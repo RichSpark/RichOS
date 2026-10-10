@@ -1218,9 +1218,20 @@ window.RichBug = (function () {
   /// the screen the report is about and the one in its picture.
   function showDock() {
     fillDock();
+    quietOtherInputs();
     $("bugdock").hidden = false;
     document.body.classList.add("bug-dock-open");
     paintDock();
+  }
+  /// **ONE INPUT AT A TIME.** A report in the panel does not share the keyboard with another
+  /// mode: Dictation's "Press a different key" ends by its own Cancel, which also disarms the
+  /// tool's key tap, so typing, Enter and a function key are the panel's again; and conversation
+  /// voice mode goes off by its own off path, so nothing said becomes a message to Rich. The
+  /// panel's own talk button is how the user speaks to the report.
+  function quietOtherInputs() {
+    var cancel = $("dict-capture-cancel");
+    if (cancel) cancel.click();
+    if (host && host.voiceOn()) host.voiceOff();
   }
   function hideDock() {
     $("bugdock").hidden = true;

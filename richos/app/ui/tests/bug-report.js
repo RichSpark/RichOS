@@ -54,8 +54,12 @@
 //      panel under Dictation's sheet. The panel is the app's top layer now (one rule in
 //      `style.css`), checked over every overlay `lib/overlays.js` derives from the shipped CSS.
 //  17. The reviews of 4cc6e34db (rv-20261010T150403Z-4cc6e34d-61db, rv-20261010T150420Z-4cc6e34d-84f1),
-//      each red there: Dictation waiting for a different key swallowed the panel's typing and Enter;
-//      and Talk to Rich turned on before Bust a bug sent the report to the panel.
+//      red there: Talk to Rich turned on before Bust a bug sent the report to the panel.
+//  18. The reviews of cac278721 (rv-20261010T153832Z-cac27872-e986, rv-20261010T153823Z-cac27872-1b7a),
+//      each red there: a report in the Rich panel takes the input alone. It ends Dictation's
+//      "Press a different key" through its own Cancel (the tool's key tap disarmed with it) and
+//      turns conversation voice mode off through its own off path; the panel's talk button is
+//      how the user speaks to it.
 "use strict";
 
 const path = require("path");
@@ -1014,11 +1018,12 @@ async function main() {
       "; the report went to the conversation, not the panel, over: " + (toConversation.join(", ") || "none") + "; " + seen.join("; ");
   });
 
-  // ---- the review of 4cc6e34db (rv-20261010T150403Z-4cc6e34d-61db, rv-20261010T150420Z-4cc6e34d-84f1) ----
-  await run.check("with Dictation waiting for a different key, the Rich panel's report takes typing and Enter, and the sheet still takes the key", async () => {
-    // Fixtures `dictation-report-keyboard.js` / `dictation-capture-report.js`: Settings, Dictation,
-    // Press a different key, Settings, Bust a bug. On the tip Dictation's capturing listener
-    // swallowed every key, the panel's answer box's included: nothing typed, Enter never sent.
+  // ---- the reviews of 4cc6e34db (rv-20261010T150420Z-4cc6e34d-84f1) and cac278721 (rv-20261010T153832Z-cac27872-e986, rv-20261010T153823Z-cac27872-1b7a) ----
+  await run.check("with Dictation waiting for a different key, Bust a bug ends that wait: the panel's report takes typing and Enter, and a function key from the tool's tap leaves Dictation's key alone", async () => {
+    // Settings, Dictation, Press a different key, Settings, Bust a bug. A report in the panel takes
+    // the keyboard alone: it ends Dictation's wait through Dictation's own Cancel, which also
+    // disarms the tool's key tap (rv-20261010T153832Z-cac27872-e986). On cac278721 the wait and
+    // the tap stayed on under the report.
     const page = await open("dark", { dictation: true });
     await page.click("#set-btn");
     await page.click("#set-dictation-open");
@@ -1027,19 +1032,25 @@ async function main() {
     await page.waitForSelector("#dict-capture-cancel");
     await bustABug(page);
     await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
-    assert(await page.locator("#dict-capture-cancel").count(), "key capture ended before the report started");
+    assertEqual(await page.locator("#dict-capture-cancel").count(), 0, "Dictation still waits for a different key under the report");
+    const tap = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_capture_key").map((c) => c.on);
+    assertEqual(JSON.stringify(tap), "[true,false]", "the tool's key tap, armed then disarmed");
     const said = "The names on the left get cut off when I make the text bigger.";
     await page.click("#bugdock-input");
     await page.keyboard.type(said);
     assertEqual(await page.inputValue("#bugdock-input"), said, "what was typed in the panel's answer box");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
-    // A key pressed in the sheet is still the sheet's: F7 becomes Dictation's key.
-    await page.focus("#dict-capture-cancel");
-    await page.keyboard.press("F7");
-    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 7));
+    // F7 delivered by the tool's tap (`rich://dictation {key}`), the report in focus. The mock's
+    // event and Dictation's handler run synchronously, so a key change is recorded by the time
+    // the call returns.
+    await page.focus("#bugdock .bugcard #bug-send");
+    await page.evaluate(() => window.__RICHOS_MOCK__.dictationKey(7));
+    const set = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_set_key");
+    assertEqual(JSON.stringify(set), "[]", "Dictation's key was changed by a function key from the tool's tap");
+    assert(await page.evaluate(() => document.activeElement && document.activeElement.id === "bug-send"), "focus left the report");
     await page.close();
-    return "typed and sent in the panel with capture on; F7 in the sheet set the key";
+    return "the wait ended (tap " + JSON.stringify(tap) + "); typed and sent in the panel; F7 from the tap set no key";
   });
 
   await run.check("Talk to Rich on first, then Bust a bug: the report is in the conversation and takes what is said", async () => {
@@ -1061,6 +1072,37 @@ async function main() {
     assertEqual(await page.locator("#messages .tl-user").count(), before, "the spoken answer went to Rich's conversation");
     await page.close();
     return "report in the conversation; spoken answer taken by it";
+  });
+
+  await run.check("Talk to Rich on, Dictation open, Bust a bug: voice mode goes off, nothing said goes to the conversation, and the panel's talk button takes the answer", async () => {
+    // rv-20261010T153823Z-cac27872-1b7a: on cac278721 the report opened in the panel with
+    // conversation voice mode still on, so the spoken answer became a message to Rich.
+    const page = await open("dark", { bugVoice: true, dictation: true });
+    await page.click("#talk-toggle");
+    await page.waitForSelector("#voice-panel:not([hidden])");
+    await page.click("#set-btn");
+    await page.click("#set-dictation-open");
+    await page.waitForSelector("#dictation-sheet:not([hidden])");
+    await bustABug(page);
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
+    assertEqual(await page.getAttribute("#talk-toggle", "aria-pressed"), "false", "conversation voice mode under the report (Talk to Rich pressed)");
+    const stops = (await calls(page, "stop_voice_capture")).length;
+    assertEqual(stops, 1, "conversation voice mode's own off path (stop_voice_capture calls)");
+    // Said now, before the panel's talk button: neither the conversation nor the report takes it.
+    // The transcript listeners run synchronously; two frames let a drawn message land.
+    const before = await page.locator("#messages .tl-user").count();
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "Rich, what's on my calendar today?");
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "what was said went to Rich's conversation");
+    assertEqual(await page.locator("#bugdock .bug-user").count(), 0, "what was said with the panel's talk button off went to the report");
+    // The panel's talk button is how the user speaks to the report.
+    await page.click("#bugdock-talk");
+    await page.waitForSelector("#bugdock-voice:not([hidden])");
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "The names on the left get cut off when the text is bigger.");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "the spoken answer went to Rich's conversation");
+    await page.close();
+    return "voice mode off (Talk to Rich not pressed, 1 stop_voice_capture); nothing said went to the conversation; the panel's talk button took the answer";
   });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----

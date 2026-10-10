@@ -3277,6 +3277,8 @@ if (window.RichBug) {
     },
     syncComposer: () => syncComposerMode(),
     voiceOn: () => voiceMode,
+    // Voice mode's own off path, the one the Talk to Rich button takes.
+    voiceOff: () => { if (voiceMode) exitVoiceMode(); },
     announce,
     toast: (text) => window.RichSettings && window.RichSettings.toast(text),
   });

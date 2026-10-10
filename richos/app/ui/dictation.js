@@ -493,12 +493,8 @@
   });
   // The keyboard, before anything else hears it: key capture first, then the off notice.
   const isDictKey = e => !!view && (e.key === keyName() || (view.key === 1 && (e.key === "F13" || e.code === "F13")));
-  // Key capture takes only a key aimed at the sheet: one whose target is inside it, or the page
-  // itself when nothing has focus. A key aimed anywhere else (the Rich panel's answer box, opened
-  // over the sheet by Bust a bug) passes through untouched.
-  const atSheet = e => sheet.contains(e.target) || e.target === document.body || e.target === document.documentElement;
   document.addEventListener("keydown", e => {
-    if (capture && !sheet.hidden && atSheet(e)) {
+    if (capture && !sheet.hidden) {
       e.preventDefault(); e.stopPropagation();
       if (e.key === "Escape") { stopCapture(); return; }
       const f = /^F([1-9]|1[0-9])$/.exec(e.key);
