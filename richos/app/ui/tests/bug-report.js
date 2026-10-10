@@ -10,9 +10,8 @@
 //
 //   0. ONE PLACE (CEO, 2026-10-10: "pressing Bust a bug always shows the bug report on top, ready
 //      to answer"). The report always lives in the Rich panel, never in the conversation: over
-//      every overlay `lib/overlays.js` finds, plus Dictation and the bare conversation, for a
-//      first and a second press, with plain typing, Talk to Rich on, and Dictation waiting for
-//      a key, it is on top with the keys in its answer box, takes typing, Enter and its talk
+//      every overlay `lib/overlays.js` finds, plus Dictation and the bare conversation, with
+//      plain typing, Talk to Rich on, and Dictation waiting for a key, it is on top with the keys in its answer box, takes typing, Enter and its talk
 //      button, Change it takes typing, and nothing goes to the conversation.
 //   1. Bust a bug starts the exchange with Rich in the Rich panel; no notice.
 //   2. The draft is shown before anything is sent: nothing reaches `bug_report_send` until Send.
@@ -47,10 +46,10 @@
 //      wait on this Mac, unsent, when Claude can't check them. Whether a sheet may go is the
 //      shell's decision (`richos_core::bug_report::decide`, tested in Rust); `mock.js` decides it
 //      the same way and `filed()` is what actually went out.
-//  14. The review of 665df1bb3 (rv-20261009T223503Z-665df1bb-17bf), each red there: Bust a bug
-//      pressed again over Corrections shows the report already in the conversation, on top and
-//      answerable; and the heads-up reads a line break typed in a change the way Send does, so a
-//      name on two lines is named. `mock.js` matches a name across any whitespace, as the core does.
+//  14. The review of 665df1bb3 (rv-20261009T223503Z-665df1bb-17bf), red there: the heads-up
+//      reads a line break typed in a change the way Send does, so a name on two lines is named.
+//      `mock.js` matches a name across any whitespace, as the core does. (Its other case, Bust a
+//      bug pressed again over Corrections, cannot happen since item 20.)
 //  15. The review of b3b5c573d (rv-20261009T225657Z-b3b5c573-96c0), each red there: what Send reads
 //      is what the card shows when a step holds a nested list, and a rich-text paste (a nested
 //      list, a table, styled words) comes in as plain text. `mock.js` writes steps from
@@ -71,9 +70,14 @@
 //      each red there: the panel's microphone is on only while the report waits for the user's
 //      words, so while Rich checks it is stopped first and only then is the hold released (read
 //      from the order of `stop_voice_capture` and `bug_report_voice`, as the mock does not run the
-//      shell's submission); and every press of Bust a bug turns the panel's talk off, shows the
-//      answer box and puts the keys in it. Stand-ins in a change are marked and counted in Rust
+//      shell's submission). Stand-ins in a change are marked and counted in Rust
 //      (`stand_ins_in_a_change_are_marked_and_counted_as_in_the_first_draft`).
+//  20. The reviews of fe4cd6b14 (rv-20261010T183313Z-fe4cd6b1-1e66, rv-20261010T183337Z-fe4cd6b1-ce45)
+//      and the CEO (2026-10-10), each red there: every stand-in in the card's final words is
+//      marked and counted, whoever wrote it; a microphone start that waited for a stop runs only
+//      if the panel's talk is still on; and while a report is open, from the press until it is
+//      sent, canceled or its panel closed, Bust a bug in the Settings menu is disabled, so a press
+//      is always a first press.
 "use strict";
 
 const path = require("path");
@@ -387,10 +391,6 @@ async function main() {
     assertEqual(await page.locator(".bug-sec p.is-added").innerText(), "It happens in the light theme too.", "the change");
     await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('Added that to What happened, above. It still waits for you to send it.')");
     await shot(page, "changed-dark");
-    // One report at a time: Bust a bug again goes back to this one.
-    await bustABug(page);
-    assertEqual(await page.locator("#bugdock-msgs .bug-rich:has-text('What went wrong?')").count(), 1, "a second report was started");
-    assertEqual(await page.locator("#bugdock .bugcard").count(), 1, "the report in progress is gone");
     await page.click("#bug-cancel");
     await page.waitForSelector(".bugcard.is-canceled .bug-pill:has-text('Canceled · nothing sent')");
     assert((await page.locator(".bug-ctitle").innerText()).includes("for Acme deal"), "the folded card does not show its title");
@@ -987,8 +987,8 @@ async function main() {
   // it over every place it can be pressed: every element a covering rule in the shipped CSS matches
   // (`lib/overlays.js`, one made from the selector where none is in the page yet, put on screen with
   // focus inside it, as `appearance.js` check 7c does), Dictation opened from Settings, and the bare
-  // conversation. Over each, a FIRST press (no report yet) and a SECOND press (a report with its card
-  // already in progress), each with plain typing, with Talk to Rich on, and with Dictation waiting
+  // conversation. Over each, a press (always a first one: while a report is open Bust a bug is
+  // disabled, checked below), with plain typing, with Talk to Rich on, and with Dictation waiting
   // for a different key. In every cell: the report is in the panel and nothing of it anywhere else;
   // what it shows and its answer box are what is painted at their places (the overlay made
   // hit-testable for the read, so a cover that lets the pointer through still counts); the keys are
@@ -1001,7 +1001,6 @@ async function main() {
   // Settings cannot be pressed (`setup.js` check 20), so no report starts over it.
   const FIRST_RUN_QUESTIONS = ["memory-setup", "setup-sheet"];
   const MODES = ["typing", "Talk to Rich on", "Dictation waiting for a key"];
-  const PRESSES = ["first press", "second press"];
   /// Put target `t` on screen with focus inside it: `{name, sel}`, `{question}` or `{error}`.
   async function showTarget(page, t, qsel) {
     if (t.conversation) return { name: "the conversation", sel: null };
@@ -1040,16 +1039,11 @@ async function main() {
       return { name: made ? name + " (made from " + sel + ")" : name, sel: "[data-under-test]" };
     }, { sel: t.sel, index: t.index, qsel, firstRun: FIRST_RUN_QUESTIONS });
   }
-  /// One cell: target `t`, input `mode`, `press`. Returns a line; throws with what was wrong.
-  async function oneCell(t, mode, press, qsel) {
-    const second = press === "second press";
+  /// One cell: target `t`, input `mode`. Returns a line; throws with what was wrong.
+  async function oneCell(t, mode, qsel) {
     const page = await open("dark", { dictation: true, bugVoice: true });
     try {
       const before = await page.locator("#messages .tl-user").count();
-      if (second) {
-        await bustABug(page);
-        await answer(page, "The names on the left get cut off when I make the text bigger.");
-      }
       if (mode === "Talk to Rich on") {
         await page.evaluate(() => document.getElementById("talk-toggle").click());
         await page.waitForSelector("#voice-panel:not([hidden])");
@@ -1073,7 +1067,7 @@ async function main() {
       // `focusAnswer` puts the keys there in a zero-delay timer queued as the panel was shown; a
       // timer queued after it has run after it, so this reads the fact, not the clock.
       const ready = await page.evaluate(() => new Promise((r) => setTimeout(() => r(document.activeElement === document.getElementById("bugdock-input")), 0)));
-      const st = await page.evaluate(({ sel, second }) => {
+      const st = await page.evaluate(({ sel }) => {
         const cover = sel ? document.querySelector(sel) : null;
         const was = cover ? cover.style.pointerEvents : "";
         if (cover) cover.style.pointerEvents = "auto";
@@ -1081,11 +1075,10 @@ async function main() {
         const hitAt = (el) => {
           if (!el) return "MISSING";
           const r = el.getBoundingClientRect();
-          const y = second ? Math.max(r.top, box.top) + 20 : r.top + r.height / 2;
-          const h = document.elementFromPoint(r.left + r.width / 2, y);
+          const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
           return h === el || el.contains(h) ? "ON-TOP" : "COVERED by " + (h ? h.tagName.toLowerCase() + (h.id ? "#" + h.id : "." + String(h.className).split(" ")[0]) : "nothing");
         };
-        const shownEl = second ? document.querySelector("#bugdock .bugcard") : document.querySelector("#bugdock-msgs .bug-rich .tl-prose");
+        const shownEl = document.querySelector("#bugdock-msgs .bug-rich .tl-prose");
         const out = {
           shown: hitAt(shownEl),
           input: hitAt(document.getElementById("bugdock-input")),
@@ -1096,9 +1089,9 @@ async function main() {
         };
         if (cover) cover.style.pointerEvents = was;
         return out;
-      }, { sel: shown.sel, second });
+      }, { sel: shown.sel });
       const bad = [];
-      if (st.shown !== "ON-TOP") bad.push((second ? "the card " : "Rich's question ") + st.shown);
+      if (st.shown !== "ON-TOP") bad.push("Rich's question " + st.shown);
       if (st.input !== "ON-TOP") bad.push("the answer box " + st.input);
       if (!ready) bad.push("the keys are not in the answer box");
       if (st.outside) bad.push(st.outside + " part(s) of the report outside the panel");
@@ -1107,14 +1100,13 @@ async function main() {
       if (st.voice !== "false") bad.push("Talk to Rich still on");
       if (bad.length) throw new Error(bad.join("; "));
       // Typing, then Enter, without a click first: ready to answer.
-      const typed = second ? "Also say it happens in the light theme too" : "The names on the left get cut off when I make the text bigger.";
+      const typed = "The names on the left get cut off when I make the text bigger.";
       await page.keyboard.type(typed);
       const value = await page.inputValue("#bugdock-input");
       if (value !== typed) throw new Error("the keys typed reached the answer box as " + JSON.stringify(value));
       await page.keyboard.press("Enter");
       const added = () => page.locator("#bugdock .bug-sec p.is-added").count();
-      if (second) await page.waitForFunction(() => document.querySelectorAll("#bugdock .bug-sec p.is-added").length === 1);
-      else await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+      await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
       // The panel's talk button takes what is said.
       await page.waitForSelector("#bugdock #bug-change", { state: "visible" });
       const had = await added();
@@ -1142,7 +1134,7 @@ async function main() {
       await page.close();
     }
   }
-  await run.check("ONE PLACE: over every overlay, Dictation and the bare conversation, first and second press, typing, Talk to Rich on and Dictation waiting for a key: the report is in the panel, on top, ready to answer, takes typing, Enter, its talk button and Change it, and nothing goes to the conversation", async () => {
+  await run.check("ONE PLACE: over every overlay, Dictation and the bare conversation, typing, Talk to Rich on and Dictation waiting for a key: the report is in the panel, on top, ready to answer, takes typing, Enter, its talk button and Change it, and nothing goes to the conversation", async () => {
     const qsel = (fs.readFileSync(path.join(UI_DIR, "main.js"), "utf8").match(/^const QUESTION_SELECTOR = '([^']+)';$/m) || [])[1];
     assert(qsel, "main.js has no `const QUESTION_SELECTOR = '...';` to read the first-run questions from");
     const rules = coverings.coveringRules();
@@ -1155,7 +1147,7 @@ async function main() {
       for (let i = 0; i < counts[k]; i++) targets.push({ sel: r.selector, index: i });
     });
     const cells = [];
-    for (const t of targets) for (const press of PRESSES) for (const mode of MODES) cells.push({ t, press, mode });
+    for (const t of targets) for (const mode of MODES) cells.push({ t, mode });
     const wrong = [];
     const skipped = new Set();
     let passed = 0;
@@ -1164,9 +1156,9 @@ async function main() {
     async function worker() {
       while (next < cells.length) {
         const c = cells[next++];
-        const label = (c.t.conversation ? "the conversation" : c.t.dictation ? "Dictation" : c.t.sel + (c.t.index >= 0 ? "[" + c.t.index + "]" : " (made)")) + ", " + c.press + ", " + c.mode;
+        const label = (c.t.conversation ? "the conversation" : c.t.dictation ? "Dictation" : c.t.sel + (c.t.index >= 0 ? "[" + c.t.index + "]" : " (made)")) + ", " + c.mode;
         try {
-          const r = await oneCell(c.t, c.mode, c.press, qsel);
+          const r = await oneCell(c.t, c.mode, qsel);
           if (r.skipped) skipped.add(r.skipped);
           else passed++;
         } catch (e) {
@@ -1176,8 +1168,8 @@ async function main() {
     }
     await Promise.all([worker(), worker(), worker(), worker()]);
     assertEqual(wrong, [], "the report is not on top and ready to answer in every cell");
-    assert(passed > 2 * PRESSES.length * MODES.length, "EMPTY INVENTORY: only " + passed + " cells walked");
-    return passed + " cells passed (" + (targets.length - skipped.size) + " places x " + PRESSES.length + " presses x " + MODES.length + " input modes); left out, the first-run questions (Settings cannot be pressed over them): " + [...skipped].join(", ");
+    assert(passed > 2 * MODES.length, "EMPTY INVENTORY: only " + passed + " cells walked");
+    return passed + " cells passed (" + (targets.length - skipped.size) + " places x " + MODES.length + " input modes); left out, the first-run questions (Settings cannot be pressed over them): " + [...skipped].join(", ");
   });
 
   // ---- the reviews of 4cc6e34db (rv-20261010T150420Z-4cc6e34d-84f1) and cac278721 (rv-20261010T153832Z-cac27872-e986, rv-20261010T153823Z-cac27872-1b7a) ----
@@ -1362,40 +1354,98 @@ async function main() {
     return "voice calls: " + order.join(" → ");
   });
 
-  await run.check("every press of Bust a bug turns the panel's talk off, shows the answer box and puts the keys in it, asked and with the card", async () => {
-    // Both reviews: on f29db7082 a second press with the panel's talk button on left the answer
-    // box hidden, and the keys elsewhere (`focusAnswer` skips a hidden box).
-    const page = await open("dark", { bugVoice: true });
+  // ---- the CEO, 2026-10-10, and rv-20261010T183337Z-fe4cd6b1-ce45 finding 1 ----
+  // "WHY THE FUCK IS IT EVEN POSSIBLE TO CLICK THE FUCKING BUTTON AGAIN IF THE ACTION RELATED TO
+  // THAT IS ALREADY GOING ON???" On fe4cd6b14 Bust a bug could be pressed again over a report in
+  // progress (the review's case: while Rich checked, the press put the keys in an answer box whose
+  // Enter did nothing). Now it is disabled from the press until the report is sent, canceled or its
+  // panel closed.
+  /// Settings open, then every way to press Bust a bug: the pointer, the element's own click, and
+  /// focus for the keyboard. Returns what the menu showed and whether anything started.
+  async function pressBugAgain(page) {
+    await page.click("#set-btn");
+    await page.waitForSelector("#set-menu:not([hidden]) #bug-btn");
+    const count = () => page.evaluate(() => ({
+      flows: window.RichBug.state().length,
+      looks: window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_look").length,
+      asked: document.querySelectorAll("#bugdock-msgs .bug-rich .tl-prose").length,
+    }));
+    const before = await count();
+    const shown = await page.evaluate(() => {
+      const b = document.getElementById("bug-btn");
+      const cs = getComputedStyle(b);
+      return { disabled: b.disabled, shown: !!b.getClientRects().length && cs.visibility !== "hidden" && cs.display !== "none" };
+    });
+    await page.click("#bug-btn", { force: true });
+    await page.evaluate(() => document.getElementById("bug-btn").click());
+    const focused = await page.evaluate(() => { const b = document.getElementById("bug-btn"); b.focus(); return document.activeElement === b; });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const after = await count();
+    if (await page.isVisible("#set-menu")) await page.click("#set-btn");
+    await page.waitForSelector("#set-menu", { state: "hidden" });
+    return { disabled: shown.disabled, shown: shown.shown, focusable: focused, started: JSON.stringify(after) !== JSON.stringify(before) };
+  }
+  await run.check("while a report is open, Bust a bug in Settings is shown disabled and cannot be pressed (asked, Rich checking, the card, Change it, Rich changing it, sending); after Send, Cancel or closing the panel it works again", async () => {
+    const page = await open("dark", { bugWriteMs: 4000, bugChangeHold: true, bugSendCheckHold: true });
+    const open_ = { disabled: true, shown: true, focusable: false, started: false };
+    const seen = [];
+    async function expectOpen(step) {
+      const st = await pressBugAgain(page);
+      assertEqual(st, open_, step + ": Bust a bug in the Settings menu");
+      seen.push(step);
+    }
     await bustABug(page);
     await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
-    const lines = [];
-    for (const stage of ["asked", "with the card"]) {
-      if (stage === "with the card") await answer(page, "The names on the left get cut off when I make the text bigger.");
-      await page.click("#bugdock-talk");
-      await page.waitForSelector("#bugdock-voice:not([hidden])");
-      assertEqual(await heldNow(page), true, stage + ": the hold with the talk button on");
-      const from = await callCount(page);
-      await bustABug(page);
-      const st = await page.evaluate(() => new Promise((r) => setTimeout(() => r({
-        form: !document.getElementById("bugdock-form").hidden,
-        voice: !document.getElementById("bugdock-voice").hidden,
-        talk: document.getElementById("bugdock-talk").getAttribute("aria-pressed"),
-        keys: document.activeElement === document.getElementById("bugdock-input"),
-      }), 0)));
-      assertEqual(st, { form: true, voice: false, talk: "false", keys: true }, stage + ": after the press");
-      await page.waitForFunction(() => {
-        const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
-        return v[v.length - 1].on === false;
-      });
-      const order = await voiceOrder(page, from);
-      assertEqual(order, ["stop", "hold off"], stage + ": the voice calls of the press");
-      await page.keyboard.type("x");
-      assertEqual(await page.inputValue("#bugdock-input"), "x", stage + ": the keys typed reached the answer box");
-      await page.fill("#bugdock-input", "");
-      lines.push(stage + ": " + order.join(" → "));
-    }
+    await expectOpen("asked");
+    await page.fill("#bugdock-input", "The names on the left get cut off when I make the text bigger.");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock .bug-working");
+    assertEqual(await page.evaluate(() => window.RichBug.state().slice(-1)[0].step), "checking", "the step");
+    await expectOpen("Rich checking");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    await expectOpen("the card");
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    await expectOpen("Change it");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    await page.fill("#bugdock-input", "Also say it happens in the light theme too");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Changing it…')");
+    await expectOpen("Rich changing it");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseChange());
+    await page.waitForSelector(".bug-sec p.is-added");
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-sending");
+    await expectOpen("sending");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseSendCheck());
+    await page.waitForSelector(".bugcard.is-sent");
+    // Sent: it works again, and a press is a new report.
+    const reopen = async (after) => {
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu:not([hidden]) #bug-btn");
+      assertEqual(await page.evaluate(() => document.getElementById("bug-btn").disabled), false, after + ": Bust a bug is still disabled");
+      const flows = await page.evaluate(() => window.RichBug.state().length);
+      await page.click("#bug-btn");
+      await page.waitForFunction((n) => window.RichBug.state().length === n + 1 && window.RichBug.state()[n].step === "ask", flows);
+      await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+      seen.push("after " + after + ": pressed, a new report");
+    };
+    await reopen("Send");
+    await expectOpen("a new report, asked");
+    // Canceled: it works again.
+    await page.fill("#bugdock-input", "The window froze while opening the plan.");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')", { timeout: 30000 });
+    await page.click("#bug-cancel");
+    await page.waitForSelector(".bugcard.is-canceled");
+    await reopen("Cancel");
+    // The panel closed: it works again.
+    await page.click("#bugdock-x");
+    await page.waitForSelector("#bugdock", { state: "hidden" });
+    await reopen("closing the panel");
     await page.close();
-    return lines.join("; ");
+    return "disabled while " + seen.join("; ");
   });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
@@ -1464,45 +1514,6 @@ async function main() {
       await page.close();
     }
     return seen.join("; ");
-  });
-
-  // ---- the review of 665df1bb3 (rv-20261009T223503Z-665df1bb-17bf) ----
-  await run.check("Bust a bug pressed again over Corrections brings the report already open forward, on top and ready to answer, and Corrections stays", async () => {
-    // Finding 1, fixture `reopen-report.js`: on 665df1bb3 the report already open was focused
-    // UNDER Corrections (a full-window overlay at z-index 60), and the user pressed Bust a bug and
-    // saw Corrections. One place now: the report is in the panel, the app's top layer, and the
-    // second press brings the panel forward with nothing closed or reached for behind it.
-    const page = await open("dark");
-    await bustABug(page);
-    await page.waitForSelector("#bugdock-msgs .bug-rich .tl-prose");
-    await page.click("#nav-corrections");
-    await page.waitForSelector("#corrections-overlay:not([hidden])");
-    await bustABug(page);
-    await page.waitForFunction(() => document.activeElement === document.getElementById("bugdock-input"));
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-    const top = await page.evaluate(() => {
-      const q = document.querySelector("#bugdock-msgs .bug-rich .tl-prose");
-      const input = document.getElementById("bugdock-input");
-      const hitAt = (el) => {
-        const r = el.getBoundingClientRect();
-        const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        return h === el || el.contains(h) ? "ON-TOP" : "COVERED by " + (h ? h.tagName.toLowerCase() + (h.id ? "#" + h.id : h.className ? "." + String(h.className).split(" ")[0] : "") : "nothing");
-      };
-      return { asked: q.textContent.trim(), question: hitAt(q), input: hitAt(input) };
-    });
-    assert(top.asked.startsWith("What went wrong?"), "not the report's question: " + JSON.stringify(top.asked));
-    assertEqual(top.question, "ON-TOP", "Rich's question is not what is painted where it is");
-    assertEqual(top.input, "ON-TOP", "the box the answer goes in is not what is painted where it is");
-    assertEqual(await page.locator("#bugdock-msgs .bug-rich:has-text('What went wrong?')").count(), 1, "a second report was started");
-    assert(await page.isVisible("#corrections-overlay"), "the second press closed Corrections");
-    // Answered without a click: the keys are already in the answer box.
-    const said = "The names on the left get cut off when I make the text bigger.";
-    await page.keyboard.type(said);
-    await page.keyboard.press("Enter");
-    await page.waitForSelector("#bugdock-msgs .bug-user:has-text('" + said + "')");
-    await page.waitForSelector("#bugdock-msgs .bugcard .bug-pill:has-text('Not sent yet')");
-    await page.close();
-    return `question ${top.question}, answer box ${top.input} with the keys; answered, card written; Corrections still open`;
   });
 
   // ---- nightly 48's walk, D24 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----

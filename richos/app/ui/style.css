@@ -6416,6 +6416,16 @@ body.home-open {
   outline: 2px solid var(--gold);
   outline-offset: -2px;
 }
+/* Bust a bug while a report is open (`settings-button.js` `paintBug`, CEO 2026-10-10): shown,
+   not pressable. NOT an exemption: the label stays readable in the muted ink, as `#send:disabled`
+   does (computed on `#set-menu`'s ground, alpha composited: 5.35:1 light, 5.52:1 dark), and the
+   state is carried by that ink, the absent hover and the cursor. */
+#bug-btn:disabled,
+#bug-btn:disabled:hover {
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
 .bugbtn svg {
   width: 16px;
   height: 16px;

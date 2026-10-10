@@ -30,8 +30,9 @@
 // ONE PLACE (CEO, 2026-10-10: "pressing Bust a bug always shows the bug report on top, ready to
 // answer"). The exchange always happens in the Rich panel (`#bugdock`), never in the conversation.
 // The panel is the app's top layer (`style.css`), so whatever screen or window the bug is on stays
-// up behind it, untouched. Every press, for a new report or the one in progress, opens or brings
-// the panel forward and puts the keys in its answer box; anything in the panel taking focus turns
+// up behind it, untouched. A press opens the panel and puts the keys in its answer box; from then
+// until the report is sent, canceled or its panel closed, Bust a bug is disabled in the Settings
+// menu (`reportOpen`), so there is no second press. Anything in the panel taking focus turns
 // Dictation's key capture and conversation voice mode off through their own off paths.
 //
 // WHAT IS NOT IN THIS FILE: what is private and its stand-ins, Rich's write-up, the issue's words,
@@ -231,6 +232,19 @@ window.RichBug = (function () {
   function liveFlow() { return flows.filter(live)[0] || null; }
   function dockFlow() { return flows[flows.length - 1] || null; }
 
+  /// **A REPORT IS OPEN**: from the press (`looking`, while the window's picture is taken) until
+  /// the report is sent, canceled or its panel closed. While it is, Bust a bug in the Settings
+  /// menu is disabled (`settings-button.js` asks this, and `paintMenu` tells it when it changes):
+  /// shown, and impossible to press. The panel itself is the way out.
+  var looking = false;
+  function reportOpen() {
+    var dock = $("bugdock");
+    return looking || !!(dock && !dock.hidden && liveFlow());
+  }
+  function paintMenu() {
+    if (window.RichSettings && window.RichSettings.repaintBugReport) window.RichSettings.repaintBugReport();
+  }
+
   // Every report lives in the panel: its messages box and its answer box.
   function box() { return $("bugdock-msgs"); }
 
@@ -312,27 +326,24 @@ window.RichBug = (function () {
     if (dockInput) dockInput.placeholder = placeholderFor(f) || "Talk to Rich…";
     paintDock();
     syncVoiceHold();
+    paintMenu();
   }
 
-  /// **START.** Every press is the same: the report is in the Rich panel, on top, with the keys in
-  /// its answer box. One report at a time: pressing it while one is in progress brings that one
-  /// forward and pulses its card; the screen behind is left as it is.
+  /// **START.** The report is in the Rich panel, on top, with the keys in its answer box; the
+  /// screen behind is left as it is.
   ///
-  /// **EVERY PRESS TURNS THE PANEL'S TALK OFF AND SHOWS THE ANSWER BOX** (reviews
-  /// rv-20261010T180327Z-f29db708-24e0 finding 1, rv-20261010T180313Z-f29db708-733e finding 2): on
-  /// f29db7082 a press with the panel's talk button on left the answer box hidden, and
-  /// `focusAnswer` skips a hidden box, so the keys stayed where they were.
+  /// **A PRESS IS ALWAYS A FIRST PRESS** (CEO, 2026-10-10: "WHY THE FUCK IS IT EVEN POSSIBLE TO
+  /// CLICK THE FUCKING BUTTON AGAIN IF THE ACTION RELATED TO THAT IS ALREADY GOING ON???"). From
+  /// the press until the report is sent, canceled or its panel closed, Bust a bug in the Settings
+  /// menu is disabled (`reportOpen`), so nothing here handles a press over a report in progress.
+  /// The one report a press can find is one saved on this Mac whose panel the user closed (the
+  /// ✕ is offered only then: waiting to send, or waiting for Rich's check): the press opens the
+  /// panel on it again, which is the way back to it.
   function start(seen) {
-    setDockVoice(false);
     var cur = liveFlow();
     if (cur) {
       showDock();
-      if (cur.card) {
-        cur.card.classList.remove("is-flash");
-        void cur.card.offsetWidth;
-        cur.card.classList.add("is-flash");
-        cur.card.scrollIntoView({ block: "center" });
-      } else scrollDown();
+      scrollDown();
       focusAnswer();
       return cur;
     }
@@ -366,12 +377,17 @@ window.RichBug = (function () {
   /// Rich's question appears, so neither shows the exchange instead of the screen. A picture that
   /// does not come within 1.5 s is not waited for; Rich then has the words.
   function lookThenStart() {
+    if (reportOpen()) return;
     if (liveFlow()) return start();
     var seen = screenNow();
     var started = false;
+    // The press has happened: Bust a bug is disabled from now, while the picture is taken too.
+    looking = true;
+    paintMenu();
     function go() {
       if (started) return;
       started = true;
+      looking = false;
       start(seen);
     }
     bridge.invoke("bug_report_look").then(go, go);
@@ -1276,6 +1292,7 @@ window.RichBug = (function () {
     $("bugdock").hidden = false;
     document.body.classList.add("bug-dock-open");
     paintDock();
+    paintMenu();
   }
   /// **ONE INPUT AT A TIME.** A report in the panel does not share the keyboard with another
   /// mode: Dictation's "Press a different key" ends by its own Cancel, which also disarms the
@@ -1295,6 +1312,7 @@ window.RichBug = (function () {
     $("bugdock").hidden = true;
     document.body.classList.remove("bug-dock-open");
     setDockVoice(false);
+    paintMenu();
   }
   function paintDock() {
     var f = dockFlow();
@@ -1514,7 +1532,7 @@ window.RichBug = (function () {
         if (dockVoice && !(host && host.voiceOn()) && e.payload && e.payload.text) takeSpoken(e.payload.text);
       });
       if (window.RichSettings && window.RichSettings.registerBugReport) {
-        window.RichSettings.registerBugReport({ open: function () { refreshContext(); lookThenStart(); } });
+        window.RichSettings.registerBugReport({ open: function () { refreshContext(); lookThenStart(); }, busy: reportOpen });
       }
     },
     start: start,
