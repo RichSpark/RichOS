@@ -5436,6 +5436,8 @@ module.exports = [
   {"s": "filed from your GitHub account, @", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The end of Rich's line after a report went out from the user's own account (once RichOS can sign in to GitHub), before the login."},
   {"s": "your GitHub account,", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The From line for the user's own GitHub account, before the login."},
   {"s": "the RichOS reporting account", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The From line's account and the sent card's \"filed from\"."},
+  {"s": "a RichOS window", "c": "FRAGMENT", "why": "Bust a bug (review rv-20261010T081721Z-66ba5386-a4d1 finding 2; bug-report.js openWindow). Where the user was, inside Rich's question, and the report's Where, for a dialog on screen that names no title."},
+  {"s": "the RichOS window titled", "c": "FRAGMENT", "why": "Bust a bug (review rv-20261010T081721Z-66ba5386-a4d1 finding 2; bug-report.js openWindow). The report's Where for a dialog on screen, before its title."},
   {"s": "a RichOS screen", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The report's Where for a screen Bust a bug does not name, inside \"<place>. It was on screen when the report was started.\""},
   {"s": "a company's page", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). Where the user was, inside Rich's question."},
   {"s": "a company's page, with its conversations", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The report's Where for a company's page."},
