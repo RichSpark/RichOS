@@ -890,12 +890,15 @@ async function main() {
   // `#bugdock`), and this check holds it there over every overlay `lib/overlays.js` derives from the
   // shipped CSS (each element its covering rules match, one made from the selector where none is in
   // the page yet, put on screen with focus inside it, as `appearance.js` check 7c does), plus
-  // Dictation opened the way a person opens it. Over each: Settings, Bust a bug; Rich's question and
-  // the panel's answer box are what is painted at their middles (with the overlay made hit-testable
+  // Dictation opened the way a person opens it. A report goes to the panel whenever the conversation's
+  // answer box is not what is painted at its place (`conversationOnScreen`, round 21's "when a window
+  // covers the conversation"); before that, over the side panes' backdrops on a narrow window it went
+  // to the conversation behind them. Over each: Settings, Bust a bug; Rich's question and the answer
+  // box are what is painted at their middles (with the overlay made hit-testable
   // for the read, so a cover that lets the pointer through still counts), and a typed answer brings
   // the card. Left out: the two first-run questions main.js's own QUESTION_SELECTOR finds; while one
   // is up Settings cannot be pressed (`setup.js` check 20), so no report starts over it.
-  await run.check("a new report started over any overlay the app can open, Dictation opened from Settings included, is on top in the Rich panel and can be answered", async () => {
+  await run.check("a new report started over any overlay the app can open, Dictation opened from Settings included, is on top and answerable, in the Rich panel wherever the overlay covers the conversation", async () => {
     const FIRST_RUN_QUESTIONS = ["memory-setup", "setup-sheet"];
     const qsel = (fs.readFileSync(path.join(UI_DIR, "main.js"), "utf8").match(/^const QUESTION_SELECTOR = '([^']+)';$/m) || [])[1];
     assert(qsel, "main.js has no `const QUESTION_SELECTOR = '...';` to read the first-run questions from");
@@ -943,6 +946,10 @@ async function main() {
           if (!el.getClientRects().length || getComputedStyle(el).display === "none") el.style.display = "block";
           const first = el.querySelector("button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])");
           if (first) first.focus();
+          // Hit-testable from the start: a cover that lets the pointer through (the opening curtain
+          // is one, `splash.css`) is still a cover. The real curtain is found by `curtainUp()`
+          // (the held-screen check above); one made from the selector has no state to find.
+          el.style.pointerEvents = "auto";
           el.setAttribute("data-under-test", "");
           const name = el.tagName.toLowerCase() + (el.id ? "#" + el.id : "." + String(el.className).split(" ")[0]);
           return { name: made ? name + " (made from " + sel + ")" : name, sel: "[data-under-test]" };
@@ -981,22 +988,21 @@ async function main() {
         return out;
       }, shown.sel);
       let answered = "NOT TRIED";
-      if (top.inPanel && top.question === "ON-TOP" && top.input === "ON-TOP") {
+      if (top.question === "ON-TOP" && top.input === "ON-TOP") {
         const said = "The names on the left get cut off when I make the text bigger.";
-        await page.click("#bugdock-input");
+        await page.click("#" + top.inputId);
         await page.keyboard.type(said);
         await page.keyboard.press("Enter");
         answered = await page
-          .waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')")
+          .waitForSelector((top.inPanel ? "#bugdock" : "#bug-flows") + " .bugcard .bug-pill:has-text('Not sent yet')")
           .then(() => "ANSWERED, CARD WRITTEN", () => "NO CARD AFTER THE ANSWER");
       }
       const line = shown.name + ": " + (top.inPanel ? "in the panel" : "in the conversation") + ", question " + top.question + ", answer box " + top.input + ", " + answered;
       seen.push(line);
-      // Where the report goes (the panel, or the conversation when nothing covers it) is decided
-      // before the panel is shown, by `screenNow`; a report that went to the conversation is named
-      // in the result rather than held to the panel's rule.
+      // Wherever it went (the panel, or the conversation where nothing covers its answer box), the
+      // question and the answer box are what is painted, and a typed answer brings the card.
+      if (!top.inPanel) toConversation.push(shown.name);
       if (!top.asked.startsWith("What went wrong?")) wrong.push(line + ", not the report's question: " + JSON.stringify(top.asked));
-      else if (!top.inPanel) toConversation.push(shown.name);
       else if (top.question !== "ON-TOP" || top.input !== "ON-TOP" || answered !== "ANSWERED, CARD WRITTEN") wrong.push(line);
       await page.close();
     }

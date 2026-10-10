@@ -201,6 +201,23 @@ window.RichBug = (function () {
     return !!(window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen());
   }
 
+  /// ROUND 21: "when a window covers the conversation", the exchange happens in the Rich panel.
+  /// Measured, not listed: the conversation is on screen only when its answer box is what is
+  /// painted at the box's middle (Settings, closing as Bust a bug is pressed, and its notice left
+  /// aside). Anything else there — a side pane's backdrop on a narrow window, a sheet, one the app
+  /// opens later — and the report goes to the panel, which is the app's top layer.
+  function conversationOnScreen() {
+    var input = $("input");
+    if (!input || !input.getClientRects().length) return false;
+    var r = input.getBoundingClientRect();
+    var hits = document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    for (var i = 0; i < hits.length; i++) {
+      if (hits[i].closest(".settings, #bug-toast")) continue;
+      return hits[i] === input || input.contains(hits[i]);
+    }
+    return false;
+  }
+
   function screenNow() {
     var scale = window.RichTheme && window.RichTheme.scale ? window.RichTheme.scale() : 100;
     var theme = document.documentElement.dataset.theme || "";
@@ -221,7 +238,7 @@ window.RichBug = (function () {
       return Object.assign(base, { key: "unbound", dock: true, label: title || "this conversation", here: title ? "the " + title + " conversation" : "a conversation", conversation: title || null, public: "a conversation that isn't filed under a company yet, where sending is off" });
     if (view === "entity")
       return Object.assign(base, { key: "company", dock: true, label: "this company's page", here: "a company's page", public: "a company's page, with its conversations" });
-    if (view !== "conversation" || !thread || (host && host.blocked()))
+    if (view !== "conversation" || !thread || (host && host.blocked()) || !conversationOnScreen())
       return Object.assign(base, { key: "other", dock: true, label: "this screen", here: "this screen", public: "a RichOS screen" });
     return Object.assign(base, { key: "conversation", dock: false, label: title, here: "the " + (title || "current") + " conversation", conversation: title || null, public: "a conversation, the main RichOS screen" });
   }
