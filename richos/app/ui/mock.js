@@ -2553,6 +2553,9 @@
   // `preset.bugRichWrote` is What happened as Rich wrote it, with his own stand-ins and nothing
   // listed beside them (nightly 48's walk, D23). The core marks each by its kind alone, with no
   // replaced words (`richos_core::bug_report::finished`, `Segment::unaccounted`); so does this.
+  // `preset.bugRichSection` (`{heading, text}`) is one more section Rich writes, last, its heading
+  // as he wrote it: a heading is plain words in the draft, stand-ins and all (review
+  // rv-20261010T183313Z-fe4cd6b1-1e66).
   const bugMock = {
     net: preset.bugNet || "online",
     account: preset.bugAccount || { kind: "reporting" },
@@ -2576,7 +2579,7 @@
   };
   const BUG_REASON = { offline: "offline", down: "github-down", "not-set-up": "not-set-up" };
   const BUG_VERSION = "RichOS 1.2.0, preview · macOS 15.6 · Apple silicon";
-  const BUG_KINDS = { conversation_name: "[a conversation]", company_name: "[a company]", person_name: "[a person]", file_path: "[a file on this Mac]", email_address: "[an email address]", private_word: "[a private word]" };
+  const BUG_KINDS = { conversation_name: "[a conversation]", company_name: "[a company]", person_name: "[a person]", folder_name: "[a folder]", file_path: "[a file on this Mac]", email_address: "[an email address]", private_word: "[a private word]" };
   function bugTerms() {
     const list = [];
     threads.forEach((t) => { if (/\s/.test(t.title)) list.push({ text: t.title, kind: "conversation_name" }); });
@@ -2635,7 +2638,7 @@
         { heading: "What happened", paragraphs: [preset.bugRichWrote ? bugMarked(preset.bugRichWrote) : bugScrub(bugSentence(answer), rich)], steps: (preset.bugSteps || []).map((t) => bugScrub(t, rich)) },
         { heading: "Where", paragraphs: [[{ text: pub.charAt(0).toUpperCase() + pub.slice(1) + ". It was on screen when the report was started." }]], steps: [] },
         { heading: "Version", paragraphs: [[{ text: BUG_VERSION }]], steps: [] },
-      ],
+      ].concat(preset.bugRichSection ? [{ heading: preset.bugRichSection.heading, paragraphs: [bugMarked(preset.bugRichSection.text)], steps: [] }] : []),
       private: rich,
     };
   }

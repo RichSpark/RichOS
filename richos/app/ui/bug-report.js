@@ -707,13 +707,18 @@ window.RichBug = (function () {
         parent.appendChild(document.createTextNode(s.text));
         return;
       }
-      var sub = node("span", "bug-sub", s.text);
-      sub.tabIndex = 0;
-      if (s.was != null) sub.dataset.was = s.was;
-      sub.dataset.kind = s.kind;
-      sub.dataset.stand = s.text;
-      parent.appendChild(sub);
+      parent.appendChild(subSpan(s.text, s.kind, s.was));
     });
+  }
+  /// One stand-in on the card: underlined, reachable with Tab, its kind, and what it replaced
+  /// only when that is known (`was`).
+  function subSpan(text, kind, was) {
+    var sub = node("span", "bug-sub", text);
+    sub.tabIndex = 0;
+    if (was != null) sub.dataset.was = was;
+    sub.dataset.kind = kind;
+    sub.dataset.stand = text;
+    return sub;
   }
 
   /// The card draws the draft word for word and changes none: every draft the shell gives it is
@@ -804,15 +809,99 @@ window.RichBug = (function () {
     private_word: ["private word", "private words"],
   };
   var NUM = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-  /// The line under the sheet, counted from the stand-ins on it now, in Rust's words
-  /// (`left_out_line`): a stand-in the user deleted is no longer counted.
+
+  // ---- the stand-ins: read from the card's words, whoever wrote them -------------------------
+  /// **EVERY STAND-IN IS READ FROM THE CARD'S FINAL WORDS** (reviews
+  /// rv-20261010T183313Z-fe4cd6b1-1e66 finding 1 and the two before it): which words were marked
+  /// used to come from where they were written (the first draft, Rich's change), so a stand-in the
+  /// user typed, or one edited into another (`[a person]` into `[a company]`), was plain words and
+  /// the line under the card said nothing private was in it. Now every stand-in written anywhere in
+  /// the title, the headings, the paragraphs and the steps is one, and the line counts exactly
+  /// those. The stand-ins, word for word as the core writes them (`richos_core::bug_report::Kind::
+  /// stand_in`), with their kinds.
+  var STAND_IN_KIND = {
+    "[a conversation]": "conversation_name",
+    "[a company]": "company_name",
+    "[a person]": "person_name",
+    "[a folder]": "folder_name",
+    "[a file on this Mac]": "file_path",
+    "[an email address]": "email_address",
+    "[a private word]": "private_word",
+  };
+  var STAND_IN_RE = new RegExp(Object.keys(STAND_IN_KIND).sort(function (a, b) { return b.length - a.length; }).map(function (s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }).join("|"), "g");
+  /// Each stand-in written in `text`, in order (the core's `stand_ins_in`): `[at, words, kind]`.
+  function standInsIn(text) {
+    var out = [], m;
+    STAND_IN_RE.lastIndex = 0;
+    while ((m = STAND_IN_RE.exec(text))) out.push([m.index, m[0], STAND_IN_KIND[m[0]]]);
+    return out;
+  }
+  /// Every part of the card's words, in the order it shows them: the title, then each section's
+  /// heading, paragraphs and steps.
+  function cardParts(f) {
+    var parts = [f.card.querySelector(".bug-title")];
+    f.card.querySelectorAll(".bug-sec").forEach(function (s) {
+      var own = fieldsIn(s);
+      parts = parts.concat([s.querySelector("h4")], own.paragraphs, own.steps);
+    });
+    return parts;
+  }
+  /// The card's stand-ins marked from its words as they are now. Within one part: a marked span
+  /// that is no longer exactly one stand-in is plain words again; one that is keeps what it
+  /// replaced only while it is still the stand-in that was written for those words (its receipt,
+  /// `data-stand`), and otherwise says its kind alone; and every stand-in in the plain words is
+  /// marked with its kind. Never run while the card is being changed, so the caret stays put.
+  function markStandIns(f) {
+    cardParts(f).forEach(function (part) {
+      var spans = part.querySelectorAll("span");
+      for (var i = spans.length - 1; i >= 0; i--) {
+        var s = spans[i];
+        var words = s.childNodes.length === 1 && s.firstChild.nodeType === 3 ? s.textContent : null;
+        var kind = words !== null && STAND_IN_KIND.hasOwnProperty(words) ? STAND_IN_KIND[words] : null;
+        if (!kind) {
+          while (s.firstChild) s.parentNode.insertBefore(s.firstChild, s);
+          s.remove();
+          continue;
+        }
+        if (s.dataset.stand !== words) delete s.dataset.was;
+        s.className = "bug-sub";
+        s.tabIndex = 0;
+        s.dataset.kind = kind;
+        s.dataset.stand = words;
+      }
+      part.normalize();
+      var texts = [];
+      var walk = document.createTreeWalker(part, NodeFilter.SHOW_TEXT);
+      for (var t = walk.nextNode(); t; t = walk.nextNode()) if (!t.parentNode.classList.contains("bug-sub")) texts.push(t);
+      texts.forEach(function (t) {
+        var found = standInsIn(t.data);
+        if (!found.length) return;
+        var frag = document.createDocumentFragment(), at = 0;
+        found.forEach(function (x) {
+          if (x[0] > at) frag.appendChild(document.createTextNode(t.data.slice(at, x[0])));
+          frag.appendChild(subSpan(x[1], x[2], null));
+          at = x[0] + x[1].length;
+        });
+        if (at < t.data.length) frag.appendChild(document.createTextNode(t.data.slice(at)));
+        t.parentNode.replaceChild(frag, t);
+      });
+    });
+  }
+
+  /// The line under the sheet, in Rust's words (`left_out_line`), COUNTED FROM THE CARD'S WORDS:
+  /// every stand-in in its title, headings, paragraphs and steps, by kind (`standInsIn`), and
+  /// nothing else. A stand-in the user deleted is no longer counted; one anybody wrote is.
   function leftOutText(f) {
-    var subs = f.card.querySelectorAll(".bug-doc .bug-sub");
-    var counts = {}, order = [];
-    subs.forEach(function (s) {
-      var k = s.dataset.kind;
-      if (!counts[k]) { counts[k] = 0; order.push(k); }
-      counts[k] += 1;
+    var counts = {}, order = [], total = 0;
+    cardParts(f).forEach(function (part) {
+      standInsIn(part.nodeName === "H4" ? part.textContent : wordsOf(part)).forEach(function (x) {
+        var k = x[2];
+        if (!counts[k]) { counts[k] = 0; order.push(k); }
+        counts[k] += 1;
+        total += 1;
+      });
     });
     if (!order.length) return "Nothing private was in it, so nothing was left out. Anyone can read GitHub issues.";
     var parts = order.map(function (k) {
@@ -820,13 +909,14 @@ window.RichBug = (function () {
       return (NUM[n] || n) + " " + (n === 1 ? w[0] : w[1]);
     });
     var list = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
-    return "Left out, because anyone can read GitHub issues: " + list + ". The underlined words stand in for " + (subs.length === 1 ? "it" : "them") + "; point at one to see what it replaced.";
+    return "Left out, because anyone can read GitHub issues: " + list + ". The underlined words stand in for " + (total === 1 ? "it" : "them") + "; point at one to see what it replaced.";
   }
 
   /// A stand-in whose words the user changed is the user's own text from then on: no longer
-  /// marked, counted or explained as a stand-in, and read by the heads-up like any other words
+  /// marked or explained as the stand-in it was, and read by the heads-up like any other words
   /// (third review: a name typed inside "[a person]" was sent with no heads-up). It stays a plain
-  /// span so the caret the user is typing at does not move.
+  /// span so the caret the user is typing at does not move. When the card is no longer being
+  /// changed, `markStandIns` reads it again: if its words are a stand-in, it is one, by its kind.
   function releaseEdited(f) {
     var released = false;
     f.card.querySelectorAll(".bug-doc .bug-sub").forEach(function (s) {
@@ -933,6 +1023,7 @@ window.RichBug = (function () {
     acts.hidden = false;
     c.querySelector(".bug-edithint").hidden = f.step !== "editing";
     if (f.step !== "sent" && f.step !== "sending") paintFrom(c.querySelector(".r-from"));
+    if (f.step !== "editing") markStandIns(f);
     c.querySelector(".lo-text").textContent = leftOutText(f);
     var editable = f.step === "editing";
     fieldsOf(c).forEach(function (n) {
@@ -1308,10 +1399,10 @@ window.RichBug = (function () {
     var a = (/^[aeiou]/.test(k[0]) ? "an " : "a ") + k[0];
     tip.textContent = "";
     if (s.dataset.was == null) {
-      // Rich wrote this stand-in himself and the app was not told the words it replaced, so the
-      // tip says what kind of detail it leaves out and claims nothing more (D23).
-      tip.appendChild(node("b", null, "Stands in for " + a));
-      tip.appendChild(document.createTextNode(" that Rich left out when he wrote the report."));
+      // The app does not know the words this stand-in replaced (Rich wrote it, the user typed
+      // it, or it was edited from another), so the tip says its kind and claims nothing more
+      // (D23; review rv-20261010T183313Z-fe4cd6b1-1e66: who wrote it is not known either).
+      tip.appendChild(node("b", null, "Stands in for " + a + "."));
     } else {
       tip.appendChild(node("b", null, "Stands in for “" + s.dataset.was + "”"));
       tip.appendChild(document.createTextNode(", " + a + ". Only you see this; it isn't in the report."));

@@ -225,13 +225,77 @@ async function main() {
     await page.hover(".bugcard .bug-sub >> nth=1");
     await page.waitForSelector("#bug-subtip.is-shown");
     const tip = await page.locator("#bug-subtip").innerText();
-    assertEqual(tip, "Stands in for a person's name that Rich left out when he wrote the report.", "the stand-in's tip");
+    // Its kind alone: the card does not know who wrote a stand-in it has no words for (review
+    // rv-20261010T183313Z-fe4cd6b1-1e66: the user can type one too).
+    assertEqual(tip, "Stands in for a person's name.", "the stand-in's tip");
     await page.mouse.move(5, 5);
     await page.focus(".bugcard .bug-sub >> nth=3");
     await page.waitForSelector("#bug-subtip.is-shown");
-    assertEqual(await page.locator("#bug-subtip").innerText(), "Stands in for a file path that Rich left out when he wrote the report.", "the tip on Tab");
+    assertEqual(await page.locator("#bug-subtip").innerText(), "Stands in for a file path.", "the tip on Tab");
     await page.close();
     return `${subs.length} marked; line: ${line}; tip: ${tip}`;
+  });
+
+  // ---- the review of fe4cd6b14 (rv-20261010T183313Z-fe4cd6b1-1e66), finding 1 ----
+  await run.check("every stand-in in the card's final words is marked and counted, whoever wrote it: edited from another, typed by the user, in Rich's change and in a heading", async () => {
+    // Fixture `edited-stand-in.js`: on fe4cd6b14, Change it, "[a person]" edited into "[a company]",
+    // Done, and the card said "Nothing private was in it, so nothing was left out." under it. The
+    // marking came from where a stand-in was written; now it is read from the card's words.
+    const page = await open("dark", {
+      bugRichPrivate: [{ text: "Jane Doe", kind: "person_name" }],
+      bugRichSection: { heading: "Seen at [a company]", text: "It started after the last update." },
+    });
+    await bustABug(page);
+    await answer(page, "The names on the left get cut off. Jane Doe saw it first.");
+    const marks = () => page.locator(".bugcard .bug-doc .bug-sub").evaluateAll((n) => n.map((s) => [s.textContent, s.dataset.kind, s.dataset.was == null ? null : s.dataset.was]));
+    const before = await marks();
+    assertEqual(JSON.stringify(before), JSON.stringify([["[a person]", "person_name", "Jane Doe"], ["[a company]", "company_name", null]]), "the first draft's stand-ins (the heading's included)");
+    const lineBefore = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(lineBefore, "Left out, because anyone can read GitHub issues: one person's name and one company name. The underlined words stand in for them; point at one to see what it replaced.", "the line under the first draft");
+    // Change it: the caret is at the end of the title; the user types a stand-in there, then
+    // edits the words inside "[a person]" into "[a company]".
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    await page.keyboard.type(" in [a folder]");
+    await page.evaluate(() => {
+      const sub = [...document.querySelectorAll(".bugcard .bug-doc .bug-sub")].find((s) => s.dataset.was === "Jane Doe");
+      const words = sub.firstChild;
+      sub.closest("[contenteditable]").focus();
+      const r = document.createRange();
+      r.setStart(words, 3);
+      r.setEnd(words, words.length - 1);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    });
+    await page.keyboard.type("company");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    assert((await page.locator(".bugcard .bug-sec p").first().innerText()).includes("[a company] saw it first"), "the edit did not land inside the stand-in");
+    const done = await marks();
+    assertEqual(
+      JSON.stringify(done),
+      JSON.stringify([["[a folder]", "folder_name", null], ["[a company]", "company_name", null], ["[a company]", "company_name", null]]),
+      "after Done: the typed one and the edited one marked by their kind, the edited one no longer claiming Jane Doe"
+    );
+    const lineDone = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(lineDone, "Left out, because anyone can read GitHub issues: one folder name and two company names. The underlined words stand in for them; point at one to see what it replaced.", "the line after Done");
+    // Pointing at the edited one says its kind alone.
+    await page.hover(".bugcard .bug-sec p .bug-sub");
+    await page.waitForSelector("#bug-subtip.is-shown");
+    assertEqual(await page.locator("#bug-subtip").innerText(), "Stands in for a company name.", "the edited stand-in's tip");
+    await page.mouse.move(5, 5);
+    // Told to Rich: his change carries a stand-in.
+    await page.fill("#bugdock-input", "Also say [a private word] is cut off as well");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bug-sec p.is-added");
+    const added = await page.locator(".bug-sec p.is-added .bug-sub").evaluateAll((n) => n.map((s) => [s.textContent, s.dataset.kind]));
+    assertEqual(JSON.stringify(added), JSON.stringify([["[a private word]", "private_word"]]), "the stand-in in Rich's change");
+    const line = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(line, "Left out, because anyone can read GitHub issues: one folder name, two company names and one private word. The underlined words stand in for them; point at one to see what it replaced.", "the line after Rich's change");
+    assertEqual((await marks()).length, 4, "stand-ins marked on the card");
+    await page.close();
+    return line;
   });
 
   await run.check("Send files it, from the RichOS reporting account, with the words the card showed", async () => {
