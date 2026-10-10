@@ -705,16 +705,20 @@ window.RichBug = (function () {
   }
 
   // ---- the report card: the send-before-approve step ------------------------------------------
+  /// A stand-in is a segment with a `kind` (`Segment::is_stand_in`), whether or not the shell knows
+  /// the words it replaced (`was`): one Rich wrote himself, with nothing listed beside it, is still
+  /// underlined and counted (nightly 48's walk, D23: on d0d06501c it was drawn as plain words, and
+  /// the line under the card said nothing private was in a report carrying four).
   function appendSegments(parent, segments) {
     (segments || []).forEach(function (s) {
-      if (s.was == null) {
+      if (!s.kind) {
         parent.appendChild(document.createTextNode(s.text));
         return;
       }
       var sub = node("span", "bug-sub", s.text);
       sub.tabIndex = 0;
-      sub.dataset.was = s.was;
-      sub.dataset.kind = s.kind || "";
+      if (s.was != null) sub.dataset.was = s.was;
+      sub.dataset.kind = s.kind;
       sub.dataset.stand = s.text;
       parent.appendChild(sub);
     });
@@ -1281,9 +1285,17 @@ window.RichBug = (function () {
   function showSubTip(s) {
     var tip = $("bug-subtip");
     var k = KIND_WORDS[s.dataset.kind] || ["private word", "private words"];
+    var a = (/^[aeiou]/.test(k[0]) ? "an " : "a ") + k[0];
     tip.textContent = "";
-    tip.appendChild(node("b", null, "Stands in for “" + s.dataset.was + "”"));
-    tip.appendChild(document.createTextNode(", " + (/^[aeiou]/.test(k[0]) ? "an " : "a ") + k[0] + ". Only you see this; it isn't in the report."));
+    if (s.dataset.was == null) {
+      // Rich wrote this stand-in himself and the app was not told the words it replaced, so the
+      // tip says what kind of detail it leaves out and claims nothing more (D23).
+      tip.appendChild(node("b", null, "Stands in for " + a));
+      tip.appendChild(document.createTextNode(" that Rich left out when he wrote the report."));
+    } else {
+      tip.appendChild(node("b", null, "Stands in for “" + s.dataset.was + "”"));
+      tip.appendChild(document.createTextNode(", " + a + ". Only you see this; it isn't in the report."));
+    }
     tip.hidden = false;
     var r = s.getBoundingClientRect(), w = tip.offsetWidth;
     tip.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left + r.width / 2 - w / 2)) + "px";

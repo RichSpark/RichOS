@@ -2550,6 +2550,9 @@
   // every sheet that actually went out.
   // `preset.bugSteps` is the numbered steps Rich writes under What happened (none by default), so
   // a suite can change and paste into a step (review rv-20261009T225657Z-b3b5c573-96c0).
+  // `preset.bugRichWrote` is What happened as Rich wrote it, with his own stand-ins and nothing
+  // listed beside them (nightly 48's walk, D23). The core marks each by its kind alone, with no
+  // replaced words (`richos_core::bug_report::finished`, `Segment::unaccounted`); so does this.
   const bugMock = {
     net: preset.bugNet || "online",
     account: preset.bugAccount || { kind: "reporting" },
@@ -2598,6 +2601,21 @@
     if (last < text.length || !out.length) out.push({ text: text.slice(last) });
     return out;
   }
+  /// Words Rich wrote, each stand-in in them marked by its kind with no replaced words (the core's
+  /// `marked` when nothing accounts for one).
+  function bugMarked(text) {
+    const kinds = Object.keys(BUG_KINDS);
+    const re = new RegExp(kinds.map((k) => BUG_KINDS[k].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+    const out = [];
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) out.push({ text: text.slice(last, m.index) });
+      out.push({ text: m[0], kind: kinds.find((k) => BUG_KINDS[k] === m[0]) });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length || !out.length) out.push({ text: text.slice(last) });
+    return out;
+  }
   function bugSentence(t) {
     t = t.trim();
     t = t.charAt(0).toUpperCase() + t.slice(1);
@@ -2614,7 +2632,7 @@
     return {
       title: bugScrub(first.charAt(0).toUpperCase() + first.slice(1), rich),
       sections: [
-        { heading: "What happened", paragraphs: [bugScrub(bugSentence(answer), rich)], steps: (preset.bugSteps || []).map((t) => bugScrub(t, rich)) },
+        { heading: "What happened", paragraphs: [preset.bugRichWrote ? bugMarked(preset.bugRichWrote) : bugScrub(bugSentence(answer), rich)], steps: (preset.bugSteps || []).map((t) => bugScrub(t, rich)) },
         { heading: "Where", paragraphs: [[{ text: pub.charAt(0).toUpperCase() + pub.slice(1) + ". It was on screen when the report was started." }]], steps: [] },
         { heading: "Version", paragraphs: [[{ text: BUG_VERSION }]], steps: [] },
       ],

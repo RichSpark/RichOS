@@ -173,13 +173,17 @@ impl PrivateTerm {
     }
 }
 
-/// A run of report text: plain words, or a stand-in with what it replaced.
+/// A run of report text: plain words, or a stand-in (it has a `kind`), with what it replaced when
+/// that is known.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Segment {
     pub text: String,
-    /// What the stand-in replaced. Shown to the user on the card; never part of the issue.
+    /// What the stand-in replaced. Shown to the user on the card; never part of the issue. `None`
+    /// on a stand-in nothing accounts for: Rich wrote it himself and listed nothing beside it
+    /// ([`finished`]), so the app does not know the words, and the card says only their kind.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub was: Option<String>,
+    /// The kind of private detail a stand-in leaves out. `None` on plain words, and only there.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub kind: Option<Kind>,
 }
@@ -190,6 +194,18 @@ impl Segment {
     }
     fn stand_in(was: &str, kind: Kind) -> Self {
         Segment { text: kind.stand_in().to_string(), was: Some(was.to_string()), kind: Some(kind) }
+    }
+    /// A stand-in whose replaced words nothing accounts for: marked, counted and explained by its
+    /// kind alone (nightly 48's walk, D23).
+    fn unaccounted(kind: Kind) -> Self {
+        Segment { text: kind.stand_in().to_string(), was: None, kind: Some(kind) }
+    }
+    /// **A STAND-IN, KNOWN OR NOT WHAT IT REPLACED**: the one test of whether a segment is one.
+    /// On d0d06501c this was "it has `was`", so a stand-in Rich wrote himself was plain words: it
+    /// was not underlined, and the line under the card said nothing private was in a report that
+    /// carried four (D23).
+    pub fn is_stand_in(&self) -> bool {
+        self.kind.is_some()
     }
 }
 
@@ -1242,7 +1258,11 @@ fn section_of(his: &serde_json::Value, n: usize, ours: &DraftSection) -> Result<
 ///
 /// Nothing here changes a word of his. Each stand-in in his words is only MARKED for the card's
 /// tooltip ([`marked`]): with what the scanner replaced there, in order, then what he says he
-/// replaced; a stand-in nobody accounts for stays plain words. What the scanner hid and he put
+/// replaced. **EVERY stand-in in his words is marked**, whatever he listed beside them: one nobody
+/// accounts for is marked with its kind and no replaced words ([`Segment::unaccounted`]), so the
+/// card underlines it and the line under it counts it (nightly 48's walk, D23: on d0d06501c it
+/// stayed plain words, and "Nothing private was in it" sat under four stand-ins Rich had written
+/// himself, his `private` list empty because nothing private was still in his words). What the scanner hid and he put
 /// back is in his words as it was, so it marks no stand-in. What he replaced is kept with the
 /// report's private words, so the scanner leaves it out of every later change too.
 pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, String> {
@@ -1300,11 +1320,12 @@ pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, 
 }
 
 /// `text` as segments, its words unchanged: each stand-in in it ([`Kind::stand_in`]) marked with the
-/// first entry of `queue` of its kind, which it then takes; one with none is plain words.
+/// first entry of `queue` of its kind, which it then takes; one with none is marked with its kind
+/// alone ([`Segment::unaccounted`]). Every stand-in written is a stand-in on the card.
 fn marked(text: &str, queue: &mut Vec<(Kind, String)>) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let plain = |out: &mut Vec<Segment>, words: &str| match out.last_mut() {
-        Some(last) if last.was.is_none() => last.text.push_str(words),
+        Some(last) if !last.is_stand_in() => last.text.push_str(words),
         _ if !words.is_empty() => out.push(Segment::plain(words)),
         _ => {}
     };
@@ -1316,7 +1337,7 @@ fn marked(text: &str, queue: &mut Vec<(Kind, String)>) -> Vec<Segment> {
         plain(&mut out, &text[at..start]);
         match queue.iter().position(|(k, _)| *k == kind) {
             Some(i) => out.push(Segment::stand_in(&queue.remove(i).1, kind)),
-            None => plain(&mut out, &text[start..end]),
+            None => out.push(Segment::unaccounted(kind)),
         }
         at = end;
     }
@@ -1430,7 +1451,7 @@ pub struct Draft {
 fn paragraphs_of(text: &str, scrubber: &Scrubber) -> Vec<Vec<Segment>> {
     let mut out: Vec<Vec<Segment>> = vec![vec![]];
     for segment in scrubber.scrub(text) {
-        if segment.was.is_some() {
+        if segment.is_stand_in() {
             out.last_mut().expect("never empty").push(segment);
             continue;
         }
@@ -1443,13 +1464,13 @@ fn paragraphs_of(text: &str, scrubber: &Scrubber) -> Vec<Vec<Segment>> {
     }
     out.into_iter()
         .filter_map(|mut paragraph| {
-            if let Some(first) = paragraph.first_mut().filter(|s| s.was.is_none()) {
+            if let Some(first) = paragraph.first_mut().filter(|s| !s.is_stand_in()) {
                 first.text = first.text.trim_start().to_string();
             }
-            if let Some(last) = paragraph.last_mut().filter(|s| s.was.is_none()) {
+            if let Some(last) = paragraph.last_mut().filter(|s| !s.is_stand_in()) {
                 last.text = last.text.trim_end().to_string();
             }
-            paragraph.retain(|s| s.was.is_some() || !s.text.is_empty());
+            paragraph.retain(|s| s.is_stand_in() || !s.text.is_empty());
             (!paragraph.is_empty()).then_some(paragraph)
         })
         .collect()
@@ -1670,7 +1691,7 @@ pub fn issue_of(sheet: &Sheet) -> Issue {
 /// Stand-ins already on `draft` stay as they are, with what they replaced.
 pub fn as_posted(draft: &Draft, scrubber: &Scrubber) -> Draft {
     let mut card = tidied(draft);
-    for segment in card.title.iter_mut().filter(|s| s.was.is_none()) {
+    for segment in card.title.iter_mut().filter(|s| !s.is_stand_in()) {
         segment.text = segment.text.replace('`', "'");
     }
     loop {
@@ -1721,7 +1742,7 @@ fn left_out(segments: &[Segment], spans: &[Span]) -> Vec<Segment> {
     let mut at = 0;
     for segment in segments {
         let end = at + segment.text.len();
-        if segment.was.is_some() {
+        if segment.is_stand_in() {
             out.push(segment.clone());
             at = end;
             continue;
@@ -1754,20 +1775,20 @@ fn tidied(draft: &Draft) -> Draft {
     let words = |segments: &[Segment]| -> Vec<Segment> {
         let mut out: Vec<Segment> = Vec::new();
         for segment in segments {
-            let stand_in = segment.was.is_some() && Kind::ALL.iter().any(|k| k.stand_in() == segment.text);
+            let stand_in = segment.is_stand_in() && Kind::ALL.iter().any(|k| k.stand_in() == segment.text);
             match out.last_mut() {
-                Some(last) if !stand_in && last.was.is_none() => last.text.push_str(&segment.text),
+                Some(last) if !stand_in && !last.is_stand_in() => last.text.push_str(&segment.text),
                 _ if stand_in => out.push(segment.clone()),
                 _ => out.push(Segment::plain(&segment.text)),
             }
         }
-        if let Some(first) = out.first_mut().filter(|s| s.was.is_none()) {
+        if let Some(first) = out.first_mut().filter(|s| !s.is_stand_in()) {
             first.text = first.text.trim_start().to_string();
         }
-        if let Some(last) = out.last_mut().filter(|s| s.was.is_none()) {
+        if let Some(last) = out.last_mut().filter(|s| !s.is_stand_in()) {
             last.text = last.text.trim_end().to_string();
         }
-        out.retain(|s| s.was.is_some() || !s.text.is_empty());
+        out.retain(|s| s.is_stand_in() || !s.text.is_empty());
         out
     };
     let kept = |list: &[Vec<Segment>]| list.iter().map(|p| words(p)).filter(|p| !p.is_empty()).collect();

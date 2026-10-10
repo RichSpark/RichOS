@@ -171,6 +171,40 @@ async function main() {
     return `${subs.length} stand-ins; tooltip: ${tip}`;
   });
 
+  // ---- nightly 48's walk, D23 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+  await run.check("stand-ins Rich wrote himself, with nothing listed beside them, are marked and counted, and none is called nothing private", async () => {
+    // D23: on d0d06501c a report carrying [a person], [a company], [a conversation] and [a file
+    // on this Mac] said "Nothing private was in it, so nothing was left out." and marked none of
+    // them, because nothing told the card what they replaced. The shell now sends each one with
+    // its kind and no replaced words (`Segment::unaccounted`); `mock.js` does the same with
+    // `bugRichWrote`.
+    const page = await open("light", {
+      bugRichWrote: "In [a conversation], the user made the text bigger and the names got cut off. They say [a person] at [a company] sees the same thing, and their notes in [a file on this Mac] now look empty.",
+    });
+    await bustABug(page);
+    await answer(page, "The names in the sidebar get cut off when I make the text bigger.");
+    const subs = await page.locator(".bugcard .bug-doc .bug-sub").evaluateAll((n) => n.map((s) => [s.textContent, s.dataset.kind, s.tabIndex]));
+    assertEqual(subs.map(([t]) => t), ["[a conversation]", "[a person]", "[a company]", "[a file on this Mac]"], "a stand-in on the card is not marked: " + JSON.stringify(subs));
+    assert(subs.every(([, , tab]) => tab === 0), "a stand-in cannot be reached with Tab: " + JSON.stringify(subs));
+    const line = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(
+      line,
+      "Left out, because anyone can read GitHub issues: one conversation name, one person's name, one company name and one file path. The underlined words stand in for them; point at one to see what it replaced.",
+      "the line under the card"
+    );
+    // Pointing at one says what kind of detail it leaves out, and claims no words it was not given.
+    await page.hover(".bugcard .bug-sub >> nth=1");
+    await page.waitForSelector("#bug-subtip.is-shown");
+    const tip = await page.locator("#bug-subtip").innerText();
+    assertEqual(tip, "Stands in for a person's name that Rich left out when he wrote the report.", "the stand-in's tip");
+    await page.mouse.move(5, 5);
+    await page.focus(".bugcard .bug-sub >> nth=3");
+    await page.waitForSelector("#bug-subtip.is-shown");
+    assertEqual(await page.locator("#bug-subtip").innerText(), "Stands in for a file path that Rich left out when he wrote the report.", "the tip on Tab");
+    await page.close();
+    return `${subs.length} marked; line: ${line}; tip: ${tip}`;
+  });
+
   await run.check("Send files it, from the RichOS reporting account, with the words the card showed", async () => {
     const page = await open("dark");
     await bustABug(page);

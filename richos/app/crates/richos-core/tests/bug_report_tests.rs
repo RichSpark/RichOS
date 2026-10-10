@@ -1800,3 +1800,50 @@ fn a_last_pass_with_a_malformed_section_is_not_a_report_and_waits_on_this_mac() 
     assert_eq!(sheet_of(&done.draft), card);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+// ---- nightly 48's walk, D23 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+
+#[test]
+fn every_stand_in_on_the_card_is_marked_and_counted_whatever_rich_listed_beside_it() {
+    // D23: Rich wrote the stand-ins himself and listed nothing private beside them (what his
+    // prompt asks for: what is still in his words, and nothing was). On d0d06501c none of the four
+    // was marked, and the line under the card said "Nothing private was in it, so nothing was left
+    // out." under all four. The line and the marks follow the words, not the list.
+    let written = serde_json::json!({
+        "title": "Sidebar names are cut off when the text size is made bigger",
+        "what_happened": "In [a conversation], the user made the text bigger and the names in the sidebar got cut off. \
+                          They say [a person] at [a company] sees the same thing. They also say their notes in \
+                          [a file on this Mac] now look empty.",
+        "where": "The sidebar on the left.",
+        "steps": [],
+        "expected": "",
+        "checked": "",
+        "private": []
+    })
+    .to_string();
+    let draft = checked(Ok(written), &screen(), false, VERSION, &Scrubber::new(terms()), rich_keeps).unwrap().draft;
+    let mut all: Vec<Segment> = draft.title.clone();
+    for section in &draft.sections {
+        all.extend(section.paragraphs.iter().chain(&section.steps).flatten().cloned());
+    }
+    let marked: Vec<(&str, Option<Kind>)> = all.iter().filter(|s| s.kind.is_some()).map(|s| (s.text.as_str(), s.kind)).collect();
+    assert_eq!(
+        marked,
+        [
+            ("[a conversation]", Some(Kind::ConversationName)),
+            ("[a person]", Some(Kind::PersonName)),
+            ("[a company]", Some(Kind::CompanyName)),
+            ("[a file on this Mac]", Some(Kind::FilePath)),
+        ],
+        "a stand-in on the card is not marked"
+    );
+    // Nothing accounts for what they replaced, so none claims to know.
+    assert!(all.iter().all(|s| s.was.is_none()), "{all:?}");
+    assert_eq!(
+        left_out_line(&all),
+        "Left out, because anyone can read GitHub issues: one conversation name, one person's name, one company name \
+         and one file path. The underlined words stand in for them; point at one to see what it replaced."
+    );
+    // The words are Rich's, to the character.
+    assert!(draft_words(&draft).contains("They say [a person] at [a company] sees the same thing."));
+}
