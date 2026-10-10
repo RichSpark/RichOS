@@ -915,6 +915,76 @@ async function main() {
     return `question ${top.question}, answer box ${top.input}; answered, card written`;
   });
 
+  // ---- nightly 48's walk, D24 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+  //
+  // On d0d06501c, with Corrections open and focus inside it, the Settings button was missing from
+  // the accessibility tree and a press at its place did nothing (runs B, B3, R, K; once it worked,
+  // run Q, with focus left on the rail). Corrections claimed `aria-modal="true"`, and WebKit
+  // leaves everything outside a modal dialog that holds focus out of the tree, so the press the
+  // walk makes (System Events `click at`, which presses the accessibility element at a point)
+  // never reached the button. A pointer is not the only way in; the tree is how VoiceOver gets
+  // there too.
+  //
+  // IN THE TREE, COMPUTED: Playwright 1.61 ships no accessibility snapshot (control-names.js says
+  // the same), so this applies WebKit's rules from the DOM: not hidden, not `inert`, not under
+  // `aria-hidden`, and not outside an `aria-modal` dialog that holds focus. An approximation of
+  // one platform's tree, declared as one; it is the rule that was broken.
+  const settingsReach = (page) =>
+    page.evaluate(() => {
+      const btn = document.getElementById("set-btn");
+      const r = btn.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const named = (n) => (n ? n.tagName.toLowerCase() + (n.id ? "#" + n.id : "") : "nothing");
+      let why = null;
+      for (let n = btn; n && n.nodeType === 1 && !why; n = n.parentElement) {
+        if (n.hidden || n.hasAttribute("inert") || n.getAttribute("aria-hidden") === "true") why = "hidden or inert at " + named(n);
+      }
+      const focus = document.activeElement;
+      for (const modal of document.querySelectorAll('[aria-modal="true"]')) {
+        if (why || modal.hidden || !modal.getClientRects().length) continue;
+        if (modal.contains(focus) && !modal.contains(btn)) why = "outside " + named(modal) + ", an aria-modal dialog that holds focus (on " + named(focus) + ")";
+      }
+      return { top: hit === btn || btn.contains(hit) ? "ON-TOP" : "COVERED by " + named(hit), tree: why || "IN THE TREE", focus: named(focus) };
+    });
+  const OVERLAYS = [
+    ["Corrections", "#nav-corrections", "#corrections-overlay"],
+    ["Feedback", "#nav-feedback", "#feedback-overlay"],
+    ["Search", "#nav-search", "#search-overlay"],
+    ["the company picker", "#rail-new-thread", "#entity-picker"],
+  ];
+  await run.check("with Corrections open and focus inside it, the Settings button is on top, in the accessibility tree, and opens the menu; the same over every overlay it sits above", async () => {
+    const seen = [];
+    for (const [label, opener, overlay] of OVERLAYS) {
+      const page = await open("dark");
+      await page.click(opener);
+      await page.waitForSelector(overlay + ":not([hidden])");
+      // The failing state is the normal one: focus inside the overlay. Where the overlay does not
+      // move it there itself, it is put on its first control, as Tab would.
+      await page.evaluate((sel) => {
+        const o = document.querySelector(sel);
+        if (!o.contains(document.activeElement)) o.querySelector("button, input, select, textarea, [tabindex]:not([tabindex='-1'])").focus();
+      }, overlay);
+      await page.waitForFunction((sel) => document.querySelector(sel).contains(document.activeElement), overlay);
+      const reach = await settingsReach(page);
+      assertEqual(reach.top, "ON-TOP", label + ": the Settings button is not what is painted at its place");
+      assertEqual(reach.tree, "IN THE TREE", label + ": the Settings button is not in the accessibility tree");
+      // Pressed the way a person does: the pointer at its place.
+      const r = await page.locator("#set-btn").boundingBox();
+      await page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
+      await page.waitForSelector("#set-menu:not([hidden]) #bug-btn");
+      assert(await page.isVisible(overlay), label + " closed when Settings was pressed");
+      if (label === "Corrections") {
+        // And Bust a bug starts from there: the Rich panel opens beside Corrections, which stays.
+        await page.click("#bug-btn");
+        await page.waitForSelector("#bugdock:not([hidden]) .bug-rich .tl-prose");
+        assert(await page.isVisible(overlay), "Corrections closed when Bust a bug started");
+      }
+      seen.push(`${label}: ${reach.top}, ${reach.tree}, focus on ${reach.focus}, menu opened`);
+      await page.close();
+    }
+    return seen.join("; ");
+  });
+
   await run.check("the privacy heads-up reads a line break typed in a change as a break, so a name on two lines is still named", async () => {
     // Finding 2, fixture `line-break-warning.js`: on 665df1bb3 Send read the card with
     // `wordsOf()`, the heads-up with `textContent`, so "Jane" and "Doe" on two lines reached the

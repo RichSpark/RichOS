@@ -8905,15 +8905,18 @@ window.RichDismiss = {
 // about where a sheet lives — a sheet moved to `<body>` tomorrow is covered by the same walk —
 // and it reaches `.settings` precisely because `<body>` is on the chain.
 //
-// WHICH SHEETS, AND WHY NOT ALL SEVEN `aria-modal` OVERLAYS. The trigger is the declaration
+// WHICH SHEETS, AND WHY NOT EVERY OVERLAY. The trigger is the declaration
 // already on the element: `aria-modal="true"` AND a `data-dismiss` that names a CONTROL rather
 // than `escape`. That pair is "a question with one named way out" — `#setup-sheet` and
 // `#memory-setup`, the two first-run questions, and the two whose backdrop deliberately does
 // not dismiss them (`704b4596`). The other five (`#search-overlay`, `#entity-picker`,
 // `#corrections-overlay`, `#feedback-overlay`, `#techy-scope`) are dismissed from OUTSIDE
 // themselves, so "the outside is unavailable" is not what they mean and enforcing it there is
-// a different change from this one. Their `aria-modal` promise is still unkept, and saying so
-// here is better than quietly widening a fix nobody measured.
+// a different change from this one. Four of them no longer make the promise (nightly 48's walk,
+// D24): with `aria-modal` on Corrections and focus inside it, WebKit left the Settings button out
+// of the accessibility tree, so Bust a bug could not be reached from there, though Settings sits
+// above them on purpose. `#techy-scope` keeps it: it is opened from the Settings menu itself and
+// answered with its own Cancel (`ui/tests/appearance.js` holds it to that).
 //
 // EVERY MARK IS SIGNED (`data-question-inert`) AND ONLY SIGNED MARKS ARE CLEARED, so a subtree
 // that is inert for its OWN reason — `home.js` holds `#app` inert while the opening screen is

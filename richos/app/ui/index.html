@@ -900,7 +900,13 @@
       <!-- SEARCH (§3.4): a command-palette overlay, never a replacement for the sidebar.
            Results group by entity; matching happens in Rust so no thread body is loaded
            into the renderer. -->
-      <div id="search-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-label="Search">
+      <!-- NOT `aria-modal`, here and on the company picker, Corrections and Feedback (nightly 48's
+           walk, D24): each is dismissed from outside itself, and Settings (z-index 300) sits above
+           it and works there by design. With the claim, WebKit left everything outside the dialog
+           out of the accessibility tree while focus was inside it, so the Settings button could
+           not be found or pressed that way. See `QUESTION_SELECTOR` in main.js for the sheets that
+           do own the window. -->
+      <div id="search-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-label="Search">
         <div class="overlay-panel">
           <input
             id="search-input"
@@ -920,7 +926,7 @@
 
       <!-- ENTITY PICKER (§3.3): the global New thread flow asks which entity BEFORE the
            first message. Never defaults to the last entity (§21). -->
-      <div id="entity-picker" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-labelledby="entity-picker-title">
+      <div id="entity-picker" class="overlay" data-dismiss="escape" hidden role="dialog" aria-labelledby="entity-picker-title">
         <div class="overlay-panel overlay-panel--compact">
           <p id="entity-picker-title" class="overlay-title">Which company is this work in?</p>
           <!-- THE BOOT CASE'S SECOND LINE, and the reason it is separate from the title.
@@ -1129,7 +1135,7 @@
            single empty list spanning both would say "nothing to correct" on a machine where
            one desk simply is not there — the exact distinction loro itself draws between
            "nothing recorded bears on this" and a fabricated answer. -->
-      <div id="corrections-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-labelledby="corrections-title">
+      <div id="corrections-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-labelledby="corrections-title">
         <div class="overlay-panel overlay-panel--desk">
           <header class="desk-head">
             <p id="corrections-title" class="overlay-title">Corrections</p>
@@ -1196,7 +1202,7 @@
            surface's code rather than trusting this comment.
 
            NO PAGINATION. One scrolling column, however long the history gets. -->
-      <div id="feedback-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-labelledby="feedback-title">
+      <div id="feedback-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-labelledby="feedback-title">
         <div class="overlay-panel overlay-panel--desk">
           <header class="desk-head">
             <p id="feedback-title" class="overlay-title">Feedback</p>
