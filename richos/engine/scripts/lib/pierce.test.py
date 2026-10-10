@@ -494,8 +494,12 @@ model = argv[argv.index("--model") + 1]
 request = json.load(sys.stdin)
 Path(os.environ["CAPTURES"], model + ".json").write_text(json.dumps({"argv": argv, "request": request}))
 answer = json.loads(os.environ["VERDICTS"])["opus" if model == "opus" else "twin"]
-if model != "opus":
-    time.sleep(float(os.environ.get("TWIN_SLEEP", "0")))
+gate = os.environ.get("TWIN_GATE")
+if model != "opus" and gate:
+    # The twin cannot answer until the test opens the gate (bounded, to catch a hang only).
+    deadline = time.monotonic() + 60
+    while not Path(gate).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
 result = {"type": "result", "is_error": False, "structured_output": answer, "num_turns": 2,
           "total_cost_usd": 0.5 if model == "opus" else 0.01, "duration_ms": 900,
           "modelUsage": {"claude-opus-fixture" if model == "opus" else model: {"costUSD": 0.01}}}
@@ -540,7 +544,7 @@ class HaikuParallelTrack(unittest.TestCase):
         path.chmod(0o700)
         return path
 
-    def track_env(self, opus, twin, sleep=0, quota_exit=0, cpu="5"):
+    def track_env(self, opus, twin, gate="", quota_exit=0, cpu="5"):
         self.executable("claude", TWIN_PROVIDER)
         quota = self.root / "bin/quota"
         quota.write_text("#!/bin/sh\necho 'fixture quota reading'\nexit %d\n" % quota_exit)
@@ -550,7 +554,7 @@ class HaikuParallelTrack(unittest.TestCase):
         env = {**self.env, "PATH": str(self.root / "bin") + os.pathsep + self.env["PATH"],
                "CAPTURES": str(self.captures), "CLAUDECODE": "parent-session",
                "VERDICTS": json.dumps({"opus": {"notes": [], **opus}, "twin": {"notes": [], **twin}}),
-               "TWIN_SLEEP": str(sleep), "SECOND_REVIEW_QUOTA_CMD": str(quota),
+               "TWIN_GATE": str(gate), "SECOND_REVIEW_QUOTA_CMD": str(quota),
                "SECOND_REVIEW_CPU_BUSY": cpu, "SECOND_REVIEW_CODEX": str(self.root / "no-codex"),
                "RICHOS_ESCALATION_LEDGER": str(self.root / "escalations.jsonl")}
         return env
@@ -572,7 +576,8 @@ class HaikuParallelTrack(unittest.TestCase):
 
     def test_a_pierce_check_also_records_a_haiku_run_without_changing_the_opus_result(self):
         env = self.track_env({"verdict": "FINDINGS", "report": '1. "Remove the API" contradicts the user.'},
-                             {"verdict": "PASS", "report": "PASS. The API is kept."}, sleep=3)
+                             {"verdict": "PASS", "report": "PASS. The API is kept."},
+                             gate=self.root / "release-twin")
         hook = ["/bin/bash", str(ENGINE / "scripts/hooks/guard-pierce.sh")]
         off = subprocess.run(hook, input=json.dumps(self.payload), env=env, capture_output=True, text=True, timeout=30)
         off_opus = json.loads((self.captures / "opus.json").read_text())
@@ -580,10 +585,10 @@ class HaikuParallelTrack(unittest.TestCase):
         off_record = json.loads(next(records.glob("[0-9a-f]" * 64 + ".json")).read_text())
         self.assertFalse(self.shadow.exists())
         self.turn_on()
-        began = time.monotonic()
+        # The twin is held until the gate opens, so a hook that waited for it (directly
+        # or through an inherited pipe) would never return: the timeout only catches that hang.
         on = subprocess.run(hook, input=json.dumps({**self.payload, "tool_use_id": "call-2"}), env=env,
                             capture_output=True, text=True, timeout=30)
-        elapsed = time.monotonic() - began
         # The Opus answer, the refusal text and the exit code are exactly what they were.
         self.assertEqual((on.returncode, on.stdout, on.stderr), (off.returncode, off.stdout, off.stderr))
         self.assertEqual(on.returncode, 2)
@@ -593,8 +598,9 @@ class HaikuParallelTrack(unittest.TestCase):
         for key in ("id", "verdict", "report", "notes", "review_mode"):
             self.assertEqual(on_record[key], off_record[key], key)
         self.assertNotIn("haiku", json.dumps(on_record).lower())
-        # The spawn never waits for the twin, which sleeps three seconds.
-        self.assertLess(elapsed, 3)
+        # The spawn's answer is complete while the twin has not answered yet.
+        self.assertEqual(list((self.shadow / "pairs").glob("*.haiku.json")), [])
+        (self.root / "release-twin").write_text("")
         self.wait_for(lambda: "finished" in (self.shadow / "shadow.log").read_text()
                       if (self.shadow / "shadow.log").exists() else False, "the twin to finish")
         pair = next((self.shadow / "pairs").glob("*.haiku.json")).name[:-len(".haiku.json")]
