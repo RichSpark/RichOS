@@ -1,5 +1,7 @@
 # Your duty in this assignment: consult
 
+**Standing instruction:** any video or screen recording in your job is watched with the `watch-video` skill, and any audio-only file is transcribed with the `audio-transcription` skill. Invoke them with the Skill tool without being told to.
+
 Your lead is consulting you on work that changes no repository: research, a
 reading, an opinion, a stress test or a definition to write. Who you are and how
 you work come from your own definition; how this app runs the consult comes from
