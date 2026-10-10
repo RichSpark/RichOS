@@ -166,6 +166,19 @@ def run_bounded(argv, timeout, grace=None, **kwargs):
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
+def run_admitted(repo, argv, **kwargs):
+    """A fast check's hang guard starts under its worker token, as the nightly's does."""
+    snapshot = Path(__file__).parent
+    library = snapshot if (snapshot / "owned_command.py").is_file() else repo.top / "richos/app/scripts/lib"
+    sys.path.insert(0, str(library))
+    from owned_command import finish_group, owned_run
+    # Signal the owned supervisor group once. proc_tree owns detached browsers and gets
+    # nightly's full cleanup grace (its EXIT traps can take eight seconds). Walking and
+    # signalling those children here as well can turn graceful browser shutdown into abort.
+    return owned_run(argv, library=repo.top / "richos/engine/scripts/lib", finish=finish_group,
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+
+
 def say(text=""):
     print(text, file=sys.stderr, flush=True)
 
@@ -291,6 +304,13 @@ def commit_check(repo, what):
         with StagedOnly(repo) as aside:
             if aside.summary:
                 say(f"autocheck: {what}: {aside.summary} set aside for the check, so it sees only what is committed")
+            load_check = repo.top / "richos/app/scripts/lint/load_rules.py"
+            if any(p.startswith("richos/engine/") for p in staged) and load_check.is_file():
+                result = run_bounded([sys.executable, str(load_check), "--root", str(repo.top)],
+                                     timeout=FAST_HANG_SECONDS, env=repo.env, text=True)
+                if result.returncode:
+                    banner(f"{what.upper()} REFUSED: engine test load-rule growth", [result.stderr])
+                    return 1
             if policy_applies(repo, staged) and release_policy(repo, what):
                 return 1
             if physical_check(repo, what):
@@ -911,13 +931,21 @@ def run_fast_checks(repo, what, commands):
         spent += seconds
         say("+ (cd " + cwd + " && " + " ".join(shlex.quote(a) for a in argv) + ")")
         try:
-            result = run_bounded(argv, cwd=repo.top / cwd, env={**repo.env, **MUTATION_SWITCH},
+            result = run_admitted(repo, argv, cwd=repo.top / cwd, env={**repo.env, **MUTATION_SWITCH},
                                     stdin=subprocess.DEVNULL, text=True,
                                     timeout=FAST_HANG_SECONDS)
         except subprocess.TimeoutExpired:
-            banner(f"{what.upper()} REFUSED: {label} did not finish in {FAST_HANG_SECONDS} s",
+            banner(f"{what.upper()} REFUSED: {label} did not finish in {FAST_HANG_SECONDS} s of execution",
                    [f"Its recorded duration is {seconds:g} s; a hang is a failure, not a pass."])
             return ran, 1
+        if result.returncode == 75 and not getattr(result, "admitted", True):
+            banner(f"{what.upper()} REFUSED: {label} was not admitted", [
+                "No test ran. The worker admission limit expired; this is an infrastructure refusal.",
+                (result.stdout + result.stderr)[-4000:],
+            ])
+            return ran, 1
+        if getattr(result, "admission_seconds", 0) >= 1:
+            say(f"  {label}: admission {result.admission_seconds:.1f}s, execution {result.execution_seconds:.1f}s")
         if result.returncode:
             sys.stderr.write((result.stdout + result.stderr)[-4000:])
             banner(f"{what.upper()} REFUSED: {label} failed for this branch", [
@@ -953,12 +981,20 @@ def branch_selection(repo, what, run_quick=True):
     for suite in quick:
         say(f"+ (cd richos/app/ui/tests && node {suite})")
         try:
-            result = run_bounded(["node", suite], cwd=repo.top / "richos/app/ui/tests", env=repo.env,
+            result = run_admitted(repo, ["node", suite], cwd=repo.top / "richos/app/ui/tests", env=repo.env,
                                     stdin=subprocess.DEVNULL, text=True, timeout=120)
         except subprocess.TimeoutExpired:
-            banner(f"{what.upper()} REFUSED: {suite} did not finish in 120 s",
+            banner(f"{what.upper()} REFUSED: {suite} did not finish in 120 s of execution",
                    [f"It measures under a second ({QUICK_WEIGHTS}); a hang is a failure, not a pass."])
             return 1
+        if result.returncode == 75 and not getattr(result, "admitted", True):
+            banner(f"{what.upper()} REFUSED: {suite} was not admitted", [
+                "No test ran. The worker admission limit expired; this is an infrastructure refusal.",
+                (result.stdout + result.stderr)[-4000:],
+            ])
+            return 1
+        if getattr(result, "admission_seconds", 0) >= 1:
+            say(f"  {suite}: admission {result.admission_seconds:.1f}s, execution {result.execution_seconds:.1f}s")
         if result.returncode:
             sys.stderr.write((result.stdout + result.stderr)[-4000:])
             banner(f"{what.upper()} REFUSED: {suite} failed for this branch", [
@@ -1259,6 +1295,12 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     # compiler work (hunt part 2, finding 13). Any application path, a deletion included, runs it.
     # On the changed files only: `--changed` is the lint's own rule, never looser than `--all`
     # (a count that grows is decided by the full pass, lint/driver.py).
+    engine_paths = sorted(p for p in covered | set(staged) if p.startswith("richos/engine/"))
+    load_check = "richos/app/scripts/lint/load_rules.py"
+    if engine_paths and (repo.top / load_check).is_file():
+        trusted = range_argv[0].split("..", 1)[0] if what == "push" and range_argv else "refs/heads/main"
+        argv = ["python3", load_check, "--root", ".", "--trusted-ref", trusted, "--paths", *engine_paths]
+        commands.append("cd . && " + " ".join(shlex.quote(a) for a in argv))
     touches_app = any(p.startswith("richos/app/") for p in covered | set(staged))
     if touches_app and not any("lint.test.sh" in c for c in commands):
         mode = "--changed" if changed_lint and knows(repo, LINT_DRIVER, "--changed") else "--all"

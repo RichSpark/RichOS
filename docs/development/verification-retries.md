@@ -35,6 +35,21 @@ The runner and receipt verifier suppress Python bytecode writes so verification
 does not alter its own declared source inputs. Existing bytecode remains part
 of the input identity and changed inputs still invalidate evidence.
 
+Commit quick/fast checks and nightly commands share
+`richos/app/scripts/lib/owned_command.py`. Their execution hang guards start
+when the machine worker admits the command. Admission refusal is reported as
+no execution, never as a failed assertion. Installed browser identities include
+recursive file metadata, including ctime, so edits and re-signing in place
+invalidate saved evidence. This detects ordinary input drift; it does not
+authenticate a browser download. Keep installed browsers as downloaded.
+
+The app load-site baseline remains a ratchet. Engine test sites are compared
+with committed integration source under the same rules, at commit and merge;
+the push backstop compares with the pushed range's base. Existing engine sites
+are debt, not findings that every one is defective. New sites, duplicates and
+multiline timing assertions refuse. Use controlled time for a timing verdict
+or wait for the fact. A declared hang guard must explain what proves correctness.
+
 ## 2. Before any retry
 
 Run failed, timed-out, refused or previously unrun units before repeating
@@ -119,6 +134,12 @@ have identical qualified inputs and command. An unrelated commit does not itself
 invalidate its result. Missing qualification, changed inputs or damaged evidence
 requires execution with the reason recorded. Live known-red declarations are
 evaluated again and are never reused.
+
+The nightly's workspace mutation batches use this same runner and its per-unit
+receipts. An interrupted or failed batch retains completed, validated units;
+the next request executes only obligations without applicable evidence. The
+nightly gate still requires verified coverage of its complete mutation plan.
+Mutation passes remain off in the merge gate.
 
 The runner supplies target provenance to `ci-receipts.py verify --proof-run <target-run>`.
 The verifier independently recomputes target inputs and checks saved outcomes,

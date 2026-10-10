@@ -5,7 +5,7 @@ TIME only to catch a hang, never to decide a verdict; and a deadline measures ex
 never queueing. Every failure the audit ranks has one shape: a check turns the speed of the
 Mac into a fact about the product. An idle Mac hides it and a loaded nightly exposes it.
 
-Five blocking IDs, in test code only (`*.test.sh`, `*.test.py`, `ui/tests/**/*.js`,
+Five blocking IDs, in app and engine test code only (`*.test.sh`, `*.test.py`, `ui/tests/**/*.js`,
 Rust `tests/*.rs` and `#[cfg(test)]` code):
 
   wall-clock-verdict      an assertion comparing a measured duration against an upper literal
@@ -23,7 +23,7 @@ and a hash of the whitespace-normalized line), so any new site fails even while 
 is being removed. The sites that existed when the rule was introduced are in
 `baselines/load.json` and are paid down; nothing new gets in undeclared.
 
-These are structural line checks, not a parser. What each recognizes is written beside its
+These are structural checks, not a parser; parenthesized assertions may span lines. What each recognizes is written beside its
 pattern below; a shape outside them is not claimed. Fixture directories are data, never
 scanned, as everywhere else in this lint.
 """
@@ -56,7 +56,7 @@ def number(text):
 
 def language_of(path):
     """None when the path is not test code this rule covers."""
-    if not path.startswith(APP):
+    if not path.startswith((APP, "richos/engine/")):
         return None
     p = Path(path)
     if "fixtures" in p.parts or "fixture" in p.parts or "node_modules" in p.parts:
@@ -65,7 +65,7 @@ def language_of(path):
         return "shell"
     if p.name.endswith(".test.py"):
         return "python"
-    if p.suffix == ".js" and path.startswith(APP + "ui/tests/"):
+    if p.suffix == ".js" and (path.startswith(APP + "ui/tests/") or p.name.endswith(".test.js")):
         return "javascript"
     if p.suffix == ".rs":
         return "rust"
@@ -140,7 +140,7 @@ SCOPE_END = re.compile(r"^\s*(?:def |fn |async fn |async function\b|function\b)|
 DURATION_INLINE = (r"(?:(?:Date\.now|performance\.now)\(\)\s*-\s*[\w.]+"
                    r"|time\.(?:monotonic|time|perf_counter)\(\)\s*-\s*[\w.]+"
                    r"|[\w.]+\.elapsed\(\)(?:\.as_\w+\(\))?"
-                   r"|\$?\bSECONDS\b)")
+                   r"|[\w.]+At\s*-\s*[\w.]+At|\$?\bSECONDS\b)")
 ASSIGNED = re.compile(r"(?:\b(?:const|let|var)\s+(?:mut\s+)?)?\b([A-Za-z_]\w*)\s*=\s*\$?\(*\s*"
                       r"(?:(?:Date\.now|performance\.now)\(\)\s*-|time\.(?:monotonic|time|perf_counter)\(\)\s*-"
                       r"|[\w.]+\.elapsed\(\)|\$?SECONDS\s*-|\$\(date \+%s\)\s*-)")
@@ -148,7 +148,7 @@ DURATION_NAME = r"[\w.]*(?:\b(?:elapsed|took|duration|waited)\w*|\w(?:Ms|_ms|Mil
 
 
 def upper_bound(line, duration, language):
-    d = duration
+    d = rf"(?:{duration}|Math\.abs\(\s*(?:{duration}\s*-\s*{duration}|[\w.]+\.window\s*-\s*[\w.]+\.window)\s*\))"
     upper = [rf"{d}\s*<=?\s*{LIT}", rf"{LIT}\s*>=?\s*{d}",
              rf"{d}\s*<=?\s*Duration::from_\w+\(\s*{LIT}",
              rf"assertLess(?:Equal)?\(\s*{d}\s*,\s*{LIT}",
@@ -168,6 +168,25 @@ def upper_bound(line, duration, language):
 FAILS = re.compile(r"\bthrow\b|\bself\.fail\b|\bpanic!|\b(?:bad|fail|die)\b")
 
 
+def assertion_text(lines, index, language):
+    """Join an assertion's parenthesized lines, retaining its starting source location.
+
+    This remains a structural check. Quoted strings/comments do not contribute delimiters.
+    Bound the lookahead so malformed source cannot turn the rest of a file into one site.
+    """
+    if language == "shell":
+        return lines[index]
+    parts, depth = [], 0
+    for line in lines[index:index + 40]:
+        parts.append(line)
+        code = re.sub(r"(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*')", "''", line)
+        code = re.split(r"//|#", code, maxsplit=1)[0]
+        depth += code.count("(") - code.count(")")
+        if depth <= 0:
+            break
+    return " ".join(parts)
+
+
 def wall_clock(lines, code, language):
     names = set()
     for i in code:
@@ -181,7 +200,7 @@ def wall_clock(lines, code, language):
             judged = bool(re.search(r"\[\[?|\(\(", line)) and not re.match(r"\s*(?:while|until)\b", line)
         else:
             judged = bool(ASSERT[language].search(line))
-        if judged and upper_bound(line, duration, language):
+        if judged and upper_bound(assertion_text(lines, i, language), duration, language):
             found.append(i)
     return found
 
@@ -324,7 +343,8 @@ def scan(path, text, language):
     for rule, fn in SCANS:
         for i in fn(visible, code, language):
             if not declared(lines, i):
-                findings.append((rule, i + 1, lines[i]))
+                source = assertion_text(lines, i, language) if rule == "wall-clock-verdict" else lines[i]
+                findings.append((rule, i + 1, source))
     return sorted(findings, key=lambda f: (f[1], f[0]))
 
 
@@ -427,3 +447,43 @@ def lower(sites, baseline):
 
 def dump(baseline):
     return json.dumps(baseline, indent=2, sort_keys=True) + "\n"
+
+
+def check_engine(root, paths, trusted_ref="refs/heads/main"):
+    """Ratchet engine tests against committed integration source under these same rules.
+
+    Existing engine debt is reported, not silently inserted into the app baseline. New
+    sites (including duplicates) refuse. Fixing one site cannot buy room for another.
+    """
+    import subprocess
+    before = []
+    engine = [p for p in paths if p.startswith("richos/engine/") and language_of(p)]
+    for path in engine:
+        old = subprocess.run(["git", "show", f"{trusted_ref}:{path}"], cwd=root,
+                             capture_output=True, text=True)
+        if old.returncode:
+            # Missing paths are new tests; a missing trusted ref is not an empty baseline.
+            subprocess.run(["git", "rev-parse", "--verify", trusted_ref], cwd=root,
+                           check=True, capture_output=True)
+            continue
+        for rule, line, text in scan(path, old.stdout, language_of(path)):
+            before.append(dict(path=path, rule=rule, line=line, hash=site_hash(text), text=normalized(text)))
+    sites = collect(root, engine)
+    check(sites, record(before))
+    return sites
+
+
+if __name__ == "__main__":
+    import argparse
+    import subprocess
+    parser = argparse.ArgumentParser(description="Refuse new load-sensitive sites in engine tests")
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--paths", nargs="+")
+    parser.add_argument("--trusted-ref", default="refs/heads/main")
+    args = parser.parse_args()
+    paths = args.paths or subprocess.run(["git", "diff", "--cached", "--name-only", "--no-renames"],
+                           cwd=args.root, capture_output=True, text=True, check=True).stdout.splitlines()
+    try:
+        check_engine(args.root, paths, args.trusted_ref)
+    except (Refusal, subprocess.CalledProcessError) as exc:
+        raise SystemExit(str(exc))

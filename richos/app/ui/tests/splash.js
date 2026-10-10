@@ -735,6 +735,11 @@ async function launch(browser, opts) {
   opts = opts || {};
   const ctx = await browser.newContext({ viewport: opts.viewport || { width: 1280, height: 800 } });
   const page = await newPage(ctx);
+  if (opts.virtualTime) {
+    // Freeze before any product script. Only explicit runFor advances timers and rAF.
+    await page.clock.install({ time: new Date(0) });
+    await page.clock.pauseAt(new Date(0));
+  }
   if (opts.off) await page.addInitScript(() => window.localStorage.setItem("richos.splash.enabled", "false"));
   // FIRST, so the clock is running before anything else the page or this suite does.
   await page.addInitScript(CURTAIN_CLOCK, opts.clock || {});
@@ -746,7 +751,7 @@ async function launch(browser, opts) {
   }
   if (opts.init) await page.addInitScript(opts.init, opts.initArg);
   await page.goto(APP);
-  await lag(page);
+  if (!opts.virtualTime) await lag(page);
   page.__ctx = ctx;
   return page;
 }
@@ -1700,8 +1705,9 @@ async function main() {
     // 1. WITHOUT IT — the failsafe fires, and the window it leaves a shutter is MEASURED
     //    rather than quoted. `__barStoppedAt` is when `settledShot` would open; `goneAt` is
     //    when the node leaves.
-    const plain = await launch(browser, { hold: true, init: MARK_BAR_STOPPED });
-    await plain.waitForFunction(() => window.__curtain.goneAt !== null, null, { timeout: 20000 });
+    const plain = await launch(browser, { hold: true, init: MARK_BAR_STOPPED, virtualTime: true });
+    await plain.clock.runFor(6000);
+    assert(await plain.evaluate(() => window.__curtain.goneAt !== null), "the virtual-time ceiling never removed the curtain");
     const three = await plain.evaluate(() => ({
       reason: window.RichSplash.state.reason,
       hold: window.RichSplash.state.seconds * 1000,
@@ -1718,14 +1724,16 @@ async function main() {
     //    the node leaves at `holdMs + CEILING_GRACE_MS + FADE_MS + 40`; the hold is in both
     //    terms and cancels, so a five-second screen hands the camera the same 270 ms a
     //    three-second one does.
-    const long = await launch(browser, { hold: true, seconds: 5, init: MARK_BAR_STOPPED });
-    await long.waitForFunction(() => window.__curtain.goneAt !== null, null, { timeout: 20000 });
+    const long = await launch(browser, { hold: true, seconds: 5, init: MARK_BAR_STOPPED, virtualTime: true });
+    await long.clock.runFor(8000);
+    assert(await long.evaluate(() => window.__curtain.goneAt !== null), "the longer virtual-time ceiling never removed the curtain");
     const five = await long.evaluate(() => ({
       hold: window.RichSplash.state.seconds * 1000,
       window: Math.round(window.__curtain.goneAt - window.__barStoppedAt),
     }));
     await long.__ctx.close();
     assertEqual(five.hold - three.hold, 2000, "the second launch was not given two more seconds of hold");
+    // load-bound: both page clocks paused before product scripts; runFor alone advances time.
     assert(
       Math.abs(five.window - three.window) < 100,
       "the shutter's window moved from " + three.window + "ms to " + five.window + "ms when the hold grew by 2,000ms " +
@@ -1734,8 +1742,8 @@ async function main() {
 
     // 3. WITH IT — the curtain is still there a full two seconds past the instant the same
     //    launch removed it above, and nothing has reported a reason for leaving.
-    const held = await launch(browser, { hold: true, noCeiling: true, init: MARK_BAR_STOPPED });
-    await atCurtain(held, three.life + 2000);
+    const held = await launch(browser, { hold: true, noCeiling: true, init: MARK_BAR_STOPPED, virtualTime: true });
+    await held.clock.runFor(three.life + 2000);
     const kept = await held.evaluate(() => ({
       up: !!document.getElementById("splash"),
       yielding: document.getElementById("splash") ? document.getElementById("splash").classList.contains("splash--yielding") : null,
