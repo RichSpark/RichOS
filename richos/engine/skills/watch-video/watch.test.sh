@@ -214,6 +214,62 @@ STATUS=0
 N2="$(ls "$SANDBOX/at2" 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$STATUS" -eq 0 ] && [ "$N2" = 2 ]; then ok "--at 4.96,5.04 keeps two frames"; else bad "--at 4.96,5.04 keeps two frames (exit $STATUS, $N2 files)"; fi
 
+# 9. a frame step the host stops partway (the CPU circuit breaker killed ffmpeg at 17:02 of a
+# 41-minute video on 2026-10-10 and the script died with exit 255 and no index): the stopped
+# stretch is redone alone and the run still finishes. A stand-in ffmpeg fails the frame-step
+# calls named in FAKE_FAIL_CALLS (leaving a partial frame behind, exit 255) and passes every
+# other call, and every transcription call, to the real ffmpeg.
+REAL_FFMPEG="$(command -v ffmpeg)"
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in
+    *select=*)
+        n=\$(( \$(cat "$SANDBOX/ff.count" 2>/dev/null || echo 0) + 1 ))
+        echo "\$n" > "$SANDBOX/ff.count"
+        if [ -n "\${FAKE_FAIL_ALWAYS:-}" ] || case " \$FAKE_FAIL_CALLS " in *" \$n "*) true ;; *) false ;; esac; then
+            for last; do :; done
+            : > "\${last/%%04d.png/0001.png}"
+            exit 255
+        fi ;;
+esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+chmod +x "$SANDBOX/fakebin/ffmpeg"
+rm -f "$SANDBOX/ff.count"
+STATUS=0
+PATH="$SANDBOX/fakebin:$PATH" FAKE_FAIL_CALLS="1 3" WATCH_SEGMENT_SECONDS=4 WATCH_RETRY_SECONDS=0 \
+    "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/kill1" >/dev/null 2>"$SANDBOX/err9" || STATUS=$?
+KF="$(ls "$SANDBOX/kill1/frames" 2>/dev/null | tr '\n' ' ')"
+if [ "$STATUS" -eq 0 ] && [ "$(grep -c 'redoing this 4s stretch' "$SANDBOX/err9")" = 2 ] \
+    && [ "$KF" = "frame-0001-t00m00.0s.png frame-0002-t00m03.0s.png frame-0003-t00m04.0s.png frame-0004-t00m08.0s.png " ] \
+    && [ ! -e "$SANDBOX/kill1/frames/.seg" ] && [ -f "$SANDBOX/kill1/watched.md" ]; then
+    ok "a frame step stopped twice partway is redone stretch by stretch and the run finishes with its index"
+else
+    bad "a stopped frame step is redone (exit $STATUS, frames: $KF; $(tail -3 "$SANDBOX/err9"))"
+fi
+rm -f "$SANDBOX/ff.count"
+STATUS=0
+PATH="$SANDBOX/fakebin:$PATH" FAKE_FAIL_ALWAYS=1 WATCH_FRAME_RETRIES=2 WATCH_RETRY_SECONDS=0 \
+    "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/kill2" >/dev/null 2>"$SANDBOX/err9b" || STATUS=$?
+if [ "$STATUS" -eq 4 ] && grep -q 'frame step failed 3 times' "$SANDBOX/err9b" && [ ! -e "$SANDBOX/kill2/watched.md" ]; then
+    ok "a frame step that keeps being stopped exits 4 (in SKILL.md's table) with the reason, never 255"
+else
+    bad "a frame step that keeps failing exits 4 (exit $STATUS: $(tail -3 "$SANDBOX/err9b"))"
+fi
+# And it is paced: the frame step runs under nice with limited threads, so one ffmpeg stays
+# under the breaker's 3 cores. The stand-in records its own arguments and niceness.
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *select=*) echo "nice=\$(ps -o nice= -p \$\$ | tr -d ' ') \$*" >> "$SANDBOX/ff.args" ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+PATH="$SANDBOX/fakebin:$PATH" "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/paced1" >/dev/null 2>&1 || true
+if grep -q '^nice=10 ' "$SANDBOX/ff.args" 2>/dev/null && grep -q -- '-threads 2' "$SANDBOX/ff.args" && grep -q -- '-filter_threads 2' "$SANDBOX/ff.args"; then
+    ok "the frame step runs at nice 10 with 2 decoder and 2 filter threads"
+else
+    bad "the frame step is paced (recorded: $(head -c 200 "$SANDBOX/ff.args" 2>/dev/null))"
+fi
+
 if [ "$FAIL" -eq 0 ]; then echo "PASS"; exit 0; fi
 echo "$FAIL failure(s)"
 exit 1
