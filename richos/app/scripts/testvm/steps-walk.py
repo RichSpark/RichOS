@@ -17,7 +17,7 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
   wait   seconds                       sleep (a plain pause; prefer "until")
   until  args[] contains seconds       repeat ax.sh VM <args...> until its output contains the text
   keys   text                          guest.sh osascript keystroke into the frontmost app
-  push   src dest                      guest.sh VM --push src dest (a fixture file into the guest)
+  push   src dest                      guest.sh VM --push src dest (src relative to the repository root, or absolute)
   handfile mode path [to]              hand-file.sh VM paste|drag path [--to x,y]
   relaunch                             relaunch.py VM: the recorded app stopped by its captured PID and
                                        started again with its fixture environment (a choice that must
@@ -73,7 +73,11 @@ def step_run(vm, step, out):
     if op == 'keys':
         return run([str(HERE / 'guest.sh'), vm, 'osascript', '-e', keys_script(step['text'])])
     if op == 'push':
-        return run([str(HERE / 'guest.sh'), vm, '--push', step['src'], step['dest']])
+        # A plan names its source relative to the repository root so it is portable and carries no
+        # home path; an absolute source is used as written.
+        src = Path(step['src'])
+        src = src if src.is_absolute() else HERE.parents[4] / src
+        return run([str(HERE / 'guest.sh'), vm, '--push', str(src), step['dest']])
     if op == 'handfile':
         return run([str(HERE / 'hand-file.sh'), vm, step['mode'], step['path']] + (['--to', step['to']] if step.get('to') else []))
     if op == 'relaunch':
