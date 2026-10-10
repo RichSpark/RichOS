@@ -14773,7 +14773,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "9c26e57d9e207d4fcc697a6548f3f11155d1eb15dee4856765fab73caad37318",
+          "sha256": "097bbedcad9f52e9ef41d6c96a7ffdf87ef3f7a18e595e204c79b18cda1ec392",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14785,7 +14785,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "691cfad3359036abc9a7d8a0710e66cbe13d21a77bf0e3bfa71743445047c9fd",
+          "sha256": "15a885bdcce38379dc6394f23a5ab65bcfdaa49467a54d447412b36994884ee1",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -14901,6 +14901,12 @@
           "path": "richos/app/scripts/lib/runtime_cache.py",
           "sha256": "1795b481afe2193c7432dc22d9ff9571b0b5a47475ded48e2c0317ed05c60c49",
           "evidence": "Imported by proof-run.py supply_runtime and nightly-local.py Runner.runtime_path: hashes the bytes of runtime-sources.json to name the nightly's recipe-keyed runtime cache directory, and (gui_speech_models) checks whether ~/Models/Whisper/ggml-small.en.bin and ggml-large-v3-turbo-q5_0.bin under HOME are files, the speech models gui-boot's fixture needs. Stdlib only; reads no configuration and no file contents."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/nightly-local.py",
+          "sha256": "15a885bdcce38379dc6394f23a5ab65bcfdaa49467a54d447412b36994884ee1",
+          "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         }
       ]
     },
@@ -15016,7 +15022,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "9c26e57d9e207d4fcc697a6548f3f11155d1eb15dee4856765fab73caad37318",
+          "sha256": "097bbedcad9f52e9ef41d6c96a7ffdf87ef3f7a18e595e204c79b18cda1ec392",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {

@@ -31,6 +31,19 @@ class WallClockVerdict(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("wall-clock-verdict", rules(path, text))
 
+    def test_multiline_assertions_and_measured_window_differences_are_sites(self):
+        text = "assert(\n Math.abs(five.window - three.window) < 100,\n 'window');\n"
+        sites = load_rules.scan(APP + "ui/tests/splash.js", text, "javascript")
+        self.assertEqual([rule for rule, _, _ in sites], ["wall-clock-verdict"])
+        self.assertEqual(sites[0][1], 1)
+        changed = text.replace("100", "120")
+        self.assertNotEqual(load_rules.site_hash(sites[0][2]),
+                            load_rules.site_hash(load_rules.scan(APP + "ui/tests/splash.js", changed, "javascript")[0][2]))
+        for path, source in (("richos/engine/scripts/x.test.py", "self.assertLess(\n elapsed, 2)"),
+                             ("richos/engine/tests/x.test.sh", 'sleep 1\nassert_ok ready'),
+                             ("richos/engine/tests/x.test.js", "assert(\n took < 20);")):
+            self.assertTrue(rules(path, source), path)
+
     def test_shell_direction_follows_which_side_fails(self):
         upper = ["[ \"$elapsed\" -lt 5 ] || bad 'slow'\n", "if [ \"$elapsed\" -gt 5 ]; then bad 'slow'; fi\n"]
         lower = ["[ \"$waited\" -ge 3 ] && ok 'it waited'\n", "if [ \"$elapsed\" -lt 3 ]; then bad 'too fast'; fi\n"]
@@ -195,6 +208,39 @@ class SiteBaseline(unittest.TestCase):
         weakened = dict(trusted, rules={k: v for k, v in trusted["rules"].items() if k != "host-sample"})
         with self.assertRaisesRegex(Refusal, "removed or weakened load rule"):
             load_rules.compare(weakened, trusted)
+
+
+class EngineRatchet(unittest.TestCase):
+    def test_committed_engine_debt_is_allowed_but_new_and_duplicated_sites_refuse(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            def git(*args):
+                return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args], cwd=root,
+                                      capture_output=True, text=True, check=True)
+            git("init", "-q", "-b", "main")
+            git("config", "user.name", "Fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            path = "richos/engine/scripts/slow.test.py"
+            target = root / path
+            target.parent.mkdir(parents=True)
+            original = "self.assertLess(elapsed, 2)\n"
+            target.write_text(original)
+            git("add", ".")
+            git("commit", "-qm", "existing engine timing debt")
+            load_rules.check_engine(root, [path])
+            target.write_text(original * 2)
+            with self.assertRaisesRegex(Refusal, "load-rule growth"):
+                load_rules.check_engine(root, [path])
+            target.write_text("self.assertLess(\n duration, 3)\n")
+            with self.assertRaisesRegex(Refusal, "load-rule growth"):
+                load_rules.check_engine(root, [path])
+            target.write_text("self.assertTrue(ready)\n")
+            load_rules.check_engine(root, [path])
+            new = "richos/engine/scripts/new.test.py"
+            (root / new).write_text(original)
+            with self.assertRaisesRegex(Refusal, "load-rule growth"):
+                load_rules.check_engine(root, [new])
 
 
 if __name__ == "__main__":

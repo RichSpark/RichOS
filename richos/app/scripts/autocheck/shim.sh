@@ -32,17 +32,27 @@ case "$HOOK" in
     post-*) REFUSE=0 ;;
     *) REFUSE=1 ;;
 esac
-TMP=$(mktemp "${TMPDIR:-/tmp}/richos-autocheck.XXXXXX") || {
+TMP=$(mktemp -d "${TMPDIR:-/Volumes/E1TB/tmp/codex}/richos-autocheck.XXXXXX") || {
     echo "autocheck: $HOOK could not make a scratch file; the check did not run" >&2
     exit "$REFUSE"
 }
-trap 'rm -f "$TMP"' HUP INT TERM
-if ! git cat-file -p "$SRC:$REL" > "$TMP" 2>/dev/null </dev/null; then
-    rm -f "$TMP"
+trap 'rm -rf "$TMP"' HUP INT TERM
+if ! git cat-file -p "$SRC:$REL" > "$TMP/autocheck.py" 2>/dev/null </dev/null; then
+    rm -rf "$TMP"
     echo "autocheck: $HOOK could not read $SRC:$REL; the check did not run" >&2
     exit "$REFUSE"
 fi
-python3 "$TMP" "$HOOK" "$@"
+# Read the shared admission clock from the SAME committed source as the checker. This
+# also works when HEAD predates the checker/helper and the shim falls back to main.
+HELPER=richos/app/scripts/lib/owned_command.py
+if git cat-file -e "$SRC:$HELPER" 2>/dev/null </dev/null; then
+    if ! git cat-file -p "$SRC:$HELPER" > "$TMP/owned_command.py" 2>/dev/null </dev/null; then
+        rm -rf "$TMP"
+        echo "autocheck: $HOOK could not read its committed admission helper" >&2
+        exit "$REFUSE"
+    fi
+fi
+python3 "$TMP/autocheck.py" "$HOOK" "$@"
 rc=$?
-rm -f "$TMP"
+rm -rf "$TMP"
 exit "$rc"
