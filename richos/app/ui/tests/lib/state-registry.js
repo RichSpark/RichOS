@@ -4150,6 +4150,16 @@ module.exports = [
       "and hidden — no chip, no pane, no way to see the work (esc-20260918T114550Z-64ae379a).",
   },
   {
+    "s": "waiting to start",
+    "c": "FRAGMENT",
+    "why":
+      "The tail of the work chip's own count for work held until a sign-in or the work " +
+      "connection comes back — '2 assignments waiting to start' (nightly 48's walk, D26) — " +
+      "classified beside `waiting for the screen` above and for the same reason: it never " +
+      "renders alone, and the count IS the affordance, the chip opening the pane the " +
+      "assignments live in. The hold's own notice says what ends it.",
+  },
+  {
     "s": "Waiting on you:",
     "c": "FRAGMENT",
     "why":
@@ -5418,6 +5428,8 @@ module.exports = [
   {"s": "Left out, because anyone can read GitHub issues:", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The start of the left-out line under the sheet, before the counted kinds."},
   {"s": "Open issue #", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The sent card's link, before the issue number; the link is the control."},
   {"s": "Stands in for “", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The start of the stand-in tooltip, before the words it replaced."},
+  {"s": "Stands in for", "c": "FRAGMENT", "why": "Bust a bug (nightly 48's walk, D23; bug-report.js). The start of the tooltip of a stand-in whose replaced words the app was not told, before its kind (\"a person's name\")."},
+  {"s": "that Rich left out when he wrote the report.", "c": "FRAGMENT", "why": "Bust a bug (nightly 48's walk, D23; bug-report.js). The end of that tooltip, after its kind. Nothing to act on: it says what the stand-in leaves out."},
   {"s": "This Mac wouldn't open the issue. It's at github.com/WebDevBooster/richos/issues/", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). A notice when /usr/bin/open refused the issue's page, before the number; the address is the way there."},
   {"s": "Your bug report went out: issue #", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The notice when a waiting report went out by itself, before the number."},
   {"s": "filed from the RichOS reporting account, because RichOS isn't signed in to a GitHub account of yours.", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The end of Rich's line after a report went out from the reporting account."},
