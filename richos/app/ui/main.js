@@ -8474,6 +8474,10 @@ function openTechyScope(on) {
   // stop matching the sentence it was built from.
   for (const input of techyScopeInputs()) input.checked = input.value === TECHY_SCOPE_PRESELECTED;
   techyScopeEl.hidden = false;
+  // THE MENU THAT ASKED IT CLOSES. Settings is above this sheet, as above every overlay (second
+  // review of 9463220ef, finding 2), so a menu left open would cover its Turn it on and Cancel at
+  // the app's minimum window; the button stays on top, and pressing it opens the menu again.
+  if (window.RichSettings && window.RichSettings.close) window.RichSettings.close(false);
   const first = techyScopeInputs()[0];
   if (first) first.focus();
 }
@@ -8919,11 +8923,12 @@ window.RichDismiss = {
 // not dismiss them (`704b4596`). The other five (`#search-overlay`, `#entity-picker`,
 // `#corrections-overlay`, `#feedback-overlay`, `#techy-scope`) are dismissed from OUTSIDE
 // themselves, so "the outside is unavailable" is not what they mean and enforcing it there is
-// a different change from this one. Four of them no longer make the promise (nightly 48's walk,
+// a different change from this one. None of them makes the promise any more (nightly 48's walk,
 // D24): with `aria-modal` on Corrections and focus inside it, WebKit left the Settings button out
 // of the accessibility tree, so Bust a bug could not be reached from there, though Settings sits
-// above them on purpose. `#techy-scope` keeps it: it is opened from the Settings menu itself and
-// answered with its own Cancel (`ui/tests/appearance.js` holds it to that).
+// above them on purpose. `#techy-scope` followed (second review of 9463220ef, finding 2): it was
+// aria-modal at z-index 310 over Settings; it is an ordinary overlay below it now, and the menu
+// that opens it closes as it does (`openTechyScope`).
 //
 // EVERY MARK IS SIGNED (`data-question-inert`) AND ONLY SIGNED MARKS ARE CLEARED, so a subtree
 // that is inert for its OWN reason — `home.js` holds `#app` inert while the opening screen is

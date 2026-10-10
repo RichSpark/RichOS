@@ -10429,13 +10429,11 @@ body.bug-dock-open .overlay-panel--desk {
 :root { --sw-off: rgba(223, 228, 238, 0.62); }
 :root[data-theme="light"] { --sw-off: rgba(12, 19, 34, 0.58); }
 .setmenu:has(#set-codex) { width: 372px; }
-/* THE TECHNICAL VIEW QUESTION IS PAINTED OVER THE MENU THAT ASKED IT. The menu's Technical view
-   switch opens this sheet (main.js openTechyScope) while the menu stays open, and the menu (in
-   `.settings`, z-index 300) floats above every `.overlay` (60). At 372px it covered the sheet's
-   Turn it on and Cancel at the app's minimum window, 1024 by 700 (tests/quota.js). The sheet is
-   aria-modal with its own Cancel, opened from the menu: the same standing `.home-prefs` has above
-   the button, and appearance.js check 7 lists it as the menu's own and proves it in the shell. */
-#techy-scope { z-index: 310; }
+/* THE TECHNICAL VIEW QUESTION IS AN ORDINARY `.overlay` (60), BELOW SETTINGS (300), like every
+   overlay the button sits above (second review of 9463220ef, finding 2: at 310 it covered Settings
+   and Bust a bug). The menu's Technical view switch opens it, and the menu closes as it does
+   (main.js openTechyScope), so the 372px menu covers neither Turn it on nor Cancel at the app's
+   minimum window, 1024 by 700 (tests/quota.js, appearance.js check 7). */
 /* TWO DEPARTURES FROM THE ROUND'S SPACING, both forced by a floor the round could not see:
    the rules' margin is 2px above and below (the round's 6px) and the row's padding 9px over
    10px (the round's 10px over 12px), 11px in all. At the app's own minimum window, 1024 by 700

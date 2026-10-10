@@ -1014,17 +1014,22 @@ async function main() {
       }
       return { top: hit === btn || btn.contains(hit) ? "ON-TOP" : "COVERED by " + named(hit), tree: why || "IN THE TREE", focus: named(focus) };
     });
+  // Each overlay with the presses, in order, that open it the way a person does.
   const OVERLAYS = [
-    ["Corrections", "#nav-corrections", "#corrections-overlay"],
-    ["Feedback", "#nav-feedback", "#feedback-overlay"],
-    ["Search", "#nav-search", "#search-overlay"],
-    ["the company picker", "#rail-new-thread", "#entity-picker"],
+    ["Corrections", ["#nav-corrections"], "#corrections-overlay"],
+    ["Feedback", ["#nav-feedback"], "#feedback-overlay"],
+    ["Search", ["#nav-search"], "#search-overlay"],
+    ["the company picker", ["#rail-new-thread"], "#entity-picker"],
+    // The second review of 9463220ef (rv-20261010T072702Z-9463220e-543f), finding 2, fixture
+    // `settings-techy-scope.js`: opened from Settings in a conversation, the Technical view question
+    // was aria-modal at z-index 310 over Settings (300), and focus went to its first choice.
+    ["the Technical view question", ["#set-btn", "#set-techy"], "#techy-scope"],
   ];
   await run.check("with Corrections open and focus inside it, the Settings button is on top, in the accessibility tree, and opens the menu; the same over every overlay it sits above", async () => {
     const seen = [];
-    for (const [label, opener, overlay] of OVERLAYS) {
+    for (const [label, openers, overlay] of OVERLAYS) {
       const page = await open("dark");
-      await page.click(opener);
+      for (const opener of openers) await page.click(opener);
       await page.waitForSelector(overlay + ":not([hidden])");
       // The failing state is the normal one: focus inside the overlay. Where the overlay does not
       // move it there itself, it is put on its first control, as Tab would.

@@ -979,13 +979,9 @@ async function main() {
         why: "the company-buttons dialog the menu's own Home screen row opens (aria-modal, with its own Done)",
         proof: "aria-modal-opened-from-the-menu",
       },
-      {
-        // Since round 20.2 (2026-10-09): the menu widened to 372px for the Codex row and, kept open
-        // under this sheet, covered its Turn it on at 1024 by 700 (tests/quota.js).
-        sel: "#techy-scope",
-        why: "the Technical view question the menu's own Technical view switch opens over it (aria-modal, with its own Cancel)",
-        proof: "aria-modal-opened-from-the-menu",
-      },
+      // `#techy-scope` is NOT on this list since the second review of 9463220ef (finding 2): at
+      // z-index 310 it covered Settings. It is an ordinary overlay below the button; the menu
+      // closes as it opens, so the menu covers none of it (proven at the foot of this check).
     ];
 
     const zOf = (sel) => {
@@ -1044,7 +1040,8 @@ async function main() {
         done: !!document.getElementById("home-prefs-done"),
       };
     });
-    // And `#techy-scope`: opened by the Technical view switch inside the menu, over the menu.
+    // And `#techy-scope`: opened by the Technical view switch inside the menu, which closes as it
+    // opens, so nothing covers the sheet's own controls and the Settings button is above it.
     await owner.click("#home-prefs-done");
     await owner.waitForSelector("#home-prefs", { state: "hidden" });
     if (await owner.locator("#set-menu").isHidden()) await owner.click("#set-btn");
@@ -1054,18 +1051,21 @@ async function main() {
     await owner.waitForSelector("#techy-scope:not([hidden])");
     const scope = await owner.evaluate(() => {
       const sheet = document.getElementById("techy-scope");
-      const b = document.getElementById("techy-scope-confirm").getBoundingClientRect();
-      const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-      return { role: sheet.getAttribute("role"), ariaModal: sheet.getAttribute("aria-modal"),
-        cancel: !!document.getElementById("techy-scope-cancel"), confirmOnTop: !!(top && top.closest("#techy-scope")) };
+      const at = (el) => { const b = el.getBoundingClientRect(); return document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); };
+      const top = at(document.getElementById("techy-scope-confirm"));
+      const btn = at(document.getElementById("set-btn"));
+      return { role: sheet.getAttribute("role"), ariaModal: sheet.getAttribute("aria-modal"), menuHidden: document.getElementById("set-menu").hidden,
+        cancel: !!document.getElementById("techy-scope-cancel"), confirmOnTop: !!(top && top.closest("#techy-scope")), settingsOnTop: !!(btn && btn.closest(".settings")) };
     });
     await owner.click("#techy-scope-cancel");
     await owner.close();
-    assert(techyInMenu, "`#techy-scope` is excused as 'the question the menu's Technical view switch opens' and the menu has no such switch");
-    assertEqual(scope.role, "dialog", "`#techy-scope` is excused as a modal and is not a dialog");
-    assertEqual(scope.ariaModal, "true", "`#techy-scope` is excused as a modal and does not claim aria-modal");
-    assert(scope.cancel, "`#techy-scope` is excused as a modal and has no control to close it");
+    assert(techyInMenu, "the menu has no Technical view switch to open `#techy-scope` from");
+    assertEqual(scope.role, "dialog", "`#techy-scope` is not a dialog");
+    assertEqual(scope.ariaModal, null, "`#techy-scope` claims aria-modal, which leaves Settings out of the accessibility tree");
+    assert(scope.cancel, "`#techy-scope` has no control to close it");
+    assert(scope.menuHidden, "the menu stayed open over `#techy-scope`");
     assert(scope.confirmOnTop, "`#techy-scope`'s Turn it on is covered by something while the sheet is open");
+    assert(scope.settingsOnTop, "the Settings button is covered while `#techy-scope` is open");
     assertEqual(modal.role, "dialog", "`.home-prefs` is excused as a modal and is not a dialog");
     assertEqual(modal.ariaModal, "true", "`.home-prefs` is excused as a modal and does not claim aria-modal");
     assert(modal.done, "`.home-prefs` is excused as a modal the CEO opened and has no control to close it");
