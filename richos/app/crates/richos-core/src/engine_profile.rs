@@ -493,7 +493,8 @@ impl EngineProfile {
         if let Some((entity, thread)) = &self.work_scope {
             command.env("RICHOS_APP_ENTITY", entity).env("RICHOS_APP_THREAD", thread);
         }
-        // The video skill's transcription step reads this (`skills/video/SKILL.md`). An
+        // The video skill's transcription step reads this (`skills/watch-video/SKILL.md`), and
+        // so does `skills/audio-transcription/SKILL.md`. An
         // inherited value was removed with every other `RICHOS_` name above.
         if let Some(model) = &self.speech_model {
             command.env("RICHOS_SPEECH_MODEL", model);

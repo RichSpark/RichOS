@@ -118,7 +118,20 @@ pub const SKILLS: &[(&str, &str)] = &[
     // ffprobe, whisper-cli, and the speech model `engine_profile.rs` names in
     // `RICHOS_SPEECH_MODEL`). HERE and not in the engine's `skills/`, which reaches only the
     // operator's orchestrator (media-tools plan section 3, Frank's review M1).
-    ("video", include_str!("../skills/video/SKILL.md")),
+    //
+    // **Named `watch-video`, and `audio-transcription` below, because every RichOS teammate's
+    // definition says so** (CEO, 2026-10-10: the audio and video skill use is part of all the
+    // teammate and proto-teammate profiles in RichOS, "otherwise a RichOS user wouldn't take
+    // advantage of that"). The standing instruction in `engine/agents/`, `engine/team/shelf/`
+    // and the duty texts names these two skills, and the engine's own skills of the same names
+    // serve the operator's team. A teammate runs inside the work lease, which is given this
+    // plugin, so it reaches them as `rich-skills:watch-video` and
+    // `rich-skills:audio-transcription` (`native.rs`,
+    // `a_teammate_s_session_lists_every_skill_its_standing_instruction_names`).
+    ("watch-video", include_str!("../skills/watch-video/SKILL.md")),
+    // Getting the words out of an audio-only file, with the same two tools and the same pinned
+    // decode flags as `watch-video`'s transcription step.
+    ("audio-transcription", include_str!("../skills/audio-transcription/SKILL.md")),
 ];
 
 /// The plugin root for a configuration directory.
@@ -299,7 +312,11 @@ mod tests {
     }
 
     fn video_commands(prefix: &str) -> Vec<String> {
-        let body = SKILLS.iter().find(|(name, _)| *name == "video").expect("the video skill ships").1;
+        skill_commands("watch-video", prefix)
+    }
+
+    fn skill_commands(skill: &str, prefix: &str) -> Vec<String> {
+        let body = SKILLS.iter().find(|(name, _)| *name == skill).unwrap_or_else(|| panic!("{skill} ships")).1;
         // A command continued with a trailing backslash is one command.
         body.replace("\\\n", " ").lines().map(str::trim).filter(|l| l.starts_with(prefix)).map(String::from).collect()
     }
@@ -314,7 +331,7 @@ mod tests {
         assert!(!yt[uploaded].contains("--write-auto-subs"), "the first captions fetch must not take auto-generated ones: {}", yt[uploaded]);
         let auto = yt.iter().position(|c| c.contains("--write-auto-subs")).expect("the last-resort command");
         assert!(uploaded < auto, "uploaded captions come before auto-generated ones");
-        let body = SKILLS.iter().find(|(name, _)| *name == "video").unwrap().1;
+        let body = SKILLS.iter().find(|(name, _)| *name == "watch-video").unwrap().1;
         let whisper = body.find("whisper-cli -m").expect("a transcription command");
         assert!(whisper < body.find("yt-dlp --skip-download --write-auto-subs").expect("the auto-captions command"),
                 "Rich's own transcription comes before auto-generated captions");
@@ -327,7 +344,7 @@ mod tests {
     /// the CEO gave from his Mac, with no link, goes straight to transcription.
     #[test]
     fn a_link_checks_uploaded_captions_even_after_the_video_is_downloaded() {
-        let body = SKILLS.iter().find(|(name, _)| *name == "video").unwrap().1;
+        let body = SKILLS.iter().find(|(name, _)| *name == "watch-video").unwrap().1;
         let words = &body[body.find("## 4.").expect("the words section")..body.find("## 5.").expect("the next section")];
         let before_a = &words[..words.find("**a.").expect("source a")];
         assert!(before_a.contains("For a link, always start with a") && before_a.contains("already downloaded"),
@@ -342,16 +359,22 @@ mod tests {
     /// test video (D8PikZ1KhUo, 2026-10-07) that default looped "All right." 539 times and kept
     /// 1,748 of the 14,241 captioned words. Unlike voice's short utterances, a video is decoded
     /// with timestamps on (no `-nt`).
+    ///
+    /// `audio-transcription` runs the same command on an audio-only file, so it is held to the
+    /// same flags.
     #[test]
     fn the_video_skill_transcribes_with_the_pinned_decode_flags() {
-        let whisper = video_commands("whisper-cli ");
-        assert_eq!(whisper.len(), 1, "one transcription command: {whisper:?}");
-        for flag in ["-m \"$RICHOS_SPEECH_MODEL\"", " -l en ", " -t 4 ", " -fa ", " -mc 0 ", " -np "] {
-            assert!(whisper[0].contains(flag), "missing {flag:?} in {}", whisper[0]);
+        for skill in ["watch-video", "audio-transcription"] {
+            let whisper = skill_commands(skill, "whisper-cli ");
+            assert_eq!(whisper.len(), 1, "{skill}: one transcription command: {whisper:?}");
+            for flag in ["-m \"$RICHOS_SPEECH_MODEL\"", " -l en ", " -t 4 ", " -fa ", " -mc 0 ", " -np "] {
+                assert!(whisper[0].contains(flag), "{skill}: missing {flag:?} in {}", whisper[0]);
+            }
+            // `-nt` decodes without timestamp tokens, and then whisper.cpp drops the words at
+            // each 30-second window's seam: 44 of the 48 dropped stretches of 3+ words on
+            // D8PikZ1KhUo.
+            assert!(!whisper[0].contains(" -nt "), "{skill}: no -nt on a long recording: {}", whisper[0]);
         }
-        // `-nt` decodes without timestamp tokens, and then whisper.cpp drops the words at each
-        // 30-second window's seam: 44 of the 48 dropped stretches of 3+ words on D8PikZ1KhUo.
-        assert!(!whisper[0].contains(" -nt "), "no -nt on a long recording: {}", whisper[0]);
     }
 
     /// The name in the frontmatter, the directory it is written to, and the name the wire
@@ -363,7 +386,8 @@ mod tests {
             vec![
                 "rich-skills:american-english".to_string(),
                 "rich-skills:bootstrap-interview".to_string(),
-                "rich-skills:video".to_string(),
+                "rich-skills:watch-video".to_string(),
+                "rich-skills:audio-transcription".to_string(),
             ]
         );
     }

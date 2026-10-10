@@ -1,6 +1,6 @@
 ---
-name: video
-description: Use whenever the CEO asks you to download, watch, listen to, summarize or answer questions about a video, whether a YouTube or other web link or a video file on his Mac. The tools are already installed by RichOS (yt-dlp, ffmpeg, ffprobe, whisper-cli and a speech model); this says which commands to run and where the files go.
+name: watch-video
+description: Use whenever the CEO asks you, or a job needs you, to download, watch, listen to, summarize or answer questions about a video or screen recording, whether a YouTube or other web link or a video file on his Mac (.mov/.mp4/.webm/.mkv). The tools are already installed by RichOS (yt-dlp, ffmpeg, ffprobe, whisper-cli and a speech model); this says which commands to run and where the files go. An audio-only file goes to the audio-transcription skill instead.
 ---
 
 # Video: download it, watch it, hear it
