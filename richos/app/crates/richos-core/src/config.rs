@@ -213,6 +213,87 @@ impl Theme {
     }
 }
 
+/// **Which Claude model one of the two sessions runs on** — the CEO's §119 (2026-10-10):
+/// *"Rich and Stu stay on Opus high effort in RichOS by default. But the user should have the
+/// option to switch one or both to Fable (in general settings, not in quick settings)."*
+///
+/// One value per role, stored as `rich_model` and `stu_model` in `config.json`. The wire
+/// strings are the `claude` CLI's own model aliases (`--model opus`, `--model fable`), so the
+/// value goes to the child unchanged ([`ModelChoice::cli_alias`]). Effort is not a setting:
+/// his sentence fixes it at high for both, and `native.rs` passes `--effort high` either way.
+///
+/// Before this, the app never named a model, so both sessions ran on whatever the CLI chose
+/// for the account (Clark's 2026-10-10 Haiku audit in the private record).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelChoice {
+    /// His default for both roles.
+    #[default]
+    Opus,
+    /// The option he named.
+    Fable,
+    /// **A model on disk this build has no name for** — same contract as
+    /// [`Assertiveness::Unknown`]: never set, never sent to the child, never persisted as
+    /// itself. A session reads it as the default, Opus.
+    #[serde(other)]
+    Unknown,
+}
+
+impl ModelChoice {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ModelChoice::Opus => "opus",
+            ModelChoice::Fable => "fable",
+            // See `Assertiveness::as_str`: the default's wire string. The store resolves
+            // `Unknown` before any caller sees it.
+            ModelChoice::Unknown => ModelChoice::Opus.as_str(),
+        }
+    }
+
+    /// The `--model` value the `claude` CLI is given. The aliases are the CLI's own
+    /// (`claude --help`: "an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet')").
+    /// Measured on 2.1.295 with the lease's `--setting-sources ''` on 2026-10-10: `opus`
+    /// answered as `claude-opus-5-5` and `fable` as `claude-fable-5-1`.
+    pub fn cli_alias(&self) -> &'static str {
+        self.as_str()
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "opus" => Some(ModelChoice::Opus),
+            "fable" => Some(ModelChoice::Fable),
+            _ => None,
+        }
+    }
+
+    fn resolved(self) -> Self {
+        match self {
+            ModelChoice::Unknown => ModelChoice::default(),
+            known => known,
+        }
+    }
+}
+
+/// The two stored choices together, as the spawn path reads them: Rich is the front desk
+/// (the conversation lease), Stu is the back end (the work lease, §110).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LeaseModels {
+    pub rich: ModelChoice,
+    pub stu: ModelChoice,
+}
+
+/// The models a data directory's `config.json` names, read fresh at every lease spawn so a
+/// change in settings reaches the next session that starts. An absent or unreadable file
+/// yields the default (Opus for both) rather than a failure, the same rule
+/// `doctrine::identity_from_config` follows: a preference is never a reason a session cannot
+/// start.
+pub fn lease_models_from_config(data_dir: &Path) -> LeaseModels {
+    match ConfigStore::open(data_dir.join("config.json")) {
+        Ok(c) => c.lease_models(),
+        Err(_) => LeaseModels::default(),
+    }
+}
+
 /// The steps the font-size control walks, as percentages of the 16px root.
 ///
 /// A DISCRETE LADDER AND NOT A FREE NUMBER, deliberately. §15 makes font size a control —
@@ -426,6 +507,13 @@ struct StoredConfig {
     /// a setting. Absence is an absent opinion, and the product's opinion is "show it".
     #[serde(default)]
     home_entity_hidden: BTreeMap<String, bool>,
+    /// §119: the model Rich's session (the front desk) starts on. Absent reads as Opus, his
+    /// default; see [`ModelChoice`].
+    #[serde(default)]
+    rich_model: ModelChoice,
+    /// §119: the model Stu's session (the back end) starts on. Absent reads as Opus.
+    #[serde(default)]
+    stu_model: ModelChoice,
 }
 
 impl Default for StoredConfig {
@@ -447,6 +535,8 @@ impl Default for StoredConfig {
             entity: None,
             home_entity_labels: BTreeMap::new(),
             home_entity_hidden: BTreeMap::new(),
+            rich_model: ModelChoice::default(),
+            stu_model: ModelChoice::default(),
         }
     }
 }
@@ -881,6 +971,46 @@ impl ConfigStore {
         self.persist()
     }
 
+    // ---- §119: the model each session starts on ----------------------------------------
+
+    /// The model Rich's session starts on. Opus unless he chose Fable; a value this build has
+    /// no name for answers with Opus (see [`ConfigStore::assertiveness`] for the rule).
+    pub fn rich_model(&self) -> ModelChoice {
+        self.config.rich_model.resolved()
+    }
+
+    /// The model Stu's session starts on, by the same rule as [`ConfigStore::rich_model`].
+    pub fn stu_model(&self) -> ModelChoice {
+        self.config.stu_model.resolved()
+    }
+
+    /// Both, as the spawn path reads them.
+    pub fn lease_models(&self) -> LeaseModels {
+        LeaseModels { rich: self.rich_model(), stu: self.stu_model() }
+    }
+
+    /// The general-settings row's write for Rich. Refuses [`ModelChoice::Unknown`] by name —
+    /// see [`ConfigStore::set_assertiveness`]. Takes effect at the next session Rich starts.
+    pub fn set_rich_model(&mut self, model: ModelChoice) -> io::Result<()> {
+        refuse_unknown_model(model)?;
+        if self.config.rich_model == model {
+            return Ok(());
+        }
+        self.config.rich_model = model;
+        self.persist()
+    }
+
+    /// The general-settings row's write for Stu, by the same rule as
+    /// [`ConfigStore::set_rich_model`].
+    pub fn set_stu_model(&mut self, model: ModelChoice) -> io::Result<()> {
+        refuse_unknown_model(model)?;
+        if self.config.stu_model == model {
+            return Ok(());
+        }
+        self.config.stu_model = model;
+        self.persist()
+    }
+
     /// The font control's position, as a percentage of the 16px root. Always one of
     /// `FONT_SCALE_STEPS` — a value read off a hand-edited file is snapped on the way out
     /// as well as on the way in, so a caller can never observe a scale it cannot step from.
@@ -1261,14 +1391,57 @@ impl ConfigStore {
         if self.config.assertiveness == Assertiveness::Unknown {
             keys.push("assertiveness");
         }
+        if self.config.rich_model == ModelChoice::Unknown {
+            keys.push("rich_model");
+        }
+        if self.config.stu_model == ModelChoice::Unknown {
+            keys.push("stu_model");
+        }
         keys
     }
+}
+
+fn refuse_unknown_model(model: ModelChoice) -> io::Result<()> {
+    if model == ModelChoice::Unknown {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ModelChoice::Unknown is what a value written by another build reads as; it is not \
+             a setting this build can choose",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::journal::RetentionLimit;
+
+    #[test]
+    fn each_session_s_model_defaults_to_opus_survives_restart_and_keeps_a_model_it_cannot_name() {
+        // §119: absent reads as Opus for both.
+        let path = tmp_path("models");
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.lease_models(), LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Opus });
+        store.set_stu_model(ModelChoice::Fable).unwrap();
+        assert!(store.set_rich_model(ModelChoice::Unknown).is_err(), "Unknown is never a choice");
+        let reopened = ConfigStore::open(&path).unwrap();
+        assert_eq!(reopened.lease_models(), LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Fable });
+        assert_eq!(lease_models_from_config(path.parent().unwrap().join("no-such-dir").as_path()),
+            LeaseModels::default(), "no file is the default, not a failure");
+
+        // A model a newer build wrote reads as Opus here and goes back out unchanged.
+        fs::remove_file(&path).ok();
+        fs::write(&path, r#"{"rich_model":"fable-6","stu_model":"fable"}"#).unwrap();
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.rich_model(), ModelChoice::Opus);
+        assert_eq!(store.stu_model(), ModelChoice::Fable);
+        store.set_stu_model(ModelChoice::Opus).unwrap();
+        let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["rich_model"], "fable-6");
+        assert_eq!(written["stu_model"], "opus");
+        fs::remove_file(&path).ok();
+    }
 
     fn tmp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("richos-config-test-{tag}-{}-{}.json", std::process::id(), crate::util::now_millis()))

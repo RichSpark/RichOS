@@ -559,3 +559,39 @@ fn the_team_digest_moves_with_what_a_lease_registers_and_nothing_else() {
     std::fs::remove_file(team.join("mark.md")).unwrap();
     assert_eq!(digest(), fresh, "retiring the teammate gives the stock team's digest again");
 }
+
+/// **§119 (CEO, 2026-10-10): "Rich and Stu stay on Opus high effort in RichOS by default. But
+/// the user should have the option to switch one or both to Fable."** Each role's flags come
+/// from the one function `spawn_with_tools` appends to the child's argument vector, given the
+/// profile every product lease is spawned with, which reads `config.json` in the data folder.
+#[test]
+fn each_role_starts_on_opus_at_high_effort_unless_its_setting_says_fable() {
+    use richos_core::config::{ConfigStore, ModelChoice};
+    use richos_core::native::lease_model_args;
+    let opus = ["--model", "opus", "--effort", "high"];
+    let fable = ["--model", "fable", "--effort", "high"];
+    let f = Scratch::new();
+
+    // No setting written: both on Opus at high effort.
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), opus, "Rich's default");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), opus, "Stu's default");
+
+    // Rich switched to Fable; Stu stays on Opus. Read at the next spawn's `prepare`.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Fable).unwrap();
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), fable, "Rich set to Fable");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), opus, "Stu was not switched");
+
+    // Both on Fable.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_stu_model(ModelChoice::Fable).unwrap();
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), fable);
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), fable, "Stu set to Fable");
+
+    // And back: Rich returned to Opus, Stu keeps Fable.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Opus).unwrap();
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), opus, "Rich switched back");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), fable);
+}
