@@ -49,12 +49,17 @@
 //      is what the card shows when a step holds a nested list, and a rich-text paste (a nested
 //      list, a table, styled words) comes in as plain text. `mock.js` writes steps from
 //      `preset.bugSteps`.
+//  16. The review of ec2349eee (rv-20261010T121456Z-ec2349ee-5ac3), finding 2, red on 26a0213b5:
+//      a new report started over Dictation, opened from Settings for the first time, put the Rich
+//      panel under Dictation's sheet. The panel is the app's top layer now (one rule in
+//      `style.css`), checked over every overlay `lib/overlays.js` derives from the shipped CSS.
 "use strict";
 
 const path = require("path");
 const fs = require("fs");
 const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled, shellSettled, openThread, HOLD_CURTAIN } = require("./lib/harness");
 const contrast = require("./lib/contrast");
+const coverings = require("./lib/overlays");
 
 const PRIVATE = ["Acme deal", "Northwind Traders", "/Users/you/Projects/northwind/notes.txt"];
 const ANSWER =
@@ -875,6 +880,130 @@ async function main() {
       return `question ${top.question}, answer box ${top.input} and focused, typed and sent; card on top; ${name} still behind it`;
     });
   }
+
+  // ---- a NEW report over every overlay, found rather than listed: the Rich panel is the top layer ----
+  // The review of ec2349eee (rv-20261010T121456Z-ec2349ee-5ac3), finding 2, fixture
+  // `dictation-report-stack.js`: Settings -> Dictation, then Bust a bug, put the report in the Rich
+  // panel at z-index 65 UNDER Dictation's full-window sheet at 160, which took every press. Dictation
+  // is built on first open, so a check over the startup page never saw it. The panel was raised only
+  // over the screens `covered()` named. Now it is the app's top layer by one rule (`style.css`
+  // `#bugdock`), and this check holds it there over every overlay `lib/overlays.js` derives from the
+  // shipped CSS (each element its covering rules match, one made from the selector where none is in
+  // the page yet, put on screen with focus inside it, as `appearance.js` check 7c does), plus
+  // Dictation opened the way a person opens it. Over each: Settings, Bust a bug; Rich's question and
+  // the panel's answer box are what is painted at their middles (with the overlay made hit-testable
+  // for the read, so a cover that lets the pointer through still counts), and a typed answer brings
+  // the card. Left out: the two first-run questions main.js's own QUESTION_SELECTOR finds; while one
+  // is up Settings cannot be pressed (`setup.js` check 20), so no report starts over it.
+  await run.check("a new report started over any overlay the app can open, Dictation opened from Settings included, is on top in the Rich panel and can be answered", async () => {
+    const FIRST_RUN_QUESTIONS = ["memory-setup", "setup-sheet"];
+    const qsel = (fs.readFileSync(path.join(UI_DIR, "main.js"), "utf8").match(/^const QUESTION_SELECTOR = '([^']+)';$/m) || [])[1];
+    assert(qsel, "main.js has no `const QUESTION_SELECTOR = '...';` to read the first-run questions from");
+    const rules = coverings.coveringRules();
+    const scout = await open("dark", { dictation: true });
+    const counts = await scout.evaluate((sels) => sels.map((s) => document.querySelectorAll(s).length), rules.map((r) => r.selector));
+    await scout.close();
+    const targets = [];
+    rules.forEach((r, k) => {
+      if (counts[k] === 0) targets.push({ sel: r.selector, index: -1 });
+      for (let i = 0; i < counts[k]; i++) targets.push({ sel: r.selector, index: i });
+    });
+    targets.push({ dictation: true });
+    const seen = [];
+    const wrong = [];
+    const heldBack = [];
+    const toConversation = [];
+    for (const t of targets) {
+      const page = await open("dark", { dictation: true });
+      let shown;
+      if (t.dictation) {
+        // The review's path: Dictation built and opened by its own Settings row, for the first time.
+        assertEqual(await page.locator("#dictation-sheet").count(), 0, "Dictation is already built before it is opened");
+        await page.click("#set-btn");
+        await page.click("#set-dictation-open");
+        await page.waitForSelector("#dictation-sheet:not([hidden])");
+        shown = { name: "div#dictation-sheet (opened from Settings)", sel: "#dictation-sheet" };
+      } else {
+        shown = await page.evaluate(({ sel, index, qsel, firstRun }) => {
+          let el = index >= 0 ? document.querySelectorAll(sel)[index] : null;
+          if (el && el.matches(qsel) && firstRun.includes(el.id)) return { question: el.id };
+          let made = false;
+          if (!el) {
+            const m = sel.match(/^([a-z]+)?((?:[#.][\w-]+)+)$/i);
+            if (!m) return { error: "no element matches it, and it is not a simple selector to make one from" };
+            el = document.createElement(m[1] || "div");
+            for (const part of m[2].match(/[#.][\w-]+/g)) {
+              if (part[0] === "#") el.id = part.slice(1);
+              else el.classList.add(part.slice(1));
+            }
+            document.body.appendChild(el);
+            made = true;
+          }
+          for (let n = el; n && n.nodeType === 1; n = n.parentElement) if (n.hidden) n.hidden = false;
+          if (!el.getClientRects().length || getComputedStyle(el).display === "none") el.style.display = "block";
+          const first = el.querySelector("button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])");
+          if (first) first.focus();
+          el.setAttribute("data-under-test", "");
+          const name = el.tagName.toLowerCase() + (el.id ? "#" + el.id : "." + String(el.className).split(" ")[0]);
+          return { name: made ? name + " (made from " + sel + ")" : name, sel: "[data-under-test]" };
+        }, { sel: t.sel, index: t.index, qsel, firstRun: FIRST_RUN_QUESTIONS });
+      }
+      if (shown.question) {
+        heldBack.push("#" + shown.question);
+        await page.close();
+        continue;
+      }
+      if (shown.error) {
+        wrong.push("`" + t.sel + "`: " + shown.error);
+        await page.close();
+        continue;
+      }
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      await bustABug(page);
+      await page.waitForSelector("#bug-flows .bug-rich, #bugdock-msgs .bug-rich", { state: "attached" });
+      await page.evaluate(() => Promise.all(document.getAnimations()
+        .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#bugdock, #bug-flows"))
+        .map((a) => a.finished.catch(() => null))));
+      const top = await page.evaluate((sel) => {
+        const q = document.querySelector("#bugdock-msgs .bug-rich .tl-prose, #bug-flows .bug-rich .tl-prose");
+        const inPanel = !!q.closest("#bugdock");
+        const input = inPanel ? document.getElementById("bugdock-input") : document.getElementById("input");
+        const cover = document.querySelector(sel);
+        const was = cover ? cover.style.pointerEvents : "";
+        if (cover) cover.style.pointerEvents = "auto";
+        const hitAt = (el) => {
+          const r = el.getBoundingClientRect();
+          const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return h === el || el.contains(h) ? "ON-TOP" : "COVERED by " + (h ? h.tagName.toLowerCase() + (h.id ? "#" + h.id : "." + String(h.className).split(" ")[0]) : "nothing");
+        };
+        const out = { asked: q.textContent.trim(), inPanel, question: hitAt(q), input: hitAt(input), inputId: input.id };
+        if (cover) cover.style.pointerEvents = was;
+        return out;
+      }, shown.sel);
+      let answered = "NOT TRIED";
+      if (top.inPanel && top.question === "ON-TOP" && top.input === "ON-TOP") {
+        const said = "The names on the left get cut off when I make the text bigger.";
+        await page.click("#bugdock-input");
+        await page.keyboard.type(said);
+        await page.keyboard.press("Enter");
+        answered = await page
+          .waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')")
+          .then(() => "ANSWERED, CARD WRITTEN", () => "NO CARD AFTER THE ANSWER");
+      }
+      const line = shown.name + ": " + (top.inPanel ? "in the panel" : "in the conversation") + ", question " + top.question + ", answer box " + top.input + ", " + answered;
+      seen.push(line);
+      // Where the report goes (the panel, or the conversation when nothing covers it) is decided
+      // before the panel is shown, by `screenNow`; a report that went to the conversation is named
+      // in the result rather than held to the panel's rule.
+      if (!top.asked.startsWith("What went wrong?")) wrong.push(line + ", not the report's question: " + JSON.stringify(top.asked));
+      else if (!top.inPanel) toConversation.push(shown.name);
+      else if (top.question !== "ON-TOP" || top.input !== "ON-TOP" || answered !== "ANSWERED, CARD WRITTEN") wrong.push(line);
+      await page.close();
+    }
+    assertEqual(wrong, [], "a new report is not on top and answerable over every overlay");
+    return targets.length - heldBack.length + " overlays; left out, the first-run questions (Settings cannot be pressed over them): " + heldBack.join(", ") +
+      "; the report went to the conversation, not the panel, over: " + (toConversation.join(", ") || "none") + "; " + seen.join("; ");
+  });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
   // On d0d06501c the Rich panel showed a horizontal scroll bar under its messages, its thumb

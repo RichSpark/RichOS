@@ -324,7 +324,6 @@ window.RichBug = (function () {
     var cur = liveFlow();
     if (cur) {
       if (cur.dock) {
-        raiseDock(covered());
         showDock();
       } else {
         // The report is in a conversation, and the home screen or a window (Corrections,
@@ -351,7 +350,6 @@ window.RichBug = (function () {
     if (f.dock) {
       $("bugdock-msgs").textContent = "";
       $("bugdock-where").textContent = "· " + scr.label;
-      raiseDock(covered());
       showDock();
     } else {
       $("bug-flows").appendChild(f.el);
@@ -612,7 +610,6 @@ window.RichBug = (function () {
       flows.push(f);
       $("bugdock-msgs").textContent = "";
       $("bugdock-where").textContent = "· " + label;
-      raiseDock(false); // shown by itself, never over the home screen or the opening screen
     }
     if (f.step !== "unchecked") return;
     taken[c.id] = true;
@@ -1196,22 +1193,10 @@ window.RichBug = (function () {
     $("bugdock-send").firstElementChild.textContent = "▷";
     $("bugdock-voice-label").textContent = "listening…";
   }
-  /// ON TOP OF THE SCREEN THE BUG IS ON. The home screen (`#home`, 150) and the held opening
-  /// screen (`.splash`, 200) cover the whole window, and the panel sits at 65: pressed there, the
-  /// report opened underneath and the user saw nothing (echo-opus-bug20's finding on f619e9e5f).
-  /// `bugdock--over` lifts it to 250, above both and below `.settings` (300); the screen stays up
-  /// behind it, as it is the screen the report is about and the one in its picture.
-  function covered() {
-    return curtainUp() || homeOpen() || homePrefsOpen();
-  }
-  /// The Home screen buttons panel (`home.js`, z-index 240) is above the panel's own 65 too.
-  function homePrefsOpen() {
-    var p = $("home-prefs");
-    return !!(p && !p.hidden);
-  }
-  function raiseDock(on) {
-    $("bugdock").classList.toggle("bugdock--over", !!on);
-  }
+  /// ON TOP OF THE SCREEN THE BUG IS ON, whatever that screen is: the panel is the top layer of
+  /// the app by one rule in `style.css` (`#bugdock`, z-index 298), above every window, sheet and
+  /// backdrop, so nothing here decides when to raise it. The screen stays up behind it, as it is
+  /// the screen the report is about and the one in its picture.
   function showDock() {
     fillDock();
     $("bugdock").hidden = false;

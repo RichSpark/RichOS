@@ -1445,8 +1445,8 @@ window.RichHome = (function () {
     // the panel he reaches FROM the home screen could not be typed into at all. `page.fill()`
     // hid it from the older checks because it writes the value without holding focus.
     if (t.closest && t.closest(".home-prefs")) return;
-    // ...AND BUST A BUG'S RICH PANEL, which the settings menu opens ON TOP of this screen
-    // (`#bugdock.bugdock--over`): its answer box takes focus, and pulling it back to the door
+    // ...AND BUST A BUG'S RICH PANEL, which is ON TOP of this screen (`#bugdock`, the app's top
+    // layer): its answer box takes focus, and pulling it back to the door
     // would leave a report on screen that cannot be answered.
     if (t.closest && t.closest("#bugdock")) return;
     focusHome();
