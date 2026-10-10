@@ -1385,7 +1385,20 @@ window.RichBug = (function () {
       }
     });
     $("bugdock-input").addEventListener("input", paintDockSend);
-    $("bugdock-talk").addEventListener("click", function () { setDockVoice(!dockVoice); });
+    // ONE INPUT AT A TIME, again whenever the user comes back to the report: a "Press a different
+    // key" started in Dictation's sheet after the panel was shown is ended when the answer box or
+    // the talk button takes focus (rv-20261010T161328Z-06066849-659f). Dictation's Cancel puts
+    // focus on its own button, so focus goes back to what the user chose. The talk button runs it
+    // on its click too, as WebKit does not focus a button that is clicked.
+    function backToReport(e) {
+      var el = e.currentTarget;
+      var was = document.activeElement;
+      quietOtherInputs();
+      if (document.activeElement !== was) el.focus();
+    }
+    $("bugdock-input").addEventListener("focusin", backToReport);
+    $("bugdock-talk").addEventListener("focusin", backToReport);
+    $("bugdock-talk").addEventListener("click", function (e) { backToReport(e); setDockVoice(!dockVoice); });
     document.addEventListener("mouseover", function (e) { var s = e.target.closest && e.target.closest(".bug-sub"); if (s) showSubTip(s); });
     document.addEventListener("mouseout", function (e) { if (e.target.closest && e.target.closest(".bug-sub")) hideSubTip(); });
     document.addEventListener("focusin", function (e) { if (e.target.classList && e.target.classList.contains("bug-sub")) showSubTip(e.target); });

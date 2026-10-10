@@ -1053,6 +1053,39 @@ async function main() {
     return "the wait ended (tap " + JSON.stringify(tap) + "); typed and sent in the panel; F7 from the tap set no key";
   });
 
+  // ---- the review of 060668495 (rv-20261010T161328Z-06066849-659f) ----
+  await run.check("a report already in the panel, then Press a different key in Dictation, then back to the report: the wait ends, and the report takes typing and Enter", async () => {
+    // Settings, Dictation, Bust a bug, Press a different key in the sheet that stays open, then
+    // the report's answer box. On 060668495 the wait was ended only when the panel was shown, so
+    // the second wait and its key tap kept every key: the typing and Enter never reached the report.
+    const page = await open("dark", { dictation: true });
+    await page.click("#set-btn");
+    await page.click("#set-dictation-open");
+    await page.waitForSelector("#dictation-sheet:not([hidden])");
+    await bustABug(page);
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
+    await page.click("#dict-capture");
+    await page.waitForSelector("#dict-capture-cancel");
+    await page.click("#bugdock-input");
+    assertEqual(await page.locator("#dict-capture-cancel").count(), 0, "Dictation still waits for a different key with the report's answer box in focus");
+    const tap = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_capture_key").map((c) => c.on);
+    assertEqual(JSON.stringify(tap), "[true,false]", "the tool's key tap, armed then disarmed");
+    const said = "The names on the left get cut off when I make the text bigger.";
+    await page.keyboard.type(said);
+    assertEqual(await page.inputValue("#bugdock-input"), said, "what was typed in the panel's answer box");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    // The talk button is the other way back to the report: it ends a wait started again too.
+    await page.click("#dict-capture");
+    await page.waitForSelector("#dict-capture-cancel");
+    await page.click("#bugdock-talk");
+    assertEqual(await page.locator("#dict-capture-cancel").count(), 0, "Dictation still waits for a different key after the report's talk button");
+    const tap2 = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_capture_key").map((c) => c.on);
+    assertEqual(JSON.stringify(tap2), "[true,false,true,false]", "the tool's key tap, armed and disarmed twice");
+    await page.close();
+    return "the wait ended on the click into the answer box (tap " + JSON.stringify(tap) + "); typed and sent in the panel; ended again by the talk button (tap " + JSON.stringify(tap2) + ")";
+  });
+
   await run.check("Talk to Rich on first, then Bust a bug: the report is in the conversation and takes what is said", async () => {
     // Fixture `voice-before-report.js`: voice mode hides the answer box on purpose; on the tip that
     // read as a cover, so the report went to the panel and the spoken answer went to Rich instead.
