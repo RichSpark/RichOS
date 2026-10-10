@@ -904,8 +904,9 @@
            walk, D24): each is dismissed from outside itself, and Settings (z-index 300) sits above
            it and works there by design. With the claim, WebKit left everything outside the dialog
            out of the accessibility tree while focus was inside it, so the Settings button could
-           not be found or pressed that way. See `QUESTION_SELECTOR` in main.js for the sheets that
-           do own the window. -->
+           not be found or pressed that way. Only the two first-run questions claim it (review
+           rv-20261010T081721Z-66ba5386-a4d1 finding 2, the whole class); see `QUESTION_SELECTOR`
+           in main.js for why they own the window. -->
       <div id="search-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-label="Search">
         <div class="overlay-panel">
           <input

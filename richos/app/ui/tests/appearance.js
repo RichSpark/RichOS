@@ -71,6 +71,7 @@ const {
   UI_DIR,
 } = require("./lib/harness");
 const SOURCES = require("./lib/ui-sources");
+const OVERLAYS = require("./lib/overlays");
 const { collectPageErrors, createErrorTracker } = require("./lib/page-errors");
 
 const APP = "file://" + path.join(UI_DIR, "index.html");
@@ -974,11 +975,10 @@ async function main() {
     // future overlay that turned this check red could be silenced by being added to it.
     const SETTINGS_OWNED = [
       { sel: "#bug-toast", why: "the toast the menu's own Bust a bug raises", proof: "raised-by-the-menu" },
-      {
-        sel: "\\.home-prefs",
-        why: "the company-buttons dialog the menu's own Home screen row opens (aria-modal, with its own Done)",
-        proof: "aria-modal-opened-from-the-menu",
-      },
+      // `.home-prefs` is NOT on this list since the review of 66ba53861
+      // (rv-20261010T081721Z-66ba5386-a4d1, finding 2): at z-index 340 its scrim covered Settings
+      // and a press there closed it instead of opening the menu. It is 240 now, below the button,
+      // and not aria-modal (proven at the foot of this check, and by check 7c with every overlay).
       // `#techy-scope` is NOT on this list since the second review of 9463220ef (finding 2): at
       // z-index 310 it covered Settings. It is an ordinary overlay below the button; the menu
       // closes as it opens, so the menu covers none of it (proven at the foot of this check).
@@ -1026,18 +1026,19 @@ async function main() {
       ownership.bugInMenu,
       "#bug-toast is excused as 'the toast the menu raises' and the menu has no Bust a bug control in it"
     );
-    assert(
-      ownership.homeRowInMenu,
-      "`.home-prefs` is excused as 'the dialog the menu's Home screen row opens' and the menu has no such row"
-    );
+    assert(ownership.homeRowInMenu, "the menu has no Home screen row to open `.home-prefs` from");
     await owner.click("#set-home-open");
     await owner.waitForSelector("#home-prefs:not([hidden])");
     const modal = await owner.evaluate(() => {
       const panel = document.querySelector(".home-prefs-panel");
+      const b = document.getElementById("set-btn").getBoundingClientRect();
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
       return {
         ariaModal: panel ? panel.getAttribute("aria-modal") : null,
         role: panel ? panel.getAttribute("role") : null,
         done: !!document.getElementById("home-prefs-done"),
+        menuHidden: document.getElementById("set-menu").hidden,
+        settingsOnTop: !!(hit && hit.closest(".settings")),
       };
     });
     // And `#techy-scope`: opened by the Technical view switch inside the menu, which closes as it
@@ -1066,15 +1067,146 @@ async function main() {
     assert(scope.menuHidden, "the menu stayed open over `#techy-scope`");
     assert(scope.confirmOnTop, "`#techy-scope`'s Turn it on is covered by something while the sheet is open");
     assert(scope.settingsOnTop, "the Settings button is covered while `#techy-scope` is open");
-    assertEqual(modal.role, "dialog", "`.home-prefs` is excused as a modal and is not a dialog");
-    assertEqual(modal.ariaModal, "true", "`.home-prefs` is excused as a modal and does not claim aria-modal");
-    assert(modal.done, "`.home-prefs` is excused as a modal the CEO opened and has no control to close it");
+    assertEqual(modal.role, "dialog", "`.home-prefs` is not a dialog");
+    assertEqual(modal.ariaModal, null, "`.home-prefs` claims aria-modal, which leaves Settings out of the accessibility tree");
+    assert(modal.done, "`.home-prefs` has no control to close it");
+    assert(modal.menuHidden, "the menu stayed open over `.home-prefs`");
+    assert(modal.settingsOnTop, "the Settings button is covered while `.home-prefs` is open");
     return (
       report.length + " surfaces, the button hit-testable on every one (" + report.join(", ") +
       "); z-index " + settingsZ + " out-ranks every other z-index in " +
       SOURCES.styleSources().join(" + ") + " (highest other: " + highest + "), and the " +
       ownedZ.length + " above it are the component's own, each proven so in the real shell: " +
       ownedZ.map((o) => o.sel.replace(/\\/g, "") + " " + o.z + " — " + o.why).join("; ")
+    );
+  });
+
+  // ---- 7c. over EVERY overlay, found rather than listed ----------------------------------
+  //
+  // The review of 66ba53861 (rv-20261010T081721Z-66ba5386-a4d1), finding 2: Settings -> Home
+  // screen opened an aria-modal panel at z-index 340 over Settings (300), and check 7 above
+  // excused it by name. Each round before had found one more such overlay missing from a typed
+  // list (D24's four, then the Technical view question), and behind them six sheets the menu
+  // itself opens inerted Settings through main.js's question walk. So this check carries no list:
+  // `lib/overlays.js` derives every rule in the shipped CSS that covers the window and every
+  // `aria-modal` the shipped markup and code declare, and each element those rules match in the
+  // real shell (one made from the selector where none is in the page yet) is put on screen with
+  // focus inside it, the failing state D24 found. Over each: the Settings button is what is
+  // painted at its place, it is in the accessibility tree (not hidden, not `inert`, not under
+  // `aria-hidden`, not outside an `aria-modal` dialog that holds focus: WebKit's rules applied
+  // from the DOM, as `bug-report.js`'s D24 check does), and a pointer press opens its menu.
+  // Left out: only the two first-run questions, which main.js's own `QUESTION_SELECTOR` finds
+  // and which keep holding Settings back (`setup.js` check 20; see FIRST_RUN_QUESTIONS below).
+  await run.check("7c Settings is on top, in the accessibility tree and opens its menu over every overlay the shipped markup and CSS can open", async () => {
+    // THE ONE THING LEFT OUT: THE TWO FIRST-RUN QUESTIONS, as main.js defines them. They keep
+    // holding Settings back with the rest of the window (Ray's B1b, `setup.js` check 20; the CEO's
+    // common-sense exception to §15, 2026-10-10). Which elements they are is read from the
+    // product's own `QUESTION_SELECTOR` in the live shell, and that set must be exactly these two:
+    // any other sheet that comes to match it fails here by name, so this is never a way out.
+    const FIRST_RUN_QUESTIONS = ["memory-setup", "setup-sheet"];
+    const qsel = (MAIN_JS.match(/^const QUESTION_SELECTOR = '([^']+)';$/m) || [])[1];
+    assert(qsel, "main.js has no `const QUESTION_SELECTOR = '...';` to read the first-run questions from");
+    const rules = OVERLAYS.coveringRules();
+    const scout = track(await openApp(browser));
+    const counts = await scout.evaluate(
+      (sels) => sels.map((s) => { try { return document.querySelectorAll(s).length; } catch (e) { return -1; } }),
+      rules.map((r) => r.selector)
+    );
+    const questions = await scout.evaluate((q) => [...document.querySelectorAll(q)].map((n) => n.id).sort(), qsel);
+    await scout.close();
+    // Every failure is collected and named together, so one red run lists the whole class.
+    const wrong = questions
+      .filter((id) => !FIRST_RUN_QUESTIONS.includes(id))
+      .map((id) => "#" + id + " matches main.js QUESTION_SELECTOR, which holds Settings back, and is not a first-run question");
+    // An aria-modal site is the first-run questions' own when it is on their tag, or in main.js's
+    // selector that finds them.
+    const theirs = (s) =>
+      (s.file === "main.js" && s.text.startsWith("const QUESTION_SELECTOR")) ||
+      FIRST_RUN_QUESTIONS.some((id) => s.text.includes('id="' + id + '"'));
+    wrong.push(
+      ...OVERLAYS.ariaModalSites()
+        .filter((s) => !theirs(s))
+        .map((s) => "aria-modal at " + s.file + ":" + s.line + " (WebKit leaves Settings out of the accessibility tree while focus is in it): " + s.text)
+    );
+    const targets = [];
+    rules.forEach((r, k) => {
+      assert(counts[k] !== -1, "the covering rule `" + r.selector + "` (" + r.file + ") is not a selector the page can query");
+      if (counts[k] === 0) targets.push({ sel: r.selector, index: -1 });
+      for (let i = 0; i < counts[k]; i++) targets.push({ sel: r.selector, index: i });
+    });
+    const seen = [];
+    const heldBack = [];
+    for (const t of targets) {
+      const page = track(await openApp(browser));
+      const shown = await page.evaluate(({ sel, index, qsel, firstRun }) => {
+        let el = index >= 0 ? document.querySelectorAll(sel)[index] : null;
+        if (el && el.matches(qsel) && firstRun.includes(el.id)) return { question: el.id };
+        let made = false;
+        if (!el) {
+          // Not in the page until something opens it (`.home-prefs` is built on first open): one
+          // made from the selector stands in for it, so the stylesheet's claim is still tested.
+          const m = sel.match(/^([a-z]+)?((?:[#.][\w-]+)+)$/i);
+          if (!m) return { error: "no element matches it, and it is not a simple selector to make one from" };
+          el = document.createElement(m[1] || "div");
+          for (const part of m[2].match(/[#.][\w-]+/g)) {
+            if (part[0] === "#") el.id = part.slice(1);
+            else el.classList.add(part.slice(1));
+          }
+          document.body.appendChild(el);
+          made = true;
+        }
+        for (let n = el; n && n.nodeType === 1; n = n.parentElement) if (n.hidden) n.hidden = false;
+        if (!el.getClientRects().length || getComputedStyle(el).display === "none") el.style.display = "block";
+        const first = el.querySelector("button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])");
+        if (first) first.focus();
+        const name = el.tagName.toLowerCase() + (el.id ? "#" + el.id : el.className ? "." + String(el.className).split(" ")[0] : "");
+        return { name: made ? name + " (made from " + sel + ")" : name, focused: !!first && el.contains(document.activeElement) };
+      }, { sel: t.sel, index: t.index, qsel, firstRun: FIRST_RUN_QUESTIONS });
+      if (shown.question) {
+        heldBack.push("#" + shown.question);
+        await page.close();
+        continue;
+      }
+      if (shown.error) {
+        wrong.push("`" + t.sel + "`: " + shown.error);
+        await page.close();
+        continue;
+      }
+      // main.js's question walk runs from a MutationObserver: two frames for it to have run.
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const reach = await page.evaluate(() => {
+        const btn = document.getElementById("set-btn");
+        if (!btn) return { top: "MISSING", tree: "MISSING" };
+        const r = btn.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const named = (n) => (n ? n.tagName.toLowerCase() + (n.id ? "#" + n.id : "") : "nothing");
+        let why = null;
+        for (let n = btn; n && n.nodeType === 1 && !why; n = n.parentElement) {
+          if (n.hidden || n.hasAttribute("inert") || n.getAttribute("aria-hidden") === "true") why = "hidden or inert at " + named(n);
+        }
+        const focus = document.activeElement;
+        for (const m of document.querySelectorAll('[aria-modal="true"]')) {
+          if (!why && !m.hidden && m.getClientRects().length && m.contains(focus) && !m.contains(btn)) why = "outside aria-modal " + named(m);
+        }
+        return { top: hit && hit.closest(".settings") ? "ON-TOP" : "COVERED by " + named(hit), tree: why || "IN THE TREE" };
+      });
+      let opened = "NOT PRESSED";
+      if (reach.top === "ON-TOP") {
+        const b = await page.locator("#set-btn").boundingBox();
+        await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+        opened = await page
+          .waitForSelector("#set-menu:not([hidden])")
+          .then(() => "MENU OPENED", () => "MENU DID NOT OPEN");
+      }
+      const line = shown.name + ": " + reach.top + ", " + reach.tree + ", " + opened + (shown.focused ? ", focus inside" : "");
+      seen.push(line);
+      if (reach.top !== "ON-TOP" || reach.tree !== "IN THE TREE" || opened !== "MENU OPENED") wrong.push(line);
+      await page.close();
+    }
+    assertEqual(wrong, [], "Settings is not on top and reachable over every overlay");
+    return (
+      targets.length + " overlays from " + rules.length + " covering rules, no aria-modal but the first-run questions'; " +
+      "left out, the first-run questions that hold Settings back (setup.js check 20): " + heldBack.join(", ") + "; " + seen.join("; ")
     );
   });
 
@@ -2087,6 +2219,16 @@ main().catch((e) => {
 //      `#set-menu`, and that the dialog that row opens is `role=dialog`, `aria-modal=true`
 //      and carries its own Done. An unrelated overlay added to that list to quiet this check
 //      would fail those three assertions instead.
+//      SUPERSEDED by the review of 66ba53861 (rv-20261010T081721Z-66ba5386-a4d1, finding 2):
+//      the "false positive" was the defect. Its scrim covered Settings, and a press there closed
+//      the panel instead of opening the menu. `.home-prefs` left the owned list, is 240 and not
+//      aria-modal, and check 7c below holds every overlay to the same rule.
+// 7c   NOT A MUTATION — THE SHIPPED SOURCE TURNED IT RED. Run against 66ba53861's ui/ with only
+//      this file and `lib/overlays.js` copied in, check 7c named the sheets other than the two
+//      first-run questions that main.js's QUESTION_SELECTOR held Settings back over, their
+//      aria-modal declarations and `.home-prefs-panel`'s, and the overlays over which Settings was
+//      not on top, not in the tree or would not open its menu; check 7 failed on the same tree at
+//      340 against 300. The run's lines are in the commit.
 //  8   settings-button.js `buildMenu`: append the Techy row before the font row -> check 8.
 //      §15 says Text size sits "directly under the theme switch", and it is one line to get
 //      wrong.

@@ -4,7 +4,7 @@
   const bridge = window.RichBridge;
   const sheet = document.createElement("div");
   sheet.id = "repositories-sheet"; sheet.className = "overlay"; sheet.hidden = true;
-  sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-modal", "true"); sheet.setAttribute("aria-labelledby", "repositories-title");
+  sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-labelledby", "repositories-title");
   // ESCAPE CLOSES IT FROM ANYWHERE (CEO, 2026-09-17, item 1). The keydown listener below is
   // bound to the SHEET and so only fired while focus was inside it. `data-dismiss` names the
   // sheet's own Close button for main.js's document-level handler, which means Escape inherits

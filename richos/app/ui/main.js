@@ -8933,6 +8933,16 @@ window.RichDismiss = {
 // EVERY MARK IS SIGNED (`data-question-inert`) AND ONLY SIGNED MARKS ARE CLEARED, so a subtree
 // that is inert for its OWN reason — `home.js` holds `#app` inert while the opening screen is
 // up — is never un-inerted by this file on its way past.
+//
+// ONLY THE TWO FIRST-RUN QUESTIONS (review rv-20261010T081721Z-66ba5386-a4d1 finding 2, the
+// whole class). This selector also matched six sheets the Settings menu itself opens (Claude
+// accounts, the quota, the phone, repositories, dictation) and the quit question, and each one
+// inerted Settings with the rest of the window: after D24 had made Settings reachable over
+// Corrections, it was still dead over these. None of them claims `aria-modal` any more, so the
+// two first-run questions, `#setup-sheet` and `#memory-setup`, are what this matches, and they
+// keep holding Settings back as Ray's B1b asked (`tests/setup.js` check 20; the CEO's common-
+// sense exception to §15, 2026-10-10). `ui/tests/appearance.js` check 7c finds every other
+// overlay from the shipped markup and CSS and holds Settings on top and reachable over each.
 
 /// A modal question: it asks, and the only way out is the control it names.
 const QUESTION_SELECTOR = '.overlay[aria-modal="true"][data-dismiss^="control:"]';

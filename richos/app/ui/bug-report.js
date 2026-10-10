@@ -128,6 +128,19 @@ window.RichBug = (function () {
       var n = $(WINDOWS[i][0]);
       if (n && !n.hidden) return WINDOWS[i];
     }
+    // ANY OTHER DIALOG ON SCREEN IS A WINDOW TOO (review rv-20261010T081721Z-66ba5386-a4d1
+    // finding 2): Settings is reachable over every overlay now, the sheets its own menu opens
+    // included (Claude accounts, the quota, the phone, repositories, dictation, the Home screen
+    // buttons, the Technical view question), so a report started over one goes to the panel
+    // beside it rather than to a conversation the sheet covers.
+    var dialogs = document.querySelectorAll('[role="dialog"]');
+    for (var d = 0; d < dialogs.length; d++) {
+      var el = dialogs[d];
+      if (el.closest("[hidden], #bugdock, .settings") || !el.getClientRects().length) continue;
+      var titleId = el.getAttribute("aria-labelledby");
+      var title = (titleId && $(titleId) && $(titleId).textContent.trim()) || el.getAttribute("aria-label") || "";
+      return [el.id || "", "window", title ? "the " + title + " window" : "a RichOS window", title ? "the RichOS window titled " + title : "a RichOS window"];
+    }
     return null;
   }
   /// Close every window over the conversation with its own close (`main.js`'s `POPUP_CLOSERS`).
@@ -1189,7 +1202,12 @@ window.RichBug = (function () {
   /// `bugdock--over` lifts it to 250, above both and below `.settings` (300); the screen stays up
   /// behind it, as it is the screen the report is about and the one in its picture.
   function covered() {
-    return curtainUp() || homeOpen();
+    return curtainUp() || homeOpen() || homePrefsOpen();
+  }
+  /// The Home screen buttons panel (`home.js`, z-index 240) is above the panel's own 65 too.
+  function homePrefsOpen() {
+    var p = $("home-prefs");
+    return !!(p && !p.hidden);
   }
   function raiseDock(on) {
     $("bugdock").classList.toggle("bugdock--over", !!on);

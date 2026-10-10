@@ -1024,6 +1024,10 @@ async function main() {
     // `settings-techy-scope.js`: opened from Settings in a conversation, the Technical view question
     // was aria-modal at z-index 310 over Settings (300), and focus went to its first choice.
     ["the Technical view question", ["#set-btn", "#set-techy"], "#techy-scope"],
+    // The review of 66ba53861 (rv-20261010T081721Z-66ba5386-a4d1), finding 2, fixture
+    // `settings-overlays.js`: Settings -> Home screen opened an aria-modal panel at z-index 340
+    // over Settings (300). Every other overlay is found, not listed, by appearance.js check 7c.
+    ["the Home screen buttons", ["#set-btn", "#set-home-open"], "#home-prefs"],
   ];
   await run.check("with Corrections open and focus inside it, the Settings button is on top, in the accessibility tree, and opens the menu; the same over every overlay it sits above", async () => {
     const seen = [];

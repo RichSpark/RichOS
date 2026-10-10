@@ -1530,9 +1530,11 @@ window.RichHome = (function () {
     scrim.addEventListener("click", closeSettings);
     wrap.appendChild(scrim);
 
+    // NOT aria-modal, like every overlay (review rv-20261010T081721Z-66ba5386-a4d1 finding 2):
+    // with focus on its label field, WebKit would leave the Settings button out of the
+    // accessibility tree, and Settings is above every overlay (§15).
     var panel = elem("div", "home-prefs-panel", {
       role: "dialog",
-      "aria-modal": "true",
       "aria-labelledby": "home-prefs-title",
     });
 
