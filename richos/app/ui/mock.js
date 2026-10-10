@@ -1231,6 +1231,11 @@
   // would be rehearsing the surface against a sentence the product does not raise.
   let onboardingState = preset.onboarding || "described";
   const onboardingDeclineFails = preset.onboardingDeclineFails === true;
+  // `onboardingDeclineHold: true` keeps "Not now"'s answer back until
+  // `__RICHOS_MOCK__.releaseDecline()`, so a suite can have it finish while something else is
+  // on screen, as the real write does when the spine is slow (nightly 49's walk, D28: it
+  // finished behind an open Bust a bug panel).
+  let onboardingDeclineHeld = preset.onboardingDeclineHold === true ? [] : null;
   const ONBOARDING_DECLINE_REFUSED =
     "I couldn't write that down, so it isn't recorded and I'll ask again next time. I'd " +
     "rather say so than let you think it was settled. Whoever set RichOS up will need to " +
@@ -3229,6 +3234,7 @@
         case "decline_onboarding":
           onboardingCalls.push({ cmd: "decline_onboarding", entityId: args.entityId });
           if (!args.entityId || args.entityId !== onboardingViewOf().entityId) return Promise.reject("The selected company changed. Open its conversation and choose Not now again.");
+          if (onboardingDeclineHeld) await new Promise((r) => onboardingDeclineHeld.push(r));
           if (onboardingDeclineFails) return Promise.reject(ONBOARDING_DECLINE_REFUSED);
           onboardingByEntity.set(args.entityId, "declined");
           return onboardingViewOf();
@@ -4971,6 +4977,12 @@
     /// suite proves "Not now" actually recorded something rather than merely looking pressed
     /// — the exact failure the command it calls was written to end.
     onboardingCalls() { return onboardingCalls.slice(); },
+    /// Lets a "Not now" held by `onboardingDeclineHold` answer, and every later one at once.
+    releaseDecline() {
+      const held = onboardingDeclineHeld || [];
+      onboardingDeclineHeld = null;
+      held.forEach((r) => r());
+    },
     /// ---- what did not load out of the ledger (2026-09-05) -----------------------------
     /// Put the history notice into a state. The default is CLEAN, so a suite that wants the
     /// notice on screen has to ask for it — the surface can never be shown to be working by

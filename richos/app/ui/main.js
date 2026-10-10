@@ -122,6 +122,21 @@ const messagesEl = el("messages");
 const conversationEl = el("conversation");
 const composerEl = el("composer");
 const inputEl = el("input");
+/// **WHILE A REPORT IS OPEN IN THE RICH PANEL, NOTHING MOVES FOCUS TO THE CONVERSATION'S
+/// MESSAGE BOX** (nightly 49's walk, D28). The conversation behind the panel keeps working:
+/// on 13aa9bc0f the first-run "Not now" finishing (`declineFirstRunInterview`) called
+/// `inputEl.focus()` while the user was typing their answer in the panel, so the next words and
+/// Return went to Rich as a conversation message. Every app call that focuses this box goes
+/// through this one method, whichever file makes it (`main.js`, `home.js`, `questions.js`,
+/// `permissions.js` reach it as `#input`), so the rule is here and not in each caller. The user
+/// can still click or Tab into the box: neither calls `focus()`. `bug-dock-open` is the panel's
+/// own state (`bug-report.js` `showDock`/`hideDock`); once it closes, focus calls work again.
+inputEl.focus = (function (focus) {
+  return function (options) {
+    if (document.body.classList.contains("bug-dock-open")) return;
+    return focus.call(this, options);
+  };
+})(inputEl.focus);
 const sendBtn = el("send");
 const stopBtn = el("stop");
 const talkToggleBtn = el("talk-toggle");

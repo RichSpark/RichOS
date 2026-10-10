@@ -78,6 +78,10 @@
 //      if the panel's talk is still on; and while a report is open, from the press until it is
 //      sent, canceled or its panel closed, Bust a bug in the Settings menu is disabled, so a press
 //      is always a first press.
+//  21. Nightly 49's walk (docs/verification/2026-10-10-nightly-49-candidate-walk.md), D28, red on
+//      13aa9bc0f: while a report is open in the Rich panel, nothing moves focus to the
+//      conversation's message box. `mock.js` holds "Not now" with `onboardingDeclineHold` until
+//      `__RICHOS_MOCK__.releaseDecline()`, so it finishes while the panel is open, as on the guest.
 "use strict";
 
 const path = require("path");
@@ -1446,6 +1450,54 @@ async function main() {
     await reopen("closing the panel");
     await page.close();
     return "disabled while " + seen.join("; ");
+  });
+
+  // ---- nightly 49's walk, D28 (docs/verification/2026-10-10-nightly-49-candidate-walk.md) ----
+  // Run I on 13aa9bc0f: the panel asked "What went wrong?", "markerone" was typed into its box,
+  // and while the panel was open the conversation behind it finished its first-run "Not now".
+  // `declineFirstRunInterview` then called `inputEl.focus()`, and " markertwo" went into the
+  // conversation's message box, where Return sends it to Rich. THE RULE: while a report is open in
+  // the Rich panel, nothing moves focus to the conversation's message box. It is one method on the
+  // box (`main.js`, `inputEl.focus`), so every caller goes through it: the first-run path and the
+  // way the home screen and the question sheets reach it (`document.getElementById("input")
+  // .focus()`). Once the panel closes the box takes focus again.
+  await run.check("D28: while a report is open in the Rich panel, nothing moves focus to the conversation's message box: the first-run Not now finishing and a caller outside main.js, asked and at the card; typing and Enter stay the report's, and once the panel closes the box takes focus again", async () => {
+    const page = await open("light", { onboarding: "not-yet", onboardingDeclineHold: true, bugWriteMs: 300 });
+    const before = await page.locator("#messages .tl-user").count();
+    const where = () => page.evaluate(() => { const a = document.activeElement; return a ? (a.id ? "#" + a.id : a.tagName.toLowerCase()) : "none"; });
+    // The path the walk saw: "Not now" pressed in the conversation, its write still on the way.
+    await page.waitForSelector("#first-run-later:visible");
+    await page.click("#first-run-later");
+    await bustABug(page);
+    await page.waitForFunction(() => document.activeElement === document.getElementById("bugdock-input"));
+    await page.keyboard.type("markerone");
+    await page.evaluate(() => window.__RICHOS_MOCK__.releaseDecline());
+    await page.waitForSelector("#first-run[data-state='declined']");
+    const afterDecline = await where();
+    await page.keyboard.type(" markertwo");
+    // Any other caller, the way home.js, questions.js and permissions.js reach the box.
+    await page.evaluate(() => document.getElementById("input").focus());
+    const afterOther = await where();
+    await page.keyboard.type(" markerthree");
+    const seen = { afterDecline, afterOther, panel: await page.inputValue("#bugdock-input"), conversation: await page.inputValue("#input") };
+    assertEqual(seen, { afterDecline: "#bugdock-input", afterOther: "#bugdock-input", panel: "markerone markertwo markerthree", conversation: "" }, "focus left the panel's box");
+    // Return is the report's: the card comes, and nothing went to Rich's conversation.
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "a message went to Rich's conversation");
+    // At the card (runs F, G and J): the panel's box has the keys, and a caller does not take them.
+    await page.locator("#bugdock-input").focus();
+    await page.evaluate(() => document.getElementById("input").focus());
+    assertEqual(await where(), "#bugdock-input", "at the card, focus left the panel's box");
+    // The way out: once the panel is closed, the app focuses the box again.
+    await page.click("#bug-cancel");
+    await page.waitForSelector(".bugcard.is-canceled");
+    await page.click("#bugdock-x");
+    await page.waitForSelector("#bugdock", { state: "hidden" });
+    await page.evaluate(() => document.getElementById("input").focus());
+    assertEqual(await where(), "#input", "after the panel closed, the box cannot take focus");
+    await page.close();
+    return `after Not now finished: ${afterDecline}; after a caller outside main.js: ${afterOther}; panel "${seen.panel}", conversation "${seen.conversation}"; at the card: focus stayed; panel closed: #input focuses`;
   });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
