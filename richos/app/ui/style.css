@@ -10290,9 +10290,14 @@ body.bug-dock-open .overlay-panel--desk {
   outline: 2px solid var(--gold);
   outline-offset: 1px;
 }
+/* NEVER SIDEWAYS (nightly 48's walk, D25): on d0d06501c a horizontal scroll bar sat under the
+   messages on the guest, whose classic always-on scroll bars take width from the box; with only
+   `overflow-y` set, `overflow-x` computes to `auto` too. The box never scrolls sideways, and the
+   card no longer leans 4px into the padding on each side, so that clip can never cut its border. */
 .bugdock-msgs {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
   padding: 14px 18px 18px;
   display: flex;
@@ -10301,10 +10306,6 @@ body.bug-dock-open .overlay-panel--desk {
 }
 .bugdock-msgs .tl-user-bubble {
   max-width: 88%;
-}
-.bugdock-msgs .bugcard {
-  margin-left: -4px;
-  margin-right: -4px;
 }
 .bugdock-msgs .tl-prose {
   font-size: 1.0625rem;

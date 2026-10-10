@@ -876,6 +876,74 @@ async function main() {
     });
   }
 
+  // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+  // On d0d06501c the Rich panel showed a horizontal scroll bar under its messages, its thumb
+  // almost the panel's width (runs B2 and P2): the content was a few pixels wider than the panel.
+  //
+  // WHAT THIS CAN AND CANNOT SEE. The guest has no trackpad, so macOS draws classic scroll bars that
+  // take width from the box; this WebKit draws overlay ones that take none, and on the mock's words
+  // nothing overflowed here, with or without a 15px classic bar, and a long unbroken word already
+  // wraps (all measured before this check was written). The guest's exact few pixels were not
+  // reproduced. So the check puts the walk's observed state in directly, under two declared
+  // stand-ins: a 15px classic scroll bar on the messages (the guest's always-on bars) and one
+  // element a few pixels wider than the box (the overflow the walk saw). No horizontal scroll bar
+  // may be drawn under it. Then, with that element gone, the panel's own content must be no wider
+  // than the box and reach past nothing, so the clip that keeps the bar away cuts nothing off.
+  const CLASSIC_BARS = "#bugdock-msgs::-webkit-scrollbar{width:15px;height:15px;background:#5a6070}#bugdock-msgs::-webkit-scrollbar-thumb{background:#9aa0ad}";
+  const sideways = (page, wider) =>
+    page.evaluate((wider) => {
+      const box = document.getElementById("bugdock-msgs");
+      let probe = null;
+      if (wider) {
+        probe = document.createElement("div");
+        probe.style.cssText = "flex:none;height:1px;width:calc(100% + " + wider + "px)";
+        box.appendChild(probe);
+      }
+      const cs = getComputedStyle(box);
+      const r = box.getBoundingClientRect();
+      // The padding box's right edge: where the content may reach, the vertical bar left aside.
+      const edge = r.left + parseFloat(cs.borderLeftWidth) + box.clientWidth;
+      const wide = [...box.querySelectorAll("*")]
+        .filter((n) => n !== probe && n.getClientRects().length && getComputedStyle(n).position !== "absolute" && n.getBoundingClientRect().right > edge + 0.5)
+        .slice(0, 3)
+        .map((n) => n.tagName.toLowerCase() + (typeof n.className === "string" && n.className ? "." + n.className.split(" ")[0] : "") + " +" + (n.getBoundingClientRect().right - edge).toFixed(1) + "px");
+      const bar = box.offsetHeight - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth) - box.clientHeight;
+      const over = box.scrollWidth - box.clientWidth;
+      if (probe) probe.remove();
+      return { over, bar, wide };
+    }, wider || 0);
+  await run.check("the Rich panel's messages never scroll sideways: over Corrections and on the home screen, asked and with the card", async () => {
+    const seen = [];
+    for (const where of ["corrections", "home"]) {
+      let page;
+      if (where === "corrections") {
+        page = await open("dark");
+        await page.click("#nav-corrections");
+        await page.waitForSelector("#corrections-overlay:not([hidden])");
+      } else {
+        page = await openCovered("home");
+      }
+      await page.addStyleTag({ content: CLASSIC_BARS });
+      await bustABug(page);
+      await page.waitForSelector("#bugdock:not([hidden]) .bug-rich .tl-prose");
+      await settle(page);
+      const asked = await sideways(page, 6);
+      assertEqual(asked.bar, 0, where + ", asked, with content 6px wider than the panel: a horizontal scroll bar is drawn under the messages (" + asked.bar + "px)");
+      await page.fill("#bugdock-input", "The names in the sidebar get cut off when I make the text bigger.");
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+      await settle(page);
+      const wider = await sideways(page, 6);
+      assertEqual(wider.bar, 0, where + ", with the card and content 6px wider than the panel: a horizontal scroll bar is drawn under the messages (" + wider.bar + "px)");
+      const own = await sideways(page);
+      assertEqual(own.over, 0, where + ", with the card: the panel's own content is " + own.over + "px wider than the box: " + JSON.stringify(own.wide));
+      assertEqual(own.wide, [], where + ", with the card: something of the panel's own reaches past its edge and is cut off");
+      seen.push(`${where}: no sideways bar with content 6px wider (asked ${asked.bar}px, card ${wider.bar}px); own content ${own.over}px wider`);
+      await page.close();
+    }
+    return seen.join("; ");
+  });
+
   // ---- the review of 665df1bb3 (rv-20261009T223503Z-665df1bb-17bf) ----
   await run.check("Bust a bug pressed again over Corrections shows the report already open in the conversation, on top and answerable", async () => {
     // Finding 1, fixture `reopen-report.js`: on 665df1bb3 the report already in the conversation
