@@ -1269,6 +1269,42 @@ async function main() {
     return "talk off while checking; voice calls: " + all.join(" → ") + "; the second sentence went nowhere";
   });
 
+  await run.check("every press of Bust a bug turns the panel's talk off, shows the answer box and puts the keys in it, asked and with the card", async () => {
+    // Both reviews: on f29db7082 a second press with the panel's talk button on left the answer
+    // box hidden, and the keys elsewhere (`focusAnswer` skips a hidden box).
+    const page = await open("dark", { bugVoice: true });
+    await bustABug(page);
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    const lines = [];
+    for (const stage of ["asked", "with the card"]) {
+      if (stage === "with the card") await answer(page, "The names on the left get cut off when I make the text bigger.");
+      await page.click("#bugdock-talk");
+      await page.waitForSelector("#bugdock-voice:not([hidden])");
+      assertEqual(await heldNow(page), true, stage + ": the hold with the talk button on");
+      const from = await callCount(page);
+      await bustABug(page);
+      const st = await page.evaluate(() => new Promise((r) => setTimeout(() => r({
+        form: !document.getElementById("bugdock-form").hidden,
+        voice: !document.getElementById("bugdock-voice").hidden,
+        talk: document.getElementById("bugdock-talk").getAttribute("aria-pressed"),
+        keys: document.activeElement === document.getElementById("bugdock-input"),
+      }), 0)));
+      assertEqual(st, { form: true, voice: false, talk: "false", keys: true }, stage + ": after the press");
+      await page.waitForFunction(() => {
+        const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+        return v[v.length - 1].on === false;
+      });
+      const order = await voiceOrder(page, from);
+      assertEqual(order, ["stop", "hold off"], stage + ": the voice calls of the press");
+      await page.keyboard.type("x");
+      assertEqual(await page.inputValue("#bugdock-input"), "x", stage + ": the keys typed reached the answer box");
+      await page.fill("#bugdock-input", "");
+      lines.push(stage + ": " + order.join(" → "));
+    }
+    await page.close();
+    return lines.join("; ");
+  });
+
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
   // On d0d06501c the Rich panel showed a horizontal scroll bar under its messages, its thumb
   // almost the panel's width (runs B2 and P2): the content was a few pixels wider than the panel.

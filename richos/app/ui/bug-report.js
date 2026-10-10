@@ -317,7 +317,13 @@ window.RichBug = (function () {
   /// **START.** Every press is the same: the report is in the Rich panel, on top, with the keys in
   /// its answer box. One report at a time: pressing it while one is in progress brings that one
   /// forward and pulses its card; the screen behind is left as it is.
+  ///
+  /// **EVERY PRESS TURNS THE PANEL'S TALK OFF AND SHOWS THE ANSWER BOX** (reviews
+  /// rv-20261010T180327Z-f29db708-24e0 finding 1, rv-20261010T180313Z-f29db708-733e finding 2): on
+  /// f29db7082 a press with the panel's talk button on left the answer box hidden, and
+  /// `focusAnswer` skips a hidden box, so the keys stayed where they were.
   function start(seen) {
+    setDockVoice(false);
     var cur = liveFlow();
     if (cur) {
       showDock();
