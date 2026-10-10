@@ -88,44 +88,10 @@ class CommandCleanupError(RuntimeError):
 
 
 def finish_group(process):
-    """Stop only the session/group we created, including surviving grandchildren.
-
-    Descendants that deliberately call setsid/setpgid escape this boundary. This
-    is process-group ownership, not an OS container or a claim to discover those
-    descendants. No process-name lookup is used.
-    """
-    def exists():
-        process.poll()  # Reap the leader before testing its group.
-        try:
-            os.killpg(process.pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            # macOS can briefly report EPERM while orphaned group members are
-            # being reaped. Treat it as present and keep the bounded wait.
-            return True
-
-    for sig, grace in ((signal.SIGTERM, TERM_GRACE), (signal.SIGKILL, KILL_GRACE)):
-        try:
-            os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            break
-        except PermissionError:
-            # A group of exiting orphans may briefly reject signals on macOS.
-            # The deadline and final presence check still apply.
-            pass
-        until = time.monotonic() + grace
-        while exists() and time.monotonic() < until:
-            time.sleep(0.02)
-        if not exists():
-            break
-    try:
-        process.wait(timeout=KILL_GRACE)
-    except subprocess.TimeoutExpired:
-        raise CommandCleanupError(f"owned command group {process.pid} did not exit after bounded cleanup") from None
-    if exists():
-        raise CommandCleanupError(f"owned command group {process.pid} did not exit after bounded cleanup")
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+    from owned_command import finish_group as finish
+    return finish(process, term_grace=TERM_GRACE, kill_grace=KILL_GRACE,
+                  error_type=CommandCleanupError)
 
 
 class GateStopped(RuntimeError):
@@ -185,105 +151,12 @@ class GateNotAdmitted(RuntimeError):
     pass
 
 
-# Written by the command's first instruction AFTER worker_tokens.py admitted it, and before
-# it execs the real command (same pid, so the owned group is unchanged).
-ADMITTED_SHIM = ': > "$0" && exec "$@"'
-ADMISSION_POLL = 0.1
-
-
-def owned_run(args, *, timeout=None, groups=None, cleanup=False, release_build=False, **kwargs):
-    """subprocess.run's result shape with bounded, owned-group cleanup on all exits.
-
-    `groups`, when given, is the run's OwnedGroups: the command is registered there for as
-    long as it lives, so a failing gate elsewhere can stop it (Runner.run_gates).
-
-    `release_build` registers the supervisor with the CPU guard as a release build
-    instead of a plain session, which gives the compiler under it the guard's longer
-    per-process window (cpu_guard.BUILD_WINDOW). Only the build step passes it: on
-    2026-09-28 the guard's 10-second rule stopped rustc compiling the app binary at
-    4.52 cores after every gate had passed (run 20260928T190111Z-40a16163).
-
-    `timeout` MEASURES EXECUTION, NEVER QUEUEING. Every command first waits in
-    worker_tokens.py for one of the machine's worker tokens, and until 2026-09-29 the deadline
-    ran from the spawn, so a gate beside the mutation pool spent its budget in the queue: run
-    20260929T003824Z-01545196, the UI gate's 30 s `git status` cleanup "timed out" while the
-    pool held the tokens. The clock now starts when the command is ADMITTED (the shim above
-    writes a marker as its first act under the token), as ci-shard.sh does per unit. The wait
-    for a token keeps its own bound: worker_tokens.py gives up after 1800 s and exits 75.
-    The result carries `admission_seconds`, `execution_seconds` and `admitted`; so does the
-    TimeoutExpired raised when execution runs past `timeout`."""
+def owned_run(args, **kwargs):
+    # Keep nightly's cleanup/group ownership while sharing its admission clock with commits.
     library = Path(__file__).resolve().parents[2] / "engine/scripts/lib"
-    worker = library / "worker_tokens.py"
-    # The worker wrapper owns its command, but does not watch this coordinator.
-    # Keep an independent supervisor tied to our identity around the entire
-    # admission/worker lifetime, so even SIGKILL here cancels waiting or active work.
-    supervisor = library / "proc_tree.py"
-    role = ["--guard-role", "release-build"] if release_build else []
-    scratch = Path(tempfile.mkdtemp(prefix="richos-nightly-admission-"))
-    marker, timing = scratch / "admitted", scratch / "timing.json"
-    started = time.monotonic()
-    admitted_at = None
-
-    def admitted():
-        nonlocal admitted_at
-        if admitted_at is None and marker.exists():
-            admitted_at = time.monotonic()
-        return admitted_at is not None
-
-    process = None
-    try:
-        process = subprocess.Popen([sys.executable, str(supervisor), "run", str(os.getpid()), *role, "--",
-                                    sys.executable, str(worker), "machine", "--timing", str(timing), "--",
-                                    "/bin/sh", "-c", ADMITTED_SHIM, str(marker), *map(str, args)],
-                                   start_new_session=True, **kwargs)
-        if groups is not None:
-            groups.add(process, cleanup)
-        while True:
-            # Queued: look for the admission marker every ADMISSION_POLL seconds (communicate()
-            # keeps draining the pipes meanwhile). Admitted: the rest of the budget, once.
-            if not admitted():
-                wait = ADMISSION_POLL
-            elif timeout is None:
-                wait = None
-            else:
-                wait = max(0.0, admitted_at + timeout - time.monotonic())
-            try:
-                stdout, stderr = process.communicate(timeout=wait)
-                break
-            except subprocess.TimeoutExpired:
-                # Retrying communicate() after its timeout loses no output (subprocess docs).
-                if admitted_at is not None and timeout is not None and \
-                        time.monotonic() >= admitted_at + timeout:
-                    expired = subprocess.TimeoutExpired(args, timeout)
-                    expired.admitted = True
-                    expired.admission_seconds = admitted_at - started
-                    expired.execution_seconds = time.monotonic() - admitted_at
-                    raise expired from None
-        result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
-        ended = time.monotonic()
-        admitted()
-        try:
-            row = json.loads(timing.read_text())
-            result.admitted = bool(row["admitted"])
-            result.admission_seconds = float(row["admission_seconds"])
-            result.execution_seconds = float(row["execution_seconds"])
-        except (OSError, ValueError, KeyError, TypeError):
-            result.admitted = admitted_at is not None
-            result.admission_seconds = (admitted_at or ended) - started
-            result.execution_seconds = ended - admitted_at if admitted_at is not None else 0.0
-        return result
-    finally:
-        try:
-            if process is not None:
-                finish_group(process)
-        finally:
-            if groups is not None and process is not None:
-                groups.discard(process)
-            if process is not None:
-                for stream in (process.stdout, process.stderr):
-                    if stream is not None:
-                        stream.close()
-            shutil.rmtree(scratch, ignore_errors=True)
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+    from owned_command import owned_run as admitted_run
+    return admitted_run(args, library=library, finish=finish_group, **kwargs)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -941,7 +814,7 @@ GATE_SET_PER_STEP = (
 
 
 def gate_tmpdir(environ=None):
-    """The temporary folder every gate's commands get: macOS's per-user one, never the caller's.
+    """One temporary folder for both build gates and their author checks.
 
     WHY NOT THE LAUNCHING SHELL'S (2026-10-01). Nightly attempt 2 failed cargo-cache-env.test.sh
     with "sccache: error: path must be shorter than SUN_LEN": a Unix socket under
@@ -949,11 +822,15 @@ def gate_tmpdir(environ=None):
     build started from a terminal passes through `/var/folders/<..>/T/` (57 bytes once
     resolved to /private/var/...); an agent's shell can hand down something shorter, and the
     same suite then passes for the engineer and fails in the nightly. So the build names ONE
-    folder, the one `getconf DARWIN_USER_TEMP_DIR` reports for this account, and
-    proof-run.py's checks get the same one from this function (gate_conditions). Only when
-    that cannot be read (not macOS) does the caller's TMPDIR stand in.
+    folder independent of the caller: the project's short external-SSD gate root when that
+    volume is mounted, otherwise the account's platform root. Each command creates its own
+    disposable subdirectories there. proof-run.py gets the same root via gate_conditions.
     """
     environ = os.environ if environ is None else environ
+    if Path("/Volumes/E1TB").is_mount():
+        folder = Path("/Volumes/E1TB/tmp/richos-gates")
+        folder.mkdir(parents=True, exist_ok=True)
+        return str(folder) + "/"
     try:
         out = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True,
                              text=True, timeout=10, stdin=subprocess.DEVNULL)
@@ -1883,6 +1760,28 @@ class Runner:
                             f"{failed} failed check(s))" + (" [" + "; ".join(named) + "]" if named else "")))
         return red
 
+    def mutation_units(self, units, environment, label):
+        """Use the existing per-unit runner/receipts instead of losing a batch's passes.
+
+        Each retry gets a fresh evidence directory. The existing qualified-input owner
+        store reuses completed units only after validating their inputs and receipts.
+        ci-shard keeps each unit's deadlines, leak canary and worker admission unchanged.
+        """
+        plans = self.state / "mutation-plans"
+        plans.mkdir(parents=True, exist_ok=True)
+        selection = plans / (label + ".txt")
+        selection.write_text("cd richos/engine && bash scripts/ci-shard.sh --only-units " +
+                             ",".join(units) + "\n")
+        evidence = self.state / "mutation-proof"
+        evidence.mkdir(parents=True, exist_ok=True)
+        logdir = Path(tempfile.mkdtemp(prefix=label + "-", dir=evidence))
+        self.command(sys.executable, self.source / SCRIPTS / "proof-run.py",
+                     "--commands", selection, "--log-dir", logdir,
+                     # The engine never reads this output-only nightly generation id.
+                     # Keep the actual id on the coordinator, normalize only this batch.
+                     env_extra={**environment, "RICHOS_NIGHTLY_RUN_ID": CONDITIONS_RUN_ID},
+                     timeout=GATE_BUDGETS[WORKSPACE_MUTANTS_GATE])
+
     def retry_red_ui_suites_alone(self, error, receipts, tests, tree, first):
         """Give each suite the sharded run left red ONE attempt alone; True when the build goes on.
 
@@ -2031,13 +1930,9 @@ class Runner:
         # fourteen-point pass's own 3600 s until the first nightly measures them.
         def workspace_mutants():
             with self.phase(WORKSPACE_MUTANTS_GATE):
-                self.command("bash", "richos/engine/scripts/ci-shard.sh", "--only-units",
-                             "mega-lander/tests/workspace-spec-fourteen.test.sh",
-                             env_extra={"RICHOS_FOURTEEN_MUTANTS": "1"},
-                             timeout=GATE_BUDGETS[WORKSPACE_MUTANTS_GATE])
-                self.command("bash", "richos/engine/scripts/ci-shard.sh", "--only-units",
-                             ",".join(MUTATION_PASS_UNITS), env_extra={"RICHOS_MUTATION_PASSES": "1"},
-                             timeout=GATE_BUDGETS[WORKSPACE_MUTANTS_GATE])
+                self.mutation_units(["mega-lander/tests/workspace-spec-fourteen.test.sh"],
+                                    {"RICHOS_FOURTEEN_MUTANTS": "1"}, "fourteen")
+                self.mutation_units(MUTATION_PASS_UNITS, {"RICHOS_MUTATION_PASSES": "1"}, "workspace")
 
         def privacy_sweep():
             with self.phase("gates/privacy-sweep"):
@@ -2094,7 +1989,7 @@ class Runner:
         inputs = proof_evidence.checkout_identity(self.source, [sys.executable], env)
         inputs["readers"] = {str(path): proof_evidence.file_digest(path) for path in (
             Path(__file__).resolve(), Path(proof_evidence.__file__).resolve(),
-            Path(library) / "nightly_gate_evidence.py")}
+            Path(library) / "nightly_gate_evidence.py", Path(library) / "owned_command.py")}
         home = Path(env.get("HOME", str(Path.home())))
         paths = {"privacy": Path(env.get("RICHOS_NAMED_PERSONS_FILE") or
                                  home / ".richos-privacy/named-persons"),
