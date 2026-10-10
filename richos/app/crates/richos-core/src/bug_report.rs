@@ -1257,8 +1257,9 @@ fn section_of(his: &serde_json::Value, n: usize, ours: &DraftSection) -> Result<
 /// waits.
 ///
 /// Nothing here changes a word of his. Each stand-in in his words is only MARKED for the card's
-/// tooltip ([`marked`]): with what the scanner replaced there, in order, then what he says he
-/// replaced. **EVERY stand-in in his words is marked**, whatever he listed beside them: one nobody
+/// tooltip ([`marked`]): with what the stand-in in the same place of the report replaced, the
+/// scanner's or what he says he replaced, and with its kind alone where that place cannot be
+/// told (review rv-20261010T072702Z-9463220e-543f finding 1). **EVERY stand-in in his words is marked**, whatever he listed beside them: one nobody
 /// accounts for is marked with its kind and no replaced words ([`Segment::unaccounted`]), so the
 /// card underlines it and the line under it counts it (nightly 48's walk, D23: on d0d06501c it
 /// stayed plain words, and "Nothing private was in it" sat under four stand-ins Rich had written
@@ -1275,14 +1276,28 @@ pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, 
     let his_sections =
         scanned.sections.iter().zip(theirs).enumerate().map(|(n, (ours, his))| section_of(his, n + 1, ours)).collect::<Result<Vec<_>, String>>()?;
     let replaced = private_of(&value)?;
-    // What each stand-in in his words stands for, in the order they will be met.
-    let mut queue: Vec<(Kind, String)> = Vec::new();
-    let mut take = |segments: &[Segment]| {
-        queue.extend(segments.iter().filter_map(|s| Some((s.kind?, s.was.clone()?))));
-    };
-    take(&scanned.title);
-    for section in &scanned.sections {
-        section.paragraphs.iter().chain(&section.steps).for_each(|p| take(p));
+    // **EVERY STAND-IN OF THE REPORT AS THE SCANNER LEFT IT, IN ITS PLACE** (review
+    // rv-20261010T072702Z-9463220e-543f finding 1): what the scanner replaced, and `None` for one
+    // already in the words, which nothing here knows (one Rich wrote before, kept through Change
+    // it). On 9463220ef only the scanner's were queued, so the [a person] Rich had written for
+    // Bob took the receipt for the "Alex" the user added after it. `at` is its place: the text's
+    // number (title, then each section's paragraphs and steps) and where in that text.
+    let mut queue: Vec<((usize, usize), Kind, Option<String>)> = Vec::new();
+    // The words around them, where what he replaces now is found ([`finished`]'s last step).
+    let mut words_at: Vec<((usize, usize), &str)> = Vec::new();
+    let units = std::iter::once(&scanned.title).chain(scanned.sections.iter().flat_map(|s| s.paragraphs.iter().chain(&s.steps)));
+    for (n, unit) in units.enumerate() {
+        let mut offset = 0;
+        for s in unit {
+            match s.kind {
+                Some(kind) => queue.push(((n, offset), kind, s.was.clone())),
+                None => {
+                    queue.extend(stand_ins_in(&s.text).into_iter().map(|(i, kind)| ((n, offset + i), kind, None)));
+                    words_at.push(((n, offset), s.text.as_str()));
+                }
+            }
+            offset += s.text.len();
+        }
     }
     // What the scanner hid that he put back: each time its words are in his, stand-ins aside.
     let mut his_words = title.clone();
@@ -1293,19 +1308,55 @@ pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, 
         his_words = his_words.replace(kind.stand_in(), "\n");
     }
     let mut put_back: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for (_, was) in &queue {
+    for was in queue.iter().filter_map(|(_, _, was)| was.as_ref()) {
         if !was.is_empty() && !put_back.contains_key(was) {
             put_back.insert(was.clone(), his_words.matches(was.as_str()).count());
         }
     }
-    queue.retain(|(_, was)| match put_back.get_mut(was) {
+    queue.retain(|(_, _, was)| match was.as_ref().and_then(|w| put_back.get_mut(w)) {
         Some(left) if *left > 0 => {
             *left -= 1;
             false
         }
         _ => true,
     });
-    queue.extend(replaced.iter().map(|t| (t.kind, t.text.clone())));
+    // What he replaced now takes the place its words had in the report; a kind with one whose
+    // place is not in it cannot be told apart from the rest of its kind.
+    let mut unplaced: std::collections::HashSet<Kind> = std::collections::HashSet::new();
+    let mut claimed: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    for t in &replaced {
+        let place = words_at.iter().find_map(|&((n, offset), words)| {
+            words.match_indices(t.text.as_str()).map(|(i, _)| (n, offset + i)).find(|at| !t.text.is_empty() && !claimed.contains(at))
+        });
+        match place {
+            Some(at) => {
+                claimed.insert(at);
+                queue.push((at, t.kind, Some(t.text.clone())));
+            }
+            None => {
+                unplaced.insert(t.kind);
+            }
+        }
+    }
+    queue.sort_by_key(|(at, _, _)| *at);
+    // **A STAND-IN NOT TIED TO ITS PLACE CLAIMS NOTHING.** His stand-ins of a kind are matched
+    // to these in order only when there are as many of each and every one has its place: then
+    // the n-th in his words is the n-th in the report, his words being the report's with nothing
+    // else changed. Otherwise which is which cannot be told, and each of that kind says only its
+    // kind ([`Segment::unaccounted`]) rather than name words it may not have replaced.
+    let mut his_count: std::collections::HashMap<Kind, usize> = std::collections::HashMap::new();
+    for text in std::iter::once(&title).chain(his_sections.iter().flat_map(|(_, paragraphs, steps)| paragraphs.iter().chain(steps))) {
+        for (_, kind) in stand_ins_in(text) {
+            *his_count.entry(kind).or_default() += 1;
+        }
+    }
+    let untied: std::collections::HashSet<Kind> = Kind::ALL
+        .iter()
+        .copied()
+        .filter(|k| unplaced.contains(k) || queue.iter().filter(|(_, kind, _)| kind == k).count() != his_count.get(k).copied().unwrap_or(0))
+        .collect();
+    let mut queue: Vec<(Kind, Option<String>)> =
+        queue.into_iter().filter(|(_, kind, _)| !untied.contains(kind)).map(|(_, kind, was)| (kind, was)).collect();
     let mut mark = |text: &str| marked(text, &mut queue);
     let title = mark(&title);
     let sections = his_sections
@@ -1319,10 +1370,24 @@ pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, 
     Ok(Draft { title, sections, private: distinct(scanned.private.iter().cloned().chain(replaced)) })
 }
 
-/// `text` as segments, its words unchanged: each stand-in in it ([`Kind::stand_in`]) marked with the
-/// first entry of `queue` of its kind, which it then takes; one with none is marked with its kind
-/// alone ([`Segment::unaccounted`]). Every stand-in written is a stand-in on the card.
-fn marked(text: &str, queue: &mut Vec<(Kind, String)>) -> Vec<Segment> {
+/// Each stand-in written in `text` ([`Kind::stand_in`]), where it starts and its kind, in order.
+fn stand_ins_in(text: &str) -> Vec<(usize, Kind)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some((start, kind)) =
+        Kind::ALL.iter().filter_map(|k| text[at..].find(k.stand_in()).map(|i| (at + i, *k))).min_by_key(|&(i, k)| (i, std::cmp::Reverse(k.stand_in().len())))
+    {
+        found.push((start, kind));
+        at = start + kind.stand_in().len();
+    }
+    found
+}
+
+/// `text` as segments, its words unchanged: each stand-in in it ([`stand_ins_in`]) marked with the
+/// first entry of `queue` of its kind, which it then takes; one whose entry knows no words, or
+/// with no entry, is marked with its kind alone ([`Segment::unaccounted`]). Every stand-in written
+/// is a stand-in on the card.
+fn marked(text: &str, queue: &mut Vec<(Kind, Option<String>)>) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let plain = |out: &mut Vec<Segment>, words: &str| match out.last_mut() {
         Some(last) if !last.is_stand_in() => last.text.push_str(words),
@@ -1330,16 +1395,13 @@ fn marked(text: &str, queue: &mut Vec<(Kind, String)>) -> Vec<Segment> {
         _ => {}
     };
     let mut at = 0;
-    loop {
-        let next = Kind::ALL.iter().filter_map(|k| text[at..].find(k.stand_in()).map(|i| (at + i, *k))).min_by_key(|&(i, k)| (i, std::cmp::Reverse(k.stand_in().len())));
-        let Some((start, kind)) = next else { break };
-        let end = start + kind.stand_in().len();
+    for (start, kind) in stand_ins_in(text) {
         plain(&mut out, &text[at..start]);
-        match queue.iter().position(|(k, _)| *k == kind) {
-            Some(i) => out.push(Segment::stand_in(&queue.remove(i).1, kind)),
-            None => out.push(Segment::unaccounted(kind)),
+        match queue.iter().position(|(k, _)| *k == kind).map(|i| queue.remove(i).1) {
+            Some(Some(was)) => out.push(Segment::stand_in(&was, kind)),
+            _ => out.push(Segment::unaccounted(kind)),
         }
-        at = end;
+        at = start + kind.stand_in().len();
     }
     plain(&mut out, &text[at..]);
     if out.is_empty() {

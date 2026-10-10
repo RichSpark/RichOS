@@ -1847,3 +1847,49 @@ fn every_stand_in_on_the_card_is_marked_and_counted_whatever_rich_listed_beside_
     // The words are Rich's, to the character.
     assert!(draft_words(&draft).contains("They say [a person] at [a company] sees the same thing."));
 }
+
+// ---- the review of 9463220ef (rv-20261010T072702Z-9463220e-543f), fixture `mixed-stand-in-receipts.py` ----
+
+/// What each stand-in on `draft`'s card says it replaced, in the order they are met.
+fn receipts(draft: &Draft) -> Vec<Option<String>> {
+    let mut all: Vec<&Segment> = draft.title.iter().collect();
+    for section in &draft.sections {
+        all.extend(section.paragraphs.iter().chain(&section.steps).flatten());
+    }
+    all.into_iter().filter(|s| s.is_stand_in()).map(|s| s.was.clone()).collect()
+}
+
+#[test]
+fn a_stand_in_names_only_the_words_it_replaced_where_it_stands() {
+    // Finding 1: a report already carries a [a person] Rich wrote for Bob, and the user adds "Alex
+    // saw it too" with Change it, Alex being a name RichOS holds. On 9463220ef the scanner's receipt
+    // for Alex went to the first [a person] of the report, so Bob's stand-in said it replaced Alex
+    // and Alex's said nothing. A stand-in is tied to what it replaced by its place, or claims nothing.
+    let alex = [PrivateTerm::new("Alex", Kind::PersonName)];
+    let edit = |said: &str| Edited {
+        sheet: Sheet {
+            title: "Window froze".into(),
+            sections: vec![SheetSection { heading: "What happened".into(), paragraphs: vec![said.into()], steps: vec![] }],
+        },
+        private: vec![],
+    };
+
+    // The review's fixture: the earlier stand-in claims nothing; Alex's names Alex.
+    let done = checked_edit(&edit("[a person] saw it. Alex saw it too."), &alex, rich_keeps).unwrap();
+    assert_eq!(draft_words(&done.draft), "Window froze\n[a person] saw it. [a person] saw it too.", "the words changed");
+    assert_eq!(receipts(&done.draft), [None, Some("Alex".to_string())], "a stand-in names words it did not replace");
+
+    // Rich cleans up a name written before the scanner's: each names its own.
+    let done = checked_edit(&edit("Carol saw it. Alex saw it too."), &alex, rich_replaces("Carol", "person", "[a person]")).unwrap();
+    assert_eq!(receipts(&done.draft), [Some("Carol".to_string()), Some("Alex".to_string())]);
+
+    // Rich writes a stand-in he lists nothing for beside the scanner's: which one is Alex's cannot
+    // be told, so neither claims to know.
+    let rich_hides_bob = |prompt: &str| {
+        let mut report: serde_json::Value = serde_json::from_str(&report_in(prompt).to_string().replace("Bob", "[a person]")).unwrap();
+        report["private"] = serde_json::json!([]);
+        Ok(report.to_string())
+    };
+    let done = checked_edit(&edit("Bob saw it. Alex saw it too."), &alex, rich_hides_bob).unwrap();
+    assert_eq!(receipts(&done.draft), [None, None]);
+}
