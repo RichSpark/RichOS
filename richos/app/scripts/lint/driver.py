@@ -113,8 +113,9 @@ def load_phase(root, args, report, paths=None):
     `paths` limits the scan to those files; sites are per file, so that is exact for them."""
     tick = time.monotonic()
     scanned = tracked(root) if paths is None else paths
-    sites = load_rules.collect(root, scanned)
-    report["load"] = dict(sites=sites, files=len(load_rules.targets(scanned)))
+    engine_sites = load_rules.check_engine(root, scanned, args.trusted_ref)
+    sites = load_rules.collect(root, [p for p in scanned if p.startswith(APP)])
+    report["load"] = dict(sites=sites, engine_sites=engine_sites, files=len(load_rules.targets(scanned)))
     baseline_path = root / load_rules.BASELINE
     trusted = ratchet.trusted_record(root, args.trusted_ref, load_rules.BASELINE)
     if args.bootstrap and not baseline_path.exists():
@@ -289,6 +290,7 @@ def changed(args, rows, tool_versions, report):
     report["changed"] = paths
     app_paths = [p for p in paths if p.startswith(APP)]
     if not app_paths:
+        load_phase(ROOT, args, report, paths=paths)
         print("No change under " + APP + "; nothing this lint scans changed", flush=True)
         return
     if any(p.startswith(LINT_MACHINERY) for p in app_paths):
@@ -337,7 +339,7 @@ def changed(args, rows, tool_versions, report):
               + "; the full static check decides whether the tree still fits its ceilings", flush=True)
         static_full(args, rows, tool_versions, report)
     else:
-        load_phase(ROOT, args, report, paths=app_paths)
+        load_phase(ROOT, args, report, paths=paths)
         print(f"Static checks: {len(touched)} changed or dependent file(s), no count grew "
               f"({time.monotonic() - started:.2f}s)", flush=True)
     for which, wanted in (("fast", lambda p: in_set(p, "fast")), ("tauri", lambda p: p.startswith(APP + "src-tauri/"))):

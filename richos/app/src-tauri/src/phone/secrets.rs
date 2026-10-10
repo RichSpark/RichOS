@@ -417,6 +417,7 @@ mod tests {
         // on any host. This was 5 s, a bound on how fast a busy host spawns, kills and reaps a
         // process rather than on whether the deadline was enforced (2026-09-29, the
         // load-sensitive checks audit). The `ToolTimedOut` verdict above is the proof it fired.
+        // load-bound: hang guard for the blocked fixture; ToolTimedOut above decides correctness.
         assert!(
             waited < Duration::from_secs(20),
             "the bound did not bound anything: waited {waited:?} for a 300 ms deadline"

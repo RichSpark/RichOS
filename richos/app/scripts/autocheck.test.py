@@ -354,6 +354,13 @@ class Fixture(unittest.TestCase):
     def add_checker(self, repo=None):
         dest = (repo or self.repo) / "richos/app/scripts/autocheck"
         dest.mkdir(parents=True, exist_ok=True)
+        shared = dest.parent / "lib"
+        shared.mkdir(exist_ok=True)
+        shutil.copy(HERE / "lib/owned_command.py", shared / "owned_command.py")
+        lint = dest.parent / "lint"
+        lint.mkdir(exist_ok=True)
+        for name in ("load_rules.py", "common.py"):
+            shutil.copy(HERE / "lint" / name, lint / name)
         for name in ("autocheck.py", "shim.sh", "install.sh"):
             shutil.copy(AUTOCHECK / name, dest / name)
 
@@ -489,6 +496,11 @@ class Commit(Fixture):
         self.git("add", "-A")
         out = self.git("commit", "-m", "bad", expect=1)
         self.assertIn("COMMIT REFUSED", out.stderr)
+        self.write("richos/app/src/bad.txt", "fine\n")
+        self.write("richos/app/src/claims.txt", "true, an old branch with a quick check\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-m", "old branch uses the committed admission helper")
+        self.assertIn("ran quick.js", out.stderr)
 
     def test_a_commit_the_land_would_refuse_as_uncovered_is_refused_at_the_commit(self):
         # 2026-09-29: isaac-opus-speckle1 and andy-opus-speckle1 each had four UNCOVERED paths
@@ -727,6 +739,8 @@ class Commit(Fixture):
         self.make(install=False)
         (self.repo / "richos/engine").unlink()      # our own tiny engine tree instead of the symlink
         (self.repo / ".git/info/exclude").write_text("")
+        (self.repo / "richos/engine/scripts").mkdir(parents=True)
+        (self.repo / "richos/engine/scripts/lib").symlink_to(ENGINE / "scripts/lib")
         self.write("richos/engine/probe.txt", "fine\n")
         self.write("richos/engine/scripts/ci-shard.sh",
                    '#!/bin/bash\necho "ran-engine-fast" >> "$AUTOCHECK_FIXTURE_LOG"\n'
@@ -753,6 +767,26 @@ class Commit(Fixture):
         out = self.git("commit", "-m", "engine-only broken unit", expect=1)
         self.assertIn("COMMIT REFUSED: engine scripts/fast.test.sh failed", out.stderr)
         self.assertIn("ran-engine-fast", self.tools())
+
+    def test_engine_timing_growth_refuses_commit_and_merge_without_application_lint(self):
+        self.make(install=False)
+        (self.repo / "richos/engine").unlink()
+        (self.repo / ".git/info/exclude").write_text("")
+        self.write("richos/engine/scripts/growth.test.py", "assert ready\n")
+        self.finish_fast_setup()
+        # load-bound: this assertion is fixture SOURCE, never executed by this suite.
+        self.write("richos/engine/scripts/growth.test.py", "self.assertLess(\n elapsed, 2)\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-m", "adds a host timing verdict", expect=1)
+        self.assertIn("engine test load-rule growth", out.stderr)
+        self.assertIn("growth.test.py", out.stderr)
+        self.git("commit", "--no-verify", "-qm", "bypass the author check")
+        self.git("checkout", "-q", "main")
+        before = self.head()
+        out = self.git("merge", "--no-ff", "--no-edit", "feature", expect=1)
+        self.assertIn("load-rule growth", out.stdout + out.stderr)
+        self.assertEqual(self.head(), before)
+        self.assertIn("load_rules.py", self.tools())
 
     def test_a_node_suite_selected_and_recorded_as_fast_runs_at_the_commit(self):
         self.make(install=False)
@@ -1871,6 +1905,74 @@ class TimeLimit(unittest.TestCase):
             if alive:
                 os.kill(pid, 9)
             return alive, os.path.exists(marker + ".term")
+
+    def test_admitted_checks_do_not_spend_their_hang_guard_in_the_worker_queue(self):
+        import fcntl
+        import threading
+        import time
+        import types
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as scratch:
+            workers = Path(scratch) / "workers"
+            tool = ENGINE / "scripts/lib/worker_tokens.py"
+            subprocess.run([sys.executable, str(tool), "init", str(workers),
+                            str(max(1, int((os.cpu_count() or 4) * 0.8)))], check=True)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("RICHOS_WORKER_")}
+            env["RICHOS_MACHINE_WORKERS"] = str(workers)
+            held = []
+            for token in sorted(workers.glob("token-*")):
+                fd = os.open(token, os.O_RDWR)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(fd)
+            def release():
+                try:
+                    guard = time.monotonic() + HANG_GUARD
+                    while not list(workers.glob("wait-*")) and time.monotonic() < guard:
+                        time.sleep(0.05)
+                    time.sleep(3)  # Deliberately outlast the two-second execution budget.
+                finally:
+                    for fd in held:
+                        os.close(fd)
+            releaser = threading.Thread(target=release)
+            releaser.start()
+            try:
+                repo = types.SimpleNamespace(top=HERE.parents[2], env=env)
+                # load-bound: two seconds is the queue test stimulus, never a host-speed verdict.
+                result = module.run_admitted(repo, ["/usr/bin/true"], timeout=2,
+                                             env=env, text=True, stdin=subprocess.DEVNULL)
+            finally:
+                releaser.join()
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(result.admitted)
+            self.assertGreaterEqual(result.admission_seconds, 3)
+
+    def test_admitted_timeout_allows_the_owned_supervisor_to_close_a_detached_browser(self):
+        import types
+        spec = importlib.util.spec_from_file_location("autocheck_under_test", AUTOCHECK / "autocheck.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as scratch:
+            workers = Path(scratch) / "workers"
+            subprocess.run([sys.executable, str(ENGINE / "scripts/lib/worker_tokens.py"), "init",
+                            str(workers), str(max(1, int((os.cpu_count() or 4) * 0.8)))], check=True)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("RICHOS_WORKER_")}
+            env["RICHOS_MACHINE_WORKERS"] = str(workers)
+            repo = types.SimpleNamespace(top=HERE.parents[2], env=env)
+            marker = str(Path(scratch) / "browser.pid")
+            suite = self.SUITE.replace("subprocess.Popen(['sleep', '300'])",
+                                      "subprocess.Popen(['sleep', '300'], start_new_session=True)")
+            with self.assertRaises(subprocess.TimeoutExpired):
+                # load-bound: stimulus for a blocked fixture; pid exit and its trap are the verdict.
+                module.run_admitted(repo, [sys.executable, "-c", suite, marker, "polite"], timeout=2,
+                                    env=env, text=True, stdin=subprocess.DEVNULL)
+            pid = int(Path(marker).read_text())
+            self.assertTrue(Path(marker + ".term").exists(), "the suite never got to close its browser")
+            alive = self.alive(pid)
+            if alive:
+                os.kill(pid, 9)
+            self.assertFalse(alive, "the detached browser outlived the admitted check")
 
     def test_a_suite_that_closes_its_browser_on_sigterm_is_given_the_chance(self):
         alive, termed = self.run_late("polite", 3)
