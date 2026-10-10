@@ -76,6 +76,18 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     mod.step_run('no-such-vm', {'op': 'keys', 'text': 'Say "hi"'}, Path(tmp))
     check('V04 the keys step hands guest.sh the escaped script', seen and seen[0][-1].endswith('keystroke "Say \\"hi\\""'), seen)
 
+    # A push names its source relative to the repository root (the folder holding `richos/`), so a
+    # committed step list carries no home path. Candidate 49's walk: it resolved one folder too high,
+    # and every relative push failed "no such file on this Mac".
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'push', 'src': 'richos/app/scripts/qa/frame.py', 'dest': '/tmp/frame.py'}, Path(tmp))
+    pushed = Path(seen[0][-2]) if seen else None
+    check('a relative push source resolves inside this repository and names a file that exists',
+          pushed is not None and pushed.exists() and pushed == TOOL.parents[4] / 'richos/app/scripts/qa/frame.py', seen)
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'push', 'src': '/abs/where.txt', 'dest': '/tmp/x'}, Path(tmp))
+    check('an absolute push source is used as written', seen and seen[0][-2] == '/abs/where.txt', seen)
+
     # S8: a relaunch is a step, so "the choice survives a relaunch" is a walk's data, not a new script.
     seen.clear()
     mod.step_run('no-such-vm', {'op': 'relaunch'}, Path(tmp))
