@@ -1371,8 +1371,11 @@ window.RichBug = (function () {
       return;
     }
     // The hold is on before the microphone opens, and a stop still running finishes first.
+    // **A START THAT WAITED FOR A STOP RUNS ONLY IF THE TALK BUTTON IS STILL ON THEN** (review
+    // rv-20261010T183313Z-fe4cd6b1-1e66 finding 2): on fe4cd6b14 talk turned on and off again
+    // while a stop ran left the start queued, and it opened the microphone with the hold released.
     syncVoiceHold();
-    var open = function () { return bridge.invoke("start_voice_capture", args); };
+    var open = function () { return dockVoice ? bridge.invoke("start_voice_capture", args) : Promise.resolve(); };
     (micStopping ? micStopping.then(open, open) : open()).catch(function (e) {
       dockVoice = false;
       if (t) t.setAttribute("aria-pressed", "false");

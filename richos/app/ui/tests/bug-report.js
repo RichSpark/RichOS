@@ -1333,6 +1333,35 @@ async function main() {
     return "talk off while checking; voice calls: " + all.join(" → ") + "; the second sentence went nowhere";
   });
 
+  // ---- the review of fe4cd6b14 (rv-20261010T183313Z-fe4cd6b1-1e66), finding 2 ----
+  await run.check("a microphone start that waited for a stop runs only if the panel's talk is still on: on, off, on, off while the stops run opens nothing", async () => {
+    // Fixture `pending-mic-restart.js`: on fe4cd6b14 talk turned on while a stop was still running
+    // queued an unconditional start; turned off again, the start still ran once the stops ended,
+    // and the microphone was open with the hold released. `bugStopHold` keeps each stop running
+    // until `releaseStop()`.
+    const page = await open("dark", { bugVoice: true, bugStopHold: true });
+    await bustABug(page);
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    await page.click("#bugdock-talk");
+    await page.waitForSelector("#bugdock-voice:not([hidden])");
+    const from = await callCount(page);
+    await page.click("#bugdock-talk"); // off: its stop is still running
+    await page.click("#bugdock-talk"); // on again: the start waits for that stop
+    await page.click("#bugdock-talk"); // off again before the stop ends
+    assertEqual(await page.getAttribute("#bugdock-talk", "aria-pressed"), "false", "the talk button after on, off, on, off");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseStop());
+    await page.waitForFunction(() => {
+      const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+      return v[v.length - 1].on === false;
+    });
+    // Anything queued behind the stops has run by the time two more frames have gone.
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const order = await voiceOrder(page, from);
+    assertEqual(order, ["stop", "stop", "hold off"], "the voice calls: both stops, no start, then the hold released");
+    await page.close();
+    return "voice calls: " + order.join(" → ");
+  });
+
   await run.check("every press of Bust a bug turns the panel's talk off, shows the answer box and puts the keys in it, asked and with the card", async () => {
     // Both reviews: on f29db7082 a second press with the panel's talk button on left the answer
     // box hidden, and the keys elsewhere (`focusAnswer` skips a hidden box).

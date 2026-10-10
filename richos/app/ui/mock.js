@@ -2564,7 +2564,7 @@
     sent: [],
     calls: [],
     seq: 0,
-    held: { change: [], cancel: [], private: [], sendcheck: [] },
+    held: { change: [], cancel: [], private: [], sendcheck: [], stop: [] },
     claude: preset.bugClaude || "up",
     unchecked: [],
     checks: {},
@@ -2688,6 +2688,7 @@
     releaseChange: () => bugRelease("change"),
     releaseCancel: () => bugRelease("cancel"),
     releasePrivate: () => bugRelease("private"),
+    releaseStop: () => bugRelease("stop"),
     /// An utterance recognized by the shell, as `rich://voice-transcript` carries it. The shell
     /// emits it whether or not it held the words back for a report (`bug_report_voice`).
     say(text) { emit("rich://voice-transcript", { text, at: now() }); },
@@ -4158,10 +4159,13 @@
         // The preview has no microphone, so voice mode never opens here (main.js says so in one
         // line). `preset.bugVoice` opens it for the Bust a bug suite, which drives what the user
         // says with `__RICHOS_MOCK_BUG__.say` and reads the hold off `bug_report_voice`'s calls.
+        // `preset.bugStopHold` keeps each stop unanswered until `releaseStop()`, as a microphone
+        // that takes a moment to close does (review rv-20261010T183313Z-fe4cd6b1-1e66 finding 2).
         case "start_voice_capture":
         case "stop_voice_capture":
           if (!preset.bugVoice) return Promise.reject(`mock: no such command "${cmd}"`);
           bugMock.calls.push({ cmd, threadId: args.threadId });
+          if (cmd === "stop_voice_capture" && preset.bugStopHold) await bugHold("stop");
           return { started: cmd === "start_voice_capture" };
         case "bug_report_open_issue":
           bugMock.calls.push({ cmd, number: args.number });
