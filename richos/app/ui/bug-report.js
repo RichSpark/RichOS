@@ -1226,17 +1226,32 @@ window.RichBug = (function () {
   /// waiting on words, with the panel's own talk button on. Conversation voice mode is Rich's
   /// conversation's, never the report's (fourth review finding 3: two conditions drifted apart
   /// once, and the shell dropped every spoken turn in another conversation).
-  function takesSpeech(f) {
-    return !!(f && TAKES_WORDS.indexOf(f.step) !== -1 && dockVoice);
+  function waitsForWords(f) {
+    return !!(f && TAKES_WORDS.indexOf(f.step) !== -1);
   }
+  function takesSpeech(f) {
+    return waitsForWords(f) && dockVoice;
+  }
+  /// **THE PANEL'S MICROPHONE IS ON ONLY WHILE THE REPORT WAITS FOR THE USER'S WORDS** (reviews
+  /// rv-20261010T180327Z-f29db708-24e0 finding 2, rv-20261010T180313Z-f29db708-733e finding 3): at
+  /// every other step (Rich checking, sending, a report closed) it is stopped first, and only once
+  /// the shell has closed it is the hold released. On f29db7082 moving to checking released the
+  /// hold with the microphone still on, and the shell submits every sentence nothing holds back
+  /// (`main.rs`, `start_voice_capture`'s submit), so the next sentence became a turn in Rich's
+  /// conversation. `micStopping` is that stop while it runs: the hold stays on through it.
+  var micStopping = null;
   function syncVoiceHold() {
-    var want = takesSpeech(liveFlow());
+    var f = liveFlow();
+    if (dockVoice && !waitsForWords(f)) return setDockVoice(false);
+    var want = takesSpeech(f) || !!micStopping;
     if (want === voiceHeld || !bridge) return;
     voiceHeld = want;
     bridge.invoke("bug_report_voice", { on: want }).catch(function () {});
   }
   function setDockVoice(on) {
     if (dockVoice === on) return;
+    // Nothing waits for words: the microphone stays off.
+    if (on && !waitsForWords(liveFlow())) return;
     // The talk button is a way into the panel just as focus is (WebKit does not focus a button
     // that is clicked): the other input modes go off by their own off paths first.
     if (on) quietOtherInputs($("bugdock-talk"));
@@ -1245,10 +1260,23 @@ window.RichBug = (function () {
     if (t) t.setAttribute("aria-pressed", String(on));
     $("bugdock-form").hidden = on;
     $("bugdock-voice").hidden = !on;
-    syncVoiceHold();
     if (!bridge) return;
-    bridge.invoke(on ? "start_voice_capture" : "stop_voice_capture", { threadId: host ? host.activeThread() : null }).catch(function (e) {
-      if (!on) return;
+    var args = { threadId: host ? host.activeThread() : null };
+    if (!on) {
+      // Stopped first; the hold goes only once the shell says the microphone is closed. A stop
+      // that fails keeps the hold: words said then go nowhere rather than to the conversation.
+      var stop = bridge.invoke("stop_voice_capture", args);
+      micStopping = stop;
+      stop.then(function () {
+        if (micStopping === stop) micStopping = null;
+        syncVoiceHold();
+      }, function () {});
+      return;
+    }
+    // The hold is on before the microphone opens, and a stop still running finishes first.
+    syncVoiceHold();
+    var open = function () { return bridge.invoke("start_voice_capture", args); };
+    (micStopping ? micStopping.then(open, open) : open()).catch(function (e) {
       dockVoice = false;
       if (t) t.setAttribute("aria-pressed", "false");
       $("bugdock-form").hidden = false;

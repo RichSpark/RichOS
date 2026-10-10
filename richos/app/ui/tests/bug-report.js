@@ -67,6 +67,13 @@
 //      "Press a different key" through its own Cancel (the tool's key tap disarmed with it) and
 //      turns conversation voice mode off through its own off path; the panel's talk button is
 //      how the user speaks to it.
+//  19. The reviews of f29db7082 (rv-20261010T180327Z-f29db708-24e0, rv-20261010T180313Z-f29db708-733e),
+//      each red there: the panel's microphone is on only while the report waits for the user's
+//      words, so while Rich checks it is stopped first and only then is the hold released (read
+//      from the order of `stop_voice_capture` and `bug_report_voice`, as the mock does not run the
+//      shell's submission); and every press of Bust a bug turns the panel's talk off, shows the
+//      answer box and puts the keys in it. Stand-ins in a change are marked and counted in Rust
+//      (`stand_ins_in_a_change_are_marked_and_counted_as_in_the_first_draft`).
 "use strict";
 
 const path = require("path");
@@ -519,6 +526,12 @@ async function main() {
     await said("The names on the left get cut off when the text is bigger.");
     await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
     assertEqual(await page.locator("#messages .tl-user").count(), before, "the report's answer went to Rich's conversation");
+    // The microphone went off while Rich checked the answer (review rv-20261010T180327Z-f29db708-24e0):
+    // the talk button turns it on again for a spoken change.
+    assertEqual(await page.getAttribute("#bugdock-talk", "aria-pressed"), "false", "the panel's talk button after Rich checked");
+    await holding(false);
+    await page.click("#bugdock-talk");
+    await holding(true);
     await said("Also say it happens in the light theme too");
     await page.waitForSelector(".bug-sec p.is-added");
     assertEqual(await page.locator(".bug-sec p.is-added").innerText(), "It happens in the light theme too.", "the spoken change");
@@ -1200,6 +1213,60 @@ async function main() {
     assertEqual(await page.locator("#messages .tl-user").count(), before, "the spoken answer went to Rich's conversation");
     await page.close();
     return "voice mode off (Talk to Rich not pressed, 1 stop_voice_capture); nothing said went to the conversation; the panel's talk button took the answer";
+  });
+
+  // ---- the reviews of f29db7082 (rv-20261010T180327Z-f29db708-24e0, rv-20261010T180313Z-f29db708-733e) ----
+  /// The order of the voice calls made after call number `from`: `stop`, `start`, `hold on`, `hold off`.
+  const voiceOrder = (page, from) => page.evaluate((n) => window.__RICHOS_MOCK_BUG__.calls.slice(n)
+    .filter((c) => c.cmd === "stop_voice_capture" || c.cmd === "start_voice_capture" || c.cmd === "bug_report_voice")
+    .map((c) => (c.cmd === "bug_report_voice" ? "hold " + (c.on ? "on" : "off") : c.cmd === "stop_voice_capture" ? "stop" : "start")), from);
+  const callCount = (page) => page.evaluate(() => window.__RICHOS_MOCK_BUG__.calls.length);
+  const heldNow = (page) => page.evaluate(() => {
+    const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+    return v.length ? v[v.length - 1].on : null;
+  });
+
+  await run.check("the panel's microphone is on only while the report waits for the user's words: while Rich checks, it is stopped first, then the hold is released, and nothing said goes anywhere", async () => {
+    // Both reviews, fixtures `panel-voice-state.js` and `report-state.js`: on f29db7082 moving to
+    // checking released the shell's hold with the microphone still on, so the next sentence said
+    // became a turn in Rich's conversation (the shell submits it whenever nothing holds it back).
+    // The mock does not run the shell's submission, so this reads the ORDER of the calls: the
+    // microphone is stopped (`stop_voice_capture`) before the hold is released.
+    const page = await open("dark", { bugVoice: true, bugWriteMs: 1500 });
+    await bustABug(page);
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    await page.click("#bugdock-talk");
+    await page.waitForSelector("#bugdock-voice:not([hidden])");
+    assertEqual(await heldNow(page), true, "the hold while the report waits for the spoken answer");
+    const from = await callCount(page);
+    const before = await page.locator("#messages .tl-user").count();
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "The names on the left get cut off when the text is bigger.");
+    await page.waitForSelector("#bugdock .bug-working");
+    await page.waitForFunction(() => {
+      const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+      return v[v.length - 1].on === false;
+    });
+    const checking = await page.evaluate(() => ({
+      step: window.RichBug.state().slice(-1)[0].step,
+      talk: document.getElementById("bugdock-talk").getAttribute("aria-pressed"),
+      form: !document.getElementById("bugdock-form").hidden,
+    }));
+    assertEqual(checking.step, "checking", "the step while Rich checks");
+    assertEqual(checking.talk, "false", "the panel's talk button still on while Rich checks");
+    const order = await voiceOrder(page, from);
+    assertEqual(order, ["stop", "hold off"], "the voice calls on the way to checking: the microphone stopped, then the hold released");
+    // Said while Rich checks: the report does not take it, and nothing reaches the conversation.
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "And it happens in the light theme too.");
+    // The talk button cannot turn the microphone on again while nothing waits for words.
+    await page.click("#bugdock-talk");
+    assertEqual(await page.getAttribute("#bugdock-talk", "aria-pressed"), "false", "the talk button turned the microphone on while Rich checks");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#bugdock .bug-user").count(), 1, "what was said while Rich checked went to the report");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "what was said went to Rich's conversation");
+    const all = await voiceOrder(page, from);
+    assertEqual(all, ["stop", "hold off"], "voice calls from the spoken answer to the card (no start while Rich checked)");
+    await page.close();
+    return "talk off while checking; voice calls: " + all.join(" → ") + "; the second sentence went nowhere";
   });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
