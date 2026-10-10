@@ -53,6 +53,8 @@
 //      a new report started over Dictation, opened from Settings for the first time, put the Rich
 //      panel under Dictation's sheet. The panel is the app's top layer now (one rule in
 //      `style.css`), checked over every overlay `lib/overlays.js` derives from the shipped CSS.
+//  17. The reviews of 4cc6e34db (rv-20261010T150403Z-4cc6e34d-61db, rv-20261010T150420Z-4cc6e34d-84f1),
+//      red there: Dictation waiting for a different key swallowed the panel's typing and Enter.
 "use strict";
 
 const path = require("path");
@@ -1009,6 +1011,34 @@ async function main() {
     assertEqual(wrong, [], "a new report is not on top and answerable over every overlay");
     return targets.length - heldBack.length + " overlays; left out, the first-run questions (Settings cannot be pressed over them): " + heldBack.join(", ") +
       "; the report went to the conversation, not the panel, over: " + (toConversation.join(", ") || "none") + "; " + seen.join("; ");
+  });
+
+  // ---- the review of 4cc6e34db (rv-20261010T150403Z-4cc6e34d-61db, rv-20261010T150420Z-4cc6e34d-84f1) ----
+  await run.check("with Dictation waiting for a different key, the Rich panel's report takes typing and Enter, and the sheet still takes the key", async () => {
+    // Fixtures `dictation-report-keyboard.js` / `dictation-capture-report.js`: Settings, Dictation,
+    // Press a different key, Settings, Bust a bug. On the tip Dictation's capturing listener
+    // swallowed every key, the panel's answer box's included: nothing typed, Enter never sent.
+    const page = await open("dark", { dictation: true });
+    await page.click("#set-btn");
+    await page.click("#set-dictation-open");
+    await page.waitForSelector("#dictation-sheet:not([hidden])");
+    await page.click("#dict-capture");
+    await page.waitForSelector("#dict-capture-cancel");
+    await bustABug(page);
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
+    assert(await page.locator("#dict-capture-cancel").count(), "key capture ended before the report started");
+    const said = "The names on the left get cut off when I make the text bigger.";
+    await page.click("#bugdock-input");
+    await page.keyboard.type(said);
+    assertEqual(await page.inputValue("#bugdock-input"), said, "what was typed in the panel's answer box");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    // A key pressed in the sheet is still the sheet's: F7 becomes Dictation's key.
+    await page.focus("#dict-capture-cancel");
+    await page.keyboard.press("F7");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 7));
+    await page.close();
+    return "typed and sent in the panel with capture on; F7 in the sheet set the key";
   });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
