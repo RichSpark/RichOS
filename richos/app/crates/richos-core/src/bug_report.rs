@@ -1611,10 +1611,22 @@ pub fn parse_change(raw: &str) -> Result<Change, String> {
 /// (`report`), and any he names in this change. Returns the words to add and the report's
 /// private words from now on, so a name Rich found once stays left out on every later change
 /// (second review finding 4: on 1c3dda1dc his names applied to the first draft only).
+///
+/// **EVERY STAND-IN IN HIS ADDITION IS MARKED AND COUNTED, AS IN THE FIRST DRAFT** (review
+/// rv-20261010T180313Z-f29db708-733e finding 1): his prompt asks him to write private details as
+/// stand-ins, and on f29db7082 the ones he wrote stayed plain words, so the card said "Nothing
+/// private was in it" under "[a person] could not open [a file on this Mac] either." Each is marked
+/// by [`marked`], the first draft's rule; his change lists what is still in his words, never what
+/// he replaced, so nothing accounts for one and each says its kind alone ([`Segment::unaccounted`]).
 pub fn scrub_change(change: &Change, app: &[PrivateTerm], report: &[PrivateTerm]) -> (Vec<Segment>, Vec<PrivateTerm>) {
     let report = distinct(report.iter().chain(&change.private).cloned());
     let scrubber = Scrubber::with_rich(app.to_vec(), report.clone());
-    (scrubber.scrub(&change.add), report)
+    let add = scrubber
+        .scrub(&change.add)
+        .into_iter()
+        .flat_map(|segment| if segment.is_stand_in() { vec![segment] } else { marked(&segment.text, &mut Vec::new()) })
+        .collect();
+    (add, report)
 }
 
 /// **THE CARD'S HEADS-UP, ASKED OF THE SCRUBBER THAT CLEANS THE REPORT**: the private words in

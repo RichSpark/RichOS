@@ -1848,6 +1848,40 @@ fn every_stand_in_on_the_card_is_marked_and_counted_whatever_rich_listed_beside_
     assert!(draft_words(&draft).contains("They say [a person] at [a company] sees the same thing."));
 }
 
+// ---- the review of f29db7082 (rv-20261010T180313Z-f29db708-733e), finding 1, fixture `change-standins.rs` ----
+
+#[test]
+fn stand_ins_in_a_change_are_marked_and_counted_as_in_the_first_draft() {
+    // On f29db7082 `scrub_change` left the stand-ins Rich wrote in a change as plain words, so the
+    // card said "Nothing private was in it, so nothing was left out." under "[a person] could not
+    // open [a file on this Mac] either." A name the scanner leaves out beside them keeps what it
+    // replaced; his own say their kind alone, as in the first draft.
+    let change = change_naming("[a person] could not open [a file on this Mac] either, and Jane Doe saw it.", "[]");
+    let report = vec![PrivateTerm::new("Jane Doe", Kind::PersonName)];
+    let (add, _) = scrub_change(&change, &[], &report);
+    assert_eq!(joined(&add), "[a person] could not open [a file on this Mac] either, and [a person] saw it.");
+    let marked: Vec<(&str, Option<Kind>, Option<&str>)> =
+        add.iter().filter(|s| s.is_stand_in()).map(|s| (s.text.as_str(), s.kind, s.was.as_deref())).collect();
+    assert_eq!(
+        marked,
+        [
+            ("[a person]", Some(Kind::PersonName), None),
+            ("[a file on this Mac]", Some(Kind::FilePath), None),
+            ("[a person]", Some(Kind::PersonName), Some("Jane Doe")),
+        ],
+        "a stand-in in the change is not marked: {add:?}"
+    );
+    assert_eq!(
+        left_out_line(&add),
+        "Left out, because anyone can read GitHub issues: two people's names and one file path. The underlined words \
+         stand in for them; point at one to see what it replaced."
+    );
+    // The review's own words, alone: both marked, none plain.
+    let (add, _) = scrub_change(&change_naming("[a person] could not open [a file on this Mac] either.", "[]"), &[], &[]);
+    assert_eq!(add.iter().filter(|s| s.is_stand_in()).count(), 2, "{add:?}");
+    assert_eq!(joined(&add), "[a person] could not open [a file on this Mac] either.");
+}
+
 // ---- the review of 9463220ef (rv-20261010T072702Z-9463220e-543f), fixture `mixed-stand-in-receipts.py` ----
 
 /// What each stand-in on `draft`'s card says it replaced, in the order they are met.

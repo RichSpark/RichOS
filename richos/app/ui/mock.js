@@ -4094,9 +4094,10 @@
           // Claude could not be asked: nothing is added (the shell's answer, word for word).
           if (bugMock.claude === "down") throw "I couldn't check that change just now, so nothing was added.";
           const said = String(args.said || "").replace(/^(also|and|please)\s+/i, "").replace(/^(say|mention|add)\s+(that\s+)?/i, "");
-          // The report's own private words go on applying to every change (the shell's `scrub_change`).
+          // The report's own private words go on applying to every change (the shell's `scrub_change`),
+          // and every stand-in already in his words is marked by its kind, as in the first draft.
           const kept = args.private || [];
-          const add = bugScrub(bugSentence(said), kept);
+          const add = bugScrub(bugSentence(said), kept).flatMap((s) => (s.kind ? [s] : bugMarked(s.text)));
           // The card with his words added is a changed card: at Send it goes through the scanner
           // and then Rich, last (the core's `at_send`, CEO §115), as words changed by hand do.
           return { section: "What happened", add, private: kept, workedMs: 4000 };
