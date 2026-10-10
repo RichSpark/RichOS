@@ -9754,8 +9754,8 @@ body.panel-full .op-body {
    The exchange is ordinary conversation: Rich's lines are `.tl-rich`/`.tl-prose` and the user's
    are `.tl-user` bubbles, drawn by `bug-report.js` with the timeline's own classes. The one new
    object is the REPORT CARD, the send-before-approve step: the whole issue as it will appear on
-   GitHub, who it goes out as, what was left out, and Send report / Change it / Cancel. Where a
-   window covers the conversation, the same exchange happens in the RICH PANEL at the right.
+   GitHub, who it goes out as, what was left out, and Send report / Change it / Cancel. The
+   exchange always happens in the RICH PANEL at the right, the app's top layer (CEO 2026-10-10).
 
    Round 21's tokens, mapped onto this file's: its --inset is --surface-sunk, its --surface (the
    panel) is --surface-raised, its --sw-off (the dashed edges) is --ink-faint. No new token.
@@ -9771,41 +9771,6 @@ body.panel-full .op-body {
    CONTRAST is measured by `ui/tests/bug-report.js` in both themes with the shipping walker's
    arithmetic (tests/lib/contrast.js), never eyeballed; its output is in that suite's run.
    ========================================================================================= */
-#bug-flows {
-  max-width: var(--reading-width);
-  margin: 0 auto;
-  padding: 0 28px 24px;
-}
-#bug-flows:empty {
-  display: none;
-}
-.bugflow {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.bug-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 10px 0 4px;
-  font-size: 1rem;
-  color: var(--ink-soft);
-}
-.bug-divider::before,
-.bug-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--line);
-}
-.bug-divider svg {
-  width: 16px;
-  height: 16px;
-  color: var(--gold-text);
-  flex: none;
-  margin-right: -4px;
-}
 .bug-turn {
   display: flex;
   flex-direction: column;

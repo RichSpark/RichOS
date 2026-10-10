@@ -477,11 +477,6 @@
                one for the other. Empty unless techy mode is on AND there is nothing. -->
           <div id="techy-state" hidden></div>
           <div id="messages"></div>
-          <!-- BUST A BUG (round 21): the exchange with Rich, in the conversation it was started in,
-               after whatever the conversation shows. A sibling of #messages rather than a child,
-               so a redraw of the timeline never takes the report card away mid-change. Drawn by
-               bug-report.js; empty until Bust a bug is pressed. -->
-          <div id="bug-flows"></div>
           <!-- BETWEEN TURNS (techy-mode design §1.5). What the session said while NO turn
                was in flight: its start-up traffic, and whatever arrived after a turn's
                answer had already been returned. It is a SEPARATE section because those

@@ -863,14 +863,14 @@ async function main() {
     assert(await page.evaluate(() => !!document.getElementById("splash")), "opening the menu did not lift the curtain");
     await page.click("#bug-btn");
     // SINCE ROUND 21 (CEO §115) THE BUTTON OPENS THE REPORT, NOT A NOTICE: `bug-report.js` is
-    // registered, so `bustABug` hands over to it and Rich's first question is drawn — in the
-    // conversation (`#bug-flows`) or in the panel beside a window (`#bugdock-msgs`), whichever
+    // registered, so `bustABug` hands over to it and Rich's first question is drawn in the Rich
+    // panel (`#bugdock-msgs`), the one place a report lives (CEO 2026-10-10), whatever
     // the screen under the curtain is. The wait is for that question to EXIST; what it says is
     // asserted below.
-    await page.waitForSelector("#bug-flows .bug-rich, #bugdock-msgs .bug-rich", { state: "attached" });
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
     await settledPage(page);
     const after = await page.evaluate(() => {
-      const q = document.querySelector("#bug-flows .bug-rich .tl-prose, #bugdock-msgs .bug-rich .tl-prose");
+      const q = document.querySelector("#bugdock-msgs .bug-rich .tl-prose");
       return { splash: !!document.getElementById("splash"), asked: q ? q.textContent.trim() : "" };
     });
     assert(after.splash, "and neither did pressing Bust a bug");
