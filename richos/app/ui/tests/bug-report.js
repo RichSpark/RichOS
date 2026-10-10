@@ -54,7 +54,8 @@
 //      panel under Dictation's sheet. The panel is the app's top layer now (one rule in
 //      `style.css`), checked over every overlay `lib/overlays.js` derives from the shipped CSS.
 //  17. The reviews of 4cc6e34db (rv-20261010T150403Z-4cc6e34d-61db, rv-20261010T150420Z-4cc6e34d-84f1),
-//      red there: Dictation waiting for a different key swallowed the panel's typing and Enter.
+//      each red there: Dictation waiting for a different key swallowed the panel's typing and Enter;
+//      and Talk to Rich turned on before Bust a bug sent the report to the panel.
 "use strict";
 
 const path = require("path");
@@ -893,7 +894,7 @@ async function main() {
   // shipped CSS (each element its covering rules match, one made from the selector where none is in
   // the page yet, put on screen with focus inside it, as `appearance.js` check 7c does), plus
   // Dictation opened the way a person opens it. A report goes to the panel whenever the conversation's
-  // answer box is not what is painted at its place (`conversationOnScreen`, round 21's "when a window
+  // composer row is not what is painted at its place (`conversationOnScreen`, round 21's "when a window
   // covers the conversation"); before that, over the side panes' backdrops on a narrow window it went
   // to the conversation behind them. Over each: Settings, Bust a bug; Rich's question and the answer
   // box are what is painted at their middles (with the overlay made hit-testable
@@ -1039,6 +1040,27 @@ async function main() {
     await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 7));
     await page.close();
     return "typed and sent in the panel with capture on; F7 in the sheet set the key";
+  });
+
+  await run.check("Talk to Rich on first, then Bust a bug: the report is in the conversation and takes what is said", async () => {
+    // Fixture `voice-before-report.js`: voice mode hides the answer box on purpose; on the tip that
+    // read as a cover, so the report went to the panel and the spoken answer went to Rich instead.
+    const page = await open("dark", { bugVoice: true });
+    await page.click("#talk-toggle");
+    await page.waitForSelector("#voice-panel:not([hidden])");
+    await bustABug(page);
+    await page.waitForSelector("#bug-flows .bug-rich, #bugdock-msgs .bug-rich", { state: "attached" });
+    assertEqual(await page.locator("#bugdock-msgs .bug-rich").count(), 0, "the report went to the Rich panel, not the conversation");
+    await page.waitForFunction(() => {
+      const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+      return v.length > 0 && v[v.length - 1].on === true;
+    });
+    const before = await page.locator("#messages .tl-user").count();
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "The names on the left get cut off when the text is bigger.");
+    await page.waitForSelector("#bug-flows .bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "the spoken answer went to Rich's conversation");
+    await page.close();
+    return "report in the conversation; spoken answer taken by it";
   });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----

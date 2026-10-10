@@ -202,18 +202,20 @@ window.RichBug = (function () {
   }
 
   /// ROUND 21: "when a window covers the conversation", the exchange happens in the Rich panel.
-  /// Measured, not listed: the conversation is on screen only when its answer box is what is
-  /// painted at the box's middle (Settings, closing as Bust a bug is pressed, and its notice left
+  /// Measured, not listed: the conversation is on screen only when its composer row is what is
+  /// painted at the row's middle (Settings, closing as Bust a bug is pressed, and its notice left
   /// aside). Anything else there — a side pane's backdrop on a narrow window, a sheet, one the app
-  /// opens later — and the report goes to the panel, which is the app's top layer.
+  /// opens later — and the report goes to the panel, which is the app's top layer. The row, not
+  /// the answer box: Talk to Rich hides the box on purpose and shows its voice panel in the same
+  /// row, and that is not a cover.
   function conversationOnScreen() {
-    var input = $("input");
-    if (!input || !input.getClientRects().length) return false;
-    var r = input.getBoundingClientRect();
+    var row = $("composer-row");
+    if (!row || !row.getClientRects().length) return false;
+    var r = row.getBoundingClientRect();
     var hits = document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     for (var i = 0; i < hits.length; i++) {
       if (hits[i].closest(".settings, #bug-toast")) continue;
-      return hits[i] === input || input.contains(hits[i]);
+      return hits[i] === row || row.contains(hits[i]);
     }
     return false;
   }
