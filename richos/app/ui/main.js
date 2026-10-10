@@ -792,8 +792,6 @@ function setMainView(view) {
   // And the Output buttons belong to the conversation on screen: no thread, no button, and a
   // panel that was open closes with the conversation (output side-panel PRD §6.2, §6.7).
   syncOutputThread();
-  // A bug report started in a conversation stays in it (round 21).
-  if (window.RichBug) window.RichBug.sync();
 }
 
 /// The thread whose output the two buttons count and the panel lists: the conversation on
@@ -1584,8 +1582,6 @@ function flushRender() {
   }
   // Rich's one offer of dictation, a local note after whatever the conversation shows.
   if (mainView === "conversation") renderDictationOffer();
-  // A bug report started in this conversation is shown with it, and only with it (round 21).
-  if (window.RichBug) window.RichBug.sync();
 
   if (focusId) {
     const again = messagesEl.querySelector('[id="' + focusId.replace(/(["\\])/g, "\\$1") + '"]');
@@ -2049,20 +2045,6 @@ async function send(explicitText) {
   // One Send at a time while files are being filed into the conversation: a second Return in
   // that gap would otherwise send the same words twice, once with the files and once without.
   if (foldingAttachments) return;
-  // BUST A BUG (round 21): while Rich waits for the user to say what went wrong, or what to
-  // change in the report, the words in the composer are the report's, not a message to Rich's
-  // conversation. They leave the box exactly as a sent message does.
-  if (typeof explicitText !== "string" && mainView === "conversation" && window.RichBug) {
-    const said = inputEl.value.trim();
-    if (said && window.RichBug.takeWords(said, activeThreadId)) {
-      inputEl.value = "";
-      autoGrow();
-      if (activeThreadId) drafts.delete(activeThreadId);
-      parkViewStateNow();
-      syncComposerMode();
-      return;
-    }
-  }
   // Start/Resume sends its own acceptance without silently submitting or deleting a draft.
   const preserveDraft = typeof explicitText === "string";
   let text = preserveDraft ? explicitText.trim() : inputEl.value.trim();
@@ -2491,9 +2473,7 @@ function syncComposerMode() {
   const empty =
     inputEl.value.trim().length === 0 && !(window.RichAttachments && window.RichAttachments.hasItems());
 
-  // A bug report waiting on his words says so in the box he types them into (round 21).
-  const bugPlaceholder = window.RichBug ? window.RichBug.placeholder(activeThreadId) : null;
-  inputEl.placeholder = bugPlaceholder || (working ? "Add context or steer Rich…" : idlePlaceholder);
+  inputEl.placeholder = working ? "Add context or steer Rich…" : idlePlaceholder;
 
   stopBtn.hidden = !working;
   stopBtn.disabled = stopping;
@@ -3256,7 +3236,8 @@ if (window.RichAttachments) {
 }
 
 // BUST A BUG (round 21, `bug-report.js`): what the Settings button's "Bust a bug!" opens. It
-// talks to the bridge itself; what it needs from here is the conversation it happens in.
+// talks to the bridge itself and always shows the report in its own panel; what it needs from
+// here is where the user was and the conversation's voice mode, to turn it off.
 if (window.RichBug) {
   window.RichBug.init({
     bridge: Bridge,
@@ -3266,17 +3247,9 @@ if (window.RichBug) {
       return row ? row.display_title : "";
     },
     view: () => mainView,
-    blocked: () => !!sendBlockedReason,
-    openThread: (threadId) => openThread(threadId),
-    // A window over the conversation, closed by its own close; false for one that has none.
-    closeWindow: (id) => {
-      const close = POPUP_CLOSERS[id];
-      if (!close) return false;
-      close();
-      return true;
-    },
-    syncComposer: () => syncComposerMode(),
     voiceOn: () => voiceMode,
+    // Voice mode's own off path, the one the Talk to Rich button takes.
+    voiceOff: () => { if (voiceMode) exitVoiceMode(); },
     announce,
     toast: (text) => window.RichSettings && window.RichSettings.toast(text),
   });
@@ -3827,11 +3800,18 @@ function renderDrillChip() {
   // what is starting, then what is running.
   const forScreen = rows.filter((row) => row.state === "waiting-for-screen").length;
   const forQuota = rows.filter((row) => row.state === "waiting-for-quota").length;
-  const starting = rows.filter((row) => row.state === "registered" || row.state === "preparing").length;
+  // **HELD IS NOT STARTING** (nightly 48's walk, D26): a job held until a sign-in or the work
+  // connection comes back is `registered` like one about to start, and the line read
+  // "2 assignments starting" under the notice saying neither had started. The shell says which
+  // are held (`held`, `WorkHost::held_on`); they wait to start, and clear by themselves.
+  const notStarted = (row) => row.state === "registered" || row.state === "preparing";
+  const held = rows.filter((row) => row.held && notStarted(row)).length;
+  const starting = rows.filter((row) => !row.held && notStarted(row)).length;
   const running = rows.filter((row) => row.state === "running").length;
   if (awaiting) parts.push(`${awaiting} waiting for you`);
   if (forScreen) parts.push(counted(forScreen, "assignment", "assignments") + " waiting for the screen");
   if (forQuota) parts.push(counted(forQuota, "assignment", "assignments") + " waiting to continue");
+  if (held) parts.push(counted(held, "assignment", "assignments") + " waiting to start");
   if (starting) parts.push(counted(starting, "assignment", "assignments") + " starting");
   if (running) parts.push(counted(running, "assignment", "assignments") + " running");
   // Plain language for the state the design calls `not_found`. "1 unknown" reads like an
@@ -4527,13 +4507,11 @@ async function enterVoiceMode() {
   renderVoiceModelState(null);
   renderVoiceState("listening", false);
   renderVoiceLevel(0);
-  if (window.RichBug) window.RichBug.voiceChanged();
 }
 
 async function exitVoiceMode() {
   voiceMode = false;
   setTalkPressed(false);
-  if (window.RichBug) window.RichBug.voiceChanged();
   voicePanelEl.hidden = true;
   composerEl.hidden = false;
   inputEl.focus();
@@ -8467,6 +8445,10 @@ function openTechyScope(on) {
   // stop matching the sentence it was built from.
   for (const input of techyScopeInputs()) input.checked = input.value === TECHY_SCOPE_PRESELECTED;
   techyScopeEl.hidden = false;
+  // THE MENU THAT ASKED IT CLOSES. Settings is above this sheet, as above every overlay (second
+  // review of 9463220ef, finding 2), so a menu left open would cover its Turn it on and Cancel at
+  // the app's minimum window; the button stays on top, and pressing it opens the menu again.
+  if (window.RichSettings && window.RichSettings.close) window.RichSettings.close(false);
   const first = techyScopeInputs()[0];
   if (first) first.focus();
 }
@@ -8905,19 +8887,33 @@ window.RichDismiss = {
 // about where a sheet lives — a sheet moved to `<body>` tomorrow is covered by the same walk —
 // and it reaches `.settings` precisely because `<body>` is on the chain.
 //
-// WHICH SHEETS, AND WHY NOT ALL SEVEN `aria-modal` OVERLAYS. The trigger is the declaration
+// WHICH SHEETS, AND WHY NOT EVERY OVERLAY. The trigger is the declaration
 // already on the element: `aria-modal="true"` AND a `data-dismiss` that names a CONTROL rather
 // than `escape`. That pair is "a question with one named way out" — `#setup-sheet` and
 // `#memory-setup`, the two first-run questions, and the two whose backdrop deliberately does
 // not dismiss them (`704b4596`). The other five (`#search-overlay`, `#entity-picker`,
 // `#corrections-overlay`, `#feedback-overlay`, `#techy-scope`) are dismissed from OUTSIDE
 // themselves, so "the outside is unavailable" is not what they mean and enforcing it there is
-// a different change from this one. Their `aria-modal` promise is still unkept, and saying so
-// here is better than quietly widening a fix nobody measured.
+// a different change from this one. None of them makes the promise any more (nightly 48's walk,
+// D24): with `aria-modal` on Corrections and focus inside it, WebKit left the Settings button out
+// of the accessibility tree, so Bust a bug could not be reached from there, though Settings sits
+// above them on purpose. `#techy-scope` followed (second review of 9463220ef, finding 2): it was
+// aria-modal at z-index 310 over Settings; it is an ordinary overlay below it now, and the menu
+// that opens it closes as it does (`openTechyScope`).
 //
 // EVERY MARK IS SIGNED (`data-question-inert`) AND ONLY SIGNED MARKS ARE CLEARED, so a subtree
 // that is inert for its OWN reason — `home.js` holds `#app` inert while the opening screen is
 // up — is never un-inerted by this file on its way past.
+//
+// ONLY THE TWO FIRST-RUN QUESTIONS (review rv-20261010T081721Z-66ba5386-a4d1 finding 2, the
+// whole class). This selector also matched six sheets the Settings menu itself opens (Claude
+// accounts, the quota, the phone, repositories, dictation) and the quit question, and each one
+// inerted Settings with the rest of the window: after D24 had made Settings reachable over
+// Corrections, it was still dead over these. None of them claims `aria-modal` any more, so the
+// two first-run questions, `#setup-sheet` and `#memory-setup`, are what this matches, and they
+// keep holding Settings back as Ray's B1b asked (`tests/setup.js` check 20; the CEO's common-
+// sense exception to §15, 2026-10-10). `ui/tests/appearance.js` check 7c finds every other
+// overlay from the shipped markup and CSS and holds Settings on top and reachable over each.
 
 /// A modal question: it asks, and the only way out is the control it names.
 const QUESTION_SELECTOR = '.overlay[aria-modal="true"][data-dismiss^="control:"]';

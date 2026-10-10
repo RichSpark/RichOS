@@ -3572,10 +3572,10 @@ async function main() {
     assert(await page.locator("#bug-btn").isVisible(), "§15's floor is missing from the held screen's menu");
     await page.click("#bug-btn");
     // Round 21 (CEO §115): the button opens the report itself, so what is waited for is Rich's
-    // first question — in the conversation or in the panel beside a window — not a notice.
-    await page.waitForSelector("#bug-flows .bug-rich, #bugdock-msgs .bug-rich", { state: "attached" });
+    // first question, in the Rich panel, not a notice.
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
     const asked = await page.evaluate(() =>
-      document.querySelector("#bug-flows .bug-rich .tl-prose, #bugdock-msgs .bug-rich .tl-prose").textContent.trim());
+      document.querySelector("#bugdock-msgs .bug-rich .tl-prose").textContent.trim());
     assert(asked.startsWith("What went wrong?"), "Bust a bug did not open the report: " + JSON.stringify(asked));
     const afterBug = await splashState(page);
     assert(afterBug.present, "reporting a bug navigated away from the screen the bug is on");

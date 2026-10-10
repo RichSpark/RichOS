@@ -1336,7 +1336,7 @@
   /// swallowed rather than toggled on, because holding space is one press to a person.
   ///
   /// AND WHAT THE MENU'S BUST A BUG OPENS (round 21, CEO §115). The report opens in the Rich
-  /// panel ON TOP of this held screen (`#bugdock.bugdock--over`, z-index 250), and the user
+  /// panel ON TOP of this held screen (`#bugdock`, z-index 298, the app's top layer), and the user
   /// answers it there: a click into it, and every key typed into it, spaces included, belongs to
   /// the report. Measured with this exemption taken out (`tests/bug-report.js`, "Bust a bug on
   /// the held opening screen"): the first click into the answer box took the screen the bug is on

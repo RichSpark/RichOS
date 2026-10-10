@@ -163,7 +163,7 @@
   // measured against (tests/contrast.js counts every text node, hidden or not) is unchanged.
   const sheet = document.createElement("div");
   sheet.id = "dictation-sheet"; sheet.className = "overlay"; sheet.hidden = true;
-  sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("role", "dialog");
   sheet.setAttribute("aria-labelledby", "dict-title"); sheet.setAttribute("data-dismiss", "control:#dict-close");
   const $ = id => document.getElementById(id);
   let col = null, tryBox = null, tryNote = null;
