@@ -1280,7 +1280,7 @@ fn a_line_starting_with_a_block_marker_is_sent_as_plain_text() {
         "",
         "Fine",
         "\\- seven",
-        "  12\\. eight",
+        "12\\. eight",
         "\\===",
         "",
         "1. \\- a step",
@@ -1298,6 +1298,12 @@ fn a_line_starting_with_a_block_marker_is_sent_as_plain_text() {
     let plain = body(&["- The button does nothing.", "---", "1. five"], &["2) six"]);
     assert_eq!(Scrubber::default().scrub_markdown(&plain), plain);
     assert_eq!(Scrubber::default().scrub_markdown(&body(&["1.jane@example.com wrote it."], &[])), "### What happened\n\n\\[an email address\\] wrote it.\n");
+    // Review rv-20261010T204141Z-53407e2a-dc94: a line indented four or more spaces (pasted during
+    // Change it) was a GitHub code block, where the added backslashes show. Indentation means
+    // nothing in a bug report, so no line keeps it: none starts a code block, and the escape is
+    // on the line's real first character.
+    assert_eq!(body(&[], &["Click Save.\n\n        - No response\n        ---"]), "### What happened\n\n1. Click Save.\n\n\\- No response\n\\---\n");
+    assert_eq!(body(&["\t\t1. five\n    plain words"], &[]), "### What happened\n\n1\\. five\nplain words\n");
 }
 
 /// **WHAT GOES, AND THE CARD THE USER LAST SAW WHEN IT WENT**: Send pressed on `card` under

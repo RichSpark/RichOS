@@ -1775,21 +1775,23 @@ fn escaped(text: &str) -> String {
     out
 }
 
-/// The card's words as [`escaped`] writes them, and on every line the mark that would start a
-/// Markdown block there ([`LINE_MARKS`]) escaped too, after any spaces the line starts with: a
-/// leading `-`, `+` or `=`, and the `.` or `)` after a leading number. So the line GitHub shows is
-/// the line the user approved, not a list, a divider or a heading.
+/// The card's words as [`escaped`] writes them, each line without the spaces and tabs it starts
+/// with, and on every line the mark that would start a Markdown block there ([`LINE_MARKS`])
+/// escaped too: a leading `-`, `+` or `=`, and the `.` or `)` after a leading number. So the line
+/// GitHub shows is the line the user approved, not a list, a divider or a heading. Indentation
+/// means nothing in a bug report and is dropped (review rv-20261010T204141Z-53407e2a-dc94: a line
+/// indented four spaces was a code block, where the escapes show), so no line is a code block and
+/// every escape is on the line's real first character.
 fn escaped_lines(text: &str) -> String {
     text.split('\n')
         .map(|line| {
             let rest = line.trim_start_matches([' ', '\t']);
-            let indent = &line[..line.len() - rest.len()];
             let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
             let (number, rest) = rest.split_at(digits);
             match rest.chars().next() {
-                Some(c @ ('.' | ')')) if !number.is_empty() => format!("{indent}{number}\\{c}{}", escaped(&rest[1..])),
-                Some(c @ ('-' | '+' | '=')) if number.is_empty() => format!("{indent}\\{c}{}", escaped(&rest[1..])),
-                _ => format!("{indent}{}", escaped(&format!("{number}{rest}"))),
+                Some(c @ ('.' | ')')) if !number.is_empty() => format!("{number}\\{c}{}", escaped(&rest[1..])),
+                Some(c @ ('-' | '+' | '=')) if number.is_empty() => format!("\\{c}{}", escaped(&rest[1..])),
+                _ => escaped(&format!("{number}{rest}")),
             }
         })
         .collect::<Vec<_>>()
