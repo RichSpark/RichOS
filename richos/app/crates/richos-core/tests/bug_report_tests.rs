@@ -1240,6 +1240,66 @@ fn assert_sent_as_shown(card: &Sheet, public: &Public) {
     assert_eq!((request["title"].as_str(), request["body"].as_str()), (Some(card.title.as_str()), Some(issue_body(card).as_str())));
 }
 
+/// **A LINE THAT STARTS WITH A MARKDOWN BLOCK MARKER GOES TO GITHUB AS THE LINE THE CARD SHOWED**
+/// (review rv-20261010T194410Z-796ff877-381f): on 796ff877d the paragraph "- The button does
+/// nothing." went out as a bullet and "---" as a divider. The marker that starts a line is
+/// escaped, and the words the last scrub reads in the body are the user's words with no
+/// backslash left in them (an email address that starts a numbered-looking line is still found
+/// whole and left out whole).
+#[test]
+fn a_line_starting_with_a_block_marker_is_sent_as_plain_text() {
+    let body = |paragraphs: &[&str], steps: &[&str]| {
+        issue_body(&Sheet {
+            title: "t".into(),
+            sections: vec![SheetSection {
+                heading: "What happened".into(),
+                paragraphs: paragraphs.iter().map(|p| p.to_string()).collect(),
+                steps: steps.iter().map(|s| s.to_string()).collect(),
+            }],
+        })
+    };
+    assert_eq!(body(&["- The button does nothing.", "---"], &[]), "### What happened\n\n\\- The button does nothing.\n\n\\---\n");
+    let expected = [
+        "### What happened",
+        "",
+        "\\+ one",
+        "",
+        "\\* two",
+        "",
+        "\\*\\*\\*",
+        "",
+        "\\_\\_\\_",
+        "",
+        "\\# three",
+        "",
+        "\\> four",
+        "",
+        "1\\. five",
+        "",
+        "2\\) six",
+        "",
+        "Fine",
+        "\\- seven",
+        "  12\\. eight",
+        "\\===",
+        "",
+        "1. \\- a step",
+        "2. 3\\. another",
+        "",
+    ];
+    assert_eq!(
+        body(&["+ one", "* two", "***", "___", "# three", "> four", "1. five", "2) six", "Fine\n- seven\n  12. eight\n==="], &["- a step", "3. another"]),
+        expected.join("\n")
+    );
+    // Not at the start of a line, the same characters are words and stay as they are.
+    assert_eq!(body(&["It costs 3.5 - 1 + 2 = 4.5)"], &[]), "### What happened\n\nIt costs 3.5 - 1 + 2 = 4.5)\n");
+    // The last scrub reads the words GitHub shows: no stray backslash, so a body written out from
+    // its card is left as it is, and an address after an escaped number is left out whole.
+    let plain = body(&["- The button does nothing.", "---", "1. five"], &["2) six"]);
+    assert_eq!(Scrubber::default().scrub_markdown(&plain), plain);
+    assert_eq!(Scrubber::default().scrub_markdown(&body(&["1.jane@example.com wrote it."], &[])), "### What happened\n\n\\[an email address\\] wrote it.\n");
+}
+
 /// **WHAT GOES, AND THE CARD THE USER LAST SAW WHEN IT WENT**: Send pressed on `card` under
 /// `check`, with `rich` as Rich's last pass, and pressed once more on the card shown again if it
 /// is shown again, as the window does. A card shown again is Rich's version, so the second press

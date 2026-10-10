@@ -1743,6 +1743,13 @@ pub struct SheetSection {
 /// here would be a way for a name to be shown that the scrub did not read.
 const MARKS: &str = "\\`*_[]<>#|~&";
 
+/// **THE MARKS THAT ARE MARKDOWN ONLY AT THE START OF A LINE** (review
+/// rv-20261010T194410Z-796ff877-381f: "- The button does nothing." went out as a bullet, "---" as a
+/// divider): a list's `-` or `+`, a line of `=` under a line (a heading), and the `.` or `)` after
+/// a line's leading number (a numbered list). [`escaped_lines`] escapes them there only; `*`, `_`,
+/// `#` and `>` are in [`MARKS`] and escaped everywhere already. [`shown`] reads each as itself.
+const LINE_MARKS: &str = "-+=.)";
+
 /// **WHAT FOLLOWS EVERY `@` IN AN ISSUE'S BODY**: a zero-width space, so "@octocat" is not a
 /// mention: GitHub neither links it nor notifies that account, and the reader still sees
 /// "@octocat" (review rv-20261009T183159Z-a2fc94dc-20e7, the leak cc/echo-opus-bug13's handover
@@ -1768,6 +1775,27 @@ fn escaped(text: &str) -> String {
     out
 }
 
+/// The card's words as [`escaped`] writes them, and on every line the mark that would start a
+/// Markdown block there ([`LINE_MARKS`]) escaped too, after any spaces the line starts with: a
+/// leading `-`, `+` or `=`, and the `.` or `)` after a leading number. So the line GitHub shows is
+/// the line the user approved, not a list, a divider or a heading.
+fn escaped_lines(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            let rest = line.trim_start_matches([' ', '\t']);
+            let indent = &line[..line.len() - rest.len()];
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            let (number, rest) = rest.split_at(digits);
+            match rest.chars().next() {
+                Some(c @ ('.' | ')')) if !number.is_empty() => format!("{indent}{number}\\{c}{}", escaped(&rest[1..])),
+                Some(c @ ('-' | '+' | '=')) if number.is_empty() => format!("{indent}\\{c}{}", escaped(&rest[1..])),
+                _ => format!("{indent}{}", escaped(&format!("{number}{rest}"))),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// **THE WORDS GITHUB SHOWS** for a body this module wrote ([`issue_body`]): every escaped mark
 /// read as the mark itself, and the [`MENTION_BREAK`] after each `@` read as nothing, so these
 /// are the words as the user wrote them (an email address is whole again for the scrub). With
@@ -1779,7 +1807,7 @@ fn shown(markdown: &str) -> (String, Vec<(usize, usize)>) {
     let mut chars = markdown.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         let c = match chars.peek() {
-            Some(&(_, next)) if c == '\\' && MARKS.contains(next) => {
+            Some(&(_, next)) if c == '\\' && (MARKS.contains(next) || LINE_MARKS.contains(next)) => {
                 chars.next();
                 next
             }
@@ -1841,9 +1869,9 @@ fn body_parts(sheet: &Sheet) -> Vec<Part> {
 }
 
 /// The issue's body: each section as a heading and its words, nothing added, every word escaped
-/// ([`escaped`]) so GitHub shows the words themselves.
+/// ([`escaped_lines`]) so GitHub shows the words themselves.
 pub fn issue_body(sheet: &Sheet) -> String {
-    body_parts(sheet).into_iter().map(|(place, text)| if place.is_some() { escaped(&text) } else { text }).collect()
+    body_parts(sheet).into_iter().map(|(place, text)| if place.is_some() { escaped_lines(&text) } else { text }).collect()
 }
 
 /// The page of issue `number` on [`REPOSITORY`]. Built from a number, so the card's link can only
