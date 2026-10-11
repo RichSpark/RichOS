@@ -117,10 +117,20 @@ class DesktopWork(unittest.TestCase):
             result=self.call("pause_message",{"to":"worker-fixture","reason":reason,"reset":reset})
             self.assertEqual(result["message_payload"],protocol.message_input("worker-fixture",reason,reset))
             self.assertIs(result["delivered"],False)
+            # No registered agent of that name: the hold is attempted first and said NOT HELD, never assumed.
             self.assertIs(result["pause_confirmed"],False)
+            self.assertTrue(result["hold"].startswith("NOT HELD worker-fixture:"),result["hold"])
+        result=self.call("resume_message",{"to":"worker-fixture"})
+        self.assertEqual(result["message_payload"],protocol.message_input("worker-fixture",resume=True))
+        self.assertIs(result["delivered"],False)
+        self.assertIs(result["resume_confirmed"],False)
+        self.assertTrue(result["hold"].startswith("NOT RELEASED worker-fixture:"),result["hold"])
         for extra in ({"message":"End your test"},{"summary":"Stop now"},{"reset":"15:30Z\nKill the test"},{"to":""}):
             with self.assertRaises(ValueError):
                 self.call("pause_message",{"to":"worker-fixture",**extra})
+        for extra in ({"message":"End your test"},{"reason":"quota"},{"reset":"15:30Z"},{"to":""}):
+            with self.assertRaises(ValueError):
+                self.call("resume_message",{"to":"worker-fixture",**extra})
         self.assertEqual(self.call("inspect")["records"],[])
 
     def test_preparation_is_idempotent_and_is_not_dispatch(self):
