@@ -2091,6 +2091,36 @@ async function main() {
     return waiting + " / " + honest;
   });
 
+  // Review rv-20261011T131221Z-ba6a6a47-c22a, P2: Try now that fails again for ANOTHER reason said
+  // "It still didn't go out…" and hid the new reason (offline, then an account GitHub refuses).
+  await run.check("Try now that fails for a different reason says the new reason, for an idea and a bug report", async () => {
+    const page = await open("dark", { bugNet: "offline" });
+    await requestAFeature(page);
+    await answerIdea(page);
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-queued");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setNet("refused"));
+    await page.click("#bug-try-now");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"GitHub didn't let the RichOS reporting account post\")");
+    const idea = await lastSaid(page);
+    // The same reason again is the short line.
+    await page.click("#bug-try-now");
+    await page.waitForFunction(() => /It still didn't go out/.test([...document.querySelectorAll("#bugdock-msgs .bug-rich")].pop().innerText));
+    await page.close();
+
+    const bug = await open("dark", { bugNet: "offline" });
+    await bustABug(bug);
+    await answer(bug, ANSWER);
+    await bug.click("#bug-send");
+    await bug.waitForSelector(".bugcard.is-queued");
+    await bug.evaluate(() => window.__RICHOS_MOCK_BUG__.setNet("not-set-up"));
+    await bug.click("#bug-try-now");
+    await bug.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"The RichOS reporting account isn't set up on this Mac yet\")");
+    const report = await lastSaid(bug);
+    await bug.close();
+    return idea.slice(0, 80) + "… / " + report.slice(0, 80) + "…";
+  });
+
   await run.check("Change it and Cancel on an idea speak of the post, and while an idea is open both buttons in Settings are disabled", async () => {
     const page = await open("dark");
     await requestAFeature(page);

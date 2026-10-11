@@ -1336,7 +1336,10 @@ window.RichBug = (function () {
 
   function delivered(f, d, why) {
     if (d.state === "sent") return markSent(f, d, why);
-    var again = f.queuedOnce;
+    // "Still …" only when it failed again FOR THE SAME REASON: a new reason (offline, then an
+    // account GitHub refuses) is explained in full, as the first failure was (review
+    // rv-20261011T131221Z-ba6a6a47-c22a, P2).
+    var again = f.queuedOnce && f.reason === d.reason;
     f.pendingId = d.id;
     f.reason = d.reason;
     f.queuedOnce = true;
