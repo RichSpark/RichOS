@@ -238,6 +238,31 @@ class Base(unittest.TestCase):
 
 # ===========================================================================
 class RecoveryChain(Base):
+    def test_refused_landing_routes_in_a_fresh_cli_interpreter(self):
+        code = r"""
+import importlib.util,json,os,sys
+spec=importlib.util.spec_from_file_location('workspaces',sys.argv[1])
+w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
+f=w._fence_program();repo=sys.argv[2];state=sys.argv[3];tip='a'*40
+record=os.path.join(state,'rv');os.makedirs(record)
+with open(os.path.join(record,'verdict.json'),'w') as out:
+ json.dump(dict(answer=dict(findings=[dict(blocks=True,priority=1,title='defect',files=['a'],evidence='original')])),out)
+ledger=os.path.join(state,'reviews.jsonl')
+with open(ledger,'w') as out:
+ out.write(json.dumps(dict(id='rv',repo=repo,repo_id=f.review_repo_identity(repo),work='teammate:fixture',tip=tip,trigger='handover',verdict='changes-requested',record=record))+'\n')
+w._registry_entity_map=lambda _:{}
+w._declared_review_listing=lambda *a:(True,[],None)
+w._review_ledgers=lambda *a:([ledger],None)
+try:w._review_check([(repo,'cc/work',repo,tip)])
+except w.SpecError:
+ assert (__import__('pathlib').Path(state)/'recovery/routing-requests.jsonl').is_file(), 'routing request absent'
+else:raise AssertionError('blocked review was accepted')
+"""
+        state=os.path.join(self.env.root,'cli-review-state');os.makedirs(state)
+        env=dict(os.environ,SECOND_REVIEW_STATE_DIR=state)
+        result=subprocess.run([sys.executable,'-I','-B','-c',code,os.path.realpath(LIB),self.other,state],env=env,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def recovery_fixture(self, name='recovery-worker'):
         cc = self.make_cc(name)
         aid, _path = self.spawn(name, cc)

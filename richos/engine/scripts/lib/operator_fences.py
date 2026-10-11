@@ -1363,6 +1363,9 @@ def route_refused_review(ledger, tips, repo):
     """The shared landing backstop requests applicability review without ever
     changing the effective outcome. Host watcher consumes durable requests.
     """
+    library = os.path.dirname(os.path.realpath(__file__))
+    if library not in sys.path:
+        sys.path.insert(0, library)
     import recovery
     source = recovery.rows(ledger)
     for tip in tips:
