@@ -13209,8 +13209,8 @@
     },
     "scripts/lib/appinstances.test.sh": {
       "source": "scripts/lib/appinstances.test.sh",
-      "sha256": "1e5e77257ef31b7a6848e728a8dcaa605466f459d97a790173edfe48f5c0667e",
-      "evidence": "Imports the complete appinstances module and scratch allocator. Test binaries are compiled literal C fixtures; all process queries use native commands. Retain the full module declared config keys; no additional engine helper or mutation driver executes.",
+      "sha256": "cde722876a7e5e069164d5048b6b5579925ef55fd735229a84ae66994e3dd840",
+      "evidence": "Imports the complete appinstances module and scratch allocator. Test binaries are compiled literal C fixtures; all process queries use native commands. Retain the full module declared config keys; no additional engine helper or mutation driver executes. The suite itself sets APP_TEST_INSTANCE_REAL_HOME_PATHS (a module key) to a fixture directory it creates under /tmp and removes; it reads no value from outside.",
       "keys": [],
       "edges": [
         {
