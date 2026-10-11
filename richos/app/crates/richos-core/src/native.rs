@@ -6035,6 +6035,75 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
             "the work lease sets nothing, and its reader must not claim otherwise");
     }
 
+    /// **A teammate in the app can reach every skill its standing instruction names** (CEO,
+    /// 2026-10-10: the audio and video skill use must be part of all the teammate and
+    /// proto-teammate profiles in RichOS, "otherwise a RichOS user wouldn't take advantage of
+    /// that").
+    ///
+    /// A teammate runs as a helper inside the WORK lease (`start_work_lease`, then the `Agent`
+    /// call `richos_work`'s `prepare` hands it), so the skills it can invoke are that session's.
+    /// This spawns a real Work-role lease, reads the argument vector the child actually got,
+    /// and builds the session's `system/init.skills` list from it the way the binary does:
+    /// every `--plugin-dir`'s manifest name, then `:<skill directory>` for each skill in it
+    /// (measured cell K2, `skills.rs`; re-measured on 2.1.295 for this change). Every skill
+    /// named in backticks on the standing-instruction line of every definition that reaches an
+    /// app teammate (the stock `engine/agents/`, the shelf `engine/team/shelf/`, the three
+    /// duty texts) must be on that list.
+    #[test]
+    fn a_teammate_s_session_lists_every_skill_its_standing_instruction_names() {
+        let argv = fixture_root().join(format!("argv-{}", uuid::Uuid::new_v4().simple()));
+        let script = format!(
+            "printf '%s\\n' \"$@\" > '{}'\n\
+             read -r line\n\
+             printf '%s\\n' '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_init\",\"response\":{{}}}}}}'\n\
+             sleep 5\n", argv.display());
+        let _work = NativeClient::spawn_with_tools(
+            &write_script("teammate-skills", &script), Path::new("/tmp"),
+            Some((doctrine_fixture().as_path(), skills_fixture().as_path())),
+            None, None, None, None, None, LeaseRole::Work,
+        ).expect("the handshake should succeed");
+        let args: Vec<String> = std::fs::read_to_string(&argv).unwrap().lines().map(String::from).collect();
+
+        let mut init_skills = Vec::new();
+        for (i, flag) in args.iter().enumerate() {
+            if flag != PLUGIN_DIR { continue; }
+            let root = Path::new(&args[i + 1]);
+            let manifest: Value = serde_json::from_str(
+                &std::fs::read_to_string(crate::skills::manifest_path(root)).unwrap()).unwrap();
+            let plugin = manifest["name"].as_str().unwrap().to_string();
+            for entry in std::fs::read_dir(root.join("skills")).unwrap() {
+                let dir = entry.unwrap().path();
+                if dir.join("SKILL.md").is_file() {
+                    init_skills.push(format!("{plugin}:{}", dir.file_name().unwrap().to_string_lossy()));
+                }
+            }
+        }
+        assert!(!init_skills.is_empty(), "the work lease was given no skills at all: {args:?}");
+
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let mut checked = 0;
+        for folder in ["agents", "team/shelf", "mega-lander/duties"] {
+            for entry in std::fs::read_dir(engine.join(folder)).unwrap() {
+                let path = entry.unwrap().path();
+                if path.extension().is_none_or(|e| e != "md") { continue; }
+                let body = std::fs::read_to_string(&path).unwrap();
+                let line = body.lines().find(|l| l.starts_with("**Standing instruction:**") && l.contains("skill"))
+                    .unwrap_or_else(|| panic!("{} carries no standing instruction naming a skill", path.display()));
+                let named: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
+                assert!(!named.is_empty(), "{} names no skill: {line}", path.display());
+                for name in named {
+                    let want = format!("{}:{name}", crate::skills::PLUGIN_NAME);
+                    assert!(init_skills.contains(&want),
+                        "{} tells its teammate to use `{name}`, and the teammate's session lists only {init_skills:?}",
+                        path.display());
+                }
+                checked += 1;
+            }
+        }
+        // The 5 stock definitions and the 3 duties, with the shelf beside them.
+        assert!(checked > 8, "only {checked} definitions were read");
+    }
+
     #[test]
     fn every_lease_is_started_on_opus_at_high_effort_by_default() {
         // §119 (CEO, 2026-10-10): "Rich and Stu stay on Opus high effort in RichOS by default."
