@@ -2359,10 +2359,14 @@ class GatesAtOnceTests(unittest.TestCase):
     NUMBERS = ("--gates-at-once", "2", "--simulated-phones", "1")
     NO_HOST_SCREEN_ARG = 5  # perform(command, force, runtime, run, checks_done_at_land, no_host_screen, ...)
 
-    def build_with_gate_parent(self, parent_mode):
+    def build_with_gate_parent(self, parent_mode, foreign_owner=False):
         """main() `build` with its gate folder under a fresh parent created with `parent_mode`:
-        (the refusal or None, what was reached, the Runner mock, the gate folder)."""
-        volume = self.root / f"volume-{parent_mode:o}"
+        (the refusal or None, what was reached, the Runner mock, the gate folder).
+
+        `foreign_owner` models a parent another account owns, which a test cannot make without
+        root: stat() reports another owner for it, and creating anything inside it is refused
+        with the PermissionError the filesystem would raise."""
+        volume = self.root / f"volume-{parent_mode:o}{'-foreign' if foreign_owner else ''}"
         previous = os.umask(0)  # Created with this mode; no existing folder is changed.
         try:
             volume.mkdir(mode=parent_mode)
@@ -2387,12 +2391,33 @@ class GatesAtOnceTests(unittest.TestCase):
                 patch.object(m, "private_file", side_effect=Path), \
                 patch.object(m, "exclusive", side_effect=lock), \
                 patch.object(m, "TimestampedLog", return_value=contextlib.nullcontext(io.StringIO())), \
-                patch.object(m, "Runner", runner), contextlib.redirect_stdout(io.StringIO()):
+                patch.object(m, "Runner", runner), contextlib.redirect_stdout(io.StringIO()), \
+                (self.owned_by_another_account(volume) if foreign_owner else contextlib.nullcontext()):
             try:
                 m.main()
-            except ValueError as error:
+            except (ValueError, OSError) as error:
                 return str(error), reached, runner, folder
         return None, reached, runner, folder
+
+    @contextlib.contextmanager
+    def owned_by_another_account(self, volume):
+        real_stat, real_mkdir, foreign = Path.stat, Path.mkdir, volume.resolve()
+
+        def stat(path, *args, **kwargs):
+            st = real_stat(path, *args, **kwargs)
+            if Path(os.path.realpath(path)) != foreign:
+                return st
+            fields = list(st[:10])
+            fields[4] = os.getuid() + 1  # st_uid
+            return os.stat_result(fields)
+
+        def mkdir(path, *args, **kwargs):
+            if foreign in Path(os.path.realpath(path)).parents:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_mkdir(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", stat), patch.object(Path, "mkdir", mkdir):
+            yield
 
     def test_a_gate_folder_the_updater_tests_would_refuse_stops_the_build_before_any_gate(self):
         # Nightly 49, first build (20261010T211748Z-87d4a826): gates/updater-tests failed in 3 s
@@ -2412,6 +2437,20 @@ class GatesAtOnceTests(unittest.TestCase):
         self.assertEqual(reached, ["lock"])
         runner.return_value.perform.assert_called_once()
         self.assertEqual(runner.call_args.args[2]["TMPDIR"], str(folder) + "/")  # Runner(repo, state, env, ...)
+
+    def test_a_foreign_owned_parent_is_refused_with_its_fix_before_the_gate_folder_is_created(self):
+        # Review rv-20261011T040921Z-7ac03392-1fbf: the folder was created before its
+        # ancestors were checked, so on first use under another account's 0755 parent the build
+        # died with a bare PermissionError instead of naming the folder and the fix.
+        refusal, reached, runner, folder = self.build_with_gate_parent(0o755, foreign_owner=True)
+        self.assertIsNotNone(refusal, "a foreign-owned parent of the gate folder did not stop the build")
+        self.assertIn(str(folder.resolve()), refusal)
+        self.assertIn(f"sudo chown {shlex.quote(m.pwd.getpwuid(os.getuid()).pw_name)} "
+                      f"{shlex.quote(str(folder.parent.parent.resolve()))}", refusal)
+        self.assertNotIn("Permission denied", refusal)
+        self.assertEqual(reached, [])  # No lock, no log, no gate.
+        runner.assert_not_called()
+        self.assertFalse(folder.parent.exists())  # Nothing was created under it.
 
     def test_an_acl_write_grant_on_an_ancestor_is_the_same_refusal(self):
         # The updater's no_write_acl(): an allow entry carrying any write right refuses the home.

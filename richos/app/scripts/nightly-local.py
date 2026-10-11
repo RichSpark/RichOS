@@ -829,6 +829,10 @@ def gate_tmpdir(environ=None):
     """
     environ = os.environ if environ is None else environ
     if GATE_TMPDIR_VOLUME.is_mount():
+        # The folders that already exist above it are checked before it is created, so a parent
+        # this account cannot write into is named with its fix, not a bare PermissionError
+        # (review rv-20261011T040921Z-7ac03392-1fbf).
+        refuse_unsafe_gate_folder(str(GATE_TMPDIR))
         GATE_TMPDIR.mkdir(parents=True, exist_ok=True)
         return refuse_unsafe_gate_folder(str(GATE_TMPDIR) + "/")
     try:
@@ -875,8 +879,11 @@ def refuse_unsafe_gate_folder(folder):
     """
     me = os.getuid()
     fixes = []
-    resolved = Path(folder).resolve(strict=True)
-    for ancestor in (resolved, *resolved.parents):
+    resolved = Path(folder).resolve()
+    existing = resolved
+    while not existing.exists():  # A folder not yet created: check the ones that exist above it.
+        existing = existing.parent
+    for ancestor in (existing, *existing.parents):
         st = ancestor.stat()
         quoted = shlex.quote(str(ancestor))
         sudo = "sudo " if st.st_uid != me else ""
