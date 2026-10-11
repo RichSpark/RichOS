@@ -2,7 +2,7 @@
 
 The host schedules Axel after three distinct failed implementation handovers for a tracked job. Wes receives explicitly disputed blocking findings, findings refused at landing and findings selected by the declared routing policy. Both run through the existing asynchronous review infrastructure. Ordinary work continues while evaluation is pending.
 
-This feature is inactive without an entity-local `.claude/recovery.json`. Landing review acceptance remains independently active. Agent profiles alone do not activate recovery.
+This feature is inactive without an entity-local the adopting entity's own `recovery.json` (in its `.claude` folder). Landing review acceptance remains independently active. Agent profiles alone do not activate recovery.
 
 ## Observation first
 
@@ -59,7 +59,7 @@ The installed contract probe needs an independent frozen reference for an adopte
 observation declaration. Before deployment, run `scripts/recovery.sh
 contract-snapshot --entity <absolute entity> --output <absolute new reference>`
 from the reviewed source engine. Keep that reference outside the mutable engine
-and set `runtime_contract` to its absolute path in `.claude/recovery.json`.
+and set `runtime_contract` to its absolute path in the adopting entity's own `recovery.json` (in its `.claude` folder).
 The snapshot does not qualify enforcement or native capabilities. The probe
 compares installed bytes and declared mode against the frozen reference and
 refuses an adopted engine comparing itself without one. Enforcement may use its

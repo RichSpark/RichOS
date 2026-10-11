@@ -228,6 +228,13 @@
       "keys": [],
       "edges": []
     },
+    "scripts/lib/entity-sandbox.sh": {
+      "source": "scripts/lib/entity-sandbox.sh",
+      "sha256": "523f4102a182366f536bd51d61a6cc93fc4535e9006db90f5c9ba75adae7d413",
+      "evidence": "Copies orchestration.config and the agents folder byte for byte into a fresh temporary directory (optionally a one-commit Git repository there); it reads no setting by name, so no key is declared.",
+      "keys": [],
+      "edges": []
+    },
     "scripts/hooks/guard-main-checkout-writes.sh": {
       "source": "scripts/hooks/guard-main-checkout-writes.sh",
       "sha256": "6e82fa3b4ada059d40200b56549e249d1048eb88b68a97d2961065a0504ededa",
@@ -2408,7 +2415,7 @@
     },
     "scripts/hooks/guard-stop-live-work.test.sh": {
       "source": "scripts/hooks/guard-stop-live-work.test.sh",
-      "sha256": "52e711104bf1f6224ed806ce5c1894254a0bc6857509d8c2b626a1334e0c309a",
+      "sha256": "dd7a444be8f7aa5c667a3b2fcfce0ead381cbe949d49ec5526a430b82a7c873c",
       "evidence": "Runs the actual guard, predicate, recorder and liveness resolver. Every ACK path is private; the live Git worktree uses generated literal MODEL settings as adoption markers. The non-TaskStop and missing-target cases read root identity, not setting values.",
       "keys": [],
       "edges": [
@@ -2423,6 +2430,9 @@
         },
         {
           "to": "scripts/agent-liveness.sh"
+        },
+        {
+          "to": "scripts/lib/entity-sandbox.sh"
         }
       ]
     },
