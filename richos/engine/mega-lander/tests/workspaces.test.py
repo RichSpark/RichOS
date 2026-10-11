@@ -4396,6 +4396,38 @@ class AutoLand_MergedAndEndedLandsOnItsOwn(Base):
         self.assertFalse(os.path.exists(kept))
 
 
+class CarriedWait_EndsWhenItsCarrierLands(Base):
+    """2026-10-11: zach-opus-pierce3 had a workspace in two repositories and a
+    wait "carried by zach-opus-pierce4, lands with it". pierce4 carried only
+    the first repository's branch and landed; the wait outlived it, so the
+    second repository's branch sat unlanded and off every gate for ~40 h.
+    When an agent lands, a wait that names it ends unless all of the waiting
+    agent's work landed with it, and the gate names the branch still out."""
+
+    def test_a_wait_naming_the_lander_ends_and_the_branch_left_out_is_named(self):
+        cc = self.make_cc("zach-opus-ca")                        # repository one: self.other
+        aid_a, npath_a = self.spawn("zach-opus-ca", cc=cc)        # repository two: self.entity
+        self.commit(cc, "first.txt")
+        self.commit(npath_a, "second.txt")
+        self.finish(aid_a)
+        ws.wait("zach-opus-ca", "started", "carried by zach-opus-cb, lands with it", "", self.sid)
+        aid_b, npath_b = self.spawn("zach-opus-cb", extra="lands-pending: zach-opus-ca\n")
+        self.commit(npath_b, "carrier.txt")
+        self.finish(aid_b)
+        self.merge(self.other, "cc/zach-opus-ca")                  # B carries only A's first repository
+        self.merge(self.entity, "worktree-agent-" + aid_b)
+        self.assertTrue(ws.land("zach-opus-cb", self.sid)["landed"])
+        item = [i for i in ws.pending(self.sid, self.entity) if i["name"] == "zach-opus-ca"]
+        self.assertEqual(len(item), 1)
+        self.assertEqual(item[0]["waiting"], "")                   # the wait ended with B's land
+        self.assertTrue(item[0]["blocks_turn_end"])
+        self.assertIn("worktree-agent-" + aid_a, item[0]["why"])   # the branch still out is named
+        ok, msg = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertFalse(ok)
+        self.assertIn("zach-opus-ca", msg)
+        self.assertIn("worktree-agent-" + aid_a, msg)
+
+
 class MergeGateRefusal_LeavesTheMainCheckoutAsItWas(Base):
     """2026-10-07: three of Rich's lands (merge-echo-cc292b, merge-retry1,
     merge-avskills1) ended in `=== MERGE INTO MAIN REFUSED ===` and git's "Not

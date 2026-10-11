@@ -5137,12 +5137,56 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
                                     **({"kept_ignored": kept} if kept else {})}
             save_agent(fresh)
         event("landed", key=r["key"], auto=bool(auto), as_part_of=rec["key"])
+    _release_carried_waits(chain, deadline)
     clean = _delete_chain(chain, "landed", processes=stopped, deadline=deadline)
     if not clean:
         if not (load_agent(rec["key"]) or {}).get("disposition"):
             raise SpecError("landing eligibility changed during cleanup; the work was preserved")
     return {"landed": True, **({"cleanup_pending": True} if not clean else {}),
             **({"kept_ignored": kept} if kept else {})}
+
+
+def _release_carried_waits(chain, deadline=None):
+    """A WAIT ON AN AGENT ENDS WHEN THAT AGENT LANDS (2026-10-11).
+
+    zach-opus-pierce3 had workspaces in two repositories and a wait "carried
+    by zach-opus-pierce4, lands with it". pierce4 carried only the first
+    repository's branch and landed; the wait outlived it, and the second
+    repository's branch sat unlanded for ~40 h behind that note on every gate.
+
+    So when `chain` lands, every other agent whose recorded wait names one of
+    its agents, or that one of them carried (lands-pending / continues), loses
+    that wait while any of its own work is not in its integration branch. The
+    gate then lists it as unlanded again and its automatic land names the
+    branch still out. Work that could not be checked loses the wait too:
+    showing it is the safe answer, and nothing is deleted here."""
+    keys = {r["key"] for r in chain}
+    names = [r["name"] for r in chain if r.get("name")]
+    carried = {c for r in chain for c in (r.get("lands_pending") or []) + (r.get("continues") or [])}
+    for other in all_agents():
+        waiting = other.get("waiting")
+        if not waiting or other["key"] in keys or other.get("disposition"):
+            continue
+        on = waiting.get("on") or ""
+        if not (other.get("name") in carried or other["key"] in carried
+                or any(re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(n), on) for n in names)):
+            continue
+        try:
+            out = _not_in_integration(other, _chain(other), deadline=deadline)
+        except (SpecError, OSError) as e:
+            out = ["it could not be checked (%s)" % e]
+        if not out:
+            continue
+        with Lock():
+            fresh = load_agent(other["key"])
+            if not fresh or fresh.get("disposition") or fresh.get("waiting") != waiting:
+                continue
+            fresh.setdefault("history", []).append({"at": iso(), "fact": "wait ended: %s landed without "
+                                                    "all of this work" % ", ".join(names),
+                                                    "wait": waiting, "not_landed": out})
+            fresh["waiting"] = None
+            save_agent(fresh)
+        event("wait-ended", key=other["key"], landed=names, not_landed=out)
 
 
 def merge_and_land(ref, me="", message=""):
