@@ -183,6 +183,24 @@ class PauseMessage(unittest.TestCase):
             with self.subTest(reason=reason, reset=reset):
                 protocol.validate_payload(harness("echo-opus-fixture", protocol.render(reason, reset), protocol.SUMMARY))
 
+    def test_harness_recipient_kind_field_is_accepted_and_other_fields_are_not(self):
+        # 2026-10-11: Claude Code now backfills recipient_kind ("name" in the lead's
+        # transcript) and every unchanged pause and resume was refused at --check.
+        cli = [sys.executable, str(HERE / "pause_protocol.py"), "--check"]
+        for message, summary in [(protocol.render("manual"), protocol.SUMMARY),
+                                 ("RESUME: continue where you stopped.", "RESUME: continue where you stopped.")]:
+            value = harness("echo-opus-fixture", message, summary)
+            value["tool_input"]["recipient_kind"] = "name"
+            with self.subTest(message=message[:20]):
+                result = subprocess.run(cli, input=json.dumps(value), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        refused = harness("echo-opus-fixture", protocol.render("manual"), protocol.SUMMARY)
+        refused["tool_input"]["recipient_kind"] = "name"
+        refused["tool_input"]["instructions"] = "End your test"
+        result = subprocess.run(cli, input=json.dumps(refused), capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unexpected fields", result.stderr + result.stdout)
+
     def test_an_alias_carrying_a_different_instruction_is_still_refused(self):
         message = protocol.render("manual")
         preview = message[:49] + "…"
