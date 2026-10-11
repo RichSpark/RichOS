@@ -58,6 +58,25 @@ class RuntimeInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "public recipe"):
             module.verify(self.root, self.sources)
 
+    def test_runtime_from_another_recipe_names_what_differs_and_the_right_runtime(self):
+        # Nightly 51 (2026-10-11): the launch passed --runtime-dir ~/.richos-nightly/runtime, the
+        # pre-keying cache built from a recipe without ffmpeg, ffprobe and whisper-cpp, and the
+        # refusal said only "do not match". The refusal now names the differing sources and the
+        # recipe-keyed runtime directory (lib/runtime_cache.py) that matches this recipe.
+        (self.root / "runtime-sources.json").write_text(json.dumps(
+            {"schema": 1, "sources": {"git": {"v": 1}, "node": {"v": 1}, "old": {"v": 1}}}))
+        self.sources.write_text(json.dumps(
+            {"schema": 1, "sources": {"git": {"v": 1}, "node": {"v": 2}, "ffmpeg": {"v": 1}, "whisper-cpp": {"v": 1}}}))
+        keyed = "runtime-" + hashlib.sha256(self.sources.read_bytes()).hexdigest()[:12]
+        with self.assertRaises(ValueError) as refused:
+            module.verify(self.root, self.sources)
+        message = str(refused.exception)
+        self.assertIn("public recipe", message)
+        self.assertIn("missing: ffmpeg, whisper-cpp", message)
+        self.assertIn("extra: old", message)
+        self.assertIn("changed: node", message)
+        self.assertIn(keyed, message)
+
     def test_nonexecutable_runtime_refuses(self):
         (self.root / "bin/node").chmod(0o644)
         with self.assertRaisesRegex(ValueError, "not executable"):
