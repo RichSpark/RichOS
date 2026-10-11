@@ -21,9 +21,7 @@ def main(argv=None):
         record = R.read(args.job)
         print(json.dumps(record, indent=2, sort_keys=True))
         return 0 if record else 1
-    rows = [r for r in R.rows(R.F.review_ledger_default()) if r.get('work')==args.work
-            and r.get('tip')==args.tip and R.F.review_row_belongs(r, R.F.review_repo_identity(args.repo))]
-    findings = R.F.open_review_findings(rows)
+    findings = R.source_findings(R.rows(R.F.review_ledger_default()), args.repo, args.work, args.tip)
     if not all(f in findings and findings[f].get('blocks') for f in args.finding):
         raise R.Unavailable('dispute must name a current exact blocking finding at this source')
     print(json.dumps(R.route_request(args.repo, args.work, args.tip, args.finding, 'explicit-dispute'), sort_keys=True))

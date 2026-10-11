@@ -78,6 +78,24 @@ class Recovery(unittest.TestCase):
         self.assertEqual(current()['deadline'],deadline)
         self.assertEqual(current()['status'],'investigating')
 
+    def test_carried_blocker_routes_at_its_current_job_source(self):
+        import recovery_admin
+        work='teammate:carried'
+        def review(rid, tip, findings=(), earlier=()):
+            directory=self.base/rid
+            directory.mkdir()
+            (directory/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=list(findings),earlier_findings=list(earlier)),earlier_findings_in=[dict(id='carried-1#1')] if earlier else [])))
+            R.F.append_jsonl(str(self.ledger),dict(id=rid,repo=str(self.repo),work=work,tip=tip,trigger='handover',verdict='changes-requested',record=str(directory)))
+        review('carried-1','a'*40,[dict(blocks=True,priority=1,title='premise',files=[],evidence='original',fixture='')])
+        review('carried-2','b'*40,earlier=[dict(id='carried-1#1',status='still-open',blocks=True,note='')])
+        self.assertEqual(recovery_admin.main(['dispute','--repo',str(self.repo),'--work',work,'--tip','b'*40,'--finding','carried-1#1']),0)
+        R.F.route_refused_review(str(self.ledger),['b'*40],str(self.repo))
+        routes=R.rows(R.root()/'routing-requests.jsonl')
+        self.assertEqual({r['origin'] for r in routes},{'explicit-dispute','refused-landing'})
+        self.assertTrue(all(r['findings']==['carried-1#1'] for r in routes))
+        self.assertEqual(R.source_findings(R.rows(self.ledger),str(self.repo),self.work,'b'*40),{})
+        self.assertEqual(R.source_findings(R.rows(self.ledger),str(self.repo),work,'c'*40),{})
+
     def test_three_failed_sources_schedule_without_a_watcher(self):
         self.assertEqual(len(self.record["failed"]), 3)
         self.assertEqual(self.record["status"], "investigating")

@@ -454,6 +454,21 @@ def mode(entity):
     return declaration
 
 
+def source_findings(source, repo, work, tip, ledger=None):
+    """Resolve carried findings within one attested repository/job/source."""
+    aliases = {work}
+    record = read(key(repo, work), ledger)
+    if record:
+        aliases.update(record.get("aliases", []))
+    scoped = [r for r in source if r.get("work") in aliases and F.review_row_belongs(r, F.review_repo_identity(repo))]
+    if not any(r.get("tip")==tip for r in scoped):
+        return {}
+    # Include predecessors so the shared reader can reconcile still-open,
+    # withdrawn and resolved dispositions. Never pull another job's findings.
+    end = max(i for i,r in enumerate(scoped) if r.get("tip")==tip)
+    return F.open_review_findings(scoped[:end+1])
+
+
 def route_request(repo, work, tip, findings, origin, ledger=None):
     """A routing request cannot resolve a finding or authorize implementation."""
     request = dict(repo_id=F.review_repo_identity(repo), repo=os.path.realpath(repo), work=work,

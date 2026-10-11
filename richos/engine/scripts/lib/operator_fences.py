@@ -1367,8 +1367,8 @@ def route_refused_review(ledger, tips, repo):
     source = recovery.rows(ledger)
     for tip in tips:
         qualified = [r for r in source if r.get("tip")==tip and review_row_belongs(r, review_repo_identity(repo))]
-        findings = [fid for fid,f in open_review_findings(qualified).items() if f.get("blocks")]
         for work in sorted({r["work"] for r in qualified if r.get("work")}):
+            findings = [fid for fid,f in recovery.source_findings(source, repo, work, tip, ledger).items() if f.get("blocks")]
             if findings:
                 recovery.route_request(repo, work, tip, findings, "refused-landing", ledger)
 
