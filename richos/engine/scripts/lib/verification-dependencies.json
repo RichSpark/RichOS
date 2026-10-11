@@ -16160,7 +16160,7 @@
     },
     "scripts/lib/recovery.py": {
       "source": "scripts/lib/recovery.py",
-      "sha256": "200b9c33f906d00daf9a879684f837c961572a26d9a551a96109ee5e704eb0ec",
+      "sha256": "dddabd6997767718b5074e6e9e2129ac385c1b2ddd54e96f9adae2733c341a36",
       "evidence": "Recovery fixtures bind review ledgers, repository identity and recovery JSON to private state. Standard-library locks and atomic state are host operations. mode reads the entity-local .claude/recovery.json and named qualification files, not orchestration.config. Runtime knobs are recorded with the fixture inputs. Storage reads absolute host RICHOS_RECOVERY_EVIDENCE_ROOT and RICHOS_RECOVERY_WIP_ROOT overrides; fixtures bind their destinations. macOS default mount and non-macOS private-state fallback are runtime inputs, never orchestration.config keys.",
       "keys": [],
       "edges": [
@@ -16185,7 +16185,7 @@
     },
     "scripts/lib/recovery_runner.py": {
       "source": "scripts/lib/recovery_runner.py",
-      "sha256": "d9e8431b024227406c970344133e9718f7f745f20469f33354807144240acbfb",
+      "sha256": "12eac6ea297ce80467673d8278a7d4cccc5aff60d74c20fe4a6eccc3286cbc98",
       "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor.",
       "keys": [],
       "edges": [

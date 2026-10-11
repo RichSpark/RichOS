@@ -44,3 +44,9 @@ State and append-only events live beside the existing review ledger under `recov
 Turning operator lease fencing off requires a verified operator and `--reason`. It appends actor, authority, time, repository and setting to `operator-fence-settings.jsonl`. Review acceptance, recovery acceptance and current-operation checks remain active for reviewed repositories. Restoring an unreadable installed reader requires repairing the installation; switching lease fencing off does not repair acceptance.
 
 Codex's current file-based handover participates in review and landing reconciliation. It has no equivalent native recovery dispatch issuer or interruption consumer in this implementation. Do not claim that boundary is enforced.
+
+The runtime profiles are staged under `recovery-profiles/`, outside the live agent roster. The restricted runner reads them directly. Native agent installation and visibility require the R10 qualification step first.
+
+The host can set absolute `RICHOS_RECOVERY_EVIDENCE_ROOT` and `RICHOS_RECOVERY_WIP_ROOT` paths. On this Mac the default remains the external SSD; other platforms default to private recovery state. A missing configured storage destination is an observation gap or an enforcement refusal. Observation preserves the baseline Pierce verdict when recovery classification, source freezing or identity reconciliation fails. It records the gap and applies no new tool restriction.
+
+Disabling operator lease fencing deliberately follows the existing operator ownership policy. The verified desktop owner must perform it while the app owns the team; a terminal cannot use it to override that owner. An installation repair remains available through the ordinary installation workflow. The setting never disables acceptance or recovery gates.

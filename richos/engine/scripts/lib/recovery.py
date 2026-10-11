@@ -465,7 +465,7 @@ def mode(entity):
             raise Unavailable("required rollout evidence is incomplete")
         pins = qualification.get("source_pins") or {}
         engine = Path(__file__).resolve().parents[2]
-        required_pins = {"agents/axel.md", "agents/wes.md", "scripts/lib/recovery.py", "scripts/lib/recovery_runner.py",
+        required_pins = {"recovery-profiles/axel.md", "recovery-profiles/wes.md", "scripts/lib/recovery.py", "scripts/lib/recovery_runner.py",
                          "scripts/lib/recovery_controls.py", "scripts/lib/pierce.py", "mega-lander/workspaces.py", "scripts/app-engine-hook.py"}
         if not required_pins.issubset(pins) or any(F.file_digest(str(engine/path))!=value for path,value in pins.items()):
             raise Unavailable("qualified runtime/profile source identity changed")

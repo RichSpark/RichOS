@@ -351,7 +351,7 @@ def run(identity, role, engine):
         executable = SR.find_claude(record.get("runtime", {}).get("claude", ""))
         if not executable:
             raise R.Unavailable("Claude executable unavailable for restricted advisor")
-        profile = Path(engine) / "agents" / (role + ".md")
+        profile = Path(engine) / "recovery-profiles" / (role + ".md")
         profile_text = profile.read_text()
         if "tools: Read, Glob, Grep" not in profile_text:
             raise R.Unavailable("canonical advisor capability fingerprint changed")
