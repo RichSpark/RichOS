@@ -1498,8 +1498,10 @@ def release(session_id, agent_id):
                     waited.append(pid)
                 except ProcessLookupError:
                     pass
+    released = time.time()
+    _remember_hold(rec, released)
     result = {"ok": True, "continued": continued, "gone": gone, "waited": waited, "name": rec.get("name", ""),
-              "held_seconds": round(time.time() - float(rec.get("at") or time.time()), 1),
+              "held_seconds": round(released - float(rec.get("at") or released), 1),
               "continued_seconds": round(time.monotonic() - t0, 3)}
     try:
         os.unlink(path + RELEASING)
@@ -1513,6 +1515,54 @@ def release(session_id, agent_id):
                          "(%s: %s); the next hold of this agent would treat them as already suspended"
                          % (path + RELEASING, type(error).__name__, error))
     return result
+
+
+HISTORY_FILE = "hold-history.jsonl"
+HISTORY_KEEP = 14 * 86400      # a released hold is remembered this long
+HISTORY_PRUNE_BYTES = 256 * 1024
+
+
+def _remember_hold(rec, released):
+    """One line per released hold: who was held, from when to when, and which processes.
+
+    resource_waits.py reads it so a wait recorded by a held agent does not count
+    the held time once the agent is resumed. Best effort: a line that cannot be
+    written costs only that subtraction, never the release."""
+    path = os.path.join(state_dir(), HISTORY_FILE)
+    line = json.dumps({"session_id": rec.get("session_id"), "agent_id": rec.get("agent_id"),
+                       "name": rec.get("name") or "", "at": rec.get("at"), "released": released,
+                       "held": rec.get("held") or {}}, sort_keys=True) + "\n"
+    try:
+        os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+        with open(path, "a") as out:
+            out.write(line)
+        if os.path.getsize(path) > HISTORY_PRUNE_BYTES:
+            keep = [r for r in history() if released - float(r.get("released") or 0) < HISTORY_KEEP]
+            tmp = "%s.%d.new" % (path, os.getpid())
+            with open(tmp, "w") as out:
+                out.writelines(json.dumps(r, sort_keys=True) + "\n" for r in keep)
+            os.replace(tmp, path)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def history():
+    """Released holds, oldest first: [{session_id, agent_id, name, at, released, held}]."""
+    try:
+        with open(os.path.join(state_dir(), HISTORY_FILE)) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and isinstance(r.get("at"), (int, float)) \
+                and isinstance(r.get("released"), (int, float)):
+            out.append(r)
+    return out
 
 
 # ---------------------------------------------------------------------------

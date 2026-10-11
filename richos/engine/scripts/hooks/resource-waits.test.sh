@@ -19,6 +19,7 @@
 #   RW20..RW27  escalations: acks never clear, what does clear
 #   RW30..RW36  the wrapper: teammates, re-fire, config, cannot-read, cost
 #   RW40..RW42  the writers: `wait`, the waits directory, prune
+#   RW45..RW48  a teammate the lead holds (agent_hold.py) is not waiting in line
 #
 # NOTHING HERE TOUCHES THE OPERATOR'S STATE: the waits directory, the test VM
 # root, the escalation ledger and the workspace registry are all sandboxed, and
@@ -69,8 +70,9 @@ export RICHOS_WORKSPACES_DIR="$SANDBOX/workspaces"
 export RICHOS_WAITS_DIR="$SANDBOX/waits"
 export TESTVM_ROOT="$SANDBOX/testvm"
 export RICHOS_ESCALATION_LEDGER="$SANDBOX/escalations.jsonl"
+export RICHOS_AGENT_HOLD_DIR="$SANDBOX/agent-hold"
 unset RICHOS_RESOURCE_WAITS_NOW RICHOS_RESOURCE_WAIT_MINUTES RICHOS_WAITER
-mkdir -p "$RICHOS_WAITS_DIR" "$TESTVM_ROOT/run" "$SANDBOX/bin"
+mkdir -p "$RICHOS_WAITS_DIR" "$TESTVM_ROOT/run" "$SANDBOX/bin" "$RICHOS_AGENT_HOLD_DIR"
 : > "$RICHOS_ESCALATION_LEDGER"
 
 echo "=== resource waits: the lead's turn does not end while a job waits in line ==="
@@ -192,7 +194,7 @@ has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
 
 clear_all() {
     rm -f "$RICHOS_WAITS_DIR"/*.json "$TESTVM_ROOT"/guest*.lock
-    rm -rf "$TESTVM_ROOT/run"/*
+    rm -rf "$TESTVM_ROOT/run"/* "$RICHOS_AGENT_HOLD_DIR"/*
     : > "$RICHOS_ESCALATION_LEDGER"
     unset RICHOS_RESOURCE_WAITS_NOW
 }
@@ -704,6 +706,104 @@ PY
 )"
 [ "$PR" = "OK" ] && ok "RW42 waiting() writes its record for exactly its body, with what it holds, and prunes a dead writer's leftover" \
                 || bad "RW42 writer" "$PR"
+
+# ===========================================================================
+# RW45..RW48 — a teammate the lead HOLDS (agent_hold.py) is not waiting in line
+# ===========================================================================
+# 2026-10-11 04:26Z and 06:19Z: a frozen teammate's recorded wait kept its clock
+# running, blocked the lead at ten minutes and forced an early resume. The hold
+# records are written by hand in the agent_hold.py shape, in the sandbox; the
+# release is the real `agent_hold.py release`.
+HOLD_SID="aaaa0001-0000-4000-8000-000000000045"
+write_hold() { # <agent-id> <name> <at-epoch> [pid] — a standing hold; [pid] frozen by it
+    AID="$1" NAME="$2" AT="$3" HPID="${4:-}" python3 - "$ENGINE_ROOT/scripts/lib" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import agent_hold
+held = {}
+if os.environ["HPID"]:
+    held[os.environ["HPID"]] = agent_hold.snapshot()[int(os.environ["HPID"])]["birth"]
+rec = {"session_id": os.environ["HOLD_SID"], "agent_id": os.environ["AID"], "name": os.environ["NAME"],
+       "at": float(os.environ["AT"]), "held": held, "parents": {}, "detached": {}}
+agent_hold._write_json(agent_hold._held_path(os.environ["HOLD_SID"], os.environ["AID"]), rec)
+PY
+}
+export HOLD_SID
+
+clear_all
+spawn sleep 120; W45=$SPAWNED
+settle
+T0="$(now)"
+write_record "$W45" cpu-admission "$T0"
+export RICHOS_RESOURCE_WAITS_NOW=$((T0 + 900))
+stop_run; BEFORE_RC=$SRC
+# Held 11 minutes in: already over the line when the lead froze it.
+write_hold a0000000000fix45 "tester-waiter-$W45" "$((T0 + 660))"
+stop_run
+LIST45="$(python3 "$LIB" list 2>&1)"; LRC45=$?
+if [ "$BEFORE_RC" = "2" ] && [ "$SRC" = "0" ] && [ -z "$SERR" ] && [ "$LRC45" = "0" ] \
+   && has "$LIST45" "HELD tester-waiter-$W45 is HELD by the lead" && has "$LIST45" "stopped at 11 min" \
+   && ! has "$LIST45" "OVER"; then
+    ok "RW45 a wait already 11 minutes old when its agent was HELD does not refuse the turn (the same wait refused before the hold); list shows it HELD, clock stopped at 11 min"
+else
+    bad "RW45 held wait does not block" "before=$BEFORE_RC rc=$SRC err=$(printf '%s' "$SERR" | head -c 400) list($LRC45)=$LIST45"
+fi
+
+stop_pid "$W45"
+
+# RW46 — RESUME, through the real `agent_hold.py release`. An escalated wait
+# (no pid, so its start can lie in the real past): waited 15 min, the last 12
+# of them held. Five minutes after the release it has 3 + 5 = 8 counted
+# minutes (20 if the held time counted): no refusal.
+clear_all
+WT45="$SANDBOX/wt-hold-test"; mkdir -p "$WT45"
+T0="$(now)"
+RAISED45="$(python3 -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]))))' "$T0")"
+python3 -c '
+import json, sys
+print(json.dumps({"event": "Escalation", "id": "esc-test-45", "raised": sys.argv[1], "teammate": "hold-test",
+                  "worktree": sys.argv[2], "state": "proceeding", "for": "lead",
+                  "title": "hold-test has waited 15 min for CPU admission", "question": "", "meanwhile": "", "tried": ""}))' \
+    "$RAISED45" "$WT45" >> "$RICHOS_ESCALATION_LEDGER"
+write_hold a0000000000fix46 hold-test "$((T0 - 720))"
+export RICHOS_RESOURCE_WAITS_NOW="$T0"
+stop_run; HELD_RC=$SRC
+REL46="$(python3 "$ENGINE_ROOT/scripts/lib/agent_hold.py" release --session "$HOLD_SID" --agent a0000000000fix46 2>&1)"
+export RICHOS_RESOURCE_WAITS_NOW=$((T0 + 300))
+stop_run
+if [ "$HELD_RC" = "0" ] && has "$REL46" '"ok": true' && [ "$SRC" = "0" ] && [ -z "$SERR" ] \
+   && grep -q '"name": "hold-test"' "$RICHOS_AGENT_HOLD_DIR/hold-history.jsonl"; then
+    ok "RW46 after RESUME the wait counts again WITHOUT the held time: 8 counted minutes (20 raw) do not refuse"
+else
+    bad "RW46 resumed wait excludes held time" "held_rc=$HELD_RC release=$REL46 rc=$SRC err=$(printf '%s' "$SERR" | head -c 600)"
+fi
+
+# RW47 — ...and it does count again: two and a half minutes later it is over ten.
+export RICHOS_RESOURCE_WAITS_NOW=$((T0 + 450))
+stop_run
+if [ "$SRC" = "2" ] && has "$SERR" "hold-test has waited 10 min" && has "$SERR" "held by the lead, not counted"; then
+    ok "RW47 the resumed wait refuses again once its COUNTED time passes ten minutes, saying the held time was not counted"
+else
+    bad "RW47 resumed wait counts again" "rc=$SRC err=$(printf '%s' "$SERR" | head -c 600)"
+fi
+
+# RW48 — the hold is matched by the frozen PROCESS too (pid and start time from
+# the hold record), whatever name the waiter wrote.
+clear_all
+spawn sleep 120; W48=$SPAWNED
+settle
+T0="$(now)"
+write_record "$W48" testvm-slot "$T0"
+write_hold a0000000000fix48 some-other-name "$((T0 + 660))" "$W48"
+export RICHOS_RESOURCE_WAITS_NOW=$((T0 + 900))
+stop_run
+if [ "$SRC" = "0" ] && [ -z "$SERR" ]; then
+    ok "RW48 a wait whose process the hold froze is HELD, matched by pid and start time, not by name"
+else
+    bad "RW48 held by pid" "rc=$SRC err=$(printf '%s' "$SERR" | head -c 400)"
+fi
+stop_pid "$W48"
+clear_all
 
 # RW43 — nothing this suite started outlives it (§54): every owned pid is
 # stopped, and no process whose command line names the sandbox is left.
