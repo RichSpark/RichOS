@@ -143,9 +143,11 @@ if have_commit e7facc99; then
   # (ui/tests/suite-weights.tsv). Still not the 19-minute run (K1 below says why it is here).
   # affordances.js is here too since the land changed a Rust source its state inventory scrapes
   # (R47 below): a Rust message nobody classified is what the nightly refused on 2026-10-03.
+  # dialect.js, interruption.js and outage.js scan every Rust file under crates/ too, and
+  # realbytes.js compiles it (R48 below), so the land's work_host.rs selects them as well.
   UI_B="$(sed -n 's/^  cd richos\/app\/ui\/tests && node \(.*\.js\)$/\1/p' "$WORK/b.out" | LC_ALL=C sort | tr '\n' ' ')"
-  [ "$UI_B" = "affordances.js docs-claims.js no-home-network.js " ] \
-    && ok "B4 a one-check UI change costs ONE suite (plus the sub-second document check), not the 19-minute run" \
+  [ "$UI_B" = "affordances.js dialect.js docs-claims.js interruption.js no-home-network.js outage.js realbytes.js " ] \
+    && ok "B4 a one-check UI change costs ONE suite plus the suites that read its Rust file (and the sub-second document check), not the 19-minute run" \
     || bad "B4 a one-check UI change costs ONE suite" "got ${UI_B:-none}"
 else
   bad "B  e7facc99 is not in this clone — the testvm fixture could not run"
@@ -603,6 +605,51 @@ if grep -q 'node affordances.js' "$WORK/r47.out"; then
   ok "R47 a Rust file the state inventory scrapes selects affordances.js"
 else
   bad "R47 a Rust file the state inventory scrapes selects affordances.js" "exit $R47_RC: $(head -c 300 "$WORK/r47.out" | tr '\n' ' ')"
+fi
+
+# R48. A FILE A UI SUITE READS SELECTS THAT SUITE (2026-10-11). echo-opus-spend3 found
+# attachments.js reading src-tauri/src/output_files.rs, and dialect.js, interruption.js and
+# outage.js reading every Rust file under src-tauri/src/ and crates/, none of it declared, so a
+# change there selected none of them. One pair per read the suite-by-suite audit found missing:
+# the file (or one file under the directory) the suite reads, and the suite.
+R48_MISSED=""
+while read -r r48_path r48_suite; do
+  [ -n "$r48_path" ] || continue
+  run_pf "$WORK/r48.out" --paths "$r48_path"
+  grep -q "node $r48_suite\$" "$WORK/r48.out" || R48_MISSED="$R48_MISSED $r48_path->$r48_suite"
+done <<'PAIRS'
+richos/app/src-tauri/src/output_files.rs attachments.js
+richos/app/crates/richos-core/src/launch.rs dialect.js
+richos/app/src-tauri/src/nav.rs dialect.js
+richos/app/ui/home.css dialect.js
+richos/app/crates/richos-core/src/launch.rs interruption.js
+richos/app/crates/richos-core/src/launch.rs outage.js
+richos/app/src-tauri/tauri.conf.json appearance.js
+richos/app/crates/richos-core/src/config.rs appearance.js
+richos/app/ui/timeline.js background-work.js
+richos/app/ui/home.css bug-report.js
+richos/app/crates/richos-core/src/timeline.rs compaction-notice.js
+docs/verification/compaction-notice-2026-09-06/raw/cellT1.jsonl compaction-notice.js
+docs/verification/inner-doctrine-opens-2026-09-06/raw/cellC0-control-no-doctrine.jsonl compaction-progress.js
+richos/app/crates/richos-core/src/machinery.rs compaction-progress.js
+richos/app/src-tauri/src/phone/attachments.rs no-home-network.js
+richos/web/web-app/index.html no-home-network.js
+richos/app/src-tauri/src/phone/mod.rs phone.js
+richos/tools/phone-probe/lib/qr.js phone.js
+richos/app/src-tauri/examples/timeline_payload.rs realbytes.js
+richos/app/crates/richos-core/src/timeline.rs realbytes.js
+richos/app/crates/richos-core/src/journal.rs retention.js
+richos/app/src-tauri/src/setup_view.rs setup.js
+richos/app/crates/richos-core/src/setup.rs setup.js
+richos/app/crates/richos-core/src/launch.rs splash.js
+richos/app/scripts/qa/contrast.py thread-switch.js
+richos/app/src-tauri/src/updates.rs updates.js
+docs/verification/pr-trust-gate-2026-09-05/raw/vouch-pin-resolution.txt vouch-template.js
+PAIRS
+if [ -z "$R48_MISSED" ]; then
+  ok "R48 every file a UI suite reads selects that suite (output_files.rs -> attachments.js, crates/ -> dialect.js, and 25 more)"
+else
+  bad "R48 every file a UI suite reads selects that suite" "not selected:$R48_MISSED"
 fi
 
 echo
