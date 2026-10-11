@@ -36,7 +36,7 @@ async function main() {
   // Scroll an element into view in one page task; Playwright's scrollIntoViewIfNeeded waits for
   // stability and throws "not attached" when the sheet's 1 s redraw replaces the element.
   async function reveal(page, selector) {
-    assert(await page.evaluate(sel => { const e = document.querySelector(sel); if (!e) return false; e.scrollIntoView({ block: "nearest" }); return true; }, selector), selector + " exists");
+    assert(await page.evaluate(sel => { const e = document.querySelector(sel); if (!e) return false; const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return false; e.scrollIntoView({ block: "nearest" }); return true; }, selector), selector + " exists with a layout box");
   }
   async function enableTechnical(page) {
     // A click, as a person makes it: inside a conversation the switch asks first (the scope sheet),
