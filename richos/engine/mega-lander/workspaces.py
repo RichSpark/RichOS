@@ -2714,6 +2714,11 @@ def stop(ref, why, session_id="", notes=None):
         save_agent(rec)
     # A suspended process holds a pending termination forever: continue it first.
     release_held_work(rec, notes)
+    # Then end what it owns: the release just continued a paused agent's commands,
+    # and a stop leaves none of them running (second review
+    # rv-20261011T042129Z-6b0f0810-1c93: the app's Stop resumed them instead).
+    end_owned_work(str(rec.get("session_id") or ""), str(rec.get("agent_id") or ""),
+                   rec.get("name") or "", rec.get("key"), "its run ended (stopped)")
     observe_created_refs(rec, all_open=True)
     event("end", key=rec["key"], signal="stopped", detail=why)
     return rec

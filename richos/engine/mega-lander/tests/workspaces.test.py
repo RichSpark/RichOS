@@ -2978,6 +2978,21 @@ class UnknownIsNeverClean(Base):
         events = [json.loads(line) for line in open(ws._p("events.jsonl"))]
         self.assertTrue(any(e.get("event") == "ended-owned-work" and e.get("agent_id") == aid for e in events))
 
+    def test_point_11_the_apps_stop_of_a_paused_agent_ends_its_own_loop(self):
+        """The app's Stop (operator_runtime.rs registry_stop -> `workspaces.sh stop`) of a paused
+        agent whose turn already ended: the stop releases the hold, which continues the loop, so
+        the stop must also end it (second review rv-20261011T042129Z-6b0f0810-1c93, P2)."""
+        aid, _npath = self.spawn("echo-opus-loopapp")
+        shell, ah = self._endless_loop(aid, "tu-loop-app")
+        ws.pause("echo-opus-loopapp", "the quota reset", self.sid)
+        ws.record_end(self.sid, aid, "SubagentStop")         # a paused run's turn ends: not a stop
+        self.assertIsNone(shell.poll(), "a pause never ends anything")
+        stopped = ws.stop("echo-opus-loopapp", "stop this agent", self.sid)
+        self.assertEqual(stopped["end"]["signal"], "stopped")
+        self.assertTrue(self._gone_within(shell), "the app's Stop left its own loop running")
+        with open(os.path.join(ah.state_dir(), "ended.log")) as f:
+            self.assertIn("ended echo-opus-loopapp", f.read())
+
     def test_point_09_a_deferred_end_keeps_its_loop_until_the_one_command_ends_it(self):
         """Option B (the lead, 2026-10-11): a SubagentStop while its own command runs is still not
         its end and ends nothing (echo-opus-panel16). The one command stall-watch names ends its
