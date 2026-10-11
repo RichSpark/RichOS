@@ -9,6 +9,7 @@ them within seconds with no CPU advance; after release each result must be corre
 All state is in a temporary directory; nothing outside this test's own processes
 is ever signaled.
 """
+import copy
 import hashlib
 import json
 import os
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1416,6 +1418,154 @@ class HeldAgentMakesNoModelCalls(Base):
         for p in (lead, other, unnoticed, {"tool_name": "Read"}, None):
             self.assertEqual(agent_hold.gate(p, poll=0.05), 0)
         self.assertLess(time.monotonic() - start, 1.0, "nothing but a noticed held wait is held")
+
+
+class EndOwned(Base):
+    """2026-10-11, echo-opus-walk49fix1: its own `until grep ...; do sleep 3; done` loops,
+    watching a file in a scratch folder it had already deleted, could never finish. When an
+    agent's run ends, the commands it owns are ended, with the hold's exclusions."""
+
+    script, pid_from, watchdog_of = Catches.script, Catches.pid_from, Catches.watchdog_of
+
+    def start_call(self, body, tuid="toolu_fixture1", agent=None):
+        """As Base.start_call, with the call's own command in its record (the log names it)."""
+        payload = dict(self.payload(tuid, agent), tool_input={"command": body, "run_in_background": True})
+        prefix = agent_hold.capture(payload)
+        self.assertTrue(prefix)
+        p = subprocess.Popen([SHELL, "-c", "set -e -o pipefail\n" + prefix + body], process_group=0,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(p)
+        return p
+
+    def loop(self):
+        # Exactly the incident's shape: the folder it watches is gone, so it never finishes.
+        return 'until grep -q "Finished" %s 2>/dev/null; do sleep 0.2; done' % self.out("deleted/build.log")
+
+    def alive(self, pid):
+        return bool(state(pid)) and not state(pid).startswith("Z")
+
+    def test_an_endless_loop_is_ended_and_logged_and_nothing_it_does_not_own_is_touched(self):
+        walk = self.script("walk.py", WALK)
+        daemon = self.script("daemon.py", DAEMON)
+        slot = os.path.join(os.environ["TESTVM_ROOT"], "guest.lock")
+        # Three calls of its own, as an agent makes them: a daemon, a test VM walk, the loop.
+        self.start_call("%s %s %s" % (sys.executable, daemon, self.out("d")), tuid="toolu_daemon")
+        self.start_call("%s %s %s %s" % (sys.executable, walk, slot, self.out("walk")), tuid="toolu_walk")
+        call = self.start_call(self.loop())
+        # The same loop text, not started by the agent; and another agent's own loop.
+        twin = subprocess.Popen([SHELL, "-c", self.loop()], process_group=0)
+        self.procs.append(twin)
+        peer = self.start_call(self.loop(), tuid="toolu_peer", agent="bpeerfixture")
+        dpid = self.pid_from(self.out("d") + ".pid")
+        self.assertTrue(wait_for(lambda: os.path.exists(self.out("walk") + ".pid")))
+        walker, walk_child = map(int, Path(self.out("walk") + ".pid").read_text().split())
+        self.pids |= {walker, walk_child}
+        self.assertTrue(wait_for(lambda: agent_hold.snapshot().get(dpid, {}).get("ppid") == 1), "daemonized")
+        self.assertTrue(wait_for(lambda: call.pid in {p for p, _pp, _a in agent_hold.owned_shells(
+            self.session, self.agent, agent_hold.snapshot())}), "its call is recorded as its own")
+        self.assertIsNone(call.poll(), "the loop never finishes by itself")
+
+        r = agent_hold.end_owned(self.session, self.agent, "fixture-agent", "its run ended (fixture)")
+
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(wait_for(lambda: call.poll() is not None, 120), "the agent's loop is gone")
+        self.assertIn(call.pid, [e["pid"] for e in r["ended"]])
+        for pid, what in ((dpid, "the shared daemon it started"), (walker, "the test VM walk"),
+                          (walk_child, "the walk's guest work")):
+            self.assertTrue(self.alive(pid), "%s is left running" % what)
+            self.assertNotIn(pid, [e["pid"] for e in r["ended"]], what)
+        self.assertIsNone(twin.poll(), "the same command line elsewhere is never touched")
+        self.assertIsNone(peer.poll(), "another agent's command is never touched")
+        log = Path(os.environ["RICHOS_AGENT_HOLD_DIR"], "ended.log").read_text()
+        self.assertIn("ended fixture-agent", log)
+        self.assertIn('until grep -q "Finished"', log)
+        self.assertIn("its run ended (fixture)", log)
+        self.assertIn("shared daemon", log)
+        self.assertIn("test VM walk pid %d" % walker, log)
+        line = agent_hold.describe_end(r)
+        self.assertIn("END fixture-agent:", line)
+        sys.stderr.write("\n  measured: %s (%.2f s); ended: %s\n" % (line[:60], r["seconds"], [e["command"][:40] for e in r["ended"]]))
+
+    def test_a_paused_agents_work_is_never_ended(self):
+        self.start_call("%s %s %s %d" % (sys.executable, self.worker, self.out("w"), ROUNDS * 20))
+        worker = self.worker_pid("w")
+        r = agent_hold.hold(self.session, self.agent, "fixture")
+        self.watchdog_of(r)
+        got = agent_hold.end_owned(self.session, self.agent, "fixture", "its run ended (fixture)")
+        self.assertEqual(got["ended"], [], got)
+        self.assertIn("pause", got["skipped"])
+        self.assertTrue(state(worker).startswith("T"), "still frozen, not ended")
+        agent_hold.release(self.session, self.agent)
+        self.assertTrue(self.alive(worker))
+
+    def test_a_reused_process_id_is_never_signaled(self):
+        """Each signal re-reads the process's start time from the kernel first (second review
+        rv-20261011T042129Z-6b0f0810-1c93): an owned process that exits while the end is under
+        way, its id given to a process the agent does not own, is never signaled. No real signal
+        is sent; the kernel's answers are the fixture's."""
+        pid = 987654
+        kernel = {pid: {"birth": 100, "ppid": 50, "pgid": pid, "stat": "S", "cpu": 0}}
+        sent = []
+
+        def commands(_pids):
+            kernel[pid]["birth"] = 200      # it exits during the command-line read; the id is reused
+            return {pid: "the agent's own loop"}
+
+        with mock.patch.object(agent_hold, "snapshot", side_effect=lambda: copy.deepcopy(kernel)), \
+             mock.patch.object(agent_hold, "calls", return_value=[]), \
+             mock.patch.object(agent_hold, "owned_tree", side_effect=lambda _s, _a, t: (
+                 {p for p, row in t.items() if row["birth"] == 100}, set(), set(), [], {})), \
+             mock.patch.object(agent_hold, "_commands", side_effect=commands), \
+             mock.patch.object(agent_hold, "_birth_now", side_effect=lambda p: kernel.get(p, {}).get("birth")), \
+             mock.patch.object(agent_hold.os, "kill", side_effect=lambda p, s: sent.append((s, kernel[p]["birth"]))), \
+             mock.patch.object(agent_hold, "_log_end"):
+            r = agent_hold.end_owned(self.session, self.agent, "fixture-agent", "its run ended (fixture)")
+        self.assertEqual(sent, [], "a signal reached the process that took over the id")
+        self.assertEqual(r["ended"], [], r)
+        self.assertEqual(r["survivors"], [], r)
+
+    def test_the_parent_of_a_left_running_walk_is_not_ended(self):
+        """The test VM walk is left running, so its owned parents are too: a proc_tree
+        supervisor ends its whole tree when it is ended, the walk with it (second review
+        rv-20261011T055437Z-792eda49-35e8). Its own unrelated loop is still ended. No real
+        signal is sent; the kernel's answers are the fixture's."""
+        def row(ppid):
+            return {"ppid": ppid, "pgid": 100, "stat": "S", "birth": 100, "cpu": 0}
+
+        # Bash call 100 -> supervisor 110 -> walk 120 (slot holder) -> guest work 130; loop 140.
+        kernel = {100: row(50), 110: row(100), 120: row(110), 130: row(120), 140: row(50)}
+        sent = []
+
+        def kill(p, s):
+            sent.append(p)
+            if s in (signal.SIGTERM, signal.SIGKILL):
+                kernel.pop(p, None)
+
+        with mock.patch.object(agent_hold, "snapshot", side_effect=lambda: copy.deepcopy(kernel)), \
+             mock.patch.object(agent_hold, "calls", return_value=[]), \
+             mock.patch.object(agent_hold, "owned_tree", side_effect=lambda _s, _a, t: (
+                 set(t), {120, 130} & set(t), set(), ["test VM walk pid 120 left running"], {})), \
+             mock.patch.object(agent_hold, "_commands", side_effect=lambda pids: {p: "fixture" for p in pids}), \
+             mock.patch.object(agent_hold, "_birth_now", side_effect=lambda p: kernel.get(p, {}).get("birth")), \
+             mock.patch.object(agent_hold.os, "kill", side_effect=kill), \
+             mock.patch.object(agent_hold, "_log_end"):
+            r = agent_hold.end_owned(self.session, self.agent, "fixture-agent", "its run ended (fixture)")
+        self.assertEqual(sorted(set(sent)), [140], "only its unrelated loop is signaled")
+        self.assertEqual([e["pid"] for e in r["ended"]], [140], r)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["excluded"], [100, 110, 120, 130], r)
+        self.assertTrue(any("parent" in n for n in r["notes"]), r["notes"])
+
+    def test_the_one_command_ends_it_by_hand(self):
+        call = self.start_call(self.loop())
+        self.assertTrue(wait_for(lambda: call.pid in {p for p, _pp, _a in agent_hold.owned_shells(
+            self.session, self.agent, agent_hold.snapshot())}), "its call is recorded as its own")
+        cmd = agent_hold.end_command(self.session, self.agent, "fixture-agent")
+        self.assertTrue(cmd.startswith("python3 ") and " end --session " in cmd, cmd)
+        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("END fixture-agent: ", out.stdout)
+        self.assertTrue(wait_for(lambda: call.poll() is not None, 120), "the agent's loop is gone")
 
 
 if __name__ == "__main__":

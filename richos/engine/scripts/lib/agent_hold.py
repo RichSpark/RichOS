@@ -99,6 +99,12 @@ hold again at execution to close the hook-to-spawn race. Wait calls are exempt
 and forced into the foreground. Legacy wrappers already in flight still use
 _detach/_collect and keep their frozen results until collected.
 
+AN ENDED RUN LEAVES NOTHING OF ITS OWN RUNNING (2026-10-11). A pause never ends
+anything; the end of an agent's run does. end_owned(), called wherever the
+registry records an agent's end, ends the commands it still owns through this
+same ownership record and owned tree, with the same exclusions, and logs them to
+ended.log. `agent_hold.py end` does it by hand (see the section below).
+
 KNOWN LIMITS: held work keeps its file locks (the hold report lists the lock
 files it has open: a Cargo target lock, a worker token, a git index lock), and a
 command started before capture was installed has no record and is not held (and
@@ -1509,6 +1515,209 @@ def release(session_id, agent_id):
     return result
 
 
+# ---------------------------------------------------------------------------
+# end: an agent whose run has ended leaves no command of its own running
+# ---------------------------------------------------------------------------
+# 2026-10-11, echo-opus-walk49fix1: it handed over its fixes, but four of its own
+# background loops (`until grep -q ... ; do sleep 3; done` on a file in a scratch
+# folder it had already deleted) could never finish. The registry rightly does not
+# take a SubagentStop as the end while the agent's own command still runs (the
+# platform wakes it when that command ends: workspaces.py record_end), so the land
+# was refused until Rich found and stopped them by hand. Now, whenever the registry
+# records an agent's end, the commands it still owns are ended through the same
+# ownership record and owned-tree computation as a pause, with the same exclusions
+# (shared daemons it started and the test VM guest stay running), and what was
+# ended is logged. `agent_hold.py end` is the one command that does this by hand
+# for an agent whose end waits on its own commands: once they are gone the platform
+# wakes it, its turn ends with nothing running, and that end is recorded.
+END_GRACE = 2.0      # seconds between SIGTERM and SIGKILL
+
+
+def _commands(pids):
+    """{pid: command line} for the log, read once; a process ps cannot see is ''."""
+    if not pids:
+        return {}
+    try:
+        out = subprocess.run(["ps", "-o", "pid=,command=", "-p", ",".join(map(str, sorted(pids)))],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    got = {}
+    for line in out.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if pid.isdigit():
+            got[int(pid)] = cmd.strip()
+    return got
+
+
+def _gone(pid, birth, table):
+    row = table.get(pid)
+    return not row or row["birth"] != birth or row["stat"].startswith("Z")
+
+
+def _birth_now(pid):
+    """This process's start time (epoch seconds, the resolution snapshot() records) read
+    at this instant, or None when it is gone, a zombie or unreadable. On macOS one libproc
+    call (struct proc_bsdinfo, 136 bytes: status at 4, start seconds at 120); elsewhere a
+    one-process ps read with snapshot()'s parsing."""
+    if sys.platform == "darwin":
+        try:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            buf = ctypes.create_string_buffer(136)
+            if libproc.proc_pidinfo(int(pid), 3, ctypes.c_uint64(0), buf, 136) != 136:  # PROC_PIDTBSDINFO
+                return None
+            status, = struct.unpack_from("I", buf.raw, 4)
+            start, = struct.unpack_from("Q", buf.raw, 120)
+        except (OSError, ValueError, struct.error):
+            return None
+        return None if status == 5 else int(start)                                      # SZOMB
+    try:
+        out = subprocess.run(["ps", "-o", "stat=,lstart=", "-p", str(int(pid))], capture_output=True,
+                             text=True, timeout=10, env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"}).stdout
+        st, _, lstart = out.strip().partition(" ")
+        if not st or st.startswith("Z"):
+            return None
+        return calendar.timegm(time.strptime(lstart.strip(), "%a %b %d %H:%M:%S %Y"))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _signal_same(pid, birth, sig):
+    """Send `sig` only if `pid` is still the process born at `birth`, re-read from the kernel
+    immediately before (second review rv-20261011T042129Z-6b0f0810-1c93: a snapshot can be
+    older than the signal, and an id freed in between can belong to a process the agent
+    does not own). False when it is no longer that process; never signals another."""
+    if _birth_now(pid) != birth:
+        return False
+    os.kill(pid, sig)
+    return True
+
+
+def end_owned(session_id, agent_id, name="", why=""):
+    """End the commands this agent still owns; never a held (paused) agent's work.
+
+    The owned tree and its exclusions are owned_tree()'s, exactly as for a hold.
+    Each process is signaled only while it is still the process recorded (its start
+    time re-read from the kernel immediately before EACH signal): SIGTERM and SIGCONT first, SIGKILL after END_GRACE for any
+    that remain. Rounds catch a process forked between the snapshot and the
+    signal. Every ended process is logged to ended.log. Never raises on races."""
+    if not _valid_ids(session_id, agent_id):
+        return {"ok": False, "why": "no valid session and agent id recorded", "ended": []}
+    path = _held_path(session_id, agent_id)
+    if os.path.lexists(path) or os.path.lexists(path + RELEASING):
+        # A pause never ends anything: its frozen work continues on RESUME.
+        return {"ok": True, "ended": [], "skipped": "its work is held by a pause, which never ends anything"}
+    t0 = time.monotonic()
+    table = snapshot()
+    shell_cmds = {c["pid"]: c["command"] for c in calls(session_id, agent_id, table)}
+    signaled, excluded, notes, described, unconfirmed = {}, set(), [], {}, {}
+    for _ in range(STOP_ROUNDS):
+        owned, excl, _protected, found_notes, _parents = owned_tree(session_id, agent_id, table)
+        # What is left running keeps its owned parents too: ending a parent can end its tree
+        # (a proc_tree supervisor's cleanup ends the walk it runs; second review
+        # rv-20261011T055437Z-792eda49-35e8). Freezing a parent is harmless, so a hold has no
+        # such step. They end by themselves when what they wait on ends.
+        parents_of = set()
+        for pid in excl:
+            up = table.get(pid, {}).get("ppid")
+            while up in owned and up not in excl and up not in parents_of:
+                parents_of.add(up)
+                up = table[up]["ppid"]
+        excl = excl | parents_of
+        excluded |= excl
+        notes = list(found_notes or notes)
+        if parents_of:
+            notes.append("its parent process(es) of what is left running also left running, so ending "
+                         "them cannot end it: pid %s" % ", ".join(map(str, sorted(parents_of))))
+        targets = sorted(p for p in owned - excl
+                         if signaled.get(p) != table[p]["birth"] and not table[p]["stat"].startswith("Z"))
+        if not targets:
+            break
+        described.update(_commands(set(targets) - set(described)))
+        for pid in targets:
+            birth = table[pid]["birth"]
+            try:
+                # Identity re-read from the kernel before each signal, never from the snapshot.
+                if not _signal_same(pid, birth, signal.SIGTERM):
+                    unconfirmed[pid] = birth
+                    continue
+                signaled[pid] = birth
+                unconfirmed.pop(pid, None)
+                _signal_same(pid, birth, signal.SIGCONT)   # a stopped process takes its SIGTERM only once continued
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                signaled.pop(pid, None)
+        time.sleep(0.05)
+        table = snapshot()
+    deadline = time.monotonic() + END_GRACE
+    remaining = [p for p, b in signaled.items() if not _gone(p, b, table)]
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.05)
+        table = snapshot()
+        remaining = [p for p, b in signaled.items() if not _gone(p, b, table)]
+    killed = []
+    for pid in remaining:
+        try:
+            if _signal_same(pid, signaled[pid], signal.SIGKILL):
+                killed.append(pid)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if killed:
+        time.sleep(0.1)
+        table = snapshot()
+    # A target whose identity could not be confirmed was never signaled; if the snapshot
+    # still shows it as the same process, it is still running and reported, never hidden.
+    survivors = sorted({p for p, b in signaled.items() if not _gone(p, b, table)}
+                       | {p for p, b in unconfirmed.items() if not _gone(p, b, table)})
+    ended = [{"pid": p, "command": shell_cmds.get(p) or described.get(p, ""), "killed": p in killed}
+             for p in sorted(signaled) if p not in survivors]
+    result = {"ok": not survivors, "session_id": session_id, "agent_id": agent_id, "name": name,
+              "why": why, "ended": ended, "survivors": survivors, "excluded": sorted(excluded),
+              "notes": notes, "seconds": round(time.monotonic() - t0, 3)}
+    if ended or survivors:
+        _log_end(result)
+    return result
+
+
+def _log_end(result):
+    try:
+        os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+        at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        who = "%s (%s/%s)" % (result.get("name") or result["agent_id"], result["session_id"], result["agent_id"])
+        with open(os.path.join(state_dir(), "ended.log"), "a") as out:
+            for e in result["ended"]:
+                out.write("%s ended %s pid %d%s: %s [%s]\n" % (at, who, e["pid"], " (SIGKILL)" if e["killed"] else "",
+                                                              " ; ".join(e["command"].split("\n"))[:300], result.get("why") or "its run ended"))
+            for pid in result["survivors"]:
+                out.write("%s NOT ENDED %s pid %d [%s]\n" % (at, who, pid, result.get("why") or "its run ended"))
+            for note in result.get("notes") or []:
+                out.write("%s left running for %s: %s\n" % (at, who, note))
+    except OSError:
+        pass
+
+
+def describe_end(result):
+    name = result.get("name") or result.get("agent_id") or "the agent"
+    if result.get("skipped"):
+        return "END %s: nothing ended (%s)." % (name, result["skipped"])
+    if result.get("ok") is False and not result.get("survivors"):
+        return "END %s: NOT done (%s)." % (name, result.get("why"))
+    line = "END %s: %d process(es) of its own ended" % (name, len(result.get("ended") or []))
+    if result.get("survivors"):
+        line += "; NOT ended: pid %s" % ", ".join(map(str, result["survivors"]))
+    for note in result.get("notes") or []:
+        line += "; " + note
+    return line + "."
+
+
+def end_command(session_id, agent_id, name=""):
+    """The one command that ends this agent's own commands by hand (stall-watch names it)."""
+    return "python3 %s end --session %s --agent %s%s" % (
+        shlex.quote(os.path.abspath(__file__)), shlex.quote(session_id), shlex.quote(agent_id),
+        (" --name " + shlex.quote(name)) if name else "")
+
+
 def records():
     directory = os.path.join(state_dir(), "held")
     try:
@@ -1584,7 +1793,7 @@ def describe_release(result):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    for cmd in ("hold", "release", "watch"):
+    for cmd in ("hold", "release", "watch", "end"):
         s = sub.add_parser(cmd)
         s.add_argument("--session", required=True)
         s.add_argument("--agent", required=True, help="the agent id recorded by the registry")
@@ -1608,6 +1817,10 @@ def main(argv=None):
     if a.cmd == "hold":
         r = hold(a.session, a.agent, a.name)
         print(json.dumps(r, sort_keys=True))
+        return 0 if r.get("ok") else 1
+    if a.cmd == "end":
+        r = end_owned(a.session, a.agent, a.name, "ended by hand (agent_hold.py end)")
+        print(describe_end(r))
         return 0 if r.get("ok") else 1
     if a.cmd == "release":
         r = release(a.session, a.agent)
