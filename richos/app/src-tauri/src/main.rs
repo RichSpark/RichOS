@@ -1459,6 +1459,19 @@ fn take_the_spine_or_give_up(spine: &std::sync::Mutex<Spine>) -> Option<SpineHol
     Some(hold_the_spine(guard, site, asked))
 }
 
+/// **The same door for work nobody is waiting on**: the un-priming "Not now" owes, handed to
+/// a thread of its own so his tap never waits for a prime (`decline_onboarding_in`). Its wait
+/// is not HIS, so it never prints [`spine_wait_notice`], whose every clause ("a window
+/// command", "that wait is HIS", the screen he is looking at) would be false about it and
+/// would read as the decline having waited. The hop trace still records the take.
+#[track_caller]
+fn take_the_spine_unwatched(spine: &std::sync::Mutex<Spine>) -> SpineHold<'_> {
+    let site = spine_site(std::panic::Location::caller());
+    let asked = std::time::Instant::now();
+    let guard = spine.lock().unwrap();
+    trace_the_take(guard, site, asked.elapsed())
+}
+
 /// Where the wait is written down. Both doors end here, so there is one place that decides
 /// what a wait is worth saying and one place a reader has to check.
 fn hold_the_spine<'a>(
@@ -1470,6 +1483,15 @@ fn hold_the_spine<'a>(
     if let Some(line) = spine_wait_notice(&site, waited) {
         eprintln!("{line}");
     }
+    trace_the_take(guard, site, waited)
+}
+
+/// The hop trace's TAKEN line, for every door.
+fn trace_the_take(
+    guard: std::sync::MutexGuard<'_, Spine>,
+    site: String,
+    waited: std::time::Duration,
+) -> SpineHold<'_> {
     if hop_trace_is_on() {
         eprintln!(
             "[richos] hop-trace +{} ms  spine TAKEN at {site} after waiting {} ms",
@@ -5413,7 +5435,7 @@ fn decline_onboarding_in(
     };
     if outcome.is_ok() {
         let spine = Arc::clone(spine);
-        std::thread::spawn(move || take_the_spine(&spine).onboarding_answer_recorded());
+        std::thread::spawn(move || take_the_spine_unwatched(&spine).onboarding_answer_recorded());
     }
     if let Err(why) = outcome {
         // THE ERROR THE CEO SEES IS NOT THE ERROR THE CRATE RAISED, and that is deliberate
