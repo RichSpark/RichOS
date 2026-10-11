@@ -40,7 +40,6 @@ ENGINE = HERE.parents[1]
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-import cpu_policy  # noqa: E402  (the engine's CPU admission rule)
 import second_review as SR  # noqa: E402  (its quota hold and its isolated Codex call)
 
 _spec = importlib.util.spec_from_file_location("pierce", HERE / "pierce.py")
@@ -162,7 +161,8 @@ def instruction_sources(request):
 
 
 # ---------------------------------------------------------------------------
-# admission: his 93% quota rule and the engine's CPU rule, never waited on
+# admission: his 93% quota rule only, never waited on. A busy CPU never skips a
+# twin (Rich's instruction for this track, 2026-10-11).
 # ---------------------------------------------------------------------------
 
 def refused():
@@ -170,11 +170,6 @@ def refused():
     held_now, reading = SR.quota_hold(str(ENGINE))
     if held_now:
         return "quota pause", reading
-    busy = SR.cpu_busy()
-    if busy is None:
-        return "cpu", "the CPU could not be measured"
-    if not cpu_policy.admission_open(busy):
-        return "cpu", "CPU %.0f%% busy; the rule admits below %d%%" % (busy, cpu_policy.DEFAULT_MAX_CPU)
     return None
 
 

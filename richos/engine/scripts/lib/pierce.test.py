@@ -696,16 +696,28 @@ class HaikuParallelTrack(unittest.TestCase):
         path = Path(start.call_args.args[0][4])
         return path, json.loads(path.read_text())["pair"], result
 
-    def test_quota_pause_and_closed_cpu_admission_skip_the_twin(self):
+    def test_quota_pause_skips_the_twin(self):
         S = shadow_module()
         path, pair, _ = self.job()
-        for quota_exit, cpu, why in ((1, "5", "quota pause"), (0, "95", "cpu")):
-            with self.subTest(why=why), patch.dict(os.environ, self.track_env({}, {}, quota_exit=quota_exit, cpu=cpu)), \
-                 patch.object(S.pierce, "run_review", side_effect=AssertionError("no Haiku run may start")):
-                self.assertEqual(S.run(str(path)), 0)
-                rows = [json.loads(line) for line in (self.shadow / "skipped.jsonl").read_text().splitlines()]
-                self.assertEqual((rows[-1]["pair"], rows[-1]["why"]), (pair, why))
-                self.assertFalse((self.shadow / "pairs" / (pair + ".haiku.json")).exists())
+        with patch.dict(os.environ, self.track_env({}, {}, quota_exit=1)), \
+             patch.object(S.pierce, "run_review", side_effect=AssertionError("no Haiku run may start")):
+            self.assertEqual(S.run(str(path)), 0)
+        rows = [json.loads(line) for line in (self.shadow / "skipped.jsonl").read_text().splitlines()]
+        self.assertEqual((rows[-1]["pair"], rows[-1]["why"]), (pair, "quota pause"))
+        self.assertFalse((self.shadow / "pairs" / (pair + ".haiku.json")).exists())
+
+    def test_a_busy_cpu_never_skips_the_twin(self):
+        S = shadow_module()
+        path, pair, _ = self.job()
+        (self.shadow / "pairs" / (pair + ".opus.json")).write_text(json.dumps({"verdict": "PASS", "report": "x"}))
+        with patch.dict(os.environ, self.track_env({}, {}, quota_exit=0, cpu="100")), \
+             patch.object(S.pierce, "run_review", return_value=(
+                 {"verdict": "PASS", "report": "PASS. Fixture.", "notes": []}, {})) as review:
+            self.assertEqual(S.run(str(path)), 0)
+        review.assert_called_once()
+        haiku = json.loads((self.shadow / "pairs" / (pair + ".haiku.json")).read_text())
+        self.assertEqual((haiku["pair"], haiku["verdict"]), (pair, "PASS"))
+        self.assertFalse((self.shadow / "skipped.jsonl").exists())
 
     def test_a_refused_haiku_run_is_unavailable_never_a_verdict(self):
         S = shadow_module()
