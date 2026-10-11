@@ -65,10 +65,16 @@ wait_text() {
   done
   return 1
 }
-theme() { # dark | light, through the Settings button's own theme row
+theme() { # dark | light, through the Settings button's own theme row, then the menu closed
+  # Each press stops at the first match and is tried up to three times, and Escape closes the menu
+  # after: walk-166ae6c12266's dark and light captures were both light, with the menu left open
+  # over the card.
+  local name="Dark theme"; [ "$1" = light ] && name="Light theme"
   "$T/ax.sh" "$VM" click --title "Settings" --first >/dev/null 2>&1 || true
   sleep 1
-  if [ "$1" = light ]; then "$T/ax.sh" "$VM" click --title "Light theme" >/dev/null 2>&1; else "$T/ax.sh" "$VM" click --title "Dark theme" >/dev/null 2>&1; fi
+  for _ in 1 2 3; do "$T/ax.sh" "$VM" click --title "$name" --first >/dev/null 2>&1 && break; sleep 2; done
+  sleep 1
+  "$T/ax.sh" "$VM" --key 53 >/dev/null 2>&1 || true
   sleep 2
 }
 both() { # $1 name: one capture in each theme, dark first, and back to dark
@@ -80,6 +86,20 @@ check() { local ok="$1" bad="$2"; shift 2; if "$@"; then note "ok: $ok"; else fa
 refuse() { local bad="$1"; shift; if "$@"; then fail "$bad"; fi; }
 # shellcheck disable=SC2329  # called through check and refuse, which shellcheck cannot follow
 has() { grep -q -- "$1" "$2"; }
+# Press a button by its title: the first match, up to three tries, then the pointer at its center.
+# A press that searches the whole tree, or by a partial title, can outlast ax.sh's 20 s deadline on
+# a busy host: the first run of this walk (walk-aa3d555a63df) found "Request a feature" on screen
+# and then lost its press to that deadline. bug-report-walk.sh step 5 met the same and does this.
+click_first() {
+  local title="$1" at
+  for _ in 1 2 3; do "$T/ax.sh" "$VM" click --title "$title" --first && return 0; sleep 2; done
+  at=$("$T/ax.sh" "$VM" find --title "$title" --first 2>/dev/null | sed -n "s/.* pos=\([0-9.-]*\) \([0-9.-]*\) size=\([0-9.]*\) \([0-9.]*\).*/\1 \2 \3 \4/p" | head -1)
+  [ -n "$at" ] || return 1
+  # shellcheck disable=SC2086  # four numbers, split on purpose
+  set -- $at
+  note "pressing '$title' failed; clicking it at its center ($at) instead"
+  "$T/ax.sh" "$VM" click --at "$(python3 -c 'import sys; x,y,w,h=map(float,sys.argv[1:]); print("%d,%d" % (x+w/2, y+h/2))' "$1" "$2" "$3" "$4")"
+}
 
 # ---- the fixture: the fake claude, the stand-in, the token in the guest's keychain ----
 "$T/guest.sh" "$VM" "mkdir -p $G" || setup_failed "the fixture folder"
@@ -134,11 +154,14 @@ note "ok: a conversation in $COMPANY"
 sleep 1
 check "Request a feature is in Settings" "no Request a feature in Settings" wait_text 'Request a feature' 3
 "$T/shot.sh" "$VM" "$S/1-settings-dark.png" || fail "capture 1-settings-dark"
-"$T/ax.sh" "$VM" click --title 'Request a feature' --contains || fail "the Request a feature button"
+click_first 'Request a feature' || fail "the Request a feature button"
 check "Rich asks what the user would like" "Rich did not ask" wait_text 'What would you like RichOS to do?' 10
 
 # ---- 2. the answer, Rich's write-up, the card ----
-"$T/ax.sh" "$VM" type "It would be great if Rich sent me a short summary of each conversation every Friday afternoon, like what changed with $COMPANY this week." --role AXTextArea --first --replace || fail "typing the idea"
+# Into the Rich panel's own answer box (`#bugdock-input`), named by its id: the first text area
+# on screen is the conversation's composer, and an answer typed there is a message to Rich
+# (walk-2160ec387035 typed the idea into it and no card ever came).
+"$T/ax.sh" "$VM" type "It would be great if Rich sent me a short summary of each conversation every Friday afternoon, like what changed with $COMPANY this week." --role AXTextArea --id bugdock-input --replace || fail "typing the idea"
 "$T/ax.sh" "$VM" --key 36 || fail "Return"
 check "the idea card, not posted yet" "no idea card" wait_text 'Not posted yet' 40
 check "the card says Feature idea" "no Feature idea head" wait_text 'Feature idea' 3
@@ -155,7 +178,8 @@ sleep 3
 both 2-idea
 
 # ---- 3. Post idea: a discussion under Ideas, never an issue ----
-"$T/ax.sh" "$VM" click --title 'Post idea' || fail "Post idea"
+# By the button's own id (`#bug-send`), which a search reaches without walking the whole card.
+"$T/ax.sh" "$VM" click --role AXButton --id bug-send --first || click_first 'Post idea' || fail "Post idea"
 check "Posted · in Ideas" "the card never said Posted · in Ideas" wait_text 'Posted · in Ideas' 20
 check "Rich says where it went" "Rich did not say where it went" wait_text "in RichOS's Discussions on GitHub, under Ideas" 5
 refuse "a word on screen says issue" wait_text 'issue' 1
