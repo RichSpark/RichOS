@@ -52,6 +52,10 @@ export RICHOS_MACHINE_WORKERS="$SANDBOX/machine" RICHOS_ENGINE_PASS_DIR="$SANDBO
 export RICHOS_VERIFICATION_CONTAMINATION="$SANDBOX/expected-contamination"
 unset RICHOS_WORKER_TOKENS RICHOS_WORKER_SLOT_HELD RICHOS_WORKER_BORROW_LOCK
 mkdir -p "$CLAUDE_CONFIG_DIR/state"
+# Every throwaway engine below has no host shield of its own, and the runner refuses to start a
+# suite without one: each run gets this checkout's shield, so every fixture suite runs behind
+# the stand-ins (7c proves the refusal with it withheld).
+export RICHOS_HOST_SHIELD_TOOL="$ENGINE_ROOT/scripts/lib/host_shield.py"
 
 NO_HOOKS="$SANDBOX/empty-hooks"; mkdir -p "$NO_HOOKS"
 git_q() { git -C "$1" -c core.hooksPath="$NO_HOOKS" -c user.email=t@t -c user.name=t "${@:2}"; }
@@ -356,6 +360,19 @@ for which in bare path; do
         fi
     fi
 done
+# 7c — with no shield beside it and none exported, the runner refuses (rc 2) and starts no suite.
+E7C="$SANDBOX/e7-none"
+build_engine "$E7C"
+printf '%s\n' '#!/usr/bin/env bash' "touch \"$SANDBOX/e7c-started\"" 'echo "  PASS  started"' \
+    > "$E7C/engine/scripts/hooks/started.test.sh"
+git_q "$E7C" add -A; git_q "$E7C" commit -q -m suites
+OUT7="$( cd "$E7C/engine" && PATH="$(hs_path "$SANDBOX/hstrip-bare")" env -u RICHOS_HOST_SHIELD_TOOL \
+    bash scripts/run-all-tests.sh 2>&1 )"; RC7=$?
+if [ "$RC7" -eq 2 ] && printf '%s' "$OUT7" | grep -q "REFUSED: NO HOST SHIELD" && [ ! -e "$SANDBOX/e7c-started" ]; then
+    ok "7c  with no shield beside it and none exported, the runner refuses (rc 2) and no suite starts"
+else
+    bad "7c  a suite started without the host shield" "rc=$RC7: $OUT7"
+fi
 fi
 
 printf '\n  %d passed, %d failed\n' "$PASS" "$FAIL"

@@ -290,14 +290,17 @@ PASS_TOOL="$ENGINE_ROOT/scripts/lib/engine_pass.py"
 # The host shield (lib/host_shield.py, ceo-decisions §65): each suite's source is checked first,
 # then it runs with stand-ins for this Mac's power, sleep, lock and display commands first on
 # PATH, and a suite that called one fails with the stand-in's logged line. A fixture engine
-# without it uses the one the shielded run around it exports; with neither it says so.
+# without it uses the one its caller exports (RICHOS_HOST_SHIELD_TOOL); with neither it REFUSES
+# and starts no suite (`--list`, above, still lists), as run-tests.sh refuses
+# (zach-opus-hostshim3, d645b9a77).
 SHIELD="$ENGINE_ROOT/scripts/lib/host_shield.py"
 [ -f "$SHIELD" ] || SHIELD="${RICHOS_HOST_SHIELD_TOOL:-}"
 SHIELDED=()
 if [ -n "$SHIELD" ] && [ -f "$SHIELD" ]; then
     SHIELDED=(python3 -S "$SHIELD" run --)
 else
-    echo "run-all-tests.sh: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL): suites run WITHOUT the power/sleep/lock/display stand-ins." >&2
+    echo "run-all-tests.sh: REFUSED: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL), so no suite can run behind the power, sleep, lock and display stand-ins (ceo-decisions §65). Nothing was run." >&2
+    exit 2
 fi
 for tool in "$WORKER_TOOL" "$PASS_TOOL"; do
     [ -f "$tool" ] || { echo "ERROR: missing verification admission helper: $tool" >&2; exit 2; }

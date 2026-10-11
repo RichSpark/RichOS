@@ -2230,7 +2230,7 @@
     },
     "scripts/run-all-tests.sh#generated-inventory": {
       "source": "scripts/run-all-tests.sh",
-      "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
+      "sha256": "a7a8243142aa9182d7232b40dd0990325940af86e18ac367bcc5d600a384f9ea",
       "evidence": "The runner discovers suites in its own engine and executes the caller-supplied inventory. This fixture copies it into an engine containing only generated marker/leak suites. Shared witness, timing, slot and worker helpers remain real; none sources the generated config.",
       "keys": [],
       "edges": [
@@ -2256,7 +2256,7 @@
     },
     "scripts/run-all-tests.test.sh": {
       "source": "scripts/run-all-tests.test.sh",
-      "sha256": "c56278ebb185126d55f3b3c435927a4da817686cb0758d36b20780e15594ab51",
+      "sha256": "8d777240b1638a6b21e983db3ce5ae16d9081d586354a1bced498723ecc413a5",
       "evidence": "Copies the real serial runner and finite helpers into generated Git repositories containing literal config and tiny generated clean/leaking suites. Every runner invocation changes cwd to that fixture engine. The real config is never copied or compared.",
       "keys": [],
       "edges": [
@@ -11674,7 +11674,7 @@
     },
     "scripts/run-all-tests.sh#list": {
       "source": "scripts/run-all-tests.sh",
-      "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
+      "sha256": "a7a8243142aa9182d7232b40dd0990325940af86e18ac367bcc5d600a384f9ea",
       "evidence": "ci-units.test.sh invokes only --list. Argument parsing and filename discovery exit before worker tools, witnesses or test execution. The full source hash binds this early exit; files are names, not executed content.",
       "keys": [],
       "edges": [],
@@ -14818,7 +14818,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/run-all-tests.sh",
-          "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
+          "sha256": "a7a8243142aa9182d7232b40dd0990325940af86e18ac367bcc5d600a384f9ea",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
