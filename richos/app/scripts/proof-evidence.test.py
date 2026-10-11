@@ -624,6 +624,13 @@ class Evidence(unittest.TestCase):
                 shutil.copy2(path, engine / "scripts/lib" / path.name)
         for name in ("ci-shard.sh", "ci-units.sh"):
             shutil.copy2(source_engine / name, engine / "scripts" / name)
+        # The host shield the copied runners start every check through (ceo-decisions §65): its
+        # stand-ins and the guard whose rules it reads. Without them the copied host_shield.py
+        # refuses every check, which is its refusal working, not this fixture's subject.
+        shutil.copytree(source_engine / "lib/host-shield", engine / "scripts/lib/host-shield")
+        (engine / "scripts/hooks").mkdir()
+        shutil.copy2(source_engine / "hooks/guard-host-display-power.sh",
+                     engine / "scripts/hooks/guard-host-display-power.sh")
         # Every lib/ module proof-run.py imports: rerun_tree.py (write_rerun) and runtime_cache.py
         # (supply_runtime) included.
         for name in ("proof_evidence.py", "proof_slots.py", "test_results.py", "cargo_identity.py",
