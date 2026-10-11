@@ -743,6 +743,28 @@ class Commit(Fixture):
         self.assertIn("host-shield: refused `%s -h +60`" % power_off, out.stdout + out.stderr)
         self.assertEqual((trip / "trip.log").read_text(), "")
 
+    def test_a_fast_check_is_refused_and_never_started_without_the_host_shield(self):
+        # zach-opus-hostshim4: with no shield in the checkout and none exported, run_admitted
+        # refuses the check and never starts it, as run-tests.sh refuses (d645b9a77). The fixture
+        # engine is the real scripts/lib with only the shield and its stand-ins left out.
+        self.env.pop("RICHOS_HOST_SHIELD_TOOL", None)
+        self.make()
+        engine = self.repo / "richos/engine"
+        engine.unlink()
+        (engine / "scripts/lib").mkdir(parents=True)
+        for entry in (ENGINE / "scripts/lib").iterdir():
+            if entry.name not in ("host_shield.py", "host-shield"):
+                (engine / "scripts/lib" / entry.name).symlink_to(entry)
+        self.record_duration("suite", 2.5)
+        self.git("checkout", "-q", "-b", "feature")
+        started = self.base / "suite-started"
+        self.write("richos/app/scripts/suite.sh", '#!/usr/bin/env bash\ntouch "%s"\necho "suite: PASS"\n' % started)
+        self.write("richos/app/src/thing.txt", "fine, better\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-m", "a fast check with no host shield in the checkout", expect=1)
+        self.assertIn("REFUSED: NO HOST SHIELD", out.stdout + out.stderr)
+        self.assertFalse(started.exists(), "the check was started without the host shield")
+
     def test_a_check_recorded_as_slow_or_never_recorded_waits_for_the_land(self):
         for label, seconds in (("suite", 40.0), ("other", 1.0)):   # slow; and fast but not selected
             with self.subTest(label=label):
