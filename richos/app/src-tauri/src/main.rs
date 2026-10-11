@@ -5330,8 +5330,8 @@ const ONBOARDING_UNUSABLE_MESSAGE: &str =
     "I'm working without them, and I won't guess at what they said. Whoever set RichOS up \
      will need to look at that.";
 
-fn onboarding_view_of(state: &State<AppState>) -> OnboardingView {
-    let spine = state.reader.snapshot();
+fn onboarding_view_in(reader: &SpineReader) -> OnboardingView {
+    let spine = reader.snapshot();
     let Some(binding) = spine.active_binding() else {
         return OnboardingView {
             state: "no-central-folder".to_string(),
@@ -5365,7 +5365,7 @@ fn onboarding_view_of(state: &State<AppState>) -> OnboardingView {
 /// and `not-yet` is what makes it show the offer.
 #[richos_command::command]
 fn onboarding_view(state: State<AppState>) -> OnboardingView {
-    onboarding_view_of(&state)
+    onboarding_view_in(&state.reader)
 }
 
 /// **HE PRESSED "Not now".** Record it, and return the state that results.
@@ -5388,12 +5388,40 @@ fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<Onboa
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    decline_onboarding_in(&state.reader, &entity_id, now_millis)
+}
+
+/// The body of [`decline_onboarding`], without Tauri's `State`, so a test can drive it.
+///
+/// **IT NEVER WAITS FOR THE SPINE** (a user's tap is answered at once; nothing he just did
+/// waits behind work the app does for itself). It used to take the spine for the whole of
+/// it, and at boot the spine is held by `prime_front_desk` for a model turn: measured
+/// 2026-10-11 in the built app, the decline asked at +7898 ms and got the spine at
+/// +98797 ms, so the card stayed on screen 90899 ms after he pressed "Not now"
+/// (`docs/verification/2026-10-11-preferences-close-walk/README.md`, step 17).
+///
+/// So the answer is checked and written from ONE published snapshot (the record's path and
+/// the open company are both published, `read_view.rs`), and the card gets its answer from
+/// the same read the window already uses.
+///
+/// **NOTHING ELSE IS OWED TO THE DESKS.** Every desk (the one in use, each parked one, the
+/// spare, and a spare still being primed) carries the onboarding block it was primed with,
+/// and before every message `prime_lease_if_needed` compares that block with what the record
+/// says now and re-primes the desk if they differ. So the next message on any desk carries
+/// the decline, and a desk that already carries it (primed after the answer) is not primed
+/// again. A separate step that un-primed desks here cost a redundant hidden model turn in
+/// two orderings (reviews rv-20261011T101519Z-e4ab1771-98bb, rv-20261011T104029Z-c8b2a74a-37e4).
+fn decline_onboarding_in(
+    reader: &SpineReader,
+    entity_id: &str,
+    now_millis: u64,
+) -> Result<OnboardingView, String> {
     let outcome = {
-        let mut spine = take_the_spine(&state.spine);
-        if spine.active_binding().map(|b| b.entity_id().to_string()).as_deref() != Some(entity_id.as_str()) {
+        let view = reader.snapshot();
+        if view.active_binding().map(|b| b.entity_id().as_str()) != Some(entity_id) {
             return Err("The company changed. Please use the offer for the company now open.".into());
         }
-        spine.record_onboarding_declination(now_millis)
+        view.record_onboarding_declination(now_millis)
     };
     if let Err(why) = outcome {
         // THE ERROR THE CEO SEES IS NOT THE ERROR THE CRATE RAISED, and that is deliberate
@@ -5409,7 +5437,7 @@ fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<Onboa
         eprintln!("[richos] onboarding: declination NOT recorded — {why}");
         return Err(ONBOARDING_DECLINE_REFUSED.to_string());
     }
-    Ok(onboarding_view_of(&state))
+    Ok(onboarding_view_in(reader))
 }
 
 /// What he is told when "Not now" could not be written down.
@@ -9894,6 +9922,9 @@ mod window_read_tests;
 
 #[cfg(test)]
 mod command_rule_tests;
+
+#[cfg(test)]
+mod onboarding_decline_tests;
 
 #[cfg(test)]
 mod turn_boundary_tests;
