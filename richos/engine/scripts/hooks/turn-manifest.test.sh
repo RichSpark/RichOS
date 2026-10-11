@@ -409,10 +409,14 @@ has "chars)" "e6. a shortened row says how many characters were removed"
 # ===========================================================================
 run "$(payload "$MIXED_TR")"
 EXAMINED="$(record_field records_examined)"
-if [ "$EXAMINED" = "$MIXED_N" ] && [ "$MIXED_N" -gt 0 ]; then
-    ok "f.  the manifest examined all $MIXED_N transcript records (non-zero, exact)"
+# The turn is located from the END of the file (no size cap), so only the records
+# from this turn's opening prompt on are examined: the 3 records of the earlier
+# turn in the "mixed" fixture are not read.
+TURN_N=$((MIXED_N - 3))
+if [ "$EXAMINED" = "$TURN_N" ] && [ "$TURN_N" -gt 0 ]; then
+    ok "f.  the manifest examined all $TURN_N records of this turn (non-zero, exact)"
 else
-    bad "f.  records examined" "expected exactly $MIXED_N, record says '${EXAMINED:-<none>}' — a manifest rendered from nothing would still look convincing, so this number is the proof it read something"
+    bad "f.  records examined" "expected exactly $TURN_N, record says '${EXAMINED:-<none>}' — a manifest rendered from nothing would still look convincing, so this number is the proof it read something"
 fi
 
 # f2 proves f can tell the two apart, rather than passing on any number at all.

@@ -153,7 +153,6 @@ import sys
 # --------------------------------------------------------------------------
 MAX_ROWS = 25            # rows printed in full before the omission tally
 MAX_DETAIL = 150         # characters of a single row's detail
-MAX_TRANSCRIPT = 48 * 1024 * 1024
 
 HOOK_TAG = "(hook: scripts/hooks/turn-manifest.sh)"
 
@@ -184,6 +183,63 @@ def flatten(content):
     return "\n".join(parts)
 
 
+def turn_start_offset(path, prompt_id, chunk=4 * 1024 * 1024):
+    """Byte offset of the first record carrying prompt_id, found by reading
+    backward from the END of the file, so a long session costs no more than its
+    last turn does (2026-10-10: no hook may skip itself because a transcript is
+    large).
+
+    The first record is accepted only when a record of ANOTHER turn precedes it
+    in the window already read (or the window reaches the start of the file);
+    otherwise the window doubles. When the prompt cannot be located without
+    pulling in more than 64 MB, the answer is 0 and the caller's forward
+    streaming read from the start takes over, which is the previous behavior.
+    """
+    needle = prompt_id.encode("utf-8", "replace")
+
+    def pid_of(raw):
+        try:
+            rec = json.loads(raw)
+        except Exception:
+            return None
+        return rec.get("promptId") if isinstance(rec, dict) else None
+
+    try:
+        size = os.path.getsize(path)
+        window = chunk
+        with open(path, "rb") as fh:
+            while True:
+                pos = max(0, size - window)
+                fh.seek(pos)
+                buf = fh.read(size - pos)
+                base = 0
+                if pos > 0:
+                    nl = buf.find(b"\n")
+                    base = len(buf) if nl < 0 else nl + 1
+                lines, at = [], pos + base
+                for ln in buf[base:].split(b"\n"):
+                    lines.append((at, ln))
+                    at += len(ln) + 1
+                first = None
+                for idx, (_o, ln) in enumerate(lines):
+                    if needle in ln and pid_of(ln) == prompt_id:
+                        first = idx
+                        break
+                if first is not None:
+                    if pos == 0:
+                        return lines[first][0]
+                    for _o, ln in reversed(lines[:first]):
+                        if b'"promptId"' in ln:
+                            other = pid_of(ln)
+                            if other and other != prompt_id:
+                                return lines[first][0]
+                if pos == 0 or window >= 64 * 1024 * 1024:
+                    return 0
+                window *= 2
+    except OSError:
+        return 0
+
+
 def read_turn(path, prompt_id):
     """Return (calls, results, records_examined, error).
 
@@ -205,14 +261,11 @@ def read_turn(path, prompt_id):
     if not os.path.isfile(path):
         return [], {}, 0, "the transcript is not a readable file at %s" % path
     try:
-        size = os.path.getsize(path)
+        os.path.getsize(path)
     except OSError as exc:
         return [], {}, 0, "the transcript could not be sized (%s)" % exc
-    if size > MAX_TRANSCRIPT:
-        return [], {}, 0, (
-            "the transcript is %d bytes, over this hook's %d-byte read cap"
-            % (size, MAX_TRANSCRIPT)
-        )
+    # No size cap: the turn is located from the end of the file.
+    offset = turn_start_offset(path, prompt_id)
 
     calls = []
     results = {}
@@ -221,9 +274,10 @@ def read_turn(path, prompt_id):
     # the user's prompt itself — and runs to end of file.
     in_turn = False
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            for raw in fh:
+                line = raw.decode("utf-8", "replace").strip()
                 if not line:
                     continue
                 try:
