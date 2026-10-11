@@ -2110,6 +2110,11 @@ def _undelivered_calls(session_id, agent_id, ah, running):
     return [(tid, cmd) for tid, cmd in sorted(candidates.items()) if tid in receipts and tid not in delivered]
 
 
+# The history fact a deferred end leaves; stall_watch.py reads it to say why a
+# silent agent has not ended and which one command ends its own commands.
+END_DEFERRED_FACT = "SubagentStop while its own command(s) still run or still owe it their result: not its end"
+
+
 def record_end(session_id, agent_id, signal_name, detail=""):
     """The platform's own end-of-run signal, recorded automatically.
 
@@ -2133,7 +2138,7 @@ def record_end(session_id, agent_id, signal_name, detail=""):
                 rec = _record_for_agent(session_id, agent_id)
                 if rec and not (rec.get("disposition") or rec.get("end") or rec.get("pause")):
                     rec.setdefault("history", []).append({
-                        "at": iso(), "fact": "SubagentStop while its own command(s) still run or still owe it their result: not its end",
+                        "at": iso(), "fact": END_DEFERRED_FACT,
                         "calls": [tid for tid, _c in running]})
                     save_agent(rec)
                     deferred = rec
@@ -2147,6 +2152,13 @@ def record_end(session_id, agent_id, signal_name, detail=""):
         # already disposed of, or one the registry never knew, is still released
         # (Sage's catch 1).
         release_held_ids(session_id, agent_id)
+    # Its run has ended (the deferral above did not apply): no command of its own
+    # stays running after it. A paused agent's work is never ended (a pause is
+    # not a stop); end_owned() also refuses while agent_hold holds it.
+    current = _record_for_agent(session_id, agent_id)
+    if signal_name == "stopped" or not (current and current.get("pause")):
+        end_owned_work(session_id, agent_id, (current or {}).get("name") or "",
+                       (current or {}).get("key"), "its run ended (%s)" % signal_name)
     with Lock():
         rec = _record_for_agent(session_id, agent_id)
         if not rec:
@@ -2371,6 +2383,8 @@ def observe_platform_end(rec):
             fresh["pause"] = None
             save_agent(fresh)
         release_held_work(fresh)
+        end_owned_work(str(fresh.get("session_id") or ""), str(fresh.get("agent_id") or ""),
+                       fresh.get("name") or "", fresh.get("key"), "its run ended (%s)" % signal_name)
         observe_created_refs(fresh, all_open=True)
         event("end", key=fresh["key"], signal=signal_name, detail=why, source=field)
         return fresh
@@ -2612,6 +2626,23 @@ def release_held_ids(session_id, agent_id, name="", key=None, notes=None):
     if notes is not None and line:
         notes.append(line)
     return line
+
+
+def end_owned_work(session_id, agent_id, name="", key=None, why=""):
+    """An agent whose run has ended leaves no command of its own running
+    (2026-10-11, echo-opus-walk49fix1's four endless wait loops): agent_hold's
+    end_owned(), with the hold's exclusions, logged there and here. Never raises."""
+    try:
+        ah = _agent_hold()
+        res = ah.end_owned(str(session_id or ""), str(agent_id or ""), name, why)
+    except Exception as e:
+        event("end-owned-failed", key=key, agent_id=agent_id, why=str(e)[:200])
+        return None
+    if res.get("ended") or res.get("survivors"):
+        event("ended-owned-work", key=key, agent_id=agent_id, why=why,
+              ended=["%d: %s" % (e["pid"], (e.get("command") or "")[:80]) for e in res["ended"]],
+              survivors=res.get("survivors") or [], notes=res.get("notes") or [])
+    return res
 
 
 def release_session_holds(session_id, notes=None):

@@ -11,6 +11,7 @@ is a fact the operating system reports, not a fixture flag.
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -2930,6 +2931,70 @@ class UnknownIsNeverClean(Base):
         fin, _paused, why = ws.finished_state(self.rec("echo-opus-timer"))
         self.assertTrue(fin, why)
         self.assertEqual(self.pre(aid, "tu-after")[0], "FINISHED")
+
+    def _endless_loop(self, aid, call):
+        """2026-10-11, echo-opus-walk49fix1: its own wait loop on a file in a scratch folder it
+        had already deleted, recorded by agent_hold exactly as a real call is. Never ends."""
+        hold_env = patch.dict(os.environ, {"RICHOS_AGENT_HOLD_DIR": os.path.join(self.env.root, "agent-hold")})
+        hold_env.start()                                    # the fixture's own, never the operator's
+        self.addCleanup(hold_env.stop)
+        ah = ws._agent_hold()
+        loop = 'until grep -q "Finished" %s 2>/dev/null; do sleep 0.2; done' % os.path.join(
+            self.env.root, "deleted-scratch", "build.log")
+        payload = {"session_id": self.sid, "agent_id": aid, "tool_use_id": call, "tool_name": "Bash",
+                   "tool_input": {"command": loop}}
+        stem, _held = ah._record(payload, "native", loop)
+        shell = subprocess.Popen(["bash", "-c", "%s %s mark --state %s %s\nexport %s=%s %s=%s\n%s"
+                                  % (sys.executable, ah.__file__, ah.state_dir(), stem,
+                                     ah.TAG, aid, ah.SESSION_TAG, self.sid, loop)],
+                                 start_new_session=True)
+        self.env.procs.append(shell)
+        for _ in range(100):
+            if os.path.exists(stem + ".pid"):
+                break
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(stem + ".pid"), "agent_hold's mark never recorded the shell")
+        self.assertIsNone(shell.poll(), "the loop never finishes by itself")
+        return shell, ah
+
+    def _gone_within(self, shell, seconds=120):
+        try:
+            shell.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
+
+    def test_point_09_when_its_run_ends_its_own_endless_loop_is_ended_and_logged(self):
+        """The registry records the agent's end (here a stop): the endless loop it owns is
+        ended, through agent_hold's ownership record, and the end says what it ended."""
+        aid, _npath = self.spawn("echo-opus-loopstop")
+        shell, ah = self._endless_loop(aid, "tu-loop-stop")
+        ws.record_end(self.sid, aid, "stopped", "TaskStop")
+        self.assertTrue(self._gone_within(shell), "its endless loop outlived the end of its run")
+        with open(os.path.join(ah.state_dir(), "ended.log")) as f:
+            log = f.read()
+        self.assertIn("ended echo-opus-loopstop", log)
+        self.assertIn('until grep -q "Finished"', log)
+        events = [json.loads(line) for line in open(ws._p("events.jsonl"))]
+        self.assertTrue(any(e.get("event") == "ended-owned-work" and e.get("agent_id") == aid for e in events))
+
+    def test_point_09_a_deferred_end_keeps_its_loop_until_the_one_command_ends_it(self):
+        """Option B (the lead, 2026-10-11): a SubagentStop while its own command runs is still not
+        its end and ends nothing (echo-opus-panel16). The one command stall-watch names ends its
+        own commands; its next turn then ends with nothing running, and that is its end."""
+        aid, _npath = self.spawn("echo-opus-loopdefer")
+        shell, ah = self._endless_loop(aid, "tu-loop-defer")
+        self.finish(aid)                                    # its turn ends with its loop running
+        fin, _paused, why = ws.finished_state(self.rec("echo-opus-loopdefer"))
+        self.assertFalse(fin, why)
+        self.assertIsNone(shell.poll(), "a deferred end ends nothing")
+        cmd = ah.end_command(self.sid, aid, "echo-opus-loopdefer")
+        out = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(self._gone_within(shell), "the one command did not end its loop")
+        self.finish(aid)                                    # woken by that, its next turn ends
+        fin, _paused, why = ws.finished_state(self.rec("echo-opus-loopdefer"))
+        self.assertTrue(fin, why)
 
     def test_point_09_a_subagentstop_just_after_its_command_ended_but_before_the_wake_does_not_seal_it(self):
         """2026-10-08: echo-fable-dict5's background test run ended at 16:55:45, its turn ended
