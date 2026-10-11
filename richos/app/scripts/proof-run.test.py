@@ -1098,6 +1098,42 @@ try:
     check(pr.discount_held_gap(pr.HELD_GAP_SECONDS, running) == 0.0 and running[0].started == now - 100 + 300.0,
           "P37b an ordinary slow loop turn (a stop, an admission sample) moves nothing", [it.started for it in running])
 
+    # PHS — THE HOST SHIELD (ceo-decisions §65; engine lib/host_shield.py). Every check starts
+    # through it. The two throwaway suites come from host-shield-fixture.sh, which keeps the real
+    # command out of reach on a runner without the shield (the bare-name suite checks what PATH
+    # finds before it calls; the by-path suite exits on line one); PATH here is the tripwire
+    # first and neither sbin.
+    hs_dir = os.path.join(tmp, "phs")
+    trip, hs_suites = os.path.join(hs_dir, "trip"), os.path.join(hs_dir, "suites")
+    fixture = os.path.join(pr.ROOT, "richos/engine/scripts/lib/host-shield-fixture.sh")
+    subprocess.run(["bash", "-c", '. "$1" && hs_fixture "$2" "$3" && hs_path "$2" > "$4"', "phs", fixture,
+                    trip, hs_suites, os.path.join(hs_dir, "path")], check=True)
+    with open(os.path.join(hs_dir, "path")) as fh:
+        case_path = fh.read().strip()
+    halt_cmd = "shut" + "down"
+    saved_path = os.environ["PATH"]
+    os.environ["PATH"] = case_path
+    try:
+        app = os.path.join(pr.ROOT, "richos/app")
+        its = [pr.Item("hs-bare", app, ["bash", os.path.join(hs_suites, "hs-bare.test.sh")], None, 1.0),
+               pr.Item("hs-path", app, ["bash", os.path.join(hs_suites, "hs-path.test.sh")], None, 1.0)]
+        pr.run(its, Args(), os.path.join(tmp, "phs-log"), sampler=idle)
+    finally:
+        os.environ["PATH"] = saved_path
+    logs = {}
+    for it in its:
+        with open(it.log, errors="replace") as fh:
+            logs[it.label] = fh.read()
+    tripped = os.path.getsize(os.path.join(trip, "trip.log"))
+    check(its[0].state == "failed" and ("  FAIL  host-shield: refused `%s -h +60`" % halt_cmd) in logs["hs-bare"]
+          and not tripped,
+          "PHS1 a check calling %s -h +60 by bare name FAILS with the stand-in's logged line; nothing reached "
+          "the tripwire" % halt_cmd, (its[0].state, logs["hs-bare"][-600:]))
+    check(its[1].state == "failed" and "REFUSED before it ran" in logs["hs-path"]
+          and not os.path.exists(os.path.join(trip, "path-suite-ran")),
+          "PHS2 a check whose suite names /sbin/%s is refused before it runs" % halt_cmd,
+          (its[1].state, logs["hs-path"][-600:]))
+
     # P9 — the log directory is bounded: the last three runs of a checkout, nothing more.
     parent = os.path.join(tmp, "rot")
     for n in range(5):

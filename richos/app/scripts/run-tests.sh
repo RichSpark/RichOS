@@ -309,6 +309,21 @@ if [ -z "$LISTING" ] && [ -f "$WORKER_TOOL" ]; then
   fi
 fi
 
+# THE HOST SHIELD (ceo-decisions §65). Every suite runs through engine/scripts/lib/host_shield.py:
+# its source is read first (a host power, sleep, lock or display command called by path refuses
+# it before it runs), then it runs with stand-ins for those commands first on PATH, and a suite
+# that called one FAILS with the stand-in's logged line. A standalone fixture copy of this file
+# has no engine beside it and uses the one the shielded run around it exports; with neither it
+# says so on stderr and runs its (synthetic) suites without the stand-ins.
+SHIELD="$DIR/../../engine/scripts/lib/host_shield.py"
+[ -f "$SHIELD" ] || SHIELD="${RICHOS_HOST_SHIELD_TOOL:-}"
+SHIELDED=()
+if [ -n "$SHIELD" ] && [ -f "$SHIELD" ]; then
+  SHIELDED=(python3 -S "$SHIELD" run --)
+elif [ -z "$LISTING" ]; then
+  echo "run-tests.sh: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL): suites run WITHOUT the power/sleep/lock/display stand-ins." >&2
+fi
+
 JOBS=""
 ONLY=""
 PROOF_OUT=""
@@ -994,7 +1009,7 @@ launch() {
       # The finish time is stamped by the child, never by the printer: output is drained in
       # discovery order, so a fast suite can sit finished for minutes waiting for a slow one
       # ahead of it, and timing it at print would charge it that wait.
-      ( RICHOS_TEST_RESULTS_DIR="$results" ${lease[@]+"${lease[@]}"} bash "$t" > "$WORK/$idx.out" 2>&1
+      ( RICHOS_TEST_RESULTS_DIR="$results" ${lease[@]+"${lease[@]}"} ${SHIELDED[@]+"${SHIELDED[@]}"} bash "$t" > "$WORK/$idx.out" 2>&1
         c=$?; date +%s > "$WORK/$idx.end"; echo $c > "$WORK/$idx.rc" ) &
       ;;
   esac
@@ -1051,7 +1066,7 @@ retry_alone() {
   # trapped signal, and cleanup stops this pid's whole tree like any other launch.
   case "${RUNNER[$idx]}" in
     vm:*) RICHOS_TEST_RESULTS_DIR="$results" ${lease[@]+"${lease[@]}"} "$DIR/testvm/run-suite.sh" "${RUNNER[$idx]#vm:}" "$t" > "$WORK/$idx.retry.out" 2>&1 & ;;
-    *)    RICHOS_TEST_RESULTS_DIR="$results" ${lease[@]+"${lease[@]}"} bash "$t" > "$WORK/$idx.retry.out" 2>&1 & ;;
+    *)    RICHOS_TEST_RESULTS_DIR="$results" ${lease[@]+"${lease[@]}"} ${SHIELDED[@]+"${SHIELDED[@]}"} bash "$t" > "$WORK/$idx.retry.out" 2>&1 & ;;
   esac
   PIDS[idx]=$!
   wait "${PIDS[idx]}" && code=0 || code=$?

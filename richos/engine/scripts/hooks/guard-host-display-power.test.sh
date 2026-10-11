@@ -3,6 +3,8 @@
 # guard-host-display-power.test.sh — regression tests for
 # scripts/hooks/guard-host-display-power.sh.
 #
+# host-shield: names shutdown -- the F16/F17 payloads carry a continued `sudo shutdown` line as text piped to the guard; nothing here runs it
+#
 # THE FIXTURES ARE THE REAL STRINGS OF 2026-09-19, not paraphrases. That is the
 # whole design of this suite: the guard exists because of specific commands and
 # specific sentences, some of which must be refused and some of which must

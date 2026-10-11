@@ -46,7 +46,7 @@
 # scanner exempt from its own rule is a rule with a hole exactly where somebody clever would
 # put something.
 # run-tests: no-host-screen: its matches are its own S6 search pattern and the fake suites S1 writes under mktemp
-# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh
+# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh
 # run-tests: covers richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/gui-launch.sh
 set -uo pipefail
 
@@ -1315,6 +1315,34 @@ if grep -q 'could not write the gui proof' "$TMP/r45b.out" && ! grep -q 'gui pro
   ok "R45 a failed proof write is reported, never announced as written"
 else
   bad "R45 a failed proof write is reported" "$(grep 'gui proof' "$TMP/r45b.out" | tr '\n' ' ')"
+fi
+
+# HS — THE HOST SHIELD (ceo-decisions §65; engine lib/host_shield.py). 2026-10-11: a draft guard
+# test's backticked fixture ran the host's halt command as the normal user, and nothing in the
+# runner stood in the way. The two throwaway suites come from host-shield-fixture.sh, which
+# carries the walls that keep the real command out of reach on a runner without the shield (the
+# bare-name suite checks what PATH finds before it calls; the by-path suite exits on line one).
+. "$DIR/../../engine/scripts/lib/host-shield-fixture.sh"
+HSBOX="$TMP/hsbox"; mkdir -p "$HSBOX"
+install_harness "$HSBOX"
+hs_fixture "$TMP/hstrip" "$HSBOX"
+hs_run() {  # <suite> <out>: the box's runner on one suite, the tripwire first, neither sbin on PATH
+  env -i PATH="$(hs_path "$TMP/hstrip")" HOME="$FIXTURE_HOME" LC_ALL=C TMPDIR="$TMP" RUN_TESTS_RETRY=0 \
+      RUN_TESTS_STATE="$TMP/fixture-state" RICHOS_HOST_SHIELD_TOOL="$HS_TOOL" \
+      bash "$HSBOX/run-tests.sh" --only "$1" > "$2" 2>&1
+}
+hs_run hs-bare.test.sh "$TMP/hs1.out"; HSRC=$?
+if [ "$HSRC" -ne 0 ] && grep -q "^  FAIL  host-shield: refused \`$HS_CMD -h +60\`" "$TMP/hs1.out" \
+    && [ ! -s "$TMP/hstrip/trip.log" ]; then
+  ok "HS1 a suite calling $HS_CMD -h +60 by bare name fails the run with the stand-in's logged line; nothing reached the tripwire"
+else
+  bad "HS1 a bare-name host call fails with the stand-in's line" "exit $HSRC: $(tr '\n' ' ' < "$TMP/hs1.out" | cut -c1-600)"
+fi
+hs_run hs-path.test.sh "$TMP/hs2.out"; HSRC=$?
+if [ "$HSRC" -ne 0 ] && grep -q "REFUSED before it ran" "$TMP/hs2.out" && [ ! -e "$TMP/hstrip/path-suite-ran" ]; then
+  ok "HS2 a suite whose source names /sbin/$HS_CMD is refused before it runs (its first line never ran)"
+else
+  bad "HS2 a by-path host call is refused before the suite runs" "exit $HSRC: $(tr '\n' ' ' < "$TMP/hs2.out" | cut -c1-600)"
 fi
 
 echo ""

@@ -13,6 +13,13 @@ async function main() {
     if (fixedTime) await page.clock.setFixedTime(fixedTime);
     page.setDefaultTimeout(5000);
     page.on("pageerror", e => errors.push(String(e)));
+    // RICHOS_QUOTA_TEST_TICK_MS shortens the sheet's 1 s redraw clock so a redraw lands inside
+    // the test's loops on demand (proof hook for the busy-Mac flake; unset = the real 1 s clock).
+    const tick = Number(process.env.RICHOS_QUOTA_TEST_TICK_MS) || 0;
+    if (tick) await page.addInitScript(ms => {
+      const real = window.setInterval.bind(window);
+      window.setInterval = (fn, d, ...a) => real(fn, d === 1000 ? ms : d, ...a);
+    }, tick);
     await page.addInitScript(({ theme, quota, scale, quotaActivity, enabled }) => {
       localStorage.setItem("richos-theme", theme);
       localStorage.setItem("richos-font-scale", String(scale));
@@ -25,6 +32,11 @@ async function main() {
     await page.evaluate(() => window.RichSplash.yieldNow("quota-test"));
     await page.click("#set-btn");
     return page;
+  }
+  // Scroll an element into view in one page task; Playwright's scrollIntoViewIfNeeded waits for
+  // stability and throws "not attached" when the sheet's 1 s redraw replaces the element.
+  async function reveal(page, selector) {
+    assert(await page.evaluate(sel => { const e = document.querySelector(sel); if (!e) return false; const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return false; e.scrollIntoView({ block: "nearest" }); return true; }, selector), selector + " exists with a layout box");
   }
   async function enableTechnical(page) {
     // A click, as a person makes it: inside a conversation the switch asks first (the scope sheet),
@@ -119,9 +131,9 @@ async function main() {
       const box = await page.locator(".quota-panel").boundingBox();
       assert(box.x >= 0 && box.y >= 0 && box.x + box.width <= 1024 && box.y + box.height <= 700);
       assert(await page.evaluate(() => { const p = document.querySelector(".quota-panel"); return p.scrollWidth <= p.clientWidth; }));
-      await page.locator(".quota-boundary:not([hidden])").scrollIntoViewIfNeeded();
+      await reveal(page, ".quota-boundary:not([hidden])");
       assert(await page.locator(".quota-boundary:not([hidden])").isVisible());
-      await page.locator("#quota-title").scrollIntoViewIfNeeded();
+      await reveal(page, "#quota-title");
       await shot(page, "claude-quota-" + theme, { fullPage: false });
       await page.setViewportSize({ width: 1440, height: 900 });
       await shot(page, "claude-quota-full-" + theme, { fullPage: false });
@@ -360,9 +372,24 @@ async function main() {
       // state, which is today's panel, still fits without scrolling.
       if (name === "two-accounts") {
         assert(await page.evaluate(() => { const p = document.querySelector(".quota-body"); return p.scrollWidth <= p.clientWidth; }), name + " never scrolls sideways");
-        for (const control of await page.locator(".quota-lane button, .quota-opt, #quota-account-start").all()) {
-          await control.scrollIntoViewIfNeeded(); assert(await control.isVisible(), name + " control reachable");
-        }
+        // The sheet redraws every second and replaces its buttons. Playwright's scroll action
+        // waits for an element to be "stable" across frames and throws "not attached" when a
+        // redraw lands in that wait, so the whole sweep is one page task: no redraw can run
+        // between a control's scroll and its check. Each control is scrolled into view and must
+        // then sit inside the scrolling body's visible box.
+        const swept = await page.evaluate(() => {
+          const body = document.querySelector(".quota-body").getBoundingClientRect(), bad = [];
+          const found = document.querySelectorAll(".quota-lane button, .quota-opt, #quota-account-start");
+          for (const c of found) {
+            c.scrollIntoView({ block: "nearest" });
+            const r = c.getBoundingClientRect();
+            const st = getComputedStyle(c);  // Playwright's isVisible: visibility and display, non-empty box; opacity is NOT part of it
+            if (!(st.visibility === "visible" && st.display !== "none" && r.width > 0 && r.height > 0 && r.top >= body.top - 1 && r.bottom <= body.bottom + 1)) bad.push(c.textContent.trim() || c.id);
+          }
+          return { count: found.length, bad };
+        });
+        assert(swept.count > 0, name + " has controls to reach");
+        assertEqual(swept.bad, [], name + " every control reachable");
       } else assert(await page.evaluate(() => { const p = document.querySelector(".quota-body"); return p.scrollHeight <= p.clientHeight + 1 && p.scrollWidth <= p.clientWidth; }), name + " fits");
       const failures = await page.evaluate(() => {
         const C = window.__contrastMath, failures = [];
@@ -406,7 +433,7 @@ async function main() {
     assert((await page.locator("#quota-reset-offers").innerText()).includes("99% weekly usage"));
     assert((await page.locator("#quota-reset-offers").innerText()).includes("weekly quota"));
     assertEqual(await page.evaluate(() => window.__richosResetCalls), []);
-    await page.locator("#quota-reset-prepare-launch").scrollIntoViewIfNeeded();
+    await reveal(page, "#quota-reset-prepare-launch");
     await shot(page, "claude-reset-offer-" + theme, { fullPage: false });
     await page.click("#quota-reset-prepare-launch");
     assertEqual(await page.evaluate(() => window.__richosResetCalls), []);
@@ -420,13 +447,13 @@ async function main() {
     assert((await page.locator("#quota-reset-offers").innerText()).includes("Approved and ready"));
     await page.click("#quota-close"); await page.click("#set-btn"); await page.click("#set-quota-open");
     await page.waitForSelector("#quota-reset-revoke");
-    await page.locator("#quota-reset-revoke").scrollIntoViewIfNeeded();
+    await reveal(page, "#quota-reset-revoke");
     await shot(page, "claude-reset-armed-" + theme, { fullPage: false });
     await page.click("#quota-reset-revoke");
     await page.waitForSelector("#quota-reset-prepare-launch");
     assertEqual(await page.evaluate(() => window.__richosResetCalls.map(c => c.cmd)), ["approve_claude_reset", "revoke_claude_reset"]);
     await page.setViewportSize({width: 1024, height: 700});
-    await page.locator("#quota-reset-prepare-launch").scrollIntoViewIfNeeded();
+    await reveal(page, "#quota-reset-prepare-launch");
     assert(await page.evaluate(() => { const p = document.querySelector(".quota-body"); return p.scrollWidth <= p.clientWidth; }));
     await page.close();
   });
