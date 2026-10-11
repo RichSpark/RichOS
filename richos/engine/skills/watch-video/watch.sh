@@ -180,6 +180,19 @@ done
 [ "$SEG" -gt 0 ] || { echo "watch: WATCH_SEGMENT_SECONDS must be above 0" >&2; exit 1; }
 VDURATION="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null | head -1 || true)"
 case "$VDURATION" in ''|*[!0-9.]*) VDURATION="" ;; esac
+# Each stretch (and each redo) is admitted by the engine's CPU admission first
+# (app/scripts/testvm/reserve.py: one sample of total CPU, refuses at 80% or more) and
+# waits up to WATCH_ADMISSION_WAIT seconds for the Mac to quiet. A refusal after the wait
+# (exit 75) is handled as a stopped stretch: redone after RETRY_WAIT, up to RETRIES times.
+# WATCH_RESERVE names another admission command (the test suite's stand-in).
+RESERVE="${WATCH_RESERVE:-$HERE/../../../app/scripts/testvm/reserve.py}"
+ADMIT_WAIT="${WATCH_ADMISSION_WAIT:-600}"
+case "$ADMIT_WAIT" in ''|*[!0-9]*) echo "watch: WATCH_ADMISSION_WAIT takes whole seconds" >&2; exit 1 ;; esac
+ADMIT=()
+if [ -x "$RESERVE" ]; then ADMIT=("$RESERVE" --wait "$ADMIT_WAIT" --)
+elif [ -f "$RESERVE" ]; then ADMIT=(python3 "$RESERVE" --wait "$ADMIT_WAIT" --)
+else echo "watch: the CPU admission command is not beside this engine ($RESERVE); the frame step runs without it" >&2
+fi
 SEGDIR="$FRAMES/.seg"
 NSEG=0
 SEG_START=()
@@ -193,7 +206,7 @@ while :; do
         if [ "$start" -gt 0 ]; then FF_IN+=(-ss "$start"); fi
         if [ -n "$VDURATION" ]; then FF_IN+=(-t "$SEG"); fi
         rc=0
-        nice -n 10 ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -filter_threads 2 \
+        ${ADMIT[@]+"${ADMIT[@]}"} nice -n 10 ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -filter_threads 2 \
             ${FF_IN[@]+"${FF_IN[@]}"} -threads 2 -i "$INPUT" -an \
             -vf "fps=5,select='$SELECT',metadata=mode=print:key=lavfi.scene_score:file='$segd/kept.txt',scale='min(1920,iw)':-2" \
             -fps_mode passthrough "$segd/raw-%04d.png" || rc=$?
@@ -313,6 +326,7 @@ rm -rf "$SEGDIR"
 # 3d. contact sheets: SHEET frames tiled in one JPEG (ffmpeg's tile filter); the full
 # frames stay where they are.
 NSHEETS=0
+SHEET_FAILED=0
 if [ "$SHEET" -gt 0 ] && [ "$n" -gt 0 ]; then
     mkdir -p "$OUT/sheets"
     cols=1
@@ -333,8 +347,15 @@ if [ "$SHEET" -gt 0 ] && [ "$n" -gt 0 ]; then
             k=$((k + 1))
         done
         printf "file '%s'\n" "${FILES[last]}" >> "$list"
-        ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -f concat -safe 0 -i "$list" \
-            -vf "scale=480:-2,tile=${c}x${r}:padding=4:margin=4" -frames:v 1 -q:v 3 "$sheet"
+        if ! ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -f concat -safe 0 -i "$list" \
+            -vf "scale=480:-2,tile=${c}x${r}:padding=4:margin=4" -frames:v 1 -q:v 3 "$sheet"; then
+            # The frames and the index are what matter; a sheet is a convenience.
+            rm -f "$sheet" "$list"
+            NSHEETS=$((NSHEETS - 1))
+            SHEET_FAILED=$((SHEET_FAILED + 1))
+            first=$((last + 1))
+            continue
+        fi
         rm -f "$list"
         # The sheet sorts just before its first frame (C before F on a tie).
         tf="$(grep -F "FRAME ${FILES[first]}" "$ROWS" | cut -f1)"
@@ -373,6 +394,7 @@ fi
     fi
     if [ "$NSHEETS" -gt 0 ]; then echo "- Contact sheets: $NSHEETS in $OUT/sheets, $SHEET frames each; each sheet's row comes just before its first frame. Read a sheet to skim, then Read only the full FRAMEs you need."; fi
     if [ -f "$OUT/transcript.md" ]; then echo "- Transcript: $OUT/transcript.md (one channel, speakers not separated; \"Me\" is the recording's sound, not a speaker)"; fi
+    if [ "$SHEET_FAILED" -gt 0 ]; then echo "- Contact sheet missing: $SHEET_FAILED of $((NSHEETS + SHEET_FAILED)) could not be made; every frame is still here as a FRAME row below."; fi
     if [ -n "$TNOTE" ]; then echo "- $TNOTE"; fi
     echo "- Read this file top to bottom; Read each FRAME path to see the screen at that moment."
     echo
@@ -384,6 +406,7 @@ rm -f "$ROWS"
 if [ -n "$DL" ]; then rm -rf "$DL"; DL=""; fi
 if [ "$NSHEETS" -gt 0 ]; then echo "watch: $n frames, $NSHEETS sheets, index $OUT/watched.md" >&2
 else echo "watch: $n frames, index $OUT/watched.md" >&2; fi
+if [ "$SHEET_FAILED" -gt 0 ]; then echo "watch: contact sheet missing: $SHEET_FAILED could not be made; the frames and the index are complete." >&2; fi
 [ -n "$TNOTE" ] && echo "watch: $TNOTE" >&2
 echo "$OUT/watched.md"
 if [ "$TSTATUS" -ne 0 ] && [ "$TSTATUS" -ne 3 ]; then exit 2; fi

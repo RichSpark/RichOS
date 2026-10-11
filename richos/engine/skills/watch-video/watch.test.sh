@@ -24,6 +24,12 @@ command -v say >/dev/null 2>&1 || { bad "macOS say is available to make the spee
 SANDBOX="$(scratch_new watch-test --ttl 30)"
 trap 'scratch_release "$SANDBOX"' EXIT
 
+# The real admission waits while the Mac is busy, which would make this suite as slow as
+# the host; every run but the admission test (6) uses a stand-in that admits at once.
+printf '#!/usr/bin/env bash\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n' > "$SANDBOX/admit-now"
+chmod +x "$SANDBOX/admit-now"
+export WATCH_RESERVE="$SANDBOX/admit-now"
+
 VIDEO_FILTER="drawbox=x=40:y=40:w=240:h=160:color=white:t=fill:enable='gte(t,3)'"
 say -o "$SANDBOX/speech.aiff" "First the screen is empty. Now a white box appears on the screen."
 ffmpeg -hide_banner -nostdin -loglevel error -y -f lavfi -i "color=c=black:s=320x240:r=30:d=12" \
@@ -268,6 +274,49 @@ if grep -q '^nice=10 ' "$SANDBOX/ff.args" 2>/dev/null && grep -q -- '-threads 2'
     ok "the frame step runs at nice 10 with 2 decoder and 2 filter threads"
 else
     bad "the frame step is paced (recorded: $(head -c 200 "$SANDBOX/ff.args" 2>/dev/null))"
+fi
+
+# 6. CPU admission: every frame stretch is admitted first, and waits while the Mac is
+# busy. A stand-in admission command (WATCH_RESERVE) is "busy" for 2 s on each ask; the
+# ffmpeg shim logs when a stretch really starts. Order must be ASK, OPEN, START.
+cat > "$SANDBOX/fake-reserve" <<FAKE
+#!/usr/bin/env bash
+echo ASK >> "$SANDBOX/adm.log"
+sleep 2
+echo OPEN >> "$SANDBOX/adm.log"
+while [ "\$1" != "--" ]; do shift; done
+shift
+exec "\$@"
+FAKE
+chmod +x "$SANDBOX/fake-reserve"
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *select=*) echo START >> "$SANDBOX/adm.log" ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+STATUS=0
+WATCH_RESERVE="$SANDBOX/fake-reserve" PATH="$SANDBOX/fakebin:$PATH" "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/adm1" >/dev/null 2>&1 || STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ "$(tr '\n' ' ' < "$SANDBOX/adm.log" 2>/dev/null)" = "ASK OPEN START " ]; then
+    ok "a frame stretch starts only after admission opens (busy for 2 s: ASK, OPEN, START)"
+else
+    bad "a frame stretch starts only after admission opens (exit $STATUS, log: $(tr '\n' ' ' < "$SANDBOX/adm.log" 2>/dev/null))"
+fi
+
+# 7. a failed contact-sheet step keeps the frames and the index and says the sheet is missing
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *tile=*) echo "forced sheet failure" >&2; exit 1 ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+STATUS=0
+PATH="$SANDBOX/fakebin:$PATH" "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/sheetfail" --sheet 2 >/dev/null 2>"$SANDBOX/sheetfail.err" || STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ "$(ls "$SANDBOX/sheetfail/frames" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] \
+    && grep -q 'FRAME' "$SANDBOX/sheetfail/watched.md" 2>/dev/null \
+    && grep -qi 'contact sheet.*missing' "$SANDBOX/sheetfail/watched.md" 2>/dev/null \
+    && grep -qi 'contact sheet.*missing' "$SANDBOX/sheetfail.err"; then
+    ok "a failed contact sheet keeps the frames and the index, exits 0 and says the sheet is missing"
+else
+    bad "a failed contact sheet keeps the frames and the index (exit $STATUS, $(tail -2 "$SANDBOX/sheetfail.err" | tr '\n' ' '))"
 fi
 
 if [ "$FAIL" -eq 0 ]; then echo "PASS"; exit 0; fi

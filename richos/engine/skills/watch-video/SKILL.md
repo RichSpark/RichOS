@@ -87,6 +87,13 @@ the transcript's details.
 | 2 | frames written, transcription failed; the reason is printed and in `watched.md` | use the frames, report the transcription output to the lead |
 | 4 | the frame step was stopped again and again on one stretch of the video (the host's CPU circuit breaker, or a refusal); no `watched.md`, but `transcript.md` is kept | `Read` the transcript, then run again when the Mac is quieter, or cut chosen frames with `frames-at.sh`; report it to the lead if it repeats |
 
+A contact sheet that cannot be made (with `--sheet`) is not an exit either: the run still exits 0
+with every frame and the index; `watched.md` says "Contact sheet missing: N of M could not be
+made" and so does stderr. Read the FRAME rows in place of that sheet.
+
+Each stretch is admitted by the engine's CPU admission first and waits (up to 600 s,
+`WATCH_ADMISSION_WAIT`) while the Mac is busy; a refusal after that wait counts as a stopped stretch.
+
 A single stop is not an exit: the frame step runs in 300-second stretches under `nice` with
 2 decoder and 2 filter threads (a single ffmpeg stays under the 3 cores the breaker allows),
 and a stretch that is stopped is redone alone, up to 4 times, 10 seconds apart. The run
