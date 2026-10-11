@@ -295,7 +295,8 @@ impl Sink {
 ///   `result`, exactly one message on that model was not finalized, the remainder is added to it
 ///   (same id, time and card), so it is priced and dated exactly and is no new request.
 /// - **Otherwise it is a correction, never a request** (`Request::correction`): priced on the
-///   card those messages share, dated at the latest of them; and when they span cards (Haiku 5.5
+///   card those messages share, dated at the earliest of them (so it is counted only in the
+///   periods all of them fall in; the second review of `6c21269e6`); and when they span cards (Haiku 5.5
 ///   either side of 100,000), it is counted and left unpriced (`Request::unmatched`), an
 ///   explicit gap rather than a guess. A cache-write remainder has no 5-minute and 1-hour split in
 ///   `modelUsage`, so it is a 5-minute write (none was ever seen).
@@ -430,11 +431,17 @@ impl Tally {
             open.iter().collect()
         };
         let latest = pool.iter().max_by_key(|r| r.at).copied();
+        // Dated by its own requests: at the earliest of them. Which of them it belongs to is not
+        // recorded, and the periods are nested back from now, so a remainder dated at its earliest
+        // request is counted in exactly the periods every one of them falls in (the second review
+        // of 6c21269e6: dated at the latest, a turn crossing midnight moved yesterday's output
+        // into Today). All time always has it.
+        let earliest = pool.iter().map(|r| r.at).min();
         let cards: std::collections::BTreeSet<crate::spend::Card> = pool.iter().map(|r| r.card()).collect();
         let id = format!("{lease}:result-{}:{model}", self.results);
         let request = crate::spend::Request {
             id: id.clone(),
-            at: latest.map_or(at, |l| l.at),
+            at: earliest.unwrap_or(at),
             model: model.to_string(),
             effort: latest.and_then(|l| l.effort.clone()),
             fast: latest.is_some_and(|l| l.fast),
@@ -640,6 +647,30 @@ mod tests {
         let t = unstreamed.totals(0);
         assert_eq!((t.requests, t.unpriced_tokens, t.unpriced_requests), (2, 10_000, 0));
         assert!((t.cost - 0.060103).abs() < 1e-12, "{}", t.cost);
+    }
+
+    /// **A remainder two requests share is dated by its own requests, never moved into a later
+    /// period** (the second review of 6c21269e6, earlier finding 1 still open, its own fixture). An
+    /// Opus 5.5 lead a few seconds before midnight and a helper a second after, each 1,000 input,
+    /// 1 output, 10,000 cache reads; the result says 10,002 output. The 10,000 more belong to one
+    /// or both, which nothing says, so the remainder is counted only in the periods both requests
+    /// fall in: All time has it, Today does not. By hand: Today is the helper alone, 1,000 x $4 +
+    /// 1 x $20 + 10,000 x $0.20 = $0.00602 (dated at the latest request, Today read $0.20602, the
+    /// 10,000 x $20 = $0.20 of a remainder that may be yesterday's moved into today); All time is
+    /// both requests and the remainder, 2 x $0.00602 + $0.20 = $0.21204.
+    #[test]
+    fn a_shared_remainder_is_never_dated_after_its_earliest_request() {
+        let opus = "claude-opus-5-5";
+        let midnight = crate::spend::stamp("2026-10-11T00:00:00Z").unwrap();
+        let (_a, crossing) = spend_of(&[(frame("yesterday-lead", opus, 1000, 1, 10_000, None), midnight - 10_000),
+            (frame("today-helper", opus, 1000, 1, 10_000, Some("toolu_1")), midnight + 1000),
+            (result(opus, 2000, 10_002, 20_000), midnight + 2000)]);
+        let today = crossing.totals(midnight);
+        assert!((today.cost - 0.00602).abs() < 1e-12, "Today read ${:.8}, by hand $0.00602000", today.cost);
+        assert_eq!((today.requests, today.unpriced_tokens), (1, 0));
+        let all = crossing.totals(0);
+        assert!((all.cost - 0.21204).abs() < 1e-12, "All time read ${:.8}, by hand $0.21204000", all.cost);
+        assert_eq!(all.requests, 2);
     }
 
     #[test]
