@@ -490,7 +490,7 @@ richos/app/
                               assuming support
     tests/onboarding_persistence_tests.rs regressions for verified tool persistence, per-company answers, resumption and MCP transport.
     tests/request_preparation_tests.rs regressions for cancellable connection, priming, rotation, bounded recovery and restart outcomes.
-    tests/onboarding_declination_tests.rs 4 tests over the two spine methods the first-run
+    tests/onboarding_declination_tests.rs 5 tests over the two spine methods the first-run
                               notice is built on. `record_declination` shipped with no caller
                               anywhere in the product, so `OnboardingState::Declined` and
                               `DECLINED_BLOCK` were unreachable outside their own unit tests
@@ -499,7 +499,9 @@ richos/app/
                               so the press has to survive a relaunch; the others hold the
                               screen and the priming turn to one derived fact across all four
                               reachable states, and refuse a write that has nowhere to go
-                              rather than reporting success over it
+                              rather than reporting success over it; the fifth presses "Not
+                              now" during boot priming with a message queued behind it and
+                              counts the priming turns: no extra one after the deferred step
     tests/loro_reprime_tests.rs 12 Tier-C tests: a slice that carries another company's
                               item is refused whole, and an entity with no lane reads the
                               CEO layer and nothing else
@@ -1177,7 +1179,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1990 tests + 5 doc-tests (1986 direct, 4 ignored)
+cargo test -p richos-core                       # 1991 tests + 5 doc-tests (1987 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

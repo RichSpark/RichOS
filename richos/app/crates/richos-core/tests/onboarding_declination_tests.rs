@@ -244,3 +244,112 @@ fn the_spines_write_produces_a_record_holding_only_a_declination() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// 4. "Not now" during boot priming costs no extra hidden model turn.
+// ---------------------------------------------------------------------------
+
+/// A lease whose FIRST priming turn waits, with the spine held, until the test lets it go:
+/// the boot prime still running when he presses "Not now" and sends a message.
+struct HeldPrime {
+    mock: MockCognition,
+    entered: Option<std::sync::mpsc::Sender<()>>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+impl richos_core::cognition::Cognition for HeldPrime {
+    fn session_id(&self) -> &str {
+        self.mock.session_id()
+    }
+    fn reprime(
+        &mut self,
+        text: &str,
+        sink: &mut dyn FnMut(richos_core::cognition::TurnItem),
+    ) -> Result<(), richos_core::cognition::CognitionError> {
+        if let Some(entered) = self.entered.take() {
+            entered.send(()).unwrap();
+            self.release.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        }
+        self.mock.reprime(text, sink)
+    }
+    fn prompt(
+        &mut self,
+        text: &str,
+        sink: &mut dyn FnMut(richos_core::cognition::TurnItem),
+    ) -> Result<String, richos_core::cognition::CognitionError> {
+        self.mock.prompt(text, sink)
+    }
+}
+
+/// The ordering from review `rv-20261011T101519Z-e4ab1771-98bb`: "Not now" is written from the
+/// published view while `prime_front_desk` holds the spine, and a message is sent while the
+/// prime continues. The prime drains that message before it lets go, and the message's turn
+/// re-primes the desk with the declined block (priming 2). The deferred step that runs after
+/// it must leave that up-to-date desk alone: his next message goes straight to the model.
+/// On `e4ab1771e` it un-primed the desk anyway and the next message paid priming 3.
+#[test]
+fn not_now_during_boot_priming_with_a_queued_message_costs_no_extra_priming() {
+    use richos_core::read_view::SpineView;
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let (path, ledger) = tmp_ledger("not-now-queued");
+    let central = tmp_dir("not-now-queued-central");
+    let config = tmp_dir("not-now-queued-config");
+    let mut spine = support::spine(ledger);
+    let thread = spine.create_thread("Work", &company()).unwrap();
+    spine.switch_thread(&thread).unwrap();
+    spine.set_central_root(central.clone());
+    spine.set_onboarding_record(record_path(&config));
+    let control = richos_core::steering::TurnControl::open(config.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(control.clone());
+    let mock = MockCognition::new("s-held", vec!["First reply", "Second reply", "Third reply"]);
+    let primes = mock.reprimes.clone();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    spine.attach_lease(Box::new(HeldPrime { mock, entered: Some(entered_tx), release: release_rx }));
+    let reader = spine.reader();
+    let spine = Arc::new(Mutex::new(spine));
+
+    // Boot priming takes the spine and is inside its model turn.
+    let prime_spine = spine.clone();
+    let prime_thread = thread.clone();
+    let prime = std::thread::spawn(move || {
+        prime_spine.lock().unwrap().prime_front_desk(&prime_thread);
+    });
+    entered_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+
+    // "Not now": written from the published view, the deferred step waiting for the spine.
+    reader.snapshot().record_onboarding_declination(1_000).unwrap();
+    let deferred_spine = spine.clone();
+    let deferred = std::thread::spawn(move || deferred_spine.lock().unwrap().onboarding_answer_recorded());
+
+    // His message, sent while the prime continues.
+    let active = reader.snapshot().active_thread().unwrap().to_string();
+    control.submit_from_desk(&active, Some(company()), "Please help with my business").unwrap();
+    release_tx.send(()).unwrap();
+    prime.join().unwrap();
+    deferred.join().unwrap();
+
+    let after_prime = primes.lock().unwrap().len();
+    assert_eq!(after_prime, 2, "the boot prime, then the queued message's re-prime with the decline");
+    assert!(
+        primes.lock().unwrap()[1].contains("said not now"),
+        "the queued message's re-prime already carries the decline"
+    );
+
+    spine.lock().unwrap().submit_prompt("Thanks, next question", Source::Text).unwrap();
+    let after_next = primes.lock().unwrap().len();
+    eprintln!(
+        "[not-now-queued] primes after the prime: {after_prime}; after the deferred step and the next message: {after_next}"
+    );
+    assert_eq!(
+        after_next, after_prime,
+        "the deferred step un-primed a desk that already carried the decline, so the next message \
+         waited through {} extra hidden priming turn(s)",
+        after_next - after_prime
+    );
+    drop(spine);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir_all(&central).unwrap();
+    std::fs::remove_dir_all(&config).unwrap();
+}
