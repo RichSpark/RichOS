@@ -381,7 +381,9 @@ or loses never prevents or undoes a hold. Send the returned payload
 unchanged. Do not write, append, summarize or "improve" pause instructions.
 The quota watcher uses this same template; the terminal and desktop delivery
 guards reject altered pause messages before delivery. In the desktop, use
-`richos_work.pause_message` for the same payload. Pause preserves the same task,
+`richos_work.pause_message` (and `richos_work.resume_message` to resume): the same
+function freezes or releases the agent before the tool returns the same payload,
+and its `hold` field says which. Pause preserves the same task,
 context, workspaces and work in progress. Never substitute TaskStop, termination,
 cancellation, hand-in, workspace removal or a replacement. In particular, never
 add "end any heavy run" or "re-run what was cut off". A request sent is not proof

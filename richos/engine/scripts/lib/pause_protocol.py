@@ -10,6 +10,8 @@ THE HOLD NEVER DEPENDS ON THE MESSAGE. The command line (`--to <agent>`) first
 freezes that agent through the workspace registry (workspaces.pause, which runs
 agent_hold.py) and confirms its hold is in place, and only then prints the
 message; `--resume --to <agent>` first releases the hold (workspaces.resume).
+The desktop's richos_work.pause_message and resume_message tools take the same
+step through the same function (issue) before they return their payload.
 The message's format belongs to Claude Code: on 2026-10-11 it added a field to
 SendMessage, the delivery check refused every generated pause, and nothing was
 frozen for 47 minutes, because the freeze ran only when the message got through.
@@ -281,6 +283,17 @@ def take_effect(to, reason="manual", reset=None, resume=False):
         return False, "NOT %s %s: %s" % (word, to, str(error)[:300] or type(error).__name__)
 
 
+def issue(to, reason="manual", reset=None, resume=False):
+    """THE one way a pause or a resume is made, by the terminal command and the desktop's
+    richos_work.pause_message / resume_message alike: (ok, line for the lead, payload).
+    Invalid input is refused (ValueError/TypeError) before anything is held; then the
+    hold or its release FIRST (take_effect), and only then the message to send. So no
+    refusal or loss of the message, on any surface, can prevent or undo the hold."""
+    payload = message_input(to, reason, reset, resume=resume)
+    ok, line = take_effect(to, reason, reset, resume=resume)
+    return ok, line, payload
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="validate a hook payload on stdin")
@@ -299,9 +312,8 @@ def main():
                 raise ValueError("invalid hook payload")
             validate_payload(value)
         else:
-            payload = message_input(args.to, args.reason, args.reset, resume=args.resume)
             # The hold FIRST, so no refusal or loss of the message can prevent or undo it.
-            ok, line = take_effect(args.to, args.reason, args.reset, resume=args.resume)
+            ok, line, payload = issue(args.to, args.reason, args.reset, resume=args.resume)
             print(line, file=sys.stderr)
             if not ok:
                 print("The message below is still printed and still tells the agent to %s; check "

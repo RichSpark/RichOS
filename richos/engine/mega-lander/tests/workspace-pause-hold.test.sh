@@ -419,6 +419,62 @@ sub "H10.9 an agent the registry cannot hold: the message is still printed, and 
     "$(cat "$T/gen11.json" "$T/gen11.err")"
 kill -9 "$W10" 2>/dev/null
 
+echo "=== H11 the same in the desktop app: its pause and resume tools hold and release before, and independently of, the message ==="
+# Review rv-20261011T055437Z-206908c9-000f: the app's richos_work.pause_message only
+# rendered the text, so in the app a refused SendMessage still prevented the hold.
+# Both tools now take the hold step through the terminal command's own function
+# (pause_protocol.issue). The tool's host-scope check is stubbed here (it needs an
+# app-issued conversation scope); the tool's code, the registry and the hold are real.
+start_session "sess-hold-5555"
+python3 "$ENGINE/mega-lander/workspaces.py" --entity "$ENT" --session "$CUR_SID" integration --repo "$ENT" --branch main \
+    --why "the pause-hold suite's body of work" >/dev/null 2>>"$T/hooks.err"
+AID7="aholdsevensevenseven"
+register_agent "zach-opus-hold7" "$AID7"
+agent_call "$AID7" "toolu_work11" "python3 $T/worker.py $T/w11 $((ROUNDS * 50))" w11 bg
+wait_file "$T/w11.progress"; W11="$(cat "$T/w11.pid")"; OURS+=("$W11")
+cat > "$T/app_tool.py" <<'PY'
+import importlib.util, json, sys
+from unittest.mock import patch
+app_py, tool, to, out = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("richos_desktop_work", app_py)
+app = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(app)
+with patch.object(app, "read_scope", return_value={}):
+    result = app.call("unused-scope", tool, {"to": to})
+json.dump(result, open(out + ".result", "w"))
+json.dump(result["message_payload"], open(out, "w"))
+PY
+app_tool() { # <tool> <to> <payload-out>  the desktop's richos_work tool; its result in <payload-out>.result
+    RICHOS_SESSION_ID="$CUR_SID" python3 "$T/app_tool.py" "$ENGINE/mega-lander/app.py" "$1" "$2" "$3" 2>"$3.err"
+}
+result_field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2" 2>/dev/null; }
+app_tool pause_message zach-opus-hold7 "$T/gen12.json"; ARC=$?
+sub "H11.1 the app's pause tool returns the generated message unchanged (rc $ARC)" \
+    "python3 -c 'import json,sys; sys.path.insert(0, sys.argv[2]); import pause_protocol as p; sys.exit(0 if json.load(open(sys.argv[1])) == p.message_input(\"zach-opus-hold7\") else 1)' '$T/gen12.json' '$LIB'" \
+    "$(cat "$T/gen12.json" "$T/gen12.json.err" 2>/dev/null)"
+if refused_by_check "$T/gen12.json"; then CHK=0; else CHK=$?; fi
+sub "H11.2 the delivery check refuses the message (rc $CHK), so no PostToolUse ever records it" "[ $CHK -ne 0 ]"
+sub "H11.3 the agent's running command is suspended all the same ($(pstate "$W11"))" "is_stopped $W11" \
+    "$(cat "$T/gen12.json.result" "$T/gen12.json.err" 2>/dev/null)"
+agent_call "$AID7" "toolu_late11" "python3 -c \"open('$T/late11.ran','w').write('ran')\"" late11
+wait_file "$T/late11.rc" 100
+sub "H11.4 its next command waits: refused with the WAIT, and it did not run" \
+    "[ \"\$(cat $T/late11.rc 2>/dev/null)\" = 75 ] && [ ! -e '$T/late11.ran' ]" "$(cat "$T/late11.stdout" 2>/dev/null)"
+sub "H11.5 the tool reports the hold in place: pause_confirmed $(result_field "$T/gen12.json.result" pause_confirmed)" \
+    "[ \"\$(result_field $T/gen12.json.result pause_confirmed)\" = True ] && result_field $T/gen12.json.result hold | grep -q '^HELD zach-opus-hold7'" \
+    "$(cat "$T/gen12.json.result" 2>/dev/null)"
+app_tool resume_message zach-opus-hold7 "$T/res12.json"; ARC=$?
+if refused_by_check "$T/res12.json"; then CHK=0; else CHK=$?; fi
+sub "H11.6 the app's RESUME message is refused too (rc $CHK)" "[ $CHK -ne 0 ]"
+P1="$(cat "$T/w11.progress")"; sleep 1; P2="$(cat "$T/w11.progress")"
+sub "H11.7 the command runs again all the same (rc $ARC, $(pstate "$W11"), progress $P1 -> $P2, resume_confirmed $(result_field "$T/res12.json.result" resume_confirmed))" \
+    "! is_stopped $W11 && [ '$P1' != '$P2' ] && [ -z \"\$(ls $HOLD_STATE/held 2>/dev/null)\" ] && unpaused zach-opus-hold7 && [ \"\$(result_field $T/res12.json.result resume_confirmed)\" = True ]" \
+    "$(cat "$T/res12.json.result" "$T/res12.json.err" 2>/dev/null)"
+agent_call "$AID7" "toolu_after11" "python3 -c \"open('$T/after11.ran','w').write('ran')\"" after11
+wait_file "$T/after11.rc" 200
+sub "H11.8 its next command runs" "[ -e '$T/after11.ran' ]" "$(cat "$T/after11.stdout" 2>/dev/null)"
+kill -9 "$W11" 2>/dev/null
+
 echo ""
 echo "CHECKS: $RUN  RED: $RED"
 [ "$RED" -eq 0 ]
