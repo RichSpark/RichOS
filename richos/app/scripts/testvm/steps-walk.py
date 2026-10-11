@@ -38,6 +38,7 @@ import sys
 import time
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[3]
 
 
 def run(args, timeout=120):
@@ -74,9 +75,11 @@ def step_run(vm, step, out):
         return run([str(HERE / 'guest.sh'), vm, 'osascript', '-e', keys_script(step['text'])])
     if op == 'push':
         # A plan names its source relative to the repository root so it is portable and carries no
-        # home path; an absolute source is used as written.
+        # home path; an absolute source is used as written. HERE is <root>/richos/app/scripts/testvm,
+        # so the repository root is HERE.parents[3]; parents[4] was the folder holding
+        # the checkout, and every relative push failed "no such file" (candidate 49 walk, run B).
         src = Path(step['src'])
-        src = src if src.is_absolute() else HERE.parents[4] / src
+        src = src if src.is_absolute() else REPO_ROOT / src
         return run([str(HERE / 'guest.sh'), vm, '--push', str(src), step['dest']])
     if op == 'handfile':
         return run([str(HERE / 'hand-file.sh'), vm, step['mode'], step['path']] + (['--to', step['to']] if step.get('to') else []))
