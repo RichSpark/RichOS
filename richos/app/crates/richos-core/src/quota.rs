@@ -1490,12 +1490,31 @@ impl Service {
         self.spend.update(&self.spend_folders(), now)
     }
 
+    /// **The first read never holds a screen** (9.28 GB took 15.97 s on the CEO's Mac): until the
+    /// whole history has been read once, a call starts that read on its own thread and answers at
+    /// once with `ready: false`, so the screen says it is counting instead of waiting blank. A read
+    /// already under way makes this one return at once (`Ledger::update`'s own lock).
+    fn spend_catch_up(&self) {
+        if self.spend.ready() {
+            self.spend_update();
+            return;
+        }
+        let (ledger, sink, folders) = (self.spend.clone(), self.sink.clone(), self.spend_folders());
+        std::thread::spawn(move || {
+            let now = crate::util::now_millis();
+            ledger.add(sink.take_for_spend(), now);
+            ledger.update(&folders, now);
+        });
+    }
+
     /// The spend screen's snapshot of everything at or after `from` (Unix ms: the webview's local
     /// midnight, Monday or first of the month; 0 for all time).
     pub fn spend_view(&self, from: u64) -> crate::spend::ledger::SpendView {
-        self.spend_update();
+        // Ready as it was when asked: a first read started now is never reported as done.
+        let ready = self.spend.ready();
+        self.spend_catch_up();
         crate::spend::ledger::SpendView {
-            ready: self.spend.ready(),
+            ready,
             as_of: crate::util::now_millis(),
             price_date: crate::spend::PRICE_DATE,
             totals: self.spend.totals(from),
@@ -1505,9 +1524,10 @@ impl Service {
     /// The spend screen's live line: the agents working at the shell's last count, the latest
     /// request, and how many have been counted ever (more than the snapshot's: Refresh's dot).
     pub fn spend_live(&self) -> crate::spend::ledger::SpendLive {
-        self.spend_update();
+        let ready = self.spend.ready();
+        self.spend_catch_up();
         crate::spend::ledger::SpendLive {
-            ready: self.spend.ready(),
+            ready,
             counted: self.spend.counted(),
             agents_working: self.agents_working.load(std::sync::atomic::Ordering::SeqCst),
             last: self.spend.last().as_ref().map(crate::spend::ledger::LastRequest::of),
@@ -1866,6 +1886,14 @@ pub(crate) mod tests {
         service.token_sink().frame("1", &json!({"type": "assistant", "message": {"id": "msg_l", "model": "claude-sonnet-5-5",
             "usage": {"input_tokens": 1_000, "output_tokens": 2_000, "cache_read_input_tokens": 50_000,
                 "cache_creation_input_tokens": 4_000}}}), crate::util::now_millis());
+        // The first call answers at once, counting, and reads on its own thread.
+        let first = service.spend_view(0);
+        let waited = std::time::Instant::now();
+        while !service.spend.ready() {
+            assert!(waited.elapsed() < std::time::Duration::from_secs(30), "the first read never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!first.ready, "the first call answers at once, counting, while the history is read");
         let view = service.spend_view(0);
         assert!(view.ready);
         assert_eq!(view.totals.requests, 2);
