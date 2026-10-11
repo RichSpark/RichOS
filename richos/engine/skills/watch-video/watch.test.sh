@@ -18,6 +18,7 @@ bad() { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 echo "=== watch-video: watch.sh ==="
 [ -x "$SCRIPT" ] || { bad "watch.sh exists and is executable at $SCRIPT"; echo "1 failure"; exit 1; }
+[ -x "$HERE/admit.py" ] || { bad "admit.py (the CPU admission beside watch.sh) exists and is executable"; echo "1 failure"; exit 1; }
 command -v say >/dev/null 2>&1 || { bad "macOS say is available to make the speech fixture"; exit 1; }
 
 . "$ENGINE/scripts/lib/scratch.sh"
@@ -317,6 +318,46 @@ if [ "$STATUS" -eq 0 ] && [ "$(ls "$SANDBOX/sheetfail/frames" 2>/dev/null | wc -
     ok "a failed contact sheet keeps the frames and the index, exits 0 and says the sheet is missing"
 else
     bad "a failed contact sheet keeps the frames and the index (exit $STATUS, $(tail -2 "$SANDBOX/sheetfail.err" | tr '\n' ' '))"
+fi
+
+# 8. The admission ships inside the engine: from an engine-only copy (the skills and the
+# engine's cpu_policy.py, no app/ folder, no WATCH_RESERVE), the frame stretch still asks
+# the engine's own admission and waits for it. The copy's cpu_guard.py is a stand-in that
+# reports a busy Mac for the first CPU sample and an idle one after; cpu_policy.py is the
+# engine's real file. Order must be BUSY, IDLE, START.
+EC="$SANDBOX/engine-copy"
+mkdir -p "$EC/skills" "$EC/scripts/lib"
+cp -R "$HERE" "$EC/skills/watch-video"
+[ -d "$ENGINE/skills/audio-transcription" ] && cp -R "$ENGINE/skills/audio-transcription" "$EC/skills/audio-transcription"
+cp "$ENGINE/scripts/lib/cpu_policy.py" "$EC/scripts/lib/cpu_policy.py"
+cat > "$EC/scripts/lib/cpu_guard.py" <<'STUB'
+import os
+LOG = os.environ['ADM_LOG']
+def host_ticks():
+    n = int(open(LOG + '.n').read()) if os.path.exists(LOG + '.n') else 0
+    n += 1
+    open(LOG + '.n', 'w').write(str(n))
+    if n == 2:
+        open(LOG, 'a').write('BUSY\n')
+    if n == 4:
+        open(LOG, 'a').write('IDLE\n')
+    table = {1: [0, 0, 0, 0], 2: [900, 0, 100, 0], 3: [900, 0, 100, 0]}
+    if n in table:
+        return table[n]
+    return [910 + 10 * (n - 4), 0, 1090 + 990 * (n - 4), 0]
+STUB
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *select=*) echo START >> "$SANDBOX/eng.log" ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+STATUS=0
+env -u WATCH_RESERVE ADM_LOG="$SANDBOX/eng.log" PATH="$SANDBOX/fakebin:$PATH" "$EC/skills/watch-video/watch.sh" "$SANDBOX/mute.mov" "$SANDBOX/eng1" >/dev/null 2>"$SANDBOX/eng.err" || STATUS=$?
+# (exit 2 is fine here: the copy carries no transcription pipeline; the frames are the point)
+if { [ "$STATUS" -eq 0 ] || [ "$STATUS" -eq 2 ]; } && [ "$(ls "$SANDBOX/eng1/frames" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] && [ ! -e "$EC/app" ] && [ "$(tr '\n' ' ' < "$SANDBOX/eng.log" 2>/dev/null)" = "BUSY IDLE START " ]; then
+    ok "from an engine-only copy (no app/), the engine's own admission is asked for and honored (BUSY, IDLE, START)"
+else
+    bad "engine-only admission (exit $STATUS, log: $(tr '\n' ' ' < "$SANDBOX/eng.log" 2>/dev/null), err: $(tail -2 "$SANDBOX/eng.err" | tr '\n' ' '))"
 fi
 
 if [ "$FAIL" -eq 0 ]; then echo "PASS"; exit 0; fi

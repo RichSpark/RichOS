@@ -181,11 +181,11 @@ done
 VDURATION="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null | head -1 || true)"
 case "$VDURATION" in ''|*[!0-9.]*) VDURATION="" ;; esac
 # Each stretch (and each redo) is admitted by the engine's CPU admission first
-# (app/scripts/testvm/reserve.py: one sample of total CPU, refuses at 80% or more) and
-# waits up to WATCH_ADMISSION_WAIT seconds for the Mac to quiet. A refusal after the wait
+# (admit.py beside this script: the engine's cpu_policy over a cpu_guard CPU sample, refuses
+# at 80% or more total CPU) and waits up to WATCH_ADMISSION_WAIT seconds for the Mac to quiet. A refusal after the wait
 # (exit 75) is handled as a stopped stretch: redone after RETRY_WAIT, up to RETRIES times.
 # WATCH_RESERVE names another admission command (the test suite's stand-in).
-RESERVE="${WATCH_RESERVE:-$HERE/../../../app/scripts/testvm/reserve.py}"
+RESERVE="${WATCH_RESERVE:-$HERE/admit.py}"
 ADMIT_WAIT="${WATCH_ADMISSION_WAIT:-600}"
 case "$ADMIT_WAIT" in ''|*[!0-9]*) echo "watch: WATCH_ADMISSION_WAIT takes whole seconds" >&2; exit 1 ;; esac
 ADMIT=()
