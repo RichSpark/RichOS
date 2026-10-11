@@ -52,6 +52,32 @@ class Recovery(unittest.TestCase):
         R.accept(record["id"], plan["id"], dict(plan=plan["id"], accepted=True, evidence="matrix independently checked", reviewer="independent", materially_different=True, difference_evidence="different state owner, checked against earlier attempts"))
         return R.read(record["id"]), plan
 
+    def test_resolved_premise_reopens_when_the_recovery_threshold_is_crossed(self):
+        work='teammate:premise-first'
+        def add(rid,tip,verdict,findings=(),earlier=()):
+            folder=self.base/rid
+            folder.mkdir()
+            (folder/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=list(findings),earlier_findings=list(earlier)),earlier_findings_in=[dict(id=e['id']) for e in earlier])))
+            with self.ledger.open('a') as out:
+                out.write(json.dumps(dict(id=rid,repo=str(self.repo),work=work,tip=tip,trigger='handover',verdict=verdict,record=str(folder)))+'\n')
+        finding=dict(blocks=True,priority=1,title='premise',files=[],evidence='source',fixture='')
+        add('p1','a'*40,'changes-requested',[finding])
+        add('p2','b'*40,'changes-requested',earlier=[dict(id='p1#1',status='still-open',blocks=True,note='unresolved')])
+        def current():return R.reconcile(str(self.repo),work,{work},'owner','acceptance',mode='enforce',premises='carried')
+        first=current()
+        self.assertFalse(first['axel_required'])
+        add('p3','c'*40,'passed',earlier=[dict(id='p1#1',status='withdrawn',blocks=False,note='original authority checked')])
+        self.assertEqual(current()['status'],'resolved_findings')
+        add('p4','d'*40,'changes-requested',[finding])
+        reopened=current()
+        self.assertTrue(reopened['axel_required'])
+        self.assertEqual(reopened['status'],'investigating')
+        self.assertTrue(R.landing_gap(str(self.repo),work))
+        deadline=reopened['deadline']
+        add('p5','e'*40,'changes-requested',[finding])
+        self.assertEqual(current()['deadline'],deadline)
+        self.assertEqual(current()['status'],'investigating')
+
     def test_three_failed_sources_schedule_without_a_watcher(self):
         self.assertEqual(len(self.record["failed"]), 3)
         self.assertEqual(self.record["status"], "investigating")

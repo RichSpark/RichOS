@@ -155,9 +155,11 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
         before = digest(record)
         previous_count = record.get("recovery_failures", 0)
         record.update(failed=failed, aliases=sorted(aliases), owner=owner, mode=mode, wes_candidates=candidates)
-        if not record.get("axel_required", True) and len(failed)>=THRESHOLD:
+        if len(failed)>=THRESHOLD and (not record.get("axel_required", True) or record["status"]=="resolved_findings"):
             record["deadline"] = now + EXECUTION_SECONDS
-            record["budgets"].append(dict(start=now, deadline=record["deadline"], reason="recovery threshold crossed"))
+            record["budgets"].append(dict(start=now, deadline=record["deadline"], reason="recovery threshold crossed after premise resolution"))
+            record["status"] = "investigating"
+            record["plan"] = None
         record["axel_required"] = record.get("axel_required", True) or len(failed)>=THRESHOLD
         if record["axel_required"] and record["status"] == "reviewing_premise":
             record["status"] = "investigating"
