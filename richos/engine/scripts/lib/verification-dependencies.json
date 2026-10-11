@@ -1657,7 +1657,7 @@
     },
     "scripts/hooks/guard-host-display-power.test.sh": {
       "source": "scripts/hooks/guard-host-display-power.test.sh",
-      "sha256": "e4b3e1788d5b3c915626781969995a37dba884a81d0f39d7b7855bbabb7dbcb8",
+      "sha256": "6804abd0f93083318cdea615e2dc16b2ff1479c73206bc6017737671e320125a",
       "evidence": "Creates a private entity orchestration.config and a private ruling repository. Every hook invocation resolves that entity, its off-switch variant or an explicitly unadopted directory. Missing-resolver fixture refuses before config. Nested mutations recreate the same private settings; literal historical commands remain payload data.",
       "keys": [],
       "edges": [

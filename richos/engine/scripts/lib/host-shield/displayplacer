@@ -1,0 +1,8 @@
+#!/bin/sh
+# host-shield stand-in (ceo-decisions §65). Every file in this directory is this same script
+# under the name of a command that can change this Mac's power, sleep, lock or display state.
+# Test runners put this directory first on PATH; ../host_shield.py judges the call with the
+# guard's own rules and hands a harmless form to the real command, or logs and refuses it.
+# -S: standard library only. Site startup measured 0.30 s against 0.06 s without it
+# (2026-10-11, host at 99% CPU), and a harmless `pmset -g` pays it on every call.
+exec python3 -S "$(dirname "$0")/../host_shield.py" --standin "$(basename "$0")" "$@"
