@@ -19,6 +19,7 @@ from pathlib import Path
 import operator_fences as F
 
 THRESHOLD = 3
+REPEAT_ITERATION = 4
 MAX_RECOVERIES = 3
 EXECUTION_SECONDS = 3 * 3600
 LOCK_SECONDS = 4
@@ -173,11 +174,120 @@ def failed_attempts(ledger, repo, aliases):
     return failed
 
 
-def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", dry=False, premises=False):
+def repeat_signal(name):
+    """A visible fourth iteration is enough to ask for intervention.
+
+    This is an alarm, not proof of a failed attempt or an identity join.
+    No review outcome, predecessor record or manually declared dispute is needed.
+    """
+    match = re.fullmatch(r"[^-\s/]+-[^-\s/]+-([A-Za-z][A-Za-z0-9_-]*?)([0-9]{1,9})", name or "")
+    if not match:
+        return None
+    number = int(match[2])
+    return dict(name=name, job=match[1], iteration=number) if number >= REPEAT_ITERATION else None
+
+
+def repeat_pending(record, role):
+    return bool(record.get("repeat_signal") and
+                (record.get("repeat_questions", {}).get(role) or {}).get("frontier") != record["evidence_cursor"])
+
+
+def questioning(record):
+    return bool(record.get("repeat_signal") and not record.get("repeat_recovery") and
+                not record["attempts"] and record["status"] != "awaiting_alex" and
+                not any(c["action"] != "continue" for c in record["controls"]))
+
+
+def repeat_question_key(record, role):
+    question = record.get("repeat_questions", {}).get(role) or {}
+    return "recovery:%s:questions:%s" % (record["id"], digest(
+        [record["evidence_cursor"], role, question.get("consultation")]))
+
+
+def repeat_ready(record):
+    """Questions reach the lead before a later judgment can run."""
+    return all(not repeat_pending(record, role) and
+               (record["mode"] != "enforce" or repeat_question_key(record, role) in record.get("deliveries", {}))
+               for role in ("axel", "wes"))
+
+
+def settle_questions(record):
+    # Delivery is not an answer. A satisfactory reply lets Rich correct course;
+    # it does not waive ordinary review, acceptance or any existing stop.
+    if (record.get("repeat_outcome") == "self_correction" and repeat_ready(record) and
+            record["status"] not in ("accepted", "awaiting_alex", "unavailable") and
+            not record["attempts"] and not record.get("repeat_recovery") and
+            not any(c["action"] != "continue" for c in record["controls"])):
+        record["status"] = "resolved_findings"
+
+
+def repeat_questioned(identity, role, answer, consultation, sources=()):
+    """Store probing questions without requiring or granting a verdict."""
+    with locked(identity):
+        record = read(identity)
+        if (role not in ("axel", "wes") or set(answer) != {"job", "acceptance", "frontier", "questions"} or
+                answer["job"] != identity or answer["acceptance"] != record["acceptance"] or
+                answer["frontier"] != record["evidence_cursor"] or
+                not isinstance(answer["questions"], list) or not 1 <= len(answer["questions"]) <= 2 or
+                any(not isinstance(q, dict) or set(q) != {"question", "evidence"} or
+                    any(not isinstance(q[k], str) or not q[k].strip() for k in ("question", "evidence"))
+                    for q in answer["questions"])):
+            raise Unavailable("questions lack exact current job applicability or evidence")
+        if record["status"] in ("accepted", "awaiting_alex", "unavailable"):
+            raise Unavailable("late questions cannot reopen a resolved or escalated job")
+        record.setdefault("repeat_questions", {})[role] = dict(frontier=answer["frontier"],
+            questions=answer["questions"], consultation=consultation, sources=list(sources))
+        settle_questions(record)
+        save(record, "repetition-questions-ready")
+        return record
+
+
+def repeat_response(identity, role, answer, consultation, replies):
+    """Only real, distinct replies to delivered questions can justify escalation."""
+    with locked(identity):
+        record = read(identity)
+        question = record.get("repeat_questions", {}).get(role) or {}
+        prior = record.setdefault("repeat_responses", {}).setdefault(role, [])
+        used = {uid for row in prior for uid in row["answer_ids"]}
+        available = {row["uuid"] for row in replies}
+        ids = answer.get("answer_ids") or []
+        outcome = answer.get("outcome")
+        if (answer.get("job") != identity or answer.get("acceptance") != record["acceptance"] or
+                answer.get("frontier") != record["evidence_cursor"] or
+                answer.get("question") != question.get("consultation") or
+                repeat_question_key(record, role) not in record.get("deliveries", {}) or
+                not ids or len(set(ids)) != len(ids) or not set(ids) <= available or set(ids) & used or
+                outcome not in ("self_correction", "probe_again", "unrelated", "escalate") or
+                not isinstance(answer.get("reason"), str) or not answer["reason"].strip()):
+            raise Unavailable("response lacks new witnessed answers to delivered questions")
+        bad = [row for row in prior if row["frontier"] == record["evidence_cursor"] and row["outcome"] == "probe_again"]
+        if outcome == "escalate" and not any(row["question"] != question["consultation"] for row in bad):
+            raise Unavailable("stronger intervention requires repeated unsatisfying answers, after probing again")
+        followup = answer.get("questions")
+        if outcome == "probe_again" and (not isinstance(followup, list) or not 1 <= len(followup) <= 2 or
+                any(not isinstance(q, dict) or set(q) != {"question", "evidence"} or
+                    any(not isinstance(q[k], str) or not q[k].strip() for k in ("question", "evidence")) for q in followup)):
+            raise Unavailable("an unsatisfying first answer requires a probing follow-up question")
+        prior.append(dict(frontier=record["evidence_cursor"], question=question["consultation"],
+            answer_ids=ids, outcome=outcome, reason=answer["reason"], consultation=consultation))
+        if outcome == "probe_again":
+            record["repeat_questions"][role] = dict(question, questions=followup, consultation=consultation)
+        elif outcome == "self_correction":
+            record["repeat_outcome"] = "self_correction"
+        elif outcome == "escalate":
+            record["repeat_recovery"] = True
+        record["update_needed"] = consultation
+        settle_questions(record)
+        save(record, "repetition-answer-assessed")
+        return record
+
+
+def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", dry=False, premises=False, name=""):
     """Level-triggered, including when no watcher has polled. The original
     deadline survives source movement and worker replacement.
     """
     now = time.time() if now is None else now
+    repetition = repeat_signal(name)
     ledger = rows(F.review_ledger_default())
     failed = failed_attempts(ledger, repo, aliases)
     relevant = [r for r in ledger if r.get("work") in aliases and F.review_row_belongs(r, F.review_repo_identity(repo))]
@@ -196,7 +306,7 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
     identity = key(repo, work)
     with (contextlib.nullcontext() if dry else locked(identity)):
         record = read(identity)
-        if record is None and len(failed) < THRESHOLD and not candidates:
+        if record is None and len(failed) < THRESHOLD and not candidates and not repetition:
             return None
         if record is None:
             record = dict(schema=1, id=identity, repo=os.path.realpath(repo),
@@ -212,15 +322,30 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
         before = digest(record)
         previous_count = record.get("recovery_failures", 0)
         record.update(failed=failed, aliases=sorted(aliases), owner=owner, mode=mode, wes_candidates=candidates)
-        if len(failed)>=THRESHOLD and (not record.get("axel_required", True) or record["status"]=="resolved_findings"):
+        previous = record.get("repeat_signal")
+        if repetition and (not previous or repetition["iteration"] > previous["iteration"]):
+            record["repeat_signal"] = repetition
+            record["repeat_questions"] = {}
+            record.pop("repeat_outcome", None)
+            if record["status"] in ("accepted", "resolved_findings", "reviewing_premise"):
+                record.update(status="investigating", plan=None, deadline=now + EXECUTION_SECONDS,
+                              wes_deadline=now + EXECUTION_SECONDS)
+                record["budgets"].append(dict(start=now, deadline=record["deadline"], reason="fourth or later named iteration"))
+        if len(failed)>=THRESHOLD and (not record.get("axel_required", True) or
+                (record["status"]=="resolved_findings" and record.get("repeat_outcome") != "self_correction")):
             record["deadline"] = now + EXECUTION_SECONDS
             record["budgets"].append(dict(start=now, deadline=record["deadline"], reason="recovery threshold crossed after premise resolution"))
             record["status"] = "investigating"
             record["plan"] = None
-        record["axel_required"] = record.get("axel_required", True) or len(failed)>=THRESHOLD
+        record["axel_required"] = record.get("axel_required", True) or len(failed)>=THRESHOLD or bool(record.get("repeat_signal"))
         if record["axel_required"] and record["status"] == "reviewing_premise":
             record["status"] = "investigating"
-        record["evidence_cursor"] = digest(failed)
+        frontier = digest([failed, record["repeat_signal"]]) if record.get("repeat_signal") else digest(failed)
+        if record.get("repeat_signal") and frontier != record["evidence_cursor"] and record.get("repeat_outcome"):
+            record.pop("repeat_outcome", None)
+            if record["status"] == "resolved_findings":
+                record["status"] = "investigating"
+        record["evidence_cursor"] = frontier
         failures = {a["tip"] for a in failed}
         for attempt in record["attempts"]:
             attempt["failed"] = bool(attempt.get("tip") in failures)
@@ -234,7 +359,7 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
                 constraints="No fourth correction or budget reset without a new explicit Alex decision.",
                 options=["Reauthorize with a changed outcome or new constraints", "Defer the job", "Discard the job"],
                 approaches=[p.get("approach") for p in record.get("plans",[])], delivered=False)
-        elif len(failed) < THRESHOLD and not record["attempts"] and (record["axel_required"] or not candidates):
+        elif not record.get("repeat_signal") and len(failed) < THRESHOLD and not record["attempts"] and (record["axel_required"] or not candidates):
             record["status"] = "resolved_findings"
         elif count > previous_count:
             # A newly established recovery failure permits the next bounded
@@ -261,6 +386,8 @@ def admission(record, worker, brief, disposition="", dry=False, replaces="", saf
         return None
     with (contextlib.nullcontext() if dry else locked(record["id"])):
         record = read(record["id"])
+        if questioning(record):
+            return None  # Questions or silence do not authorize taking over work.
         if record["status"] in ("awaiting_alex", "unavailable"):
             raise Unavailable("job %s is %s" % (record["id"], record["status"]))
         if record["status"] in ("accepted", "resolved_findings"):
@@ -406,7 +533,7 @@ def landing_gap(repo, work, ledger=None):
                 observed = control.get("observations", {}).get(worker) or {}
                 if not observed.get("quiescent") or observed.get("cancellation_status")!="acknowledged":
                     return "job %s has unresolved recovery control of %s" % (record["id"], worker)
-        if record.get("axel_required", True) and record["status"] not in ("resolved_findings", "accepted"):
+        if not questioning(record) and record.get("axel_required", True) and record["status"] not in ("resolved_findings", "accepted"):
             return "job %s has unresolved recovery (%s)" % (record["id"], record["status"])
     return ""
 
@@ -430,6 +557,8 @@ def control(identity, recommendation, consultation):
             raise Unavailable("control lacks exact current job/source applicability and evidence")
         if record["status"] in ("accepted", "resolved_findings", "awaiting_alex", "unavailable"):
             raise Unavailable("late control cannot reopen a resolved, expired or escalated job")
+        if questioning(record):
+            raise Unavailable("probing questions and repeated unsatisfying answers must precede advisor control")
         result = dict(recommendation, id=digest([consultation, recommendation]), consultation=consultation,
                       at=time.time(), observations={}, observe_only=record["mode"] != "enforce")
         if not any(c["id"] == result["id"] for c in record["controls"]):
@@ -553,6 +682,11 @@ def owner_delivered(reference, delivery_key, owner):
         if not record or record["owner"]!=owner:
             return
         record.setdefault("deliveries", {}).setdefault(delivery_key, dict(at=time.time(), owner=owner))
+        if record.get("repeat_signal") and delivery_key in {
+                repeat_question_key(record, role) for role in ("axel", "wes") if not repeat_pending(record, role)}:
+            settle_questions(record)
+            # Existing follow-up scheduling sees delivery, without a new scheduler.
+            record["update_needed"] = delivery_key
         if record["status"]=="awaiting_alex" and record.get("escalation"):
             record["escalation"].update(delivered=True, delivered_to_owner=owner)
         save(record, "recovery-owner-delivery-accepted", ledger)
