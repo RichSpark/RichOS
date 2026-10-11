@@ -2601,7 +2601,8 @@
       "richos/engine/scripts/ci-shard.sh",
       "richos/engine/scripts/ci-units.sh",
       "richos/engine/scripts/hooks/contract-integrity.test.sh",
-      "richos/engine/orchestration.config"
+      "richos/engine/orchestration.config",
+      "richos/engine/scripts/hooks/guard-host-display-power.sh"
     ],
     "inventories": [
       "richos/engine"
