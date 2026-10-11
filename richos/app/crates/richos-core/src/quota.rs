@@ -1731,6 +1731,12 @@ impl Service {
     pub fn shutdown(&self) {
         self.control.stop();
         self.source.lock().unwrap().disconnect();
+        // The spend's last requests, written now (§118; the review of 2dd1375d7): a lease's
+        // requests are in no transcript, and a token scan saves the ledger at most every 30 s, so
+        // whatever came in since the last save is drained into it and saved before the app goes.
+        let now = crate::util::now_millis();
+        self.spend.add(self.sink.take_for_spend(), now);
+        self.spend.save(now, true);
         // Approval survives app restarts; a fresh authenticated account check fences use.
         self.request_refresh();
     }
@@ -1904,6 +1910,41 @@ pub(crate) mod tests {
         let last = live.last.unwrap();
         assert_eq!((last.name.as_str(), last.tokens), ("Sonnet 5.5", 57_000));
         assert!((last.cost.unwrap() - 0.037).abs() < 1e-12);
+    }
+
+    /// **A normal quit keeps every request** (the review of 2dd1375d7, rv-20261011T085659Z: "CLEAN
+    /// QUIT: before=$0.1889708/2 requests, reopen=$0.0944854/1"). A lease's requests are in no
+    /// transcript, so the ledger is the only place they live, and a token scan saves it at most
+    /// every 30 seconds. Two Opus 5.5 lease requests (report.md's worked example, $0.0944854 each),
+    /// a scan after each, the second within 30 seconds of the first save; then the app quits
+    /// (the service's own quit path, as main.rs calls it on exit) and opens again. By hand:
+    /// 2 requests, 2 x $0.0944854 = $0.1889708.
+    #[test]
+    fn a_normal_quit_keeps_the_leases_requests_the_last_scan_did_not_save() {
+        let root = Scratch::new();
+        let app = root.path().join("app");
+        let frame = |id: &str| json!({"type": "assistant", "message": {"id": id, "model": "claude-opus-5-5",
+            "usage": {"input_tokens": 2, "output_tokens": 51, "cache_read_input_tokens": 447_967, "cache_creation_input_tokens": 483,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 483}}}});
+        {
+            let service = Service::open(&app).unwrap();
+            service.token_sink().frame("1", &frame("msg_a"), crate::util::now_millis());
+            service.track_tokens();
+            service.token_sink().frame("1", &frame("msg_b"), crate::util::now_millis());
+            service.track_tokens(); // within 30 seconds of the first save: not written
+            assert_eq!(service.spend.totals(0).requests, 2, "both are counted while the app runs");
+            service.shutdown();
+        }
+        let again = Service::open(&app).unwrap();
+        again.spend_view(0);
+        let waited = std::time::Instant::now();
+        while !again.spend.ready() {
+            assert!(waited.elapsed() < std::time::Duration::from_secs(30), "the first read never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let t = again.spend_view(0).totals;
+        assert_eq!(t.requests, 2, "reopened with {} request(s), ${:.7}; by hand 2, $0.1889708", t.requests, t.cost);
+        assert!((t.cost - 0.1889708).abs() < 1e-12, "reopened at ${:.7}, by hand $0.1889708", t.cost);
     }
 
     /// **An old figure is never current** (handoff round 2, run 10: Work read 0.0% weekly for
