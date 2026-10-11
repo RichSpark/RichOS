@@ -201,6 +201,21 @@ class Pierce(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no original human"):
             P.human_context(self.payload)
 
+    def test_restart_authority_on_older_macos_datetime_parser(self):
+        self.continued_terminal()
+        current_datetime = P.datetime
+        def older_parse(value):
+            # Python 3.9/3.10 accept +00:00 but reject Claude's UTC Z suffix.
+            if value.endswith("Z"):
+                raise ValueError("Invalid isoformat string")
+            return current_datetime.fromisoformat(value)
+        older_datetime = type("OlderDatetime", (), {"fromisoformat": staticmethod(older_parse)})
+        with patch.object(P, "datetime", older_datetime), \
+             patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
+            result = P.inspect(self.payload)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(reviewer.call_args.args[0]["user_requests_in_order"], "Implement the feature. Keep the API.")
+
     def desktop_ledger(self):
         state = self.root / "desktop/engine-state"
         state.mkdir(parents=True)

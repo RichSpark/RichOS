@@ -126,7 +126,7 @@ def transcript_rows(path, complete=False):
 def session_time(value):
     if not isinstance(value, str):
         raise ValueError("restart transcript has no valid timestamp")
-    stamp = datetime.fromisoformat(value)
+    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if stamp.tzinfo is None:
         raise ValueError("restart transcript timestamp has no timezone")
     return stamp
