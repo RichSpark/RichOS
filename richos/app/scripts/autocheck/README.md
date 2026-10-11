@@ -9,7 +9,7 @@ Git runs these itself. Nobody runs them by hand and nobody has to be told to (CE
 | `git commit` | every branch but `main`, in every worktree | `lint.sh --changed --strict`: the lint ratchets for what differs from `HEAD` (static and load rules; Clippy for a Rust set whose inputs changed), and no count may grow, whatever room a ceiling has | refuses the commit, with the lint's reason |
 | `git commit` | every branch but `main`, in every worktree | a branch-changed file that a reviewed check pins by SHA-256 in `docs/development/verification-input-qualifications.json` must have its pin renewed in the same change (the merge would refuse it with `UnqualifiedReader`); read only when a changed path is named there | refuses the commit, naming the file, the unit and the fix |
 | `git merge` into a branch | every branch but `main` | `lint.sh --changed` (ceilings; what main brings was held to its land) | refuses the merge |
-| `git merge` into `main`, a commit on `main` | the main checkout | the suites that own the changed files (`proof-for.sh --gate`), run by `proof-run.py`, plus `lint.sh --changed` when the land changes something under `richos/app` and that selection does not already include `lint.test.sh`; each check capped at 600 s, the gate run in rounds of at most 900 s that keep every pass (at most six) | a failing check refuses the merge before main moves, unless it passes when run again alone, once; nothing else does |
+| `git merge` into `main`, a commit on `main` | the main checkout | the suites that own the changed files (`proof-for.sh --gate`), run by `proof-run.py`, plus `lint.sh --changed` when the land changes something under `richos/app` and that selection does not already include `lint.test.sh`, plus `publication-completeness.sh` over the whole tree being landed (see "What every commit refuses, the merge refuses"); each check capped at 600 s, the gate run in rounds of at most 900 s that keep every pass (at most six) | a failing check refuses the merge before main moves, unless it passes when run again alone, once; nothing else does |
 | `git push` of `main` | wherever main is pushed from | the same land checks (the lint as `--all`: HEAD is already the land), only when main's tip has no land receipt (a fast-forward, a cherry-pick, a `--no-verify` merge) | refuses the push |
 | main moved (post-merge, post-commit) | the operator's main checkout | `richos/mobile/perf/watch.py trigger`: when the land changed `richos/mobile/`, a detached run measures each wired phone's cold start and return against the benchmarks (`richos/mobile/perf/README.md`, "It runs by itself"); it also reports any earlier run that never finished | never refuses (main has moved); a slower, refused or unmeasured run, a missed run and a trigger that could not run are escalations in the lead's ledger |
 
@@ -117,6 +117,25 @@ every job capped at 10 minutes. A merge into main runs exactly:
    out at their cap, or ended at the round's cap) is followed by another that resumes it,
    keeps every pass, and runs only those checks. See "A large land runs in rounds" below.
 5. **A failure is retried alone, once (since 2026-10-08)**: see the next section.
+
+## What every commit refuses, the merge refuses (2026-10-11)
+
+The merge of `codex/axel-wes-recovery` (`9c5f0f6dc`) passed this gate and left
+`richos/engine/docs/recovery-supervision.md` citing a path the public tree does not hold. The
+engine's commit guard `guard-completeness-commits.sh` runs `publication-completeness.sh` over
+the whole tree at every `git commit`, so every commit on every branch was refused until
+`918319ed0` reworded the citation. A merge makes its commit without `git commit`, so that guard
+never saw it, and a merge can make the finding from two clean sides (one branch moves a file,
+another cites its old path).
+
+So every land (merge into main, commit on main, the push backstop) runs the same checker from
+the tree being landed, as the commit guard runs it (`--skip-private-trees`), before any suite
+starts, and refuses what the guard refuses: findings, or a check that did not complete. A tree
+with no `.publication-boundary` is NOT APPLICABLE and is said so. The engine's other commit
+guards are not in this position: the leak, vendoring and hook-registration guards judge what a
+commit changes against its HEAD, so a later commit that does not touch a finding still passes,
+and the row-currency guard already judges the merge itself. `../autocheck.test.py` proves it
+with a merge whose citation dangles only after the land before it.
 
 ## A check that fails under the gate's own load runs again alone, once (2026-10-08)
 

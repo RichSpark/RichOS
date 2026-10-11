@@ -24,7 +24,9 @@ engineer in a worktree, Codex, Rich in the main checkout.
   pre-push of main as the backstop): the suites that own the changed files
   (`proof-for.sh --gate`), run by `proof-run.py`, plus `lint.sh --changed` when the land
   changes something under richos/app and the selection does not already include
-  `lint.test.sh` (the push backstop: `--all`). Every check is stopped at 600 s, and the gate
+  `lint.test.sh` (the push backstop: `--all`), and first the engine's publication-completeness
+  check over the whole tree, which its commit guard runs at every commit
+  (publication_completeness_gate). Every check is stopped at 600 s, and the gate
   runs in rounds of at most 900 s that keep every pass, at most six (THE MERGE GATE'S LIMITS,
   A LARGE LAND RUNS IN ROUNDS). Nobody chooses the suites. A failing check refuses the
   merge before it exists, so it cannot be pushed; that is all that refuses it (land_verdict).
@@ -1268,6 +1270,60 @@ def device_identifier_gate(repo, what):
     return 1
 
 
+# THE MERGE RUNS WHAT THE COMMIT REFUSES ON THE WHOLE TREE (2026-10-11). The merge of
+# codex/axel-wes-recovery (9c5f0f6dc) passed this gate and left richos/engine/docs/
+# recovery-supervision.md citing `.claude/recovery.json`, a path the public tree does not hold.
+# Every later commit on every branch was then refused by the engine's commit guard
+# (guard-completeness-commits.sh runs publication-completeness.sh over the WHOLE tree at every
+# `git commit`) until 918319ed0 reworded it: a main no commit could pass. A merge makes a commit
+# without `git commit`, so that guard never saw it, and a merge can manufacture the finding from
+# two clean sides (one branch moves a file, another cites its old path). So the land runs the
+# same checker the same way the commit guard does (`--skip-private-trees`: the commit judges
+# only this tree; a private tree is the push's), from the tree being landed, and refuses
+# exactly what the guard refuses: findings (exit 1) or a check that did not complete (exit 2
+# without NOT APPLICABLE). A tree with no .publication-boundary is NOT APPLICABLE, as there.
+# The engine's other commit guards are not in this position: the leak, vendoring and
+# hook-registration guards judge what a commit changes against its HEAD, so a later commit
+# that does not touch a finding passes; row-currency already judges the merge itself.
+PUBLICATION_COMPLETENESS = "richos/engine/scripts/publication-completeness.sh"
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def publication_completeness_gate(repo, what):
+    """0, or 1 after printing a refusal: the tree being landed fails the publication-completeness
+    check the engine's commit guard runs at every commit, so no commit could pass after it."""
+    script = repo.top / PUBLICATION_COMPLETENESS
+    if not script.is_file():
+        say(f"autocheck: {what}: {PUBLICATION_COMPLETENESS} is not in this tree; publication completeness NOT checked")
+        return 0
+    scope = ["--skip-private-trees"] if "--skip-private-trees" in script.read_text(errors="replace") else []
+    say(f"+ bash {PUBLICATION_COMPLETENESS} --root . {' '.join(scope)}".rstrip())
+    try:
+        result = run_bounded(["bash", str(script), "--root", str(repo.top), *scope], cwd=repo.top,
+                             env=hook_env(repo), stdin=subprocess.DEVNULL, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        banner(f"{what.upper()} REFUSED: publication-completeness did not finish in 120 s",
+               ["It measures under a second; a hang is a failure, not a pass."])
+        return 1
+    text = ANSI.sub("", result.stdout + result.stderr).strip()
+    if result.returncode == 0:
+        return 0
+    if result.returncode == 2 and "NOT APPLICABLE" in text:
+        say(f"autocheck: {what}: publication completeness NOT APPLICABLE (no .publication-boundary)")
+        return 0
+    broken = result.returncode != 1
+    banner(f"{what.upper()} REFUSED: " + ("the publication-completeness check did not complete" if broken
+                                         else "the tree being landed fails publication completeness"), [
+        *text[-4000:].splitlines(),
+        "",
+        "The engine's commit guard (guard-completeness-commits.sh) runs this check over the whole tree at",
+        "every commit, so once main holds this tree every commit on every branch is refused until it is fixed.",
+        "Fix it on the branch (the path, the missing file, or a reviewed line in .publication-completeness)",
+        "and land it again. Recheck: bash " + PUBLICATION_COMPLETENESS + " --root . --explain",
+    ])
+    return 1
+
+
 def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     """Run the suites proof-for.sh assigns plus the lint on the working tree, which the
     caller has established IS the tree being landed. Returns 0 and writes the receipt when
@@ -1280,6 +1336,8 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
             banner(f"{what.upper()} REFUSED: cannot select the checks", [f"{need} is not in this tree."])
             return 1
     if (rc := device_identifier_gate(repo, what)):
+        return rc
+    if (rc := publication_completeness_gate(repo, what)):
         return rc
     commands = []
     covered = set()
