@@ -31,7 +31,10 @@ WHAT IS A STALL (every threshold, and why)
    names, such as a device), from the escalation ledger's stated waits, and
    from the proof-run slot line itself (app/scripts/lib/proof_slots.py
    status), which says who holds each slot and where each waiter stands.
-   A wait is recorded, never inferred from process names.
+   A wait is recorded, never inferred from process names. A wait whose
+   teammate the lead holds (agent_hold.py) is not a stall while the hold
+   stands, and the held time is never counted (resource_waits.py, A HELD
+   AGENT IS NOT WAITING IN LINE).
 
 2. A SILENT TEAMMATE: a live teammate of THIS session (the workspace registry
    says its run has not ended and it is not paused) with no new commit on any
@@ -417,6 +420,10 @@ def look(src, now, session_id, th=None):
     slots, why = _slot_lines(src, now)
     if why:
         problems.append(why)
+    # -- every recorded wait (and the ledger's); a held agent's is skipped ----
+    reading = resource_waits.collect(now=now, threshold_seconds=min(th["self"], th["wait"]))
+    problems += reading["problems"]
+
     slot_waiter_pids = set()
     watched = []  # (kind, waiter dict, holders)
     if slots:
@@ -426,12 +433,16 @@ def look(src, now, session_id, th=None):
             except (TypeError, ValueError):
                 pass
             since = w.get("since") if isinstance(w.get("since"), (int, float)) else now
-            if now - since >= min(th["self"], th["wait"]):
-                watched.append(("proof", w, slots.get("holders") or []))
-
-    # -- every other recorded wait (and the ledger's) -------------------------
-    reading = resource_waits.collect(now=now, threshold_seconds=min(th["self"], th["wait"]))
-    problems += reading["problems"]
+            # A teammate the lead holds is not waiting in line (resource_waits.py,
+            # A HELD AGENT IS NOT WAITING IN LINE); its clock resumes on RESUME.
+            pw = {"pid": w.get("pid"), "waiter": w.get("waiter"), "since": since,
+                  "names": [reg.owner(w.get("pid"), w.get("cwd") or "", w.get("waiter") or "")[0]]
+                  if reading["holds"] else []}
+            resource_waits.apply_holds([pw], reading["holds"], now)
+            if pw["held_by"]:
+                continue
+            if now - pw["since"] >= min(th["self"], th["wait"]):
+                watched.append(("proof", dict(w, since=pw["since"], began=since), slots.get("holders") or []))
     # A proof-run slot waiter also records itself as a CPU-admission wait; with
     # the slot line read, that record is the same wait and is told once.
     others = [w for w in reading["waits"]
@@ -489,7 +500,7 @@ def _proof_stall(src, reg, w, holders, slots, now, th, table):
             mine.append((h, "its process ancestry"))
     ps = src.proof_slots_path
     place = "#%s in line, this Mac runs %s at once" % (w.get("position", "?"), limit)
-    key = "wait:proof:%s:%d" % (pid, int(since))
+    key = "wait:proof:%s:%d" % (pid, int(w.get("began", since)))
     if mine and now - since >= th["self"]:
         h, hhow = mine[0]
         deadlock = bool(table) and isinstance(h.get("pid"), int) and h["pid"] in _ancestors(pid, table)
@@ -546,7 +557,7 @@ def _vm_self_wait(src, reg, w, vm_slots, table):
                      "held by: %s held by pid %s %s, which is ALSO %s's (known from %s)" % (
                          s["name"], s["pid"], _proc_words(s["pid"], table), who,
                          hhow or "its process ancestry")]
-            return Stall("wait:rec:%d:%d" % (w["pid"], int(w["since"])), "SELF-WAIT", who, w["since"],
+            return Stall("wait:rec:%d:%d" % (w["pid"], int(w.get("began", w["since"]))), "SELF-WAIT", who, w["since"],
                          "waits for the test VM that its own process holds", lines,
                          ["tell %s to let its own walk finish first, or to end the walk it no longer needs" % who,
                           "every current wait: python3 %s list" % os.path.join(HERE, "resource_waits.py")])
@@ -560,7 +571,7 @@ def _wait_stall(reg, w, now, table, waits):
     lines = []
     if w["source"] == "record":
         lines.append("waiting: pid %d %s" % (w["pid"], _proc_words(w["pid"], table)))
-        key = "wait:rec:%d:%d" % (w["pid"], int(w["since"]))
+        key = "wait:rec:%d:%d" % (w["pid"], int(w.get("began", w["since"])))
     else:
         lines.append("from the escalation ledger: %s" % ", ".join(w.get("escalations") or []))
         key = "wait:esc:%s:%s" % (w["waiter"], w["resource"])

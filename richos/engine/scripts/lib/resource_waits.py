@@ -61,6 +61,22 @@ The waiter says it is waiting, through `waiting()`, or it is not counted.
    "<what ended the wait>"`, which refuses a note that says to keep waiting.
 
 ===========================================================================
+A HELD AGENT IS NOT WAITING IN LINE (2026-10-11)
+===========================================================================
+When the lead freezes a teammate (agent_hold.py, through a generated pause),
+a wait that teammate had recorded is not a job waiting in line: the lead chose
+to hold it. On 2026-10-11 such a wait blocked the lead at 04:26Z, during the
+CEO's account-switch hold, and at 06:19Z forced three teammates frozen for
+Codex's final proof to be resumed early. So a wait whose agent has a hold
+record standing (agent_hold.py's held/ directory) is HELD, not waiting: `list`
+shows it as held, the Stop gate and stall-watch skip it, and its clock stops.
+On RESUME it counts again from where it was: every hold that covered part of
+the wait (agent_hold.py's hold-history.jsonl, written at each release) is
+subtracted from its age. A wait belongs to a hold when its waiter is the held
+agent's name (or `agent-<id>`), or when its process is one the hold froze
+(pid and start time from the hold record).
+
+===========================================================================
 WHO HOLDS IT, AND IS THE HOLDER USING IT
 ===========================================================================
 TEST VM. Holders are read from the slot files' own holder records
@@ -490,10 +506,78 @@ def drop_reused_pids(waits, table):
         p = table.get(w["pid"])
         if p is None:
             continue
-        if p.age is not None and (now - p.age) > w["since"] + 5:
+        if p.age is not None and (now - p.age) > w.get("began", w["since"]) + 5:
             continue
         kept.append(w)
     return kept
+
+
+# ---------------------------------------------------------------------------
+# HELD AGENTS — a wait the lead froze is not a wait in line
+# ---------------------------------------------------------------------------
+HOLD_BIRTH_SLACK = 2.0  # agent_hold.py reads start times from `ps -o lstart` (one-second resolution)
+
+
+def holds():
+    """([{name, agent_id, at, until, held}], problem): every hold standing now
+    (until None) and every released one (agent_hold.py's records and history)."""
+    try:
+        import agent_hold  # noqa: WPS433 (sibling module in scripts/lib)
+    except Exception as exc:  # noqa: BLE001
+        return [], "the agent hold records could not be loaded (%s)" % exc.__class__.__name__
+    out = []
+    for rec, until in ([(r, None) for r in agent_hold.records()] +
+                       [(r, r.get("released")) for r in agent_hold.history()]):
+        try:
+            at = float(rec.get("at"))
+            until = None if until is None else float(until)
+        except (TypeError, ValueError):
+            continue
+        held = rec.get("held") if isinstance(rec.get("held"), dict) else {}
+        out.append({"name": str(rec.get("name") or ""), "agent_id": str(rec.get("agent_id") or ""),
+                    "at": at, "until": until, "held": held})
+    return out, ""
+
+
+def _hold_covers(w, h):
+    """True when this hold is of the wait's agent: by name, or by a process it froze."""
+    names = {h["name"], h["agent_id"], "agent-" + h["agent_id"] if h["agent_id"] else ""} - {""}
+    if any(n in names for n in [w.get("waiter")] + list(w.get("names") or [])):
+        return True
+    birth = h["held"].get(str(w.get("pid")))
+    # The frozen process started before its wait did; a reused pid started later.
+    return isinstance(birth, (int, float)) and birth <= w.get("began", w["since"]) + HOLD_BIRTH_SLACK
+
+
+def apply_holds(waits, hold_list, now):
+    """Mark each wait held or not and take the held time out of its age.
+
+    Sets `began` (when the wait really began), `held_by` (the standing hold, or
+    None), `held_seconds` (time inside [began, now] some hold of its agent
+    covered) and moves `since` forward by that, so every age read from `since`
+    stops while held and resumes from where it was."""
+    for w in waits:
+        began = w.get("began", w["since"])
+        w["began"] = began
+        spans, standing = [], None
+        for h in hold_list:
+            if not _hold_covers(w, h):
+                continue
+            if h["until"] is None:
+                standing = h
+            start, end = max(h["at"], began), min(now if h["until"] is None else h["until"], now)
+            if end > start:
+                spans.append((start, end))
+        total, reach = 0.0, began  # overlapping holds are counted once
+        for start, end in sorted(spans):
+            start = max(start, reach)
+            if end > start:
+                total += end - start
+                reach = end
+        w["held_by"] = standing
+        w["held_seconds"] = total
+        w["since"] = began + total
+    return waits
 
 
 # ---------------------------------------------------------------------------
@@ -780,6 +864,12 @@ def collect(now=None, threshold_seconds=None, ledger_rows=None):
     else:
         rows = ledger_rows
     waits += escalation_waits(rows, now)
+    hold_list, why = holds()
+    if why:
+        problems.append(why)
+    apply_holds(waits, hold_list, now)
+    held = sorted((w for w in waits if w["held_by"]), key=lambda w: w["since"])
+    waits = [w for w in waits if not w["held_by"]]
 
     root = testvm_root()
     table = None
@@ -794,11 +884,26 @@ def collect(now=None, threshold_seconds=None, ledger_rows=None):
     overdue = [w for w in waits if now - w["since"] >= threshold]
     facts = {}
     if any(w["resource"] == VM for w in overdue):
-        facts[VM] = vm_facts(root, table, waits)[0]
+        facts[VM] = vm_facts(root, table, waits + held)[0]
     if any(w["resource"] == CPU for w in overdue):
         facts[CPU] = cpu_facts(table)
-    return {"now": now, "threshold": threshold, "waits": waits, "overdue": overdue,
-            "facts": facts, "problems": problems, "ps_read": table is not None}
+    return {"now": now, "threshold": threshold, "waits": waits, "overdue": overdue, "held": held,
+            "holds": hold_list, "facts": facts, "problems": problems, "ps_read": table is not None}
+
+
+def _hhmm(epoch):
+    return time.strftime("%H:%MZ", time.gmtime(epoch))
+
+
+def describe_held(w, now):
+    label = LABELS.get(w["resource"], w["resource"])
+    h = w["held_by"]
+    where = ("pid %d" % w["pid"]) if w["source"] == "record" else \
+        "from the escalation ledger: %s" % ", ".join(w.get("escalations") or [])
+    return ("%s is HELD by the lead (hold of %s since %s), so its wait for %s is not counted: stopped at %s, "
+            "it resumes from there on RESUME (%s)." % (
+                w["waiter"], h["name"] or h["agent_id"], _hhmm(h["at"]), label,
+                minutes(now - w["since"]), where))
 
 
 def describe_wait(w, now):
@@ -809,6 +914,8 @@ def describe_wait(w, now):
         bits.append("pid %d, recorded in %s" % (w["pid"], os.path.basename(w["path"])))
     else:
         bits.append("from the escalation ledger: %s" % ", ".join(w.get("escalations") or []))
+    if w.get("held_seconds", 0) >= 60:
+        bits.append("%s of it held by the lead, not counted" % minutes(w["held_seconds"]))
     if w.get("until"):
         bits.append("waiting for %s to exist" % w["until"])
     if w.get("reason"):
@@ -892,6 +999,8 @@ def cmd_list(args):
     for w in reading["waits"]:
         flag = "OVER" if now - w["since"] >= wait_minutes() * 60 else "    "
         print("%s %s" % (flag, describe_wait(w, now)))
+    for w in reading["held"]:
+        print("HELD %s" % describe_held(w, now))
     for resource, lines in reading["facts"].items():
         print("%s:" % LABELS.get(resource, resource))
         for line in lines:
