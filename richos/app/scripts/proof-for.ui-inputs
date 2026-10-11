@@ -114,7 +114,8 @@ quota.js                @shell richos/app/ui/quota.js richos/app/ui/settings-but
 accounts.js             @shell richos/app/ui/accounts.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js
 dictation.js            @shell richos/app/ui/dictation.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js
-codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js
+codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/spend.js
+spend.js                @shell richos/app/ui/spend.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/home.js richos/app/src-tauri/src/main.rs
 provider-auth.js        @shell
 
 # ---- the timeline renderer ---------------------------------------------------------------

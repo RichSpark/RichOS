@@ -1229,7 +1229,7 @@ async function main() {
       // defect A. One setting carried two names: this row said "Techy Mode" while the gear
       // panel said "Technical view" and THIS toggle's own modal is headed "Turn off the
       // technical view". The ORDER is untouched; only the third row's words changed.
-      ["Theme", "Text size", "Technical view", "Let Codex review your team’s work", "Claude Code quota", "Company", "Home screen", "Claude accounts", "Connected folders (repositories)", "Memory folder", "Use Rich from your phone", "Updates", "Bust a bug!"],
+      ["Theme", "Text size", "Technical view", "Token spend", "Let Codex review your team’s work", "Claude Code quota", "Company", "Home screen", "Claude accounts", "Connected folders (repositories)", "Memory folder", "Use Rich from your phone", "Updates", "Bust a bug!"],
       "§15 fixes the first three: Text size 'directly under the theme switch', and 'directly under " +
         "that, a Techy Mode toggle'. The technical-only Claude Code quota row follows that toggle. The splash screen's off switch is not in this menu " +
         "since the CEO's 2026-10-06 feedback item 7 (it is in the gear's general settings), and Bust a bug is always the floor. " +
@@ -1257,7 +1257,9 @@ async function main() {
         "at the bottom of the preferences rather than among them, next to the other rows that " +
         "open a sheet about an arrangement rather than flipping a switch. " +
         "Let Codex review your team's work (2026-10-09, round 20.2, the CEO's ruling §114) sits " +
-        "directly below Technical view, between two rules, as round 20.2 draws it, for everyone."
+        "directly below Technical view, between two rules, as round 20.2 draws it, for everyone. " +
+        "Token spend (2026-10-10, round 22.1, the CEO's ruling §118: \"That needs to be a row in " +
+        "quick settings.\") sits between them, directly under Technical view, as round 22.1 draws it."
     );
     await page.close();
     return rows.join(" -> ");

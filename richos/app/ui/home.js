@@ -1449,6 +1449,10 @@ window.RichHome = (function () {
     // layer): its answer box takes focus, and pulling it back to the door
     // would leave a report on screen that cannot be answered.
     if (t.closest && t.closest("#bugdock")) return;
+    // ...AND THE TOKEN SPEND SCREEN (round 22.1, `spend.js`), which opens from Settings OVER this
+    // screen and covers it whole: its Back takes focus, and pulling it back to the door would put
+    // the keyboard on a screen nobody can see.
+    if (t.closest && t.closest("#spend")) return;
     focusHome();
   }
 

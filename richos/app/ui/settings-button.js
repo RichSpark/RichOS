@@ -43,6 +43,7 @@ window.RichSettings = (function () {
   var phonePairing = null; // { open() } — "Use Rich from your phone" (plan §4.1)
   var home = null; // { open() } — the home screen's company buttons: their labels and which show
   var codexReviews = null; // { render(container), onOpen() }, "Let Codex review your team's work" (round 20.2, codex-reviews.js)
+  var spend = null; // { render(container), onOpen() }, "Token spend" (round 22.1, spend.js)
 
   var wrap = null;
   var menuEl = null;
@@ -437,6 +438,16 @@ window.RichSettings = (function () {
     if (!T.forcedDark()) menu.appendChild(buildThemeRow());
     menu.appendChild(buildFontRow()); // ...then Text size directly under it (§15)
     if (techy) menu.appendChild(buildTechyRow()); // ...and directly under that, Techy Mode
+    // TOKEN SPEND (round 22.1, richos-hq design/mockups/rounds/round-22.1/; the CEO, §118: "The user
+    // should never need to "ask Rich" for getting those token stats. That needs to be a row in
+    // quick settings."). Directly under Technical view, above the Codex row's rule, as drawn, for
+    // everyone. A slot its owner fills (`spend.js`): the row, this month's figure, and the screen
+    // it opens are that file's.
+    if (spend) {
+      var spSlot = elem("div", "set-spend-slot", { id: "set-spend" });
+      spend.render(spSlot);
+      menu.appendChild(spSlot);
+    }
     // "LET CODEX REVIEW YOUR TEAM'S WORK" (round 20.2, richos-hq design/mockups/rounds/round-20.2/;
     // the CEO, ruling §114, 2026-10-09: "we should give the user a toggle/switch to manually enable
     // that"). One row below Technical view, between two rules, as drawn, whatever Technical view is
@@ -629,6 +640,9 @@ window.RichSettings = (function () {
     // shut, so whether the switch can be turned on is read when the menu opens (one
     // `codex_reviews_status`: Codex's own `login status`, a few milliseconds, no network).
     if (codexReviews && codexReviews.onOpen) codexReviews.onOpen();
+    // AND THE SPEND ROW'S FIGURE, taken when the menu opens, so the menu holds no ticking number
+    // either (round 22.1): one `spend_view` for this month.
+    if (spend && spend.onOpen) spend.onOpen();
   }
   function close(refocus) {
     if (!menuEl || menuEl.hidden) return;
@@ -889,6 +903,11 @@ window.RichSettings = (function () {
      *  `codex-reviews.js` registers it once the app answers `codex_reviews_status`, so a page with
      *  no shell behind it carries no switch it cannot save. */
     registerCodexReviews: function (host) { codexReviews = host || null; rebuild(); },
+    /** "Token spend" (round 22.1): `host.render(container)` fills the row's slot under Technical
+     *  view, `host.onOpen()` takes this month's figure when the menu opens. `spend.js` registers it
+     *  when the app is there, so a page with no shell behind it carries no row to a screen it
+     *  cannot fill. */
+    registerSpend: function (host) { spend = host || null; rebuild(); },
     /** The first account's sign-in (the setup sheet's account step), opened from its card in
      *  the accounts sheet now that the old row is gone. */
     openAccount: function () { close(); if (account && account.open) account.open(); },
