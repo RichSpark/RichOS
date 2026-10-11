@@ -5570,7 +5570,17 @@ def _lease_for_abort(main):
     except Exception as exc:    # noqa: BLE001  a check that cannot decide says so
         return "whether this command holds the land lease could not be read (%s)" % exc
     lease_cmd = os.path.join(engine_root(), "scripts", "land-lease.sh")
-    r = subprocess.run(["bash", lease_cmd, "acquire", "--repo", main, "--wait", "30"],
+    # The retake is by the holder that started the merge: a declared non-Claude
+    # holder (Codex) is named, or acquire finds no Claude session and refuses
+    # (review rv-20261011T205852Z-54ae8c6a-eec1).
+    holder = []
+    try:
+        who = F.caller_identity(conf)
+    except Exception:           # noqa: BLE001  acquire then identifies the caller itself
+        who = None
+    if who and who.get("kind") and who.get("kind") != "claude":
+        holder = ["--holder", str(who["kind"]), "--holder-pid", str(who["pid"])]
+    r = subprocess.run(["bash", lease_cmd, "acquire", "--repo", main, "--wait", "30"] + holder,
                        capture_output=True, text=True)
     said = (r.stdout + r.stderr).strip()
     if r.returncode == 0 and F.authorized(F.Files(conf))[0]:

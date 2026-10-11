@@ -29,8 +29,8 @@ mutant released-when-not-at-rest "T2 " "$L" \
     '        if True:{NL}            flock = _Flock(files.lock)' \
     "F3: a lease would be released with a merge half done or commits unpushed, and another land would start on top."
 mutant released-under-a-running-land "T8 " "$L" \
-    '        lands = running_lands(lease)' \
-    '        lands = []' \
+    '                        lands = running_lands(current)' \
+    '                        lands = []' \
     "2026-10-11: the holder's turn end would release the lease between two steps of its own background land, and the fence would refuse the land's next write (twice in richos that day)."
 mutant dirty-paths-unnamed "T3 " "$L" \
     '            reasons.append("uncommitted changes (%s)" % ", ".join(dirty[:6] + (["..."] if len(dirty) > 6 else [])))' \
