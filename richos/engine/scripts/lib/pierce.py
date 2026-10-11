@@ -24,7 +24,11 @@ import sys
 import tempfile
 import time
 
-ENGINE = Path(__file__).resolve().parents[2]
+LIBRARY = Path(__file__).resolve().parent
+if str(LIBRARY) not in sys.path:
+    sys.path.insert(0, str(LIBRARY))
+
+ENGINE = LIBRARY.parents[1]
 LIMIT = 300
 TTL = 900
 CONTEXT_LIMIT = 128000

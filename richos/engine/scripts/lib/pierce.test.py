@@ -51,6 +51,16 @@ class Pierce(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
+    def test_native_script_registration_loads_all_sibling_modules_without_pythonpath(self):
+        env=dict(self.env,PATH='/usr/bin:/bin',RICHOS_WORKSPACES_DIR=str(self.root/'registry'))
+        env.pop('PYTHONPATH',None)
+        for command,kind in [('register-spawn','fixture'),('register-readonly','Explore')]:
+            payload=dict(self.payload,tool_use_id='fresh-'+command,tool_input=dict(self.payload['tool_input'],subagent_type=kind))
+            result=subprocess.run([sys.executable,'-I','-B',str(ENGINE/'mega-lander/workspaces.py'),'--entity',str(self.project),command],input=json.dumps(payload),env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+            self.assertIn('Pierce UNAVAILABLE',result.stderr)
+            self.assertNotIn('ModuleNotFoundError',result.stderr)
+
     def test_observation_failure_preserves_the_baseline_dispatch_verdict(self):
         import recovery as R
         for mode in ('observe','enforce'):
