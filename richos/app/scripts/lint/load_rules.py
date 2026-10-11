@@ -168,6 +168,16 @@ def upper_bound(line, duration, language):
 FAILS = re.compile(r"\bthrow\b|\bself\.fail\b|\bpanic!|\b(?:bad|fail|die)\b")
 
 
+# A quoted string, stripped so its contents add no delimiters. Linear in the line's length.
+# The earlier `"(?:\\.|[^"])*"` let a backslash be read two ways, so a quote left open on
+# the line (a string continued on the next) backtracked through every split of every escape
+# pair: one Rust line with 43 backslashes held a commit for 30 minutes (2026-10-10).
+# This reads the same text: the possessive scan is the old pattern's first reading, and
+# when that finds no closing quote, the old pattern's backtracking settled on the LAST
+# quote on the line, which `".*"` reaches directly. test_load.QuotedStrings proves both.
+QUOTED_STRING = re.compile(r"(?s)\"(?:\\.|[^\"\\])*+\"|\".*\"|'(?:\\.|[^'\\])*+'|'.*'")
+
+
 def assertion_text(lines, index, language):
     """Join an assertion's parenthesized lines, retaining its starting source location.
 
@@ -179,7 +189,7 @@ def assertion_text(lines, index, language):
     parts, depth = [], 0
     for line in lines[index:index + 40]:
         parts.append(line)
-        code = re.sub(r"(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*')", "''", line)
+        code = QUOTED_STRING.sub("''", line)
         code = re.split(r"//|#", code, maxsplit=1)[0]
         depth += code.count("(") - code.count(")")
         if depth <= 0:
