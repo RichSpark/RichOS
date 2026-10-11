@@ -25,6 +25,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Every request counted once, kept as totals, from the transcripts and the app's own leases.
+pub mod ledger;
+
 /// When the rates below were read off the published table. The screen says it under the figure.
 pub const PRICE_DATE: &str = "October 11, 2026";
 
@@ -296,10 +299,11 @@ pub fn price(card: &Card, buckets: &Buckets) -> Option<f64> {
 }
 
 /// The four model marks the screen draws (round 22.1), in its one fixed order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
     Fable,
+    #[default]
     Opus,
     Sonnet,
     Haiku,

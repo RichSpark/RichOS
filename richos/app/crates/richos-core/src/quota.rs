@@ -844,6 +844,11 @@ pub struct Service {
     /// The token use every lease of the app streamed, by account (`tokens::Sink`), taken into
     /// each account's track at every token scan. The shell gives it to each lease it starts.
     sink: std::sync::Arc<tokens::Sink>,
+    /// **The API-equivalent token spend** (§118, `crate::spend`): every request on every
+    /// account's transcripts and every lease's stream, counted once and priced. The leases'
+    /// requests reach it from `sink` at every token scan; the transcripts are read when the
+    /// screen asks (`spend_view`, `spend_live`) and once after launch.
+    spend: std::sync::Arc<crate::spend::ledger::Ledger>,
 }
 
 /// The shortest gap between two transcript reads from the monitor's one-second tick.
@@ -943,6 +948,7 @@ impl Service {
             transcripts_one: None,
             scanned_at: std::sync::atomic::AtomicU64::new(0),
             sink: std::sync::Arc::new(tokens::Sink::default()),
+            spend: std::sync::Arc::new(crate::spend::ledger::Ledger::open(&data_dir.join("spend"))),
         };
         service.publish()?;
         Ok(service)
@@ -1088,6 +1094,9 @@ impl Service {
         let now = crate::util::now_millis();
         self.scanned_at.store(now, std::sync::atomic::Ordering::SeqCst);
         let streamed = self.sink.take();
+        // The leases' requests into the spend ledger too: nothing else holds them (§118).
+        self.spend.add(self.sink.take_for_spend(), now);
+        self.spend.save(now, false);
         // The gate's handoff markers: when each helper was ordered and when it committed.
         let markers = gate::handoffs(&self.cwd.join("engine-state"));
         let (mut learned, mut moved) = (false, false);
@@ -1463,6 +1472,48 @@ impl Service {
         self.sink.clone()
     }
 
+    /// Every account folder whose transcripts are spend: Account 1's only when the desktop
+    /// entrypoint set it (`transcripts_one`), as for the token speed, so tests and simulations
+    /// never read the developer's history.
+    fn spend_folders(&self) -> Vec<PathBuf> {
+        self.accounts.list().into_iter().filter_map(|account| {
+            if account.id == crate::claude_accounts::ACCOUNT_ONE { self.transcripts_one.clone() } else { account.folder }
+        }).collect()
+    }
+
+    /// **Bring the spend up to date** (§118): the leases' requests, then what every account's
+    /// transcripts gained (the whole history on the first read). `false` without reading while
+    /// another read is under way: the first one reads gigabytes once.
+    pub fn spend_update(&self) -> bool {
+        let now = crate::util::now_millis();
+        self.spend.add(self.sink.take_for_spend(), now);
+        self.spend.update(&self.spend_folders(), now)
+    }
+
+    /// The spend screen's snapshot of everything at or after `from` (Unix ms: the webview's local
+    /// midnight, Monday or first of the month; 0 for all time).
+    pub fn spend_view(&self, from: u64) -> crate::spend::ledger::SpendView {
+        self.spend_update();
+        crate::spend::ledger::SpendView {
+            ready: self.spend.ready(),
+            as_of: crate::util::now_millis(),
+            price_date: crate::spend::PRICE_DATE,
+            totals: self.spend.totals(from),
+        }
+    }
+
+    /// The spend screen's live line: the agents working at the shell's last count, the latest
+    /// request, and how many have been counted ever (more than the snapshot's: Refresh's dot).
+    pub fn spend_live(&self) -> crate::spend::ledger::SpendLive {
+        self.spend_update();
+        crate::spend::ledger::SpendLive {
+            ready: self.spend.ready(),
+            counted: self.spend.counted(),
+            agents_working: self.agents_working.load(std::sync::atomic::Ordering::SeqCst),
+            last: self.spend.last().as_ref().map(crate::spend::ledger::LastRequest::of),
+        }
+    }
+
     /// Add an account. `current` names the account already signed in when this is the second
     /// (round 16: going from one account to two names both); empty keeps its label.
     pub fn add_account(&self, label: &str, current: Option<&str>) -> io::Result<View> {
@@ -1792,6 +1843,39 @@ pub(crate) mod tests {
         let per_minute = after.speeds["seven_day"] * minute as f64;
         assert!((per_minute - 2.).abs() < 1e-9, "2,000,000 / 1,000,000 tokens a point = 2 points a minute, got {per_minute}");
         assert!(after.act_at["seven_day"] < 99., "the switch point moved: {}", after.act_at["seven_day"]);
+    }
+
+    /// **The spend counts both sources once** (§118): a request in Account 1's transcripts and a
+    /// request a lease streamed (no transcript holds it), each priced at its own model's rates;
+    /// the quota's own reader still gets the lease's tokens, from its own queue.
+    #[test]
+    fn the_spend_counts_the_transcripts_and_the_leases_requests() {
+        let root = Scratch::new();
+        let mut service = Service::open(&root.path().join("app")).unwrap();
+        let folder = root.path().join("claude");
+        service.transcripts_one = Some(folder.clone());
+        let transcript = folder.join("projects").join("p").join("session.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        // report.md's worked example: Opus 5.5, $0.0944854.
+        let row = json!({"type": "assistant", "timestamp": "2026-10-10T04:46:13.800Z", "effort": "high",
+            "message": {"id": "msg_t", "model": "claude-opus-5-5", "usage": {"input_tokens": 2, "output_tokens": 51,
+                "cache_read_input_tokens": 447_967, "cache_creation_input_tokens": 483,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 483}}}});
+        fs::write(&transcript, format!("{row}\n{row}\n")).unwrap();
+        // A lease's Sonnet 5.5 frame: 1,000 x $2 + 2,000 x $10 + 50,000 x $0.10 + 4,000 x $2.50 = $0.037.
+        service.token_sink().frame("1", &json!({"type": "assistant", "message": {"id": "msg_l", "model": "claude-sonnet-5-5",
+            "usage": {"input_tokens": 1_000, "output_tokens": 2_000, "cache_read_input_tokens": 50_000,
+                "cache_creation_input_tokens": 4_000}}}), crate::util::now_millis());
+        let view = service.spend_view(0);
+        assert!(view.ready);
+        assert_eq!(view.totals.requests, 2);
+        assert!((view.totals.cost - (0.0944854 + 0.037)).abs() < 1e-12, "{}", view.totals.cost);
+        assert_eq!(service.sink.take().len(), 1, "the quota's reader keeps its own copy of the lease's tokens");
+        let live = service.spend_live();
+        assert_eq!(live.counted, 2);
+        let last = live.last.unwrap();
+        assert_eq!((last.name.as_str(), last.tokens), ("Sonnet 5.5", 57_000));
+        assert!((last.cost.unwrap() - 0.037).abs() < 1e-12);
     }
 
     /// **An old figure is never current** (handoff round 2, run 10: Work read 0.0% weekly for

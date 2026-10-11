@@ -128,7 +128,7 @@ impl Track {
         if !line.windows(7).any(|w| w == b"\"usage\"") { return; }
         let Ok(row) = serde_json::from_slice::<Value>(line) else { return };
         let Some(at) = row["timestamp"].as_str().and_then(stamp) else { return };
-        if let Some(found) = message_use(&row["message"], row["uuid"].as_str(), at) { self.add_use(&found); }
+        if let Some(found) = message_use(&row["message"], &row, at) { self.add_use(&found); }
     }
 
     /// One message's usage, from a transcript or from a lease's stream ([`Sink`]).
@@ -209,21 +209,25 @@ impl Track {
 }
 
 /// One assistant message's usage: input + output + cache write + cache read, by model, as
-/// `token-track.py` counts it, and when it was stamped.
+/// `token-track.py` counts it, and when it was stamped. `request` keeps what that sum throws
+/// away and pricing needs (the API-equivalent spend, §118, `crate::spend`): the five buckets,
+/// the two cache writes apart, the effort, fast mode and US-only inference.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Use { pub id: String, pub at: u64, pub model: String, pub tokens: u64, pub output: u64 }
+pub struct Use { pub id: String, pub at: u64, pub model: String, pub tokens: u64, pub output: u64, pub request: crate::spend::Request }
 
 /// The usage of one assistant `message` (a transcript row's or a stream frame's), stamped
-/// `at`. `None` without usage, without tokens or without an id.
-pub fn message_use(message: &Value, fallback_id: Option<&str>, at: u64) -> Option<Use> {
+/// `at`; `row` is the frame or transcript row around it (its `effort`). `None` without usage,
+/// without tokens or without an id.
+pub fn message_use(message: &Value, row: &Value, at: u64) -> Option<Use> {
     let usage = message["usage"].as_object()?;
     let count = |field: &str| usage.get(field).and_then(Value::as_u64).unwrap_or(0);
     let output = count("output_tokens");
     let tokens = count("input_tokens") + output + count("cache_creation_input_tokens") + count("cache_read_input_tokens");
     if tokens == 0 { return None; }
-    let id = message["id"].as_str().or(fallback_id)?.to_string();
+    let id = message["id"].as_str().or(row["uuid"].as_str())?.to_string();
     let model = message["model"].as_str().unwrap_or("unknown").to_string();
-    Some(Use { id, at, model, tokens, output })
+    let request = crate::spend::Request::of_message(message, row, at)?;
+    Some(Use { id, at, model, tokens, output, request })
 }
 
 /// The most messages a sink holds before the quota service takes them (it takes them every
@@ -236,19 +240,28 @@ const SINK_KEEP: usize = 20_000;
 /// `assistant` frame's usage here under the account the lease runs on, its helpers' nested
 /// frames included; the quota service takes them into that account's `Track`. A message
 /// streamed in several frames counts once, at its largest copy, exactly as a transcript does.
+///
+/// **And the spend ledger takes them too** (§118): those leases' requests exist nowhere else, so
+/// each one also waits in a second queue that only the ledger drains ([`Sink::take_for_spend`]),
+/// whichever of the two readers comes first.
 #[derive(Debug, Default)]
-pub struct Sink { pending: std::sync::Mutex<Vec<(String, Use)>> }
+pub struct Sink { pending: std::sync::Mutex<Vec<(String, Use)>>, spend: std::sync::Mutex<Vec<crate::spend::Request>> }
 
 impl Sink {
     /// An `assistant` frame from a lease on `account`, received at `at`. Anything else, or an
     /// assistant frame with no usage, adds nothing.
     pub fn frame(&self, account: &str, frame: &Value, at: u64) {
         if frame["type"] != "assistant" { return; }
-        let Some(found) = message_use(&frame["message"], frame["uuid"].as_str(), at) else { return };
+        let Some(found) = message_use(&frame["message"], frame, at) else { return };
         self.push(account, found);
     }
     /// One message's usage (or a [`Tally`] remainder) from a lease on `account`.
     pub fn push(&self, account: &str, found: Use) {
+        {
+            let mut spend = self.spend.lock().unwrap();
+            if spend.len() >= SINK_KEEP { spend.remove(0); }
+            spend.push(found.request.clone());
+        }
         let mut pending = self.pending.lock().unwrap();
         if pending.len() >= SINK_KEEP { pending.remove(0); }
         pending.push((account.to_string(), found));
@@ -256,6 +269,10 @@ impl Sink {
     /// Everything put here since the last take, oldest first.
     pub fn take(&self) -> Vec<(String, Use)> {
         std::mem::take(&mut *self.pending.lock().unwrap())
+    }
+    /// Every request put here since the spend ledger last took them, oldest first.
+    pub fn take_for_spend(&self) -> Vec<crate::spend::Request> {
+        std::mem::take(&mut *self.spend.lock().unwrap())
     }
 }
 
@@ -267,12 +284,24 @@ impl Sink {
 /// `result` frame's `modelUsage`, the lease's running total per model, the helpers' tokens
 /// included. So the frames count at once (the live speed), and each `result` adds, per model,
 /// whatever its running total holds beyond what the frames and earlier results counted.
+///
+/// **Bucket by bucket, for the spend** (§118): the same sums kept per bucket, so a remainder is
+/// priced as what it is (output, on every capture so far) and not as a blend. A remainder belongs
+/// to requests already counted, so it takes the effort, the speed, the geography and Haiku 5.5's
+/// card of the lease's latest request on that model; a cache-write remainder has no 5-minute and
+/// 1-hour split in `modelUsage`, so it is priced as 5-minute writes (none was ever seen).
 #[derive(Debug, Default)]
 pub struct Tally {
     /// Each message counted so far, by id: its model and its largest streamed total.
     seen: HashMap<String, (String, u64)>,
     /// Per model, everything this lease has counted: frames plus earlier remainders.
     counted: BTreeMap<String, u64>,
+    /// Each message's largest buckets so far, by id.
+    seen_buckets: HashMap<String, crate::spend::Buckets>,
+    /// Per model (without a date suffix), the buckets counted: frames plus earlier remainders.
+    counted_buckets: BTreeMap<String, crate::spend::Buckets>,
+    /// Per model, the lease's latest request.
+    latest: BTreeMap<String, crate::spend::Request>,
     results: u64,
 }
 
@@ -281,12 +310,18 @@ impl Tally {
     pub fn frame(&mut self, frame: &Value, at: u64) -> Vec<Use> {
         match frame["type"].as_str() {
             Some("assistant") => {
-                let Some(found) = message_use(&frame["message"], frame["uuid"].as_str(), at) else { return vec![] };
+                let Some(found) = message_use(&frame["message"], frame, at) else { return vec![] };
                 let old = self.seen.get(&found.id).map_or(0, |(_, tokens)| *tokens);
                 if found.tokens > old {
                     *self.counted.entry(found.model.clone()).or_insert(0) += found.tokens - old;
                     self.seen.insert(found.id.clone(), (found.model.clone(), found.tokens));
                 }
+                let base = crate::spend::base_model(&found.model).to_string();
+                let had = self.seen_buckets.entry(found.id.clone()).or_default();
+                let grew = had.beyond(&found.request.buckets);
+                had.add(&grew);
+                self.counted_buckets.entry(base.clone()).or_default().add(&grew);
+                self.latest.insert(base, found.request.clone());
                 vec![found]
             }
             Some("result") => {
@@ -299,11 +334,31 @@ impl Tally {
                     let total = count("inputTokens") + count("outputTokens")
                         + count("cacheCreationInputTokens") + count("cacheReadInputTokens");
                     let counted = self.counted.entry(model.clone()).or_insert(0);
-                    if total > *counted {
-                        remainders.push(Use { id: format!("{lease}:result-{}:{model}", self.results), at,
-                            model: model.clone(), tokens: total - *counted, output: 0 });
-                        *counted = total;
-                    }
+                    let tokens = total.saturating_sub(*counted);
+                    *counted = (*counted).max(total);
+                    let base = crate::spend::base_model(model).to_string();
+                    let had = self.counted_buckets.entry(base.clone()).or_default();
+                    let writes = count("cacheCreationInputTokens").saturating_sub(had.write_5m + had.write_1h);
+                    let rest = crate::spend::Buckets {
+                        input: count("inputTokens").saturating_sub(had.input),
+                        output: count("outputTokens").saturating_sub(had.output),
+                        cache_read: count("cacheReadInputTokens").saturating_sub(had.cache_read),
+                        write_5m: writes,
+                        write_1h: 0,
+                    };
+                    had.add(&rest);
+                    if tokens == 0 && rest.total() == 0 { continue; }
+                    let id = format!("{lease}:result-{}:{model}", self.results);
+                    let latest = self.latest.get(&base);
+                    let request = crate::spend::Request {
+                        id: id.clone(), at, model: model.clone(),
+                        effort: latest.and_then(|l| l.effort.clone()),
+                        fast: latest.is_some_and(|l| l.fast),
+                        us: latest.is_some_and(|l| l.us),
+                        buckets: rest,
+                        card_prompt: latest.map(|l| l.buckets.prompt()),
+                    };
+                    remainders.push(Use { id, at, model: model.clone(), tokens, output: 0, request });
                 }
                 remainders
             }
@@ -404,6 +459,35 @@ mod tests {
             episode(2., &[("opus", 2_000_000), ("sonnet", 2_000_000)])]);
         assert_eq!(f.len(), 1, "{f:?}");
     }
+    /// **The spend of a lease, its unseen output included** (§118). The frames and `result` the
+    /// app captured on 2026-10-07 (`native.rs`, `a_leases_result_totals_count_the_output_its_
+    /// assistant_frames_never_show`): two Opus 5.5 messages streamed with 1 output token each,
+    /// and `modelUsage` saying 1,990. Each request keeps its own buckets (the helper's cache write
+    /// has no split, so it is a 5-minute write), and the remainder is the 1,988 output tokens.
+    /// By hand at Opus 5.5's rates: input 10 x $4 + output 1,990 x $20 + cache reads 2,989,000 x
+    /// $0.20 + 5-minute writes 9,000 x $5 = 40 + 39,800 + 597,800 + 45,000 = $0.68264.
+    #[test]
+    fn a_lease_prices_its_frames_and_the_output_only_its_result_shows() {
+        let frames = [
+            r#"{"type":"assistant","message":{"id":"msg_rich","model":"claude-opus-5-5","usage":{"input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":1999000}},"parent_tool_use_id":null}"#,
+            r#"{"type":"assistant","message":{"id":"msg_helper","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":9000,"cache_read_input_tokens":990000}},"parent_tool_use_id":"toolu_1"}"#,
+            r#"{"type":"assistant","message":{"id":"msg_helper","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":9000,"cache_read_input_tokens":990000}},"parent_tool_use_id":"toolu_1"}"#,
+            r#"{"type":"result","session_id":"s1","modelUsage":{"claude-opus-5-5":{"inputTokens":10,"outputTokens":1990,"cacheReadInputTokens":2989000,"cacheCreationInputTokens":9000,"contextWindow":1000000}}}"#,
+            // A second result with nothing new adds nothing.
+            r#"{"type":"result","session_id":"s1","modelUsage":{"claude-opus-5-5":{"inputTokens":10,"outputTokens":1990,"cacheReadInputTokens":2989000,"cacheCreationInputTokens":9000,"contextWindow":1000000}}}"#,
+        ];
+        let mut tally = Tally::default();
+        let mut kept: HashMap<String, crate::spend::Request> = HashMap::new();
+        for f in frames {
+            for u in tally.frame(&serde_json::from_str(f).unwrap(), 1_000) { kept.insert(u.id.clone(), u.request); }
+        }
+        assert_eq!(kept.len(), 3, "two messages and one remainder: {:?}", kept.keys());
+        let rest = &kept["s1:result-1:claude-opus-5-5"];
+        assert_eq!(rest.buckets, crate::spend::Buckets { output: 1988, ..Default::default() });
+        let total: f64 = kept.values().map(|r| r.price().unwrap()).sum();
+        assert!((total - 0.68264).abs() < 1e-12, "the lease priced to {total}, by hand $0.68264");
+    }
+
     #[test]
     fn a_streamed_message_counts_once_at_its_largest_copy() {
         let mut t = Track::default();
