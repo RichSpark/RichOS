@@ -2924,6 +2924,7 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
     live spawn, `land`) still act."""
     cache = {}
     items = []
+    landed_here = False
     if scan:
         repos = set(known_repos())
         if entity:
@@ -3003,6 +3004,7 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
             try:
                 res = land(rec["key"], me, auto=True, deadline=deadline)
                 if res.get("landed"):
+                    landed_here = True
                     continue
             except Deadline:
                 _deferred(report, rec)
@@ -3015,6 +3017,20 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
             _deferred(report, rec)
         items.append(_item(rec, why + ("; it did not land on its own: " + refused if refused else ""),
                            cache, me))
+    if landed_here:
+        # A LAND IN THIS PASS CHANGES OTHER RECORDS (review
+        # rv-20261011T230453Z-7b7f2a33-fec0). Landing a carrier ends the wait
+        # of the work it did not fully carry, or lands that work with it, but
+        # the items above were built from copies read before that land. The
+        # gate reading them let the turn end on the ended wait; only the next
+        # gate blocked. So every item is rebuilt from its record as it is now.
+        fresh_items = []
+        for it in items:
+            fresh = load_agent(it["key"]) if it.get("key") else None
+            if fresh and fresh.get("disposition"):
+                continue
+            fresh_items.append(_item(fresh, it["why"], cache, me) if fresh else it)
+        items = fresh_items
     return items
 
 
