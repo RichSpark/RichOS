@@ -1779,7 +1779,9 @@ def register_spawn(payload, entity, dry=False):
         if entity:
             _remember_repo(entity)
     for recovery_job in recovery_jobs:
-        recovery.schedule(recovery_job, engine_root())
+        scheduled = recovery.schedule(recovery_job, engine_root())
+        if scheduled and scheduled.get("observation_gap"):
+            event("recovery-observation-gap", key=key, job=recovery_job["id"], gap=scheduled["observation_gap"])
     event("registered-spawn", key=key, tool_use_id=tuid, cc=cc_paths, isolation=isolation,
           continues=continues, lands_pending=lands_pending)
     return rec
@@ -4783,6 +4785,24 @@ def recovery_work_key(rec):
 
 
 def _recovery_assignment(payload, rec, continues, lands_pending, inspection=None):
+    recovery, _host = _recovery_adapter()
+    declaration = recovery.R.mode(rec.get("entity") or os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd"))
+    try:
+        assignment = _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection)
+    except (SpecError, OSError, ValueError) as error:
+        if declaration["mode"] != "observe":
+            raise
+        prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
+        host = payload.get("richos_recovery_assignment") or {}
+        assignment = dict(kind=host.get("kind") or "implementation", outcome=host.get("outcome") or "teammate:"+rec["key"],
+            correction_of=[], acceptance=host.get("acceptance") or hashlib.sha256(prompt.encode()).hexdigest(),
+            authority=dict(host=host, observation_gap=str(error)))
+    if declaration["mode"] == "observe":
+        assignment["observation_only"] = True
+    return assignment
+
+
+def _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection=None):
     library = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "scripts", "lib")
     if library not in sys.path:
         sys.path.insert(0, library)
@@ -6645,7 +6665,7 @@ def barrier(payload):
     # App consults retain their existing research/media capability policy.
     # Axel/Wes use a separate restricted provider process; ordinary consults
     # are not those advisors merely because neither owns implementation.
-    if (rec.get("recovery_assignment") or {}).get("kind") in ("review", "helper") and not (
+    if (rec.get("recovery_assignment") or {}).get("kind") in ("review", "helper") and not (rec.get("recovery_assignment") or {}).get("observation_only") and not (
             ((rec.get("recovery_assignment") or {}).get("authority") or {}).get("host")) and str(
             payload.get("tool_name") or "") not in ("Read", "Glob", "Grep", "SubagentHandback"):
         return "READONLY", "agent %s is a read-only review/helper; request bounded host evidence instead" % aid

@@ -107,7 +107,7 @@ def model(executable, prompt, shape, directory, deadline, account=None, engine=N
         raise R.Unavailable("consultation execution budget exhausted")
     output, error = str(directory / "stdout.json"), str(directory / "stderr.log")
     argv = advisor_argv(executable, shape)
-    evidence_root = "/Volumes/E1TB/state/richos/recovery-evidence"
+    evidence_root = str(R.storage_root("evidence"))
     if Path(evidence_root).is_dir():
         argv += ["--add-dir", evidence_root]
     rc, elapsed = SR.run_bounded(argv, str(directory), prompt,
@@ -170,11 +170,8 @@ def consultation(identity, role, phase, prompt, shape, executable, account=None)
 
 
 def freeze_source(data, label):
-    volume = Path("/Volumes/E1TB")
-    if not volume.is_mount():
-        raise R.Unavailable("external SSD unavailable for evidence retrieval")
     fingerprint = hashlib.sha256(data).hexdigest()
-    directory = volume / "state/richos/recovery-evidence" / fingerprint
+    directory = R.storage_root("evidence") / fingerprint
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "source.txt"
     if not path.exists():
@@ -188,9 +185,7 @@ def freeze_source(data, label):
 
 
 def source_export(record, tip):
-    if not Path("/Volumes/E1TB").is_mount():
-        raise R.Unavailable("external SSD unavailable for recovery source export")
-    directory=Path("/Volumes/E1TB/state/richos/recovery-evidence")/R.digest(record["repo_id"])/tip
+    directory=R.storage_root("evidence")/R.digest(record["repo_id"])/tip
     if not directory.is_dir():
         directory.parent.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="recovery-export-",dir=str(directory.parent)) as tmp:

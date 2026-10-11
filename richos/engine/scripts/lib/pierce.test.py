@@ -51,6 +51,26 @@ class Pierce(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
+    def test_observation_failure_preserves_the_baseline_dispatch_verdict(self):
+        import recovery as R
+        for mode in ('observe','enforce'):
+            with self.subTest(mode=mode), patch.object(R,'mode',return_value=dict(mode=mode)), patch.object(P,'classification_context',side_effect=RuntimeError('registry unavailable')), patch.object(P,'invoke',return_value=P.Verdict(dict(verdict='PASS',report='valid assignment',notes=[]))):
+                payload={**self.payload,'tool_use_id':'context-'+mode}
+                result=P.inspect(payload)
+                self.assertEqual(result['verdict'],'PASS' if mode=='observe' else 'UNAVAILABLE')
+                if mode=='observe':self.assertIn('registry unavailable',result['recovery_observation_gaps'][0])
+
+    def test_observation_classification_is_optional_and_cannot_refuse(self):
+        request=dict(recovery_assignment_context=dict(mode='observe'))
+        verdict=dict(verdict='PASS',report='valid assignment',notes=[],assignment_classification=dict(kind='invalid'))
+        P.checked_classification(request,verdict)
+        self.assertEqual(verdict['verdict'],'PASS')
+        self.assertNotIn('assignment_classification',verdict)
+        self.assertTrue(verdict['recovery_observation_gaps'])
+        self.assertNotIn('assignment_classification',P.classification_schema(observe=True)['required'])
+        request['recovery_assignment_context']['mode']='enforce'
+        with self.assertRaises(ValueError):P.checked_classification(request,dict(assignment_classification={}))
+
     def test_recovery_classification_requires_observed_correction_sources(self):
         index=self.root/"candidates.json"
         data=json.dumps([dict(key="native--previous")]).encode()

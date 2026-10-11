@@ -131,14 +131,37 @@ def classification_context(payload, project):
         "relationship cannot be established, return unavailable and state the missing evidence.")
 
 
-def classification_schema():
+def recovery_context(payload, project):
+    """Recovery observation failures cannot turn baseline Pierce into refusal."""
+    import recovery
+    declaration = recovery.mode(os.environ.get("RICHOS_ENTITY_ROOT") or str(project))
+    try:
+        return classification_context(payload, project), []
+    except Exception as error:
+        if declaration["mode"] != "observe":
+            raise ValueError("recovery classification unavailable: "+str(error)) from error
+        return None, [str(error)]
+
+
+def checked_classification(request, verdict):
+    try:
+        validate_classification(request, verdict)
+    except (OSError, ValueError) as error:
+        if (request.get("recovery_assignment_context") or {}).get("mode") != "observe":
+            raise
+        verdict.pop("assignment_classification", None)
+        verdict["recovery_observation_gaps"] = [str(error)]
+
+
+def classification_schema(observe=False):
     shape = json.loads(json.dumps(SCHEMA))
     shape["properties"]["assignment_classification"] = dict(type="object", additionalProperties=False,
         required=["kind","relation","correction_of","evidence"], properties={
         "kind":{"enum":["implementation","review","helper"]},
         "relation":{"enum":["new","corrective","dependent","unavailable"]},
         "correction_of":{"type":"array","items":{"type":"string"}}, "evidence":{"type":"string"}})
-    shape["required"].append("assignment_classification")
+    if not observe:
+        shape["required"].append("assignment_classification")
     return shape
 
 
@@ -636,7 +659,7 @@ def run_review(request, profile, model="opus", effort=None, output_format="json"
     if not cli:
         raise ValueError("Claude Code executable was not found on PATH")
     command = claude_command(cli, profile, request["read_roots"], model, effort, output_format,
-        classification_schema() if request.get("recovery_assignment_context") else SCHEMA)
+        classification_schema((request.get("recovery_assignment_context") or {}).get("mode")=="observe") if request.get("recovery_assignment_context") else SCHEMA)
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     env["CLAUDE_CODE_SAFE_MODE"] = "1"
@@ -666,7 +689,7 @@ def run_review(request, profile, model="opus", effort=None, output_format="json"
                 or not isinstance(verdict.get("notes"), list) or len(verdict["notes"]) > 3
                 or any(not isinstance(note, str) or not note.strip() for note in verdict["notes"])):
             raise ReviewError("Claude Code returned no valid Pierce verdict", metrics)
-        validate_classification(request, verdict)
+        checked_classification(request, verdict)
         return verdict, metrics
     except subprocess.TimeoutExpired:
         raise ReviewError("Pierce did not finish within five minutes",
@@ -826,7 +849,9 @@ def inspect(payload):
         request = {"user_requests_in_order": human_context(payload),
                    "outgoing_assignment": assignment, "standing_instructions": instruction_text(payload),
                    "project_dir": str(project), "read_roots": read_roots(project, assignment, payload)}
-        classification = classification_context(payload, project)
+        classification, recovery_gaps = recovery_context(payload, project)
+        if recovery_gaps:
+            request["recovery_observation_gaps"] = recovery_gaps
         if classification:
             request["recovery_assignment_context"] = classification
             request["read_roots"].append(str(Path(classification["index"]["reference"]).parent.parent))
@@ -884,12 +909,14 @@ def inspect(payload):
                     pair = shadow_start(payload, review, profile, identity, project)
                 try:
                     verdict = invoke(review, profile)
-                    validate_classification(request, verdict)
+                    checked_classification(request, verdict)
                 except (OSError, ValueError) as error:
                     verdict = Verdict({"verdict": "UNAVAILABLE", "report": str(error)})
                     verdict.metrics = getattr(error, "metrics", {})
             result = {"id": identity, "at": time.time(), "session_id": payload["session_id"],
                       "tool_use_id": payload["tool_use_id"], "review_mode": review["review"]["mode"], **verdict}
+            if request.get("recovery_observation_gaps"):
+                result["recovery_observation_gaps"] = request["recovery_observation_gaps"]
             if classification:
                 result["classification_index"] = classification["index"]
             atomic(path, result)

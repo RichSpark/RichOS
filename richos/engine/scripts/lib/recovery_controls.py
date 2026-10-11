@@ -29,6 +29,16 @@ def admitted(ws, payload, rec, assignment, repos, entity, dry=False):
     declaration = R.mode(entity)
     if declaration["mode"] == "off" or assignment["kind"] != "implementation":
         return []
+    if declaration["mode"] == "observe":
+        try:
+            return _admitted(ws, payload, rec, assignment, repos, declaration, dry)
+        except Exception as error:
+            rec["recovery_observation_gap"] = str(error)
+            return []
+    return _admitted(ws, payload, rec, assignment, repos, declaration, dry)
+
+
+def _admitted(ws, payload, rec, assignment, repos, declaration, dry):
     rec = dict(rec, recovery_assignment=assignment)
     identity, aliases, acceptance = work(ws, rec)
     ti = payload.get("tool_input") or {}
@@ -140,9 +150,7 @@ def preserved(reference):
 
 
 def snapshot(ws, rec, job):
-    root = Path("/Volumes/E1TB/state/richos/recovery-wip") / job / hashlib.sha256(rec["key"].encode()).hexdigest()
-    if not Path("/Volumes/E1TB").is_mount():
-        raise R.Unavailable("external SSD unavailable for recovery WIP preservation")
+    root = R.storage_root("wip") / job / hashlib.sha256(rec["key"].encode()).hexdigest()
     root.mkdir(parents=True, exist_ok=True)
     manifest = []
     for n, space in enumerate(rec.get("workspaces") or []):
@@ -271,6 +279,15 @@ def cancellation_authority(ws, task_id, session):
 
 
 def schedule(record, engine, env=None):
+    try:
+        return _schedule(record, engine, env)
+    except Exception as error:
+        if record["mode"] != "observe":
+            raise
+        return dict(observation_gap=str(error))
+
+
+def _schedule(record, engine, env=None):
     import recovery_runner
     if record["mode"]=="enforce" and (record["controls"] or record["status"] in ("unavailable", "awaiting_alex")):
         recovery_runner.launch(record, "control", engine, env=env)

@@ -340,6 +340,29 @@ class RecoveryChain(Base):
             self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name=tool))[0],'REGISTERED',tool)
         self.assertEqual(rec['recovery_assignment']['kind'],'helper')
 
+    def test_observation_does_not_restrict_a_native_helper_or_refuse_bad_identity(self):
+        cc=self.make_cc('observed-helper')
+        aid,_path=self.spawn('observed-helper',cc)
+        rec=next(r for r in ws.all_agents() if r.get('agent_id')==aid)
+        control,host=ws._recovery_adapter()
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='research the issue'))
+        with patch.object(control.R,'mode',return_value=dict(mode='observe',repositories=[self.other])):
+            rec['recovery_assignment']=ws._recovery_assignment(payload,rec,[],[],dict(id='observed',assignment_classification=dict(kind='helper',relation='new',correction_of=[],evidence='source')))
+            ws.save_agent(rec)
+            self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Bash'))[0],'REGISTERED')
+            with patch.object(ws,'_classified_recovery_assignment',side_effect=ws.SpecError('identity gap')):
+                assignment=ws._recovery_assignment(payload,rec,[],[])
+                self.assertEqual(assignment['authority']['observation_gap'],'identity gap')
+            with patch.object(control.R,'reconcile',side_effect=control.R.Unavailable('ledger unavailable')):
+                self.assertEqual(control.admitted(host,payload,rec,dict(kind='implementation',acceptance='source'),[self.other],self.entity),[])
+                self.assertEqual(rec['recovery_observation_gap'],'ledger unavailable')
+        import recovery_runner as RR
+        with patch.object(RR,'launch',side_effect=OSError('launch unavailable')):
+            self.assertEqual(control.schedule(dict(mode='observe',axel_required=True,wes_candidates=[]),'engine')['observation_gap'],'launch unavailable')
+            with self.assertRaises(OSError):control.schedule(dict(mode='enforce',controls=[],status='investigating',axel_required=True),'engine')
+        with patch.object(control.R,'mode',return_value=dict(mode='enforce',repositories=[self.other])), patch.object(ws,'_classified_recovery_assignment',side_effect=ws.SpecError('identity gap')):
+            with self.assertRaises(ws.SpecError):ws._recovery_assignment(payload,rec,[],[])
+
     def test_read_only_classification_cannot_grant_a_writer_a_new_budget(self):
         cc = self.make_cc('helper')
         aid, _path = self.spawn('helper', cc, extra='recovery-role: helper')
