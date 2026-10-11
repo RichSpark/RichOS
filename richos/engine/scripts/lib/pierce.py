@@ -8,6 +8,7 @@ Neither a dry run nor a reviewer outage is recorded as a successful inspection.
 import argparse
 import contextlib
 import difflib
+from datetime import datetime
 import fcntl
 import hashlib
 import importlib.util
@@ -78,42 +79,189 @@ def state_dir():
     return config / "state/pierce"
 
 
-def human_context(payload):
+def human_messages(rows, desktop=False):
     """Read original user messages, not the planner's paraphrase or tool results."""
+    messages = []
+    for row in rows:
+        attachment = row.get("attachment") if row.get("type") == "attachment" else None
+        queued = (isinstance(attachment, dict) and attachment.get("type") == "queued_command"
+                  and isinstance(attachment.get("origin"), dict)
+                  and attachment["origin"].get("kind") == "human")
+        # A message sent while a turn runs is stored as a queued_command attachment.
+        if (not (row.get("type") == "user" or queued) or row.get("isSidechain") or row.get("isMeta")
+                or row.get("isCompactSummary") or row.get("isVisibleInTranscriptOnly")
+                or row.get("turnOrigin") == "task_notification"):
+            continue
+        # Desktop priming and quoted context do not attest a human instruction.
+        if desktop and row.get("evidenceSource") != "richos-ledger-attested-hook-v1":
+            continue
+        content = attachment.get("prompt") if queued else row.get("message", {}).get("content")
+        if isinstance(content, list):
+            if any(part.get("type") == "tool_result" for part in content if isinstance(part, dict)):
+                continue
+            content = "\n".join(part.get("text", "") for part in content
+                                if isinstance(part, dict) and part.get("type") == "text")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        if content.lstrip().startswith(("<task-notification>", "<local-command-", "<command-name>",
+                                       "<teammate-message", "<system-reminder>")):
+            continue
+        messages.append(content)
+    return messages
+
+
+def transcript_rows(path, complete=False):
+    with open(path, encoding="utf-8") as stream:
+        for line in stream:
+            if complete and not line.endswith("\n"):
+                break  # The host has not finished appending this ledger event.
+            try:
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    yield row
+            except ValueError:
+                continue
+
+
+def session_time(value):
+    if not isinstance(value, str):
+        raise ValueError("restart transcript has no valid timestamp")
+    stamp = datetime.fromisoformat(value)
+    if stamp.tzinfo is None:
+        raise ValueError("restart transcript timestamp has no timezone")
+    return stamp
+
+
+def terminal_messages(path, seen=None, cutoff=None, written_note=None):
+    """A witnessed restart note locates originals; its prose grants no authority.
+
+    Both the read in the successor and a successful write in its named source
+    must exist in native transcripts of this same project. Never select the
+    newest neighbouring session or accept a path from the outgoing brief.
+    """
+    path = Path(path).resolve()
+    seen = set() if seen is None else seen
+    if path in seen:
+        raise ValueError("cyclic terminal continuation")
+    seen.add(path)
+    calls, links, messages, writes = {}, {}, [], set()
+    deadline = session_time(cutoff) if cutoff else None
+    for row in transcript_rows(path):
+        if deadline:
+            stamp = row.get("timestamp")
+            if not stamp:
+                continue
+            if session_time(stamp) > deadline:
+                continue
+        if row.get("isSidechain"):
+            continue
+        messages.extend(human_messages([row]))
+        parts = row.get("message", {}).get("content", [])
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            if (row.get("type") == "assistant" and part.get("type") == "tool_use"
+                    and part.get("name") in ("Read", "Write", "Edit")):
+                raw = part.get("input", {}).get("file_path")
+                if isinstance(raw, str) and Path(raw).is_absolute():
+                    note = Path(raw).resolve()
+                    if note.parent == path.parent / "memory":
+                        calls[part.get("id")] = (part["name"], str(note))
+            elif row.get("type") == "user" and part.get("type") == "tool_result" and not part.get("is_error"):
+                call = calls.get(part.get("tool_use_id"))
+                if not call:
+                    continue
+                kind, note = call
+                if kind in ("Write", "Edit"):
+                    writes.add(note)
+                    continue
+                text = part.get("content", "")
+                if isinstance(text, list):
+                    text = "\n".join(p.get("text", "") for p in text if isinstance(p, dict))
+                if not isinstance(text, str):
+                    continue
+                text = re.sub(r"(?m)^\s*\d+\u2192|^\s*\d+\t", "", text).lstrip()
+                header = re.match(r"\A---\s*\n(.*?)\n---(?:\n|$)", text, re.S)
+                if not header:
+                    continue
+                if not re.search(r"(?m)^name:\s*restart-", header[1]):
+                    continue
+                origins = re.findall(r"(?m)^\s*originSessionId:\s*([A-Za-z0-9_-]+)\s*$", header[1])
+                if len(origins) != 1 or not row.get("timestamp"):
+                    raise ValueError("restart note has no unique source session/time")
+                predecessor = (path.parent / (origins[0] + ".jsonl")).resolve()
+                if predecessor.parent != path.parent:
+                    raise ValueError("restart source leaves this project")
+                if predecessor != path:
+                    key = (str(predecessor), note)
+                    at = row["timestamp"]
+                    if key not in links or session_time(at) < session_time(links[key]):
+                        links[key] = at
+    if written_note and written_note not in writes:
+        raise ValueError("restart note has no successful write in its source session")
+    if len(links) > 1:
+        raise ValueError("ambiguous terminal continuation")
+    if links:
+        (predecessor, note), at = next(iter(links.items()))
+        messages = terminal_messages(predecessor, seen, at, note) + messages
+    return messages
+
+
+def desktop_messages(payload):
+    """Read original text/Jam turns in the host-bound company and conversation.
+
+    This ledger survives provider rotation. Hidden priming, tool results and
+    other companies/conversations are not user requests.
+    """
+    scope_path = Path(os.environ["RICHOS_APP_SCOPE"])
+    if not scope_path.is_absolute() or scope_path.stat().st_size > 256 * 1024:
+        raise ValueError("invalid desktop authority scope")
+    scope = json.loads(scope_path.read_text())
+    if not isinstance(scope, dict):
+        raise ValueError("invalid desktop authority scope")
+    binding = scope.get("binding", {})
+    if (scope.get("version") != 1 or not isinstance(binding, dict)
+            or binding.get("session_id") != payload.get("session_id")
+            or any(not isinstance(binding.get(key), str) or not binding[key]
+                   for key in ("entity_id", "thread_id", "session_id"))):
+        raise ValueError("desktop authority does not match this company/conversation/session")
+    ledger = Path(os.environ["RICHOS_APP_STATE"]).parent / "conversation-ledger.jsonl"
+    messages, turns = [], {}
+    for row in transcript_rows(ledger, complete=True):
+        if (row.get("event") != "PromptReceived" or row.get("entity_id") != binding["entity_id"]
+                or row.get("thread_id") != binding["thread_id"] or row.get("source") not in ("text", "jam")):
+            continue
+        text, turn = row.get("text"), row.get("turn_id")
+        if not isinstance(text, str) or not isinstance(turn, str) or turn in turns:
+            raise ValueError("invalid or duplicate original desktop request")
+        turns[turn] = text
+        if text.strip():
+            messages.append(text)
+    instruction = scope.get("user_instruction")
+    if instruction:
+        if not isinstance(instruction, dict) or not isinstance(instruction.get("ledger_ref"), str):
+            raise ValueError("invalid desktop original instruction reference")
+        prefix = "ledger:" + binding["thread_id"] + ":"
+        ref = instruction.get("ledger_ref", "")
+        original = turns.get(ref[len(prefix):]) if ref.startswith(prefix) else None
+        if original is None or hashlib.sha256(original.encode()).hexdigest() != instruction.get("sha256"):
+            raise ValueError("desktop request does not match the host's original instruction")
+    return messages
+
+
+def human_context(payload):
     path = payload.get("transcript_path")
     if not path:
         raise ValueError("the runtime supplied no transcript containing the user's request")
-    messages = []
-    with open(path, encoding="utf-8") as stream:
-        for line in stream:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            attachment = row.get("attachment") if row.get("type") == "attachment" else None
-            queued = (isinstance(attachment, dict) and attachment.get("type") == "queued_command"
-                      and isinstance(attachment.get("origin"), dict)
-                      and attachment["origin"].get("kind") == "human")
-            # A message sent while a turn runs is stored as a queued_command attachment.
-            if (not (row.get("type") == "user" or queued) or row.get("isSidechain") or row.get("isMeta")
-                    or row.get("isCompactSummary") or row.get("isVisibleInTranscriptOnly")
-                    or row.get("turnOrigin") == "task_notification"):
-                continue
-            # Desktop priming and quoted context do not attest a human instruction.
-            if os.environ.get("RICHOS_APP_STATE") and row.get("evidenceSource") != "richos-ledger-attested-hook-v1":
-                continue
-            content = attachment.get("prompt") if queued else row.get("message", {}).get("content")
-            if isinstance(content, list):
-                if any(part.get("type") == "tool_result" for part in content if isinstance(part, dict)):
-                    continue
-                content = "\n".join(part.get("text", "") for part in content
-                                    if isinstance(part, dict) and part.get("type") == "text")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            if content.lstrip().startswith(("<task-notification>", "<local-command-", "<command-name>",
-                                           "<teammate-message", "<system-reminder>")):
-                continue
-            messages.append(content)
+    if os.environ.get("RICHOS_APP_STATE"):
+        # Older evidence fixtures without a host scope still require attested
+        # human rows. A real app scope always uses its durable conversation.
+        messages = (desktop_messages(payload) if os.environ.get("RICHOS_APP_SCOPE") else
+                    human_messages(transcript_rows(path), desktop=True))
+    else:
+        messages = terminal_messages(path)
     if not messages:
         raise ValueError("no original human request could be established from the transcript")
     context = "\n\n".join(messages)
