@@ -714,6 +714,35 @@ class Commit(Fixture):
         self.assertIn("ran suite", out.stderr)
         self.assertIn("suite-env", self.tools())
 
+    def test_a_fast_check_that_calls_a_host_power_command_is_refused_by_the_host_shield(self):
+        # CEO ruling §65; 2026-10-11 a fixture's power-off command ran on the host. A fast check
+        # starts through engine lib/host_shield.py (run_admitted), so the bare-name call reaches
+        # its stand-in, which logs it and runs nothing. The suite checks what PATH finds BEFORE it
+        # calls, and PATH here is a recording tripwire first with neither sbin on it, so without
+        # the shield the call is never made (the case goes red on that line, not on the host).
+        power_off = "shut" + "down"
+        trip = self.base / "trip"
+        fixture = ENGINE / "scripts/lib/host-shield-fixture.sh"
+        subprocess.run(["bash", "-c", '. "$1" && hs_tripwire "$2"', "tripwire", str(fixture), str(trip)], check=True)
+        keep = [p for p in self.env["PATH"].split(os.pathsep) if p and not p.rstrip("/").endswith("sbin")]
+        self.env["PATH"] = os.pathsep.join([str(trip), *keep])
+        self.make()
+        self.record_duration("suite", 2.5)
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("richos/app/scripts/suite.sh", "#!/usr/bin/env bash\n"
+                   'found="$(command -v %s)"\n' % power_off +
+                   'if [ "$(basename "$(dirname "$found")")" != host-shield ]; then\n'
+                   '  echo "suite: FAIL no host-shield stand-in first on PATH ($found); the call is NOT made" >&2; exit 1\n'
+                   "fi\n" +
+                   "%s -h +60\n" % power_off +
+                   'echo "suite: PASS"\n')
+        self.write("richos/app/src/thing.txt", "fine, better\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-m", "a fast check that calls the power-off command", expect=1)
+        self.assertIn("COMMIT REFUSED: suite failed for this branch", out.stderr)
+        self.assertIn("host-shield: refused `%s -h +60`" % power_off, out.stdout + out.stderr)
+        self.assertEqual((trip / "trip.log").read_text(), "")
+
     def test_a_check_recorded_as_slow_or_never_recorded_waits_for_the_land(self):
         for label, seconds in (("suite", 40.0), ("other", 1.0)):   # slow; and fast but not selected
             with self.subTest(label=label):
