@@ -83,6 +83,8 @@
 #   F12 a clean fixture tree's development stamp carries no .dirty suffix
 #   F13 an uncommitted change appends .dirty to the development stamp
 #   F14 a -dev. bundle is accepted with no declared intent, and says so
+#   F15 the compile runs under the CPU guard's release-build role, registered by
+#       proc_tree.py exactly as nightly-local.py registers its build step
 #   E1  an exported API key does not satisfy the no-credentials case       [shim]
 #   E2  exported halves do not complete a half-supplied key                [shim]
 #   E3  an exported key does not outrank the case's own profile            [shim]
@@ -93,7 +95,7 @@
 # No application window is opened. Signed bundles contain a native fixture
 # that prints a source stamp. The isolation test runs a headless file reader.
 # run-tests: no-host-screen: bundles contain a native fixture; the isolated probe runs only that fixture and the headless compiler
-# run-tests: inputs richos/app/scripts/package-app.test.sh richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/lib/probe_packaged.test.py richos/engine/scripts/lib/named-persons.py richos/app/scripts/install-signing-cert.sh richos/app/scripts/nightly-local.py richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Info.plist richos/app/src-tauri/Entitlements.plist richos/app/src-tauri/tauri.conf.json
+# run-tests: inputs richos/app/scripts/package-app.test.sh richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/lib/probe_packaged.test.py richos/engine/scripts/lib/named-persons.py richos/app/scripts/install-signing-cert.sh richos/app/scripts/nightly-local.py richos/engine/scripts/lib/proc_tree.py richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Info.plist richos/app/src-tauri/Entitlements.plist richos/app/src-tauri/tauri.conf.json
 # run-tests: covers richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py
 set -uo pipefail
 
@@ -580,6 +582,27 @@ if [ "$CODE" = 0 ] && [ -n "$REAL_SHA" ] \
   ok "F8 a plain run with no declared intent is a development build, stamped {version}-dev.{commit}"
 else
   bad "F8 the default dry run did not show a dev-stamped version" "$(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-300)"
+fi
+
+# F15: the CPU circuit breaker stopped rustc at 4.5-7.3 cores in three engineers' dev builds
+# on 2026-10-11, each then rebuilt by hand under `proc_tree.py run <pid> --guard-role
+# release-build`. The dry run prints the launcher the build uses, and the build line itself
+# must run cargo through that same array, so the printed line is the one that runs.
+# The regex matches the script's literal `${build_launch[@]}` text, so it must not expand.
+# shellcheck disable=SC2016
+BUILD_LINE_RE='"\$\{build_launch\[@\]\}"\}? env RICHOS_SOURCE_SHA="\$source_stamp" cargo "\$\{build_args\[@\]\}"'
+run bash "$SCRIPT" --dry-run
+PROC_TREE="$(cd "$APP_DIR/.." && pwd)/engine/scripts/lib/proc_tree.py"
+if [ "$CODE" != 0 ]; then
+  bad "F15 the compile runs under the release-build role" "the dry run exited $CODE"
+elif ! printf '%s' "$OUT" | grep -Fq "build runs under    : python3 $PROC_TREE run "; then
+  bad "F15 the compile runs under the release-build role" "no supervisor line naming $PROC_TREE: $(printf '%s' "$OUT" | grep 'build runs under' | head -1)"
+elif ! printf '%s' "$OUT" | grep 'build runs under' | grep -Fq -- "--guard-role release-build --"; then
+  bad "F15 the compile runs under the release-build role" "the supervisor line does not name --guard-role release-build"
+elif ! grep -Eq "$BUILD_LINE_RE" "$SCRIPT"; then
+  bad "F15 the compile runs under the release-build role" "the cargo build line does not run through build_launch"
+else
+  ok "F15 the compile runs under the CPU guard's release-build role, as the nightly's build step does"
 fi
 
 run bash "$SCRIPT" --release --dry-run

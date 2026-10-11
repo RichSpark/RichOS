@@ -511,9 +511,19 @@ def supervise(owner, argv, deadline=None, timeout_marker=None, verification=None
             print("proc_tree: REFUSED: managed verification requires a current proof-run plan "
                   "or its live registered ancestor; an owner environment hint is not admission.", file=sys.stderr)
             return 75
+        # A PRIVATE config is a fixture and registers nothing. The canonical
+        # ~/.claude named explicitly is production: on 2026-10-11 the second
+        # review of af4b68db1 measured that an explicit CLAUDE_CONFIG_DIR=~/.claude
+        # skipped registration, so package-app.sh compiled without its
+        # release-build role. Same test as cpu_guard.hook(): unset, or resolving
+        # to the real home's .claude.
+        actual_home = pwd.getpwuid(os.getuid()).pw_dir
+        config = os.environ.get("CLAUDE_CONFIG_DIR")
+        private_config = bool(config) and (
+            os.path.realpath(config) != os.path.realpath(os.path.join(actual_home, ".claude")))
         if (not managed and inherited_owner is None
-                and os.path.realpath(os.path.expanduser("~")) == pwd.getpwuid(os.getuid()).pw_dir
-                and not os.environ.get("CLAUDE_CONFIG_DIR") and cpu_guard.healthy()):
+                and os.path.realpath(os.path.expanduser("~")) == actual_home
+                and not private_config and cpu_guard.healthy()):
             cpu_guard.register(os.getpid(), "managed " + os.path.basename(argv[0]), guard_role)
     owner_id = identity(owner)
     if owner_id is None:
