@@ -59,21 +59,63 @@ with s.execution_claim(sys.argv[2],'a'*40,wait_seconds=10,say=lambda message:pri
             repo=directory+'/repo';subprocess.run(['git','init','-q',repo],check=True)
             row=dict(id='existing',at=SR.iso(1),repo=repo,repo_id=SR.repo_identity(repo),tip='a'*40,work='teammate:original',input_identity='exact-input',trigger='manual',verdict='passed')
             output=io.StringIO()
-            with contextlib.redirect_stdout(output):SR.completion_receipt(row)
+            with contextlib.redirect_stdout(output),patch.dict(os.environ,{'SECOND_REVIEW_INVOCATION':'current-invocation'}):SR.completion_receipt(row)
             log=Path(directory)/'child.log';log.write_text(output.getvalue())
-            info=dict(repo=repo,tip=row['tip'],work=row['work'],trigger='handover',started_at=1000,log=str(log),pid=123)
+            info=dict(repo=repo,tip=row['tip'],work=row['work'],trigger='handover',started_at=1000,log=str(log),pid=123,review_invocation='current-invocation')
             watcher=RW.Watcher('/fixture/engine','/fixture/config',None)
             lock=Path(directory)/'schedule.lock';lock.write_text('{}')
             result=watcher.settle(str(lock),info,1001,[row])
             self.assertEqual(result['outcome'],'verdict')
             self.assertEqual(row['at'],SR.iso(1))
-            for key,value in [('work','unrelated'),('tip','b'*40),('input_identity','other'),('purpose','progress')]:
+            for key,value in [('work','unrelated'),('tip','b'*40),('input_identity','other'),('purpose','progress'),('invocation','previous-invocation'),('recheck_of','unrelated-review')]:
                 receipt=json.loads(output.getvalue().split('RECEIPT ',1)[1]);receipt[key]=value
                 log.write_text('SECOND-REVIEW RECEIPT '+json.dumps(receipt)+'\n')
                 self.assertIsNone(watcher.joined_verdict(info,[row]),key)
             log.write_text('owner ended without a verdict')
             lock.write_text('{}')
             self.assertEqual(watcher.settle(str(lock),info,1002,[])['outcome'],'lost')
+
+    def test_lost_rechecks_cannot_consume_previous_invocation_receipts_or_recent_rows(self):
+        import contextlib,io,tempfile
+        import second_review as SR
+        import review_watch as RW
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory(prefix='review-invocations-') as directory,patch.dict(os.environ,{'REVIEW_WATCH_STATE_DIR':directory+'/watch','SECOND_REVIEW_STATE_DIR':directory+'/reviews'}):
+            repo=directory+'/repo';subprocess.run(['git','init','-q',repo],check=True)
+            repo=os.path.realpath(repo);tip='c'*40;work='teammate:worker'
+            ledger=Path(R.F.review_ledger_default());ledger.parent.mkdir(parents=True)
+            def add(rid,verdict,at,findings=()):
+                folder=Path(directory)/rid;folder.mkdir()
+                (folder/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=list(findings),earlier_findings=[]))))
+                row=dict(id=rid,repo=repo,repo_id=SR.repo_identity(repo),tip=tip,work=work,trigger='handover',at=SR.iso(at),verdict=verdict,record=str(folder),input_identity='input-'+rid)
+                with ledger.open('a') as out:out.write(json.dumps(row)+'\n')
+                return row
+            original=add('original','changes-requested',1,[dict(title='blocker',blocks=True)])
+            class Writer(RW.Watcher):
+                original=None
+                def spawn(self,item,trigger,log_path):
+                    with open(log_path,'w') as out,contextlib.redirect_stdout(out),patch.dict(os.environ,{'SECOND_REVIEW_INVOCATION':item.review_invocation}):
+                        if self.original:SR.completion_receipt(self.original)
+                        else:print('review ended without a verdict')
+                    return 999999,'fixture-finished'
+            watcher=Writer('/fixture/engine','',SimpleNamespace())
+            item=RW.Item(work,'worker',repo,tip,'b'*40,'ended',ref='worker')
+            watcher.original=original
+            info=watcher.start(item,'handover',100,1,None,[])
+            first_log=info['log']
+            self.assertEqual(watcher.settle(RW.lock_path(repo,tip),info,101,R.rows(ledger))['outcome'],'verdict')
+            add('ignored','passed',200)
+            watcher.original=None;launches=[]
+            for n in range(5):
+                rows=R.rows(ledger);book=RW.Book(rows,{},RW.read_jsonl(RW._p('attempts.jsonl')))
+                task=R.conflict_task(repo,work,tip)
+                if not task or len(book.losses.get(item.key) or [])>=RW.MAX_LOSSES:continue
+                item.recheck=task['prior']
+                info=watcher.start(item,'handover',201+n,1,None,rows)
+                launches.append(info['log'])
+                self.assertEqual(watcher.settle(RW.lock_path(repo,tip),info,201.5+n,rows)['outcome'],'lost')
+            self.assertEqual(len(launches),2)
+            self.assertEqual(len(set([first_log]+launches)),3)
 
     def test_observed_advice_cannot_steer_reviews_or_dispatch_replacements(self):
         import second_review as SR

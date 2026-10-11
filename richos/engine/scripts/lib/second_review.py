@@ -1118,6 +1118,8 @@ def completion_receipt(row):
     if row.get('verdict'):
         receipt={k:row.get(k) for k in ('id','repo_id','tip','work','input_identity')}
         receipt['purpose']='handover' if row.get('trigger') in ('handover','manual') else 'progress'
+        receipt['invocation']=os.environ.get('SECOND_REVIEW_INVOCATION')
+        receipt['recheck_of']=row.get('recheck_of') or ''
         print('SECOND-REVIEW RECEIPT '+json.dumps(receipt,sort_keys=True),flush=True)
 
 

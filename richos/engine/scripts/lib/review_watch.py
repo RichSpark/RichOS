@@ -949,6 +949,7 @@ class Watcher(object):
         mark = os.urandom(16).hex()
         env = dict(os.environ, **(item.env or {}))
         env[MARK_ENV] = mark
+        env["SECOND_REVIEW_INVOCATION"] = item.review_invocation
         # PARTLY REGISTERED (second review of f14155545, finding 2): a review leads its own
         # session, so a quit that lands inside Popen (its fork done, Popen not yet returned) would
         # lose the only handle on it. The quit is held until the child is in self.children, then
@@ -1141,13 +1142,15 @@ class Watcher(object):
             receipt=json.loads(line[len(prefix):]) if line else None
         except (OSError,ValueError,TypeError):
             return None
-        if not isinstance(receipt,dict):return None
+        if not isinstance(receipt,dict) or not info.get('review_invocation') or receipt.get('invocation')!=info['review_invocation']:return None
+        if (receipt.get('recheck_of') or '')!=(info.get('recheck_of') or ''):return None
         purpose='handover' if info.get('trigger') in ('handover','manual') else 'progress'
         for row in rows:
             if (row.get('verdict') and row.get('input_identity')
                 and all(receipt.get(k)==row.get(k) for k in ('id','repo_id','tip','work','input_identity'))
                 and receipt.get('tip')==info.get('tip') and receipt.get('work')==info.get('work')
                 and F.review_row_belongs(row,F.review_repo_identity(info.get('repo')))
+                and (receipt.get('recheck_of') or '')==(row.get('recheck_of') or '')
                 and receipt.get('purpose')==purpose
                 and ('handover' if row.get('trigger') in ('handover','manual') else 'progress')==purpose):
                 return row
@@ -1164,7 +1167,8 @@ class Watcher(object):
         if outcome is None:
             started = float(info.get("started_at") or 0)
             mine = [r for r in rows if os.path.realpath(r.get("repo") or "") == info.get("repo")
-                    and r.get("tip") == info.get("tip") and (parse_iso(r.get("at")) or 0) >= started - 5]
+                    and r.get("tip") == info.get("tip") and r.get("id") not in info.get("prior_reviews", [])
+                    and (parse_iso(r.get("at")) or 0) >= started - 5]
             got = [r for r in mine if r.get("verdict")]
             if got or self.joined_verdict(info,rows):
                 outcome = "verdict"
@@ -1240,7 +1244,12 @@ class Watcher(object):
             return None
         path, info = got
         os.makedirs(_p("logs"), exist_ok=True)
-        info["log"] = _p("logs", "%s-%s-%d.log" % (repo_tag(item.repo), item.tip[:12], attempt))
+        info["review_invocation"] = os.urandom(16).hex()
+        item.review_invocation = info["review_invocation"]
+        info["recheck_of"] = getattr(item,"recheck","")
+        ident = F.review_repo_identity(item.repo)
+        info["prior_reviews"] = [r.get("id") for r in rows if r.get("tip")==item.tip and F.review_row_belongs(r,ident)]
+        info["log"] = _p("logs", "%s-%s-%d-%s.log" % (repo_tag(item.repo), item.tip[:12], attempt,info["review_invocation"]))
         self._starting = (path, info)               # stop_own's handle until the pid is in the lock
         try:
             pid, pstart = self.spawn(item, trigger, info["log"])
