@@ -220,7 +220,8 @@
 
   const MOCK_CONFIG_KEY = "richos-mock-config";
   const mockConfig = (function () {
-    const fresh = { theme: "system", font_scale: 100, user_name: null };
+    // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Opus.
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus" };
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -229,6 +230,8 @@
         theme: ["dark", "light", "system"].includes(parsed.theme) ? parsed.theme : fresh.theme,
         font_scale: Number.isFinite(parsed.font_scale) ? parsed.font_scale : fresh.font_scale,
         user_name: typeof parsed.user_name === "string" && parsed.user_name.trim() ? parsed.user_name : null,
+        rich_model: parsed.rich_model === "fable" ? "fable" : "opus",
+        stu_model: parsed.stu_model === "fable" ? "fable" : "opus",
       };
     } catch (e) {
       // A corrupt or unavailable store degrades to the shipped defaults rather than
@@ -3050,6 +3053,21 @@
         case "set_user_name": {
           const n = String(args.name || "").trim();
           mockConfig.user_name = n === "" ? null : n;
+          persistMockConfig();
+          return null;
+        }
+
+        // ---- §119: Rich's model, both rows at once (main.rs's get/set_lease_models) ----
+        case "get_lease_models":
+          return { rich: mockConfig.rich_model, stu: mockConfig.stu_model };
+        case "set_lease_models": {
+          const known = (m) => m === "opus" || m === "fable";
+          // An unknown name refuses both and writes neither, as the real command does.
+          if (!known(args.rich) || !known(args.stu)) {
+            return Promise.reject(`unknown model: ${known(args.rich) ? args.stu : args.rich}`);
+          }
+          mockConfig.rich_model = args.rich;
+          mockConfig.stu_model = args.stu;
           persistMockConfig();
           return null;
         }

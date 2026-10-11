@@ -5737,9 +5737,185 @@ body.bp-narrow .tl-user-bubble {
 
 .popover-hint {
   margin: 4px 0 0;
-  font-size: 0.875rem;
+  /* ROUND 23: 14px -> 16px. These hints are meant to be read (§15: 16px for text meant to
+     be easily read), and round 23 raised them with the two-column Preferences. */
+  font-size: 1rem;
   color: var(--ink-faint);
   line-height: 1.45;
+}
+
+/* =========================================================================================
+   ROUND 23 — PREFERENCES IN TWO COLUMNS, AND RICH'S MODEL FIRST IN IT (CEO §119).
+   richos-hq design/mockups/rounds/round-23 (index.html + NOTES.md) is the design built here.
+
+   The popover gains a heading and two columns (760px): with a fifth section in one 330px
+   column it would be a scrolling tower. Rich's model and "How much should Rich interrupt
+   you?" sit on the left, the technical view, stored output and splash screen on the right.
+   Narrower than two 300px columns, the grid falls back to one.
+
+   Each model row is the house segmented track (round 10.1's theme control, scaled up to carry
+   words): the chosen half is the ruled gold, and the gold thumb slides between halves, with
+   one pass of light when it lands on Fable. Contrast, COMPUTED in WebKit with
+   `tests/lib/contrast.js`'s math over the open popover in three model states, 2026-10-11
+   (none exempt; every one is meant to be read or is an indicator):
+                                                          dark            light
+     chosen half, 16px/600 --on-gold on --gold            7.68  #0c1322/#c2a35c   4.72  #0c1322/#9c7c34
+     half not chosen, --ink-soft on the track             4.99  #9fa5b1/#2e3544   6.02  #55595f/#f1ede0
+     half not chosen, hovered, --ink on the track         9.69                    15.82
+     "default" and the note on Opus, --ink-soft/--surface 5.78  #979faf/#182440   6.38  #595e66/#fdfcf8
+     the note on Fable, --ink on --surface               12.06                    18.07
+     hints, 16px --ink-faint on --surface                 5.52                    5.35
+     INDICATORS (3:1): gold thumb on track                5.11                    3.35
+                       the note's gold rule, focus ring   6.36 (on surface)       3.83 (on surface)
+   ========================================================================================= */
+.popover.prefs {
+  width: 760px;
+  padding: 0;
+}
+.prefs-head {
+  padding: 14px 22px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.prefs-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+.prefs-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.prefs-col {
+  padding: 16px 22px 18px;
+  min-width: 0;
+}
+.prefs-col + .prefs-col {
+  border-left: 1px solid var(--line-soft);
+}
+.prefs-col .popover-divider {
+  margin: 12px 0;
+  background: var(--line-soft);
+}
+.md-row {
+  margin-top: 12px;
+}
+.md-row:first-of-type {
+  margin-top: 4px;
+}
+.md-who {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 7px;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.md-who b {
+  font-weight: 600;
+}
+.md-state {
+  font-size: 1rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.seg {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 3px;
+  border-radius: 999px;
+  /* The mockup's track is `color-mix(gold 10%, surface)`. WebKit serializes that as
+     `color(srgb …)`, which the contrast gate cannot read, so a label on it is unresolvable
+     rather than measured; `--gold-soft` is the same gold wash (13% dark, 12% light) as an
+     rgba the gate composites. */
+  background: var(--gold-soft);
+  isolation: isolate;
+}
+.seg-thumb {
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 999px;
+  background: var(--gold);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.14) inset, 0 6px 14px -8px rgba(0, 0, 0, 0.55);
+  transition: transform 0.42s cubic-bezier(0.3, 1.35, 0.45, 1);
+  overflow: hidden;
+}
+.seg[data-v="fable"] .seg-thumb {
+  transform: translateX(100%);
+}
+/* One pass of light across the gold as it lands on Fable. */
+.seg-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 250, 235, 0.38) 50%, transparent 70%);
+}
+.seg.is-lit .seg-thumb::after {
+  animation: seg-sheen 0.9s cubic-bezier(0.4, 0, 0.2, 1) 0.18s 1;
+}
+@keyframes seg-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+.seg-opt {
+  position: relative;
+  z-index: 1;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 1rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  /* NO color transition, unlike the mockup's `.25s`: `contrast.js` check 19 measures the very
+     frame after a theme switch, and a fading label passed through 1.35:1 (#171e2d on #2e3544)
+     on its way from light to dark. The hover change is instant; the thumb still slides. */
+}
+.seg-opt:hover {
+  color: var(--ink);
+}
+.seg-opt[aria-checked="true"] {
+  color: var(--on-gold);
+  font-weight: 600;
+  cursor: default;
+}
+.seg-opt:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.md-note {
+  margin: 14px 0 0;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.md-note.is-fable {
+  color: var(--ink);
+  padding-left: 12px;
+  border-left: 2px solid var(--gold);
+}
+.md-note strong {
+  font-weight: 600;
+}
+@media (prefers-reduced-motion: reduce) {
+  .seg-thumb {
+    transition: none;
+  }
+  .seg.is-lit .seg-thumb::after {
+    animation: none;
+  }
 }
 
 /* A note INSIDE the raw pane: today only the truncation notice, which sits under the prefix

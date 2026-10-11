@@ -593,6 +593,14 @@ impl LeaseFactory for EngineLeaseFactory {
         richos_core::engine_profile::team_digest(&engine, &self.data_dir).ok()
     }
 
+    /// **The models the next leases would start on** (§119): what `EngineProfile::prepare`
+    /// reads at every spawn, read the same way — off `config.json` on disk, never the config
+    /// lock, for the deadlock reason on `data_dir` above. The spine and the work host compare
+    /// it with the lease in the chair at each boundary.
+    fn lease_models(&self) -> Option<richos_core::config::LeaseModels> {
+        Some(richos_core::config::lease_models_from_config(&self.data_dir))
+    }
+
     /// **The second lease** — the background-work spec §2.1's work lease, in this same
     /// process, owned by the work host.
     ///
@@ -3829,6 +3837,8 @@ fn main() {
             set_company_name,
             get_assertiveness,
             set_assertiveness,
+            get_lease_models,
+            set_lease_models,
             get_worker_status,
             get_work_status,
             get_assignments,
@@ -4186,6 +4196,30 @@ fn get_assertiveness(state: State<AppState>) -> String {
 fn set_assertiveness(state: State<AppState>, level: String) -> Result<(), String> {
     let parsed = Assertiveness::parse(&level).ok_or_else(|| format!("unknown assertiveness level: {level}"))?;
     state.config.lock().unwrap().set_assertiveness(parsed).map_err(|e| e.to_string())
+}
+
+/// **Rich's model, as Preferences shows it** (§119; round 23): `{ "rich": "opus"|"fable",
+/// "stu": "opus"|"fable" }`. Rich is the conversation, Stu the team's back end, named in the
+/// app only by what each does (§110). A value another build wrote reads as Opus.
+#[tauri::command(async)]
+fn get_lease_models(state: State<AppState>) -> serde_json::Value {
+    let models = state.config.lock().unwrap().lease_models();
+    serde_json::json!({ "rich": models.rich.as_str(), "stu": models.stu.as_str() })
+}
+
+/// **Both rows at once, as Preferences closes** (the CEO's addendum to §119: *"Closing the
+/// preferences panel IS the confirmation that the settings chosen there now need to be saved
+/// and implemented."*). Saved here; implemented at the next boundary of each lease — the next
+/// reply for Rich (`spine.rs`, `MODEL_CHANGED`), the next job for the team
+/// (`work_host.rs`, `renew_if_model_changed`) — because a lease is never swapped mid-turn.
+/// An unknown name refuses both and writes neither, and the two rows are one write
+/// (`ConfigStore::set_lease_models`), so a failure never leaves one row saved alone.
+#[tauri::command(async)]
+fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result<(), String> {
+    use richos_core::config::{LeaseModels, ModelChoice};
+    let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
+    let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
+    state.config.lock().unwrap().set_lease_models(LeaseModels { rich, stu }).map_err(|e| e.to_string())
 }
 
 /// UX §3.2 / architecture P3.2: the optional AI-worker drill-down.

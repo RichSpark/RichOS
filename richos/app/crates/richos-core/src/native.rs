@@ -4038,6 +4038,11 @@ impl Cognition for NativeCognition {
     fn account(&self) -> Option<&str> {
         self.engine_profile.as_ref()?.claude_account.as_ref().map(|a| a.id.as_str())
     }
+    /// The model [`lease_model_args`] gave this child, read off the same profile and role.
+    fn lease_model(&self) -> Option<crate::config::ModelChoice> {
+        let models = self.engine_profile.as_ref()?.lease_models;
+        Some(match self.role { LeaseRole::Conversation => models.rich, LeaseRole::Work => models.stu })
+    }
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> {
         self.client.reader_state.lock().unwrap().streamed_usage.clone()
     }

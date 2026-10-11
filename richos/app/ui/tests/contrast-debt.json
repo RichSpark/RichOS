@@ -53,35 +53,36 @@
       "settings-tooltip": "The tooltip is stylesheet-generated content, not a DOM text node. Its node counts equal the shell's 92 of 448. The driver requires an opaque ::after pseudo-element, and check 11b separately requires the authored Settings string to be measured.",
       "quota-work-status": "A single status sentence adds only two nodes across both themes, inside the unchanged three-node tolerance. Its driver waits for #quota-work-status:not([hidden]) and asserts the saved-work sentence before measuring it.",
       "quit-question": "Re-derived 2026-10-10 (walk48fix20): the sheet no longer claims aria-modal, so the shell behind it is filed obscured rather than measured through an inert layer, and the surface measures only its own 12 nodes against the shell's 102. Its text ships in the shared shell, hidden until shown, so it considers 724 against the shell's 722, inside the three-node tolerance. The driver raises it through RichQuitQuestion.show, the listener's own entry point, and waits for #quit-question to be visible with its entry animation finished (overlaySettled); an unshown sheet fails that wait. tests/quit-question.js measures its ratios."
-    }
+    },
+    "// 2026-10-11 round 23": "REBASED 2026-10-11 (echo-opus-round23a, CEO §119): Preferences gained the 'Rich's model' section and a heading. That markup ships hidden in #assertiveness-popover, so it is part of the shared shell: `considered` rose by exactly the growth each surface showed between one contrast.js run on main (d4e069db1) and one on this branch, {26: 60}, and the shell went 722 -> 748. `checked` moved only where the popover is OPEN, `settings` 82 -> 108 (its new rows, note and heading, measured). Without this, check 9z found the bare shell clearing 17 floors."
   },
   "surfaceFloors": {
     "shell": {
       "checked": 98,
-      "considered": 642
+      "considered": 668
     },
     "settings-tooltip": {
       "//": "The DOM node counts equal the shell. The separate pseudo-element opacity and generated-content checks prove that the tooltip was reached and measured.",
       "checked": 98,
-      "considered": 642
+      "considered": 668
     },
     "thread": {
       "checked": 110,
-      "considered": 658
+      "considered": 684
     },
     "pending-user-bubble": {
       "//": "Audit-7 row 11. The same thread as `thread`, held at the moment the CEO has pressed Return and the spine has not answered: 8 more nodes measured than the settled walk, which is his bubble, its text and the turn scaffolding around it. Both themes agree on 112/500. The failure this surface exists to catch was `opacity: 0.72` on the whole bubble, 3.09:1 light on his own words against a 4.5:1 floor.",
       "checked": 118,
-      "considered": 670
+      "considered": 696
     },
     "composer-attachments": {
       "//": "CEO §86, 2026-09-24: files on the composer. The `hiring` thread with two chips (a PNG and a PDF), the refusal line for a zip and the drop target raised by a drag over the window. Set from its first run, 2026-09-24, both themes: 126 measured of 620 considered, against the bare shell's 94 of 584 in the same run, so a driver that never reached the tray fails this floor by 29 measured and 33 considered nodes after the 3-node tolerance. The bare shell itself is unchanged by this surface's markup (584 before and after; the drop target's words are written only while a drag is over the window).",
       "checked": 130,
-      "considered": 678
+      "considered": 704
     },
     "corrections": {
       "checked": 46,
-      "considered": 756,
+      "considered": 782,
       "//": "RE-DERIVED 2026-10-06 (round 18, Claude accounts for everyone, the CEO's feedback item 9), and the reason is not this surface: the accounts sheet's scaffold (`accounts.js`: the Settings breadcrumb, the Claude accounts title, the lede and Close) is appended to the always-present shell, so the bare shell's `considered` rose from 678 to 686 and no `checked` moved. Measured in the same run on the branch (merged with main bb1221339): the bare shell 102 of 686 and this surface 46 of 720. The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 46 of 756 (the floor was 712). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
       "// 2026-10-06": "RE-DERIVED 2026-10-06 (feedback item 7, the splash switch back in the gear popover): the popover ships in the always-present shell, so its two restored text nodes (Splash screen, Show it when RichOS starts) raised the bare shell from 102 of 678 to 102 of 682 across both themes, within the three-node tolerance of this floor, and 9z reported that a driver which never reached this state would pass. The floor is this run's measurement of the surface; nothing it renders changed.",
       "// 2026-10-06 merge": "RE-DERIVED 2026-10-06 at the merge of feedback item 9 (Claude accounts) with items 3-7: measured on the merged tree in one contrast.js run, the bare shell is 102 of 686 and this surface 46 of 720. The floor is that measurement; nothing this surface renders changed."
@@ -90,280 +91,280 @@
       "//": "RE-DERIVED 2026-10-04 (fill-first), and the reason is not this surface: the Claude Code quota sheet's markup (`quota.js`) is appended to the always-present shell, and fill-first added eight hidden text-bearing elements to it (Add account, Claude accounts, the new-account label, Add and sign in, Cancel, the at-threshold legend and its two choices), so EVERY surface's `considered` rose by 16 (8 per theme) and no `checked` moved. Measured: contrast.js on main 11cc84ff6 gives the bare shell 98 of 646 and this surface 22 of 656, 9z green; on the fill-first branch the shell is 98 of 662 and this surface 22 of 672, and 9z went red because the bare shell came within the three-node tolerance of the old floor. The floor is the branch measurement itself, restoring the margin over the bare shell it had on main; nothing this surface renders changed. RE-DERIVED AGAIN 2026-10-04 (round 16), for the same kind of reason: the quota sheet rebuilt to round 16 (`quota.js`, the CEO's chosen design) keeps more hidden text-bearing markup in the always-present shell (the inline add form, the verbs inside the one sentence, the sentence tail, the multi-account boundary), so EVERY surface's `considered` rose by 14 (7 per theme) and no `checked` moved. Measured: contrast.js on HEAD 34c54f9f4 + this branch gives the bare shell 98 of 676 (it was 98 of 662) and this surface 22 of 686. The floor is that measurement, keeping its margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 22 of 732 (the floor was 692). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
       "// 2026-10-08": "RE-DERIVED 2026-10-08 (dictation plan slice 4, round 19 setup sheet), and the reason is not this surface: the setup sheet in the always-present shell gained two hidden text-bearing elements (Rich's name in #setup-rich-line and the Start button), so EVERY surface's `considered` rose by 4 (2 per theme) and the bare shell went to 102 of 690, level with this floor. The floor is this run's measurement; nothing this surface renders changed.",
       "checked": 22,
-      "considered": 732
+      "considered": 758
     },
     "search": {
       "checked": 92,
-      "considered": 730
+      "considered": 756
     },
     "inspector": {
       "checked": 164,
-      "considered": 726
+      "considered": 752
     },
     "technical-view": {
       "checked": 154,
-      "considered": 694
+      "considered": 720
     },
     "unbound": {
       "// 2026-10-08": "RE-DERIVED 2026-10-08 (dictation plan slice 4, round 19 setup sheet), and the reason is not this surface: the setup sheet in the always-present shell gained two hidden text-bearing elements (Rich's name in #setup-rich-line and the Start button), so EVERY surface's `considered` rose by 4 (2 per theme) and the bare shell went to 102 of 690, level with this floor. The floor is this run's measurement; nothing this surface renders changed.",
       "checked": 102,
-      "considered": 726,
+      "considered": 752,
       "//": "RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-06 (round 18, Claude accounts for everyone, the CEO's feedback item 9), and the reason is not this surface: the accounts sheet's scaffold (`accounts.js`: the Settings breadcrumb, the Claude accounts title, the lede and Close) is appended to the always-present shell, so the bare shell's `considered` rose from 678 to 686 and no `checked` moved. Measured in the same run on the branch (merged with main bb1221339): the bare shell 102 of 686 and this surface 102 of 690. The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 102 of 726 (the floor was 686). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
       "// 2026-10-06": "RE-DERIVED 2026-10-06 (feedback item 7, the splash switch back in the gear popover): the popover ships in the always-present shell, so its two restored text nodes (Splash screen, Show it when RichOS starts) raised the bare shell from 102 of 678 to 102 of 682 across both themes, within the three-node tolerance of this floor, and 9z reported that a driver which never reached this state would pass. The floor is this run's measurement of the surface; nothing it renders changed.",
       "// 2026-10-06 merge": "RE-DERIVED 2026-10-06 at the merge of feedback item 9 (Claude accounts) with items 3-7: measured on the merged tree in one contrast.js run, the bare shell is 102 of 686 and this surface 102 of 690. The floor is that measurement; nothing this surface renders changed."
     },
     "settings": {
       "//": "74 -> 72 on 2026-09-01, when the app stopped borrowing the platform's typeface and started shipping its own. Inter's metrics are not SF Pro's, so the rail's thread rows sit at slightly different heights, and ONE MORE nav-thread-title now falls underneath the assertiveness popover. Diffed node by node rather than assumed: `considered` is 132 per theme before and after, `invisible` is 77 before and after, and the single lost path is li.nav-thread-item > div.nav-thread-row > button.nav-thread > span.nav-thread-title, which moves from measured into `obscured` (its recorded example goes from \"Partner book review\" to \"Q4 hiring\"). Nothing stopped rendering, which is the failure this floor exists to catch (see mutation 9b in contrast.js: `.nav-thread-title { display: none }`). Check 11 still passes, which is the proof that matters here — every obscured node is measured on some other surface, so no contrast coverage was lost, only relocated.",
-      "checked": 78,
-      "considered": 642
+      "checked": 104,
+      "considered": 668
     },
     "history-notice": {
       "//": "Added 2026-09-05 with the tolerant ledger reader. The shell walk is 90 of 408; this is 94 of 412, and the delta is exactly the notice: two paragraphs, both themes, both MEASURED rather than filed invisible or obscured. Computed before the walk ran and unchanged by it: headline --attention on --surface-raised is 7.05:1 dark and 6.19:1 light, detail --ink on --surface-raised is 13.02:1 dark and 17.02:1 light, and the --attention border (a non-text indicator, floor 3:1) is 7.05:1 / 7.88:1 dark and 6.19:1 / 5.42:1 light against the panel and the ground behind it. Nothing here is exempt; the sentence explaining why part of his history is missing is the last text in this app anyone should have to squint at. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
       "checked": 106,
-      "considered": 674
+      "considered": 700
     },
     "opening-screen": {
       "checked": 0,
-      "considered": 642
+      "considered": 668
     },
     "updates-available": {
       "checked": 144,
-      "considered": 646
+      "considered": 672
     },
     "updates-downloading": {
       "checked": 142,
-      "considered": 644
+      "considered": 670
     },
     "updates-failed": {
       "checked": 146,
-      "considered": 646
+      "considered": 672
     },
     "updates-waiting": {
       "//": "RE-DERIVED 2026-09-20, and the reason is not this surface at all: the phone sheet's markup lives in the always-present shell, so adding the screen the phone's `They do not match` leaves behind (Ray's nightly `.8` defect 1) raised EVERY surface's `considered` by four — the bare shell from 558 to 562 and this surface from 562 to 566. This row's margin over the shell was the minimum four, so the bare shell drew level with its floor and check 9z correctly reported that a driver which never reached this state would now pass. The floor is re-derived from that run and is the measurement itself, 566, which restores the margin over the bare shell; nothing about what this surface renders changed. RE-DERIVED AGAIN 2026-10-04 (fill-first), for the same kind of reason: the Claude Code quota sheet's markup (`quota.js`) is appended to the always-present shell, and fill-first added eight hidden text-bearing elements to it (Add account, Claude accounts, the new-account label, Add and sign in, Cancel, the at-threshold legend and its two choices), so EVERY surface's `considered` rose by 16 (8 per theme) and no `checked` moved. Measured: contrast.js on main 11cc84ff6 gives the bare shell 98 of 646 and this surface 100 of 650, 9z green; on the fill-first branch the shell is 98 of 662 and this surface 100 of 666. The floor is that branch measurement, keeping its four-node margin over the bare shell. RE-DERIVED AGAIN 2026-10-04 (round 16), for the same kind of reason: the quota sheet rebuilt to round 16 (`quota.js`, the CEO's chosen design) keeps more hidden text-bearing markup in the always-present shell (the inline add form, the verbs inside the one sentence, the sentence tail, the multi-account boundary), so EVERY surface's `considered` rose by 14 (7 per theme) and no `checked` moved. Measured: contrast.js on HEAD 34c54f9f4 + this branch gives the bare shell 98 of 676 (it was 98 of 662) and this surface 100 of 680. The floor is that measurement, keeping its margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-06 (round 18, Claude accounts for everyone, the CEO's feedback item 9), and the reason is not this surface: the accounts sheet's scaffold (`accounts.js`: the Settings breadcrumb, the Claude accounts title, the lede and Close) is appended to the always-present shell, so the bare shell's `considered` rose from 678 to 686 and no `checked` moved. Measured in the same run on the branch (merged with main bb1221339): the bare shell 102 of 686 and this surface 104 of 690. The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 104 of 726 (the floor was 686). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
       "// 2026-10-08": "RE-DERIVED 2026-10-08 (dictation plan slice 4, round 19 setup sheet), and the reason is not this surface: the setup sheet in the always-present shell gained two hidden text-bearing elements (Rich's name in #setup-rich-line and the Start button), so EVERY surface's `considered` rose by 4 (2 per theme) and the bare shell went to 102 of 690, level with this floor. The floor is this run's measurement; nothing this surface renders changed.",
       "checked": 104,
-      "considered": 726,
+      "considered": 752,
       "// 2026-10-06": "RE-DERIVED 2026-10-06 (feedback item 7, the splash switch back in the gear popover): the popover ships in the always-present shell, so its two restored text nodes (Splash screen, Show it when RichOS starts) raised the bare shell from 102 of 678 to 102 of 682 across both themes, within the three-node tolerance of this floor, and 9z reported that a driver which never reached this state would pass. The floor is this run's measurement of the surface; nothing it renders changed.",
       "// 2026-10-06 merge": "RE-DERIVED 2026-10-06 at the merge of feedback item 9 (Claude accounts) with items 3-7: measured on the merged tree in one contrast.js run, the bare shell is 102 of 686 and this surface 104 of 690. The floor is that measurement; nothing this surface renders changed."
     },
     "company-picker": {
       "//": "RE-DERIVED 2026-10-04 (fill-first), and the reason is not this surface: the Claude Code quota sheet's markup (`quota.js`) is appended to the always-present shell, and fill-first added eight hidden text-bearing elements to it (Add account, Claude accounts, the new-account label, Add and sign in, Cancel, the at-threshold legend and its two choices), so EVERY surface's `considered` rose by 16 (8 per theme) and no `checked` moved. Measured: contrast.js on main 11cc84ff6 gives the bare shell 98 of 646 and this surface 44 of 664, 9z green; on the fill-first branch the shell is 98 of 662 and this surface 44 of 680, and 9z went red because the bare shell came within the three-node tolerance of the old floor. The floor is the branch measurement itself, restoring the margin over the bare shell it had on main; nothing this surface renders changed. RE-DERIVED 2026-10-06 (round 18, Claude accounts for everyone, the CEO's feedback item 9), and the reason is not this surface: the accounts sheet's scaffold (`accounts.js`: the Settings breadcrumb, the Claude accounts title, the lede and Close) is appended to the always-present shell, so the bare shell's `considered` rose from 678 to 686 and no `checked` moved. Measured in the same run on the branch (merged with main bb1221339): the bare shell 102 of 686 and this surface 44 of 702. The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 44 of 738 (the floor was 694). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
       "checked": 44,
-      "considered": 738,
+      "considered": 764,
       "// 2026-10-06": "RE-DERIVED 2026-10-06 (feedback item 7, the splash switch back in the gear popover): the popover ships in the always-present shell, so its two restored text nodes (Splash screen, Show it when RichOS starts) raised the bare shell from 102 of 678 to 102 of 682 across both themes, within the three-node tolerance of this floor, and 9z reported that a driver which never reached this state would pass. The floor is this run's measurement of the surface; nothing it renders changed.",
       "// 2026-10-06 merge": "RE-DERIVED 2026-10-06 at the merge of feedback item 9 (Claude accounts) with items 3-7: measured on the merged tree in one contrast.js run, the bare shell is 102 of 686 and this surface 44 of 702. The floor is that measurement; nothing this surface renders changed."
     },
     "company-blocked": {
       "//": "RE-DERIVED 2026-10-04 (fill-first), and the reason is not this surface: the Claude Code quota sheet's markup (`quota.js`) is appended to the always-present shell, and fill-first added eight hidden text-bearing elements to it (Add account, Claude accounts, the new-account label, Add and sign in, Cancel, the at-threshold legend and its two choices), so EVERY surface's `considered` rose by 16 (8 per theme) and no `checked` moved. Measured: contrast.js on main 11cc84ff6 gives the bare shell 98 of 646 and this surface 86 of 664, 9z green; on the fill-first branch the shell is 98 of 662 and this surface 86 of 680, and 9z went red because the bare shell came within the three-node tolerance of the old floor. The floor is the branch measurement itself, restoring the margin over the bare shell it had on main; nothing this surface renders changed. RE-DERIVED 2026-10-06 (round 18, Claude accounts for everyone, the CEO's feedback item 9), and the reason is not this surface: the accounts sheet's scaffold (`accounts.js`: the Settings breadcrumb, the Claude accounts title, the lede and Close) is appended to the always-present shell, so the bare shell's `considered` rose from 678 to 686 and no `checked` moved. Measured in the same run on the branch (merged with main bb1221339): the bare shell 102 of 686 and this surface 86 of 702. The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 86 of 738 (the floor was 694). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
       "checked": 86,
-      "considered": 738,
+      "considered": 764,
       "// 2026-10-06": "RE-DERIVED 2026-10-06 (feedback item 7, the splash switch back in the gear popover): the popover ships in the always-present shell, so its two restored text nodes (Splash screen, Show it when RichOS starts) raised the bare shell from 102 of 678 to 102 of 682 across both themes, within the three-node tolerance of this floor, and 9z reported that a driver which never reached this state would pass. The floor is this run's measurement of the surface; nothing it renders changed.",
       "// 2026-10-06 merge": "RE-DERIVED 2026-10-06 at the merge of feedback item 9 (Claude accounts) with items 3-7: measured on the merged tree in one contrast.js run, the bare shell is 102 of 686 and this surface 86 of 702. The floor is that measurement; nothing this surface renders changed."
     },
     "memory-setup": {
       "//": "RE-DERIVED 2026-09-20, and the reason is not this surface at all: the phone sheet's markup lives in the always-present shell, so adding the screen the phone's `They do not match` leaves behind (Ray's nightly `.8` defect 1) raised EVERY surface's `considered` by four — the bare shell from 558 to 562 and this surface from 562 to 566. This row's margin over the shell was the minimum four, so the bare shell drew level with its floor and check 9z correctly reported that a driver which never reached this state would now pass. The floor is re-derived from that run and is the measurement itself, 566, which restores the margin over the bare shell; nothing about what this surface renders changed.",
       "checked": 108,
-      "considered": 646
+      "considered": 672
     },
     "memory-no-compiler": {
       "//": "RE-DERIVED 2026-09-20, and the reason is not this surface at all: the phone sheet's markup lives in the always-present shell, so adding the screen the phone's `They do not match` leaves behind (Ray's nightly `.8` defect 1) raised EVERY surface's `considered` by four — the bare shell from 558 to 562 and this surface from 562 to 566. This row's margin over the shell was the minimum four, so the bare shell drew level with its floor and check 9z correctly reported that a driver which never reached this state would now pass. The floor is re-derived from that run and is the measurement itself, 566, which restores the margin over the bare shell; nothing about what this surface renders changed.",
       "checked": 106,
-      "considered": 646
+      "considered": 672
     },
     "setup-sheet": {
       "checked": 116,
-      "considered": 654
+      "considered": 680
     },
     "setup-account-connect": {
       "checked": 110,
-      "considered": 644
+      "considered": 670
     },
     "setup-blocked": {
       "checked": 114,
-      "considered": 654
+      "considered": 680
     },
     "setup-r19-ask": {
       "//": "round 19, state 1 (dictation plan slice 4, ADDED 2026-10-08): the floor is the first run's measurement on this branch, both themes.",
       "checked": 122,
-      "considered": 696
+      "considered": 722
     },
     "setup-r19-progress": {
       "//": "round 19, state 2: Rich's download line, the three row states, the counter and its bar. First run's measurement, 2026-10-08.",
       "checked": 128,
-      "considered": 714
+      "considered": 740
     },
     "setup-r19-done": {
       "//": "round 19, state 3: You're all set, Voice is ready and Start. First run's measurement, 2026-10-08.",
       "checked": 124,
-      "considered": 706
+      "considered": 732
     },
     "dictation-offer": {
       "//": "round 19, state 4: Rich's one offer of dictation in the conversation, its key cap and both buttons. First run's measurement, 2026-10-08.",
       "checked": 116,
-      "considered": 720
+      "considered": 746
     },
     "voice-model-offer": {
       "//": "the offer row: the sentence, the attention dot and the download control. ADDED 2026-09-17 with the speech-model provisioning work; walked with NO audio device open, which is why this panel is measurable where the listening row is not. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
       "checked": 108,
-      "considered": 672
+      "considered": 698
     },
     "voice-model-progress": {
       "//": "the transfer row: the progress line plus the bar fill and track, which are the only non-text progress indicators this suite measures outside the update row. ADDED 2026-09-17 with the speech-model provisioning work; walked with NO audio device open, which is why this panel is measurable where the listening row is not. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
       "checked": 108,
-      "considered": 674
+      "considered": 700
     },
     "voice-model-failed": {
       "//": "the refusal row: the sentence and the retry control it must render beside. ADDED 2026-09-17 with the speech-model provisioning work; walked with NO audio device open, which is why this panel is measurable where the listening row is not. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
       "checked": 108,
-      "considered": 676
+      "considered": 702
     },
     "entity-view": {
       "checked": 118,
-      "considered": 670
+      "considered": 696
     },
     "thread-menu": {
       "checked": 106,
-      "considered": 648
+      "considered": 674
     },
     "techy-nothing-recorded": {
       "checked": 124,
-      "considered": 664
+      "considered": 690
     },
     "first-run-notice": {
       "//": "Added 2026-09-06 with the first-run notice. The shell walk is 96 of 418 in the same run; this is 106 of 424, and the delta is exactly the panel — a headline, two paragraphs and two controls, both themes, every one MEASURED rather than filed invisible, obscured or unprovable. Computed against the surfaces they are actually painted on before the walk ran, and unchanged by it: headline and body --ink on --surface-raised are 13.02:1 dark and 17.02:1 light; the consequence line --ink-soft on the same panel is 6.09:1 dark and 6.24:1 light; the Start label --on-gold on --accent is 7.68:1 dark and 4.72:1 light with its fill at 6.87:1 / 3.60:1 against the panel; the Not now label is --ink and its edge --line-control at 4.09:1 / 3.82:1; and the panel's own --line-control border, a non-text indicator with a 3:1 floor, is 4.57:1 dark and 3.35:1 light against the pane behind it. NOTHING HERE IS EXEMPT AND NOTHING CLAIMS TO BE — including the consequence line, which is the only place the effect of the second control is stated, and which is exactly the sort of line an exemption gets claimed for.",
       "checked": 108,
-      "considered": 648
+      "considered": 674
     },
     "first-run-unusable": {
       "//": "Added 2026-09-06 beside it, and a SEPARATE surface rather than the same one twice: this state paints different ink. 100 of 422 against the shell's 96 of 418 — two paragraphs, both themes. The headline and the panel border are --attention, the app's one 'needs your hand' color, computed 7.05:1 dark and 6.19:1 light on the panel and 7.88:1 / 5.42:1 against the pane behind it; the body is --ink at 13.02:1 / 17.02:1. It draws NO control, so it contributes no indicator beyond that border — which is the point of the state rather than an omission: no button could fix a file the app cannot read. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
       "checked": 106,
-      "considered": 674
+      "considered": 700
     },
     "accounts-sheet": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Round 18 (Claude accounts for everyone, the CEO's feedback item 9): the accounts sheet with two cards, the handover line, the 5-hour choice and Recent changes. Set from its first run, 2026-10-06, both themes: 202 measured of 782 considered against the bare shell's 102 of 686 in the same run, so a driver that never opened the sheet fails by 97 measured nodes after the tolerance. Every state of the sheet is also walked by tests/accounts.js.",
       "checked": 102,
-      "considered": 820
+      "considered": 846
     },
     "repositories": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "checked": 20,
-      "considered": 738
+      "considered": 764
     },
     "permission": {
       "checked": 112,
-      "considered": 648
+      "considered": 674
     },
     "saved-work": {
       "checked": 122,
-      "considered": 672
+      "considered": 698
     },
     "saved-work-chip": {
       "checked": 110,
-      "considered": 658
+      "considered": 684
     },
     "quit-question": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The quit question (background-work spec 2.5/2.5a). 12 measured nodes across both themes: the title, the question and the two controls, each measured in dark and light, plus the two the shell shares with every surface. Its own suite, ui/tests/quit-question.js, states the ratios; this floor is what stops a sheet that has stopped rendering from reading as clean.",
       "checked": 12,
-      "considered": 724
+      "considered": 750
     },
     "phone-pairing": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The pairing screen. `checked` 56 is lower than the bare shell's 92 because the sheet covers the shell it opened over, so the floor that bites for this surface is the `considered` one: 580 against the shell's 506 is a margin of 74, far outside the three-node tolerance, so check 9z's control passes without a `cannotBite` declaration. Both numbers fell under CEO §61 — `considered` by 58 with the rest of the sheet's shared markup, `checked` by 14, which is the only large visible drop in the set: the two unverified-certificate warnings, the trust address and the sixteen certificate taps were all ON this screen rather than hidden in the shared markup.",
       "checked": 54,
-      "considered": 742
+      "considered": 768
     },
     "phone-paired": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The same panel once a phone is paired. Its margin over the shell was four nodes when this floor was first set and twelve after the 2026-09-19 shrink; it is 64 now (considered 570 against the shell's 506) because §61 took 66 nodes out of the shell and 68 out of this surface. `checked` is untouched at 22: the card's own lines are filled by the render from the device record, and the two that changed wording did not change in number. Its driver's real proof of arrival is still waiting for `#phone-device-name` to carry text, which only the paired state paints.",
       "checked": 22,
-      "considered": 738
+      "considered": 764
     },
     "techy-scope": {
       "//": "§7.1's three-way scope sheet (CEO, 2026-09-18), walked on `hiring` — see the driver's own note for why not `acme`. 18 of 572 across both themes: NINE measured nodes per theme, which is the whole sheet (title, three option labels, Cancel, the confirm button, and the three radio indicators) and nothing else, because an `aria-modal` sheet files everything behind it as obscured — the same shape `quit-question` has. FEWER measured nodes than the bare shell's 92, so `checked` cannot prove arrival here; `considered` can and does, at 572 against the shell's 556, which is 16 clear and well outside the three-node tolerance. That is why this surface needs no `cannotBite` entry: a driver that never opened the sheet leaves 556 against a floor of 569 and fails. RE-DERIVED 2026-10-04 (fill-first), and the reason is not this surface: the Claude Code quota sheet's markup (`quota.js`) is appended to the always-present shell, and fill-first added eight hidden text-bearing elements to it (Add account, Claude accounts, the new-account label, Add and sign in, Cancel, the at-threshold legend and its two choices), so EVERY surface's `considered` rose by 16 (8 per theme) and no `checked` moved. Measured: contrast.js on main 11cc84ff6 gives the bare shell 98 of 646 and this surface 18 of 662, 9z green; on the fill-first branch the shell is 98 of 662 and this surface 18 of 678, and 9z went red because the bare shell came within the three-node tolerance of the old floor. The floor is the branch measurement itself, restoring the 16-node margin over the bare shell it had on main. RE-DERIVED AGAIN 2026-10-04 (round 16), for the same kind of reason: the quota sheet rebuilt to round 16 (`quota.js`, the CEO's chosen design) keeps more hidden text-bearing markup in the always-present shell (the inline add form, the verbs inside the one sentence, the sentence tail, the multi-account boundary), so EVERY surface's `considered` rose by 14 (7 per theme) and no `checked` moved. Measured: contrast.js on HEAD 34c54f9f4 + this branch gives the bare shell 98 of 676 (it was 98 of 662) and this surface 18 of 692. The floor is that measurement, keeping its margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 18 of 738 (the floor was 688). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
       "checked": 18,
-      "considered": 738
+      "considered": 764
     },
     "phone-identity": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "CEO §61.1's identity screen, which since §61 is the FIRST screen of the sheet rather than a screen behind a chosen route — its driver no longer clicks anything to reach it, and that is the arrival proof that matters here. 34 measured of 572 across both themes. `checked` 34 is lower than the bare shell's 92 because the sheet covers the shell it opened over, so the floor that bites is `considered`: 572 against the shell's 506 is a margin of 66, far outside the three-node tolerance — it was 2 when this surface was declared unable to bite and 4 after the first shrink. `checked` fell by 2 under §61: the `Pick a different way` beside `I understand`, in both themes. THE NOTE THIS ROW USED TO CARRY IS RETIRED WITH ITS SUBJECT: it recorded that this was the only surface where a control's BORDER separated two decisions (`.phone-route > button` at `--line-control`, 3.79:1 dark and 4.06:1 light). §61 removed the screen with two decisions on it. The token still carries that job on `.desk-btn` itself, measured at the same ratios from the rendered pixels — Urban's G6 — because on the paired card that border is the only thing that makes a button a button.",
       "checked": 34,
-      "considered": 736
+      "considered": 762
     },
     "phone-rejected": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The screen the phone's `They do not match` leaves behind — Ray's nightly `.8` walk in the test VM, defect 1. Measured in one run on 2026-09-20: 104 of 566 across both themes, against a bare shell of 92 of 562 in the same run. `considered` is the absolute count and it is the number that bites here: 566 against the shell's 562 is a margin of 4, outside the three-node tolerance, so a driver that never reached this state fails check 9 — which is why no `cannotBite` declaration is needed and why check 9z passes with this row in. `checked` is the surface's OWN contribution, 12, on the same footing as the three rows below it: the shell's 92 measurable nodes are counted on every surface, and holding this figure absolute would turn any future edit to the sheet's shared markup into a red run on this one surface alone. The screen carries one heading, one sentence and one control; `tests/phone.js` check 9f measures that sentence itself in both themes (5.78:1 dark, 6.38:1 light at 16px) rather than leaving it to the walk's node count.",
       "checked": 16,
-      "considered": 728
+      "considered": 754
     },
     "phone-tailscale-ready": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The ready screen with an account known and a phone that is registered and switched off — the state this Mac was actually in on 2026-09-19. 24 measured of 570 across both themes: the tailnet name in monospace, the sentence naming the provider and login name, the exposure note, the phone-watch line and the one control. 570 against the shell's 506 is a margin of 64, far outside the three-node tolerance, so the floor bites without a `cannotBite` declaration. `checked` fell by 2 under CEO §61 — the `Pick a different way` beside `Set my phone up`, in both themes — which leaves `Set my phone up` and the account line it sits under.",
       "checked": 24,
-      "considered": 734
+      "considered": 760
     },
     "phone-connect-setup": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Measured in both themes with #phone-connect and the state-specific control visible. The bare shell is 94 checked / 580 considered; this floor must reject it under unchanged tolerance 3.",
       "checked": 24,
-      "considered": 726
+      "considered": 752
     },
     "phone-connect-pairing": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Measured in both themes with #phone-connect and the state-specific control visible. The bare shell is 94 checked / 580 considered; this floor must reject it under unchanged tolerance 3.",
       "checked": 36,
-      "considered": 740
+      "considered": 766
     },
     "phone-connect-recovery": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Measured in both themes with #phone-connect and the state-specific control visible. The bare shell is 94 checked / 580 considered; this floor must reject it under unchanged tolerance 3.",
       "checked": 30,
-      "considered": 738
+      "considered": 764
     },
     "phone-awaiting-mac": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The card a phone reaches, waiting for the press on this Mac (Sage's pairing review F1): the six words derived over the key that phone registered, and They match / They do not match. Set from the run that opened it; its considered margin over the shell (584) is 18, outside the three-node tolerance, so it bites without a cannotBite entry.",
       "checked": 20,
-      "considered": 740
+      "considered": 766
     },
     "quota-offer": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "checked": 116,
-      "considered": 804,
+      "considered": 830,
       "//": "Measured across both themes with the quota panel and state-specific control visible; unchanged three-node tolerance rejects the bare shell."
     },
     "quota-approved": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "checked": 118,
-      "considered": 806,
+      "considered": 832,
       "//": "Measured across both themes with the quota panel and state-specific control visible; unchanged three-node tolerance rejects the bare shell."
     },
     "quota-uncertain": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "checked": 116,
-      "considered": 804,
+      "considered": 830,
       "//": "Measured across both themes with the quota panel and state-specific control visible; unchanged three-node tolerance rejects the bare shell."
     },
     "quota-work-status": {
       "checked": 100,
-      "considered": 644,
+      "considered": 670,
       "//": "Measured across both themes: 96 checked / 642 considered against the shell at 94 / 640. The driver also asserts the visible saved-work sentence because this two-node difference is inside the unchanged three-node tolerance."
     },
     "output-open": {
       "//": "Output side panel S4: the panel's list on mock.js's round-17 preset, one file made missing so the dimmed row is measured too. Set from its first run, 2026-10-05, both themes: 280 measured of 880 considered against the bare shell's 102 of 678 in the same run, so a driver that never opened the panel fails by 175 measured nodes after the tolerance.",
       "checked": 280,
-      "considered": 872
+      "considered": 898
     },
     "output-file": {
       "//": "Output side panel S4: one file's own view (the way back, k of N, the path, the kind and size). 220 of 820 against the shell's 102 of 678 in the same run.",
       "checked": 220,
-      "considered": 812
+      "considered": 838
     },
     "output-empty": {
       "//": "Output side panel S4: the panel on Q4 hiring, a thread that produced nothing — the eyebrow, the title, the thread's name and the one sentence. 122 of 704 against the shell's 102 of 678 in the same run: 20 measured and 26 considered over it, outside the three-node tolerance, so it bites without a cannotBite entry.",
       "checked": 122,
-      "considered": 696
+      "considered": 722
     }
   },
   "signatures": {}
