@@ -357,7 +357,8 @@
     $("spend-back").focus();
     paintRow();
   }
-  function close() {
+  // `keepFocus === true` when a sheet takes this screen's place: the focus belongs to the sheet.
+  function close(keepFocus) {
     if (!S.open) return;
     S.open = false;
     S.gen++;
@@ -366,10 +367,37 @@
     document.body.classList.remove("spend-open");
     const back = S.opener;
     S.opener = null;
-    if (back && document.contains(back) && typeof back.focus === "function" && back.id !== "set-spend-open") back.focus();
+    if (keepFocus !== true && back && document.contains(back) && typeof back.focus === "function" && back.id !== "set-spend-open") back.focus();
     paintRow();
   }
   $("spend-back").addEventListener("click", close);
+
+  // A SETTINGS SHEET OPENED OVER THIS SCREEN TAKES ITS PLACE (the review of e7c316d11). Settings
+  // stays above this screen and its rows still work, but the sheets they open live on the desk (an
+  // `.overlay` at the body, z-index 60 or 160, or inside #app, which this screen hides), so one
+  // opened while this screen is up sat under it and Settings looked dead. The same rule as Home's
+  // giveWayToOpenDeskSheet (home.js): an `.overlay` that stops being hidden closes this screen,
+  // and the sheet gets the focus its own open() could not give it while #app was hidden.
+  const FOCUSABLE = "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+  function giveWayToSheet(records) {
+    if (!S.open) return;
+    for (const r of records) {
+      const nodes = r.type === "attributes" ? [r.target] : [...r.addedNodes];
+      for (const n of nodes) {
+        if (!(n instanceof Element) || !n.classList.contains("overlay") || n.hidden || screen.contains(n)) continue;
+        close(true);
+        if (!n.contains(document.activeElement)) {
+          const first = [...n.querySelectorAll("button:not([disabled])")].find(e => e.offsetParent !== null)
+            || [...n.querySelectorAll(FOCUSABLE)].find(e => e.offsetParent !== null);
+          if (first) first.focus();
+        }
+        return;
+      }
+    }
+  }
+  if (typeof MutationObserver === "function") {
+    new MutationObserver(giveWayToSheet).observe(document.body, { attributes: true, attributeFilter: ["hidden"], childList: true, subtree: true });
+  }
   $("spend-refresh").addEventListener("click", refresh);
   $("spend-refresh").addEventListener("animationend", function () { this.classList.remove("is-spinning"); });
   screen.querySelectorAll("#spend-period button").forEach(b => b.addEventListener("click", () => {

@@ -68,11 +68,11 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, locale: "en-US", reducedMotion: opts.reducedMotion || "no-preference" });
     page.setDefaultTimeout(30000); // load-bound: a hang guard only; every wait below waits for a fact
     page.on("pageerror", e => errors.push(String(e)));
-    await page.addInitScript(({ theme, spend }) => {
+    await page.addInitScript(({ theme, spend, extra }) => {
       localStorage.setItem("richos-theme", theme);
       localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100 }));
-      window.__RICHOS_MOCK_PRESET__ = { spend };
-    }, { theme, spend });
+      window.__RICHOS_MOCK_PRESET__ = Object.assign({ spend }, extra);
+    }, { theme, spend, extra: opts.preset || {} });
     await page.goto("file://" + path.join(UI_DIR, "index.html"));
     await page.waitForSelector("#set-btn");
     await page.evaluate(() => window.RichSplash.yieldNow("spend-test"));
@@ -304,6 +304,56 @@ async function main() {
     await page.close();
     assertEqual(wrong, []);
     return "Refresh refreshed, Today chosen, Back closed the screen; Home open beneath after each";
+  });
+
+  // ---- 7c. a Settings sheet opened over the screen -------------------------------------------
+  // The review of e7c316d11 (rv-20261011T075637Z-e7c316d1-466a): with the screen open, Settings
+  // stays on top and its rows still work, but the sheets they open live on the desk (z-index 60 at
+  // the body, 160 for Dictation, or inside #app, which this screen hides), so they opened UNDER
+  // this opaque screen ("#dictation-sheet: hidden=false, spend_open=true, covered=true") and
+  // Settings looked dead. Every row of the menu that opens a sheet is pressed from this screen:
+  // the screen must give way, and the sheet must be the thing at its own middle, holding focus.
+  await run.check("a Settings row that opens a sheet, pressed over the screen, closes the screen and puts that sheet on top with the focus", async () => {
+    const out = [], wrong = [];
+    const rows = ["set-accounts-open", "set-dictation-open", "set-repositories-open", "set-memory-open", "set-phone-open", "set-quota-open"];
+    const DICTATION = { preset: { dictation: true } }; // a build with dictation: its row is in the menu
+    const page = await open("dark", undefined, DICTATION);
+    // the rows a person sees in the menu (Claude Code quota is Technical view's, hidden by default)
+    const present = await page.evaluate(ids => { const b = document.getElementById("set-btn"); b.click(); const have = ids.filter(id => { const e = document.getElementById(id); return e && !e.hidden && e.offsetParent !== null; }); b.click(); return have; }, rows);
+    for (const need of ["set-accounts-open", "set-dictation-open", "set-repositories-open"]) assert(present.includes(need), need + " is in the menu");
+    await page.close();
+    for (const id of present) {
+      const p = await open("dark", undefined, DICTATION);
+      await screen(p);
+      await menu(p);
+      await p.click("#" + id);
+      await p.waitForFunction(() => [...document.querySelectorAll(".overlay")].some(o => !o.hidden && !o.closest("#spend")));
+      await settle(p);
+      // Home, open beneath in this suite, gives way to a desk sheet by its own transition: wait for
+      // the fact that settles it either way: the sheet is the thing at its middle, or this screen
+      // is still open (then nothing more will change, and the measurement below says so).
+      await p.waitForFunction(() => {
+        if (document.body.classList.contains("spend-open")) return true;
+        const s = [...document.querySelectorAll(".overlay")].find(o => !o.hidden && !o.closest("#spend"));
+        const r = s.getBoundingClientRect(), h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return h && s.contains(h);
+      });
+      const m = await p.evaluate(() => {
+        const sheet = [...document.querySelectorAll(".overlay")].find(o => !o.hidden && !o.closest("#spend"));
+        const r = sheet.getBoundingClientRect();
+        const box = r.width > 0 && r.height > 0 ? r : { left: 0, top: 0, width: innerWidth, height: innerHeight };
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return { sheet: sheet.id, spendOpen: document.body.classList.contains("spend-open"), onTop: !!(hit && sheet.contains(hit)),
+          hit: hit ? (hit.id || hit.className || hit.tagName) : null, focus: !!(document.activeElement && sheet.contains(document.activeElement)) };
+      });
+      if (m.spendOpen) wrong.push(`${id} -> #${m.sheet}: the Token spend screen stayed open`);
+      if (!m.onTop) wrong.push(`${id} -> #${m.sheet}: covered (the middle of the sheet is ${m.hit})`);
+      if (!m.focus) wrong.push(`${id} -> #${m.sheet}: the focus is not in the sheet`);
+      out.push(`${id} -> #${m.sheet}`);
+      await p.close();
+    }
+    assertEqual(wrong, [], out.join(", "));
+    return out.join(", ") + ": each on top with the focus, the screen closed";
   });
 
   // ---- 8. the first count --------------------------------------------------------------------
