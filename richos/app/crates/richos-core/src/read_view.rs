@@ -86,8 +86,9 @@ impl ReadView {
     /// The write needs two facts, where the record lives and which company is open, and both
     /// are published here. Taking the spine for them put "Not now" behind whatever held it: at
     /// boot that is `prime_front_desk`, a model turn, and on 2026-10-11 the card stayed on
-    /// screen 90899 ms. What still needs the spine is un-priming the desks primed with the
-    /// offer; the caller hands that to [`Spine::onboarding_answer_recorded`] once it is free.
+    /// screen 90899 ms. Nothing else is needed: before every message each desk compares the
+    /// block it was primed with against this record and re-primes if they differ
+    /// (`Spine::prime_lease_if_needed`), so the next message on any desk carries the decline.
     ///
     /// The same refusals as the spine's: no record configured, or no company open.
     pub fn record_onboarding_declination(&self, now_millis: u64) -> Result<(), crate::doctrine::DoctrineError> {

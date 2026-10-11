@@ -805,10 +805,7 @@ struct AppState {
     /// thread id rather than a bool because he has more than one conversation and each has its
     /// own desk (`spine.rs`'s residency).
     front_desk_primed_for: Mutex<Option<String>>,
-    /// Shared (`Arc`) so work that must wait for the spine can wait on a thread of its own
-    /// instead of inside a window command: `decline_onboarding` hands the un-priming its
-    /// answer owes to such a thread, so "Not now" never waits for a boot prime.
-    spine: Arc<Mutex<Spine>>,
+    spine: Mutex<Spine>,
     reader: SpineReader,
     /// Durable CEO-facing preferences (company name, the assertiveness dial) — stored
     /// alongside the ledger in the app data dir, same durability posture.
@@ -1459,19 +1456,6 @@ fn take_the_spine_or_give_up(spine: &std::sync::Mutex<Spine>) -> Option<SpineHol
     Some(hold_the_spine(guard, site, asked))
 }
 
-/// **The same door for work nobody is waiting on**: the un-priming "Not now" owes, handed to
-/// a thread of its own so his tap never waits for a prime (`decline_onboarding_in`). Its wait
-/// is not HIS, so it never prints [`spine_wait_notice`], whose every clause ("a window
-/// command", "that wait is HIS", the screen he is looking at) would be false about it and
-/// would read as the decline having waited. The hop trace still records the take.
-#[track_caller]
-fn take_the_spine_unwatched(spine: &std::sync::Mutex<Spine>) -> SpineHold<'_> {
-    let site = spine_site(std::panic::Location::caller());
-    let asked = std::time::Instant::now();
-    let guard = spine.lock().unwrap();
-    trace_the_take(guard, site, asked.elapsed())
-}
-
 /// Where the wait is written down. Both doors end here, so there is one place that decides
 /// what a wait is worth saying and one place a reader has to check.
 fn hold_the_spine<'a>(
@@ -1483,15 +1467,6 @@ fn hold_the_spine<'a>(
     if let Some(line) = spine_wait_notice(&site, waited) {
         eprintln!("{line}");
     }
-    trace_the_take(guard, site, waited)
-}
-
-/// The hop trace's TAKEN line, for every door.
-fn trace_the_take(
-    guard: std::sync::MutexGuard<'_, Spine>,
-    site: String,
-    waited: std::time::Duration,
-) -> SpineHold<'_> {
     if hop_trace_is_on() {
         eprintln!(
             "[richos] hop-trace +{} ms  spine TAKEN at {site} after waiting {} ms",
@@ -3654,7 +3629,7 @@ fn main() {
                 account_auth: Mutex::new(None),
                 front_desk_primed_for: Mutex::new(None),
                 reader: spine.reader(),
-                spine: Arc::new(Mutex::new(spine)),
+                spine: Mutex::new(spine),
                 config: Mutex::new(config),
                 machinery_root,
                 entity: Mutex::new(boot.entity),
@@ -5402,7 +5377,7 @@ fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<Onboa
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    decline_onboarding_in(&state.spine, &state.reader, &entity_id, now_millis)
+    decline_onboarding_in(&state.reader, &entity_id, now_millis)
 }
 
 /// The body of [`decline_onboarding`], without Tauri's `State`, so a test can drive it.
@@ -5416,12 +5391,16 @@ fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<Onboa
 ///
 /// So the answer is checked and written from ONE published snapshot (the record's path and
 /// the open company are both published, `read_view.rs`), and the card gets its answer from
-/// the same read the window already uses. The one thing that needs the spine, un-priming the
-/// desks primed with the offer, goes to a thread that waits for it. Until that runs, a desk
-/// primed before the answer still carries the offer; that was already true while the decline
-/// sat waiting, and his own message sent meanwhile is drained by the prime either way.
+/// the same read the window already uses.
+///
+/// **NOTHING ELSE IS OWED TO THE DESKS.** Every desk (the one in use, each parked one, the
+/// spare, and a spare still being primed) carries the onboarding block it was primed with,
+/// and before every message `prime_lease_if_needed` compares that block with what the record
+/// says now and re-primes the desk if they differ. So the next message on any desk carries
+/// the decline, and a desk that already carries it (primed after the answer) is not primed
+/// again. A separate step that un-primed desks here cost a redundant hidden model turn in
+/// two orderings (reviews rv-20261011T101519Z-e4ab1771-98bb, rv-20261011T104029Z-c8b2a74a-37e4).
 fn decline_onboarding_in(
-    spine: &Arc<Mutex<Spine>>,
     reader: &SpineReader,
     entity_id: &str,
     now_millis: u64,
@@ -5433,10 +5412,6 @@ fn decline_onboarding_in(
         }
         view.record_onboarding_declination(now_millis)
     };
-    if outcome.is_ok() {
-        let spine = Arc::clone(spine);
-        std::thread::spawn(move || take_the_spine_unwatched(&spine).onboarding_answer_recorded());
-    }
     if let Err(why) = outcome {
         // THE ERROR THE CEO SEES IS NOT THE ERROR THE CRATE RAISED, and that is deliberate
         // rather than a wrapper for its own sake. `record_declination` writes through

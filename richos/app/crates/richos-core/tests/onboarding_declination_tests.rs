@@ -284,9 +284,9 @@ impl richos_core::cognition::Cognition for HeldPrime {
 /// The ordering from review `rv-20261011T101519Z-e4ab1771-98bb`: "Not now" is written from the
 /// published view while `prime_front_desk` holds the spine, and a message is sent while the
 /// prime continues. The prime drains that message before it lets go, and the message's turn
-/// re-primes the desk with the declined block (priming 2). The deferred step that runs after
-/// it must leave that up-to-date desk alone: his next message goes straight to the model.
-/// On `e4ab1771e` it un-primed the desk anyway and the next message paid priming 3.
+/// re-primes the desk with the declined block (priming 2). That desk is up to date, so his
+/// next message goes straight to the model. On `e4ab1771e` a deferred step un-primed the desk
+/// once the spine was free and the next message paid priming 3; that step no longer exists.
 #[test]
 fn not_now_during_boot_priming_with_a_queued_message_costs_no_extra_priming() {
     use richos_core::read_view::SpineView;
@@ -318,17 +318,14 @@ fn not_now_during_boot_priming_with_a_queued_message_costs_no_extra_priming() {
     });
     entered_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
 
-    // "Not now": written from the published view, the deferred step waiting for the spine.
+    // "Not now": written from the published view, the way the shell writes it.
     reader.snapshot().record_onboarding_declination(1_000).unwrap();
-    let deferred_spine = spine.clone();
-    let deferred = std::thread::spawn(move || deferred_spine.lock().unwrap().onboarding_answer_recorded());
 
     // His message, sent while the prime continues.
     let active = reader.snapshot().active_thread().unwrap().to_string();
     control.submit_from_desk(&active, Some(company()), "Please help with my business").unwrap();
     release_tx.send(()).unwrap();
     prime.join().unwrap();
-    deferred.join().unwrap();
 
     let after_prime = primes.lock().unwrap().len();
     assert_eq!(after_prime, 2, "the boot prime, then the queued message's re-prime with the decline");
@@ -340,11 +337,11 @@ fn not_now_during_boot_priming_with_a_queued_message_costs_no_extra_priming() {
     spine.lock().unwrap().submit_prompt("Thanks, next question", Source::Text).unwrap();
     let after_next = primes.lock().unwrap().len();
     eprintln!(
-        "[not-now-queued] primes after the prime: {after_prime}; after the deferred step and the next message: {after_next}"
+        "[not-now-queued] primes after the prime: {after_prime}; after the next message: {after_next}"
     );
     assert_eq!(
         after_next, after_prime,
-        "the deferred step un-primed a desk that already carried the decline, so the next message \
+        "a desk that already carried the decline was primed again, so the next message \
          waited through {} extra hidden priming turn(s)",
         after_next - after_prime
     );
@@ -495,9 +492,10 @@ fn after_not_now_the_next_message_on_every_kind_of_desk_carries_the_decline() {
 /// after the answer, so it is primed with the decline. Its first message must not pay a
 /// second priming turn.
 ///
-/// On `c8b2a74a5` the deferred step ran here (nobody holds the spine, so it runs at once),
-/// moved the generation the spare captured before it started, and the spare was installed
-/// un-primed although it already carried the decline: 1 redundant hidden priming turn.
+/// On `c8b2a74a5` a deferred step ran here (nobody holds the spine, so it ran at once), moved
+/// the generation the spare captured before it started, and the spare was installed un-primed
+/// although it already carried the decline: 1 redundant hidden priming turn. That step no
+/// longer exists; "Not now" is only the write.
 #[test]
 fn not_now_while_a_spare_is_starting_costs_its_first_message_no_extra_priming() {
     use std::sync::{mpsc, Arc, Mutex};
@@ -525,11 +523,8 @@ fn not_now_while_a_spare_is_starting_costs_its_first_message_no_extra_priming() 
     });
     entered_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
 
-    // "Not now", while the spare's process is starting.
+    // "Not now", while the spare's process is starting, written the way the shell writes it.
     reader.snapshot().record_onboarding_declination(1_000).unwrap();
-    // The deferred step the shell hands the decline's spine work to; with the spare's mutex
-    // down it takes the spine at once.
-    spine.lock().unwrap().onboarding_answer_recorded();
 
     release_tx.send(()).unwrap();
     let verdict = spare.join().unwrap();

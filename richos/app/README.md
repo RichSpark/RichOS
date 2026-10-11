@@ -501,7 +501,7 @@ richos/app/
                               reachable states, and refuse a write that has nowhere to go
                               rather than reporting success over it; the fifth presses "Not
                               now" during boot priming with a message queued behind it and
-                              counts the priming turns: no extra one after the deferred step;
+                              counts the priming turns: no extra one at the next message;
                               the sixth sends a message to each kind of desk after the answer
                               (in use, parked, spare) and finds the decline in each one's next
                               priming; the seventh presses it while a spare is starting and

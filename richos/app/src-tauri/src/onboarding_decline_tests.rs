@@ -6,9 +6,10 @@
 //! +98797 ms, so the card stayed on screen for 98797 - 7898 = 90899 ms after he pressed it.
 //!
 //! Here the spine is held by the test, standing in for that prime, and the decline must
-//! answer, with the decision on disk, inside [`DECLINE_DEADLINE`]. Once the stand-in lets go,
-//! the un-priming the answer owes (Rich must stop offering the interview in conversation) has
-//! to happen too, since a desk primed with the offer must not keep it.
+//! answer, with the decision on disk, inside [`DECLINE_DEADLINE`]. Nothing else is owed to the
+//! desks: each one compares the block it was primed with against the record before every
+//! message, so its next message carries the decline (`richos-core`'s
+//! `onboarding_declination_tests.rs`, every kind of desk).
 use super::*;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -37,23 +38,22 @@ fn not_now_answers_and_is_recorded_while_boot_priming_holds_the_spine() {
     spine.set_onboarding_record(record.clone());
     let reader = spine.reader();
     assert_eq!(onboarding_view_in(&reader).state, "not-yet", "the card is offered before he answers");
-    let generation_before = spine.front_desk_generation();
-    let spine = Arc::new(Mutex::new(spine));
+    let spine = Mutex::new(spine);
 
     // The stand-in for `prime_front_desk`: the spine taken and held, as the boot prime holds it.
     let held = spine.lock().unwrap();
 
     let (tx, rx) = mpsc::channel();
-    let (decline_spine, decline_reader) = (spine.clone(), reader.clone());
+    let decline_reader = reader.clone();
     let sent = Instant::now();
     let decline = std::thread::spawn(move || {
-        let answer = decline_onboarding_in(&decline_spine, &decline_reader, "acme", 1_000);
+        let answer = decline_onboarding_in(&decline_reader, "acme", 1_000);
         tx.send((answer.map(|view| view.state), sent.elapsed())).unwrap();
     });
     let answered = rx.recv_timeout(DECLINE_DEADLINE);
     let on_disk = richos_core::onboarding::OnboardingRecord::load(&record).for_entity(&acme).declined_at_millis();
 
-    // Always let go and join, including on the red build, so nothing is left waiting.
+    // Always let go and join, including on a red build, so nothing is left waiting.
     drop(held);
     decline.join().unwrap();
     let answered = answered.unwrap_or_else(|_| rx.recv().unwrap());
@@ -66,17 +66,6 @@ fn not_now_answers_and_is_recorded_while_boot_priming_holds_the_spine() {
     );
     assert_eq!(state, Ok("declined".to_string()), "the card's answer is the declined state");
     assert_eq!(on_disk, Some(1_000), "the decision is on disk before the spine is free");
-
-    // The un-priming it owes, applied once the spine is free.
-    let waiting_since = Instant::now();
-    while spine.lock().unwrap().front_desk_generation() == generation_before
-        && waiting_since.elapsed() < Duration::from_secs(5)
-    {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(
-        spine.lock().unwrap().front_desk_generation() > generation_before,
-        "every front desk is un-primed once the spine is free, so Rich stops offering the interview"
-    );
+    drop(spine);
     std::fs::remove_dir_all(&dir).unwrap();
 }
