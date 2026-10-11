@@ -23,6 +23,29 @@ fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 
 
+class ResponseContract(unittest.TestCase):
+    def test_provider_schema_binds_exact_job_and_finding(self):
+        record=dict(id='job',acceptance='original',evidence_cursor='source',wes_candidates=['review#1'])
+        shape=RR.bound_schema(RR.WES,record)
+        answer=dict(finding='review#1: a title',applicability='applies',action='uphold',sources=['original'],rationale='grounded',missing=[])
+        self.assertTrue(RR.SR.shape_problems(answer,shape))
+        answer['finding']='review#1'
+        self.assertFalse(RR.SR.shape_problems(answer,shape))
+        RR.validate_wes(answer,record)
+        answer['action']='withdraw_finding'
+        with self.assertRaises(R.Unavailable):RR.validate_wes(answer,record)
+        control=RR.bound_schema(RR.CONTROL,record)
+        self.assertEqual(control['properties']['job']['enum'],['job'])
+        self.assertNotIn('enum',RR.CONTROL['properties']['job'])
+
+    def test_missing_authority_requires_specific_bounded_retrieval(self):
+        record=dict(wes_candidates=['review#1'])
+        answer=dict(finding='review#1',applicability='insufficient_evidence',action='needs_evidence',sources=[],rationale='original missing',missing=[])
+        with self.assertRaises(R.Unavailable):RR.validate_wes(answer,record)
+        answer['missing']=['original ruling source']
+        RR.validate_wes(answer,record)
+
+
 class Async(unittest.TestCase):
     setUp = fixture.Recovery.setUp
     tearDown = fixture.Recovery.tearDown

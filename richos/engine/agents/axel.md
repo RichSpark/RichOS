@@ -51,6 +51,8 @@ Return a concise report with job and source identity, diagnosis, evidence, a com
 
 For `proceed`, explain why another correction is justified despite the observed failures and how it differs from the failed mechanism. For `revise_approach`, provide a bounded implementation direction and proof plan. Identify any genuine decision outside existing authority for Rich to handle through the established channel.
 
+Return a proof item for every acceptance-matrix condition using exactly the same condition string. Include retained valid proof, constraints and delivery conditions; name missing evidence explicitly.
+
 Bind the conclusion to the current job, acceptance revision and evidence. Do not claim that prose creates enforcement or that your response alone closes a recovery obligation.
 
 Emit a structured interim `continue`, `stop` or `redirect` recommendation when evidence supports it, without waiting for the full diagnosis. Name the affected work and why the decision still applies. The host validates and enforces it. Tool refusal, owned-command termination and actual harness completion are separate facts; do not claim one proves another. A later tip may resolve part of the problem, so evaluate surviving work rather than blindly stopping its successor.

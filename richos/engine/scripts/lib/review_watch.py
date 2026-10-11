@@ -62,7 +62,7 @@ the review's process id and its start time. A watcher's memory is not the
 guard, so a second watcher (a twin session, or the lead's own monitor beside a
 host child) is harmless. When a handover arrives while a mid-job review of the
 same tip runs, that review is stopped by its recorded process id and replaced
-by the handover review; nothing else is ever stopped. No cap on how many
+by the handover review. Qualified declared recovery may additionally stop exact affected workers through its separate control supervisor. No cap on how many
 reviews run at once: second-review admits each by the engine's CPU rule.
 
 A REVIEW THAT ENDS WITHOUT A VERDICT (crashed, refused, past its own 60-minute
@@ -84,11 +84,16 @@ WHAT IS TOLD (plan §2.4, §2.5). Each printed block wakes the lead.
   * a Codex handover it could not turn into a review, once.
 Starting a review is not told: the verdict is.
 
-It never edits, lands, merges, pauses or messages anything. The only processes
-it ever stops are reviews it (or another watcher) started and recorded: every
+It never edits, lands, merges or pauses work. Its ordinary review cleanup stops
+only reviews it (or another watcher) started and recorded: every
 process of this user that carries the review's own mark (MARK_ENV, a random
 value set at its start, which everything the review starts inherits however it
 is parented or grouped), and every process in the session the review leads.
+Declared recovery extends that contract through recovery_runner: an independent
+supervisor disables tools for the exact affected registered worker, ends only
+its birth-checked owned commands and observes native cancellation separately.
+Codex file-based handovers remain review and landing scope, not native dispatch
+or interruption coverage. Observation mode never applies recovery controls.
 
 ===========================================================================
 COMMANDS (review-watch.sh passes --engine-root and --config)

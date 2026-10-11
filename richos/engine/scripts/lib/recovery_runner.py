@@ -38,7 +38,7 @@ CONTROL = schema({"job":{"type":"string"}, "acceptance":{"type":"string"}, "fron
     "reason":{"type":"string"}, "evidence":{"type":"string"}})
 PLAN = schema({"job":{"type":"string"}, "acceptance":{"type":"string"}, "frontier":{"type":"string"},
     "diagnosis":{"type":"string"}, "matrix":{"type":"array", "items":schema({"condition":{"type":"string"}, "evidence":{"type":"string"}})},
-    "proof":{"type":"array", "items":schema({"condition":{"type":"string"}, "check":{"type":"string"}})},
+    "proof":{"type":"array", "description":"One proof item for every matrix condition, with exactly the same condition string. Include retained proof or a named missing check for every acceptance condition.", "items":schema({"condition":{"type":"string"}, "check":{"type":"string"}})},
     "approach":{"type":"string"}, "brief":{"type":"string"}, "control":{"enum":["continue", "stop", "redirect"]},
     "disproof":{"type":"string"}, "retained_evidence":{"type":"array", "items":{"type":"string"}}})
 ASSESS = schema({"plan":{"type":"string"}, "accepted":{"type":"boolean"}, "evidence":{"type":"string"},
@@ -48,6 +48,33 @@ WES = schema({"finding":{"type":"string"}, "applicability":{"enum":["applies", "
     "action":{"enum":["uphold", "withdraw_finding", "correct_interpretation", "needs_evidence"]},
     "sources":{"type":"array", "items":{"type":"string"}}, "rationale":{"type":"string"},
     "missing":{"type":"array", "items":{"type":"string"}}})
+
+
+def bound_schema(shape, record):
+    result=json.loads(json.dumps(shape))
+    for field,key in (("job","id"),("acceptance","acceptance"),("frontier","evidence_cursor")):
+        if field in result["properties"]:
+            result["properties"][field]["enum"]=[record[key]]
+    if "finding" in result["properties"]:
+        result["properties"]["finding"]["enum"]=record.get("wes_candidates",[])
+        result["properties"]["finding"]["description"]="Return one exact finding ID, without a title or explanatory suffix."
+    return result
+
+
+def validate_wes(verdict, record):
+    if verdict["finding"] not in record.get("wes_candidates",[]):
+        raise R.Unavailable("Wes disposition names no current routed finding")
+    allowed={"applies":{"uphold"},"inapplicable":{"withdraw_finding","correct_interpretation"},
+        "permitted_exception":{"withdraw_finding","correct_interpretation"},
+        "interpretation_incorrect":{"withdraw_finding","correct_interpretation"},
+        "insufficient_evidence":{"needs_evidence"}}
+    if verdict["action"] not in allowed[verdict["applicability"]]:
+        raise R.Unavailable("Wes applicability and proposed action conflict")
+    if verdict["action"]=="needs_evidence":
+        if not verdict["missing"]:
+            raise R.Unavailable("Wes retrieval must name missing evidence")
+    elif not verdict["sources"]:
+        raise R.Unavailable("Wes judgment requires original source references")
 
 
 def persist(identity, event, change):
@@ -164,6 +191,10 @@ def snapshot(record, ws, role):
     evidence = dict(job=record["id"], acceptance=record["acceptance"], frontier=record["evidence_cursor"],
                     outcome=record["work"], failed=record["failed"], recoveries=record["attempts"],
                     plans=record.get("plans", []), findings=[], workers={}, originals=[], manifest=[], gaps=[], sources=[])
+    evidence["recovery_policy"]=dict(trigger_failures=len(record["failed"]),
+        failed_recoveries=record.get("recovery_failures",0),maximum_recoveries=R.MAX_RECOVERIES,
+        remaining_recoveries=max(0,R.MAX_RECOVERIES-record.get("recovery_failures",0)),
+        instruction="Initial failed handovers trigger investigation. Only host-bound accepted-plan recovery handovers consume the separate three-recovery budget. Never infer escalation from trigger failures.")
     evidence["current_plan"] = record.get("plan")
     evidence["assessments"] = [c["result"] for c in record["consults"] if c["phase"]=="assessment" and c.get("result")]
     ledger = R.rows(R.F.review_ledger_default())
@@ -328,12 +359,12 @@ def run(identity, role, engine):
         if role == "axel":
             # The first completed judgment is a host-consumed interim control.
             # Full diagnosis and independent plan assessment follow separately.
-            control, cid = consultation(identity, role, "control", prompt + "\nReturn an interim control against exact observed workers, or continue.", CONTROL, executable, account)
+            control, cid = consultation(identity, role, "control", prompt + "\nReturn an interim control against exact observed workers, or continue.", bound_schema(CONTROL,record), executable, account)
             R.control(identity, control, cid)
             apply_controls(identity, ws)
             import recovery_controls as C
             C.schedule(R.read(identity), engine)
-            plan, cid = consultation(identity, role, "plan", prompt + "\nReturn a complete evidence-based acceptance matrix, falsifiable diagnosis and focused proof plan.", PLAN, executable, account)
+            plan, cid = consultation(identity, role, "plan", prompt + "\nReturn a complete evidence-based acceptance matrix, falsifiable diagnosis and focused proof plan.", bound_schema(PLAN,record), executable, account)
             accepted = R.propose(identity, plan, cid)
             if plan["control"] != "continue":
                 R.control(identity, dict(control, action=plan["control"], reason=plan["diagnosis"],
@@ -345,28 +376,22 @@ def run(identity, role, engine):
             assessment["reviewer"] = aid  # host-bound identity, never model self-attestation
             R.accept(identity, accepted["id"], assessment)
         else:
-            verdict, cid = consultation(identity, role, "applicability", prompt + "\nCheck the exact disputed blocking premise against original authority. Name missing source references explicitly.", WES, executable, account)
-            if verdict["finding"] not in record.get("wes_candidates", []):
-                raise R.Unavailable("Wes disposition names no current routed finding")
-            if verdict["action"] in ("withdraw_finding", "correct_interpretation") and not verdict["sources"]:
-                raise R.Unavailable("a corrected premise requires original source references")
+            verdict, cid = consultation(identity, role, "applicability", prompt + "\nCheck the exact disputed blocking premise against original authority. Name missing source references explicitly.", bound_schema(WES,record), executable, account)
+            validate_wes(verdict,record)
             persist(identity, "wes-disposition", lambda r: r.update(wes=dict(verdict=verdict, consultation=cid,
                 frontier=record["evidence_cursor"], applied=False)))
             if verdict["action"] == "needs_evidence":
                 # One read-only retrieval update, consuming the same finite budget.
                 extra = "\nUse the immutable source index to retrieve only these missing references: " + json.dumps(verdict["missing"])
-                verdict, cid = consultation(identity, role, "applicability", prompt+extra, WES, executable, account)
-                if verdict["finding"] not in record.get("wes_candidates", []):
-                    raise R.Unavailable("retrieval update names no routed finding")
-                if verdict["action"] in ("withdraw_finding", "correct_interpretation") and not verdict["sources"]:
-                    raise R.Unavailable("retrieved premise correction requires original source references")
+                verdict, cid = consultation(identity, role, "applicability", prompt+extra, bound_schema(WES,record), executable, account)
+                validate_wes(verdict,record)
                 persist(identity, "wes-retrieval-disposition", lambda r: r.update(wes=dict(verdict=verdict,
                     consultation=cid, frontier=record["evidence_cursor"], applied=False)))
             if verdict["action"] in ("withdraw_finding", "correct_interpretation"):
                 # Independent review consumes this proposed resolution. A separate
                 # early control may stop needless implementation while it checks.
                 action, ac = consultation(identity, role, "control", prompt+"\n"+json.dumps(verdict)+
-                    "\nReturn a scoped interim control. Preserve unrelated valid corrections.", CONTROL, executable, account)
+                    "\nReturn a scoped interim control. Preserve unrelated valid corrections.", bound_schema(CONTROL,record), executable, account)
                 R.control(identity, action, ac)
                 apply_controls(identity, ws)
                 import recovery_controls as C
