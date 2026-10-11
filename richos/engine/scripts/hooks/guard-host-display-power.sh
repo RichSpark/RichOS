@@ -625,6 +625,14 @@ def split_segments(text, depth=0):
                     j += 1
                 subs.extend(split_segments(text[i+2:j-1], depth + 1))
                 cur.append(" "); i = j; continue
+            # A backtick substitution runs inside double quotes too, exactly as $(...)
+            # does: `x="`/path/to/<it>`"` runs it (review rv-20261011T154414Z-d0066287-e6a8).
+            if q == "\x22" and c == "`":
+                j = text.find("`", i + 1)
+                if j < 0:
+                    j = n
+                subs.extend(split_segments(text[i+1:j], depth + 1))
+                cur.append(" "); i = j + 1; continue
             cur.append(c); i += 1; continue
         if c == "\\" and i + 1 < n:
             cur.append(c); cur.append(text[i+1]); i += 2; continue

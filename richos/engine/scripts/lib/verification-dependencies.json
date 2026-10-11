@@ -1610,7 +1610,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
       "evidence": "Sources the resolved entity config for the guard switch. Root/adoption, seat-jurisdiction and unevaluated-payload helpers run; citation resolution uses ceo-ruled. Embedded Python classifies payload strings and never executes their commands.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -1657,7 +1657,7 @@
     },
     "scripts/hooks/guard-host-display-power.test.sh": {
       "source": "scripts/hooks/guard-host-display-power.test.sh",
-      "sha256": "fb16b51c3041fc6969bcd76f804450d3ad3e5ff0a43ddf7a1f32fe5cc222cc29",
+      "sha256": "15b13c02ee6837d31cd7fa184974abedc889477510f9e8f31f231dfe266d11de",
       "evidence": "Creates a private entity orchestration.config and a private ruling repository. Every hook invocation resolves that entity, its off-switch variant or an explicitly unadopted directory. Missing-resolver fixture refuses before config. Nested mutations recreate the same private settings; literal historical commands remain payload data.",
       "keys": [],
       "edges": [
@@ -6797,7 +6797,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#benign-bash": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
       "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -9505,7 +9505,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
       "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -9970,7 +9970,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#fenced-commit": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
       "evidence": "The fixed fenced-commit dispatcher fixture supplies git -C <private repo> commit -m x. Reviewed prefix/classifier returns before push/merge-only, host-power or foreign-data paths. Settings read before classification remain bound.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -14580,7 +14580,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#find-payload": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
       "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -16731,7 +16731,7 @@
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
         "scripts/hooks/guard-hook-registration-commits.sh": "0e684c61c9c4d2bd3a724b6f4693090812cff645911916e4b4cb035b90790393",
         "scripts/hook-registration-completeness.sh": "b6d74c20538f74926a5acb841e92fe205cd6f1c8be1d82849c0e3dddd55496bd",
-        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
         "scripts/hooks/guard-land-lease-commands.sh": "e3fb182d2571b84f9a84599fd50f404bb53aee051f6a9bbf52f0f78e01b60078",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
         "scripts/hooks/guard-live-names.sh": "f836427a7eff9c4785a22318725e87826b6890bb20c44511cb6ae9b86fe88d30",
@@ -17017,7 +17017,7 @@
         "scripts/hooks/guard-dialect.sh": "4310360774e98410d6e35208d46346575b5ffa7046905b17deecedd9453c67c5",
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
         "scripts/hooks/guard-hook-registration-commits.sh": "0e684c61c9c4d2bd3a724b6f4693090812cff645911916e4b4cb035b90790393",
-        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
         "scripts/hooks/guard-inflight-notify.sh": "2d5c5cf2de342b7978f4aad6222e7fc37d6a0b344023e576d7881111a4aba9ab",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
@@ -17250,7 +17250,7 @@
         "scripts/lib/vendored-material.sh": "630fc9746255b5e2c6cf24be71ba0b9780a5d673f98559db3099b44f47fa3c92",
         "scripts/hooks/guard-hook-registration-commits.sh": "0e684c61c9c4d2bd3a724b6f4693090812cff645911916e4b4cb035b90790393",
         "scripts/hooks/guard-ci-red-lands.sh": "9dcac2ccec57f2fe1d47b8b5b86eda0590e5c784e587f732376b385c94232094",
-        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
         "scripts/hooks/guard-public-record-repo.sh": "49a6e6c29e59a604b4d91e847e1e6d6060035f41f703bc95ffc8275778fec3d7",
         "scripts/hooks/guard-land-lease-commands.sh": "e3fb182d2571b84f9a84599fd50f404bb53aee051f6a9bbf52f0f78e01b60078",
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
@@ -17379,7 +17379,7 @@
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "21b64bc63f511249e987c026f8b409e5d191f99bb2a122fd5011e6d95b0e9bc7",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
-        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
         "scripts/hooks/guard-idle-land.sh": "c65ff6beb940c15ff20cf5a7e54e2f8453c4f6594d2ed2a8d32cda662dc3efae",
         "scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",

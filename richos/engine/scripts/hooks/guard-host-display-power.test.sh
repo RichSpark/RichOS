@@ -433,6 +433,13 @@ expect_rc     "F17 ... and joining does not swallow a continued HOST command" 2 
 # uses it. Treating $SUDO as the command word would hide the line completely.
 expect_rc     "F18 a \$VAR in command position does not hide what follows" 2 \
               "$(payload Edit "$SB/scripts/a.sh" '$SUDO pmset -a displaysleep 0 sleep 0')"
+# A backtick substitution inside DOUBLE QUOTES runs, as $(...) there does: the analyzer read
+# `$(...)` in double quotes and skipped backticks (review rv-20261011T154414Z-d0066287-e6a8). The
+# halt path is assembled, so this file carries no call a mis-parse could run.
+F18B_HALT="/sbin/ha"; F18B_HALT="${F18B_HALT}lt"
+F18B_CMD="result=\"\`$F18B_HALT\`\""
+expect_rc     "F18b a backtick substitution inside double quotes is read as a command" 2 \
+              "$(payload Bash "" "$F18B_CMD")"
 # THE GUEST BOUNDARY ON THE FILE SURFACE. Same path segment the shell surface
 # uses. provision-guest.sh runs pmset and three `defaults write` lines INSIDE
 # the guest, and nothing in its text says so.

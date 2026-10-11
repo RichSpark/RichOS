@@ -283,6 +283,17 @@ h6i "python3 -c code naming /sbin/$HS_CMD" python3 -c "raise SystemExit(0); impo
 h6i "a shell's inline string calling $HS_CMD by path" bash -c "exit 0; $TRIP/$HS_CMD -h +60"
 h6i "$HS_CMD started directly by path (here a recording tripwire)" "$TRIP/$HS_CMD" -h +60
 
+# H6j — a backtick substitution inside double quotes is read as a command, as $(...) there is
+# (review rv-20261011T154414Z-d0066287-e6a8). Scan only: the line sits after `exit 0`.
+H6J_LINE="result=\"\`/sbin/$HS_CMD\`\""
+F="$(suite h6j.test.sh "exit 0" "$H6J_LINE")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+    ok "H6j refused before it runs: $H6J_LINE"
+else
+    bad "H6j not refused: $H6J_LINE (rc=$RC)" "$(cat "$TMP/out")"
+fi
+
 # H6e — the screen-saver binary has a stand-in of its own: a bare-name call is refused.
 F="$(suite h6e.test.sh "$SSE || true" "exit 0")"
 trip_clean
