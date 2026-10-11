@@ -15,13 +15,19 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
 
   1. A shell suite's SOURCE is read first. A line that runs one of the commands below by an
      ABSOLUTE OR RELATIVE PATH (which bypasses PATH), or under sudo/doas (which resets PATH),
-     in a form guard-host-display-power.sh refuses, refuses the suite before it runs. So does
-     a path to an always-bad command anywhere on a line (an assignment like X=<path> too).
+     in a form guard-host-display-power.sh refuses, refuses the suite before it runs, inside
+     `if`/`while`/`!` and the other control words too. So does a path to an always-bad command
+     anywhere on a line, and a path to ANY stood-in command assigned to a variable
+     (`POWER=/usr/bin/<it>` then `$POWER ...` would bypass PATH and the stand-in alike).
   2. The suite runs with `host-shield/` FIRST ON PATH. That directory holds one stand-in per
      command the guard judges. A stand-in judges its own argv with the GUARD'S OWN judge()
-     (read out of guard-host-display-power.sh, so the two cannot drift): a harmless form
-     (`pmset -g`, `caffeinate -is`, an osascript that touches nothing) is handed to the real
-     command unchanged; a harmful one is logged and exits 1 without doing anything.
+     (read out of guard-host-display-power.sh, so the two cannot drift), plus the TEST-RUN
+     RULES below: a harmless form (`pmset -g`, an osascript that touches nothing) is handed to
+     the real command unchanged; a harmful one is logged and exits 1 without doing anything.
+     THE TEST-RUN RULES are stricter than the guard's, because the guard allows a few forms an
+     operator legitimately types and a test never needs: every `caffeinate` (it holds the
+     host awake, `-is` included), and any osascript keystroke or key code (modifier or not:
+     it reaches whatever is frontmost on the host) or one that sets an app frontmost.
   3. When the suite ends, every logged call is printed as `  FAIL  host-shield: ...` and the
      suite fails, whatever it exited with.
 
@@ -69,6 +75,28 @@ TOOL_ENV = "RICHOS_HOST_SHIELD_TOOL"
 # looks for it too. Assembled, because the guard's code surface reads the bare word in a
 # literal as a call.
 SCREEN_SAVER = "screensaver" + "engine"
+# Shell control words a command can follow on a line (`if <cmd>; then`, `! <cmd>`); the source
+# check steps over them to the command word, as the shell does.
+CONTROL_WORDS = {"if", "then", "elif", "else", "while", "until", "do", "!", "time", "{", "}"}
+# THE TEST-RUN RULES (see the header): what a stand-in refuses beyond the guard's judge().
+TEST_RUN_OSA = [
+    (re.compile(r"\b(?:keystroke|key\s+code)\b", re.IGNORECASE),
+     "sends a keystroke to whatever is frontmost on the host"),
+    (re.compile(r"\bset\b[^\n]{0,120}\bfrontmost\b|\bfrontmost\s*=\s*true\b", re.IGNORECASE),
+     "brings an app to the front on the host, taking the CEO's focus"),
+]
+
+
+def test_run_rule(name, judged):
+    """(rule, why) for a call the guard allows and a test run never may, else None."""
+    if name == "caffeinate":
+        return ("caffeinate", "holds the host awake (any form, -is included); a test never needs it")
+    if name == "osascript":
+        script = " \n ".join(judged[1:])
+        for rx, why in TEST_RUN_OSA:
+            if rx.search(script):
+                return ("osascript", why)
+    return None
 
 # ---------------------------------------------------------------------------------------------
 # The guard's analyzer, loaded from the guard itself
@@ -176,11 +204,21 @@ def _scan_segment(seg, G, always, depth):
     raw = G["words"](seg)
     if not raw:
         return out
+    guarded = {n.lower() for n in standin_names()}
     for w in raw:
-        value = w.split("=", 1)[1] if G["ASSIGN_RE"].match(w) else w
+        assigned = bool(G["ASSIGN_RE"].match(w))
+        value = w.split("=", 1)[1] if assigned else w
         name = os.path.basename(value.rstrip("/")).lower()
-        if "/" in value and name in always:
+        if "/" not in value:
+            continue
+        if name in always:
             out.append((name, seg.strip()[:110], "names %s by path: %s" % (value, G["ALWAYS_BAD"].get(name, "always refused"))))
+        elif assigned and name in guarded and value.startswith(("/", "~")):
+            # Absolute only: `X="$STUBS/open"` is the suite's own recording stub, not the host's.
+            out.append((name, seg.strip()[:110], "assigns the path %s to a variable: calling it through the "
+                        "variable bypasses PATH and the stand-in" % value))
+    while raw and raw[0] in CONTROL_WORDS:
+        raw = raw[1:]
     argv, sudoed = G["resolve"](raw)
     if not argv:
         return out
@@ -401,7 +439,7 @@ def standin(name, args):
             text, stdin_bytes = _osascript_text(args)
             if text is not None:
                 judged = [name, "-e", text] + args
-        v = G["judge"](judged, False)
+        v = G["judge"](judged, False) or test_run_rule(name, judged)
         if v:
             return _refuse(name, args, "%s: %s" % (v[0], v[1]))
     real = _real(name)

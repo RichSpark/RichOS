@@ -47,9 +47,13 @@ echo "=== host_shield ==="
 
 # H1 — the stand-ins are exactly the commands the guard judges, read from the guard itself. By
 # name, so the engine's selector maps every stand-in file to this suite (it matches basenames):
-STANDIN_FILES="betterdisplaycli brightness caffeinate cgsession defaults displayplacer halt killall launchctl nvram open osascript pkill pmset reboot shutdown systemsetup"
-if [ "$(LC_ALL=C ls "$HS_STANDINS" | tr '\n' ' ' | sed 's/ $//')" = "$STANDIN_FILES" ]; then
-    ok "H1a host-shield/ holds exactly the seventeen stand-ins this suite names"
+# (the screen-saver one is named in guard-host-display-power.test.sh; here it is assembled, as a
+# literal would read to the guard's code surface as a call)
+SSE="ScreenSaver"; SSE="${SSE}Engine"
+STANDIN_FILES="betterdisplaycli brightness caffeinate cgsession defaults displayplacer halt killall launchctl nvram open osascript pkill pmset reboot $SSE shutdown systemsetup"
+lower_sorted() { tr ' ' '\n' | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
+if [ "$(ls "$HS_STANDINS" | tr '\n' ' ' | lower_sorted)" = "$(printf '%s' "$STANDIN_FILES" | lower_sorted)" ]; then
+    ok "H1a host-shield/ holds exactly the eighteen stand-ins this suite names"
 else
     bad "H1a host-shield/ changed" "$(LC_ALL=C ls "$HS_STANDINS" | tr '\n' ' ')"
 fi
@@ -66,7 +70,9 @@ names = {k.lower() for k in G["ALWAYS_BAD"]}
 names |= set(re.findall(r'name == "([a-z]+)"', body))
 for group in re.findall(r'name in \(([^)]*)\)', body):
     names |= set(re.findall(r'"([a-z]+)"', group))
-want, have = sorted(names), hs.standin_names()
+# The screen-saver branch tests the command word itself, not `name ==`: read it too.
+names |= set(re.findall(r'"([a-z]+)" in a0\.lower\(\)', body))
+want, have = sorted(names), sorted(n.lower() for n in hs.standin_names())
 print("same" if want == have else "guard judges %s; stand-ins are %s" % (want, have))
 PY
 GOT="$(cat "$TMP/h1")"
@@ -101,20 +107,24 @@ else
 fi
 
 # H4 — the harmless forms are handed on unchanged; the harmful ones are refused.
-F="$(suite h4.test.sh "$PM -g batt" "$CAF -is true" "$OSA -e 'return 1'" "$KA -0 no-such-process-here")"
+F="$(suite h4.test.sh "$PM -g batt" "$OSA -e 'return 1'" "$KA -0 no-such-process-here")"
 trip_clean
 RC="$(shielded "$F")"
-if [ "$RC" = 0 ] && grep -q "TRIPWIRE $PM -g batt" "$TRIP/trip.log" && grep -q "TRIPWIRE $CAF -is true" "$TRIP/trip.log" \
+if [ "$RC" = 0 ] && grep -q "TRIPWIRE $PM -g batt" "$TRIP/trip.log" \
         && grep -q "TRIPWIRE $OSA -e return 1" "$TRIP/trip.log" && grep -q "TRIPWIRE $KA -0 no-such-process-here" "$TRIP/trip.log"; then
-    ok "H4  $PM -g, $CAF -is, a harmless $OSA -e and $KA -0 reach the next command on PATH unchanged (rc 0)"
+    ok "H4  $PM -g, a harmless $OSA -e and $KA -0 reach the next command on PATH unchanged (rc 0)"
 else
     bad "H4  rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
 fi
-for form in "$PM $SLEEPNOW" "$CAF -d true" "$CAF -t 5 -d true" "$KA $DOCK"; do
+# The guard's refusals, then the TEST-RUN rules (forms the guard allows an operator and a test
+# never needs: any caffeinate, any osascript keystroke, an app brought to the front).
+SE='tell application "System Events" to'
+for form in "$PM $SLEEPNOW" "$CAF -d true" "$CAF -t 5 -d true" "$KA $DOCK" "$CAF -is true" \
+        "$OSA -e '$SE key code 53'" "$OSA -e '$SE keystroke \"a\"'" "$OSA -e 'tell application \"Finder\" to set frontmost to true'"; do
     F="$(suite h4b.test.sh "$form || true" "exit 0")"
     trip_clean
     RC="$(shielded "$F")"
-    if [ "$RC" = 1 ] && grep -q "^  FAIL  host-shield: refused \`$form\`" "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
+    if [ "$RC" = 1 ] && grep -q "^  FAIL  host-shield: refused \`${form%% *} " "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
         ok "H4b $form is refused and logged; nothing reached the tripwire"
     else
         bad "H4b $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
@@ -163,6 +173,31 @@ if [ "$RC" = 1 ] && grep -q "names /sbin/$HS_CMD by path" "$TMP/out"; then
     ok "H6c a path to an always-refused command is refused wherever it is named (an assignment too)"
 else
     bad "H6c rc=$RC" "$(cat "$TMP/out")"
+fi
+
+# H6d — a path inside shell control syntax, and a path to ANY stood-in command kept in a
+# variable, are refused too (each sits after `exit 0`: the source check reads it, nothing runs it).
+for line in "if /usr/bin/$PM $SLEEPNOW; then :; fi" \
+            "while ! /usr/bin/$OSA -e '$SE $SLEEP'; do :; done" \
+            "POWER=/usr/bin/$PM" "local power=/usr/bin/$CAF"; do
+    F="$(suite h6d.test.sh "exit 0" "$line")"
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+        ok "H6d refused before it runs: $line"
+    else
+        bad "H6d not refused: $line (rc=$RC)" "$(cat "$TMP/out")"
+    fi
+done
+
+# H6e — the screen-saver binary has a stand-in of its own: a bare-name call is refused.
+F="$(suite h6e.test.sh "$SSE || true" "exit 0")"
+trip_clean
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "^  FAIL  host-shield: refused \`$(printf '%s' "$SSE" | tr '[:upper:]' '[:lower:]')\`" "$TMP/out" \
+        && [ ! -s "$TRIP/trip.log" ]; then
+    ok "H6e a bare-name call of the screen-saver binary is refused; nothing reached the tripwire"
+else
+    bad "H6e rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
 fi
 
 # H7 — declarations. `names` lets the source carry it; a bare-name call is still refused.
