@@ -1085,10 +1085,38 @@ fi
 # supervisor and role: the compiler gets the guard's longer window (cpu_guard.BUILD_WINDOW),
 # the limit still holds, and the tree is stopped if this script is. The supervisor is owned
 # by this script's pid. Nothing else here runs under it.
+#
+# WHERE MANAGED VERIFICATION IS ON, the supervisor admits only work under a current proof-run
+# plan or its live admitted ancestor, and refuses everything else before it starts (exit 75,
+# proc_tree.supervise). A packaging run started by hand has neither, so it would refuse before
+# cargo ran (review rv-20261011T142043Z-4d2b357d-d8c1 #1). That case is asked FIRST, with the
+# supervisor's own two questions (cpu_guard.verification_enabled and
+# inherited_verification_owner), and the compile then runs as it did before the supervisor:
+# directly, under the ordinary CPU guard rule, said so on screen. The admission rule itself is
+# untouched: nothing here registers or claims admission. A probe that cannot answer keeps the
+# supervisor, whose own refusal then names the reason.
 build_launch=()
+build_launch_why=""
 proc_tree="$(cd "$app_dir/.." && pwd)/engine/scripts/lib/proc_tree.py"
 if [ -f "$proc_tree" ]; then
   build_launch=(python3 "$proc_tree" run "$$" --guard-role release-build --)
+  admission_rc=0
+  python3 -B - "$(dirname "$proc_tree")" <<'PY' || admission_rc=$?
+import os
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import cpu_guard
+managed = cpu_guard.verification_enabled()
+owner = cpu_guard.inherited_verification_owner(os.environ.get("RICHOS_VERIFICATION_OWNER"))
+sys.exit(3 if managed and owner is None else 0)
+PY
+  if [ "$admission_rc" = 3 ]; then
+    build_launch=()
+    build_launch_why="no supervisor: managed verification is on and this run is not under a proof-run plan, so the supervisor would refuse it; the 10-second CPU guard rule applies"
+  fi
+else
+  build_launch_why="no supervisor ($proc_tree is missing), so the 10-second CPU guard rule applies"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1128,7 +1156,7 @@ if [ -n "$dry_run" ]; then
     fi
   fi
   say "  bundle targets      : $bundles"
-  say "  build runs under    : ${build_launch[*]:-no supervisor ($proc_tree is missing), so the 10-second CPU guard rule applies}"
+  say "  build runs under    : ${build_launch[*]:-$build_launch_why}"
   if [ -n "$updater" ]; then
     say "  update artifacts    : ON — signed with $updater_key_desc"
     say "  update manifest     : ${RICHOS_UPDATE_BASE_URL:+at ${RICHOS_UPDATE_BASE_URL}}${RICHOS_UPDATE_BASE_URL:-NOT written (RICHOS_UPDATE_BASE_URL is unset, and a guessed URL is worse than none)}"
@@ -1378,8 +1406,8 @@ if [ -n "$source_stamp" ]; then
 fi
 
 if [ "${#build_launch[@]}" -eq 0 ]; then
-  warn "  note: $proc_tree is missing, so this compile runs without the release-build role"
-  warn "  and the CPU guard may stop rustc after 10 s above 3 cores."
+  warn "  note: this compile runs without the release-build role ($build_launch_why),"
+  warn "  so the CPU guard may stop rustc after 10 s above 3 cores."
 fi
 if ! (cd "$src_tauri" && ${build_launch[@]+"${build_launch[@]}"} env RICHOS_SOURCE_SHA="$source_stamp" cargo "${build_args[@]}"); then
   warn ""
