@@ -16185,7 +16185,7 @@
     },
     "scripts/lib/recovery_runner.py": {
       "source": "scripts/lib/recovery_runner.py",
-      "sha256": "cead1e181a1cab431f07839514d59366493df7461a29a7d82e1db1af3e280277",
+      "sha256": "d9e8431b024227406c970344133e9718f7f745f20469f33354807144240acbfb",
       "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor.",
       "keys": [],
       "edges": [
@@ -16205,7 +16205,7 @@
     },
     "scripts/lib/second_review.py": {
       "source": "scripts/lib/second_review.py",
-      "sha256": "5156fad05e0bdabd2aaa3d81cda22365f3557536450bfb82a5477c2bb9594036",
+      "sha256": "070b56182de30e1500eb254ef49550dc16b5a28cfbc40c9eeac6d5ce5eebe5af",
       "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle.",
       "keys": [],
       "edges": [

@@ -24,6 +24,15 @@ spec.loader.exec_module(fixture)
 
 
 class ResponseContract(unittest.TestCase):
+    def test_observed_advice_cannot_steer_reviews_or_dispatch_replacements(self):
+        import second_review as SR
+        record=dict(mode='observe',status='recovering',plan=dict(accepted=True,id='plan'),wes=dict(verdict=dict(action='withdraw_finding',finding='r#1')))
+        self.assertIsNone(RR.owner_notice(record))
+        with patch.object(R,'read',return_value=record),patch.object(R,'key',return_value='job'):
+            self.assertIsNone(SR.actionable_recovery('repo','work'))
+            record['mode']='enforce'
+            self.assertIs(SR.actionable_recovery('repo','work'),record)
+
     def test_portable_storage_freezes_evidence_without_a_specific_volume(self):
         import tempfile
         with tempfile.TemporaryDirectory(prefix='recovery-storage-') as directory, patch.dict(os.environ,{'RICHOS_RECOVERY_EVIDENCE_ROOT':directory,'RICHOS_RECOVERY_WIP_ROOT':directory+'/wip'}), patch.object(Path,'is_mount',return_value=False):

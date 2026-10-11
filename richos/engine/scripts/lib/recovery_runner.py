@@ -546,6 +546,8 @@ def tick(items, engine, entity, ws):
             C.schedule(R.read(record["id"]), engine, item.env)
             record = R.read(record["id"])
             wes = record.get("wes") or {}
+            if record["mode"] != "enforce":
+                continue  # observations cannot recheck, close or redirect live work
             if item.state=="ended" and wes.get("verdict", {}).get("action") in ("withdraw_finding", "correct_interpretation"):
                 effective, _ = R.F.review_of(R.rows(R.F.review_ledger_default()), item.tip, item.repo)
                 if effective and effective.get("wes_consultation") != wes["consultation"]:
@@ -570,6 +572,8 @@ def tick(items, engine, entity, ws):
 
 
 def owner_notice(record):
+    if record["mode"] != "enforce":
+        return None
     status = record["status"]
     wes = record.get("wes") or {}
     plan = record.get("plan") or {}

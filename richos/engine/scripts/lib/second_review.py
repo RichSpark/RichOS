@@ -1110,10 +1110,16 @@ def review_input_identity(w):
         sort_keys=True).encode()).hexdigest()
 
 
+def actionable_recovery(repo, work):
+    import recovery
+    record = recovery.read(recovery.key(repo, work))
+    return record if record and record.get("mode")=="enforce" else None
+
+
 def review(a):
     w = resolve_work(a)
     import recovery
-    recovery_record = recovery.read(recovery.key(w.repo, w.work_key))
+    recovery_record = actionable_recovery(w.repo, w.work_key)
     w.recovery_record = recovery_record
     if recovery_record and recovery_record.get("wes"):
         wes = recovery_record["wes"]
