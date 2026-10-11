@@ -247,6 +247,26 @@ json.dump({"agentType": "echo", "name": "echo-sonnet-x1", "model": "sonnet"},
 PY
 
 run() { # <args...>: runs the command with the fixture TMPDIR and config
+    # These cases intentionally ask the fake reviewer for another judgment.
+    # An unchanged-source recheck must name the prior review rather than bypass
+    # the production writer's shared claim.
+    local recheck
+    recheck="$(python3 - "$SB/state/reviews.jsonl" "$@" <<'PY'
+import json,subprocess,sys
+args=sys.argv[2:]
+get=lambda k,d='':args[args.index(k)+1] if k in args else d
+repo=get('--repo'); ref=get('--tip',get('--branch','HEAD'))
+if not repo: raise SystemExit()
+tip=subprocess.check_output(['git','-C',repo,'rev-parse',ref],text=True).strip()
+purpose=lambda t:'handover' if t in ('manual','handover') else 'progress'
+try: rows=[json.loads(l) for l in open(sys.argv[1])]
+except OSError: rows=[]
+for r in reversed(rows):
+ if r.get('repo')==repo and r.get('tip')==tip and r.get('verdict') and purpose(r.get('trigger'))==purpose(get('--trigger','manual')):
+  print(r['id']); break
+PY
+)"
+    [ -z "$recheck" ] || set -- "$@" --recheck "$recheck"
     OUT="$(TMPDIR="$RUN_TMP" CLAUDE_CONFIG_DIR="$RUN_CFG" bash "$SR" "$@" 2>&1)"; RC=$?
 }
 calls() { ls "$SB/calls" | wc -l | tr -d ' '; }
@@ -539,7 +559,7 @@ check "C17 the first repository's recheck files its own findings, under its own 
 ROWS0="$(wc -l <"$SB/state/reviews.jsonl" | tr -d ' ')"
 TMPDIR="$RUN_TMP" CLAUDE_CONFIG_DIR="$RUN_CFG" python3 - "$SCRIPT_DIR" "$REPO" "$(G rev-parse HEAD)" "$BASE" \
     "$SB/brief.txt" "$SB/claude-accounts.json" "$SB/bin/fake-reviewer" "$SB/account-two" "$SB/rw" <<'PY' >"$SB/c15.out" 2>&1
-import json, os, sys
+import json, os, sys, subprocess
 from types import SimpleNamespace
 scripts, repo, tip, base, words, accounts, claude, folder, state = sys.argv[1:]
 sys.path.insert(0, os.path.join(scripts, "lib"))
@@ -550,6 +570,8 @@ os.makedirs(state)
 log = os.environ["FAKE_LOG"]
 got = []
 for in_use in ("2", "1"):
+    subprocess.check_call(['git', '-C', repo, 'commit', '--allow-empty', '-qm', 'account fixture '+in_use])
+    tip = subprocess.check_output(['git', '-C', repo, 'rev-parse', 'HEAD'], text=True).strip()
     with open(accounts, "w") as f:
         json.dump({"accounts": [{"id": "1", "label": "Home"}, {"id": "2", "label": "Work", "folder": folder}],
                    "inUse": in_use}, f)
@@ -583,7 +605,7 @@ check "C19 both reviews are in the same ledger: the account's folder moves only 
 # which reviewer ran, whether a Codex review was run at all, and its arguments.
 TMPDIR="$RUN_TMP" CLAUDE_CONFIG_DIR="$RUN_CFG" python3 - "$SCRIPT_DIR" "$REPO" "$(G rev-parse HEAD)" "$BASE" \
     "$SB/brief.txt" "$SB/bin/fake-reviewer" "$SB/codex-reviews.json" "$SB/rw16" "$SB/bin/no-such-codex" <<'PY' >"$SB/c16.out" 2>&1
-import json, os, sys
+import json, os, sys, subprocess
 from types import SimpleNamespace
 scripts, repo, tip, base, words, claude, setting, state, missing = sys.argv[1:]
 sys.path.insert(0, os.path.join(scripts, "lib"))
@@ -600,6 +622,8 @@ cases = [("never set (first run)", None, {}),
          ("on, Codex missing", True, {"SECOND_REVIEW_CODEX": missing})]
 got = []
 for name, on, env in cases:
+    subprocess.check_call(['git', '-C', repo, 'commit', '--allow-empty', '-qm', 'review setting fixture '+name])
+    tip = subprocess.check_output(['git', '-C', repo, 'rev-parse', 'HEAD'], text=True).strip()
     if on is None:
         if os.path.exists(setting):
             os.unlink(setting)
@@ -647,6 +671,45 @@ sys.exit(1 if bad else 0)
 PY
 check "C16 the app's Codex switch picks each review's reviewer when it starts: off or never set Claude; on and signed in Codex, isolated; on and signed out or missing Claude, with no Codex review run" \
     $? "$(cat "$SB/c16.out")"
+
+# C20: the shared writer, including a manual caller, owns source execution.
+SECOND_REVIEW_STATE_DIR="$SB/claim-state" python3 - "$SCRIPT_DIR/lib" "$REPO" <<'PYTEST'
+import json,os,subprocess,sys
+from types import SimpleNamespace
+sys.path.insert(0,sys.argv[1])
+import second_review as sr
+repo=sys.argv[2]; tip=sr.git(repo,'rev-parse','HEAD')
+w=sr.Work(); w.repo=repo; w.tip=tip; w.base=tip; w.work_key='fixture'; w.words=[('original','authorized outcome')]
+a=SimpleNamespace(trigger='handover',recheck='')
+with sr.execution_claim(repo,tip):
+ code="""import sys;sys.path.insert(0,sys.argv[1]);import second_review as s;
+try:
+ with s.execution_claim(sys.argv[2],sys.argv[3]):pass
+except s.Refused:raise SystemExit(23)
+"""
+ assert subprocess.run([sys.executable,'-c',code,sys.argv[1],repo,tip]).returncode==23
+# Dead owners release kernel claims; completed locks keep the same inode.
+with sr.execution_claim(repo,tip):pass
+sr.resolve_work=lambda _:w
+calls=[]
+def execute(a,w):
+ calls.append(1)
+ sr.append_row(dict(id='one',tip=tip,repo=repo,repo_id=sr.repo_identity(repo),trigger=a.trigger,
+  verdict='passed',input_identity=sr.review_input_identity(w),recheck_of=a.recheck,record='fixture'))
+ return 0
+sr._review_owned=execute
+assert sr.review(a)==0 and len(calls)==1
+a.trigger='manual'
+assert sr.review(a)==0 and len(calls)==1
+w.claims=[('changed','new claim')]
+try:sr.review(a)
+except sr.Refused:pass
+else:raise AssertionError('changed input needs an explicit recheck')
+a.recheck='one'
+assert sr.review(a)==0 and len(calls)==2
+print('shared execution, manual deduplication and explicit rechecks passed')
+PYTEST
+check "C20 every writer claims source execution; exact duplicates reuse; changed inputs require an explicit recheck" $? "shared writer assertion failed"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

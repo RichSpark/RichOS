@@ -137,8 +137,10 @@ SECOND_REVIEW_QUOTA_CMD, SECOND_REVIEW_CPU_BUSY, SECOND_REVIEW_TIMEOUT_SECONDS.
 """
 
 import argparse
+import contextlib
 import ctypes
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -1092,9 +1094,56 @@ def repo_identity(path):
     return real
 
 
+@contextlib.contextmanager
+def execution_claim(repo, tip):
+    """Every producer uses this kernel-held claim. Keep the inode after release.
+
+    Watcher scheduling locks are not execution authority: manual reviews must
+    participate too. A crash releases flock, including a kill before output.
+    """
+    identity = hashlib.sha256((repo_identity(repo) + "\n" + tip).encode()).hexdigest()
+    path = os.path.join(state_root(), "review-claims", identity + ".lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("a review already owns this repository and source; join its recorded result")
+        yield
+    finally:
+        os.close(fd)
+
+
+def review_input_identity(w):
+    return hashlib.sha256(json.dumps({"repo": repo_identity(w.repo), "tip": w.tip,
+        "base": w.base, "work": w.work_key, "words": w.words, "claims": w.claims},
+        sort_keys=True).encode()).hexdigest()
+
+
 def review(a):
-    say = lambda s: (sys.stderr.write(s + "\n"), sys.stderr.flush())
     w = resolve_work(a)
+    with execution_claim(w.repo, w.tip):
+        purpose = "handover" if a.trigger in ("handover", "manual") else "progress"
+        existing = [r for r in read_ledger() if r.get("tip") == w.tip and r.get("verdict")
+                    and same_repo(r, w.repo, repo_identity(w.repo))
+                    and ("handover" if r.get("trigger") in ("handover", "manual") else "progress") == purpose]
+        recheck = getattr(a, "recheck", "")
+        if recheck and not any(r.get("id") == recheck for r in existing):
+            raise Refused("--recheck must name an existing review of this repository/source/purpose")
+        reusable = [r for r in existing if r.get("recheck_of", "") == recheck]
+        if reusable:
+            row = reusable[-1]
+            if row.get("input_identity") != review_input_identity(w):
+                raise Refused("this source already has a review with different inputs; use --recheck <review id>")
+            print("SECOND-REVIEW reused %s (%s). Record: %s" %
+                  (row["id"], row["verdict"], row.get("record")))
+            return {"passed": EXIT_PASSED, "changes-requested": EXIT_CHANGES}[row["verdict"]]
+        return _review_owned(a, w)
+
+
+def _review_owned(a, w):
+    say = lambda s: (sys.stderr.write(s + "\n"), sys.stderr.flush())
     repo_id = repo_identity(w.repo)
     earlier = earlier_findings(w.work_key, w.tip, w.repo, repo_id)
     started_at = time.time()
@@ -1109,6 +1158,7 @@ def review(a):
     prompt = ""
 
     row = {"id": rid, "at": iso(started_at), "repo": w.repo, "repo_id": repo_id, "branch": w.branch, "base": w.base, "tip": w.tip,
+           "input_identity": review_input_identity(w), "recheck_of": getattr(a, "recheck", ""),
            "work": w.work_key, "author": w.author, "author_model": w.author_model, "trigger": a.trigger,
            "reviewer": "", "reviewer_model": "", "reviewer_effort": "", "cli_version": "",
            "verdict": None, "forced": False, "findings": 0, "blocking": 0, "p1": 0, "follow_ups": 0,
@@ -1293,6 +1343,7 @@ def main(argv):
     ap.add_argument("--author", default="", help="the author's name, when not a registered teammate")
     ap.add_argument("--author-model", default="", help="the author's model, when no transcript says it")
     ap.add_argument("--work", default="", help="the key that ties rechecks of one piece of work together")
+    ap.add_argument("--recheck", default="", help="the prior review id intentionally rechecked on the same source")
     ap.add_argument("--trigger", default="manual", choices=["handover", "long-job", "quiet", "manual"])
     ap.add_argument("--reviewer", default="auto", choices=["auto", "codex", "claude"])
     ap.add_argument("--claude", default="", help="the Claude CLI to review with (the app passes the one it ships)")
