@@ -332,6 +332,37 @@ class RecoveryChain(Base):
         feature = dict(successor, key='independent-feature', recovery_assignment=dict(kind='implementation', outcome='new-outcome', correction_of=[]))
         self.assertEqual(ws.recovery_work_key(feature), 'teammate:independent-feature')
 
+    def test_off_mode_preserves_multi_continuation_and_ignores_unadopted_correction_metadata(self):
+        first=ws.new_record(self.sid+'--first',recovery_assignment=dict(kind='implementation',outcome='a',correction_of=[],acceptance='a'))
+        second=ws.new_record(self.sid+'--second',recovery_assignment=dict(kind='implementation',outcome='b',correction_of=[],acceptance='b'))
+        ws.save_agent(first);ws.save_agent(second)
+        current=ws.new_record(self.sid+'--off',entity=self.entity)
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='correction-of: missing\nContinue both finished agents'))
+        assignment=ws._recovery_assignment(payload,current,[first['key'],second['key']],[])
+        self.assertEqual(assignment['outcome'],'teammate:'+current['key'])
+        self.assertEqual(assignment['correction_of'],[])
+
+    def test_observed_identity_is_a_projection_and_never_rewrites_live_review_work(self):
+        one=ws.new_record(self.sid+'--observed-one',registered_at='2026-10-10T00:00:00Z')
+        two=ws.new_record(self.sid+'--observed-two',registered_at='2026-10-10T01:00:00Z')
+        ws.save_agent(one);ws.save_agent(two)
+        current=ws.new_record(self.sid+'--observed-current',entity=self.entity)
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='Continue the accepted outcome'))
+        inspection=dict(id='observed',classification_index=dict(sha256='source'),assignment_classification=dict(kind='implementation',relation='corrective',correction_of=[one['key'],two['key']],evidence='indexed original briefs'))
+        control,host=ws._recovery_adapter()
+        with patch.object(control.R,'mode',return_value=dict(mode='observe',repositories=[self.other])):
+            baseline=ws._recovery_assignment(payload,current,[],[])
+            before=ws.recovery_work_key(dict(current,recovery_assignment=baseline))
+            assignment=ws._recovery_assignment(payload,current,[],[],inspection)
+            self.assertEqual(ws.recovery_work_key(dict(current,recovery_assignment=assignment)),before)
+            self.assertEqual(ws.load_agent(one['key']),one)
+            self.assertEqual(ws.load_agent(two['key']),two)
+            projection=dict(current,recovery_assignment=current['recovery_observation_assignment'])
+            work,aliases,acceptance=control.work(host,projection)
+            self.assertEqual(work,'teammate:'+one['key'])
+            self.assertEqual(aliases,{'teammate:'+r['key'] for r in [one,two,current]})
+            self.assertEqual(acceptance,'legacy:'+one['key'])
+
     def test_native_classification_reconciles_legacy_corrections_but_not_dependencies(self):
         original=ws.new_record(self.sid+'--legacy-one',registered_at='2026-10-10T00:00:00Z')
         second=ws.new_record(self.sid+'--legacy-two',registered_at='2026-10-10T01:00:00Z')
@@ -341,12 +372,12 @@ class RecoveryChain(Base):
         payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='Implement the same accepted outcome'))
         inspector=dict(id='inspection',classification_index=dict(sha256='source'),assignment_classification=dict(
             kind='implementation',relation='corrective',correction_of=[original['key'],second['key']],evidence='Both original indexed briefs correct the same outcome'))
-        assignment=ws._recovery_assignment(payload,current,[],[second['key']],inspector)
+        assignment=ws._classified_recovery_assignment(payload,current,[],[second['key']],inspector)
         self.assertEqual(assignment['acceptance'],'legacy:'+original['key'])
         current['recovery_assignment']=assignment
         self.assertEqual(len(ws.recovery_chain(current)),3)
         independent=dict(inspector,assignment_classification=dict(kind='implementation',relation='dependent',correction_of=[],evidence='A different accepted feature depends on the merge'))
-        feature=ws._recovery_assignment(payload,dict(current,key=self.sid+'--feature'),[],[second['key']],independent)
+        feature=ws._classified_recovery_assignment(payload,dict(current,key=self.sid+'--feature'),[],[second['key']],independent)
         self.assertNotEqual(feature['outcome'],assignment['outcome'])
         self.assertEqual(feature['correction_of'],[])
         self.assertEqual(len(ws._chain(current)),1)

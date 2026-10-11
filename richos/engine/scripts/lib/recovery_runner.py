@@ -527,7 +527,8 @@ def tick(items, engine, entity, ws):
             rec = SR.find_teammate(ws, item.ref)
             if not rec.get("recovery_assignment"):
                 continue  # native dispatch inspection must first reconcile legacy identity
-            work, aliases, acceptance = C.work(ws, rec)
+            projected = dict(rec, recovery_assignment=rec["recovery_observation_assignment"]) if declaration["mode"]=="observe" and rec.get("recovery_observation_assignment") else rec
+            work, aliases, acceptance = C.work(ws, projected)
             routes = R.pending_routes(item.repo, aliases)
             record = R.reconcile(item.repo, work, aliases, item.session, acceptance,
                                  mode=declaration["mode"], premises="all" if routes else declaration.get("wes_policy", "carried"))

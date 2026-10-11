@@ -4734,7 +4734,7 @@ def _chain(rec):
     return out
 
 
-def recovery_chain(rec):
+def recovery_chain(rec, observation=False):
     """Correction identity without changing merge/discard/cleanup ownership.
 
     New registrations carry exact host-bound correction keys. Legacy
@@ -4756,7 +4756,7 @@ def recovery_chain(rec):
             previous = load_agent(reference)
             if not previous:
                 raise SpecError("recovery predecessor %s is missing; reconcile its source record" % reference)
-            if assignment and (previous.get("recovery_assignment") or {}).get("outcome") not in (
+            if assignment and not (observation and _recovery_unclassified(previous)) and (previous.get("recovery_assignment") or {}).get("outcome") not in (
                     None, assignment.get("outcome")):
                 raise SpecError("recovery relationship joins different authorized outcomes")
             todo.append(previous)
@@ -4777,36 +4777,63 @@ def recovery_stop(key, record, control, tip):
     return recovery.stop(host, key, record, control, tip)
 
 
-def recovery_work_key(rec):
+def recovery_work_key(rec, observation=False):
     outcome = (rec.get("recovery_assignment") or {}).get("outcome") or ""
     if outcome.startswith("app:") and (rec.get("recovery_assignment") or {}).get("kind") == "implementation":
         return outcome
-    return "teammate:%s" % recovery_chain(rec)[0]["key"]
+    return "teammate:%s" % recovery_chain(rec, observation=observation)[0]["key"]
+
+
+def _recovery_unclassified(rec):
+    assignment = rec.get("recovery_assignment") or {}
+    if assignment.get("kind", "implementation") != "implementation":
+        return False
+    authority = assignment.get("authority") or {}
+    return not (authority.get("host") or (authority.get("inspection") and not assignment.get("observation_only")))
+
+
+def _baseline_recovery_assignment(payload, rec, mode):
+    prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
+    host = payload.get("richos_recovery_assignment") or {}
+    roles = prompt_lines(prompt, "recovery-role")
+    kind = host.get("kind") or (roles[0] if roles else "implementation")
+    return dict(kind=kind if kind in ("implementation", "review", "helper") else "implementation",
+        outcome=host.get("outcome") or "teammate:"+rec["key"], correction_of=[],
+        acceptance=host.get("acceptance") or hashlib.sha256(prompt.encode()).hexdigest(),
+        observation_only=mode=="observe", authority=dict(host=host, mode=mode,
+            session=str(payload.get("session_id") or ""), tool_use_id=str(payload.get("tool_use_id") or ""),
+            transcript=str(payload.get("transcript_path") or ""), brief_sha256=hashlib.sha256(prompt.encode()).hexdigest()))
 
 
 def _recovery_assignment(payload, rec, continues, lands_pending, inspection=None):
     recovery, _host = _recovery_adapter()
     declaration = recovery.R.mode(rec.get("entity") or os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd"))
+    if declaration["mode"] == "off":
+        return _baseline_recovery_assignment(payload, rec, "off")
+    if declaration["mode"] == "enforce":
+        return _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection)
+    # Observation has its own projection. Never rewrite live review identity
+    # or predecessor records because a would-be classification changed.
+    baseline = _baseline_recovery_assignment(payload, rec, "observe")
+    rec.pop("recovery_observation_assignment", None)
+    rec.pop("recovery_observation_gap", None)
     try:
-        assignment = _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection)
+        proposal = _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection, observing=True)
+        proposal["observation_only"] = True
+        rec["recovery_observation_assignment"] = proposal
     except (SpecError, OSError, ValueError) as error:
-        if declaration["mode"] != "observe":
-            raise
-        prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
-        host = payload.get("richos_recovery_assignment") or {}
-        assignment = dict(kind=host.get("kind") or "implementation", outcome=host.get("outcome") or "teammate:"+rec["key"],
-            correction_of=[], acceptance=host.get("acceptance") or hashlib.sha256(prompt.encode()).hexdigest(),
-            authority=dict(host=host, observation_gap=str(error)))
-    if declaration["mode"] == "observe":
-        assignment["observation_only"] = True
-    return assignment
+        rec["recovery_observation_gap"] = str(error)
+        baseline["authority"]["observation_gap"] = str(error)
+    return baseline
 
 
-def _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection=None):
+def _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection=None, observing=False):
     library = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "scripts", "lib")
     if library not in sys.path:
         sys.path.insert(0, library)
     import recovery
+    virtual = {}
+    lookup = lambda key: virtual.get(key) or load_agent(key)
     prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
     # Top-level host metadata is supplied by the app adapter after it verifies
     # the exact prepared Agent payload. It is never read from the model's tool
@@ -4830,8 +4857,8 @@ def _classified_recovery_assignment(payload, rec, continues, lands_pending, insp
             declaration = recovery.mode(rec.get("entity") or os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd"))
             if declaration["mode"]=="enforce":
                 raise SpecError("job identity unavailable: "+classified["evidence"])
-        legacy = [load_agent(ref) for ref in refs]
-        if legacy and all(r and not r.get("recovery_assignment") for r in legacy):
+        legacy = [lookup(ref) for ref in refs]
+        if legacy and all(r and _recovery_unclassified(r) for r in legacy):
             import recovery
             legacy.sort(key=lambda r:(str(r.get("registered_at") or ""),r["key"]))
             origin = legacy[0]["key"]
@@ -4840,11 +4867,14 @@ def _classified_recovery_assignment(payload, rec, continues, lands_pending, insp
                     if space.get("repo") and recovery.read(recovery.key(space["repo"],"teammate:"+old["key"])):
                         raise SpecError("legacy job already has tracked recovery; explicit identity reconciliation required")
             for old in legacy:
+                old = dict(old)
                 old["recovery_assignment"] = dict(kind="implementation", outcome="teammate:"+origin,
                     correction_of=[] if old["key"]==origin else [origin], acceptance="legacy:"+origin,
                     authority=dict(bootstrap=True, inspection=(inspection or {}).get("id"), evidence=classified["evidence"],
                         transcript=str(payload.get("transcript_path") or "")))
-                save_agent(old)
+                virtual[old["key"]] = old
+                if not observing:
+                    save_agent(old)
     elif kind == "implementation":
         # `lands-pending` describes merge ownership, not semantic identity.
         # Explicit corrective links or the bound inspection supply identity.
@@ -4855,7 +4885,7 @@ def _classified_recovery_assignment(payload, rec, continues, lands_pending, insp
         refs = []
     inherited = []
     for reference in refs:
-        previous = load_agent(reference)
+        previous = lookup(reference)
         if not previous:
             raise SpecError("recovery predecessor %s is missing" % reference)
         if (previous.get("recovery_assignment") or {}).get("kind", "implementation") != "implementation":
@@ -4877,7 +4907,7 @@ def _classified_recovery_assignment(payload, rec, continues, lands_pending, insp
     return {"kind": kind,
             "outcome": inherited[0] if inherited else (host.get("outcome") or "teammate:%s" % rec["key"]),
             "correction_of": sorted(set(refs)), "authority": source,
-            "acceptance": host.get("acceptance") or (load_agent(refs[0]).get("recovery_assignment", {}).get("acceptance")
+            "acceptance": host.get("acceptance") or (lookup(refs[0]).get("recovery_assignment", {}).get("acceptance")
                           if refs else None) or hashlib.sha256(prompt.encode()).hexdigest()}
 
 

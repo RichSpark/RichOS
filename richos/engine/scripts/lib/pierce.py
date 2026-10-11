@@ -99,7 +99,7 @@ def classification_context(payload, project):
         if rec["key"] not in selected and rec.get("session_id")!=sid and rec.get("claimed_by")!=sid:
             continue
         candidate = dict(key=rec["key"], registered_at=rec.get("registered_at"),
-            assignment=None if ((rec.get("recovery_assignment") or {}).get("authority") or {}).get("bootstrap") else rec.get("recovery_assignment"), continues=rec.get("continues",[]),
+            assignment=None if ws._recovery_unclassified(rec) else rec.get("recovery_assignment"), observed_assignment=rec.get("recovery_observation_assignment"), continues=rec.get("continues",[]),
             lands_pending=rec.get("lands_pending",[]))
         transcript = ws.platform_agent_transcript(rec)
         if transcript:

@@ -16,9 +16,10 @@ CANCEL_SECONDS = 300
 
 
 def work(ws, rec):
-    chain = ws.recovery_chain(rec)
+    observing = bool((rec.get("recovery_assignment") or {}).get("observation_only"))
+    chain = ws.recovery_chain(rec, observation=observing)
     aliases = {"teammate:"+r["key"] for r in chain}
-    identity = ws.recovery_work_key(rec)
+    identity = ws.recovery_work_key(rec, observation=observing)
     aliases.add(identity)
     original = chain[0].get("recovery_assignment") or {}
     acceptance = original.get("acceptance") or "legacy:"+chain[0]["key"]
@@ -27,6 +28,8 @@ def work(ws, rec):
 
 def admitted(ws, payload, rec, assignment, repos, entity, dry=False):
     declaration = R.mode(entity)
+    if declaration["mode"] == "observe":
+        assignment = rec.get("recovery_observation_assignment") or assignment
     if declaration["mode"] == "off" or assignment["kind"] != "implementation":
         return []
     if declaration["mode"] == "observe":
