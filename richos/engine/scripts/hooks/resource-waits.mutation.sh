@@ -69,7 +69,7 @@ mutant dead-pid-counted "RW18" "$L" \
     "a record left by a killed process would refuse turns forever: the wait ended and the gate would not know."
 
 mutant reused-pid-counted "RW31" "$L" \
-    '        if p.age is not None and (now - p.age) > w["since"] + 5:' \
+    '        if p.age is not None and (now - p.age) > w.get("began", w["since"]) + 5:' \
     '        if False:' \
     "a dead wait whose pid was reused by an unrelated process would read as a wait still going."
 
@@ -124,6 +124,22 @@ mutant negation-ignored "RW01" "$L" \
     '        if NEGATED.search(whole[max(0, cand.start() - 24):cand.start()]):' \
     '        if False:' \
     "\"no longer waiting for the VM\" would be read as a wait."
+
+# --- 4b. A HELD AGENT IS NOT WAITING IN LINE (2026-10-11) -------------------
+mutant held-counted "RW45" "$L" \
+    '    waits = [w for w in waits if not w["held_by"]]' \
+    '    waits = list(waits)' \
+    "a teammate the lead froze would refuse the lead's turn at ten minutes, the 04:26Z and 06:19Z incidents."
+
+mutant held-time-counted "RW46" "$L" \
+    '        w["since"] = began + total' \
+    '        w["since"] = began' \
+    "a resumed wait would count the minutes it was held, and refuse the turn the moment its agent is resumed."
+
+mutant held-by-pid-ignored "RW48" "$L" \
+    '    return isinstance(birth, (int, float)) and birth <= w.get("began", w["since"]) + HOLD_BIRTH_SLACK' \
+    '    return False' \
+    "a wait recorded by a process the hold froze would count whenever its waiter name is not the agent's."
 
 # --- 5. THE WRAPPER ---------------------------------------------------------
 mutant refire-stands-down "RW27" "$L" \

@@ -28,6 +28,10 @@
 #   X06  a holder that is the waiter's own ancestor is a DEADLOCK
 #   W01  a test VM wait and a device wait over 10 min: one block, two stalls,
 #        who holds each ("no holder recorded" / "not recorded by the waiter")
+#   H01  a teammate the lead holds (agent_hold.py): its wait is no stall
+#        while the hold stands
+#   H02  resumed: the held time is not counted, so no stall yet
+#   H03  its clock runs again from where it was: told as a WAIT
 #   T01  a live teammate with no commit and no transcript write for 25 min is
 #        SILENT: its name, last commit, last transcript write, what to do
 #   T02  not repeated
@@ -350,6 +354,42 @@ check "W01  a VM wait and a device wait: one block, two stalls, who holds each" 
         && has "$OUT" "[WAIT] kilo-opus-d1: waits for android-device" && has "$OUT" "not recorded by the waiter"; \
         echo $?)" "out=$OUT"
 rm -f "$RICHOS_WAITS_DIR"/*.json
+
+# --- H: a teammate the lead HOLDS is not waiting in line (2026-10-11) ----------
+# Its wait is recorded now. H01: the lead holds it 11 minutes in, already over
+# the line (agent_hold.py's hold record). H02/H03: a hold 5 minutes in, since
+# released (its release history line). Both hand-written in agent_hold.py's
+# shapes in this suite's hold directory; resource-waits.test.sh RW46 proves the
+# real release writes that line. Ages are moved with the look's clock.
+new_registry h; new_state h
+HW="$(spawn_sleeper)"; PIDS+=("$HW")
+HNOW="$(date +%s)"
+python3 - "$RICHOS_WAITS_DIR" "$HW" "$RICHOS_AGENT_HOLD_DIR" "$HNOW" <<'PY'
+import json, os, sys
+d, pid, hold, now = sys.argv[1], int(sys.argv[2]), sys.argv[3], float(sys.argv[4])
+with open(os.path.join(d, "%d-fixture.json" % pid), "w") as fh:
+    json.dump({"schema": "richos-wait/1", "pid": pid, "since": now, "resource": "cpu-admission",
+               "waiter": "november-opus-h1", "reason": "fixture", "holding": [], "cwd": d,
+               "command": "fixture"}, fh)
+os.makedirs(os.path.join(hold, "held"), exist_ok=True)
+with open(os.path.join(hold, "held", "beadfeed-h__a0000000000fixh1.json"), "w") as fh:
+    json.dump({"session_id": "beadfeed-h", "agent_id": "a0000000000fixh1", "name": "november-opus-h1",
+               "at": now + 660, "held": {}, "parents": {}, "detached": {}}, fh)
+PY
+tick 1200
+check "H01  a held teammate's wait, 11 min old when held, is not a stall while the hold stands" \
+    "$( ! has "$OUT" "november-opus-h1"; echo $?)" "out=$OUT"
+rm -f "$RICHOS_AGENT_HOLD_DIR"/held/*.json
+new_state h2   # what H01 may have announced does not silence H02
+printf '{"agent_id": "a0000000000fixh1", "at": %s, "held": {}, "name": "november-opus-h1", "released": %s, "session_id": "beadfeed-h"}\n' \
+    "$((HNOW + 300))" "$((HNOW + 1500))" > "$RICHOS_AGENT_HOLD_DIR/hold-history.jsonl"
+tick 1700
+check "H02  RESUMED after 20 min held: 5 + 3 counted minutes (28 raw) are no stall" \
+    "$( ! has "$OUT" "november-opus-h1"; echo $?)" "out=$OUT"
+tick 1900
+check "H03  and its clock runs again from where it was: 5 + 6 counted minutes are told as a WAIT" \
+    "$( has "$OUT" "[WAIT] november-opus-h1: waits for CPU admission"; echo $?)" "out=$OUT"
+rm -f "$RICHOS_WAITS_DIR"/*.json "$RICHOS_AGENT_HOLD_DIR/hold-history.jsonl"
 
 # --- T: silent teammates ------------------------------------------------------
 new_registry t; new_state t
