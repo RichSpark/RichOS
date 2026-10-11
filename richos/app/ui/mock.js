@@ -1460,6 +1460,8 @@
   // `preset.spend.ready: false` is the first count still running; `preset.spend.agents` the agents
   // working. `__RICHOS_MOCK__.spendLand` puts a request on record now (the dot on Refresh, the live
   // line), `spendReady` ends the first count, `spendAgents` sets the count working.
+  // `preset.spend.rows` replaces the seeded record with exactly those rows (the shape below), so a
+  // suite can put one small month on record (the Settings row's cents, `spend.js` check 1b).
   const spendMock = (() => {
     const p = preset.spend || {};
     const DAY = 86400000, now = new Date();
@@ -1471,7 +1473,8 @@
     const SHAPE = { fable: [620, 0.29, 290000], opus: [9200, 0.105, 237000], sonnet: [1500, 0.04, 126000], haiku: [2600, 0.0012, 45000] };
     const NAME = { fable: "Fable 5.1", opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5" };
     const EFFORT = { fable: "high", opus: "high", sonnet: "medium", haiku: "low" };
-    for (let d = -30; d <= 16; d++) {
+    if (Array.isArray(p.rows)) p.rows.forEach(r => rows.push(Object.assign({ cacheRead: 0 }, r)));
+    else for (let d = -30; d <= 16; d++) {
       const at = first + d * DAY;
       for (const f of ["fable", "opus", "sonnet", "haiku"]) {
         if (f === "haiku" && d < 8) continue;
@@ -1482,8 +1485,10 @@
     }
     // Earlier versions on record, as on the CEO's own Mac (2026-10-11: Opus 5, 5.5 and 4.8 in one
     // record), so a mark names three and the widest legend line is drawn.
-    rows.push({ at: first + 2 * DAY, family: "opus", name: "Opus 5", effort: "high", requests: 4000, cost: 21261.91, tokens: 920000000, cacheRead: 888000000 });
-    rows.push({ at: first + 4 * DAY, family: "opus", name: "Opus 4.8", effort: "medium", requests: 200, cost: 338.57, tokens: 46000000, cacheRead: 44000000 });
+    if (!Array.isArray(p.rows)) {
+      rows.push({ at: first + 2 * DAY, family: "opus", name: "Opus 5", effort: "high", requests: 4000, cost: 21261.91, tokens: 920000000, cacheRead: 888000000 });
+      rows.push({ at: first + 4 * DAY, family: "opus", name: "Opus 4.8", effort: "medium", requests: 200, cost: 338.57, tokens: 46000000, cacheRead: 44000000 });
+    }
     const state = { ready: p.ready !== false, agents: p.agents === undefined ? 4 : p.agents, last: null, calls: [] };
     const counted = () => rows.reduce((a, r) => a + r.requests, 0);
     function view(from) {
