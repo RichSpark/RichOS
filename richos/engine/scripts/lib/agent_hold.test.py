@@ -1524,6 +1524,38 @@ class EndOwned(Base):
         self.assertEqual(r["ended"], [], r)
         self.assertEqual(r["survivors"], [], r)
 
+    def test_the_parent_of_a_left_running_walk_is_not_ended(self):
+        """The test VM walk is left running, so its owned parents are too: a proc_tree
+        supervisor ends its whole tree when it is ended, the walk with it (second review
+        rv-20261011T055437Z-792eda49-35e8). Its own unrelated loop is still ended. No real
+        signal is sent; the kernel's answers are the fixture's."""
+        def row(ppid):
+            return {"ppid": ppid, "pgid": 100, "stat": "S", "birth": 100, "cpu": 0}
+
+        # Bash call 100 -> supervisor 110 -> walk 120 (slot holder) -> guest work 130; loop 140.
+        kernel = {100: row(50), 110: row(100), 120: row(110), 130: row(120), 140: row(50)}
+        sent = []
+
+        def kill(p, s):
+            sent.append(p)
+            if s in (signal.SIGTERM, signal.SIGKILL):
+                kernel.pop(p, None)
+
+        with mock.patch.object(agent_hold, "snapshot", side_effect=lambda: copy.deepcopy(kernel)), \
+             mock.patch.object(agent_hold, "calls", return_value=[]), \
+             mock.patch.object(agent_hold, "owned_tree", side_effect=lambda _s, _a, t: (
+                 set(t), {120, 130} & set(t), set(), ["test VM walk pid 120 left running"], {})), \
+             mock.patch.object(agent_hold, "_commands", side_effect=lambda pids: {p: "fixture" for p in pids}), \
+             mock.patch.object(agent_hold, "_birth_now", side_effect=lambda p: kernel.get(p, {}).get("birth")), \
+             mock.patch.object(agent_hold.os, "kill", side_effect=kill), \
+             mock.patch.object(agent_hold, "_log_end"):
+            r = agent_hold.end_owned(self.session, self.agent, "fixture-agent", "its run ended (fixture)")
+        self.assertEqual(sorted(set(sent)), [140], "only its unrelated loop is signaled")
+        self.assertEqual([e["pid"] for e in r["ended"]], [140], r)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["excluded"], [100, 110, 120, 130], r)
+        self.assertTrue(any("parent" in n for n in r["notes"]), r["notes"])
+
     def test_the_one_command_ends_it_by_hand(self):
         call = self.start_call(self.loop())
         self.assertTrue(wait_for(lambda: call.pid in {p for p, _pp, _a in agent_hold.owned_shells(

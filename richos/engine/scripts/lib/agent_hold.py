@@ -1613,8 +1613,22 @@ def end_owned(session_id, agent_id, name="", why=""):
     signaled, excluded, notes, described, unconfirmed = {}, set(), [], {}, {}
     for _ in range(STOP_ROUNDS):
         owned, excl, _protected, found_notes, _parents = owned_tree(session_id, agent_id, table)
+        # What is left running keeps its owned parents too: ending a parent can end its tree
+        # (a proc_tree supervisor's cleanup ends the walk it runs; second review
+        # rv-20261011T055437Z-792eda49-35e8). Freezing a parent is harmless, so a hold has no
+        # such step. They end by themselves when what they wait on ends.
+        parents_of = set()
+        for pid in excl:
+            up = table.get(pid, {}).get("ppid")
+            while up in owned and up not in excl and up not in parents_of:
+                parents_of.add(up)
+                up = table[up]["ppid"]
+        excl = excl | parents_of
         excluded |= excl
-        notes = found_notes or notes
+        notes = list(found_notes or notes)
+        if parents_of:
+            notes.append("its parent process(es) of what is left running also left running, so ending "
+                         "them cannot end it: pid %s" % ", ".join(map(str, sorted(parents_of))))
         targets = sorted(p for p in owned - excl
                          if signaled.get(p) != table[p]["birth"] and not table[p]["stat"].startswith("Z"))
         if not targets:
