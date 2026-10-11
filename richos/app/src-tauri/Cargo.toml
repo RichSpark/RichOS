@@ -64,6 +64,10 @@ tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 richos-core = { path = "../crates/richos-core" }
+# EVERY WINDOW COMMAND'S BODY RUNS OFF TAURI'S ASYNC WORKERS (`crates/richos-command`): the
+# `#[richos_command::command]` attribute every command in this shell carries. A proc-macro
+# whose three dependencies are already in this Cargo.lock, so it adds no downloaded package.
+richos-command = { path = "../crates/richos-command" }
 # Owner-only publication; never invokes the updater plugin's privileged macOS installer.
 richos-user-update = { path = "../crates/richos-user-update" }
 # Voice mode: native audio (cpal) + local whisper.cpp + macOS `say`. Kept OUT of the
@@ -88,7 +92,11 @@ tauri-plugin-updater = "2.11.0"
 # deliberately NOT named: it is the one tokio feature that would pull a new `[[package]]`
 # (`tokio-macros` is absent from the lock), so the tests in `src/phone/` build their own
 # current-thread runtime rather than buy a package for an attribute.
-tokio = { version = "1", features = ["time", "rt", "net", "io-util", "sync"] }
+# `rt-multi-thread` for `tokio::task::block_in_place`, which `#[richos_command::command]` emits
+# around every command body. Tauri's own runtime is the multi-threaded one
+# (`tauri-2.11.5/src/async_runtime.rs:223`, `TokioRuntime::new()`), so the feature is already on
+# in this graph; it is named because the shell's own code now depends on it.
+tokio = { version = "1", features = ["time", "rt", "rt-multi-thread", "net", "io-util", "sync"] }
 # THE SPEECH-MODEL DOWNLOAD (src/voice_provision.rs).
 #
 # NO NEW CRATE, AND THE FEATURE LIST IS WHY IT IS SPELLED OUT RATHER THAN LEFT TO A DEFAULT.
@@ -246,6 +254,10 @@ path = "examples/key_probe.rs"
 test = true
 
 [dev-dependencies]
+# `tauri::test`'s mock runtime, for `src/command_rule_tests.rs`: commands dispatched through
+# Tauri's real IPC path in a unit test. The `test` feature is `test = []` in tauri 2.11.5's
+# manifest, so it adds no package; as a dev-dependency feature it is on in test builds only.
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "test"] }
 # `examples/verify_update_signature.rs` — the pre-publication check that a produced
 # `.app.tar.gz` and its `.sig` actually agree under the key `tauri.conf.json` ships.
 # DELIBERATELY THE SAME CRATE the updater verifies with (it arrives beneath

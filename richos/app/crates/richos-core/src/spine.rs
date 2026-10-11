@@ -208,6 +208,9 @@ pub const STOPPED_BY_CEO: &str = "stopped_by_ceo";
 pub const ACCOUNT_SWITCH: &str = "account-switch";
 /// Rotation reason: a turn was refused for a usage limit and is re-served on the next account.
 pub const ACCOUNT_EXHAUSTED: &str = "account-exhausted";
+/// Rotation reason: the lease moves to the model his setting now names (§119), at a turn
+/// boundary — saved when Preferences closed, in use from the next reply.
+pub const MODEL_CHANGED: &str = "model-changed";
 
 /// The mouth every sentence typed or spoken at the Mac is recorded under, on an install that
 /// keeps it (operator back-end spec r3 (s); `ledger::Event::PromptReceived::channel`). A
@@ -4333,6 +4336,28 @@ impl Spine {
         self.lease_factory.as_ref().and_then(|factory| factory.quota())
     }
 
+    /// **Is the lease in the chair on a model his setting no longer names?** (§119, and the
+    /// CEO's addendum: *"Closing the preferences panel IS the confirmation that the settings
+    /// chosen there now need to be saved and implemented."*) The choice is saved when
+    /// Preferences closes; this is the implementing half, asked before every turn, so his next
+    /// reply comes from the model he chose. Never inside a turn (continuity §3.1). A lease or a
+    /// factory that cannot say never moves, and neither does a lease with a command it started
+    /// still running or unreadable, by the same rule as [`Self::account_switch_due`].
+    fn model_switch_due(&self) -> bool {
+        use crate::lease_commands::CommandReading;
+        let Some(wanted) = self.lease_factory.as_ref().and_then(|f| f.lease_models()) else { return false };
+        let Some(lease) = self.lease.as_ref() else { return false };
+        let Some(running_on) = lease.lease_model() else { return false };
+        if running_on == wanted.rich {
+            return false;
+        }
+        if matches!(lease.running_commands(), Some(CommandReading::Running(_) | CommandReading::Unreadable)) {
+            eprintln!("[richos] front desk: its model changed in Preferences; the switch waits while a command it started may still be running");
+            return false;
+        }
+        true
+    }
+
     /// **Must the lease in the chair move to another account before this turn?** Hands the
     /// lease's own streamed reading to the quota service, which decides on the freshest
     /// readings and the measured speed (`claude_accounts.rs`), and answers whether the account
@@ -4444,6 +4469,10 @@ impl Spine {
         // the prompt is sent. Never inside a turn, and never at 100%.
         if self.pending_rotation_reason.is_none() && self.account_switch_due() {
             self.pending_rotation_reason = Some(ACCOUNT_SWITCH.to_string());
+        }
+        // §119: the model he chose in Preferences, from the first reply after it closed.
+        if self.pending_rotation_reason.is_none() && self.model_switch_due() {
+            self.pending_rotation_reason = Some(MODEL_CHANGED.to_string());
         }
         if let Some(reason) = self.pending_rotation_reason.take() {
             // **A WATERMARK RENEWAL WAITS FOR A COMMAND THE LEASE STARTED** (reap gap C6).

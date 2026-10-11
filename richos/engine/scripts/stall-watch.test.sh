@@ -28,12 +28,19 @@
 #   X06  a holder that is the waiter's own ancestor is a DEADLOCK
 #   W01  a test VM wait and a device wait over 10 min: one block, two stalls,
 #        who holds each ("no holder recorded" / "not recorded by the waiter")
+#   H01  a teammate the lead holds (agent_hold.py): its wait is no stall
+#        while the hold stands
+#   H02  resumed: the held time is not counted, so no stall yet
+#   H03  its clock runs again from where it was: told as a WAIT
 #   T01  a live teammate with no commit and no transcript write for 25 min is
 #        SILENT: its name, last commit, last transcript write, what to do
 #   T02  not repeated
 #   T03  it writes its transcript: cleared after two looks, once
 #   L01-L03  slow steps: three agent_hold.py wait steps 4.5 min apart are told once (name,
 #        median, slowest command, since); 10-min run-tests.sh steps are exempt; clears once
+#   T05  a silent teammate whose end the registry deferred because its own endless
+#        loop still runs: the notice says so and names the one command that ends
+#        its own commands (agent_hold.py end), not a pid to look up
 #   T04  a long honest run (transcript written 5 min ago, no commit for an
 #        hour), a paused teammate and a finished one: none is SILENT
 #   E01  THE 2026-10-01 INCIDENT: a teammate of this session raises a proceeding,
@@ -170,6 +177,10 @@ rec = workspaces.new_record("%s--%s" % (sid, name), name=name, session_id=sid, a
                                          "branch": "cc/" + name, "deleted_at": None}])
 if extra == "pause":
     rec["pause"] = {"at": now - 60, "until": "the fixture's resume", "control": True}
+if extra == "deferred":
+    # Its turn ended at its last transcript write, and the registry deferred its end.
+    rec["history"] = [{"at": workspaces.iso(now - float(tr)), "calls": ["toolu_loop1"],
+                       "fact": workspaces.END_DEFERRED_FACT}]
 if extra == "end":
     rec["end"] = {"at": now - 60, "signal": "SubagentStop", "detail": "fixture"}
     rec["handed_in"] = {"at": now - 61}
@@ -344,6 +355,42 @@ check "W01  a VM wait and a device wait: one block, two stalls, who holds each" 
         echo $?)" "out=$OUT"
 rm -f "$RICHOS_WAITS_DIR"/*.json
 
+# --- H: a teammate the lead HOLDS is not waiting in line (2026-10-11) ----------
+# Its wait is recorded now. H01: the lead holds it 11 minutes in, already over
+# the line (agent_hold.py's hold record). H02/H03: a hold 5 minutes in, since
+# released (its release history line). Both hand-written in agent_hold.py's
+# shapes in this suite's hold directory; resource-waits.test.sh RW46 proves the
+# real release writes that line. Ages are moved with the look's clock.
+new_registry h; new_state h
+HW="$(spawn_sleeper)"; PIDS+=("$HW")
+HNOW="$(date +%s)"
+python3 - "$RICHOS_WAITS_DIR" "$HW" "$RICHOS_AGENT_HOLD_DIR" "$HNOW" <<'PY'
+import json, os, sys
+d, pid, hold, now = sys.argv[1], int(sys.argv[2]), sys.argv[3], float(sys.argv[4])
+with open(os.path.join(d, "%d-fixture.json" % pid), "w") as fh:
+    json.dump({"schema": "richos-wait/1", "pid": pid, "since": now, "resource": "cpu-admission",
+               "waiter": "november-opus-h1", "reason": "fixture", "holding": [], "cwd": d,
+               "command": "fixture"}, fh)
+os.makedirs(os.path.join(hold, "held"), exist_ok=True)
+with open(os.path.join(hold, "held", "beadfeed-h__a0000000000fixh1.json"), "w") as fh:
+    json.dump({"session_id": "beadfeed-h", "agent_id": "a0000000000fixh1", "name": "november-opus-h1",
+               "at": now + 660, "held": {}, "parents": {}, "detached": {}}, fh)
+PY
+tick 1200
+check "H01  a held teammate's wait, 11 min old when held, is not a stall while the hold stands" \
+    "$( ! has "$OUT" "november-opus-h1"; echo $?)" "out=$OUT"
+rm -f "$RICHOS_AGENT_HOLD_DIR"/held/*.json
+new_state h2   # what H01 may have announced does not silence H02
+printf '{"agent_id": "a0000000000fixh1", "at": %s, "held": {}, "name": "november-opus-h1", "released": %s, "session_id": "beadfeed-h"}\n' \
+    "$((HNOW + 300))" "$((HNOW + 1500))" > "$RICHOS_AGENT_HOLD_DIR/hold-history.jsonl"
+tick 1700
+check "H02  RESUMED after 20 min held: 5 + 3 counted minutes (28 raw) are no stall" \
+    "$( ! has "$OUT" "november-opus-h1"; echo $?)" "out=$OUT"
+tick 1900
+check "H03  and its clock runs again from where it was: 5 + 6 counted minutes are told as a WAIT" \
+    "$( has "$OUT" "[WAIT] november-opus-h1: waits for CPU admission"; echo $?)" "out=$OUT"
+rm -f "$RICHOS_WAITS_DIR"/*.json "$RICHOS_AGENT_HOLD_DIR/hold-history.jsonl"
+
 # --- T: silent teammates ------------------------------------------------------
 new_registry t; new_state t
 add_agent lima-opus-q1 a0000000000fixq "$SID" 3600 3000 1500
@@ -366,6 +413,33 @@ check "T04  a long honest run, a paused teammate and a finished one are not SILE
     "$( has "$T01OUT" "[SILENT] lima-opus-q1" && ! has "$T01OUT" "mike-opus-r1" && ! has "$T01OUT" "november-opus-p1" \
         && ! has "$T01OUT" "oscar-opus-e1"; echo $?)" \
     "out=$T01OUT"
+
+# --- T05: an end deferred by its own endless loop (2026-10-11, echo-opus-walk49fix1) ----
+new_registry t5; new_state t5
+add_agent papa-opus-l1 a0000000000fixl "$SID" 3600 3000 1500 deferred
+LOOP='until grep -q Finished /nonexistent-deleted-scratch/build.log 2>/dev/null; do sleep 1; done'
+STEM="$(python3 - "$ENGINE" a0000000000fixl "$SID" "$LOOP" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib"))
+import agent_hold
+stem, _held = agent_hold._record({"session_id": sys.argv[3], "agent_id": sys.argv[2],
+                                  "tool_use_id": "toolu_loop1", "tool_name": "Bash"}, "native", sys.argv[4])
+print(stem)
+PY
+)"
+# The agent's call, as its shell runs it: the ownership mark, then its own loop.
+printf '%s\n' "python3 '$ENGINE/scripts/lib/agent_hold.py' mark --state '$RICHOS_AGENT_HOLD_DIR' '$STEM'" \
+    "$LOOP" >"$SB/t5-loop.sh"
+bash "$SB/t5-loop.sh" >/dev/null 2>&1 &
+LOOPPID=$!; PIDS+=("$LOOPPID")
+wait_for 10 test -f "$STEM.pid"
+tick 0
+check "T05  a silent agent whose end waits on its own loop: said so, with the one command that ends its commands" \
+    "$( has "$OUT" "[SILENT] papa-opus-l1: its turn ended; its end waits on its own still-running command(s)" \
+        && has "$OUT" "its end waits on its own command(s) still running" && has "$OUT" "running: \`until grep -q Finished" \
+        && has "$OUT" "agent_hold.py end --session $SID --agent a0000000000fixl --name papa-opus-l1" \
+        && ! has "$OUT" "SendMessage to papa-opus-l1"; echo $?)" "out=$OUT"
+kill "$LOOPPID" 2>/dev/null
 
 # --- L: slow steps (2026-10-04, isaac-opus-logo1: every step cost ~4.5 minutes) ----
 write_steps() { # <agent-id> <command> <result-text> <step-seconds> <count>: steps ending now-60, spaced 5 min

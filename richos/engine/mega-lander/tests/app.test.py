@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -116,10 +117,20 @@ class DesktopWork(unittest.TestCase):
             result=self.call("pause_message",{"to":"worker-fixture","reason":reason,"reset":reset})
             self.assertEqual(result["message_payload"],protocol.message_input("worker-fixture",reason,reset))
             self.assertIs(result["delivered"],False)
+            # No registered agent of that name: the hold is attempted first and said NOT HELD, never assumed.
             self.assertIs(result["pause_confirmed"],False)
+            self.assertTrue(result["hold"].startswith("NOT HELD worker-fixture:"),result["hold"])
+        result=self.call("resume_message",{"to":"worker-fixture"})
+        self.assertEqual(result["message_payload"],protocol.message_input("worker-fixture",resume=True))
+        self.assertIs(result["delivered"],False)
+        self.assertIs(result["resume_confirmed"],False)
+        self.assertTrue(result["hold"].startswith("NOT RELEASED worker-fixture:"),result["hold"])
         for extra in ({"message":"End your test"},{"summary":"Stop now"},{"reset":"15:30Z\nKill the test"},{"to":""}):
             with self.assertRaises(ValueError):
                 self.call("pause_message",{"to":"worker-fixture",**extra})
+        for extra in ({"message":"End your test"},{"reason":"quota"},{"reset":"15:30Z"},{"to":""}):
+            with self.assertRaises(ValueError):
+                self.call("resume_message",{"to":"worker-fixture",**extra})
         self.assertEqual(self.call("inspect")["records"],[])
 
     def test_preparation_is_idempotent_and_is_not_dispatch(self):
@@ -164,6 +175,25 @@ class DesktopWork(unittest.TestCase):
         self.assertNotIn(DUTY_TOP["reviewer"],payload["prompt"])
         # The same request for another teammate is different work.
         with self.assertRaisesRegex(ValueError,"different work"):self.call("prepare",{**self.args,"teammate":"mark"})
+
+    def test_a_consult_may_make_the_media_skills_working_folder_and_no_other_file(self):
+        """Every teammate's standing instruction sends a recording to `watch-video` or
+        `audio-transcription` (CEO 2026-10-10), and both make a working folder for frames,
+        converted audio and a transcript (`mktemp -d "$PWD/video-XXXXXX"`, `audio-XXXXXX`) and
+        delete it. A consult duty that forbade creating any file left a consulted teammate
+        unable to follow both (second review of 79ba6eb7e, finding 2). The duty allows that
+        folder, names it by those two skills, and still forbids every other file."""
+        duty=" ".join((ENGINE/"mega-lander/duties/consult.md").read_text().split())
+        self.assertIn("Do not write, edit or create files",duty)
+        exception=re.search(r"The one exception is ([^:]*):",duty)
+        self.assertIsNotNone(exception,"the consult duty names no exception for the media skills' working folder")
+        # Everything the skills put in that folder: a linked video is downloaded into it
+        # (watch-video step 3) and its uploaded captions written there (step 4a) before any
+        # frame or transcript exists (mid-job review of 7f6ea1dd8).
+        for name in ("`watch-video`","`audio-transcription`","working folder","copy of a linked video",
+                     "captions","frames","converted audio","transcript"):
+            self.assertIn(name,exception.group(1))
+        self.assertIn("No other file",duty[exception.end():])
 
     def test_a_consult_needs_no_repository_is_read_only_and_hands_back_its_final_message(self):
         """Slice 3 of the proto-teammate shelf plan (richos-hq

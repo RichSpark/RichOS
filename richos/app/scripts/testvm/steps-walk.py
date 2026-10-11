@@ -19,6 +19,10 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
   keys   text                          guest.sh osascript keystroke into the frontmost app
   push   src dest                      guest.sh VM --push src dest (src relative to the repository root, or absolute)
   handfile mode path [to]              hand-file.sh VM paste|drag path [--to x,y]
+  pointer points[] [right]             pointer-drag.sh VM x,y x,y ... [--right]: the REAL mouse. The same
+                                       point twice is a click, the way a hand clicks; `ax click --at` is
+                                       System Events' accessibility press at a point and does not focus
+                                       a text box (candidate 50 rewalk, run K)
   relaunch                             relaunch.py VM: the recorded app stopped by its captured PID and
                                        started again with its fixture environment (a choice that must
                                        survive a relaunch is checked after this step)
@@ -85,6 +89,8 @@ def step_run(vm, step, out):
         return run([str(HERE / 'hand-file.sh'), vm, step['mode'], step['path']] + (['--to', step['to']] if step.get('to') else []))
     if op == 'relaunch':
         return run([str(HERE / 'relaunch.py'), vm], timeout=90)
+    if op == 'pointer':
+        return run([str(HERE / 'pointer-drag.sh'), vm] + step['points'] + (['--right'] if step.get('right') else []))
     if op == 'wait':
         time.sleep(step['seconds'])
         return 0, ''
@@ -109,8 +115,9 @@ REQUIRED = {
     'tree': {'name': str}, 'shot': {'name': str}, 'ax': {'args': list}, 'guest': {'command': str},
     'keys': {'text': str}, 'push': {'src': str, 'dest': str}, 'handfile': {'mode': str, 'path': str},
     'wait': {'seconds': (int, float)}, 'until': {'args': list, 'contains': str}, 'relaunch': {},
+    'pointer': {'points': list},
 }
-OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
+OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
 
@@ -134,6 +141,9 @@ def problems(steps):
             if key in step and (not isinstance(step[key], kind)
                                 or (isinstance(step[key], bool) and kind != bool)):
                 found.append(f'step {i} ({op}): {key!r} has the wrong type')
+        if op == 'pointer' and isinstance(step.get('points'), list) and (
+                len(step['points']) < 2 or not all(isinstance(pt, str) and pt.count(',') == 1 for pt in step['points'])):
+            found.append(f'step {i} (pointer): \'points\' needs at least two "x,y" strings (the same one twice is a click)')
     return found
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """video-skill-walk.py — the app's Rich loads the video skill: his session's opening frame lists
-`rich-skills:video` (media-tools plan, slice 4; CEO 2026-10-07).
+`rich-skills:watch-video` (media-tools plan, slice 4; CEO 2026-10-07).
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
@@ -20,7 +20,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   first-run  adopt-walk.py's: memory setup declined, company "Acme" registered, questions declined
   turn       one short message typed into the Mac's composer and sent; waits for the turn to end
   init       reads the raw machinery journal (<data>/machinery/<thread>/<day>.raw.jsonl) for the
-             `system/init` frames, and passes when one lists `rich-skills:video` in `skills`
+             `system/init` frames, and passes when one lists `rich-skills:watch-video` in `skills`
 
 The full watch of a video runs in the nightly's own walk once ffmpeg and the setup step land.
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
@@ -44,7 +44,7 @@ _spec.loader.exec_module(adopt_walk)
 StepFailed = adopt_walk.StepFailed
 
 STEPS = ['identity', 'first-run', 'turn', 'init']
-WANT = 'rich-skills:video'
+WANT = 'rich-skills:watch-video'
 MESSAGE = 'Please answer with one word: ready.'
 
 

@@ -31,7 +31,10 @@ WHAT IS A STALL (every threshold, and why)
    names, such as a device), from the escalation ledger's stated waits, and
    from the proof-run slot line itself (app/scripts/lib/proof_slots.py
    status), which says who holds each slot and where each waiter stands.
-   A wait is recorded, never inferred from process names.
+   A wait is recorded, never inferred from process names. A wait whose
+   teammate the lead holds (agent_hold.py) is not a stall while the hold
+   stands, and the held time is never counted (resource_waits.py, A HELD
+   AGENT IS NOT WAITING IN LINE).
 
 2. A SILENT TEAMMATE: a live teammate of THIS session (the workspace registry
    says its run has not ended and it is not paused) with no new commit on any
@@ -45,6 +48,10 @@ WHAT IS A STALL (every threshold, and why)
    least every ten minutes however long the run itself takes, and twenty is
    twice the longest honest silence. A commit is not required: a teammate that
    is working but has not committed for an hour is not silent.
+   When its turn ended but the registry deferred its end because its own
+   command still runs (workspaces.py record_end; 2026-10-11, four endless wait
+   loops of echo-opus-walk49fix1), the notice says so and names the one
+   command that ends its own commands (agent_hold.py end), never a pid hunt.
 
 3. A SELF-WAIT: a teammate process waiting for a proof-run slot or a test VM
    slot that another process of the SAME teammate holds, reported after 2
@@ -417,6 +424,10 @@ def look(src, now, session_id, th=None):
     slots, why = _slot_lines(src, now)
     if why:
         problems.append(why)
+    # -- every recorded wait (and the ledger's); a held agent's is skipped ----
+    reading = resource_waits.collect(now=now, threshold_seconds=min(th["self"], th["wait"]))
+    problems += reading["problems"]
+
     slot_waiter_pids = set()
     watched = []  # (kind, waiter dict, holders)
     if slots:
@@ -426,12 +437,16 @@ def look(src, now, session_id, th=None):
             except (TypeError, ValueError):
                 pass
             since = w.get("since") if isinstance(w.get("since"), (int, float)) else now
-            if now - since >= min(th["self"], th["wait"]):
-                watched.append(("proof", w, slots.get("holders") or []))
-
-    # -- every other recorded wait (and the ledger's) -------------------------
-    reading = resource_waits.collect(now=now, threshold_seconds=min(th["self"], th["wait"]))
-    problems += reading["problems"]
+            # A teammate the lead holds is not waiting in line (resource_waits.py,
+            # A HELD AGENT IS NOT WAITING IN LINE); its clock resumes on RESUME.
+            pw = {"pid": w.get("pid"), "waiter": w.get("waiter"), "since": since,
+                  "names": [reg.owner(w.get("pid"), w.get("cwd") or "", w.get("waiter") or "")[0]]
+                  if reading["holds"] else []}
+            resource_waits.apply_holds([pw], reading["holds"], now)
+            if pw["held_by"]:
+                continue
+            if now - pw["since"] >= min(th["self"], th["wait"]):
+                watched.append(("proof", dict(w, since=pw["since"], began=since), slots.get("holders") or []))
     # A proof-run slot waiter also records itself as a CPU-admission wait; with
     # the slot line read, that record is the same wait and is told once.
     others = [w for w in reading["waits"]
@@ -489,7 +504,7 @@ def _proof_stall(src, reg, w, holders, slots, now, th, table):
             mine.append((h, "its process ancestry"))
     ps = src.proof_slots_path
     place = "#%s in line, this Mac runs %s at once" % (w.get("position", "?"), limit)
-    key = "wait:proof:%s:%d" % (pid, int(since))
+    key = "wait:proof:%s:%d" % (pid, int(w.get("began", since)))
     if mine and now - since >= th["self"]:
         h, hhow = mine[0]
         deadlock = bool(table) and isinstance(h.get("pid"), int) and h["pid"] in _ancestors(pid, table)
@@ -546,7 +561,7 @@ def _vm_self_wait(src, reg, w, vm_slots, table):
                      "held by: %s held by pid %s %s, which is ALSO %s's (known from %s)" % (
                          s["name"], s["pid"], _proc_words(s["pid"], table), who,
                          hhow or "its process ancestry")]
-            return Stall("wait:rec:%d:%d" % (w["pid"], int(w["since"])), "SELF-WAIT", who, w["since"],
+            return Stall("wait:rec:%d:%d" % (w["pid"], int(w.get("began", w["since"]))), "SELF-WAIT", who, w["since"],
                          "waits for the test VM that its own process holds", lines,
                          ["tell %s to let its own walk finish first, or to end the walk it no longer needs" % who,
                           "every current wait: python3 %s list" % os.path.join(HERE, "resource_waits.py")])
@@ -560,7 +575,7 @@ def _wait_stall(reg, w, now, table, waits):
     lines = []
     if w["source"] == "record":
         lines.append("waiting: pid %d %s" % (w["pid"], _proc_words(w["pid"], table)))
-        key = "wait:rec:%d:%d" % (w["pid"], int(w["since"]))
+        key = "wait:rec:%d:%d" % (w["pid"], int(w.get("began", w["since"])))
     else:
         lines.append("from the escalation ledger: %s" % ", ".join(w.get("escalations") or []))
         key = "wait:esc:%s:%s" % (w["waiter"], w["resource"])
@@ -629,6 +644,25 @@ def _running(src, rec, now):
     return out
 
 
+def _deferred_end(src, rec, running, marks):
+    """Epoch of the SubagentStop the registry did not take as this agent's end because
+    its own commands still ran, when that is still why it has not ended: it is the
+    latest thing the agent did (nothing written or committed after it) and a command
+    of its own still runs. Else None."""
+    fact = getattr(src.ws, "END_DEFERRED_FACT", None)
+    if not running or not fact or src.agent_hold is None:
+        return None
+    at = None
+    for h in rec.get("history") or []:
+        if isinstance(h, dict) and h.get("fact") == fact:
+            t = parse_iso(h.get("at"))
+            if t is not None and (at is None or t > at):
+                at = t
+    if at is None or max(marks) > at + 60:
+        return None
+    return at
+
+
 def _silent(src, reg, now, session_id, th, waits):
     if src.ws is None or reg.problem:
         return [], ""
@@ -680,7 +714,20 @@ def _silent(src, reg, now, session_id, th, waits):
         for w in own_waits[:2]:
             lines.append("recorded wait: %s for %s" % (resource_waits.LABELS.get(w["resource"], w["resource"]),
                                                        span(now - w["since"])))
-        lines += _running(src, rec, now)
+        running = _running(src, rec, now)
+        lines += running
+        deferred = _deferred_end(src, rec, running, marks)
+        if deferred:
+            # 2026-10-11, echo-opus-walk49fix1: its turn ended with its handover, but its
+            # own endless wait loops kept its end deferred, and Rich looked up their pids.
+            lines.insert(0, "its turn ended at %s, but its end waits on its own command(s) still "
+                            "running (below); they end only by themselves or by the command below" % hhmm(deferred))
+            what = "its turn ended; its end waits on its own still-running command(s)"
+            action = ["end its own commands (its run then ends by itself; shared daemons and the test VM "
+                      "guest are left running): %s" % src.agent_hold.end_command(
+                          str(rec["session_id"]), str(rec["agent_id"]), name)]
+            out.append(Stall("silent:%s" % rec.get("key"), "SILENT", name, last, what, lines, action))
+            continue
         action = ["ask %s where it is (SendMessage to %s)" % (name, name),
                   "read the end of its transcript (above)",
                   "check it: %s %s" % (os.path.join(src.engine_root, "scripts", "agent-liveness.sh"),

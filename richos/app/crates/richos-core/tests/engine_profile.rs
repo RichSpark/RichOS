@@ -501,10 +501,14 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
         assert_eq!(std::fs::read(roster.join(format!("{stock}.md"))).unwrap(), shipped);
     }
     for user in ["mark", "dean"] {
-        let own = std::fs::read(team.join(format!("{user}.md"))).unwrap();
-        assert_eq!(std::fs::read(first.plugin.join(format!("agents/{user}.md"))).unwrap(), own,
+        // As written, plus the media skills' standing instruction these fixtures lack (see
+        // a_teammate_saved_before_the_media_skills_gets_..._on_its_next_start).
+        let own = std::fs::read_to_string(team.join(format!("{user}.md"))).unwrap();
+        let want = richos_core::engine_profile::with_media_skills(&own);
+        assert_eq!(want.replace(&format!("{}\n\n", richos_core::engine_profile::MEDIA_STANDING_INSTRUCTION), ""), own);
+        assert_eq!(std::fs::read_to_string(first.plugin.join(format!("agents/{user}.md"))).unwrap(), want,
             "the user's {user} is registered as written");
-        assert_eq!(std::fs::read(roster.join(format!("{user}.md"))).unwrap(), own);
+        assert_eq!(std::fs::read_to_string(roster.join(format!("{user}.md"))).unwrap(), want);
     }
     // The shelf is never registered: none of its names reaches the plugin or the roster.
     for shelf in std::fs::read_dir(engine().join("team/shelf")).unwrap() {
@@ -530,6 +534,68 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
     let fresh = Scratch::new();
     let profile = EngineProfile::prepare(&engine(), &fresh.0, fresh.runtime()).unwrap();
     assert_eq!(registered(&profile), stock);
+}
+
+/// **A teammate the user saved before the media skills gets both on its next start** (CEO
+/// 2026-10-10: every RichOS teammate uses `watch-video` and `audio-transcription`). A saved
+/// copy is the user's and an engine update never rewrites it (plan §10 point 3), so a Ray
+/// activated from the shelf before 2026-10-10 kept a `tools:` list without `Skill` and no
+/// standing instruction, and every lease registered it so. The lease now registers it with
+/// both, byte for byte the shelf's current Ray, and the user's file stays as written. A
+/// definition with no `tools:` line already has every tool and gets no list; one that has the
+/// instruction is registered unchanged.
+#[test]
+fn a_teammate_saved_before_the_media_skills_gets_the_skill_tool_and_the_instruction_on_its_next_start() {
+    let f = Scratch::new();
+    let team = f.0.join("team");
+    std::fs::create_dir_all(&team).unwrap();
+    let shelf = std::fs::read_to_string(engine().join("team/shelf/ray.md")).unwrap();
+    let instruction = shelf.lines().find(|l| l.starts_with("**Standing instruction:**")).expect("the shelf Ray carries it");
+    // Ray as the shelf shipped him before 2026-10-10 (a6cf87db8^): no Skill, no instruction.
+    let saved = shelf.replace(", Skill\n", "\n").replace(&format!("{instruction}\n\n"), "");
+    assert!(!saved.contains("Skill\n") && !saved.contains("Standing instruction"), "the fixture is the old Ray");
+    std::fs::write(team.join("ray.md"), &saved).unwrap();
+    let open = "---\nname: scout\nmodel: sonnet\n---\nFictional teammate with every tool.\n";
+    std::fs::write(team.join("scout.md"), open).unwrap();
+
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let roster = profile.coordination.join(".claude/agents");
+    for registered in [profile.plugin.join("agents/ray.md"), roster.join("ray.md")] {
+        assert_eq!(std::fs::read_to_string(&registered).unwrap(), shelf,
+            "{} must be the saved Ray with the Skill tool and the standing instruction", registered.display());
+    }
+    let scout = std::fs::read_to_string(profile.plugin.join("agents/scout.md")).unwrap();
+    assert_eq!(scout, format!("---\nname: scout\nmodel: sonnet\n---\n{instruction}\n\nFictional teammate with every tool.\n"),
+        "a definition with no tools line gets the instruction and no tools list");
+    assert_eq!(std::fs::read_to_string(team.join("ray.md")).unwrap(), saved, "the user's own file is never rewritten");
+    assert_eq!(std::fs::read_to_string(team.join("scout.md")).unwrap(), open, "the user's own file is never rewritten");
+
+    // Already current: registered exactly as written, so the digest does not move for nothing.
+    std::fs::write(team.join("ray.md"), &shelf).unwrap();
+    let again = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(std::fs::read_to_string(again.plugin.join("agents/ray.md")).unwrap(), shelf);
+}
+
+/// The instruction a lease adds to a user's older teammate is the line every shipped
+/// definition carries, so a refreshed teammate reads exactly what a new one does; and the
+/// other `tools:` spellings get `Skill` too.
+#[test]
+fn the_instruction_a_lease_adds_is_the_shipped_one_and_every_tools_spelling_gets_skill() {
+    use richos_core::engine_profile::{with_media_skills, MEDIA_STANDING_INSTRUCTION};
+    for folder in ["agents", "team/shelf"] {
+        for entry in std::fs::read_dir(engine().join(folder)).unwrap() {
+            let path = entry.unwrap().path();
+            let body = std::fs::read_to_string(&path).unwrap();
+            assert!(body.lines().any(|l| l == MEDIA_STANDING_INSTRUCTION), "{} carries another instruction", path.display());
+            assert_eq!(with_media_skills(&body), body, "{} is current and must be registered unchanged", path.display());
+        }
+    }
+    let flow = with_media_skills("---\nname: a\ntools: [Read, Bash]\n---\n# A\n\nText.\n");
+    assert_eq!(flow, format!("---\nname: a\ntools: [Read, Bash, Skill]\n---\n# A\n\n{MEDIA_STANDING_INSTRUCTION}\n\nText.\n"));
+    let block = with_media_skills("---\nname: a\ntools:\n  - Read\n  - Bash\nmodel: opus\n---\n# A\n\nText.\n");
+    assert_eq!(block, format!("---\nname: a\ntools:\n  - Read\n  - Bash\n  - Skill\nmodel: opus\n---\n# A\n\n{MEDIA_STANDING_INSTRUCTION}\n\nText.\n"));
+    let scoped = "---\nname: a\ntools: Read, Skill(watch-video)\n---\n";
+    assert!(with_media_skills(scoped).starts_with(scoped), "a Skill(...) entry is the user's own choice and is kept");
 }
 
 /// **Slice 5: the digest that renews a back end when its team changed** (plan §1, §6). It
@@ -558,4 +624,40 @@ fn the_team_digest_moves_with_what_a_lease_registers_and_nothing_else() {
     assert_ne!(digest(), saved, "a refit must move the digest");
     std::fs::remove_file(team.join("mark.md")).unwrap();
     assert_eq!(digest(), fresh, "retiring the teammate gives the stock team's digest again");
+}
+
+/// **§119 (CEO, 2026-10-10): "Rich and Stu stay on Opus high effort in RichOS by default. But
+/// the user should have the option to switch one or both to Fable."** Each role's flags come
+/// from the one function `spawn_with_tools` appends to the child's argument vector, given the
+/// profile every product lease is spawned with, which reads `config.json` in the data folder.
+#[test]
+fn each_role_starts_on_opus_at_high_effort_unless_its_setting_says_fable() {
+    use richos_core::config::{ConfigStore, ModelChoice};
+    use richos_core::native::lease_model_args;
+    let opus = ["--model", "opus", "--effort", "high"];
+    let fable = ["--model", "fable", "--effort", "high"];
+    let f = Scratch::new();
+
+    // No setting written: both on Opus at high effort.
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), opus, "Rich's default");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), opus, "Stu's default");
+
+    // Rich switched to Fable; Stu stays on Opus. Read at the next spawn's `prepare`.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Fable).unwrap();
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), fable, "Rich set to Fable");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), opus, "Stu was not switched");
+
+    // Both on Fable.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_stu_model(ModelChoice::Fable).unwrap();
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), fable);
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), fable, "Stu set to Fable");
+
+    // And back: Rich returned to Opus, Stu keeps Fable.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Opus).unwrap();
+    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), opus, "Rich switched back");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), fable);
 }

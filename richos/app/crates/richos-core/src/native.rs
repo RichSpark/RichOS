@@ -825,6 +825,30 @@ pub fn child_args(session_id: &str) -> Vec<String> {
     .collect()
 }
 
+/// **The effort every lease runs at** — the CEO's §119 (2026-10-10): *"Rich and Stu stay on
+/// Opus high effort in RichOS by default."* Not a setting; his option is the model only.
+pub const LEASE_EFFORT: &str = "high";
+
+/// **The flags that name the model and the effort for a lease of this role** — appended to
+/// every lease's vector by [`NativeClient::spawn_with_tools`], and the one function the tests
+/// assert on. Rich is the conversation lease and Stu the work lease (§110); each gets the
+/// model its stored setting names ([`crate::engine_profile::EngineProfile::lease_models`],
+/// read from `config.json` at every spawn). A lease spawned without an engine profile (the
+/// headless and test paths, which read no settings) gets the default, Opus.
+///
+/// Until §119 the app passed neither flag, so both sessions ran on the CLI's own default for
+/// the account. Measured on `claude` 2.1.295 with the lease's `--setting-sources ''` on
+/// 2026-10-10: `--model opus --effort high` answered as `claude-opus-5-5`, and
+/// `--model fable --effort high` as `claude-fable-5-1`.
+pub fn lease_model_args(role: LeaseRole, profile: Option<&crate::engine_profile::EngineProfile>) -> Vec<String> {
+    let models = profile.map(|p| p.lease_models).unwrap_or_default();
+    let model = match role {
+        LeaseRole::Conversation => models.rich,
+        LeaseRole::Work => models.stu,
+    };
+    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), LEASE_EFFORT.into()]
+}
+
 pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<String> {
     let mut args = child_args(session_id);
     args.push(APPEND_SYSTEM_PROMPT_FILE.to_string());
@@ -1979,6 +2003,8 @@ impl NativeClient {
             Some((d, s)) => chat_child_args(&session_id, desktop_doctrine.as_deref().unwrap_or(d), s),
             None => child_args(&session_id),
         };
+        // §119: Opus at high effort unless his setting for this role says Fable.
+        args.extend(lease_model_args(role, profile));
         if let Some((executable, scope, assignments, status)) = onboarding {
             let config = mcp_config(executable, scope, assignments, status, continuity, continuity_tools, profile, role, bin);
             args.extend(["--strict-mcp-config".into(), "--mcp-config".into(), config.to_string()]);
@@ -4013,6 +4039,11 @@ impl Cognition for NativeCognition {
     fn account(&self) -> Option<&str> {
         self.engine_profile.as_ref()?.claude_account.as_ref().map(|a| a.id.as_str())
     }
+    /// The model [`lease_model_args`] gave this child, read off the same profile and role.
+    fn lease_model(&self) -> Option<crate::config::ModelChoice> {
+        let models = self.engine_profile.as_ref()?.lease_models;
+        Some(match self.role { LeaseRole::Conversation => models.rich, LeaseRole::Work => models.stu })
+    }
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> {
         self.client.reader_state.lock().unwrap().streamed_usage.clone()
     }
@@ -4995,7 +5026,7 @@ done
             },
             work_scope: None,
             permissions: std::sync::Arc::new(crate::permissions::PermissionDesk::default()),
-            operator_desk: None, claude_account: None, token_sink: None, speech_model: None,
+            operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(),
         }
     }
 
@@ -6008,6 +6039,103 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         ).expect("the handshake should succeed");
         assert_eq!(work.reader_state.lock().unwrap().tool_residency, None,
             "the work lease sets nothing, and its reader must not claim otherwise");
+    }
+
+    /// **A teammate in the app can reach every skill its standing instruction names** (CEO,
+    /// 2026-10-10: the audio and video skill use must be part of all the teammate and
+    /// proto-teammate profiles in RichOS, "otherwise a RichOS user wouldn't take advantage of
+    /// that").
+    ///
+    /// A teammate runs as a helper inside the WORK lease (`start_work_lease`, then the `Agent`
+    /// call `richos_work`'s `prepare` hands it), so the skills it can invoke are that session's.
+    /// This spawns a real Work-role lease, reads the argument vector the child actually got,
+    /// and builds the session's `system/init.skills` list from it the way the binary does:
+    /// every `--plugin-dir`'s manifest name, then `:<skill directory>` for each skill in it
+    /// (measured cell K2, `skills.rs`; re-measured on 2.1.295 for this change). Every skill
+    /// named in backticks on the standing-instruction line of every definition that reaches an
+    /// app teammate (the stock `engine/agents/`, the shelf `engine/team/shelf/`, the three
+    /// duty texts) must be on that list.
+    #[test]
+    fn a_teammate_s_session_lists_every_skill_its_standing_instruction_names() {
+        let argv = fixture_root().join(format!("argv-{}", uuid::Uuid::new_v4().simple()));
+        let script = format!(
+            "printf '%s\\n' \"$@\" > '{}'\n\
+             read -r line\n\
+             printf '%s\\n' '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_init\",\"response\":{{}}}}}}'\n\
+             sleep 5\n", argv.display());
+        let _work = NativeClient::spawn_with_tools(
+            &write_script("teammate-skills", &script), Path::new("/tmp"),
+            Some((doctrine_fixture().as_path(), skills_fixture().as_path())),
+            None, None, None, None, None, LeaseRole::Work,
+        ).expect("the handshake should succeed");
+        let args: Vec<String> = std::fs::read_to_string(&argv).unwrap().lines().map(String::from).collect();
+
+        let mut init_skills = Vec::new();
+        for (i, flag) in args.iter().enumerate() {
+            if flag != PLUGIN_DIR { continue; }
+            let root = Path::new(&args[i + 1]);
+            let manifest: Value = serde_json::from_str(
+                &std::fs::read_to_string(crate::skills::manifest_path(root)).unwrap()).unwrap();
+            let plugin = manifest["name"].as_str().unwrap().to_string();
+            for entry in std::fs::read_dir(root.join("skills")).unwrap() {
+                let dir = entry.unwrap().path();
+                if dir.join("SKILL.md").is_file() {
+                    init_skills.push(format!("{plugin}:{}", dir.file_name().unwrap().to_string_lossy()));
+                }
+            }
+        }
+        assert!(!init_skills.is_empty(), "the work lease was given no skills at all: {args:?}");
+
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let mut checked = 0;
+        for folder in ["agents", "team/shelf", "mega-lander/duties"] {
+            for entry in std::fs::read_dir(engine.join(folder)).unwrap() {
+                let path = entry.unwrap().path();
+                if path.extension().is_none_or(|e| e != "md") { continue; }
+                let body = std::fs::read_to_string(&path).unwrap();
+                let line = body.lines().find(|l| l.starts_with("**Standing instruction:**") && l.contains("skill"))
+                    .unwrap_or_else(|| panic!("{} carries no standing instruction naming a skill", path.display()));
+                let named: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
+                assert!(!named.is_empty(), "{} names no skill: {line}", path.display());
+                for name in named {
+                    let want = format!("{}:{name}", crate::skills::PLUGIN_NAME);
+                    assert!(init_skills.contains(&want),
+                        "{} tells its teammate to use `{name}`, and the teammate's session lists only {init_skills:?}",
+                        path.display());
+                }
+                checked += 1;
+            }
+        }
+        // The 5 stock definitions and the 3 duties, with the shelf beside them.
+        assert!(checked > 8, "only {checked} definitions were read");
+    }
+
+    #[test]
+    fn every_lease_is_started_on_opus_at_high_effort_by_default() {
+        // §119 (CEO, 2026-10-10): "Rich and Stu stay on Opus high effort in RichOS by default."
+        // Read off the argument vector the child actually received, on a real
+        // `spawn_with_tools`, one per role. The per-role Fable setting is
+        // `each_role_starts_on_opus_at_high_effort_unless_its_setting_says_fable`
+        // (`tests/engine_profile.rs`), through the same `lease_model_args`.
+        let handshake = "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$(dirname \"$0\")/argv\"\n\
+             read -r line\n\
+             printf '%s\\n' '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"req_init\",\"response\":{}}}'\n\
+             sleep 5\n";
+        for (tag, role) in [("models-desk", LeaseRole::Conversation), ("models-work", LeaseRole::Work)] {
+            let script = write_script(tag, handshake);
+            let _client = NativeClient::spawn_with_tools(
+                &script, Path::new("/tmp"),
+                Some((doctrine_fixture().as_path(), skills_fixture().as_path())),
+                None, None, None, None, None, role,
+            ).expect("the handshake should succeed");
+            let argv: Vec<String> = std::fs::read_to_string(script.parent().unwrap().join("argv")).unwrap()
+                .lines().map(String::from).collect();
+            let at = argv.iter().position(|a| a == "--model")
+                .unwrap_or_else(|| panic!("{role:?} was started without --model: {argv:?}"));
+            assert_eq!(&argv[at..at + 4], ["--model", "opus", "--effort", "high"], "{role:?}: {argv:?}");
+            assert_eq!(argv.iter().filter(|a| *a == "--model" || *a == "--effort").count(), 2,
+                "{role:?} names a model or an effort twice: {argv:?}");
+        }
     }
 
     #[test]
@@ -7156,7 +7284,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None
+                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

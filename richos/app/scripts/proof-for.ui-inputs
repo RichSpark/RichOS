@@ -106,6 +106,7 @@ second-mouth.js         @shell richos/app/ui/mock.js
 dialect.js              @shell richos/app/ui/mock.js
 dictation-overlay.js    richos/app/ui/dictation-bar.html richos/app/ui/dictation-bar.js richos/app/ui/dictation-menu.html richos/app/ui/dictation-menu.js richos/app/ui/dictation-overlay.css richos/app/ui/style.css richos/app/ui/theme-boot.js richos/app/ui/index.html
 retention.js            @shell richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
+rich-model.js           @shell richos/app/ui/mock.js richos/app/ui/settings-button.js
 onboarding.js           @shell richos/app/ui/mock.js
 onboarding-lifecycle.js @shell richos/app/ui/mock.js
 first-run-sheet.js      @shell richos/app/ui/mock.js

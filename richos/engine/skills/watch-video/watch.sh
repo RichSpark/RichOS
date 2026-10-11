@@ -25,7 +25,8 @@
 #
 # Exit: 0 frames written (and the transcript, if the file has sound); 1 usage or
 # a missing tool; 2 frames written but the transcription pipeline failed (its
-# reason is printed and is in watched.md).
+# reason is printed and is in watched.md); 4 the frame step was stopped again and
+# again on one stretch (no index; the transcript is kept; see the message).
 #
 # THE PARAMETERS, AND WHY
 #   Scene changes are judged on the video sampled at 5 frames a second, so an
@@ -161,10 +162,70 @@ fi
 # than SCENE at least GAP seconds after the last kept frame, or when EVERY
 # seconds passed without a kept frame. metadata prints what was kept, in order.
 SELECT="isnan(prev_selected_t)+gte(t-prev_selected_t\\,$EVERY)+gt(scene\\,$SCENE)*gte(t-prev_selected_t\\,$GAP)"
-KEPT="$FRAMES/.kept.txt"
-ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -i "$INPUT" -an \
-    -vf "fps=5,select='$SELECT',metadata=mode=print:key=lavfi.scene_score:file='$KEPT',scale='min(1920,iw)':-2" \
-    -fps_mode passthrough "$FRAMES/raw-%04d.png"
+#
+# THE FRAME STEP IS PACED AND RESUMABLE (2026-10-10). On a 41-minute 1080p video ffmpeg at
+# its default thread count ran far above 3 cores, and the host's CPU circuit breaker
+# (cpu_guard.py: one process over 3 cores for 10 s is stopped) killed it at 17:02, so the
+# script died with ffmpeg's 255 and no index. Now ffmpeg runs under nice with 2 decoder
+# and 2 filter threads, which keeps it under what the breaker allows, and the video is cut
+# in stretches of SEG seconds, each its own ffmpeg: a stretch that is killed or refused is
+# redone alone after RETRY_WAIT seconds (up to RETRIES more times), never the whole video.
+# Each stretch starts with a kept frame (the selector has no state before its first frame).
+SEG="${WATCH_SEGMENT_SECONDS:-300}"
+RETRIES="${WATCH_FRAME_RETRIES:-4}"
+RETRY_WAIT="${WATCH_RETRY_SECONDS:-10}"
+for v in "$SEG" "$RETRIES" "$RETRY_WAIT"; do
+    case "$v" in ''|*[!0-9]*) echo "watch: WATCH_SEGMENT_SECONDS, WATCH_FRAME_RETRIES and WATCH_RETRY_SECONDS take whole numbers" >&2; exit 1 ;; esac
+done
+[ "$SEG" -gt 0 ] || { echo "watch: WATCH_SEGMENT_SECONDS must be above 0" >&2; exit 1; }
+VDURATION="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null | head -1 || true)"
+case "$VDURATION" in ''|*[!0-9.]*) VDURATION="" ;; esac
+# Each stretch (and each redo) is admitted by the engine's CPU admission first
+# (admit.py beside this script: the engine's cpu_policy over a cpu_guard CPU sample, refuses
+# at 80% or more total CPU) and waits up to WATCH_ADMISSION_WAIT seconds for the Mac to quiet. A refusal after the wait
+# (exit 75) is handled as a stopped stretch: redone after RETRY_WAIT, up to RETRIES times.
+# WATCH_RESERVE names another admission command (the test suite's stand-in).
+RESERVE="${WATCH_RESERVE:-$HERE/admit.py}"
+ADMIT_WAIT="${WATCH_ADMISSION_WAIT:-600}"
+case "$ADMIT_WAIT" in ''|*[!0-9]*) echo "watch: WATCH_ADMISSION_WAIT takes whole seconds" >&2; exit 1 ;; esac
+ADMIT=()
+if [ -x "$RESERVE" ]; then ADMIT=("$RESERVE" --wait "$ADMIT_WAIT" --)
+elif [ -f "$RESERVE" ]; then ADMIT=(python3 "$RESERVE" --wait "$ADMIT_WAIT" --)
+else echo "watch: the CPU admission command is not beside this engine ($RESERVE); the frame step runs without it" >&2
+fi
+SEGDIR="$FRAMES/.seg"
+NSEG=0
+SEG_START=()
+start=0
+while :; do
+    segd="$SEGDIR/$(printf '%04d' "$NSEG")"
+    attempt=0
+    while :; do
+        rm -rf "$segd"; mkdir -p "$segd"
+        FF_IN=()
+        if [ "$start" -gt 0 ]; then FF_IN+=(-ss "$start"); fi
+        if [ -n "$VDURATION" ]; then FF_IN+=(-t "$SEG"); fi
+        rc=0
+        ${ADMIT[@]+"${ADMIT[@]}"} nice -n 10 ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -filter_threads 2 \
+            ${FF_IN[@]+"${FF_IN[@]}"} -threads 2 -i "$INPUT" -an \
+            -vf "fps=5,select='$SELECT',metadata=mode=print:key=lavfi.scene_score:file='$segd/kept.txt',scale='min(1920,iw)':-2" \
+            -fps_mode passthrough "$segd/raw-%04d.png" || rc=$?
+        [ "$rc" -eq 0 ] && break
+        attempt=$((attempt + 1))
+        if [ "$attempt" -gt "$RETRIES" ]; then
+            echo "watch: the frame step failed $attempt times in a row at ${start}s of the video (ffmpeg exit $rc); the host may be too busy or is stopping ffmpeg." >&2
+            echo "watch: the transcript is kept at $OUT/transcript.md. Run again when the Mac is quieter, or cut chosen frames with $HERE/frames-at.sh." >&2
+            rm -rf "$SEGDIR"
+            exit 4
+        fi
+        echo "watch: the frame step stopped at ${start}s (ffmpeg exit $rc); redoing this ${SEG}s stretch in ${RETRY_WAIT}s (try $attempt of $RETRIES)" >&2
+        sleep "$RETRY_WAIT"
+    done
+    SEG_START[NSEG]="$start"
+    NSEG=$((NSEG + 1))
+    start=$((start + SEG))
+    if [ -z "$VDURATION" ] || [ "$(echo "$start >= $VDURATION" | bc -l)" = 1 ]; then break; fi
+done
 
 # ---- 3. name each frame by its time, and build the index
 fmt_time() {  # seconds (float) -> MMmSS.Ss
@@ -179,23 +240,35 @@ fmt_time() {  # seconds (float) -> MMmSS.Ss
 TOTAL=0
 prev=""
 t=""
-T_OF=(); SCORE_OF=(); WHY_OF=()
-while IFS= read -r line; do
-    case "$line" in
-        frame:*)
-            t="$(printf '%s\n' "$line" | sed -E 's/.*pts_time:([0-9.]+).*/\1/')" ;;
-        lavfi.scene_score=*)
-            score="${line#lavfi.scene_score=}"
-            TOTAL=$((TOTAL + 1))
-            if [ -z "$prev" ]; then why="start"
-            elif [ "$(echo "$score > $SCENE && $t - $prev >= $GAP" | bc -l)" = 1 ]; then why="scene change ($score)"
-            else why="no change for ${EVERY}s"
-            fi
-            T_OF[TOTAL]="$t"; SCORE_OF[TOTAL]="$score"; WHY_OF[TOTAL]="$why"
-            prev="$t" ;;
-    esac
-done < "$KEPT"
-rm -f "$KEPT"
+T_OF=(); SCORE_OF=(); WHY_OF=(); RAW_OF=()
+sg=0
+while [ "$sg" -lt "$NSEG" ]; do
+    segd="$SEGDIR/$(printf '%04d' "$sg")"
+    off="${SEG_START[sg]}"
+    k=0
+    if [ -f "$segd/kept.txt" ]; then
+        while IFS= read -r line; do
+            case "$line" in
+                frame:*)
+                    t="$(printf '%s\n' "$line" | sed -E 's/.*pts_time:([0-9.]+).*/\1/')"
+                    t="$(awk -v a="$t" -v b="$off" 'BEGIN { printf "%.6f", a + b }')" ;;
+                lavfi.scene_score=*)
+                    score="${line#lavfi.scene_score=}"
+                    TOTAL=$((TOTAL + 1))
+                    k=$((k + 1))
+                    if [ -z "$prev" ]; then why="start"
+                    elif [ "$k" -eq 1 ]; then why="start of a ${SEG}s stretch"
+                    elif [ "$(echo "$score > $SCENE && $t - $prev >= $GAP" | bc -l)" = 1 ]; then why="scene change ($score)"
+                    else why="no change for ${EVERY}s"
+                    fi
+                    T_OF[TOTAL]="$t"; SCORE_OF[TOTAL]="$score"; WHY_OF[TOTAL]="$why"
+                    RAW_OF[TOTAL]="$segd/raw-$(printf '%04d' "$k").png"
+                    prev="$t" ;;
+            esac
+        done < "$segd/kept.txt"
+    fi
+    sg=$((sg + 1))
+done
 
 # 3b. a budget keeps only BUDGET frames: the video's TIME is cut into BUDGET equal
 # stretches and each stretch keeps its biggest scene change (the first frame always
@@ -234,7 +307,7 @@ n=0
 FILES=(); FSTAMP=()
 i=1
 while [ "$i" -le "$TOTAL" ]; do
-    raw="$FRAMES/raw-$(printf '%04d' "$i").png"
+    raw="${RAW_OF[i]}"
     if [ "${KEEP_OF[i]}" = 1 ]; then
         n=$((n + 1))
         stamp="$(fmt_time "${T_OF[i]}")"
@@ -248,9 +321,12 @@ while [ "$i" -le "$TOTAL" ]; do
     i=$((i + 1))
 done
 
+rm -rf "$SEGDIR"
+
 # 3d. contact sheets: SHEET frames tiled in one JPEG (ffmpeg's tile filter); the full
 # frames stay where they are.
 NSHEETS=0
+SHEET_FAILED=0
 if [ "$SHEET" -gt 0 ] && [ "$n" -gt 0 ]; then
     mkdir -p "$OUT/sheets"
     cols=1
@@ -271,8 +347,15 @@ if [ "$SHEET" -gt 0 ] && [ "$n" -gt 0 ]; then
             k=$((k + 1))
         done
         printf "file '%s'\n" "${FILES[last]}" >> "$list"
-        ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -f concat -safe 0 -i "$list" \
-            -vf "scale=480:-2,tile=${c}x${r}:padding=4:margin=4" -frames:v 1 -q:v 3 "$sheet"
+        if ! ffmpeg -hide_banner -nostdin -nostats -loglevel error -y -f concat -safe 0 -i "$list" \
+            -vf "scale=480:-2,tile=${c}x${r}:padding=4:margin=4" -frames:v 1 -q:v 3 "$sheet"; then
+            # The frames and the index are what matter; a sheet is a convenience.
+            rm -f "$sheet" "$list"
+            NSHEETS=$((NSHEETS - 1))
+            SHEET_FAILED=$((SHEET_FAILED + 1))
+            first=$((last + 1))
+            continue
+        fi
         rm -f "$list"
         # The sheet sorts just before its first frame (C before F on a tie).
         tf="$(grep -F "FRAME ${FILES[first]}" "$ROWS" | cut -f1)"
@@ -311,6 +394,7 @@ fi
     fi
     if [ "$NSHEETS" -gt 0 ]; then echo "- Contact sheets: $NSHEETS in $OUT/sheets, $SHEET frames each; each sheet's row comes just before its first frame. Read a sheet to skim, then Read only the full FRAMEs you need."; fi
     if [ -f "$OUT/transcript.md" ]; then echo "- Transcript: $OUT/transcript.md (one channel, speakers not separated; \"Me\" is the recording's sound, not a speaker)"; fi
+    if [ "$SHEET_FAILED" -gt 0 ]; then echo "- Contact sheet missing: $SHEET_FAILED of $((NSHEETS + SHEET_FAILED)) could not be made; every frame is still here as a FRAME row below."; fi
     if [ -n "$TNOTE" ]; then echo "- $TNOTE"; fi
     echo "- Read this file top to bottom; Read each FRAME path to see the screen at that moment."
     echo
@@ -322,6 +406,7 @@ rm -f "$ROWS"
 if [ -n "$DL" ]; then rm -rf "$DL"; DL=""; fi
 if [ "$NSHEETS" -gt 0 ]; then echo "watch: $n frames, $NSHEETS sheets, index $OUT/watched.md" >&2
 else echo "watch: $n frames, index $OUT/watched.md" >&2; fi
+if [ "$SHEET_FAILED" -gt 0 ]; then echo "watch: contact sheet missing: $SHEET_FAILED could not be made; the frames and the index are complete." >&2; fi
 [ -n "$TNOTE" ] && echo "watch: $TNOTE" >&2
 echo "$OUT/watched.md"
 if [ "$TSTATUS" -ne 0 ] && [ "$TSTATUS" -ne 3 ]; then exit 2; fi

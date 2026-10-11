@@ -8,6 +8,7 @@ Neither a dry run nor a reviewer outage is recorded as a successful inspection.
 import argparse
 import contextlib
 import difflib
+from datetime import datetime
 import fcntl
 import hashlib
 import importlib.util
@@ -26,6 +27,7 @@ import time
 ENGINE = Path(__file__).resolve().parents[2]
 LIMIT = 300
 TTL = 900
+CONTEXT_LIMIT = 128000
 REVIEW_RULES = """
 FINDINGS means a demonstrated mistake that would materially misdirect the work,
 violate human authorization or make the required proof invalid. Explain that
@@ -78,49 +80,237 @@ def state_dir():
     return config / "state/pierce"
 
 
-def human_context(payload):
+def human_messages(rows, desktop=False):
     """Read original user messages, not the planner's paraphrase or tool results."""
+    messages = []
+    for row in rows:
+        attachment = row.get("attachment") if row.get("type") == "attachment" else None
+        queued = (isinstance(attachment, dict) and attachment.get("type") == "queued_command"
+                  and isinstance(attachment.get("origin"), dict)
+                  and attachment["origin"].get("kind") == "human")
+        # A message sent while a turn runs is stored as a queued_command attachment.
+        if (not (row.get("type") == "user" or queued) or row.get("isSidechain") or row.get("isMeta")
+                or row.get("isCompactSummary") or row.get("isVisibleInTranscriptOnly")
+                or row.get("turnOrigin") == "task_notification"):
+            continue
+        # Desktop priming and quoted context do not attest a human instruction.
+        if desktop and row.get("evidenceSource") != "richos-ledger-attested-hook-v1":
+            continue
+        content = attachment.get("prompt") if queued else row.get("message", {}).get("content")
+        if isinstance(content, list):
+            if any(part.get("type") == "tool_result" for part in content if isinstance(part, dict)):
+                continue
+            content = "\n".join(part.get("text", "") for part in content
+                                if isinstance(part, dict) and part.get("type") == "text")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        if content.lstrip().startswith(("<task-notification>", "<local-command-", "<command-name>",
+                                       "<teammate-message", "<system-reminder>")):
+            continue
+        messages.append(content)
+    return messages
+
+
+def transcript_rows(path, complete=False):
+    with open(path, encoding="utf-8") as stream:
+        for line in stream:
+            if complete and not line.endswith("\n"):
+                break  # The host has not finished appending this ledger event.
+            try:
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    yield row
+            except ValueError:
+                continue
+
+
+def session_time(value):
+    if not isinstance(value, str):
+        raise ValueError("restart transcript has no valid timestamp")
+    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if stamp.tzinfo is None:
+        raise ValueError("restart transcript timestamp has no timezone")
+    return stamp
+
+
+def terminal_messages(path, seen=None, cutoff=None, written_note=None):
+    """A witnessed restart note locates originals; its prose grants no authority.
+
+    Both the read in the successor and a successful write in its named source
+    must exist in native transcripts of this same project. Never select the
+    newest neighbouring session or accept a path from the outgoing brief.
+    """
+    path = Path(path).resolve()
+    seen = set() if seen is None else seen
+    if path in seen:
+        raise ValueError("cyclic terminal continuation")
+    seen.add(path)
+    calls, links, messages, writes = {}, {}, [], set()
+    deadline = session_time(cutoff) if cutoff else None
+    for row in transcript_rows(path):
+        if deadline:
+            stamp = row.get("timestamp")
+            if not stamp:
+                continue
+            if session_time(stamp) > deadline:
+                continue
+        if row.get("isSidechain"):
+            continue
+        messages.extend(human_messages([row]))
+        parts = row.get("message", {}).get("content", [])
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            if (row.get("type") == "assistant" and part.get("type") == "tool_use"
+                    and part.get("name") in ("Read", "Write", "Edit")):
+                raw = part.get("input", {}).get("file_path")
+                if isinstance(raw, str) and Path(raw).is_absolute():
+                    note = Path(raw).resolve()
+                    if note.parent == path.parent / "memory":
+                        calls[part.get("id")] = (part["name"], str(note))
+            elif row.get("type") == "user" and part.get("type") == "tool_result" and not part.get("is_error"):
+                call = calls.get(part.get("tool_use_id"))
+                if not call:
+                    continue
+                kind, note = call
+                if kind in ("Write", "Edit"):
+                    writes.add(note)
+                    continue
+                text = part.get("content", "")
+                if isinstance(text, list):
+                    text = "\n".join(p.get("text", "") for p in text if isinstance(p, dict))
+                if not isinstance(text, str):
+                    continue
+                text = re.sub(r"(?m)^\s*\d+\u2192|^\s*\d+\t", "", text).lstrip()
+                header = re.match(r"\A---\s*\n(.*?)\n---(?:\n|$)", text, re.S)
+                if not header:
+                    continue
+                if not re.search(r"(?m)^name:\s*restart-", header[1]):
+                    continue
+                origins = re.findall(r"(?m)^\s*originSessionId:\s*([A-Za-z0-9_-]+)\s*$", header[1])
+                if len(origins) != 1 or not row.get("timestamp"):
+                    raise ValueError("restart note has no unique source session/time")
+                predecessor = (path.parent / (origins[0] + ".jsonl")).resolve()
+                if predecessor.parent != path.parent:
+                    raise ValueError("restart source leaves this project")
+                if predecessor != path:
+                    key = (str(predecessor), note)
+                    at = row["timestamp"]
+                    if key not in links or session_time(at) < session_time(links[key]):
+                        links[key] = at
+    if written_note and written_note not in writes:
+        raise ValueError("restart note has no successful write in its source session")
+    if len(links) > 1:
+        raise ValueError("ambiguous terminal continuation")
+    if links:
+        (predecessor, note), at = next(iter(links.items()))
+        messages = terminal_messages(predecessor, seen, at, note) + messages
+    return messages
+
+
+def desktop_messages(payload):
+    """Read original text/Jam turns in the host-bound company and conversation.
+
+    This ledger survives provider rotation. Hidden priming, tool results and
+    other companies/conversations are not user requests.
+    """
+    scope_path = Path(os.environ["RICHOS_APP_SCOPE"])
+    if not scope_path.is_absolute() or scope_path.stat().st_size > 256 * 1024:
+        raise ValueError("invalid desktop authority scope")
+    scope = json.loads(scope_path.read_text())
+    if not isinstance(scope, dict):
+        raise ValueError("invalid desktop authority scope")
+    binding = scope.get("binding", {})
+    if (scope.get("version") != 1 or not isinstance(binding, dict)
+            or binding.get("session_id") != payload.get("session_id")
+            or any(not isinstance(binding.get(key), str) or not binding[key]
+                   for key in ("entity_id", "thread_id", "session_id"))):
+        raise ValueError("desktop authority does not match this company/conversation/session")
+    ledger = Path(os.environ["RICHOS_APP_STATE"]).parent / "conversation-ledger.jsonl"
+    messages, turns = [], {}
+    for row in transcript_rows(ledger, complete=True):
+        if (row.get("event") != "PromptReceived" or row.get("entity_id") != binding["entity_id"]
+                or row.get("thread_id") != binding["thread_id"] or row.get("source") not in ("text", "jam")):
+            continue
+        text, turn = row.get("text"), row.get("turn_id")
+        if not isinstance(text, str) or not isinstance(turn, str) or turn in turns:
+            raise ValueError("invalid or duplicate original desktop request")
+        turns[turn] = text
+        if text.strip():
+            messages.append(text)
+    original = None
+    instruction = scope.get("user_instruction")
+    if instruction:
+        if not isinstance(instruction, dict) or not isinstance(instruction.get("ledger_ref"), str):
+            raise ValueError("invalid desktop original instruction reference")
+        prefix = "ledger:" + binding["thread_id"] + ":"
+        ref = instruction.get("ledger_ref", "")
+        original = turns.get(ref[len(prefix):]) if ref.startswith(prefix) else None
+        if original is None or hashlib.sha256(original.encode()).hexdigest() != instruction.get("sha256"):
+            raise ValueError("desktop request does not match the host's original instruction")
+    return bounded_messages(messages, original)
+
+
+def bounded_messages(messages, original=None):
+    """Keep original authority and recent corrections within the review budget.
+
+    Select original turns, never a planner's summary. Retain the first request
+    and the host-bound request even when they fall outside the recent window.
+    Only an individually oversized turn needs an explicitly marked excerpt.
+    """
+    if sum(len(text) + 2 for text in messages) - 2 <= CONTEXT_LIMIT:
+        return messages
+    def excerpt(text, budget):
+        if len(text) <= budget:
+            return text
+        notice = "\n[Pierce excerpt: middle of this original turn omitted for size.]\n"
+        available = budget - len(notice)
+        start = available // 2
+        return text[:start] + notice + text[-(available - start):]
+    if len(messages) == 1:
+        return [excerpt(messages[0], CONTEXT_LIMIT)]
+    notice = ("[Pierce context window, not a human message: some original turns omitted for size. "
+              "Omission does not revoke earlier authorization or prove that scope was never authorized.]")
+    selected = {0: excerpt(messages[0], CONTEXT_LIMIT // 4)}
+    if original and original in messages:
+        index = messages.index(original)
+        selected[index] = excerpt(original, CONTEXT_LIMIT // 4)
+    used = len(notice) + 2 + sum(len(text) + 2 for text in selected.values())
+    for index in range(len(messages) - 1, 0, -1):
+        if index in selected:
+            continue
+        available = CONTEXT_LIMIT - used
+        text = messages[index]
+        if len(text) + 2 > available:
+            if index == len(messages) - 1:
+                selected[index] = excerpt(text, available - 2)
+            break
+        selected[index] = text
+        used += len(text) + 2
+    return [selected[0], notice] + [selected[index] for index in sorted(selected) if index]
+
+
+def human_context(payload):
     path = payload.get("transcript_path")
     if not path:
         raise ValueError("the runtime supplied no transcript containing the user's request")
-    messages = []
-    with open(path, encoding="utf-8") as stream:
-        for line in stream:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            attachment = row.get("attachment") if row.get("type") == "attachment" else None
-            queued = (isinstance(attachment, dict) and attachment.get("type") == "queued_command"
-                      and isinstance(attachment.get("origin"), dict)
-                      and attachment["origin"].get("kind") == "human")
-            # A message sent while a turn runs is stored as a queued_command attachment.
-            if (not (row.get("type") == "user" or queued) or row.get("isSidechain") or row.get("isMeta")
-                    or row.get("isCompactSummary") or row.get("isVisibleInTranscriptOnly")
-                    or row.get("turnOrigin") == "task_notification"):
-                continue
-            # Desktop priming and quoted context do not attest a human instruction.
-            if os.environ.get("RICHOS_APP_STATE") and row.get("evidenceSource") != "richos-ledger-attested-hook-v1":
-                continue
-            content = attachment.get("prompt") if queued else row.get("message", {}).get("content")
-            if isinstance(content, list):
-                if any(part.get("type") == "tool_result" for part in content if isinstance(part, dict)):
-                    continue
-                content = "\n".join(part.get("text", "") for part in content
-                                    if isinstance(part, dict) and part.get("type") == "text")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            if content.lstrip().startswith(("<task-notification>", "<local-command-", "<command-name>",
-                                           "<teammate-message", "<system-reminder>")):
-                continue
-            messages.append(content)
+    if os.environ.get("RICHOS_APP_STATE"):
+        # Older evidence fixtures without a host scope still require attested
+        # human rows. A real app scope always uses its durable conversation.
+        messages = (desktop_messages(payload) if os.environ.get("RICHOS_APP_SCOPE") else
+                    human_messages(transcript_rows(path), desktop=True))
+    else:
+        try:
+            messages = terminal_messages(path)
+        except (OSError, ValueError, RecursionError):
+            # An unproved handoff grants no older authority, but must not erase
+            # original requests made in this fresh native session.
+            messages = human_messages(transcript_rows(path))
     if not messages:
         raise ValueError("no original human request could be established from the transcript")
-    context = "\n\n".join(messages)
-    # Do not silently replace the user's original goal with a truncated summary.
-    if len(context) > 128000:
-        raise ValueError("original user context exceeds 128000 characters; an explicit review is needed")
-    return context
+    return "\n\n".join(bounded_messages(messages))
 
 
 def effective_assignment(payload):
@@ -269,13 +459,32 @@ def atomic(path, value):
             os.unlink(temporary)
 
 
-def invoke(request, profile):
-    cli = os.environ.get("RICHOS_CLAUDE_BIN") if os.environ.get("RICHOS_APP_STATE") else shutil.which("claude")
-    if not cli:
-        raise ValueError("Claude Code executable was not found on PATH")
+class Verdict(dict):
+    """A verdict whose provider cost and time ride beside it, never inside the stored result."""
+    metrics = {}
+
+
+class ReviewError(ValueError):
+    """An inspection that returned no verdict; any cost and time it did report ride beside it."""
+    def __init__(self, message, metrics=None):
+        super().__init__(message)
+        self.metrics = metrics or {}
+
+
+# What the CLI reports about a run, kept beside the verdict (Opus's and the Haiku twin's).
+METRIC_KEYS = ("total_cost_usd", "duration_ms", "duration_api_ms", "num_turns", "usage", "modelUsage",
+               "stop_reason", "terminal_reason", "api_error_status", "safety_stops")
+
+
+def claude_command(cli, profile, read_roots, model="opus", effort=None, output_format="json"):
+    """The inspector's command. With the defaults it is byte-identical to the one Pierce has
+    always run (pierce.test.py asserts it); the Haiku twin passes its own model and effort."""
+    command = [cli, "--print", "--safe-mode", "--restricted", "--model", model]
+    if effort:
+        command.extend(["--effort", effort])
     # Safe mode retains subscription authentication but removes inherited hooks,
     # plugins and CLAUDE.md. The explicit system prompt is the shipped Pierce.
-    command = [cli, "--print", "--safe-mode", "--restricted", "--model", "opus",
+    command.extend([
                "--system-prompt", profile + "\n\nReturn the required structured verdict. "
                "Use only Read, Glob and Grep. Shell execution is unavailable; say when a claim "
                "cannot be verified with those tools. Inspect the outgoing assignment, any brief files it "
@@ -288,12 +497,53 @@ def invoke(request, profile):
                "--tools", "Read,Glob,Grep", "--allowedTools", "Read,Glob,Grep",
                "--permission-mode", "dontAsk", "--strict-mcp-config",
                "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
-               "--output-format", "json", "--json-schema", json.dumps(SCHEMA)]
-    if request["read_roots"]:
-        command.extend(["--add-dir", *request["read_roots"]])
+               "--output-format", output_format, "--json-schema", json.dumps(SCHEMA)])
+    if output_format == "stream-json":
+        command.append("--verbose")  # the CLI requires it with --print and stream-json
+    if read_roots:
+        command.extend(["--add-dir", *read_roots])
+    return command
+
+
+def read_response(out, output_format):
+    """(final result object, prompt tokens of each model request or None).
+
+    stream-json carries the same final result object (structured_output included, measured
+    2026-10-10 on claude-haiku-5-5) plus one assistant event per content block, so requests
+    are counted once per message id."""
+    if output_format != "stream-json":
+        return json.loads(out), None
+    response, requests = None, {}
+    for line in out.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result":
+            response = event
+        elif event.get("type") == "assistant" and isinstance(event.get("message"), dict):
+            message = event["message"]
+            usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+            requests[message.get("id") or len(requests)] = sum(
+                int(usage.get(key) or 0) for key in
+                ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    if response is None:
+        raise ValueError("Claude Code returned no result event")
+    return response, list(requests.values())
+
+
+def run_review(request, profile, model="opus", effort=None, output_format="json"):
+    """(verdict, metrics) from one restricted inspection by the named model."""
+    cli = os.environ.get("RICHOS_CLAUDE_BIN") if os.environ.get("RICHOS_APP_STATE") else shutil.which("claude")
+    if not cli:
+        raise ValueError("Claude Code executable was not found on PATH")
+    command = claude_command(cli, profile, request["read_roots"], model, effort, output_format)
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     env["CLAUDE_CODE_SAFE_MODE"] = "1"
+    began = time.monotonic()
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True, cwd=request["project_dir"], env=env,
                                start_new_session=True)
@@ -304,19 +554,25 @@ def invoke(request, profile):
     try:
         out, err = process.communicate(json.dumps(request, ensure_ascii=False), timeout=LIMIT)
         if process.returncode:
-            raise ValueError(f"Claude Code inspection failed (exit {process.returncode}): {err[-2000:]}")
-        response = json.loads(out)
+            raise ReviewError(f"Claude Code inspection failed (exit {process.returncode}): {err[-2000:]}",
+                              {"wall_seconds": round(time.monotonic() - began, 3)})
+        response, requests = read_response(out, output_format)
+        metrics = {key: response[key] for key in METRIC_KEYS if key in response}
+        metrics["wall_seconds"] = round(time.monotonic() - began, 3)
+        if requests is not None:
+            metrics["request_prompt_tokens"] = requests
         if response.get("is_error"):
-            raise ValueError("Claude Code returned an error instead of an inspection")
+            raise ReviewError("Claude Code returned an error instead of an inspection", metrics)
         verdict = response.get("structured_output")
         if (not isinstance(verdict, dict) or verdict.get("verdict") not in ("PASS", "FINDINGS")
                 or not isinstance(verdict.get("report"), str) or not verdict["report"].strip()
                 or not isinstance(verdict.get("notes"), list) or len(verdict["notes"]) > 3
                 or any(not isinstance(note, str) or not note.strip() for note in verdict["notes"])):
-            raise ValueError("Claude Code returned no valid Pierce verdict")
-        return verdict
+            raise ReviewError("Claude Code returned no valid Pierce verdict", metrics)
+        return verdict, metrics
     except subprocess.TimeoutExpired:
-        raise ValueError("Pierce did not finish within five minutes")
+        raise ReviewError("Pierce did not finish within five minutes",
+                          {"wall_seconds": round(time.monotonic() - began, 3)})
     finally:
         # Own only this inspector's process group, including any file-tool helpers.
         try:
@@ -325,6 +581,110 @@ def invoke(request, profile):
             pass
         process.communicate()
         signal.signal(signal.SIGTERM, previous)
+
+
+def invoke(request, profile):
+    verdict, metrics = run_review(request, profile)
+    result = Verdict(verdict)
+    result.metrics = metrics
+    return result
+
+
+# ---------------------------------------------------------------------------
+# The Haiku parallel track: data collection only (richos-hq
+# docs/plans/2026-10-10-pierce-haiku-parallel-track.md). Nothing here can reach
+# the Opus verdict, the hook's output or its exit code: every step is guarded
+# and a failure is only logged in the track's own folder.
+# ---------------------------------------------------------------------------
+SHADOW_EFFORT = "high"
+
+
+def shadow_dir():
+    return state_dir().parent / "pierce-shadow"
+
+
+def shadow_log(text):
+    try:
+        root = shadow_dir()
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with open(root / "shadow.log", "a") as log:
+            log.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + text + "\n")
+    except OSError:
+        pass
+
+
+def shadow_model(project):
+    """PIERCE_SHADOW_MODEL in the governed repository's orchestration.config. Empty or absent
+    is off, and the desktop app's Pierce (a product user's) never gets a twin."""
+    if os.environ.get("RICHOS_APP_STATE"):
+        return ""
+    try:
+        text = (Path(project) / "orchestration.config").read_text()
+    except OSError:
+        return ""
+    value = ""
+    for line in text.splitlines():
+        match = re.fullmatch(r'\s*PIERCE_SHADOW_MODEL\s*=\s*"?([^"#\s]*)"?\s*(?:#.*)?', line)
+        if match:
+            value = match[1]
+    return value if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value) else ""
+
+
+def shadow_start(payload, review, profile, identity, project):
+    """Start the twin of this initial review, detached in its own session: never waited on,
+    never raises. Returns the pair name, or None when no twin starts."""
+    try:
+        model = shadow_model(project)
+        root = shadow_dir()
+        if not model or (root / "complete.json").exists():
+            return None
+        (root / "jobs").mkdir(parents=True, exist_ok=True, mode=0o700)
+        (root / "pairs").mkdir(exist_ok=True, mode=0o700)
+        at = time.time()
+        ti = payload["tool_input"]
+        pair = time.strftime("%Y%m%dT%H%M%SZ-", time.gmtime(at)) + hashlib.sha256(json.dumps(
+            [identity, payload["tool_use_id"], at]).encode()).hexdigest()[:12]
+        job = root / "jobs" / (pair + ".json")
+        atomic(job, {"pair": pair, "at": at, "model": model, "effort": SHADOW_EFFORT,
+                     "session_id": payload["session_id"], "tool_use_id": payload["tool_use_id"],
+                     "worker": {"name": ti.get("name"), "type": ti.get("subagent_type"), "model": ti.get("model")},
+                     "opus_result_id": identity, "profile": profile, "request": review})
+        env = dict(os.environ)
+        env.pop("CLAUDECODE", None)
+        with open(root / "shadow.log", "a") as log:
+            subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve().parent / "pierce_shadow.py"),
+                              "run", str(job)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=log, cwd=str(root), env=env, start_new_session=True, close_fds=True)
+        return pair
+    except Exception as error:  # the track must never reach the hook
+        shadow_log(f"no twin started: {type(error).__name__}: {error}")
+        return None
+
+
+def shadow_opus(pair, result, metrics, began):
+    """The Opus side of a pair, written after Pierce's own result."""
+    if not pair:
+        return
+    try:
+        atomic(shadow_dir() / "pairs" / (pair + ".opus.json"), {
+            "pair": pair, "result_id": result["id"], "verdict": result["verdict"], "report": result["report"],
+            "notes": result.get("notes", []), "metrics": metrics,
+            "hook_seconds": round(time.monotonic() - began, 3)})
+    except Exception as error:
+        shadow_log(f"pair {pair}: Opus record not written: {type(error).__name__}: {error}")
+
+
+def shadow_revision(project, identity, lane, revises, result):
+    """A revision review gets no twin; its row says whether the lead's revision fixed Opus's findings."""
+    try:
+        if not shadow_model(project):
+            return
+        (shadow_dir() / "revisions").mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic(shadow_dir() / "revisions" / (identity + ".json"), {
+            "id": identity, "lane": lane, "revises": revises, "at": result["at"],
+            "verdict": result["verdict"], "report": result["report"], "notes": result.get("notes", [])})
+    except Exception as error:
+        shadow_log(f"revision {identity}: row not written: {type(error).__name__}: {error}")
 
 
 def revision_request(request, previous, report):
@@ -348,6 +708,7 @@ def revision_request(request, previous, report):
 
 
 def inspect(payload):
+    began = time.monotonic()
     ti = payload.get("tool_input") or {}
     if payload.get("tool_name") != "Agent" or ti.get("resume"):
         return None
@@ -396,6 +757,7 @@ def inspect(payload):
         with locked(root / ("revision-" + lane + ".lock")):
             review = {**request, "review": {"mode": "initial"}}
             started = time.time()
+            revises = None
             if not missing and ti.get("name"):
                 try:
                     previous = json.loads(lane_path.read_text())
@@ -406,19 +768,29 @@ def inspect(payload):
                         if revised:
                             review = revised
                             started = previous["started"]
+                            revises = previous["id"]
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
+            # The Haiku twin starts beside an initial review only, before Opus, from
+            # the request already built; it is never waited on (data collection only).
+            pair = None
             if missing:
                 verdict = {"verdict": "UNAVAILABLE", "report": missing}
             else:
+                if review["review"]["mode"] == "initial":
+                    pair = shadow_start(payload, review, profile, identity, project)
                 try:
                     verdict = invoke(review, profile)
                 except (OSError, ValueError) as error:
-                    verdict = {"verdict": "UNAVAILABLE", "report": str(error)}
+                    verdict = Verdict({"verdict": "UNAVAILABLE", "report": str(error)})
+                    verdict.metrics = getattr(error, "metrics", {})
             result = {"id": identity, "at": time.time(), "session_id": payload["session_id"],
                       "tool_use_id": payload["tool_use_id"], "review_mode": review["review"]["mode"], **verdict}
             atomic(path, result)
             atomic(lane_path, {"id": identity, "started": started, "request": request})
+            shadow_opus(pair, result, getattr(verdict, "metrics", {}), began)
+            if revises:
+                shadow_revision(project, identity, lane, revises, result)
             return result
 
 
@@ -454,6 +826,14 @@ def main():
                 raise ValueError("report expired; retry the Agent call for a fresh inspection")
             value["dismissal"] = args.reason.strip()
             atomic(path, value)
+        # The lead's action on Opus's findings is the track's cross-check on its judge.
+        try:
+            if shadow_dir().is_dir():
+                with open(shadow_dir() / "dismissals.jsonl", "a") as out:
+                    out.write(json.dumps({"id": args.dismiss, "at": time.time(),
+                                          "reason": args.reason.strip()}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
         print("Pierce report dismissed for this exact assignment: " + args.reason.strip())
         return 0
     result = inspect(json.load(sys.stdin))

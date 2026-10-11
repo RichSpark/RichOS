@@ -85,27 +85,27 @@ fn send(app: &AppHandle, event: UiEvent) {
     }
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_bar_laid_out(app: AppHandle, seq: u64, w: f64, h: f64, orb_x: f64, orb_y: f64, fix: Option<Box4>) {
     send(&app, UiEvent::BarLaidOut { seq, w, h, orb: (orb_x, orb_y), fix });
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_page_ready(app: AppHandle, role: String) {
     send(&app, UiEvent::Ready { role });
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_fix_it(app: AppHandle) {
     send(&app, UiEvent::FixIt);
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_menu_laid_out(app: AppHandle, seq: u64, w: f64, h: f64) {
     send(&app, UiEvent::MenuLaidOut { seq, w, h });
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_menu_act(app: AppHandle, act: String, value: Option<String>) {
     send(&app, UiEvent::Menu { act, value });
 }

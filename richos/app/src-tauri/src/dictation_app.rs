@@ -877,37 +877,37 @@ fn host(app: &tauri::AppHandle) -> Result<Arc<Host>, String> {
 }
 
 /// What the sheet and the row show, read now.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_status(app: tauri::AppHandle) -> Result<View, String> {
     host(&app)?.view()
 }
 
 /// The switch.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_set_on(app: tauri::AppHandle, on: bool) -> Result<View, String> {
     host(&app)?.set_on(on)
 }
 
 /// Your key, F1 to F19.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_set_key(app: tauri::AppHandle, key: u8) -> Result<View, String> {
     host(&app)?.set_key(key)
 }
 
 /// Accuracy: `accurate` or `fast`.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_set_accuracy(app: tauri::AppHandle, accuracy: String) -> Result<View, String> {
     host(&app)?.set_accuracy(&accuracy)
 }
 
 /// macOS's microphone prompt, once.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_ask_microphone(app: tauri::AppHandle) -> Result<View, String> {
     host(&app)?.ask_microphone()
 }
 
 /// macOS's Accessibility prompt, once. `true` when it was put up now.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_ask_accessibility(app: tauri::AppHandle) -> Result<bool, String> {
     host(&app)?.ask_accessibility()
 }
@@ -915,7 +915,7 @@ pub fn dictation_ask_accessibility(app: tauri::AppHandle) -> Result<bool, String
 /// **Accessibility was allowed while the sheet waited** (plan section 2 row 9): the tool makes
 /// its key tap now, and RichOS comes back to the front on the sheet, as drawn. `forward: false`
 /// when the window found it allowed with nothing waiting (it is in front already).
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_permissions_changed(app: tauri::AppHandle, forward: Option<bool>) -> Result<(), String> {
     use tauri::Manager;
     host(&app)?.permissions_changed();
@@ -933,7 +933,7 @@ pub fn dictation_permissions_changed(app: tauri::AppHandle, forward: Option<bool
 }
 
 /// **Open System Settings** on the pane a refusal names: `microphone` or `accessibility`.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_open_settings(pane: String) -> Result<(), String> {
     let url = privacy_pane(&pane).ok_or_else(|| format!("{pane} is not a pane dictation opens"))?;
     let status = std::process::Command::new("/usr/bin/open").arg(url).status().map_err(|e| e.to_string())?;
@@ -946,7 +946,7 @@ pub fn dictation_open_settings(pane: String) -> Result<(), String> {
 
 /// **Press a different key**: `on` asks the tool's key tap for the next F-key (answered on
 /// [`EVENT`] as `{"key": n}`); `false` stops waiting. `true` when the tap will answer.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn dictation_capture_key(app: tauri::AppHandle, on: bool) -> Result<bool, String> {
     Ok(host(&app)?.capture(on))
 }

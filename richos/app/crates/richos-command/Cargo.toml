@@ -1,0 +1,32 @@
+# `#[richos_command::command]` — every window command's body runs OFF Tauri's async workers.
+#
+# A proc-macro crate because the rule has to hold for every command without anybody
+# remembering it: one attribute, the body unchanged, and the shell's
+# `src/command_rule_tests.rs` refuses a bare `#[tauri::command]` anywhere in `src-tauri/src`.
+# Why the rule exists is in `src/lib.rs`.
+#
+# A MEMBER OF THE `richos/app` WORKSPACE, like richos-core, and a path dependency of the
+# detached Tauri shell, like richos-core. Its own tests (`cargo test -p richos-command`) check
+# the expansion without building the Tauri tree; the shell's tests check it through Tauri's
+# real dispatch.
+#
+# NO NEW DOWNLOAD: `syn` 2 (with `full`), `quote` and `proc-macro2` are already in both
+# lockfiles (`richos/app/Cargo.lock` and `src-tauri/Cargo.lock`, beneath serde's and
+# tauri's own derive macros).
+[package]
+name = "richos-command"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[lints]
+workspace = true

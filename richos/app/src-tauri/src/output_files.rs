@@ -1416,27 +1416,27 @@ fn moov_facts(moov: &[u8]) -> MediaFacts {
 
 // ---- the commands (§5.4) ------------------------------------------------------------------
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn list_output(files: State<'_, OutputFiles>, thread_id: String) -> Result<OutputList, String> {
     files.list(&thread_id)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn output_file(files: State<'_, OutputFiles>, output_id: String) -> Result<EntryDetail, String> {
     files.file(&output_id)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn output_preview(files: State<'_, OutputFiles>, output_id: String) -> Result<Preview, String> {
     files.preview(&output_id)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn output_open(files: State<'_, OutputFiles>, output_id: String, app_index: Option<usize>) -> Result<String, String> {
     files.open(&output_id, app_index)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn output_reveal(files: State<'_, OutputFiles>, output_id: String) -> Result<String, String> {
     files.reveal(&output_id)
 }
@@ -1459,7 +1459,7 @@ pub fn output_reveal(files: State<'_, OutputFiles>, output_id: String) -> Result
 ///   the system's own per-app memory of where he keeps things; a fixed folder would override
 ///   his last choice every time;
 /// - filters: none — a copy keeps whatever extension the file has.
-#[tauri::command]
+#[richos_command::command]
 pub async fn output_save_copy(app: tauri::AppHandle, window: tauri::WebviewWindow, output_id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager;
