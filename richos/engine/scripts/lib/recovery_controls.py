@@ -70,8 +70,13 @@ def begin_tool(ws, payload, rec):
     """Serialize tool permission with control installation. Conservative open
     admissions are cleared only by native completion or actual harness end.
     """
-    if not rec.get("recovery_jobs") and not rec.get("recovery_control"):
-        return True, ""
+    if not rec.get("recovery_control"):
+        declaration = R.mode(rec.get("entity"))
+        if declaration["mode"] == "observe":
+            return True, ""
+        if not rec.get("recovery_jobs") and (declaration["mode"] != "enforce" or
+                (rec.get("recovery_assignment") or {}).get("kind") != "implementation"):
+            return True, ""
     with ws.Lock():
         fresh = ws.load_agent(rec["key"])
         if not fresh:
@@ -93,6 +98,10 @@ def begin_tool(ws, payload, rec):
 def finish_tool(ws, payload):
     key = ws.key_for_id(str(payload.get("agent_id") or ""))
     if not key:
+        return
+    rec = ws.load_agent(key)
+    tid = payload.get("tool_use_id")
+    if not rec or tid not in rec.get("recovery_tools", {}):
         return
     with ws.Lock():
         rec = ws.load_agent(key)
@@ -234,6 +243,9 @@ def stop(ws, key, record, control, tip):
             rec["recovery_control"] = dict(job=record["id"], id=control["id"], source=tip, reason=control["reason"],
                 requested_at=time.time(), side_effects_disabled=True, cancellation_deadline=time.time()+CANCEL_SECONDS,
                 cancellation_requested=True)
+            notice = R.root() / "cancellations" / (R.digest(rec["session_id"])+".json")
+            keys = json.loads(notice.read_text()) if notice.exists() else []
+            R.F.write_json_atomic(str(notice), sorted(set(keys+[key])))
             ws.save_agent(rec)
     # Releasing only this target's old pause permits its owned commands to end.
     ws.release_held_ids(rec["session_id"], rec.get("agent_id") or "", rec.get("name") or "", key)
@@ -298,7 +310,14 @@ def _schedule(record, engine, env=None):
 
 
 def cancellation_notice(ws, session):
-    pending = [r for r in ws.all_agents() if r.get("session_id")==session and r.get("agent_id")
+    notice = R.root() / "cancellations" / (R.digest(session)+".json")
+    try:
+        keys = json.loads(notice.read_text())
+    except FileNotFoundError:
+        return ""
+    except (OSError, ValueError):
+        keys = [r["key"] for r in ws.all_agents() if r.get("session_id")==session and r.get("recovery_control")]
+    pending = [r for key in keys for r in [ws.load_agent(key)] if r and r.get("session_id")==session and r.get("agent_id")
                and r.get("recovery_control") and not r["recovery_control"].get("harness_ended_at")]
     return "\n".join("RECOVERY CONTROL %s: tools disabled for %s. Execute TaskStop with task_id %s; "
         "record native completion. Command quiescence does not prove its model loop ended." % (

@@ -259,6 +259,28 @@ class RecoveryChain(Base):
         ws.save_agent(rec)
         return cc, aid, rec, control, host, record
 
+    def test_enforcement_tracks_tools_before_the_threshold_and_after_mode_change(self):
+        cc,aid,rec,control,host,record=self.recovery_fixture('early-tracking')
+        rec['recovery_jobs']=[]
+        rec['recovery_assignment']['observation_only']=True
+        ws.save_agent(rec)
+        payload=dict(agent_id=aid,tool_use_id='early-write',tool_name='Write')
+        with patch.object(control.R,'mode',return_value=dict(mode='enforce')):
+            self.assertEqual(control.begin_tool(host,payload,rec),(True,''))
+        self.assertIn('early-write',ws.load_agent(rec['key'])['recovery_tools'])
+        control.finish_tool(host,payload)
+        with patch.object(control.R,'mode',return_value=dict(mode='observe')),patch.object(ws,'Lock',side_effect=AssertionError('observation lock')):
+            control,host=ws._recovery_adapter()
+            self.assertEqual(control.begin_tool(host,payload,rec),(True,''))
+
+    def test_idle_hooks_do_not_scan_all_workers_or_take_the_registry_lock(self):
+        cc,aid,rec,control,host,record=self.recovery_fixture('idle-hooks')
+        with patch.object(ws,'all_agents',side_effect=AssertionError('idle registry scan')), patch.object(ws,'Lock',side_effect=AssertionError('idle registry lock')):
+            control,host=ws._recovery_adapter()
+            self.assertEqual(control.cancellation_notice(host,self.sid),'')
+            control.finish_tool(host,dict(agent_id=aid,tool_use_id='no-recovery-tool'))
+        self.assertFalse(ws.load_agent(rec['key']).get('recovery_control'))
+
     def test_control_refuses_all_tools_without_manufacturing_an_end(self):
         cc, aid, rec, control, host, record = self.recovery_fixture()
         payload = dict(session_id=self.sid, agent_id=aid, tool_name='Write', tool_use_id='native-write')
@@ -272,6 +294,7 @@ class RecoveryChain(Base):
             control, host = ws._recovery_adapter()
             result = control.stop(host, rec['key'], record, decision, tip)
         self.assertFalse(result['quiescent'])
+        self.assertIn(aid,control.cancellation_notice(host,self.sid))
         self.assertFalse(ws.load_agent(rec['key']).get('end'))
         for tool in ('Read', 'Write', 'Edit', 'Bash', 'Agent', 'SubagentHandback'):
             self.assertEqual(ws.barrier(dict(payload, tool_name=tool))[0], 'CONTROLLED')
