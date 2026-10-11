@@ -1124,6 +1124,46 @@ class Land(Fixture):
         self.branch_with("clean", "richos/app/src/audit.txt", "phone <android-phone>\n")
         self.git("merge", "--no-ff", "-m", "land clean", "clean")
 
+    def test_a_merge_that_leaves_a_citation_dangling_is_refused_and_its_fix_lands(self):
+        # 2026-10-11: the merge of codex/axel-wes-recovery (9c5f0f6dc) passed the gate and left a
+        # document citing a path the public tree does not hold. The engine's commit guard runs
+        # publication-completeness.sh over the whole tree at every commit, so no commit on any
+        # branch could pass after it. Here the finding is on neither side: one branch cites a file
+        # that exists where it was cut, and the land before it moved that file. The real checker
+        # runs (richos/engine is the real engine).
+        self.make()
+        self.write(".publication-boundary", 'PRIVATE_RECORD="the private record"\nPRIVATE_SOURCES=""\n')
+        # The checker refuses a published tree that ships no declaration-gated mechanism (it reads
+        # that as its own derivation broken), so the tree ships one, with its template and its word.
+        self.write("scripts/hooks/guard-widget.sh", ': "${WIDGET_DECLARATION:=.widget}"\n')
+        self.write(".widget.example", 'WIDGET_RECORD="wherever"\n')
+        self.write("README.md", "# Sample\n\nCreate `.widget` from `.widget.example` to switch the widget guard on.\n")
+        self.write("docs/guide.md", "# Guide\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "publication-bound")
+        self.branch_with("cite", "docs/README.md", "# Docs\n\nRead `docs/guide.md` first.\n")
+        self.git("checkout", "-q", "-b", "move")
+        self.git("mv", "docs/guide.md", "docs/handbook.md")
+        self.git("commit", "-q", "-m", "move the guide")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "--no-ff", "-m", "land move", "move")
+        before = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land cite", "cite", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO MAIN REFUSED: the tree being landed fails publication completeness", text)
+        self.assertIn("[CITATION] docs/README.md", text)
+        self.assertIn("docs/guide.md", text)
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        self.git("checkout", "-q", "cite")
+        self.write("docs/README.md", "# Docs\n\nRead the guide first.\n")
+        self.git("commit", "-q", "-am", "name the guide in prose")
+        self.git("checkout", "-q", "main")
+        out = self.git("merge", "--no-ff", "-m", "land cite", "cite")
+        self.assertIn("publication-completeness.sh --root . --skip-private-trees", out.stderr)
+        self.assertNotIn("REFUSED", out.stdout + out.stderr)
+        self.assertNotEqual(self.head("main"), before)
+
     def test_the_merge_gate_selects_with_gate_lints_the_change_and_caps_the_run(self):
         # 2026-09-30: merges of 25 to 71 minutes, whole-product suites for tooling changes and
         # no cap that a planned weight could not stretch. The land asks proof-for.sh for the
