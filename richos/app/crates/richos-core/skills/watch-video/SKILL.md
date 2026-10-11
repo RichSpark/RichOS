@@ -50,12 +50,14 @@ Find its length, then take one frame every 10 seconds:
 ```bash
 ffprobe -v error -show_entries format=duration -of csv=p=0 "<video>"
 ffmpeg -nostdin -hide_banner -loglevel error -i "<video>" \
-  -vf "fps=1/10,scale='min(1280,iw)':-2" "$work/frame-%04d.jpg"
+  -vf "fps=1/10:round=up,scale='min(1280,iw)':-2" "$work/frame-%04d.jpg"
 ```
 
 Frame N shows the video at about (N - 1) x 10 seconds. Open the frames with the Read tool to see
-them. For a video longer than 10 minutes use `fps=1/30`, and over an hour `fps=1/60`; then look
-more closely (a second, narrower `ffmpeg -ss <start> -t <length>` pass) only where it matters.
+them. `round=up` makes frame 1 the opening picture, so even a recording of a second or two gives
+one. For a video longer than 10 minutes use `fps=1/30:round=up`, and over an hour
+`fps=1/60:round=up`; then look more closely (a second, narrower `ffmpeg -ss <start> -t <length>`
+pass) only where it matters.
 
 ## 4. Watch a video: the words
 

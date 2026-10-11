@@ -377,6 +377,46 @@ mod tests {
         }
     }
 
+    /// **A short screen recording gives at least one frame** (second review of `79ba6eb7e`,
+    /// finding 3). `fps=1/10` rounds each frame's time to the nearest ten-second slot, and the
+    /// filter emits slot 0 only once the recording reaches slot 1's half-way point: 5 s. A
+    /// two-second bug recording gave zero frames, and with nothing reaching the JPEG encoder
+    /// FFmpeg 9.0.2 even exited 234. This runs the skill's own extraction command, as the
+    /// teammate would, on a two-second and a twenty-five-second H.264 recording: one frame
+    /// for the first, three (0 s, 10 s, 20 s) for the second, so a short recording is covered
+    /// without changing how densely a long one is sampled.
+    ///
+    /// Needs `ffmpeg` (with libx264) on `PATH`, or its path in `RICHOS_TEST_FFMPEG`; without
+    /// it the test fails and says so rather than passing on nothing.
+    #[test]
+    fn a_short_screen_recording_gives_at_least_one_frame() {
+        let ffmpeg = std::env::var_os("RICHOS_TEST_FFMPEG").map(PathBuf::from).or_else(|| {
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|d| d.join("ffmpeg")).find(|p| p.is_file())
+        }).expect("this test runs the skill's own ffmpeg command: put ffmpeg on PATH or set RICHOS_TEST_FFMPEG");
+        let extraction = video_commands("ffmpeg ");
+        let extraction: Vec<&String> = extraction.iter().filter(|c| c.contains("frame-%04d.jpg")).collect();
+        assert_eq!(extraction.len(), 1, "one frame-extraction command: {extraction:?}");
+        let bin = ffmpeg.parent().unwrap().to_path_buf();
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
+        for (seconds, want) in [(2, 1), (25, 3)] {
+            let work = Temp::new(&format!("frames-{seconds}s"));
+            let video = work.0.join("recording.mov");
+            let made = std::process::Command::new(&ffmpeg)
+                .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+                .arg(format!("testsrc=s=640x360:r=30:d={seconds}"))
+                .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"]).arg(&video).output().unwrap();
+            assert!(made.status.success(), "fixture recording: {}", String::from_utf8_lossy(&made.stderr));
+            let command = extraction[0].replace("<video>", video.to_str().unwrap());
+            let ran = std::process::Command::new("/bin/sh").arg("-c").arg(&command)
+                .env("work", &work.0).env("PATH", &path).output().unwrap();
+            let frames = std::fs::read_dir(&work.0).unwrap()
+                .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("frame-")).count();
+            assert!(ran.status.success() && frames == want,
+                "a {seconds} s recording must give {want} frame(s), gave {frames} (exit {:?}: {}) from: {command}",
+                ran.status.code(), String::from_utf8_lossy(&ran.stderr).trim());
+        }
+    }
+
     /// The name in the frontmatter, the directory it is written to, and the name the wire
     /// announces are one fact. Measured form (cell K2): `rig-probe:rig-status`.
     #[test]
