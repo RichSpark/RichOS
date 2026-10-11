@@ -313,15 +313,18 @@ fi
 # its source is read first (a host power, sleep, lock or display command called by path refuses
 # it before it runs), then it runs with stand-ins for those commands first on PATH, and a suite
 # that called one FAILS with the stand-in's logged line. A standalone fixture copy of this file
-# has no engine beside it and uses the one the shielded run around it exports; with neither it
-# says so on stderr and runs its (synthetic) suites without the stand-ins.
+# has no engine beside it and uses the one its caller exports (RICHOS_HOST_SHIELD_TOOL); with
+# neither it REFUSES to run anything: a suite is never started without the stand-ins (review
+# rv-20261011T173659Z-e08ee8a2-2c75 #1: a fixture copy run under `env -i` ran a synthetic
+# suite's halt call unshielded, and said only a warning).
 SHIELD="$DIR/../../engine/scripts/lib/host_shield.py"
 [ -f "$SHIELD" ] || SHIELD="${RICHOS_HOST_SHIELD_TOOL:-}"
 SHIELDED=()
 if [ -n "$SHIELD" ] && [ -f "$SHIELD" ]; then
   SHIELDED=(python3 -S "$SHIELD" run --)
 elif [ -z "$LISTING" ]; then
-  echo "run-tests.sh: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL): suites run WITHOUT the power/sleep/lock/display stand-ins." >&2
+  echo "run-tests.sh: REFUSED: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL), so no suite can run behind the power, sleep, lock and display stand-ins (ceo-decisions §65). Nothing was run." >&2
+  exit 2
 fi
 
 JOBS=""

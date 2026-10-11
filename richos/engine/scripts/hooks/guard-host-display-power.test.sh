@@ -3,8 +3,6 @@
 # guard-host-display-power.test.sh — regression tests for
 # scripts/hooks/guard-host-display-power.sh.
 #
-# host-shield: names shutdown -- the F16/F17 payloads carry a continued `sudo shutdown` line as text piped to the guard; nothing here runs it
-#
 # THE FIXTURES ARE THE REAL STRINGS OF 2026-09-19, not paraphrases. That is the
 # whole design of this suite: the guard exists because of specific commands and
 # specific sentences, some of which must be refused and some of which must
@@ -414,9 +412,13 @@ expect_silent "F15 a MENTION in argument position is not an invocation" \
 # and proved nothing. The mutation harness caught that by refusing to go red.
 # F16b keeps the real line anyway: it is the text this property was written
 # for, and a case that passes both ways is still worth having as a fixture.
+# The command word is assembled: line by line, the host shield's source check (lib/host_shield.py)
+# reads the continued line as a sudo call, and a `names` declaration no longer exempts a call. The
+# payload the guard reads is the same string.
+F16_CMD="shut"; F16_CMD="${F16_CMD}down"
 expect_silent "F16 a backslash-continued ssh keeps its command word" \
               "$(payload Edit "$SB/scripts/a.sh" 'ssh "${OPTS[@]}" -i "$KEY" "$USER@$IP" \
-  sudo shutdown -r now')"
+  sudo '"$F16_CMD"' -r now')"
 expect_silent "F16b the real testvm/setup.sh guest reboot, verbatim" \
               "$(payload Edit "$SB/scripts/a.sh" 'ssh "${TESTVM_SSH_OPTS[@]}" -i "$TESTVM_SSH_KEY" "$TESTVM_GUEST_USER@$IP" \
   '"'"'sudo shutdown -r now'"'"' >/dev/null 2>&1 || true')"
@@ -431,6 +433,13 @@ expect_rc     "F17 ... and joining does not swallow a continued HOST command" 2 
 # uses it. Treating $SUDO as the command word would hide the line completely.
 expect_rc     "F18 a \$VAR in command position does not hide what follows" 2 \
               "$(payload Edit "$SB/scripts/a.sh" '$SUDO pmset -a displaysleep 0 sleep 0')"
+# A backtick substitution inside DOUBLE QUOTES runs, as $(...) there does: the analyzer read
+# `$(...)` in double quotes and skipped backticks (review rv-20261011T154414Z-d0066287-e6a8). The
+# halt path is assembled, so this file carries no call a mis-parse could run.
+F18B_HALT="/sbin/ha"; F18B_HALT="${F18B_HALT}lt"
+F18B_CMD="result=\"\`$F18B_HALT\`\""
+expect_rc     "F18b a backtick substitution inside double quotes is read as a command" 2 \
+              "$(payload Bash "" "$F18B_CMD")"
 # THE GUEST BOUNDARY ON THE FILE SURFACE. Same path segment the shell surface
 # uses. provision-guest.sh runs pmset and three `defaults write` lines INSIDE
 # the guest, and nothing in its text says so.

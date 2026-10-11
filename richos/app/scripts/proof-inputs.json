@@ -894,7 +894,8 @@
           "richos/engine/orchestration.config",
           "richos/engine/scripts/hooks/guard-definition-drift.sh",
           "richos/engine/scripts/hooks/guard-definition-drift.test.sh",
-          "richos/engine/scripts/hooks/snapshot-agent-definitions.sh"
+          "richos/engine/scripts/hooks/snapshot-agent-definitions.sh",
+          "richos/engine/scripts/hooks/guard-host-display-power.sh"
         ],
         "inventories": [
           "richos/engine"
@@ -971,7 +972,8 @@
           "richos/engine/orchestration.config",
           "richos/engine/scripts/hooks/guard-model-ceiling.mutation.sh",
           "richos/engine/scripts/hooks/guard-model-ceiling.sh",
-          "richos/engine/scripts/hooks/guard-model-ceiling.test.sh"
+          "richos/engine/scripts/hooks/guard-model-ceiling.test.sh",
+          "richos/engine/scripts/hooks/guard-host-display-power.sh"
         ],
         "inventories": [
           "richos/engine"
@@ -1048,7 +1050,8 @@
           "richos/engine/orchestration.config",
           "richos/engine/scripts/hooks/verify-agent-prompt.sh",
           "richos/engine/scripts/hooks/conceal.mutation.sh",
-          "richos/engine/scripts/hooks/verify-agent-prompt.test.sh"
+          "richos/engine/scripts/hooks/verify-agent-prompt.test.sh",
+          "richos/engine/scripts/hooks/guard-host-display-power.sh"
         ],
         "inventories": [
           "richos/engine"
@@ -1125,7 +1128,8 @@
           "richos/engine/orchestration.config",
           "richos/engine/scripts/hooks/guard-reference-ledger.sh",
           "richos/engine/scripts/hooks/reference-ledger.mutation.sh",
-          "richos/engine/scripts/hooks/guard-reference-ledger.test.sh"
+          "richos/engine/scripts/hooks/guard-reference-ledger.test.sh",
+          "richos/engine/scripts/hooks/guard-host-display-power.sh"
         ],
         "inventories": [
           "richos/engine"
@@ -1202,7 +1206,8 @@
           "richos/engine/orchestration.config",
           "richos/engine/scripts/hooks/guard-no-home-network-phone.test.sh",
           "richos/engine/scripts/hooks/home-network-phone.mutation.sh",
-          "richos/engine/scripts/hooks/guard-no-home-network-phone.sh"
+          "richos/engine/scripts/hooks/guard-no-home-network-phone.sh",
+          "richos/engine/scripts/hooks/guard-host-display-power.sh"
         ],
         "inventories": [
           "richos/engine"
@@ -2846,7 +2851,8 @@
           "richos/engine/orchestration.config",
           "richos/engine/scripts/hooks/guard-public-record-repo.test.sh",
           "richos/engine/scripts/hooks/public-record-repo.mutation.sh",
-          "richos/engine/scripts/hooks/guard-public-record-repo.sh"
+          "richos/engine/scripts/hooks/guard-public-record-repo.sh",
+          "richos/engine/scripts/hooks/guard-host-display-power.sh"
         ],
         "inventories": [
           "richos/engine"
@@ -2919,7 +2925,8 @@
           "richos/engine/scripts/hooks/contract-integrity.test.sh",
           "richos/engine/orchestration.config",
           "richos/engine/scripts/hooks/guard-bash-main-writes.test.sh",
-          "richos/engine/scripts/hooks/guard-bash-main-writes.sh"
+          "richos/engine/scripts/hooks/guard-bash-main-writes.sh",
+          "richos/engine/scripts/hooks/guard-host-display-power.sh"
         ],
         "inventories": [
           "richos/engine"

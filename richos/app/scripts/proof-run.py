@@ -974,7 +974,18 @@ def write_rerun(item, n, logdir, env):
             for key in withheld:
                 if RERUN_SHELL_NAME.match(key):
                     out.write('  ${%s+"%s=$%s"} \\\n' % (key, key, key))
-            out.write("  %s\n" % " ".join(shlex.quote(a) for a in item.argv))
+            # Started through the host shield, as launch() starts it (ceo-decisions §65): a rerun
+            # is the check as the gate ran it, stand-ins included. Written here only, never into
+            # item.argv, so the check's input identity is unchanged. Without a shield the file
+            # refuses to run rather than replaying the check unprotected (review
+            # rv-20261011T141442Z-0009fe5a-a898 #5).
+            if HOST_SHIELD and os.path.isfile(HOST_SHIELD):
+                shielded = [sys.executable, "-S", os.path.realpath(HOST_SHIELD), "run", "--"]
+            else:
+                shielded = ["/bin/sh", "-c", "echo 'proof-run rerun: NO HOST SHIELD was found when this file was "
+                            "written; refusing to run the check without the power, sleep, lock and display "
+                            "stand-ins (ceo-decisions 65).' >&2; exit 2", "rerun"]
+            out.write("  %s\n" % " ".join(shlex.quote(a) for a in [*shielded, *item.argv]))
         os.chmod(path, 0o755)
     except OSError:
         return None

@@ -18,6 +18,11 @@ unset RICHOS_HOST_SHIELD_LOG RICHOS_HOST_SHIELD_RUNS
 
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/host-shield-test.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
+# Every run below keeps its log in a TMPDIR of its own: in the shared one, another agent's
+# shielded suite running at the same moment leaves a live log that H10 read as this file's
+# (2026-10-11, three logs of concurrent runs, each still in use when H10 looked).
+export TMPDIR="$TMP/tmpdir"
+mkdir -p "$TMPDIR"
 PASS=0; FAIL=0
 ok()  { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/          /'; FAIL=$((FAIL + 1)); }
@@ -131,6 +136,37 @@ for form in "$PM $SLEEPNOW" "$CAF -d true" "$CAF -t 5 -d true" "$KA $DOCK" "$CAF
     fi
 done
 
+# H4c — the test-run rules refuse what cannot be shown harmless: any open (it launches or
+# activates an app, a file's app or a URL's browser), and an osascript that activates an app,
+# sends a key code through JXA, runs a shell from inside itself, reaches the Objective-C bridge
+# or puts a dialog up (reviews rv-20261011T141442Z-0009fe5a-a898 #2, rv-20261011T173659Z-e08ee8a2-2c75 #2).
+OPEN="op"; OPEN="${OPEN}en"
+for form in "$OPEN -a TextEdit" "$OPEN https://example.com" "$OPEN -g -b com.apple.TextEdit" \
+        "$OSA -e 'tell application \"Finder\" to activate'" \
+        "$OSA -l JavaScript -e 'Application(\"System Events\").keyCode(53)'" \
+        "$OSA -e 'do shell script \"/sbin/$HS_CMD -h +60\"'" \
+        "$OSA -l JavaScript -e 'ObjC.import(\"stdlib\"); \$.system(\"true\")'" \
+        "$OSA -e 'display dialog \"hello\"'"; do
+    F="$(suite h4c.test.sh "$form || true" "exit 0")"
+    trip_clean
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "^  FAIL  host-shield: refused \`${form%% *} " "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
+        ok "H4c $form is refused and logged; nothing reached the tripwire"
+    else
+        bad "H4c $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+    fi
+done
+# A compiled script cannot be read, so it cannot be judged harmless.
+printf 'FasdUAS 1.101.10\000\000' > "$TMP/compiled.scpt"
+F="$(suite h4d.test.sh "$OSA '$TMP/compiled.scpt' || true" "exit 0")"
+trip_clean
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "compiled script cannot be read" "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
+    ok "H4d a compiled $OSA script is refused: it cannot be read, so it cannot be judged harmless"
+else
+    bad "H4d rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+fi
+
 # H5 — osascript reads its script from stdin: the stand-in judges that text too, and hands a
 # harmless one on with its stdin intact.
 TELL='tell application "System Events" to'
@@ -189,6 +225,75 @@ for line in "if /usr/bin/$PM $SLEEPNOW; then :; fi" \
     fi
 done
 
+# H6f — a path never reaches a stand-in, so the source check applies the TEST-RUN rules to it
+# too (review rv-20261011T141442Z-0009fe5a-a898 #1), and refuses an osascript by path whose
+# script it cannot read. H6g — a backslash-continued command is read joined (#3).
+for line in "/usr/bin/$CAF -is true" "/usr/bin/$OSA -e '$SE key code 53'" "/usr/bin/$OPEN -a TextEdit" \
+            "/usr/bin/$OSA ./a-script.applescript"; do
+    F="$(suite h6f.test.sh "exit 0" "$line")"
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+        ok "H6f refused before it runs: $line"
+    else
+        bad "H6f not refused: $line (rc=$RC)" "$(cat "$TMP/out")"
+    fi
+done
+F="$(suite h6g.test.sh "exit 0" "/usr/bin/$OSA \\" "  -e '$SE $SLEEP'")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "h6g.test.sh:3: .*$SLEEP" "$TMP/out"; then
+    ok "H6g a host command continued across lines is read as one command and refused before it runs"
+else
+    bad "H6g a continued command was not read joined (rc=$RC)" "$(cat "$TMP/out")"
+fi
+F="$(suite h6h.test.sh "exit 0" "/usr/bin/$OSA -e 'return 1' >/dev/null" "/usr/bin/$PM -g batt >/dev/null || true")"
+RC="$(shielded "$F")"
+if [ "$RC" = 0 ]; then
+    ok "H6h an inert $OSA -e and $PM -g by path still pass the source check (scan only: they sit after exit 0)"
+else
+    bad "H6h rc=$RC" "$(cat "$TMP/out")"
+fi
+
+# H6i — the source check reads every form a runner starts, not only a shell suite (review
+# rv-20261011T141442Z-0009fe5a-a898 #4): a Python suite, a Node suite, Python's inline code, a
+# shell's inline string, and a host command started directly by path. Each payload exits (or
+# is a recording tripwire) before its host call: on a shield that let it start, nothing reaches
+# the host.
+shielded_argv() {  # <argv...> -> output in $TMP/out, rc echoed
+    PATH="$CASE_PATH" python3 -S "$HS_TOOL" run -- "$@" > "$TMP/out" 2>&1
+    printf '%s' "$?"
+}
+printf '%s\n' 'print("PYTHON SUITE STARTED", flush=True)' 'raise SystemExit(0)' 'import subprocess' \
+    "subprocess.run([\"/sbin/$HS_CMD\", \"-h\", \"+60\"])" > "$SUITES/h6i.test.py"
+printf '%s\n' 'console.log("NODE SUITE STARTED");' 'process.exit(0);' \
+    "require(\"child_process\").execFileSync(\"/sbin/$HS_CMD\", [\"-h\", \"+60\"]);" > "$SUITES/h6i.test.js"
+h6i() {  # <label> <argv...>
+    local label="$1" rc; shift
+    trip_clean
+    rc="$(shielded_argv "$@")"
+    if [ "$rc" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out" && ! grep -q "SUITE STARTED" "$TMP/out" \
+            && [ ! -s "$TRIP/trip.log" ]; then
+        ok "H6i refused before it starts: $label"
+    else
+        bad "H6i not refused before it started: $label (rc=$rc)" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+    fi
+}
+h6i "a Python suite naming /sbin/$HS_CMD" python3 "$SUITES/h6i.test.py"
+h6i "a Node suite naming /sbin/$HS_CMD" node "$SUITES/h6i.test.js"
+h6i "python3 -c code naming /sbin/$HS_CMD" python3 -c "raise SystemExit(0); import subprocess; subprocess.run(['/sbin/$HS_CMD', '-h'])"
+h6i "a shell's inline string calling $HS_CMD by path" bash -c "exit 0; $TRIP/$HS_CMD -h +60"
+h6i "$HS_CMD started directly by path (here a recording tripwire)" "$TRIP/$HS_CMD" -h +60
+
+# H6j — a backtick substitution inside double quotes is read as a command, as $(...) there is
+# (review rv-20261011T154414Z-d0066287-e6a8). Scan only: the line sits after `exit 0`.
+H6J_LINE="result=\"\`/sbin/$HS_CMD\`\""
+F="$(suite h6j.test.sh "exit 0" "$H6J_LINE")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+    ok "H6j refused before it runs: $H6J_LINE"
+else
+    bad "H6j not refused: $H6J_LINE (rc=$RC)" "$(cat "$TMP/out")"
+fi
+
 # H6e — the screen-saver binary has a stand-in of its own: a bare-name call is refused.
 F="$(suite h6e.test.sh "$SSE || true" "exit 0")"
 trip_clean
@@ -200,17 +305,29 @@ else
     bad "H6e rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
 fi
 
-# H7 — declarations. `names` lets the source carry it; a bare-name call is still refused.
+# H7 — declarations. `names` lets the source carry it as data; a bare-name call is still refused.
 F="$(suite h7.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" \
-        "$HS_CMD -h +60 || true" "exit 0" "/sbin/$HS_CMD -h +60")"
+        "$HS_CMD -h +60 || true" "printf '%s\n' /sbin/$HS_CMD" "exit 0")"
 trip_clean
 RC="$(shielded "$F")"
 if [ "$RC" = 1 ] && ! grep -q "REFUSED before it ran" "$TMP/out" && grep -q "^  FAIL  host-shield: refused" "$TMP/out" \
         && [ ! -s "$TRIP/trip.log" ]; then
-    ok "H7  a 'names' declaration lets the source name it, and the stand-in still refuses the call"
+    ok "H7  a 'names' declaration lets the source name it as data, and the stand-in still refuses the call"
 else
     bad "H7  rc=$RC" "$(cat "$TMP/out")"
 fi
+# H7d — `names` never exempts a call that would run it past the stand-in: by path, or as an
+# argument something else runs (review rv-20261011T141442Z-0009fe5a-a898 #6). Each sits after
+# `exit 0`: the source check reads it, nothing runs it.
+for line in "/sbin/$HS_CMD -h +60" "xargs /sbin/$HS_CMD -h" "sudo $HS_CMD -h +60"; do
+    F="$(suite h7d.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" "exit 0" "$line")"
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+        ok "H7d a 'names' declaration does not exempt a call: $line"
+    else
+        bad "H7d a 'names' declaration exempted a call: $line (rc=$RC)" "$(cat "$TMP/out")"
+    fi
+done
 F="$(suite h7b.test.sh "# host-shield: names $HS_CMD" "exit 0")"
 RC="$(shielded "$F")"
 if [ "$RC" = 1 ] && grep -q "declares nothing" "$TMP/out"; then

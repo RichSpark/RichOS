@@ -605,6 +605,30 @@ else
   ok "F15 the compile runs under the CPU guard's release-build role, as the nightly's build step does"
 fi
 
+# F15b: where managed verification is on, the supervisor refuses a run with no proof-run plan
+# before cargo starts (exit 75; review rv-20261011T142043Z-4d2b357d-d8c1 #1). A packaging run
+# started by hand then compiles directly, as it did before the supervisor, and says why; the
+# launcher it prints is checked against the supervisor itself under the same CPU guard state.
+F15B_STATE="$TMP/f15b-cpu-guard"; mkdir -p "$F15B_STATE"
+printf '{"protocol": 1}\n' > "$F15B_STATE/verification-enabled.json"
+run env RICHOS_CPU_GUARD_STATE="$F15B_STATE" RICHOS_VERIFICATION_OWNER= bash "$SCRIPT" --dry-run
+F15B_LINE="$(printf '%s' "$OUT" | grep 'build runs under' | head -1)"
+F15B_SUPERVISOR_RC="$(cd "$TMP" && RICHOS_CPU_GUARD_STATE="$F15B_STATE" RICHOS_VERIFICATION_OWNER='' \
+  python3 -B "$PROC_TREE" run "$$" --guard-role release-build -- true >/dev/null 2>&1; echo $?)"
+if [ "$CODE" != 0 ]; then
+  bad "F15b a hand-started packaging run under managed verification compiles directly" "the dry run exited $CODE"
+elif [ "$F15B_SUPERVISOR_RC" != 75 ]; then
+  bad "F15b a hand-started packaging run under managed verification compiles directly" \
+      "the fixture did not reproduce the supervisor's refusal (it exited $F15B_SUPERVISOR_RC, not 75)"
+elif printf '%s' "$F15B_LINE" | grep -Fq "$PROC_TREE"; then
+  bad "F15b a hand-started packaging run under managed verification compiles directly" \
+      "it still launches through the supervisor, which refuses it before cargo (exit 75): $F15B_LINE"
+elif ! printf '%s' "$F15B_LINE" | grep -Fq "managed verification is on"; then
+  bad "F15b a hand-started packaging run under managed verification compiles directly" "the line does not say why: $F15B_LINE"
+else
+  ok "F15b a hand-started packaging run under managed verification compiles directly and says why; the supervisor would have refused it (75)"
+fi
+
 run bash "$SCRIPT" --release --dry-run
 expect "F9 --release keeps the bare Cargo.toml version, unstamped" 0 "version             : $CARGO_VERSION"
 

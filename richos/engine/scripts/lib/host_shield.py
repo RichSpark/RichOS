@@ -15,10 +15,18 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
 
   1. A shell suite's SOURCE is read first. A line that runs one of the commands below by an
      ABSOLUTE OR RELATIVE PATH (which bypasses PATH), or under sudo/doas (which resets PATH),
-     in a form guard-host-display-power.sh refuses, refuses the suite before it runs, inside
-     `if`/`while`/`!` and the other control words too. So does a path to an always-bad command
-     anywhere on a line, and a path to ANY stood-in command assigned to a variable
-     (`POWER=/usr/bin/<it>` then `$POWER ...` would bypass PATH and the stand-in alike).
+     in a form guard-host-display-power.sh refuses OR the test-run rules below refuse,
+     refuses the suite before it runs, inside `if`/`while`/`!` and the other control words
+     too. Every physical line is read, and every backslash-continued command is read joined
+     as well. So does a path to an always-bad command anywhere on a line, and a path to ANY
+     stood-in command assigned to a variable (`POWER=/usr/bin/<it>` then `$POWER ...` would
+     bypass PATH and the stand-in alike). An osascript by path whose script is in a file or
+     on stdin is refused too: the source check cannot read that script.
+     A PYTHON OR NODE suite (`python3 <file>`, `node <file>`, a script started directly, or
+     inline `-c`/`-e` code) is read too. No shell parser can tell its data from its calls, so
+     ANY absolute path to one of these commands in it, or sudo/doas beside one, refuses it.
+     The command line itself is judged as well: a host command started by path, or a shell's
+     inline string.
   2. The suite runs with `host-shield/` FIRST ON PATH. That directory holds one stand-in per
      command the guard judges. A stand-in judges its own argv with the GUARD'S OWN judge()
      (read out of guard-host-display-power.sh, so the two cannot drift), plus the TEST-RUN
@@ -26,8 +34,12 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
      the real command unchanged; a harmful one is logged and exits 1 without doing anything.
      THE TEST-RUN RULES are stricter than the guard's, because the guard allows a few forms an
      operator legitimately types and a test never needs: every `caffeinate` (it holds the
-     host awake, `-is` included), and any osascript keystroke or key code (modifier or not:
-     it reaches whatever is frontmost on the host) or one that sets an app frontmost.
+     host awake, `-is` included); every `open` (it launches or activates an app, a file's
+     app or a URL's browser); and any osascript that is not plainly inert: a keystroke or
+     key code (modifier or not: it reaches whatever is frontmost on the host), an app set
+     frontmost, activated or launched, a shell run from inside it, the Objective-C bridge
+     or raw Apple events, a dialog or the clipboard, any `tell` or `Application(...)`, and
+     a compiled script it cannot read. A script whose harm cannot be ruled out is refused.
   3. When the suite ends, every logged call is printed as `  FAIL  host-shield: ...` and the
      suite fails, whatever it exited with.
 
@@ -35,7 +47,9 @@ A SUITE THAT GENUINELY NEEDS ONE DECLARES IT, in its own source, with a reason:
 
     # host-shield: names <command>[,<command>...] -- <reason>
         the source NAMES it (a fixture, a refusal message) and never runs it: the source check
-        skips it. The stand-in still refuses a call at run time.
+        skips a path to it in the arguments of a data command (echo, printf, grep, test), and
+        nothing else. A call by path or under sudo is still refused before the suite runs, and
+        the stand-in still refuses a call at run time.
     # host-shield: runs <command>[,<command>...] -- <reason>
         the suite RUNS it for real: the stand-in hands it to the real command (and the source
         check skips it). None should; every one is a decision somebody can read.
@@ -46,7 +60,9 @@ without one declares nothing and refuses the suite, naming the line.
 WHAT IT CANNOT SEE, stated rather than implied: a suite that rebuilds PATH from nothing
 (`env -i`, a PATH of only system directories) before calling one of these by bare name; a path
 held in a variable that was itself assigned from another variable; a library the suite sources
-(only the suite file is read); native code calling IOKit or private frameworks directly. The
+or imports (only the suite file is read); a path a Python or Node suite assembles at run time;
+`python3 -m <module>` (no file is named); native code calling IOKit or private frameworks
+directly. The
 stand-ins catch every bare-name call through PATH, which is how a shell, Python's subprocess,
 Node's child_process and Rust's Command all look a command up.
 
@@ -79,11 +95,28 @@ SCREEN_SAVER = "screensaver" + "engine"
 # check steps over them to the command word, as the shell does.
 CONTROL_WORDS = {"if", "then", "elif", "else", "while", "until", "do", "!", "time", "{", "}"}
 # THE TEST-RUN RULES (see the header): what a stand-in refuses beyond the guard's judge().
+# An osascript in a test run is handed on only when it plainly touches nothing outside itself
+# (`return 1`). Anything that addresses an app, runs a shell, reaches the Objective-C bridge or
+# raw Apple events, or puts something on the screen is refused: the guard's list names what
+# is known to be harmful, and in a test run a script whose harm cannot be ruled out is refused
+# too (reviews rv-20261011T141442Z-0009fe5a-a898 #2: `activate`, JXA `keyCode(53)` and
+# `do shell script "<a host halt>"` were all handed on).
 TEST_RUN_OSA = [
-    (re.compile(r"\b(?:keystroke|key\s+code)\b", re.IGNORECASE),
+    (re.compile(r"\b(?:keystroke|key\s*code)\b", re.IGNORECASE),
      "sends a keystroke to whatever is frontmost on the host"),
     (re.compile(r"\bset\b[^\n]{0,120}\bfrontmost\b|\bfrontmost\s*=\s*true\b", re.IGNORECASE),
      "brings an app to the front on the host, taking the CEO's focus"),
+    (re.compile(r"\b(?:activate|launch|reopen)\b", re.IGNORECASE),
+     "launches or activates an app on the host, taking the CEO's focus"),
+    (re.compile(r"\bdo\s+shell\s+script\b|\bdoShellScript\b", re.IGNORECASE),
+     "runs a shell command the stand-ins never see"),
+    (re.compile(r"«|\bObjC\b|\$\s*[.(]|\buse\s+framework\b|\b(?:run|load)\s+script\b", re.IGNORECASE),
+     "reaches past what the shield can judge (raw Apple events, the Objective-C bridge, a nested script)"),
+    (re.compile(r"\bdisplay\s+(?:dialog|alert|notification)\b|\bchoose\s+(?:file|folder|from|application|color)\b"
+                r"|\bthe\s+clipboard\b|\bopen\s+location\b", re.IGNORECASE),
+     "puts a dialog, a notification or the clipboard in front of the CEO on the host"),
+    (re.compile(r"\btell\b|\bapplication\b", re.IGNORECASE),
+     "addresses an app on the host; a test never needs to"),
 ]
 
 
@@ -91,12 +124,23 @@ def test_run_rule(name, judged):
     """(rule, why) for a call the guard allows and a test run never may, else None."""
     if name == "caffeinate":
         return ("caffeinate", "holds the host awake (any form, -is included); a test never needs it")
+    if name == "open":
+        # Every form launches or activates something on the host: an app (-a, -b), a file's
+        # app, a URL's browser, Finder (-R). Review rv-20261011T173659Z-e08ee8a2-2c75 #2.
+        return ("open", "launches or activates an app, a file's app or a URL's browser on the host, "
+                        "taking the CEO's focus; a test never needs it")
     if name == "osascript":
         script = " \n ".join(judged[1:])
+        if OSA_UNJUDGEABLE in script:
+            return ("osascript", "a compiled script cannot be read, so it cannot be judged harmless")
         for rx, why in TEST_RUN_OSA:
             if rx.search(script):
                 return ("osascript", why)
     return None
+
+
+# What _osascript_text returns for a program file it cannot read as text (a compiled .scpt).
+OSA_UNJUDGEABLE = "\x00host-shield: unjudgeable compiled script\x00"
 
 # ---------------------------------------------------------------------------------------------
 # The guard's analyzer, loaded from the guard itself
@@ -153,7 +197,7 @@ def standin_names():
 # ---------------------------------------------------------------------------------------------
 # Declarations
 # ---------------------------------------------------------------------------------------------
-DECL_RE = re.compile(r"^\s*#\s*host-shield:(.*)$")
+DECL_RE = re.compile(r"^\s*(?:#|//)\s*host-shield:(.*)$")
 DECL_FULL = re.compile(r"^\s*(names|runs)\s+([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\s+(?:--|—)\s+(\S.*\S)\s*$")
 
 
@@ -184,18 +228,53 @@ def _trigger_re():
     return re.compile(r"(?i)\b(?:%s)\b" % "|".join(re.escape(n) for n in sorted(names)))
 
 
+# Commands whose arguments are only ever data: a path to a host command named after one of
+# them (`printf '%s\n' /sbin/<it>`) is a MENTION, the one kind of finding a `names`
+# declaration exempts. Anywhere else (`xargs <path>`, `timeout 5 <path>`, the command word)
+# the same path may run, and only `runs` exempts it (review rv-20261011T141442Z-0009fe5a-a898 #6).
+DATA_COMMANDS = {"echo", "printf", "grep", "egrep", "fgrep", "rg", "test", "[", "[[", ":"}
+
+
+def logical_lines(text):
+    """[(first line number, text)] for every backslash-continued run of lines, joined as the
+    shell joins it (review rv-20261011T141442Z-0009fe5a-a898 #3: `<path> \\` then
+    `-e '<a host sleep>'` split the command from its harmful argument)."""
+    out, buf, at = [], None, 0
+    for n, raw in enumerate(text.split("\n"), 1):
+        if buf is None:
+            buf, at, joined = raw, n, False
+        else:
+            buf, joined = buf + " " + raw.lstrip(), True
+        stripped = buf.rstrip()
+        if stripped.endswith("\\") and (len(stripped) - len(stripped.rstrip("\\"))) % 2 == 1:
+            buf = stripped[:-1]
+            continue
+        if joined:
+            out.append((at, buf))
+        buf = None
+    if buf is not None and buf.strip():
+        out.append((at, buf))
+    return out
+
+
 def scan_text(text, G=None, depth=0):
-    """[(line, command word, snippet, why)] for every line that reaches a judged command
-    without going through PATH."""
+    """[(line, command word, snippet, why, kind)] for every line that reaches a judged command
+    without going through PATH. Every physical line is read, and so is every backslash-
+    continued command joined into one: either one finding refuses. `kind` is "mention" for a
+    path in a data command's arguments, else "exec"."""
     trig = _trigger_re()
-    found = []
-    for n, line in enumerate(text.split("\n"), 1):
+    found, seen = [], set()
+    lines = list(enumerate(text.split("\n"), 1)) + logical_lines(text)
+    for n, line in lines:
         if not trig.search(line):
             continue
         G = G or guard()     # loaded only when a line names one: most suites never do
         always = {k.lower() for k in G["ALWAYS_BAD"]}
         for seg in G["split_segments"](G["strip_comments"](line)):
-            found.extend((n,) + f for f in _scan_segment(seg, G, always, depth))
+            for f in _scan_segment(seg, G, always, depth):
+                if (n, f[0], f[2]) not in seen:     # a line read alone and joined: once
+                    seen.add((n, f[0], f[2]))
+                    found.append((n,) + f)
     return found
 
 
@@ -204,6 +283,11 @@ def _scan_segment(seg, G, always, depth):
     raw = G["words"](seg)
     if not raw:
         return out
+    words = raw
+    while words and words[0] in CONTROL_WORDS:
+        words = words[1:]
+    argv, sudoed = G["resolve"](words)
+    data = bool(argv) and not sudoed and os.path.basename(argv[0]) in DATA_COMMANDS
     guarded = {n.lower() for n in standin_names()}
     for w in raw:
         assigned = bool(G["ASSIGN_RE"].match(w))
@@ -212,14 +296,12 @@ def _scan_segment(seg, G, always, depth):
         if "/" not in value:
             continue
         if name in always:
-            out.append((name, seg.strip()[:110], "names %s by path: %s" % (value, G["ALWAYS_BAD"].get(name, "always refused"))))
+            out.append((name, seg.strip()[:110], "names %s by path: %s" % (value, G["ALWAYS_BAD"].get(name, "always refused")),
+                        "mention" if data and not assigned else "exec"))
         elif assigned and name in guarded and value.startswith(("/", "~")):
             # Absolute only: `X="$STUBS/open"` is the suite's own recording stub, not the host's.
             out.append((name, seg.strip()[:110], "assigns the path %s to a variable: calling it through the "
-                        "variable bypasses PATH and the stand-in" % value))
-    while raw and raw[0] in CONTROL_WORDS:
-        raw = raw[1:]
-    argv, sudoed = G["resolve"](raw)
+                        "variable bypasses PATH and the stand-in" % value, "exec"))
     if not argv:
         return out
     base = os.path.basename(argv[0])
@@ -232,43 +314,167 @@ def _scan_segment(seg, G, always, depth):
         return out
     if "/" not in argv[0] and not sudoed:
         return out          # a bare name goes through PATH, where the stand-in is
-    v = G["judge"](argv, sudoed)
+    # A path (or sudo) never reaches a stand-in, so the source check applies the TEST-RUN
+    # RULES here as well as the guard's: an absolute caffeinate or osascript keystroke is
+    # refused exactly as its bare-name call is (review rv-20261011T141442Z-0009fe5a-a898 #1).
+    name = base.lower()
+    v = G["judge"](argv, sudoed) or test_run_rule(name, argv)
+    if not v and name == "osascript" and "-e" not in argv[1:]:
+        v = ("osascript", "its script is in a file or on stdin, which the source check cannot read; "
+                          "call it by bare name so the stand-in judges the script")
     if v:
         how = "under sudo, which resets PATH" if sudoed and "/" not in argv[0] else "by path, which bypasses PATH"
-        out.append((os.path.basename(argv[0]).lower(), " ".join(argv)[:110], "%s (%s)" % (v[1], how)))
+        out.append((name, " ".join(argv)[:110], "%s (%s)" % (v[1], how), "exec"))
     return out
 
 
-def scan_file(path):
-    """(findings, declared, errors) for one suite file. Findings exclude declared commands."""
+def _code_res():
+    names = "|".join(re.escape(n) for n in sorted(set(standin_names()) | {SCREEN_SAVER}))
+    # An absolute path in a string or an argument list: it starts at the root, right after a
+    # quote, a bracket, `=`, a comma or a space, passes through at least one directory (every
+    # host command lives in one; a bare `/open ...` is a JavaScript regular expression), and
+    # ends at one of those.
+    path = re.compile(r"(?i)(?<![^\s\"'`(=,\[])(/(?:[\w.@+-]+/)+(?:%s))(?=$|[\s\"'`),;\]])" % names)
+    sudo = re.compile(r"(?i)\b(?:sudo|doas)\b[^\n]{0,80}?\b(%s)\b" % names)
+    return path, sudo
+
+
+def scan_code(text):
+    """Findings for a Python or Node source: no shell parser can tell its data from its calls,
+    so ANY absolute path to a stood-in command, and any sudo/doas next to one, refuses it
+    (review rv-20261011T141442Z-0009fe5a-a898 #4: an absolute halt in `subprocess.run([...])` in
+    a Python suite started unchecked). A path assembled at run time is not seen."""
+    path, sudo = _code_res()
+    found = []
+    for n, line in enumerate(text.split("\n"), 1):
+        for m in path.finditer(line):
+            name = os.path.basename(m.group(1)).lower()
+            found.append((n, name, line.strip()[:110], "names %s by path in code, which bypasses PATH and the "
+                          "stand-in; call it by bare name" % m.group(1), "exec"))
+        for m in sudo.finditer(line):
+            found.append((n, m.group(1).lower(), line.strip()[:110], "runs %s under sudo or doas, which resets "
+                          "PATH past the stand-in" % m.group(1), "exec"))
+    return found
+
+
+CODE_EXT = {".py": "python", ".js": "node", ".mjs": "node", ".cjs": "node", ".ts": "node"}
+
+
+def language_of(path, text):
+    """shell, python or node: by the file's extension, else its first line."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in CODE_EXT:
+        return CODE_EXT[ext]
+    first = text.split("\n", 1)[0]
+    if first.startswith("#!"):
+        if re.search(r"\bpython[0-9.]*\b", first):
+            return "python"
+        if re.search(r"\bnode(?:js)?\b", first):
+            return "node"
+    return "shell"
+
+
+def scan_source(text, lang, declared):
+    """(findings, errors) for source text in `lang`, without the declared ones."""
+    try:
+        found = scan_text(text) if lang == "shell" else scan_code(text)
+    except GuardUnavailable as exc:
+        return [], [str(exc)]
+    return [f for f in found if not exempt(f, declared)], []
+
+
+def scan_file(path, lang=None):
+    """(findings, declared, errors) for one suite file, shell, Python or Node. Findings exclude
+    declared commands."""
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError as exc:
         return [], {}, ["cannot read %s: %s" % (path, exc)]
     declared, errors = declarations(text)
-    try:
-        found = [f for f in scan_text(text) if f[1] not in declared]
-    except GuardUnavailable as exc:
-        return [], declared, [str(exc)]
+    found, unavailable = scan_source(text, lang or language_of(path, text), declared)
+    if unavailable:
+        return [], declared, unavailable
     return found, declared, errors
 
 
+def exempt(finding, declared):
+    """`runs` exempts every finding for its command; `names` only a MENTION (a path in a data
+    command's arguments), never a call that could run it past the stand-in."""
+    kind = declared.get(finding[1])
+    return kind == "runs" or (kind == "names" and finding[4] == "mention")
+
+
+PYTHON_RE = re.compile(r"^python[0-9.]*$")
+NODES = {"node", "nodejs"}
+# Interpreter options that take the next word as their value.
+PYTHON_VALUE_OPTS = {"-W", "-X", "--check-hash-based-pycs"}
+NODE_VALUE_OPTS = {"-r", "--require", "--import", "--loader", "--experimental-loader", "--conditions", "-C",
+                   "--input-type", "--title"}
+
+
 def suite_of(argv):
-    """The shell suite a check runs, when it is `bash <file> ...` (or sh/zsh), else None."""
-    if len(argv) >= 2 and os.path.basename(argv[0]) in SHELLS and not argv[1].startswith("-") \
-            and os.path.isfile(argv[1]):
-        return argv[1]
-    if argv and argv[0].endswith(".sh") and os.path.isfile(argv[0]):
-        return argv[0]
-    return None
+    """The suite file a check runs: a shell, `python3` or `node` given a file, or the file itself
+    started directly. None for any other form."""
+    return next((value for kind, value, _lang in sources_of(argv) if kind == "file"), None)
+
+
+def sources_of(argv):
+    """[(kind, value, language)] the check will run: ("file", path, lang) for a suite file,
+    ("inline", code, lang) for Python's -c or Node's -e/-p. A shell's own inline string is judged
+    with the command line itself (direct_findings). `python3 -m <module>` names no file here:
+    stated in the header."""
+    if not argv:
+        return []
+    base = os.path.basename(argv[0])
+    if base in SHELLS:
+        if len(argv) >= 2 and not argv[1].startswith("-") and os.path.isfile(argv[1]):
+            return [("file", argv[1], None)]
+        return []
+    if PYTHON_RE.match(base) or base in NODES:
+        lang = "python" if PYTHON_RE.match(base) else "node"
+        values = PYTHON_VALUE_OPTS if lang == "python" else NODE_VALUE_OPTS
+        inline = {"-c"} if lang == "python" else {"-e", "--eval", "-p", "--print"}
+        i = 1
+        while i < len(argv):
+            a = argv[i]
+            if a in inline:
+                return [("inline", argv[i + 1], lang)] if i + 1 < len(argv) else []
+            if a in ("-m", "-", "--"):
+                return []
+            if a in values:
+                i += 2
+                continue
+            if a.startswith("-"):
+                i += 1
+                continue
+            return [("file", a, lang)] if os.path.isfile(a) else []
+        return []
+    try:
+        with open(argv[0], "rb") as fh:
+            # A script started directly (a `#!` line, or a .sh file), never a binary.
+            script = fh.read(2) == b"#!" or argv[0].endswith(".sh")
+    except OSError:
+        script = False
+    return [("file", argv[0], None)] if script else []
+
+
+def direct_findings(argv):
+    """Findings for the command line itself: a host command started by path (which never
+    reaches a stand-in), or a shell's inline string."""
+    line = " ".join(shlex.quote(a) for a in argv)
+    if not _trigger_re().search(line):
+        return []
+    G = guard()
+    always = {k.lower() for k in G["ALWAYS_BAD"]}
+    return [(0,) + f for f in _scan_segment(line, G, always, 0)]
 
 
 def refusal_lines(suite, findings, errors):
     lines = []
     for e in errors:
         lines.append("  FAIL  host-shield: %s: %s" % (suite, e))
-    for n, _name, snip, why in findings:
+    for n, _name, snip, why, _kind in findings:
         lines.append("  FAIL  host-shield: %s:%d: %s -- %s" % (suite, n, snip, why))
     if lines:
         lines.append("host-shield: REFUSED before it ran: %s reaches a command that changes this Mac's "
@@ -318,13 +524,22 @@ def cmd_run(argv):
               "%s unshielded." % (SHIELD_DIR, " ".join(argv)), flush=True)
         return 1
     suite = suite_of(argv)
-    declared = {}
-    if suite:
-        findings, declared, errors = scan_file(suite)
-        lines = refusal_lines(suite, findings, errors)
-        if lines:
-            print("\n".join(lines), flush=True)
-            return 1
+    declared, lines = {}, []
+    for kind, value, lang in sources_of(argv):
+        if kind == "file":
+            findings, found_declared, errors = scan_file(value, lang)
+            declared.update(found_declared)
+            lines.extend(refusal_lines(value, findings, errors))
+        else:
+            findings, errors = scan_source(value, lang, {})
+            lines.extend(refusal_lines("%s (its inline code)" % argv[0], findings, errors))
+    try:
+        lines.extend(refusal_lines("the command line", direct_findings(argv), []))
+    except GuardUnavailable as exc:
+        lines.extend(refusal_lines("the command line", [], [str(exc)]))
+    if lines:
+        print("\n".join(lines), flush=True)
+        return 1
     fd, log = tempfile.mkstemp(prefix="richos-host-shield.", suffix=".log")
     os.close(fd)
     try:
@@ -405,9 +620,12 @@ def _osascript_text(args):
     if i < len(args) and args[i] != "-":
         try:
             with open(args[i], "rb") as fh:
-                return fh.read(1 << 20).decode("utf-8", "replace"), None
+                data = fh.read(1 << 20)
         except OSError:
             return None, None
+        if data.startswith(b"FasdUAS") or b"\x00" in data:
+            return OSA_UNJUDGEABLE, None
+        return data.decode("utf-8", "replace"), None
     data = sys.stdin.buffer.read()
     return data.decode("utf-8", "replace"), data
 

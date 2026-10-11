@@ -171,6 +171,16 @@ beyond the R1 executed-reader graph. They are excluded from subset reuse until
 that data closure is independently qualified. No production result was accepted
 under the earlier incomplete record subset declarations.
 
+Every check runs behind the host shield (`richos/engine/scripts/lib/host_shield.py`), which
+reads its analyzer out of `richos/engine/scripts/hooks/guard-host-display-power.sh` at run
+time: that analyzer decides whether a suite starts at all, and what each stand-in hands on.
+The shield itself and its stand-ins sit inside `richos/engine/scripts/lib`, already in the
+shared subset floor; the guard did not, so a guard change that would refuse a suite now left
+seven subset identities unchanged and an old pass reusable (review
+rv-20261011T164443Z-e08ee8a2-7cdb). The guard is in `subset_requires` and in every subset
+declaration, and `proof-qualification.test.py` requires every subset identity to change when
+that file, and only it, changes.
+
 ## Renewals
 
 - 2026-09-29, `richos/engine/mega-lander/workspaces.py`, pinned by 22 unit contracts,

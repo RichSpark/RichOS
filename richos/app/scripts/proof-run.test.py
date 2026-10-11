@@ -1133,6 +1133,19 @@ try:
           and not os.path.exists(os.path.join(trip, "path-suite-ran")),
           "PHS2 a check whose suite names /sbin/%s is refused before it runs" % halt_cmd,
           (its[1].state, logs["hs-path"][-600:]))
+    # PHS3 — the file that reruns a failed check as the gate ran it starts it through the shield
+    # too (review rv-20261011T141442Z-0009fe5a-a898 #5): autocheck tells the operator to run it.
+    open(os.path.join(trip, "trip.log"), "w").close()
+    rerun3 = getattr(its[0], "rerun", None)
+    ran3 = subprocess.run(["sh", rerun3], env={"PATH": case_path, "HOME": os.environ.get("HOME", "/")},
+                          capture_output=True, text=True, timeout=120) if rerun3 else None
+    said3 = (ran3.stdout + ran3.stderr) if ran3 else ""
+    check(ran3 is not None and ran3.returncode != 0
+          and ("  FAIL  host-shield: refused `%s -h +60`" % halt_cmd) in said3
+          and not os.path.getsize(os.path.join(trip, "trip.log")),
+          "PHS3 the rerun file of a check that called %s starts it through the shield: the stand-in refuses "
+          "the call and the rerun fails as the gate's run did" % halt_cmd,
+          (rerun3, ran3 and ran3.returncode, said3[-600:]))
 
     # P9 — the log directory is bounded: the last three runs of a checkout, nothing more.
     parent = os.path.join(tmp, "rot")

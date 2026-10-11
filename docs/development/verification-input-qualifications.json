@@ -1883,7 +1883,7 @@
     "engine scripts/hooks/guard-host-display-power.test.sh": {
       "review": "The hook receives historical power commands as payload strings, never executes them and resolves citations against generated private ruling records. Every entity/config path is private, including opt-out and missing-adoption cases. Nested mutants recreate these fixtures. Clock fields are audit output; no host display, model, remote service or installed application is exercised.",
       "sources": {
-        "richos/engine/scripts/hooks/guard-host-display-power.test.sh": "6804abd0f93083318cdea615e2dc16b2ff1479c73206bc6017737671e320125a",
+        "richos/engine/scripts/hooks/guard-host-display-power.test.sh": "15b13c02ee6837d31cd7fa184974abedc889477510f9e8f31f231dfe266d11de",
         "richos/engine/scripts/hooks/host-display-power.mutation.sh": "75a7aad662b3a85ca8069f5f053c14b0991bb753976a44e190ea8fa40e500428",
         "richos/engine/scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "richos/engine/scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
@@ -1894,7 +1894,7 @@
         "richos/engine/scripts/lib/proc_tree.py": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/lib/engine_pass.py": "21b64bc63f511249e987c026f8b409e5d191f99bb2a122fd5011e6d95b0e9bc7",
-        "richos/engine/scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+        "richos/engine/scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
         "richos/engine/scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",
         "richos/engine/scripts/lib/ceo-ruled.py": "e92586fdd79f1c648c2f764613f47a56bc7f2d843061c70053611d7f2e23ce30",
         "richos/engine/scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
@@ -2114,7 +2114,7 @@
       "review": "The suite scans exactly the shipped app source, crates, UI, scripts and tools trees as text. Positive refusal and acceptance cases are generated under TMPDIR. It does not execute scanned code or inspect application data. The shared run-tests wrapper discovers suites and reads its tracked declarations but the exact --only selection executes this suite alone; the teammate-workspace default (no --only and no --for in a cc/ worktree selects proof-for.sh's suites through engine/scripts/lib/workspace_scope.py) never applies to an --only selection. Private HOME clears skip-unchanged state and inherited host-screen overrides; worker admission and result preservation remain active. No host process, live clock predicate, network or operator record determines the scanner verdict. Cargo invocations use workspace-specific mutable outputs. The bound Cargo dispatcher and target resolver read Cargo.toml in the same declared source or private fixture workspace. Compiler wrappers and their settings are bound by the runner toolchain identity.",
       "sources": {
         "richos/app/scripts/no-foreign-app-data.test.sh": "8f45371fdd07c1e696bf615deaf8dcfdd350f613ccaa9eb0aa324709e812c836",
-        "richos/app/scripts/run-tests.sh": "78a8cf7f1f2fa273d5a43a3a354eb634dd2240b26469e7f7417de771452cf109",
+        "richos/app/scripts/run-tests.sh": "a134b0f933ba423b299302306b69b86d6afdbbd4b0e8941ee0bdc13adfa95f75",
         "richos/app/scripts/lib/worktree-resource.sh": "f3ce44d7c52f97f4545e4c79636e8ad19cba994db5168d9f1b8104b57793a1c7",
         "richos/app/scripts/lib/test_results.py": "9790f38172be11848fbc50fc5fc387831f25a5bda49e877e1ed4aa59fb6fa0e2",
         "richos/engine/scripts/lib/foreign_app_data.py": "752fbb7aade6e2281d7335fceba9cdcb1fdd3d7b0302df40665dc40f72d120a8",
@@ -2601,7 +2601,8 @@
       "richos/engine/scripts/ci-shard.sh",
       "richos/engine/scripts/ci-units.sh",
       "richos/engine/scripts/hooks/contract-integrity.test.sh",
-      "richos/engine/orchestration.config"
+      "richos/engine/orchestration.config",
+      "richos/engine/scripts/hooks/guard-host-display-power.sh"
     ],
     "inventories": [
       "richos/engine"
