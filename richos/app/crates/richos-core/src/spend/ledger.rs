@@ -150,6 +150,9 @@ impl State {
             self.dirty = true;
             return;
         }
+        // A larger copy of a recent message keeps the message's own time, so it stays in the slot
+        // (and the day) it was written in, as an older one does below (the review of b80728780).
+        let request = match self.recent.get(&request.id) { Some(old) => Request { at: old.at, ..request }, None => request };
         if let Some(old) = self.recent.get(&request.id) {
             if request.buckets.output <= old.buckets.output && request.buckets.total() <= old.buckets.total() {
                 return;
@@ -468,6 +471,32 @@ mod tests {
         let haiku = t.families.iter().find(|f| f.family == Family::Haiku).unwrap();
         assert_eq!(haiku.names.keys().cloned().collect::<Vec<_>>(), vec!["Haiku 4.5".to_string(), "Haiku 5.5".to_string()]);
         assert!(haiku.effort_unrecorded, "Haiku 4.5's request recorded no effort");
+    }
+
+    /// **A growing copy stays in its message's own time slot** (the review of b80728780, its third
+    /// finding, its own case): a message written at 23:59:59 and its larger copy at 00:00:01, read
+    /// in two reads while the first is still recent. By hand at Opus 5.5's rates the message is
+    /// 1,000 x $4 + 101 x $20 + 10,000 x $0.20 = $0.00802, and all of it is the day before: Today
+    /// has no request and no dollars (the copy's later time put all $0.00802 in Today).
+    #[test]
+    fn a_growing_copy_across_midnight_stays_on_the_day_its_message_was_written() {
+        let (_root, dir) = scratch();
+        let folders = [dir.join("account")];
+        let file = dir.join("account/projects/p/a.jsonl");
+        fs::write(&file, line("late", "claude-opus-5-5", "2026-10-10T23:59:59Z", [1000, 1, 10_000, 0, 0])).unwrap();
+        let midnight = stamp_ms("2026-10-11T00:00:00Z");
+        // read as it is written, so the first copy is still recent when the larger one comes
+        let ledger = Ledger::open(&dir.join("spend"));
+        ledger.update(&folders, midnight + 1000);
+        let mut f = fs::OpenOptions::new().append(true).open(&file).unwrap();
+        f.write_all(line("late", "claude-opus-5-5", "2026-10-11T00:00:01Z", [1000, 101, 10_000, 0, 0]).as_bytes()).unwrap();
+        ledger.update(&folders, midnight + 2000);
+        let today = ledger.totals(midnight);
+        assert!(today.cost.abs() < 1e-12, "Today read ${:.8}, by hand $0.00000000", today.cost);
+        assert_eq!(today.requests, 0);
+        let all = ledger.totals(0);
+        assert!((all.cost - 0.00802).abs() < 1e-12, "All time read ${:.8}, by hand $0.00802000", all.cost);
+        assert_eq!(all.requests, 1);
     }
 
     /// **A larger copy found later adds what it adds** (the second review of fc1d7bb31, finding 3,
