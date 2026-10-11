@@ -10512,11 +10512,11 @@ body.bug-dock-open .sp-head { padding-right: 22px; }
 .sp-back:hover { background: var(--gold-soft); color: var(--ink); }
 .sp-back:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .sp-back svg { width: 18px; height: 18px; }
-.sp-title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink); letter-spacing: .01em; white-space: nowrap; }
+.sp-title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink); letter-spacing: .01em; }
 .sp-title span { font-weight: 400; color: var(--ink-soft); }
 /* Refresh: when the numbers were last brought up to date, and the button that does it */
 .sp-fresh { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; }
-.sp-updated { font-size: 1rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sp-updated { font-size: 1rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .sp-refresh { position: relative; display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 999px; padding: 6px 16px 6px 12px;
   background: color-mix(in srgb, var(--gold) 10%, var(--surface)); font: inherit; font-size: 1rem; font-weight: 600; color: var(--ink); cursor: pointer;
   transition: background-color .15s, color .15s; }
@@ -10531,7 +10531,7 @@ body.bug-dock-open .sp-head { padding-right: 22px; }
 .sp-refresh.has-new .sp-new { transform: scale(1); }
 .sp-period { display: inline-flex; align-items: center; gap: 2px; background: color-mix(in srgb, var(--gold) 10%, var(--surface)); border-radius: 999px; padding: 3px; }
 .sp-period button { border: 0; border-radius: 999px; background: transparent; padding: 6px 16px; font: inherit; font-size: 1rem; color: var(--ink-soft);
-  cursor: pointer; transition: background .15s, color .15s; white-space: nowrap; }
+  cursor: pointer; transition: background .15s, color .15s; }
 .sp-period button:hover { color: var(--ink); }
 .sp-period button[aria-pressed="true"] { background: var(--gold); color: var(--on-gold); font-weight: 600; }
 .sp-period button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -10550,11 +10550,11 @@ body.bug-dock-open .sp-head { padding-right: 22px; }
 /* the live line: who is working now and the last request, priced in dollars */
 /* It wraps where the column is narrower than the line (the review of 41f028c17: in the 536px docked
    column, 12 agents and a Fable request are 517.5px at 100%, 744px at 150%, and the price ran off the
-   column); the dot stays beside the first line, and the price keeps its figures together. */
+   column); the dot stays beside the first line. */
 .sp-live { display: flex; align-items: flex-start; gap: 10px; margin: 0; font-size: 1rem; line-height: 1.5; color: var(--ink-soft); }
 .sp-live .working-dot { width: 8px; height: 8px; margin-top: calc(.75em - 4px); border-radius: 50%; background: var(--gold); flex: none; animation: spbreathe 1.4s ease-in-out infinite; }
 @keyframes spbreathe { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
-.sp-live b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sp-live b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .sp-live.is-idle .working-dot { animation: none; opacity: .5; background: var(--sw-off); }
 /* the model marks: a stacked bar with a 2px gap between segments, a legend beneath it */
 .sp-bar { display: flex; gap: 2px; height: 18px; width: 100%; }
@@ -10563,23 +10563,21 @@ body.bug-dock-open .sp-head { padding-right: 22px; }
 .sp-seg[data-m="fable"] { background: var(--m-fable); } .sp-seg[data-m="opus"] { background: var(--m-opus); } .sp-seg[data-m="sonnet"] { background: var(--m-sonnet); }
 .sp-seg[data-m="haiku"] { background: transparent; box-shadow: inset 0 0 0 2px var(--gold-text); }
 .sp-seg:first-child { border-radius: 9px 3px 3px 9px; } .sp-seg:last-child { border-radius: 3px 9px 9px 3px; }
-/* round 22.1 draws four equal columns; the real record names several versions in one mark ("Opus 5, 5.5
-   and 4.8" on the CEO's Mac), so a mark never gets narrower than its own line: equal shares while they
-   fit, the next row when they do not (a narrow window, the Rich panel docked). */
+/* round 22.1 draws four columns in a row; the real record names several versions in one mark ("Opus 5,
+   5.5 and 4.8" on the CEO's Mac, and up to seven Opus versions as models are upgraded). EVERY WORD ON
+   THIS SCREEN WRAPS (the reviews of b80728780 and 2dd1375d7: a nowrap line or a max-content minimum
+   ran off the docked 536px column at Text size 150%, one string at a time): a mark starts at its own
+   width, shares the row while the marks fit, takes the next row when it does not, and only a mark
+   wider than the whole column wraps its words inside it. The figure alone keeps one line: it has its
+   own fit rule (fitFigure in spend.js). */
 .sp-legend { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 18px; }
-.sp-legend > .sp-key { flex: 1 1 0; min-width: max-content; }
-/* In the docked 536px column of the smallest window (488px of Meter) a mark's second line can be
-   wider than the column: "91% · high and medium effort, some not recorded" is 544px at Text size
-   150% (the review of b80728780). There a mark is never narrower than its FIRST line (the name and
-   amount, which never wrap) and its second line wraps inside it. */
-.sp-key .l1 { white-space: nowrap; }
-@media (max-width: 1199px) { body.bug-dock-open .sp-legend > .sp-key { min-width: min-content; } }
+.sp-legend > .sp-key { flex: 1 1 auto; }
 .sp-key { display: grid; grid-template-columns: 14px 1fr; column-gap: 10px; align-items: center; margin: 0; font-size: 1rem; line-height: 1.45; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .sp-key[hidden] { display: none; }
 .sp-key .sw-m { width: 14px; height: 14px; border-radius: 4px; grid-row: 1; }
 .sp-key[data-m="fable"] .sw-m { background: var(--m-fable); } .sp-key[data-m="opus"] .sw-m { background: var(--m-opus); } .sp-key[data-m="sonnet"] .sw-m { background: var(--m-sonnet); }
 .sp-key[data-m="haiku"] .sw-m { box-shadow: inset 0 0 0 2px var(--gold-text); }
-.sp-key b { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.sp-key b { font-weight: 600; color: var(--ink); }
 .sp-key .amt { color: var(--ink); font-weight: 600; margin-left: 8px; }
 .sp-key .l2 { grid-column: 2; color: var(--ink-soft); }
 .sp-key .eff { color: var(--trim-text); margin-left: 8px; }

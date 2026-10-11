@@ -436,9 +436,28 @@ async function main() {
     // and the widest effort label (the review of b80728780): app leases record no effort, so on a
     // real Mac a mark reads "high and medium effort, some not recorded"; Refresh brings it in
     await page.evaluate(() => window.__RICHOS_MOCK__.spendLand({ family: "opus", name: "Opus 5.5", effort: null, cost: 0.2, tokens: 400000 }));
+    // and the longest name a mark can carry (the review of 2dd1375d7): every Opus version a record can
+    // accumulate as models are upgraded, seven in one mark, beside a five-figure amount
+    await page.evaluate(() => { for (const v of ["4.7", "4.6", "4.5", "4.1"]) window.__RICHOS_MOCK__.spendLand({ family: "opus", name: "Opus " + v, effort: "high", cost: 0.01, tokens: 1000 }); });
     await page.click("#spend-refresh");
-    await page.waitForFunction(() => /some not recorded/.test(document.querySelector('.sp-key[data-m="opus"]').textContent));
+    await page.waitForFunction(() => /4\.1/.test(document.querySelector('.sp-key[data-m="opus"]').textContent));
     assertEqual(await text(page, '.sp-key[data-m="opus"] .eff'), "· high and medium effort, some not recorded", "the widest effort label");
+    const opusName = await text(page, '.sp-key[data-m="opus"] b');
+    for (const v of ["5.5", "5,", "4.8", "4.7", "4.6", "4.5", "4.1"]) assert(opusName.includes(v), `the Opus mark names ${v}: ${opusName}`);
+    assert(/^\$\d{2},\d{3}\.\d{2}$/.test(await text(page, '.sp-key[data-m="opus"] .amt')), "a five-figure amount beside it");
+    // the live line names the LAST request: the widest one goes last, so every window below measures it
+    await page.evaluate(() => window.__RICHOS_MOCK__.spendLand({ family: "fable", name: "Fable 5.1", effort: "high", cost: 0.8214, tokens: 448503 }));
+    await page.waitForFunction(() => /Fable 5\.1, 448,503/.test(document.getElementById("spend-live").textContent));
+    assertEqual(await text(page, "#spend-live"), "12 agents working · last request Fable 5.1, 448,503 tokens, $0.821", "the widest live line, measured below");
+    // EVERY WORD ON THIS SCREEN CAN WRAP (the same review): no readable text is held to one line by
+    // `white-space: nowrap` or a `max-content` minimum, except the figure, which has its own fit rule
+    const held = await page.evaluate(() => [...document.querySelectorAll("#spend *")].filter(el => {
+      if (el.closest("#spend-fig")) return false;
+      if (![...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()) && !el.querySelector("b, span")) return false;
+      const cs = getComputedStyle(el);
+      return cs.whiteSpace === "nowrap" || cs.whiteSpace === "pre" || cs.minWidth === "max-content" || cs.width === "max-content";
+    }).map(el => (el.id ? "#" + el.id : el.className || el.tagName) + " (" + getComputedStyle(el).whiteSpace + ", min-width " + getComputedStyle(el).minWidth + ")"));
+    for (const h of held) wrong.push("text held to one line: " + h);   // judged with the measurements below
     for (const scale of [100, 120, 135, 150]) {
       await page.evaluate(sc => document.documentElement.style.setProperty("--app-font-scale", String(sc / 100)), scale);
       for (const [w, h, docked] of [[1440, 900, false], [1440, 900, true], [1024, 700, false], [1024, 700, true]]) {
@@ -502,7 +521,9 @@ async function main() {
         const where = `${scale}%, ${w} by ${h}${docked ? `, panel docked (${m.col}px column)` : ""}`;
         // a picture of each window to look at (.shots/, gitignored scratch)
         await shot(page, `spend-fit-${scale}-${w}x${h}${docked ? "-docked" : ""}`, { fullPage: false });
-        if (docked) {   // and the Meter scrolled to its end, where the live line is
+        if (docked) {   // and the Meter scrolled to its legend, then to its end, where the live line is
+          await page.evaluate(() => { document.querySelector(".sp-legend").scrollIntoView({ block: "center" }); });
+          await shot(page, `spend-fit-${scale}-${w}x${h}-docked-legend`, { fullPage: false });
           await page.evaluate(() => { const b = document.querySelector(".sp-body"); b.scrollTop = b.scrollHeight; });
           await shot(page, `spend-fit-${scale}-${w}x${h}-docked-end`, { fullPage: false });
           await page.evaluate(() => { document.querySelector(".sp-body").scrollTop = 0; });
