@@ -26,8 +26,12 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
      the real command unchanged; a harmful one is logged and exits 1 without doing anything.
      THE TEST-RUN RULES are stricter than the guard's, because the guard allows a few forms an
      operator legitimately types and a test never needs: every `caffeinate` (it holds the
-     host awake, `-is` included), and any osascript keystroke or key code (modifier or not:
-     it reaches whatever is frontmost on the host) or one that sets an app frontmost.
+     host awake, `-is` included); every `open` (it launches or activates an app, a file's
+     app or a URL's browser); and any osascript that is not plainly inert: a keystroke or
+     key code (modifier or not: it reaches whatever is frontmost on the host), an app set
+     frontmost, activated or launched, a shell run from inside it, the Objective-C bridge
+     or raw Apple events, a dialog or the clipboard, any `tell` or `Application(...)`, and
+     a compiled script it cannot read. A script whose harm cannot be ruled out is refused.
   3. When the suite ends, every logged call is printed as `  FAIL  host-shield: ...` and the
      suite fails, whatever it exited with.
 
@@ -79,11 +83,28 @@ SCREEN_SAVER = "screensaver" + "engine"
 # check steps over them to the command word, as the shell does.
 CONTROL_WORDS = {"if", "then", "elif", "else", "while", "until", "do", "!", "time", "{", "}"}
 # THE TEST-RUN RULES (see the header): what a stand-in refuses beyond the guard's judge().
+# An osascript in a test run is handed on only when it plainly touches nothing outside itself
+# (`return 1`). Anything that addresses an app, runs a shell, reaches the Objective-C bridge or
+# raw Apple events, or puts something on the screen is refused: the guard's list names what
+# is known to be harmful, and in a test run a script whose harm cannot be ruled out is refused
+# too (reviews rv-20261011T141442Z-0009fe5a-a898 #2: `activate`, JXA `keyCode(53)` and
+# `do shell script "<a host halt>"` were all handed on).
 TEST_RUN_OSA = [
-    (re.compile(r"\b(?:keystroke|key\s+code)\b", re.IGNORECASE),
+    (re.compile(r"\b(?:keystroke|key\s*code)\b", re.IGNORECASE),
      "sends a keystroke to whatever is frontmost on the host"),
     (re.compile(r"\bset\b[^\n]{0,120}\bfrontmost\b|\bfrontmost\s*=\s*true\b", re.IGNORECASE),
      "brings an app to the front on the host, taking the CEO's focus"),
+    (re.compile(r"\b(?:activate|launch|reopen)\b", re.IGNORECASE),
+     "launches or activates an app on the host, taking the CEO's focus"),
+    (re.compile(r"\bdo\s+shell\s+script\b|\bdoShellScript\b", re.IGNORECASE),
+     "runs a shell command the stand-ins never see"),
+    (re.compile(r"«|\bObjC\b|\$\s*[.(]|\buse\s+framework\b|\b(?:run|load)\s+script\b", re.IGNORECASE),
+     "reaches past what the shield can judge (raw Apple events, the Objective-C bridge, a nested script)"),
+    (re.compile(r"\bdisplay\s+(?:dialog|alert|notification)\b|\bchoose\s+(?:file|folder|from|application|color)\b"
+                r"|\bthe\s+clipboard\b|\bopen\s+location\b", re.IGNORECASE),
+     "puts a dialog, a notification or the clipboard in front of the CEO on the host"),
+    (re.compile(r"\btell\b|\bapplication\b", re.IGNORECASE),
+     "addresses an app on the host; a test never needs to"),
 ]
 
 
@@ -91,12 +112,23 @@ def test_run_rule(name, judged):
     """(rule, why) for a call the guard allows and a test run never may, else None."""
     if name == "caffeinate":
         return ("caffeinate", "holds the host awake (any form, -is included); a test never needs it")
+    if name == "open":
+        # Every form launches or activates something on the host: an app (-a, -b), a file's
+        # app, a URL's browser, Finder (-R). Review rv-20261011T173659Z-e08ee8a2-2c75 #2.
+        return ("open", "launches or activates an app, a file's app or a URL's browser on the host, "
+                        "taking the CEO's focus; a test never needs it")
     if name == "osascript":
         script = " \n ".join(judged[1:])
+        if OSA_UNJUDGEABLE in script:
+            return ("osascript", "a compiled script cannot be read, so it cannot be judged harmless")
         for rx, why in TEST_RUN_OSA:
             if rx.search(script):
                 return ("osascript", why)
     return None
+
+
+# What _osascript_text returns for a program file it cannot read as text (a compiled .scpt).
+OSA_UNJUDGEABLE = "\x00host-shield: unjudgeable compiled script\x00"
 
 # ---------------------------------------------------------------------------------------------
 # The guard's analyzer, loaded from the guard itself
@@ -405,9 +437,12 @@ def _osascript_text(args):
     if i < len(args) and args[i] != "-":
         try:
             with open(args[i], "rb") as fh:
-                return fh.read(1 << 20).decode("utf-8", "replace"), None
+                data = fh.read(1 << 20)
         except OSError:
             return None, None
+        if data.startswith(b"FasdUAS") or b"\x00" in data:
+            return OSA_UNJUDGEABLE, None
+        return data.decode("utf-8", "replace"), None
     data = sys.stdin.buffer.read()
     return data.decode("utf-8", "replace"), data
 

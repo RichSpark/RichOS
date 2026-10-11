@@ -18,6 +18,11 @@ unset RICHOS_HOST_SHIELD_LOG RICHOS_HOST_SHIELD_RUNS
 
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/host-shield-test.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
+# Every run below keeps its log in a TMPDIR of its own: in the shared one, another agent's
+# shielded suite running at the same moment leaves a live log that H10 read as this file's
+# (2026-10-11, three logs of concurrent runs, each still in use when H10 looked).
+export TMPDIR="$TMP/tmpdir"
+mkdir -p "$TMPDIR"
 PASS=0; FAIL=0
 ok()  { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/          /'; FAIL=$((FAIL + 1)); }
@@ -130,6 +135,37 @@ for form in "$PM $SLEEPNOW" "$CAF -d true" "$CAF -t 5 -d true" "$KA $DOCK" "$CAF
         bad "H4b $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
     fi
 done
+
+# H4c — the test-run rules refuse what cannot be shown harmless: any open (it launches or
+# activates an app, a file's app or a URL's browser), and an osascript that activates an app,
+# sends a key code through JXA, runs a shell from inside itself, reaches the Objective-C bridge
+# or puts a dialog up (reviews rv-20261011T141442Z-0009fe5a-a898 #2, rv-20261011T173659Z-e08ee8a2-2c75 #2).
+OPEN="op"; OPEN="${OPEN}en"
+for form in "$OPEN -a TextEdit" "$OPEN https://example.com" "$OPEN -g -b com.apple.TextEdit" \
+        "$OSA -e 'tell application \"Finder\" to activate'" \
+        "$OSA -l JavaScript -e 'Application(\"System Events\").keyCode(53)'" \
+        "$OSA -e 'do shell script \"/sbin/$HS_CMD -h +60\"'" \
+        "$OSA -l JavaScript -e 'ObjC.import(\"stdlib\"); \$.system(\"true\")'" \
+        "$OSA -e 'display dialog \"hello\"'"; do
+    F="$(suite h4c.test.sh "$form || true" "exit 0")"
+    trip_clean
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "^  FAIL  host-shield: refused \`${form%% *} " "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
+        ok "H4c $form is refused and logged; nothing reached the tripwire"
+    else
+        bad "H4c $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+    fi
+done
+# A compiled script cannot be read, so it cannot be judged harmless.
+printf 'FasdUAS 1.101.10\000\000' > "$TMP/compiled.scpt"
+F="$(suite h4d.test.sh "$OSA '$TMP/compiled.scpt' || true" "exit 0")"
+trip_clean
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "compiled script cannot be read" "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
+    ok "H4d a compiled $OSA script is refused: it cannot be read, so it cannot be judged harmless"
+else
+    bad "H4d rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+fi
 
 # H5 — osascript reads its script from stdin: the stand-in judges that text too, and hands a
 # harmless one on with its stdin intact.
