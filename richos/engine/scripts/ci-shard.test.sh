@@ -117,6 +117,10 @@ unset RICHOS_WORKER_TOKENS RICHOS_WORKER_SLOT_HELD RICHOS_WORKER_BORROW_LOCK
 # and cancel every check of the run (2026-09-28). S23 sets its own below.
 unset RICHOS_VERIFICATION_CONTAMINATION
 mkdir -p "$CLAUDE_CONFIG_DIR/state"
+# Every synthetic engine below has no host shield of its own, and ci-shard.sh refuses to start a
+# unit without one: each run gets this checkout's shield, so every fixture unit runs behind the
+# stand-ins (S26c proves the refusal with it withheld).
+export RICHOS_HOST_SHIELD_TOOL="$ENGINE_ROOT/scripts/lib/host_shield.py"
 
 echo "=== ci-shard tests ==="
 
@@ -1176,6 +1180,16 @@ if [ "$RC" != 0 ] && grep -q "REFUSED before it ran" "$SANDBOX/out" && [ ! -e "$
     ok "S26b a unit whose source names /sbin/$HS_CMD is refused before it runs"
 else
     bad "S26b rc=$RC — a by-path host call was not refused before the unit ran"; sed 's/^/          /' "$SANDBOX/out"
+fi
+# S26c — with no shield beside it and none exported, the runner refuses (rc 2) and starts no unit.
+printf '%s\n' '#!/usr/bin/env bash' "touch \"$SANDBOX/hstrip/unit-started\"" 'echo "  PASS  started"' \
+    > "$EHS/scripts/lib/hs-started.test.sh"
+RC="$(PATH="$(hs_path "$SANDBOX/hstrip")" env -u RICHOS_HOST_SHIELD_TOOL \
+        bash "$EHS/scripts/ci-shard.sh" --only-units scripts/lib/hs-started.test.sh > "$SANDBOX/out" 2>&1; printf '%s' "$?")"
+if [ "$RC" = 2 ] && grep -q "REFUSED: NO HOST SHIELD" "$SANDBOX/out" && [ ! -e "$SANDBOX/hstrip/unit-started" ]; then
+    ok "S26c with no shield beside it and none exported, ci-shard.sh refuses (rc 2) and the unit never starts"
+else
+    bad "S26c rc=$RC — a unit started without the host shield"; sed 's/^/          /' "$SANDBOX/out"
 fi
 fi
 
