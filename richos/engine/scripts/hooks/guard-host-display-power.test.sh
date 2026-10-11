@@ -42,15 +42,7 @@
 #       and a declared off switch all allow — the first loudly, the rest silent;
 #   (j) the self-exemption is by BASENAME and covers exactly four files;
 #   (k) the one hard refusal: a missing scripts/lib/resolve-roots.sh prints the
-#       shared BROKEN INSTALL banner and exits 2;
-#   (l) a code identifier named shutdown is not the command, in exactly two
-#       shapes: a name against "()" or "(&" (method calls, a Rust call with a
-#       borrow, a shell function definition) and a Rust /// or //! line whose
-#       every trigger is a bare name in backticks (the real 2026-10-11 doc
-#       comment). Everything else main refuses is still refused: the command on
-#       a shell line, on Bash, in a JS backtick, behind a // path, every case
-#       from both reviews of the comment-stripping branches, every zsh glob
-#       qualifier form, and each condition of the doc-comment shape.
+#       shared BROKEN INSTALL banner and exits 2.
 #
 # Run directly: scripts/hooks/guard-host-display-power.test.sh
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -555,118 +547,6 @@ OUT="$(env RICHOS_ENTITY_ROOT="$ENTITY" bash "$BROKEN/scripts/hooks/guard-host-d
 set -e
 if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'BROKEN INSTALL'; then ok "K1  a missing resolve-roots.sh REFUSES with the shared banner"
 else bad "K1  a missing resolve-roots.sh REFUSES with the shared banner" "rc=$RC: ${OUT:0:200}"; fi
-
-# --- (l) a code identifier named shutdown is not the shutdown command -------
-# 2026-10-11, echo-opus-spend2: a Write of a Rust test was refused at its line 7,
-# a DOC COMMENT naming the quota service method in backticks, `(` + "`shutdown`" + `)`.
-# The backticks were read as a command substitution. The engineer then wrote the
-# file through a script to get past the guard. The opening of that Write, verbatim:
-# Read with `read -d ''` like every other fixture here, never inside a command
-# substitution: bash 3.2 parses a heredoc inside one for quotes, the apostrophes
-# below unbalance it, and the backticks then RUN. Measured while writing this case.
-read -r -d '' RUST_1011 <<'RS' || true
-
-    /// **A normal quit keeps every request** (the review of 2dd1375d7, rv-20261011T085659Z: "CLEAN
-    /// QUIT: before=$0.1889708/2 requests, reopen=$0.0944854/1"). A lease's requests are in no
-    /// transcript, so the ledger is the only place they live, and a token scan saves it at most
-    /// every 30 seconds. Two Opus 5.5 lease requests (report.md's worked example, $0.0944854 each),
-    /// a scan after each, the second within 30 seconds of the first save; then the app quits
-    /// (`shutdown`) and opens again. By hand: 2 requests, 2 x $0.0944854 = $0.1889708.
-    #[test]
-    fn a_normal_quit_keeps_the_leases_requests_the_last_scan_did_not_save() {
-        {
-            let service = Service::open(&app).unwrap();
-            service.shutdown();
-        }
-    }
-RS
-expect_silent "L1  the real 2026-10-11 Rust test, its doc comment naming shutdown in backticks, PASSES" \
-              "$(payload Write "$SB/src/quota_test.rs" "$RUST_1011")"
-expect_silent "L2  method calls and a definition named shutdown PASS" \
-              "$(payload Edit "$SB/src/quota.rs" '        state.quota.shutdown();
-    pub fn shutdown(&self) {
-        .shutdown()')"
-expect_rc     "L2b a BLOCK comment naming shutdown in backticks is REFUSED, as on main: only a Rust /// or //! line is exempt" 2 \
-              "$(payload Edit "$SB/src/quota.rs" '    /* `shutdown` drains the leases */')"
-expect_silent "L2c ... and a block-comment line naming shutdown() PASSES by the parenthesis rule alone" \
-              "$(payload Edit "$SB/src/quota.rs" '     * `shutdown()` returns quickly')"
-expect_silent "L3  a plain function call named shutdown PASSES" \
-              "$(payload Edit "$SB/src/quota.rs" '        shutdown(&quota);')"
-expect_silent "L4  ... and so does a shell function DEFINED with that name" \
-              "$(payload Edit "$SB/scripts/a.sh" 'shutdown() { echo "stopping the runner"; }')"
-# The system command is still the system command, wherever it is written to run.
-expect_rc     "L5  the shutdown command in a shell script is still REFUSED" 2 \
-              "$(payload Edit "$SB/scripts/a.sh" 'shutdown -h now')"
-expect_rc     "L6  ... and on the Bash surface" 2 \
-              "$(payload Bash "" 'sudo shutdown -r now')"
-expect_rc     "L7  ... and a backtick command on a CODE line of non-shell source" 2 \
-              "$(payload Edit "$SB/src/a.js" 'execSync(`shutdown -h now`);')"
-expect_rc     "L8  ... and a // line in a SHELL script is a path, not a comment" 2 \
-              "$(payload Edit "$SB/scripts/a.sh" '//sbin/shutdown -h now')"
-# NO COMMENT OR STRING IS STRIPPED FROM NON-SHELL SOURCE. Two branches tried, and
-# their reviews measured every case below refused on main and passed by them:
-# L9 and L10 by a guard that skipped lines STARTING like a comment (af4b68db1,
-# rv-20261011T123904Z), L13 to L16 by a comment lexer (b0f108e97,
-# rv-20261011T131622Z). Each is refused again, exactly as on main.
-expect_rc     "L9  code after a CLOSED block comment on the same line is still REFUSED" 2 \
-              "$(payload Write "$SB/src/cleanup.js" '/* cleanup */ execSync(`pmset displaysleepnow`);')"
-expect_rc     "L10 ... and a // line INSIDE a multiline JS template is shell text, REFUSED" 2 \
-              "$(payload Write "$SB/src/cleanup.js" 'execSync(`
-//sbin/shutdown -h now
-`);')"
-expect_rc     "L11 ... and a /* inside a STRING opens no comment, so the code after it is REFUSED" 2 \
-              "$(payload Write "$SB/src/cleanup.js" 'const a = "/*"; execSync(`pmset displaysleepnow`); const b = "*/";')"
-# An Edit is judged on its text alone, wherever its old_string sits in the file.
-mkdir -p "$SB/src"
-printf '%s\n' 'execSync(`' 'PLACEHOLDER' '`);' >"$SB/src/in-template.js"
-printf '%s\n' 'function drain() {' '  PLACEHOLDER' '}' >"$SB/src/in-code.js"
-expect_rc     "L12 an Edit whose old_string sits INSIDE a template is REFUSED" 2 \
-              "$(payload Edit "$SB/src/in-template.js" '//sbin/shutdown -h now')"
-expect_rc     "L13 ... and a JavaScript // line naming shutdown in backticks is REFUSED, as on main" 2 \
-              "$(payload Edit "$SB/src/in-code.js" '// `shutdown` drains the leases')"
-expect_rc     "L14 a regex after a control condition, then a template carrying the command, is REFUSED" 2 \
-              "$(payload Write "$SB/src/cleanup.js" 'if (true) /"/.test(""); execSync(`
-//sbin/shutdown -h now
-`);')"
-expect_rc     "L15 ... and a C# raw multiline string carrying it, REFUSED" 2 \
-              "$(payload Write "$SB/src/Cleanup.cs" 'var command = """
-//sbin/shutdown -h now
-""";
-Process.Start("/bin/sh", command);')"
-expect_rc     "L16 ... and a C++ raw multiline string carrying it, REFUSED" 2 \
-              "$(payload Write "$SB/src/cleanup.cpp" 'int main() { std::system(R"(
-//sbin/shutdown -h now
-)"); }')"
-# ONLY "()" AND "(&" AFTER A NAME ARE A FUNCTION. Anything else in the parentheses
-# is a zsh glob qualifier and zsh RUNS the word: measured 2026-10-11 with /bin/echo,
-# zsh ran /bin/echo(N), /bin/echo(x) and /bin/echo(:t). The Bash surface here is
-# zsh. Every case below was refused on main and passed by af4b68db1 and b0f108e97.
-expect_rc     "L17 a host command carrying a zsh glob qualifier (N) on Bash is REFUSED" 2 \
-              "$(payload Bash "" '/sbin/shutdown(N) -h now')"
-expect_rc     "L18 ... behind sudo, with the qualifier (x)" 2 \
-              "$(payload Bash "" 'sudo /sbin/reboot(x)')"
-expect_rc     "L19 ... in a shell script, with the modifier (:t)" 2 \
-              "$(payload Edit "$SB/scripts/a.sh" '/sbin/reboot(:t)')"
-expect_rc     "L20 ... and a bare call with a plain argument in Rust, as on main" 2 \
-              "$(payload Edit "$SB/src/quota.rs" '        shutdown(x);')"
-# THE RUST DOC-COMMENT EXCEPTION IS ONE LINE SHAPE, and each condition is held.
-expect_silent "L21 an inner Rust doc comment (//!) naming shutdown in backticks PASSES" \
-              "$(payload Write "$SB/src/lib.rs" '//! The service quits (`shutdown`) and opens again.')"
-expect_rc     "L22 a doc-comment span holding the command WITH ARGUMENTS is REFUSED" 2 \
-              "$(payload Write "$SB/src/lib.rs" '/// run `shutdown -h now` to stop')"
-expect_rc     "L23 ... and a trigger word OUTSIDE the backticks is REFUSED" 2 \
-              "$(payload Write "$SB/src/lib.rs" '/// `shutdown` then reboot -q')"
-expect_rc     "L23b ... in any letter case: macOS finds the binary for Reboot too" 2 \
-              "$(payload Write "$SB/src/lib.rs" '/// `shutdown`; Reboot -q')"
-expect_rc     "L24 ... and a doc line continued by a backslash carries the next line, REFUSED" 2 \
-              "$(payload Write "$SB/src/lib.rs" '/// `shutdown` \
-halt -q')"
-expect_rc     "L25 ... and the same doc line in a .js file is REFUSED: the exception is Rust only" 2 \
-              "$(payload Write "$SB/src/a.js" '/// The service quits (`shutdown`) and opens again.')"
-expect_rc     "L26 ... and four slashes is not a doc comment, REFUSED" 2 \
-              "$(payload Write "$SB/src/lib.rs" '//// The service quits (`shutdown`).')"
-expect_rc     "L27 ... and a span holding a PATH is REFUSED" 2 \
-              "$(payload Write "$SB/src/lib.rs" '/// calls (`/sbin/shutdown`)')"
 
 # --- the mutation harness --------------------------------------------------
 # A suite that cannot fail proves nothing. The harness breaks the guard in ways

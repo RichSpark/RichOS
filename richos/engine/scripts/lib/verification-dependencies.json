@@ -1610,8 +1610,8 @@
     },
     "scripts/hooks/guard-host-display-power.sh": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
-      "evidence": "Sources the resolved entity config for the guard switch. Root/adoption, seat-jurisdiction and unevaluated-payload helpers run; citation resolution uses ceo-ruled. Embedded Python classifies payload strings and never executes their commands. Renewed 2026-10-11 (code identifiers): split_segments drops a name written directly against () or (&, and on the code surface of a .rs payload path a /// or //! line whose every trigger word is a bare name inside backticks is not judged. Both decisions read only the payload text; no file on disk and no configuration read is added.",
+      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
+      "evidence": "Sources the resolved entity config for the guard switch. Root/adoption, seat-jurisdiction and unevaluated-payload helpers run; citation resolution uses ceo-ruled. Embedded Python classifies payload strings and never executes their commands.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
       ],
@@ -1632,8 +1632,8 @@
     },
     "scripts/hooks/host-display-power.mutation.sh": {
       "source": "scripts/hooks/host-display-power.mutation.sh",
-      "sha256": "a153ad50a13f6f6451c82ce70b4479a4745fe59880638ed5c03b10b8e9cb9eb6",
-      "evidence": "Finite guard-source mutations copy config and registration files as fixture transports, then execute the nested suite which creates its own entity settings. Pool and stopwatch run without sourcing the real config. Copied hook-registration files are not read by the nested suite. The scratch allocator is now sourced before copying; the caller never sources the transported config and passes only environment/default TTL, so this edge consumes no shipped config values. Renewed 2026-10-11: eight more finite guard-source mutants for the parenthesis and Rust doc-comment rules. No configuration read is added.",
+      "sha256": "75a7aad662b3a85ca8069f5f053c14b0991bb753976a44e190ea8fa40e500428",
+      "evidence": "Finite guard-source mutations copy config and registration files as fixture transports, then execute the nested suite which creates its own entity settings. Pool and stopwatch run without sourcing the real config. Copied hook-registration files are not read by the nested suite. The scratch allocator is now sourced before copying; the caller never sources the transported config and passes only environment/default TTL, so this edge consumes no shipped config values.",
       "keys": [],
       "edges": [
         {
@@ -1657,8 +1657,8 @@
     },
     "scripts/hooks/guard-host-display-power.test.sh": {
       "source": "scripts/hooks/guard-host-display-power.test.sh",
-      "sha256": "c6572bcb82176ab2e6bee0664b5effa3c3f7b221b7e7c99d2bd87e920d2c7a71",
-      "evidence": "Creates a private entity orchestration.config and a private ruling repository. Every hook invocation resolves that entity, its off-switch variant or an explicitly unadopted directory. Missing-resolver fixture refuses before config. Nested mutations recreate the same private settings; literal historical commands remain payload data. Renewed 2026-10-11: section (l) adds literal payload cases (and two small source fixture files in the private sandbox) against the same private entity. No configuration read is added.",
+      "sha256": "e4b3e1788d5b3c915626781969995a37dba884a81d0f39d7b7855bbabb7dbcb8",
+      "evidence": "Creates a private entity orchestration.config and a private ruling repository. Every hook invocation resolves that entity, its off-switch variant or an explicitly unadopted directory. Missing-resolver fixture refuses before config. Nested mutations recreate the same private settings; literal historical commands remain payload data.",
       "keys": [],
       "edges": [
         {
@@ -6797,7 +6797,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#benign-bash": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
       "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -8713,7 +8713,7 @@
     "mega-lander/tests/workspaces.test.py": {
       "source": "mega-lander/tests/workspaces.test.py",
       "sha256": "98bdfd6eec53c8c2ca9e9ce98b022af877270afdabb83b3d3066009330e4a6b5",
-      "evidence": "AST census of every ws call, subprocess and run call: fixed Git fixtures, captured sleep processes, a literal shutdown writer and seven Stop guards. Private HOME/config directories and Git config do not replace real app cleanup or QA settings. Six guards receive only a forbidden lead; workspace gate receives a private unadopted repository. The sole land CLI call explicitly patches out the scratch sweep. The added resource-waits Stop guard also returns at the forbidden-lead recovery before reading settings or wait state. Renewed 2026-09-30 (hunt part 4): the finding-20 case runs app.test.py as a subprocess for the one case test_pause_message_is_fixed selects (edge to that case) and reads the five sibling *.mutation.sh files as text; the finding 11-15 and 29 cases add literal sleeper processes, ps reads, a patched container reaper and a private RICHOS_WORKSPACES_GATE_BUDGET. No configuration read is added. Renewed 2026-10-07 (merge-gate abort): MergeGateRefusal installs and switches on the operator fence in its private repository through scripts/operator-fences.sh with a literal private entity config, writes a private session record for its own pid, takes the lease with scripts/land-lease.sh (CLAUDE_PID removed from the child environment), adds a literal refusing pre-merge-commit hook and runs workspaces.py merge as a subprocess. No configuration read is added. Env (2026-10-08) also exports SCRATCH_BUILD_CACHE_ROOT and SCRATCH_CARGO_TARGET_ROOTS pointing into its own temporary root and restores them on close, so the lander's build-cache step never reads the operator's configured cache folders. Renewed 2026-10-11 (regenerable app output): RichosBuildOutputDoesNotBlockAContinuation copies this repository's three committed ignore files (.gitignore, richos/app/.gitignore, richos/app/ui/tests/.gitignore) into its private fixture repository as data and runs the continuation spawn against them; it skips when they are absent. No configuration read is added.",
+      "evidence": "AST census of every ws call, subprocess and run call: fixed Git fixtures, captured sleep processes, a literal shutdown writer and seven Stop guards. Private HOME/config directories and Git config do not replace real app cleanup or QA settings. Six guards receive only a forbidden lead; workspace gate receives a private unadopted repository. The sole land CLI call explicitly patches out the scratch sweep. The added resource-waits Stop guard also returns at the forbidden-lead recovery before reading settings or wait state. Renewed 2026-09-30 (hunt part 4): the finding-20 case runs app.test.py as a subprocess for the one case test_pause_message_is_fixed selects (edge to that case) and reads the five sibling *.mutation.sh files as text; the finding 11-15 and 29 cases add literal sleeper processes, ps reads, a patched container reaper and a private RICHOS_WORKSPACES_GATE_BUDGET. No configuration read is added. Renewed 2026-10-07 (merge-gate abort): MergeGateRefusal installs and switches on the operator fence in its private repository through scripts/operator-fences.sh with a literal private entity config, writes a private session record for its own pid, takes the lease with scripts/land-lease.sh (CLAUDE_PID removed from the child environment), adds a literal refusing pre-merge-commit hook and runs workspaces.py merge as a subprocess. No configuration read is added. Env (2026-10-08) also exports SCRATCH_BUILD_CACHE_ROOT and SCRATCH_CARGO_TARGET_ROOTS pointing into its own temporary root and restores them on close, so the lander's build-cache step never reads the operator's configured cache folders.",
       "keys": [],
       "edges": [
         {
@@ -9505,7 +9505,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
       "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -9970,7 +9970,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#fenced-commit": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
       "evidence": "The fixed fenced-commit dispatcher fixture supplies git -C <private repo> commit -m x. Reviewed prefix/classifier returns before push/merge-only, host-power or foreign-data paths. Settings read before classification remain bound.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -14580,7 +14580,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#find-payload": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+      "sha256": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
       "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -16737,7 +16737,7 @@
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
         "scripts/hooks/guard-hook-registration-commits.sh": "0e684c61c9c4d2bd3a724b6f4693090812cff645911916e4b4cb035b90790393",
         "scripts/hook-registration-completeness.sh": "b6d74c20538f74926a5acb841e92fe205cd6f1c8be1d82849c0e3dddd55496bd",
-        "scripts/hooks/guard-host-display-power.sh": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
         "scripts/hooks/guard-land-lease-commands.sh": "e3fb182d2571b84f9a84599fd50f404bb53aee051f6a9bbf52f0f78e01b60078",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
         "scripts/hooks/guard-live-names.sh": "f836427a7eff9c4785a22318725e87826b6890bb20c44511cb6ae9b86fe88d30",
@@ -17023,7 +17023,7 @@
         "scripts/hooks/guard-dialect.sh": "4310360774e98410d6e35208d46346575b5ffa7046905b17deecedd9453c67c5",
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
         "scripts/hooks/guard-hook-registration-commits.sh": "0e684c61c9c4d2bd3a724b6f4693090812cff645911916e4b4cb035b90790393",
-        "scripts/hooks/guard-host-display-power.sh": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
         "scripts/hooks/guard-inflight-notify.sh": "2d5c5cf2de342b7978f4aad6222e7fc37d6a0b344023e576d7881111a4aba9ab",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
@@ -17256,7 +17256,7 @@
         "scripts/lib/vendored-material.sh": "630fc9746255b5e2c6cf24be71ba0b9780a5d673f98559db3099b44f47fa3c92",
         "scripts/hooks/guard-hook-registration-commits.sh": "0e684c61c9c4d2bd3a724b6f4693090812cff645911916e4b4cb035b90790393",
         "scripts/hooks/guard-ci-red-lands.sh": "9dcac2ccec57f2fe1d47b8b5b86eda0590e5c784e587f732376b385c94232094",
-        "scripts/hooks/guard-host-display-power.sh": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
         "scripts/hooks/guard-public-record-repo.sh": "49a6e6c29e59a604b4d91e847e1e6d6060035f41f703bc95ffc8275778fec3d7",
         "scripts/hooks/guard-land-lease-commands.sh": "e3fb182d2571b84f9a84599fd50f404bb53aee051f6a9bbf52f0f78e01b60078",
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
@@ -17385,7 +17385,7 @@
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "21b64bc63f511249e987c026f8b409e5d191f99bb2a122fd5011e6d95b0e9bc7",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
-        "scripts/hooks/guard-host-display-power.sh": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+        "scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
         "scripts/hooks/guard-idle-land.sh": "c65ff6beb940c15ff20cf5a7e54e2f8453c4f6594d2ed2a8d32cda662dc3efae",
         "scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",

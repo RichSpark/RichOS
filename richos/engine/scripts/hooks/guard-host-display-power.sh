@@ -646,20 +646,6 @@ def split_segments(text, depth=0):
                 j = n
             subs.extend(split_segments(text[i+1:j], depth + 1))
             cur.append(" "); i = j + 1; continue
-        # A NAME WRITTEN AGAINST "()" OR "(&" IS A FUNCTION, NEVER A COMMAND.
-        # `shutdown() { ... }` DEFINES a function in bash, sh and zsh, and
-        # `shutdown(&quota)` (a Rust call) is a parse error in every shell, so
-        # neither can run the system command and the name is dropped from the
-        # segment it ends. ONLY THOSE TWO FORMS. Anything else inside the
-        # parentheses is a zsh GLOB QUALIFIER, and zsh then RUNS the word:
-        # measured 2026-10-11 with /bin/echo, zsh ran `/bin/echo(N) x`,
-        # `/bin/echo(x) x` and `/bin/echo(:t) x`. The earlier form of this rule
-        # took any "(" and let `/sbin/shutdown(N) -h now` through on the Bash
-        # surface, whose shell on this Mac is zsh. A "(" after a space, "$",
-        # "<" or "=" (a subshell, a substitution, an array) splits as before.
-        if c == "(" and cur and (cur[-1].isalnum() or cur[-1] == "_") \
-                and text[i+1:i+2] in (")", "&"):
-            segs.append(re.sub(r"\S+$", "", "".join(cur))); cur = []; i += 1; continue
         if c in SEG_BREAK:
             segs.append("".join(cur)); cur = []; i += 1; continue
         cur.append(c); i += 1
@@ -1015,46 +1001,7 @@ def join_continuations(lines):
 FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 NEW_BLOCK_RE = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)")
 
-# A RUST DOC COMMENT NAMING A METHOD IN BACKTICKS IS NOT A COMMAND.
-# ------------------------------------------------------------------
-# Measured 2026-10-11: a Write of a Rust test was refused for its doc comment
-# "then the app quits (`shutdown`) and opens again", because the code surface
-# reads every line as shell and Markdown backticks as a command substitution.
-# The engineer then wrote the file through a script to get past the guard.
-#
-# NOT A COMMENT LEXER, on purpose. Two branches tried to strip comments and
-# strings from non-shell source, and each review found text main refuses that
-# they let through: code after a closed comment, a template, a regex after a
-# control condition, C# and C++ raw strings. So this is ONE LINE SHAPE, judged
-# on the line alone, and every condition must hold:
-#   - the file is .rs and the line starts with /// or //! (not ////); a line
-#     continued by a backslash is judged with the line it carries;
-#   - every trigger word on the line is inside a backtick span, compared
-#     without case (macOS finds /sbin/shutdown for `Shutdown`);
-#   - every span holding a trigger is a bare name: letters, digits, _ . and :,
-#     optionally ending in (). No space, no slash, no argument.
-# WHY THE LAST CONDITION: a line cannot say whether it sits inside a Rust
-# string or a doctest, so the exemption must be harmless even there. A span
-# like `shutdown -h now` or `/sbin/reboot` is the command itself and is refused;
-# a bare name can only run that program with no arguments at all.
-# A Bash heredoc that writes a .rs file is still judged as main judges it.
-RUST_DOC_RE = re.compile(r"^[ \t]*(?:///(?!/)|//!)")
-ANY_TRIGGER_RE = re.compile(r"\b(?:%s|%s)\b" % (HARD_TRIGGERS, SOFT_TRIGGERS), re.IGNORECASE)
-DOC_NAME_RE = re.compile(r"^[A-Za-z0-9_.:]+(?:\(\))?$")
-
-def rust_doc_mention(line):
-    """True when a Rust doc line names a trigger only as a bare name in backticks."""
-    if not RUST_DOC_RE.match(line):
-        return False
-    named = False
-    for m in CODESPAN_RE.finditer(line):
-        if ANY_TRIGGER_RE.search(m.group(1)):
-            if not DOC_NAME_RE.match(m.group(1)):
-                return False
-            named = True
-    return named and not ANY_TRIGGER_RE.search(CODESPAN_RE.sub(" ", line))
-
-def text_findings(text, prose, base=0, rust=False):
+def text_findings(text, prose, base=0):
     """Findings in a DOCUMENT: a brief, a message, a source file, a heredoc.
 
     BLOCKS. In prose a block is what one author wrote as one thought, so
@@ -1076,10 +1023,6 @@ def text_findings(text, prose, base=0, rust=False):
         out, seen = [], set()
         for n, line in join_continuations(text.split("\n")):
             if NEG_RE.search(line) and not PERMIT_RE.search(line):
-                continue
-            # Judged on the LOGICAL line: a doc line continued by a backslash
-            # carries the next line with it, and that text must qualify too.
-            if rust and rust_doc_mention(line):
                 continue
             # Through candidates() rather than straight to analyze_command, so
             # that BOTH surfaces have one candidate-extraction entry point and
@@ -1209,7 +1152,6 @@ if re.search(r"(?:^|/)testvm/", path):
     print("CLEAN"); sys.exit(0)
 
 PROSE_EXT = {".md", ".markdown", ".txt", ".text", ".rst", ".org", ".adoc", ".mdx"}
-ext = ""
 if tool in ("Agent", "SendMessage"):
     surface = "prose"
 elif tool == "Bash":
@@ -1229,7 +1171,7 @@ if surface == "shell":
     for body, at, prose in heredocs:
         FINDINGS.extend(text_findings(body, prose, base=at))
 else:
-    FINDINGS.extend(text_findings(blob, surface == "prose", rust=(surface == "code" and ext == ".rs")))
+    FINDINGS.extend(text_findings(blob, surface == "prose"))
 
 if not FINDINGS:
     print("CLEAN"); sys.exit(0)

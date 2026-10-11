@@ -268,55 +268,6 @@ mutant no-self-exemption "J1 " "$G" \
     'guard-host-display-power-NOTHING.sh)\n        exit 0 ;;' \
     "this guard could not be authored, tested or repaired, and a guard that cannot be repaired is a guard somebody deletes."
 
-# --- 17-18. A CODE IDENTIFIER IS NOT THE COMMAND --------------------------
-# BOTH ARE A FALSE POSITIVE THIS GUARD SHIPPED: on 2026-10-11 a Rust test was
-# refused for a doc comment naming the quota service method, and the engineer
-# wrote the file through a script to get past it.
-mutant name-against-paren-is-a-command "L3 " "$G" \
-    '        if c == "(" and cur and (cur[-1].isalnum() or cur[-1] == "_") \' \
-    '        if False and c == "(" and cur and (cur[-1].isalnum() or cur[-1] == "_") \' \
-    "a plain call such as shutdown(&quota) in Rust, or a shell function DEFINED as shutdown(), would read as the system command and refuse the file."
-
-mutant rust-doc-comment-judged "L1 " "$G" \
-    '            if rust and rust_doc_mention(line):' \
-    '            if False:' \
-    "a Rust doc comment naming a method in Markdown backticks would read as a command substitution, and the 2026-10-11 test would be refused again."
-
-# --- 19-25. ...AND NOTHING WIDER. EACH IS A HOLE ONE OF THE TWO RULES HAD ----
-# The parenthesis rule of af4b68db1 took ANY "(" after a name, and zsh runs a
-# word with a glob qualifier: /sbin/shutdown(N) -h now passed on the Bash surface
-# (measured 2026-10-11). The doc-comment rule is one line shape; each mutant
-# below drops one of its conditions.
-mutant paren-any-argument-is-a-function "L17" "$G" \
-    '                and text[i+1:i+2] in (")", "&"):' \
-    '                and True:' \
-    "a host command written against a zsh glob qualifier, such as /sbin/shutdown(N) -h now, would read as a function and pass, and zsh runs it."
-
-mutant doc-span-may-hold-arguments "L22" "$G" \
-    '            if not DOC_NAME_RE.match(m.group(1)):' \
-    '            if False:' \
-    "a doc-comment backtick span holding the full command with its arguments would pass, and in a doctest or a Rust string that reaches a shell it runs."
-
-mutant doc-trigger-outside-span "L23 " "$G" \
-    '    return named and not ANY_TRIGGER_RE.search(CODESPAN_RE.sub(" ", line))' \
-    '    return named' \
-    "a doc line naming a method in backticks would carry a bare host command written beside it, unjudged."
-
-mutant doc-trigger-case-sensitive "L23b" "$G" \
-    '(HARD_TRIGGERS, SOFT_TRIGGERS), re.IGNORECASE)' \
-    '(HARD_TRIGGERS, SOFT_TRIGGERS))' \
-    "a host command beside the span written as Reboot would pass, and the case-insensitive file system of this Mac finds the binary."
-
-mutant doc-exception-any-language "L25" "$G" \
-    'rust=(surface == "code" and ext == ".rs")' \
-    'rust=(surface == "code")' \
-    "a /// line in JavaScript, which is an ordinary comment there and can sit in a template, would be exempt too."
-
-mutant four-slashes-is-doc "L26" "$G" \
-    '(?:///(?!/)|//!)' \
-    '(?:///|//!)' \
-    "a //// line, which Rust does not treat as a doc comment, would be exempt."
-
 mut_pool_drain
 mut_pool_require_submissions "$(basename "$0")"
 PASS=$(( PASS + MUT_POOL_PASS ))

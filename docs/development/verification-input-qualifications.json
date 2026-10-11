@@ -1883,8 +1883,8 @@
     "engine scripts/hooks/guard-host-display-power.test.sh": {
       "review": "The hook receives historical power commands as payload strings, never executes them and resolves citations against generated private ruling records. Every entity/config path is private, including opt-out and missing-adoption cases. Nested mutants recreate these fixtures. Clock fields are audit output; no host display, model, remote service or installed application is exercised.",
       "sources": {
-        "richos/engine/scripts/hooks/guard-host-display-power.test.sh": "c6572bcb82176ab2e6bee0664b5effa3c3f7b221b7e7c99d2bd87e920d2c7a71",
-        "richos/engine/scripts/hooks/host-display-power.mutation.sh": "a153ad50a13f6f6451c82ce70b4479a4745fe59880638ed5c03b10b8e9cb9eb6",
+        "richos/engine/scripts/hooks/guard-host-display-power.test.sh": "e4b3e1788d5b3c915626781969995a37dba884a81d0f39d7b7855bbabb7dbcb8",
+        "richos/engine/scripts/hooks/host-display-power.mutation.sh": "75a7aad662b3a85ca8069f5f053c14b0991bb753976a44e190ea8fa40e500428",
         "richos/engine/scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "richos/engine/scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
         "richos/engine/scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
@@ -1894,7 +1894,7 @@
         "richos/engine/scripts/lib/proc_tree.py": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/lib/engine_pass.py": "21b64bc63f511249e987c026f8b409e5d191f99bb2a122fd5011e6d95b0e9bc7",
-        "richos/engine/scripts/hooks/guard-host-display-power.sh": "9bbb057cd1a26ce72583848b81535db0c4fd3e1b434f24eee10c1f838a1d14f7",
+        "richos/engine/scripts/hooks/guard-host-display-power.sh": "842c60b621850ccd41c61748fe478c37bb23a40592727e248890ffa5866be911",
         "richos/engine/scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",
         "richos/engine/scripts/lib/ceo-ruled.py": "e92586fdd79f1c648c2f764613f47a56bc7f2d843061c70053611d7f2e23ce30",
         "richos/engine/scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
