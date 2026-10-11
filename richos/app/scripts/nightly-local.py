@@ -66,10 +66,18 @@ GATE_BUDGETS = {
     # 300 s this replaces sat INSIDE the lock-wait guard and would have refused a Clippy
     # queued behind another build for two minutes before it compiled a line.
     "gates/lint-tauri": 2100,
-    # Re-derived 2026-09-25: the unit took 1291 s alone (run 20260925T201442Z-f9f0f9b9), and it ran
-    # past 1800 s twice beside the simulator suites once gates ran at once (runs 20260925T222652Z-723fee53
-    # and 20260925T225819Z-2a11fdd0). 792 s (2026-09-23) is stale; this is about 2x the contended envelope.
-    "gates/workspace-mutants": 3600,
+    # The deadline is per COMMAND: the fourteen-point unit is one command, the four workspace
+    # units' passes the second (each gets the whole deadline). Re-derived 2026-10-11, when the
+    # 3600 s below killed a passing build: in run 20261011T213131Z-6a01bbe6 the fourteen-point
+    # unit alone was still running at 3600 s of execution with nothing failed, beside a
+    # script-suites gate that took 2818 s and a UI suite that took 1985 s. Its passing runs from
+    # gate-evidence/*/gates-workspace-mutants.log rose from 1443 s and 2068 s (2026-10-07) to
+    # 2198-2620 s (2026-10-08) and 2347-2974 s (2026-10-10); the 2974 s one ran beside a
+    # 2193 s script-suites gate, the 2121 s one (2026-10-11) beside a 361 s one. The contended
+    # envelope is therefore at least 3600 s; 2x is 7200 s. The workspace half took 475-488 s.
+    # Earlier derivation (2026-09-25, 1291 s alone in run 20260925T201442Z-f9f0f9b9) is stale.
+    # A gate that passes past half its deadline says so in the run log (command()).
+    "gates/workspace-mutants": 7200,
     # Re-derived 2026-09-29, when each UI shard started holding a machine worker token of its own
     # (ui/tests/run.js): beside a mutation pool the shards now wait for tokens instead of running
     # uncounted, and the progress guarantee is ONE shard at a time on the gate's own token, i.e.
@@ -1987,11 +1995,9 @@ class Runner:
         # The other workspace suites' mutation passes, the same ruling applied to them (hunt
         # part 4 finding 19, 2026-09-30): OFF at every land, ON here with
         # RICHOS_MUTATION_PASSES=1, one unit after another, a failed pass failing the gate
-        # (MUTATION_PASS_UNITS says why app.test.sh is not among them yet). Their own budget is
-        # UNVERIFIED: the dated CI-era weights put the three units, mutation passes included,
-        # near 700 s (workspaces 580 s, workspace-probes 114 s, create-teammate-worktree 4 s;
-        # their behavioral halves took 89, 25 and 9 s here on 2026-09-30), so they get the
-        # fourteen-point pass's own 3600 s until the first nightly measures them.
+        # (MUTATION_PASS_UNITS says why app.test.sh is not among them yet). They share the
+        # fourteen-point pass's deadline, one command each; measured here the four took
+        # 475-488 s together (runs 20261010T211905Z-62031055 and 20261011T010111Z-abdbc9e8).
         def workspace_mutants():
             with self.phase(WORKSPACE_MUTANTS_GATE):
                 self.mutation_units(["mega-lander/tests/workspace-spec-fourteen.test.sh"],
