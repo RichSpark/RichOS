@@ -646,6 +646,14 @@ def split_segments(text, depth=0):
                 j = n
             subs.extend(split_segments(text[i+1:j], depth + 1))
             cur.append(" "); i = j + 1; continue
+        # A NAME WRITTEN AGAINST "(" IS A FUNCTION, NEVER A COMMAND. In shell,
+        # `shutdown() { ... }` DEFINES a function; in every other language
+        # `shutdown(&quota)` CALLS one. Neither runs the system command, so
+        # the name is dropped from the segment it ends. A "(" after a space,
+        # "$", "<" or "=" (a subshell, a substitution, an array) still splits
+        # exactly as before. Measured 2026-10-11 (corpus section 5).
+        if c == "(" and cur and (cur[-1].isalnum() or cur[-1] == "_"):
+            segs.append(re.sub(r"\S+$", "", "".join(cur))); cur = []; i += 1; continue
         if c in SEG_BREAK:
             segs.append("".join(cur)); cur = []; i += 1; continue
         cur.append(c); i += 1
@@ -1001,7 +1009,19 @@ def join_continuations(lines):
 FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 NEW_BLOCK_RE = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)")
 
-def text_findings(text, prose, base=0):
+# A COMMENT LINE IN NON-SHELL SOURCE CANNOT RUN. `strip_comments` removes a
+# shell comment; these languages comment with // and /* */ instead, and their
+# doc comments name methods in Markdown backticks, which the shell analyzer
+# reads as a command substitution. Measured 2026-10-11: a Rust test whose doc
+# comment said the app quits (`shutdown`) was refused, and the engineer wrote
+# the file through a script to get past the guard. Only these extensions: in a
+# shell script `//sbin/shutdown` is a path and still runs.
+SLASH_COMMENT_EXT = {".rs", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".swift", ".kt",
+                     ".kts", ".java", ".go", ".c", ".h", ".cc", ".cpp", ".hpp", ".m",
+                     ".mm", ".cs", ".scala", ".dart"}
+SLASH_COMMENT_RE = re.compile(r"^\s*(?://|/\*|\*)")
+
+def text_findings(text, prose, base=0, slash_comments=False):
     """Findings in a DOCUMENT: a brief, a message, a source file, a heredoc.
 
     BLOCKS. In prose a block is what one author wrote as one thought, so
@@ -1022,6 +1042,8 @@ def text_findings(text, prose, base=0):
     if not prose:
         out, seen = [], set()
         for n, line in join_continuations(text.split("\n")):
+            if slash_comments and SLASH_COMMENT_RE.match(line):
+                continue
             if NEG_RE.search(line) and not PERMIT_RE.search(line):
                 continue
             # Through candidates() rather than straight to analyze_command, so
@@ -1152,6 +1174,7 @@ if re.search(r"(?:^|/)testvm/", path):
     print("CLEAN"); sys.exit(0)
 
 PROSE_EXT = {".md", ".markdown", ".txt", ".text", ".rst", ".org", ".adoc", ".mdx"}
+ext = ""
 if tool in ("Agent", "SendMessage"):
     surface = "prose"
 elif tool == "Bash":
@@ -1171,7 +1194,8 @@ if surface == "shell":
     for body, at, prose in heredocs:
         FINDINGS.extend(text_findings(body, prose, base=at))
 else:
-    FINDINGS.extend(text_findings(blob, surface == "prose"))
+    FINDINGS.extend(text_findings(blob, surface == "prose",
+                                  slash_comments=ext in SLASH_COMMENT_EXT))
 
 if not FINDINGS:
     print("CLEAN"); sys.exit(0)

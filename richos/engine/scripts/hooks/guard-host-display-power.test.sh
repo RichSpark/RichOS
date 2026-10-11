@@ -42,7 +42,11 @@
 #       and a declared off switch all allow — the first loudly, the rest silent;
 #   (j) the self-exemption is by BASENAME and covers exactly four files;
 #   (k) the one hard refusal: a missing scripts/lib/resolve-roots.sh prints the
-#       shared BROKEN INSTALL banner and exits 2.
+#       shared BROKEN INSTALL banner and exits 2;
+#   (l) a code identifier named shutdown is not the command: the real
+#       2026-10-11 Rust doc comment, method calls, a plain call and a shell
+#       function definition pass; the command itself is still refused on a
+#       shell line, on Bash, in a JS backtick and behind a // path.
 #
 # Run directly: scripts/hooks/guard-host-display-power.test.sh
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -547,6 +551,52 @@ OUT="$(env RICHOS_ENTITY_ROOT="$ENTITY" bash "$BROKEN/scripts/hooks/guard-host-d
 set -e
 if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'BROKEN INSTALL'; then ok "K1  a missing resolve-roots.sh REFUSES with the shared banner"
 else bad "K1  a missing resolve-roots.sh REFUSES with the shared banner" "rc=$RC: ${OUT:0:200}"; fi
+
+# --- (l) a code identifier named shutdown is not the shutdown command -------
+# 2026-10-11, echo-opus-spend2: a Write of a Rust test was refused at its line 7,
+# a DOC COMMENT naming the quota service method in backticks, `(` + "`shutdown`" + `)`.
+# The backticks were read as a command substitution. The engineer then wrote the
+# file through a script to get past the guard. The opening of that Write, verbatim:
+# Read with `read -d ''` like every other fixture here, never inside a command
+# substitution: bash 3.2 parses a heredoc inside one for quotes, the apostrophes
+# below unbalance it, and the backticks then RUN. Measured while writing this case.
+read -r -d '' RUST_1011 <<'RS' || true
+
+    /// **A normal quit keeps every request** (the review of 2dd1375d7, rv-20261011T085659Z: "CLEAN
+    /// QUIT: before=$0.1889708/2 requests, reopen=$0.0944854/1"). A lease's requests are in no
+    /// transcript, so the ledger is the only place they live, and a token scan saves it at most
+    /// every 30 seconds. Two Opus 5.5 lease requests (report.md's worked example, $0.0944854 each),
+    /// a scan after each, the second within 30 seconds of the first save; then the app quits
+    /// (`shutdown`) and opens again. By hand: 2 requests, 2 x $0.0944854 = $0.1889708.
+    #[test]
+    fn a_normal_quit_keeps_the_leases_requests_the_last_scan_did_not_save() {
+        {
+            let service = Service::open(&app).unwrap();
+            service.shutdown();
+        }
+    }
+RS
+expect_silent "L1  the real 2026-10-11 Rust test, its doc comment naming shutdown in backticks, PASSES" \
+              "$(payload Write "$SB/src/quota_test.rs" "$RUST_1011")"
+expect_silent "L2  method calls and a definition named shutdown PASS" \
+              "$(payload Edit "$SB/src/quota.rs" '        state.quota.shutdown();
+    pub fn shutdown(&self) {
+        .shutdown()
+    /* `shutdown` drains the leases */
+     * `shutdown()` returns quickly')"
+expect_silent "L3  a plain function call named shutdown PASSES" \
+              "$(payload Edit "$SB/src/quota.rs" '        shutdown(&quota);')"
+expect_silent "L4  ... and so does a shell function DEFINED with that name" \
+              "$(payload Edit "$SB/scripts/a.sh" 'shutdown() { echo "stopping the runner"; }')"
+# The system command is still the system command, wherever it is written to run.
+expect_rc     "L5  the shutdown command in a shell script is still REFUSED" 2 \
+              "$(payload Edit "$SB/scripts/a.sh" 'shutdown -h now')"
+expect_rc     "L6  ... and on the Bash surface" 2 \
+              "$(payload Bash "" 'sudo shutdown -r now')"
+expect_rc     "L7  ... and a backtick command on a CODE line of non-shell source" 2 \
+              "$(payload Edit "$SB/src/a.js" 'execSync(`shutdown -h now`);')"
+expect_rc     "L8  ... and a // line in a SHELL script is a path, not a comment" 2 \
+              "$(payload Edit "$SB/scripts/a.sh" '//sbin/shutdown -h now')"
 
 # --- the mutation harness --------------------------------------------------
 # A suite that cannot fail proves nothing. The harness breaks the guard in ways

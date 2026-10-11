@@ -184,3 +184,47 @@ quote the classifier lives in and reparses the rest of the file as shell. That
 happened three times while this guard was written, and each time the file died with
 an EOF error a hundred lines from the cause. Z2 caught the fourth one immediately and
 named the line.
+
+---
+
+## 5. A code identifier named `shutdown` — 2026-10-11, one false positive
+
+`echo-opus-spend2` wrote a Rust test whose doc comment said the app quits
+`(`shutdown`)` and opens again. It was refused at that line:
+
+```
+    line 7     shutdown
+              ^ shutdown — halts or restarts this Mac
+```
+
+**Wrong.** The code surface reads the whole line as shell, and the shell analyzer
+reads Markdown backticks as a command substitution, so the method name became a
+command word. The engineer wrote the file through a script to get past the guard,
+which is the outcome this corpus exists to prevent.
+
+Driven through the guard on that day, `quota.shutdown()`, `fn shutdown(&self)` and
+`.shutdown()` already passed; what was refused was a bare identifier in command
+position:
+
+| text | before | after |
+|---|---|---|
+| the real doc comment, `` (`shutdown`) `` | refused | passes: a `//` or `/* */` line in non-shell source is not judged |
+| `` /* `shutdown` drains the leases */ `` | refused | passes, same rule |
+| `shutdown(&quota);` | refused | passes: a name written against `(` is a call or a definition |
+| `shutdown() { echo "stopping the runner"; }` in a `.sh` | refused | passes, same rule |
+| `shutdown -h now` in a `.sh`, `sudo shutdown -r now` on Bash | refused | refused |
+| `` execSync(`shutdown -h now`); `` on a JS code line | refused | refused |
+| `//sbin/shutdown -h now` in a `.sh` | refused | refused: `//` is a comment only in the listed non-shell extensions |
+
+`richos/app/crates/richos-core/src/work_host.rs` carries the same shape in three doc
+comments (lines 1460, 2366 and 6629 at `527dc5acd`), so a Write of that whole file was
+refused before this change. Suite cases L1 to L8; mutants
+`name-against-paren-is-a-command` and `slash-comments-judged`.
+
+**What writing the case cost.** The first draft of L1 read its fixture through a
+heredoc inside a command substitution. Bash 3.2 parses such a heredoc for quotes,
+the fixture's apostrophes unbalanced it, and the backticks around `shutdown` ran on
+this Mac as the command. It ran as a regular user and stopped at
+`shutdown: NOT super-user`; nothing was scheduled. The fixture is now read with
+`read -r -d ''`, the form every other fixture in the suite uses, and the suite was
+then run with `shutdown`, `reboot` and `halt` shimmed to a logger.

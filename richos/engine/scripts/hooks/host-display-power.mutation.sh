@@ -268,6 +268,20 @@ mutant no-self-exemption "J1 " "$G" \
     'guard-host-display-power-NOTHING.sh)\n        exit 0 ;;' \
     "this guard could not be authored, tested or repaired, and a guard that cannot be repaired is a guard somebody deletes."
 
+# --- 17-18. A CODE IDENTIFIER IS NOT THE COMMAND --------------------------
+# BOTH ARE A FALSE POSITIVE THIS GUARD SHIPPED: on 2026-10-11 a Rust test was
+# refused for a doc comment naming the quota service method, and the engineer
+# wrote the file through a script to get past it.
+mutant name-against-paren-is-a-command "L3 " "$G" \
+    '        if c == "(" and cur and (cur[-1].isalnum() or cur[-1] == "_"):' \
+    '        if False:' \
+    "a plain call such as shutdown(&quota) in Rust, or a shell function DEFINED as shutdown(), would read as the system command and refuse the file."
+
+mutant slash-comments-judged "L1 " "$G" \
+    '            if slash_comments and SLASH_COMMENT_RE.match(line):' \
+    '            if False:' \
+    "a Rust or Swift doc comment naming a method in Markdown backticks would read as a command substitution, and the 2026-10-11 test would be refused again."
+
 mut_pool_drain
 mut_pool_require_submissions "$(basename "$0")"
 PASS=$(( PASS + MUT_POOL_PASS ))
