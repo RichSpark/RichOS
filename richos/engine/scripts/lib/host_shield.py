@@ -22,6 +22,11 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
      stood-in command assigned to a variable (`POWER=/usr/bin/<it>` then `$POWER ...` would
      bypass PATH and the stand-in alike). An osascript by path whose script is in a file or
      on stdin is refused too: the source check cannot read that script.
+     A PYTHON OR NODE suite (`python3 <file>`, `node <file>`, a script started directly, or
+     inline `-c`/`-e` code) is read too. No shell parser can tell its data from its calls, so
+     ANY absolute path to one of these commands in it, or sudo/doas beside one, refuses it.
+     The command line itself is judged as well: a host command started by path, or a shell's
+     inline string.
   2. The suite runs with `host-shield/` FIRST ON PATH. That directory holds one stand-in per
      command the guard judges. A stand-in judges its own argv with the GUARD'S OWN judge()
      (read out of guard-host-display-power.sh, so the two cannot drift), plus the TEST-RUN
@@ -55,7 +60,9 @@ without one declares nothing and refuses the suite, naming the line.
 WHAT IT CANNOT SEE, stated rather than implied: a suite that rebuilds PATH from nothing
 (`env -i`, a PATH of only system directories) before calling one of these by bare name; a path
 held in a variable that was itself assigned from another variable; a library the suite sources
-(only the suite file is read); native code calling IOKit or private frameworks directly. The
+or imports (only the suite file is read); a path a Python or Node suite assembles at run time;
+`python3 -m <module>` (no file is named); native code calling IOKit or private frameworks
+directly. The
 stand-ins catch every bare-name call through PATH, which is how a shell, Python's subprocess,
 Node's child_process and Rust's Command all look a command up.
 
@@ -190,7 +197,7 @@ def standin_names():
 # ---------------------------------------------------------------------------------------------
 # Declarations
 # ---------------------------------------------------------------------------------------------
-DECL_RE = re.compile(r"^\s*#\s*host-shield:(.*)$")
+DECL_RE = re.compile(r"^\s*(?:#|//)\s*host-shield:(.*)$")
 DECL_FULL = re.compile(r"^\s*(names|runs)\s+([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\s+(?:--|—)\s+(\S.*\S)\s*$")
 
 
@@ -321,18 +328,73 @@ def _scan_segment(seg, G, always, depth):
     return out
 
 
-def scan_file(path):
-    """(findings, declared, errors) for one suite file. Findings exclude declared commands."""
+def _code_res():
+    names = "|".join(re.escape(n) for n in sorted(set(standin_names()) | {SCREEN_SAVER}))
+    # An absolute path in a string or an argument list: it starts at the root, right after a
+    # quote, a bracket, `=`, a comma or a space, passes through at least one directory (every
+    # host command lives in one; a bare `/open ...` is a JavaScript regular expression), and
+    # ends at one of those.
+    path = re.compile(r"(?i)(?<![^\s\"'`(=,\[])(/(?:[\w.@+-]+/)+(?:%s))(?=$|[\s\"'`),;\]])" % names)
+    sudo = re.compile(r"(?i)\b(?:sudo|doas)\b[^\n]{0,80}?\b(%s)\b" % names)
+    return path, sudo
+
+
+def scan_code(text):
+    """Findings for a Python or Node source: no shell parser can tell its data from its calls,
+    so ANY absolute path to a stood-in command, and any sudo/doas next to one, refuses it
+    (review rv-20261011T141442Z-0009fe5a-a898 #4: an absolute halt in `subprocess.run([...])` in
+    a Python suite started unchecked). A path assembled at run time is not seen."""
+    path, sudo = _code_res()
+    found = []
+    for n, line in enumerate(text.split("\n"), 1):
+        for m in path.finditer(line):
+            name = os.path.basename(m.group(1)).lower()
+            found.append((n, name, line.strip()[:110], "names %s by path in code, which bypasses PATH and the "
+                          "stand-in; call it by bare name" % m.group(1), "exec"))
+        for m in sudo.finditer(line):
+            found.append((n, m.group(1).lower(), line.strip()[:110], "runs %s under sudo or doas, which resets "
+                          "PATH past the stand-in" % m.group(1), "exec"))
+    return found
+
+
+CODE_EXT = {".py": "python", ".js": "node", ".mjs": "node", ".cjs": "node", ".ts": "node"}
+
+
+def language_of(path, text):
+    """shell, python or node: by the file's extension, else its first line."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in CODE_EXT:
+        return CODE_EXT[ext]
+    first = text.split("\n", 1)[0]
+    if first.startswith("#!"):
+        if re.search(r"\bpython[0-9.]*\b", first):
+            return "python"
+        if re.search(r"\bnode(?:js)?\b", first):
+            return "node"
+    return "shell"
+
+
+def scan_source(text, lang, declared):
+    """(findings, errors) for source text in `lang`, without the declared ones."""
+    try:
+        found = scan_text(text) if lang == "shell" else scan_code(text)
+    except GuardUnavailable as exc:
+        return [], [str(exc)]
+    return [f for f in found if not exempt(f, declared)], []
+
+
+def scan_file(path, lang=None):
+    """(findings, declared, errors) for one suite file, shell, Python or Node. Findings exclude
+    declared commands."""
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError as exc:
         return [], {}, ["cannot read %s: %s" % (path, exc)]
     declared, errors = declarations(text)
-    try:
-        found = [f for f in scan_text(text) if not exempt(f, declared)]
-    except GuardUnavailable as exc:
-        return [], declared, [str(exc)]
+    found, unavailable = scan_source(text, lang or language_of(path, text), declared)
+    if unavailable:
+        return [], declared, unavailable
     return found, declared, errors
 
 
@@ -343,14 +405,69 @@ def exempt(finding, declared):
     return kind == "runs" or (kind == "names" and finding[4] == "mention")
 
 
+PYTHON_RE = re.compile(r"^python[0-9.]*$")
+NODES = {"node", "nodejs"}
+# Interpreter options that take the next word as their value.
+PYTHON_VALUE_OPTS = {"-W", "-X", "--check-hash-based-pycs"}
+NODE_VALUE_OPTS = {"-r", "--require", "--import", "--loader", "--experimental-loader", "--conditions", "-C",
+                   "--input-type", "--title"}
+
+
 def suite_of(argv):
-    """The shell suite a check runs, when it is `bash <file> ...` (or sh/zsh), else None."""
-    if len(argv) >= 2 and os.path.basename(argv[0]) in SHELLS and not argv[1].startswith("-") \
-            and os.path.isfile(argv[1]):
-        return argv[1]
-    if argv and argv[0].endswith(".sh") and os.path.isfile(argv[0]):
-        return argv[0]
-    return None
+    """The suite file a check runs: a shell, `python3` or `node` given a file, or the file itself
+    started directly. None for any other form."""
+    return next((value for kind, value, _lang in sources_of(argv) if kind == "file"), None)
+
+
+def sources_of(argv):
+    """[(kind, value, language)] the check will run: ("file", path, lang) for a suite file,
+    ("inline", code, lang) for Python's -c or Node's -e/-p. A shell's own inline string is judged
+    with the command line itself (direct_findings). `python3 -m <module>` names no file here:
+    stated in the header."""
+    if not argv:
+        return []
+    base = os.path.basename(argv[0])
+    if base in SHELLS:
+        if len(argv) >= 2 and not argv[1].startswith("-") and os.path.isfile(argv[1]):
+            return [("file", argv[1], None)]
+        return []
+    if PYTHON_RE.match(base) or base in NODES:
+        lang = "python" if PYTHON_RE.match(base) else "node"
+        values = PYTHON_VALUE_OPTS if lang == "python" else NODE_VALUE_OPTS
+        inline = {"-c"} if lang == "python" else {"-e", "--eval", "-p", "--print"}
+        i = 1
+        while i < len(argv):
+            a = argv[i]
+            if a in inline:
+                return [("inline", argv[i + 1], lang)] if i + 1 < len(argv) else []
+            if a in ("-m", "-", "--"):
+                return []
+            if a in values:
+                i += 2
+                continue
+            if a.startswith("-"):
+                i += 1
+                continue
+            return [("file", a, lang)] if os.path.isfile(a) else []
+        return []
+    try:
+        with open(argv[0], "rb") as fh:
+            # A script started directly (a `#!` line, or a .sh file), never a binary.
+            script = fh.read(2) == b"#!" or argv[0].endswith(".sh")
+    except OSError:
+        script = False
+    return [("file", argv[0], None)] if script else []
+
+
+def direct_findings(argv):
+    """Findings for the command line itself: a host command started by path (which never
+    reaches a stand-in), or a shell's inline string."""
+    line = " ".join(shlex.quote(a) for a in argv)
+    if not _trigger_re().search(line):
+        return []
+    G = guard()
+    always = {k.lower() for k in G["ALWAYS_BAD"]}
+    return [(0,) + f for f in _scan_segment(line, G, always, 0)]
 
 
 def refusal_lines(suite, findings, errors):
@@ -407,13 +524,22 @@ def cmd_run(argv):
               "%s unshielded." % (SHIELD_DIR, " ".join(argv)), flush=True)
         return 1
     suite = suite_of(argv)
-    declared = {}
-    if suite:
-        findings, declared, errors = scan_file(suite)
-        lines = refusal_lines(suite, findings, errors)
-        if lines:
-            print("\n".join(lines), flush=True)
-            return 1
+    declared, lines = {}, []
+    for kind, value, lang in sources_of(argv):
+        if kind == "file":
+            findings, found_declared, errors = scan_file(value, lang)
+            declared.update(found_declared)
+            lines.extend(refusal_lines(value, findings, errors))
+        else:
+            findings, errors = scan_source(value, lang, {})
+            lines.extend(refusal_lines("%s (its inline code)" % argv[0], findings, errors))
+    try:
+        lines.extend(refusal_lines("the command line", direct_findings(argv), []))
+    except GuardUnavailable as exc:
+        lines.extend(refusal_lines("the command line", [], [str(exc)]))
+    if lines:
+        print("\n".join(lines), flush=True)
+        return 1
     fd, log = tempfile.mkstemp(prefix="richos-host-shield.", suffix=".log")
     os.close(fd)
     try:

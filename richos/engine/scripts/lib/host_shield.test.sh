@@ -253,6 +253,36 @@ else
     bad "H6h rc=$RC" "$(cat "$TMP/out")"
 fi
 
+# H6i — the source check reads every form a runner starts, not only a shell suite (review
+# rv-20261011T141442Z-0009fe5a-a898 #4): a Python suite, a Node suite, Python's inline code, a
+# shell's inline string, and a host command started directly by path. Each payload exits (or
+# is a recording tripwire) before its host call: on a shield that let it start, nothing reaches
+# the host.
+shielded_argv() {  # <argv...> -> output in $TMP/out, rc echoed
+    PATH="$CASE_PATH" python3 -S "$HS_TOOL" run -- "$@" > "$TMP/out" 2>&1
+    printf '%s' "$?"
+}
+printf '%s\n' 'print("PYTHON SUITE STARTED", flush=True)' 'raise SystemExit(0)' 'import subprocess' \
+    "subprocess.run([\"/sbin/$HS_CMD\", \"-h\", \"+60\"])" > "$SUITES/h6i.test.py"
+printf '%s\n' 'console.log("NODE SUITE STARTED");' 'process.exit(0);' \
+    "require(\"child_process\").execFileSync(\"/sbin/$HS_CMD\", [\"-h\", \"+60\"]);" > "$SUITES/h6i.test.js"
+h6i() {  # <label> <argv...>
+    local label="$1" rc; shift
+    trip_clean
+    rc="$(shielded_argv "$@")"
+    if [ "$rc" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out" && ! grep -q "SUITE STARTED" "$TMP/out" \
+            && [ ! -s "$TRIP/trip.log" ]; then
+        ok "H6i refused before it starts: $label"
+    else
+        bad "H6i not refused before it started: $label (rc=$rc)" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+    fi
+}
+h6i "a Python suite naming /sbin/$HS_CMD" python3 "$SUITES/h6i.test.py"
+h6i "a Node suite naming /sbin/$HS_CMD" node "$SUITES/h6i.test.js"
+h6i "python3 -c code naming /sbin/$HS_CMD" python3 -c "raise SystemExit(0); import subprocess; subprocess.run(['/sbin/$HS_CMD', '-h'])"
+h6i "a shell's inline string calling $HS_CMD by path" bash -c "exit 0; $TRIP/$HS_CMD -h +60"
+h6i "$HS_CMD started directly by path (here a recording tripwire)" "$TRIP/$HS_CMD" -h +60
+
 # H6e — the screen-saver binary has a stand-in of its own: a bare-name call is refused.
 F="$(suite h6e.test.sh "$SSE || true" "exit 0")"
 trip_clean
