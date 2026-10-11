@@ -163,7 +163,7 @@ mutant ingress-drops-pending "F30 " "$I" \
 
 # --- the launcher and the switch (e8, G12) --------------------------------------------
 mutant off-can-refuse "F20 " "$T" \
-    'if [ "$OPERATOR_FENCES_STATE" = "on" ]; then' \
+    'if [ "$OPERATOR_FENCES_STATE" = "on" ] || [ -n "$OPERATOR_FENCES_REVIEWS" ]; then' \
     'if true; then' \
     "G12: with the switch off the launcher would still run the fence, so a defect in it would reach his terminal before the switch is ever turned on."
 mutant chain-skipped-on-refusal "F14 " "$T" \

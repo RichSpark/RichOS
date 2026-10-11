@@ -137,8 +137,10 @@ SECOND_REVIEW_QUOTA_CMD, SECOND_REVIEW_CPU_BUSY, SECOND_REVIEW_TIMEOUT_SECONDS.
 """
 
 import argparse
+import contextlib
 import ctypes
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -382,7 +384,7 @@ def resolve_work(a):
         w.workspace = os.path.realpath(space.get("path") or "")
         w.branch = a.branch or str(space.get("branch") or "")
         w.author = str(rec.get("name") or a.name)
-        w.work_key = "teammate:%s" % rec.get("key")
+        w.work_key = ws.recovery_work_key(rec)
         transcript = ws.platform_agent_transcript(rec)
         if transcript:
             words, model, report = transcript_facts(transcript)
@@ -435,6 +437,8 @@ def resolve_work(a):
     if not any(t.strip() for _, t in w.words):
         raise Refused("no original words: a review needs the request the work answers (the teammate's own "
                       "transcript through --name, or --words-file); refused before any reviewer started")
+    if a.name and a.work and a.work != w.work_key:
+        raise Refused("--work differs from the host-bound recovery identity %s" % w.work_key)
     w.work_key = a.work or w.work_key or ("branch:%s:%s" % (w.repo, w.branch) if w.branch
                                           else "range:%s:%s" % (w.repo, w.base))
     return w
@@ -459,23 +463,10 @@ def earlier_findings(work_key, tip, repo, repo_id=""):
     files it twice."""
     rows = [r for r in read_ledger() if r.get("work") == work_key and r.get("verdict")
             and same_repo(r, repo, repo_id)]
-    if not rows:
-        return []
-    last = rows[-1]
-    try:
-        with open(os.path.join(state_root(), "reviews", last["id"], "verdict.json"), encoding="utf-8") as f:
-            v = json.load(f)
-    except (OSError, ValueError, KeyError):
-        return []
-    out = []
-    carried = {e.get("id"): e for e in v.get("earlier_findings_in") or []}
-    for e in (v.get("answer") or {}).get("earlier_findings") or []:
-        if e.get("status") == "still-open" and e.get("id") in carried:
-            out.append((e["id"], carried[e["id"]]))
-    filed = last.get("verdict") == "passed"
-    for i, f in enumerate((v.get("answer") or {}).get("findings") or [], 1):
-        out.append(("%s#%d" % (last["id"], i), dict(f, filed=True) if filed else f))
-    return out
+    # The gate and the next reviewer see the same unresolved findings, including
+    # conflicting duplicate reviews. Never carry only the last writer's subset.
+    import operator_fences as fences
+    return list(fences.open_review_findings(rows).items())
 
 
 # ---------------------------------------------------------------------------
@@ -1092,9 +1083,110 @@ def repo_identity(path):
     return real
 
 
+@contextlib.contextmanager
+def execution_claim(repo, tip, wait_seconds=0, say=None):
+    """Every producer uses this kernel-held claim. Keep the inode after release.
+
+    Watcher scheduling locks are not execution authority: manual reviews must
+    participate too. A crash releases flock, including a kill before output.
+    """
+    identity = hashlib.sha256((repo_identity(repo) + "\n" + tip).encode()).hexdigest()
+    path = os.path.join(state_root(), "review-claims", identity + ".lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        deadline=time.monotonic()+wait_seconds
+        announced=False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic()>=deadline:
+                    raise Refused("a review already owns this repository and source; bounded join wait expired")
+                if not announced and say:
+                    say("SECOND-REVIEW joining the existing source owner without a worker permit")
+                    announced=True
+                time.sleep(min(1,max(0,deadline-time.monotonic())))
+        yield
+    finally:
+        os.close(fd)
+
+
+def completion_receipt(row):
+    """Names existing ledger evidence. It never creates a new review timestamp."""
+    if row.get('verdict'):
+        receipt={k:row.get(k) for k in ('id','repo_id','tip','work','input_identity')}
+        receipt['purpose']='handover' if row.get('trigger') in ('handover','manual') else 'progress'
+        receipt['invocation']=os.environ.get('SECOND_REVIEW_INVOCATION')
+        receipt['recheck_of']=row.get('recheck_of') or ''
+        print('SECOND-REVIEW RECEIPT '+json.dumps(receipt,sort_keys=True),flush=True)
+
+
+def review_input_identity(w):
+    return hashlib.sha256(json.dumps({"repo": repo_identity(w.repo), "tip": w.tip,
+        "base": w.base, "work": w.work_key, "words": w.words, "claims": w.claims},
+        sort_keys=True).encode()).hexdigest()
+
+
+def actionable_recovery(repo, work):
+    import recovery
+    record = recovery.read(recovery.key(repo, work))
+    return record if record and record.get("mode")=="enforce" else None
+
+
 def review(a):
-    say = lambda s: (sys.stderr.write(s + "\n"), sys.stderr.flush())
     w = resolve_work(a)
+    import recovery
+    recovery_record = actionable_recovery(w.repo, w.work_key)
+    w.recovery_record = recovery_record
+    if recovery_record and recovery_record.get("wes"):
+        wes = recovery_record["wes"]
+        if wes["verdict"]["action"] in ("withdraw_finding", "correct_interpretation"):
+            w.claims.append(("Wes disputed-premise evidence for independent resolution",
+                "Verify these original sources independently. Resolve the exact earlier finding through the ordinary "
+                "earlier_findings result; this proposal grants no bypass. " + json.dumps(wes)))
+    if recovery_record and (recovery_record.get("plan") or {}).get("accepted"):
+        plan = recovery_record["plan"]
+        w.claims.append(("Accepted recovery acceptance matrix and independent proof requirements", json.dumps(plan)))
+        markers = {c["condition"]:"RECOVERY:"+recovery.digest(c["condition"])+":" for c in plan["matrix"]}
+        w.claims.append(("Required recovery proof reporting", "For each condition add one check string using its "
+            "exact supplied marker followed by actual source-qualified proof evidence. Missing coverage keeps recovery "
+            "unaccepted even if ordinary findings pass. Markers: "+json.dumps(markers)))
+        if a.name:
+            ws = load_workspaces(a.engine_root)
+            registered = find_teammate(ws, a.name)
+            space = teammate_workspace(registered, w.repo)
+            current = git(space.get("path") or w.repo, "rev-parse", "HEAD").strip()
+            if ws.finished_state(registered)[0] and current==w.tip:
+                recovery.handover(recovery_record["id"], registered["key"], w.tip)
+    # A join holds no CPU worker. Its bound is the existing worst-case producer budget.
+    join_seconds=getattr(a,"admission_wait",ADMISSION_WAIT_SECONDS)+2*getattr(a,"limit_minutes",LIMIT_SECONDS/60)*60
+    say=lambda message:(sys.stderr.write(message+"\n"),sys.stderr.flush())
+    with execution_claim(w.repo, w.tip, wait_seconds=join_seconds, say=say):
+        purpose = "handover" if a.trigger in ("handover", "manual") else "progress"
+        existing = [r for r in read_ledger() if r.get("tip") == w.tip and r.get("verdict")
+                    and same_repo(r, w.repo, repo_identity(w.repo))
+                    and ("handover" if r.get("trigger") in ("handover", "manual") else "progress") == purpose]
+        recheck = getattr(a, "recheck", "")
+        if recheck and not any(r.get("id") == recheck for r in existing):
+            raise Refused("--recheck must name an existing review of this repository/source/purpose")
+        reusable = [r for r in existing if r.get("recheck_of", "") == recheck]
+        if reusable:
+            row = reusable[-1]
+            if row.get("input_identity") != review_input_identity(w):
+                raise Refused("this source already has a review with different inputs; use --recheck <review id>")
+            print("SECOND-REVIEW reused %s (%s). Record: %s" %
+                  (row["id"], row["verdict"], row.get("record")))
+            completion_receipt(row)
+            return {"passed": EXIT_PASSED, "changes-requested": EXIT_CHANGES}[row["verdict"]]
+        return _review_owned(a, w)
+
+
+def _review_owned(a, w):
+    import recovery
+    recovery_record = getattr(w, "recovery_record", None)
+    say = lambda s: (sys.stderr.write(s + "\n"), sys.stderr.flush())
     repo_id = repo_identity(w.repo)
     earlier = earlier_findings(w.work_key, w.tip, w.repo, repo_id)
     started_at = time.time()
@@ -1109,6 +1201,7 @@ def review(a):
     prompt = ""
 
     row = {"id": rid, "at": iso(started_at), "repo": w.repo, "repo_id": repo_id, "branch": w.branch, "base": w.base, "tip": w.tip,
+           "input_identity": review_input_identity(w), "recheck_of": getattr(a, "recheck", ""),
            "work": w.work_key, "author": w.author, "author_model": w.author_model, "trigger": a.trigger,
            "reviewer": "", "reviewer_model": "", "reviewer_effort": "", "cli_version": "",
            "verdict": None, "forced": False, "findings": 0, "blocking": 0, "p1": 0, "follow_ups": 0,
@@ -1127,10 +1220,29 @@ def review(a):
             left = keep_fixtures(fx, os.path.join(record, "fixtures"))
             if left:
                 row["fixtures_not_kept"] = left[:50]
+        if recovery_record and recovery_record.get("plan") and answer and row.get("verdict"):
+            plan = recovery_record["plan"]
+            coverage = {}
+            for condition in plan["matrix"]:
+                marker = "RECOVERY:"+recovery.digest(condition["condition"])+":"
+                proofs = [check[len(marker):].strip() for check in answer.get("checks", []) if check.startswith(marker)]
+                if proofs and proofs[-1]:
+                    coverage[condition["condition"]] = proofs[-1]
+            row.update(recovery_plan=plan["id"], recovery_coverage=coverage)
+        if recovery_record and recovery_record.get("wes") and answer and row.get("verdict"):
+            row["wes_consultation"] = recovery_record["wes"]["consultation"]
         with open(os.path.join(record, "verdict.json"), "w", encoding="utf-8") as f:
             json.dump({"row": row, "answer": answer,
                        "earlier_findings_in": [dict(f, id=i) for i, f in earlier]}, f, indent=2, sort_keys=True)
         append_row(row)
+        if recovery_record and row.get("wes_consultation"):
+            with recovery.locked(recovery_record["id"]):
+                fresh = recovery.read(recovery_record["id"])
+                if fresh.get("wes", {}).get("consultation") == row["wes_consultation"]:
+                    fresh["wes"].update(independent_review=row["id"], applied=True)
+                    recovery.save(fresh, "wes-independent-review-consumed")
+        if recovery_record and row.get("recovery_coverage"):
+            recovery.complete(recovery_record["id"], row)
         if row["verdict"]:
             filed = (" %d follow-up(s) filed in %s." % (row["follow_ups"], follow_ups_path())
                      if row["verdict"] == "passed" else "")
@@ -1142,6 +1254,7 @@ def review(a):
             line = "SECOND-REVIEW no verdict %s@%s: %s. Record: %s" % (os.path.basename(w.repo), w.tip[:12],
                                                                       row["why"], record)
         print(line)
+        completion_receipt(row)
         sys.stdout.flush()
         return {"passed": EXIT_PASSED, "changes-requested": EXIT_CHANGES}.get(row["verdict"], EXIT_NO_VERDICT)
 
@@ -1293,6 +1406,7 @@ def main(argv):
     ap.add_argument("--author", default="", help="the author's name, when not a registered teammate")
     ap.add_argument("--author-model", default="", help="the author's model, when no transcript says it")
     ap.add_argument("--work", default="", help="the key that ties rechecks of one piece of work together")
+    ap.add_argument("--recheck", default="", help="the prior review id intentionally rechecked on the same source")
     ap.add_argument("--trigger", default="manual", choices=["handover", "long-job", "quiet", "manual"])
     ap.add_argument("--reviewer", default="auto", choices=["auto", "codex", "claude"])
     ap.add_argument("--claude", default="", help="the Claude CLI to review with (the app passes the one it ships)")

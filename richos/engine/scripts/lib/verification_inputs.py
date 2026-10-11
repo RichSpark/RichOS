@@ -465,33 +465,67 @@ class Dependencies:
         return row
 
     def closure(self, name, active=()):
+        """Finite dependency fixed point, preserving override and fixture edges.
+
+        Read each reachable node once per invocation. Keep one witnessed path
+        per originating requirement instead of enumerating every route through
+        shared readers. Nothing is cached across input observations.
+        """
+        empty = {"keys": {}, "whole": [], "presence": [], "fallback": []}
         if name in active:
-            # Recursive nested suites reach the same finite fixed point. A
-            # repeated node adds no new readers; overrides only remove values.
-            return {"keys": {}, "whole": [], "presence": [], "fallback": []}
-        result = {"keys": {}, "whole": [], "presence": [], "fallback": []}
-        try:
-            row = self.node(name)
-        except Unsupported as exc:
-            result["fallback"].append(str(exc))
-            return result
-        for key in row.get("keys", []):
-            result["keys"][key] = [name + ": " + row["evidence"]]
-        for category in ("whole", "presence", "fallback"):
-            if row.get(category):
-                result[category].append(name + ": " + row[category])
-        for edge in row.get("edges", []):
-            child = self.closure(edge["to"], (*active, name))
-            if edge.get("fixture"):
-                child.update(keys={}, whole=[], presence=[])
-            else:
-                for key in edge.get("overrides", []):
-                    child["keys"].pop(key, None)
-            for key, reasons in child["keys"].items():
-                result["keys"].setdefault(key, []).extend(name + " -> " + reason for reason in reasons)
+            return empty
+        states, parents, pending = {}, {}, [name]
+        blocked = set(active)
+        while pending:
+            current = pending.pop()
+            if current in states:
+                continue
+            states[current] = {}
+            if current in blocked:
+                continue
+            try:
+                row = self.node(current)
+            except Unsupported as exc:
+                states[current][("fallback", "", current)] = str(exc)
+                continue
+            for key in row.get("keys", []):
+                states[current][("keys", key, current)] = current + ": " + row["evidence"]
             for category in ("whole", "presence", "fallback"):
-                result[category].extend(name + " -> " + reason for reason in child[category])
-        return result
+                if row.get(category):
+                    states[current][(category, "", current)] = current + ": " + row[category]
+            for edge in row.get("edges", []):
+                target = edge["to"]
+                parents.setdefault(target, []).append((current, edge))
+                if target not in states:
+                    pending.append(target)
+        # New facts propagate to predecessors until no requirement is added.
+        # Cycles cannot invent new facts or growing strings of explanations.
+        from collections import deque
+        queue = deque(states)
+        queued = set(states)
+        while queue:
+            child = queue.popleft()
+            queued.discard(child)
+            for parent, edge in parents.get(child, []):
+                changed = False
+                for fact, reason in states[child].items():
+                    category, key, _origin = fact
+                    if edge.get("fixture") and category != "fallback":
+                        continue
+                    if category == "keys" and key in edge.get("overrides", []):
+                        continue
+                    if fact not in states[parent]:
+                        states[parent][fact] = parent + " -> " + reason
+                        changed = True
+                if changed and parent not in queued:
+                    queue.append(parent)
+                    queued.add(parent)
+        for (category, key, _origin), reason in states[name].items():
+            if category == "keys":
+                empty["keys"].setdefault(key, []).append(reason)
+            else:
+                empty[category].append(reason)
+        return empty
 
     def config_units(self, change, inventory):
         selected = {}

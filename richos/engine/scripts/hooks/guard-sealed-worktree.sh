@@ -257,7 +257,12 @@ if [ "$KIND" = "UNREGISTERED" ]; then
 fi
 
 case "$KIND" in
-  LEAD|REGISTERED)
+  LEAD)
+    if [ -n "$DETAIL" ] && [ -z "${RICHOS_APP_STATE:-}" ]; then
+        printf '%s' "$DETAIL" | python3 -c 'import json,sys; print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":sys.stdin.read()}}))'
+    fi
+    exit 0 ;;
+  REGISTERED)
     exit 0 ;;
   RECOVERY)
     # A refused lead stopping its agents: TaskStop, or the engine's own stop.sh /
@@ -279,6 +284,12 @@ case "$KIND" in
       echo "  is over, and the orchestrator lands or discards it."
       echo "$HOOK_TAG"
     } >&2
+    exit 2 ;;
+  CONTROLLED)
+    echo "=== Recovery control: REFUSED === $DETAIL" >&2
+    exit 2 ;;
+  READONLY)
+    echo "=== Read-only assignment: REFUSED === $DETAIL $HOOK_TAG" >&2
     exit 2 ;;
   CODEX)
     {

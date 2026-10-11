@@ -37,7 +37,9 @@ class DesktopHooks(unittest.TestCase):
             input=json.dumps(payload), text=True, capture_output=True, env=self.env, timeout=25)
 
     def test_stop_refuses_a_claim_of_dispatch_without_dispatch(self):
-        result = self.hook("Stop", last_assistant_message="I'm dispatching Worker now.", stop_hook_active=False)
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="Please delegate this work.").returncode, 0)
+        result = self.hook("Stop",
+            last_assistant_message="I'm dispatching Worker now.", stop_hook_active=False)
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("dispatch", result.stderr.lower())
 

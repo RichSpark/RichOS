@@ -62,7 +62,7 @@ the review's process id and its start time. A watcher's memory is not the
 guard, so a second watcher (a twin session, or the lead's own monitor beside a
 host child) is harmless. When a handover arrives while a mid-job review of the
 same tip runs, that review is stopped by its recorded process id and replaced
-by the handover review; nothing else is ever stopped. No cap on how many
+by the handover review. Qualified declared recovery may additionally stop exact affected workers through its separate control supervisor. No cap on how many
 reviews run at once: second-review admits each by the engine's CPU rule.
 
 A REVIEW THAT ENDS WITHOUT A VERDICT (crashed, refused, past its own 60-minute
@@ -84,11 +84,16 @@ WHAT IS TOLD (plan §2.4, §2.5). Each printed block wakes the lead.
   * a Codex handover it could not turn into a review, once.
 Starting a review is not told: the verdict is.
 
-It never edits, lands, merges, pauses or messages anything. The only processes
-it ever stops are reviews it (or another watcher) started and recorded: every
+It never edits, lands, merges or pauses work. Its ordinary review cleanup stops
+only reviews it (or another watcher) started and recorded: every
 process of this user that carries the review's own mark (MARK_ENV, a random
 value set at its start, which everything the review starts inherits however it
 is parented or grouped), and every process in the session the review leads.
+Declared recovery extends that contract through recovery_runner: an independent
+supervisor disables tools for the exact affected registered worker, ends only
+its birth-checked owned commands and observes native cancellation separately.
+Codex file-based handovers remain review and landing scope, not native dispatch
+or interruption coverage. Observation mode never applies recovery controls.
 
 ===========================================================================
 COMMANDS (review-watch.sh passes --engine-root and --config)
@@ -410,6 +415,10 @@ class Item(object):
     def args(self, trigger):
         """second-review's arguments for this item."""
         a = ["--repo", self.repo, "--tip", self.tip, "--base", self.base, "--trigger", trigger, "--work", self.work]
+        if getattr(self, "recheck", ""):
+            a += ["--recheck", self.recheck]
+        if getattr(self, "reconciliation_claim", ""):
+            a += ["--claims-file", self.reconciliation_claim]
         if self.source == "app":
             # A regular RichOS user: Claude reviews (plan §2.3, "RichOS is Claude", §16), on the
             # CLI the app ships, with the user's own turn as the original words beside the
@@ -517,7 +526,7 @@ class World(object):
             return [], ["the workspace registry could not be read (%s)" % exc.__class__.__name__]
         continued = set()
         for r in recs:
-            continued.update(r.get("continues") or [])
+            continued.update((r.get("recovery_assignment") or {}).get("correction_of") or r.get("continues") or [])
         items, problems, cache = [], [], {}
         th_silent = stall_watch.thresholds()["silent"]
         for rec in recs:
@@ -530,12 +539,11 @@ class World(object):
                 continue
             try:
                 fin, paused, _why = ws.finished_state(rec, cache)
-                chain = ws._chain(rec)
+                chain = ws.review_chain(rec)
             except Exception:  # noqa: BLE001
                 continue
             state = "ended" if fin else ("paused" if paused else "running")
-            root = sorted(chain, key=lambda r: str(r.get("registered_at") or ""))[0]
-            work = "teammate:%s" % root["key"]
+            work = ws.recovery_work_key(rec)
             started = None
             for k in ("started_at", "spawned_at", "registered_at"):
                 started = parse_iso(rec.get(k))
@@ -941,6 +949,11 @@ class Watcher(object):
         mark = os.urandom(16).hex()
         env = dict(os.environ, **(item.env or {}))
         env[MARK_ENV] = mark
+        # Direct app callers also use spawn without the durable start/lock path.
+        # Give those invocations a receipt identity without weakening joined-verdict checks.
+        if not getattr(item, "review_invocation", ""):
+            item.review_invocation = os.urandom(16).hex()
+        env["SECOND_REVIEW_INVOCATION"] = item.review_invocation
         # PARTLY REGISTERED (second review of f14155545, finding 2): a review leads its own
         # session, so a quit that lands inside Popen (its fork done, Popen not yet returned) would
         # lose the only handle on it. The quit is held until the child is in self.children, then
@@ -1120,6 +1133,33 @@ class Watcher(object):
             json.dump(info, f)
         os.replace(tmp, path)
 
+    @staticmethod
+    def joined_verdict(info, rows):
+        """Accept an older reused verdict only through the child's exact host receipt."""
+        try:
+            with open(info.get('log') or '', 'rb') as source:
+                source.seek(0,os.SEEK_END)
+                size=source.tell();source.seek(max(0,size-65536))
+                lines=source.read().decode('utf-8',errors='replace').splitlines()
+            prefix='SECOND-REVIEW RECEIPT '
+            line=next((line for line in reversed(lines) if line.startswith(prefix)),None)
+            receipt=json.loads(line[len(prefix):]) if line else None
+        except (OSError,ValueError,TypeError):
+            return None
+        if not isinstance(receipt,dict) or not info.get('review_invocation') or receipt.get('invocation')!=info['review_invocation']:return None
+        if (receipt.get('recheck_of') or '')!=(info.get('recheck_of') or ''):return None
+        purpose='handover' if info.get('trigger') in ('handover','manual') else 'progress'
+        for row in rows:
+            if (row.get('verdict') and row.get('input_identity')
+                and all(receipt.get(k)==row.get(k) for k in ('id','repo_id','tip','work','input_identity'))
+                and receipt.get('tip')==info.get('tip') and receipt.get('work')==info.get('work')
+                and F.review_row_belongs(row,F.review_repo_identity(info.get('repo')))
+                and (receipt.get('recheck_of') or '')==(row.get('recheck_of') or '')
+                and receipt.get('purpose')==purpose
+                and ('handover' if row.get('trigger') in ('handover','manual') else 'progress')==purpose):
+                return row
+        return None
+
     def settle(self, path, info, now, rows, outcome=None, why=""):
         """The lock's review has ended: one attempt row, then the lock goes.
         Renamed first, so of two watchers exactly one settles it."""
@@ -1131,9 +1171,10 @@ class Watcher(object):
         if outcome is None:
             started = float(info.get("started_at") or 0)
             mine = [r for r in rows if os.path.realpath(r.get("repo") or "") == info.get("repo")
-                    and r.get("tip") == info.get("tip") and (parse_iso(r.get("at")) or 0) >= started - 5]
+                    and r.get("tip") == info.get("tip") and r.get("id") not in info.get("prior_reviews", [])
+                    and (parse_iso(r.get("at")) or 0) >= started - 5]
             got = [r for r in mine if r.get("verdict")]
-            if got:
+            if got or self.joined_verdict(info,rows):
                 outcome = "verdict"
             else:
                 outcome = "lost"
@@ -1207,7 +1248,12 @@ class Watcher(object):
             return None
         path, info = got
         os.makedirs(_p("logs"), exist_ok=True)
-        info["log"] = _p("logs", "%s-%s-%d.log" % (repo_tag(item.repo), item.tip[:12], attempt))
+        info["review_invocation"] = os.urandom(16).hex()
+        item.review_invocation = info["review_invocation"]
+        info["recheck_of"] = getattr(item,"recheck","")
+        ident = F.review_repo_identity(item.repo)
+        info["prior_reviews"] = [r.get("id") for r in rows if r.get("tip")==item.tip and F.review_row_belongs(r,ident)]
+        info["log"] = _p("logs", "%s-%s-%d-%s.log" % (repo_tag(item.repo), item.tip[:12], attempt,info["review_invocation"]))
         self._starting = (path, info)               # stop_own's handle until the pid is in the lock
         try:
             pid, pstart = self.spawn(item, trigger, info["log"])
@@ -1305,8 +1351,36 @@ class Watcher(object):
         citems, cproblems = self.world.codex_items(now, codex_state)
         items += citems
         problems += cproblems
+        import recovery_runner
+        entity = os.path.dirname(self.config) if self.config else os.environ.get("RICHOS_ENTITY_ROOT", "")
+        recovery_requests = recovery_runner.tick(items, self.engine_root, entity,
+                            getattr(self.world, "ws", None)) if entity else []
         attempts = read_jsonl(_p("attempts.jsonl"))
         book = Book(rows, running, attempts)
+        import recovery
+        conflicting={}
+        for row in rows:
+            key=(row.get('work'),row.get('tip'))
+            conflicting.setdefault(key,set()).add(row.get('verdict'))
+        for item in items:
+            if item.state!='ended' or not {'passed','changes-requested'}.issubset(conflicting.get((item.work,item.tip),set())):continue
+            saved={k:os.environ.get(k) for k in (item.env or {})}
+            os.environ.update(item.env or {})
+            try:
+                task=recovery.conflict_task(item.repo,item.work,item.tip)
+                if task:
+                    item.reconciliation_claim=str(recovery.root()/'reconciliations'/(task['id']+'.json'))
+                    recovery_requests=list(recovery_requests or [])+[(item,task['prior'])]
+            finally:
+                for k,v in saved.items():
+                    if v is None:os.environ.pop(k,None)
+                    else:os.environ[k]=v
+        for item, prior in recovery_requests or []:
+            if item.key not in book.running and len(book.losses.get(item.key) or [])<MAX_LOSSES:
+                item.recheck = prior
+                info = self.start(item, "handover", now, 1, None, rows)
+                if info:
+                    book.running[item.key] = info
         handover = not isinstance(self.world, AppWorld)
         for it, trigger, supersede in due(items, book, now, seen, LONG_JOB_MINUTES * 60, handover):
             n = len(book.losses.get(it.key) or []) + 1
@@ -1549,6 +1623,14 @@ def deliver(keys, now):
     for k in keys:
         delivered.setdefault(k, now)
     shared["delivered"] = delivered
+    for key in keys:
+        notice = (shared.get("recovery_refs") or {}).get(key)
+        if notice:
+            try:
+                import recovery
+                recovery.owner_delivered(notice["record"], key, notice["session"])
+            except (OSError, ValueError) as error:
+                sys.stderr.write("review-watch: recovery delivery audit unavailable: %s\n" % error)
     stall_watch._write_json(path, shared)
 
 
@@ -1641,7 +1723,14 @@ def tell(now, sstate, rows, book, items, problems, attempts):
     lost_twice = dict(("lost:%s:%s" % key, key) for key, lost in book.losses.items() if len(lost) >= MAX_LOSSES)
     ids = set(_row_key(r) for r in rows if r.get("verdict")) | set(lost_twice)
     shared["delivered"] = dict((k, t) for k, t in delivered.items() if k in ids or (
-        k.startswith("nc:") and now - float(t or 0) <= KEEP_SECONDS))
+        (k.startswith("nc:") or k.startswith("recovery:")) and now - float(t or 0) <= KEEP_SECONDS))
+    stall_watch._write_json(_p("last-told.json"), shared)
+    import recovery_runner
+    for notice in recovery_runner.NOTICES:
+        shared.setdefault("recovery_refs", {})[notice["key"]] = dict(record=notice["record"], session=notice["session"])
+        k, session = notice["key"], notice["session"]
+        if k not in delivered and ours(session):
+            add(notice["lines"], session=session, key=k)
     stall_watch._write_json(_p("last-told.json"), shared)
     verdict_blocks = len(body)
     # -- an unhandled changes-requested handover, again every 30 minutes ------------
@@ -1695,8 +1784,9 @@ def tell(now, sstate, rows, book, items, problems, attempts):
     else:
         shown, lines = [n for n, s in enumerate(owners) if for_this_monitor(s)], []
     if shown and not HOST_JSON["on"]:
-        lines = ["REVIEW-WATCH %s: %d second-review notice%s (it only starts reviews and reports: nothing was "
-                 "paused, stopped or killed)" % (hhmm(now), len(shown), "" if len(shown) == 1 else "s")]
+        recovery_on = bool(recovery_runner.NOTICES)
+        contract = "declared recovery control may stop exact affected workers" if recovery_on else "it only starts reviews and reports: nothing was paused, stopped or killed"
+        lines = ["REVIEW-WATCH %s: %d second-review notice%s (%s)" % (hhmm(now), len(shown), "" if len(shown)==1 else "s", contract)]
         used = len(lines[0])
         for i, n in enumerate(shown):
             cost = sum(len(x) + 1 for x in body[n])
