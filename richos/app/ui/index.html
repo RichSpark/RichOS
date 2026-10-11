@@ -477,11 +477,6 @@
                one for the other. Empty unless techy mode is on AND there is nothing. -->
           <div id="techy-state" hidden></div>
           <div id="messages"></div>
-          <!-- BUST A BUG (round 21): the exchange with Rich, in the conversation it was started in,
-               after whatever the conversation shows. A sibling of #messages rather than a child,
-               so a redraw of the timeline never takes the report card away mid-change. Drawn by
-               bug-report.js; empty until Bust a bug is pressed. -->
-          <div id="bug-flows"></div>
           <!-- BETWEEN TURNS (techy-mode design §1.5). What the session said while NO turn
                was in flight: its start-up traffic, and whatever arrived after a turn's
                answer had already been returned. It is a SEPARATE section because those
@@ -900,7 +895,14 @@
       <!-- SEARCH (§3.4): a command-palette overlay, never a replacement for the sidebar.
            Results group by entity; matching happens in Rust so no thread body is loaded
            into the renderer. -->
-      <div id="search-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-label="Search">
+      <!-- NOT `aria-modal`, here and on the company picker, Corrections and Feedback (nightly 48's
+           walk, D24): each is dismissed from outside itself, and Settings (z-index 300) sits above
+           it and works there by design. With the claim, WebKit left everything outside the dialog
+           out of the accessibility tree while focus was inside it, so the Settings button could
+           not be found or pressed that way. Only the two first-run questions claim it (review
+           rv-20261010T081721Z-66ba5386-a4d1 finding 2, the whole class); see `QUESTION_SELECTOR`
+           in main.js for why they own the window. -->
+      <div id="search-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-label="Search">
         <div class="overlay-panel">
           <input
             id="search-input"
@@ -920,7 +922,7 @@
 
       <!-- ENTITY PICKER (§3.3): the global New thread flow asks which entity BEFORE the
            first message. Never defaults to the last entity (§21). -->
-      <div id="entity-picker" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-labelledby="entity-picker-title">
+      <div id="entity-picker" class="overlay" data-dismiss="escape" hidden role="dialog" aria-labelledby="entity-picker-title">
         <div class="overlay-panel overlay-panel--compact">
           <p id="entity-picker-title" class="overlay-title">Which company is this work in?</p>
           <!-- THE BOOT CASE'S SECOND LINE, and the reason it is separate from the title.
@@ -1129,7 +1131,7 @@
            single empty list spanning both would say "nothing to correct" on a machine where
            one desk simply is not there — the exact distinction loro itself draws between
            "nothing recorded bears on this" and a fabricated answer. -->
-      <div id="corrections-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-labelledby="corrections-title">
+      <div id="corrections-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-labelledby="corrections-title">
         <div class="overlay-panel overlay-panel--desk">
           <header class="desk-head">
             <p id="corrections-title" class="overlay-title">Corrections</p>
@@ -1196,7 +1198,7 @@
            surface's code rather than trusting this comment.
 
            NO PAGINATION. One scrolling column, however long the history gets. -->
-      <div id="feedback-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-labelledby="feedback-title">
+      <div id="feedback-overlay" class="overlay" data-dismiss="escape" hidden role="dialog" aria-labelledby="feedback-title">
         <div class="overlay-panel overlay-panel--desk">
           <header class="desk-head">
             <p id="feedback-title" class="overlay-title">Feedback</p>
@@ -1311,8 +1313,12 @@
            `data-dismiss="escape"` per the CEO's 2026-09-17 rule that Escape closes every
            popup; the closer is registered in `main.js`'s POPUP_CLOSERS and cancels, which
            for this sheet means the switch that opened it is repainted from the store rather
-           than left showing a choice nothing took. -->
-      <div id="techy-scope" class="overlay" data-dismiss="escape" hidden role="dialog" aria-modal="true" aria-labelledby="techy-scope-title">
+           than left showing a choice nothing took.
+
+           NOT aria-modal, like Corrections, Feedback, Search and the company picker (nightly
+           48's walk, D24; second review of 9463220ef, finding 2): Settings sits above it and
+           stays in the accessibility tree while focus is on its choices. -->
+      <div id="techy-scope" class="overlay" data-dismiss="escape" hidden role="dialog" aria-labelledby="techy-scope-title">
         <div class="overlay-panel overlay-panel--compact">
           <p id="techy-scope-title" class="techy-scope-title">Turn on the technical view</p>
           <div id="techy-scope-options" class="techy-scope-options" role="radiogroup" aria-labelledby="techy-scope-title">

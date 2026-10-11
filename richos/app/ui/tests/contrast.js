@@ -1318,8 +1318,8 @@ const SURFACES = [
       // (z-index 60) over a `.popover` (20), so the sheet is what gets measured and the
       // popover's own nodes are filed as obscured, exactly as check 11 requires.
       //
-      // `hiring` AND NOT `acme`, and the reason is check 11 rather than taste. This is an
-      // `aria-modal` sheet, so everything behind it is filed `obscured` — and check 11
+      // `hiring` AND NOT `acme`, and the reason is check 11 rather than taste. This is a
+      // `role="dialog"` sheet, so everything behind it is filed `obscured` — and check 11
       // refuses a node that is obscured on every surface reaching it and measured on none.
       // The first draft opened `acme`, whose conversation NO other driver in this file
       // opens (every conversation walk here uses `hiring`, `legacy` or `partner`), so seven

@@ -40,7 +40,6 @@
   sheet.className = "overlay";
   sheet.hidden = true;
   sheet.setAttribute("role", "dialog");
-  sheet.setAttribute("aria-modal", "true");
   sheet.setAttribute("aria-labelledby", "phone-title");
   sheet.setAttribute("data-dismiss", "control:#phone-close");
   sheet.innerHTML = `<div class="overlay-panel">

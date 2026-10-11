@@ -1240,6 +1240,72 @@ fn assert_sent_as_shown(card: &Sheet, public: &Public) {
     assert_eq!((request["title"].as_str(), request["body"].as_str()), (Some(card.title.as_str()), Some(issue_body(card).as_str())));
 }
 
+/// **A LINE THAT STARTS WITH A MARKDOWN BLOCK MARKER GOES TO GITHUB AS THE LINE THE CARD SHOWED**
+/// (review rv-20261010T194410Z-796ff877-381f): on 796ff877d the paragraph "- The button does
+/// nothing." went out as a bullet and "---" as a divider. The marker that starts a line is
+/// escaped, and the words the last scrub reads in the body are the user's words with no
+/// backslash left in them (an email address that starts a numbered-looking line is still found
+/// whole and left out whole).
+#[test]
+fn a_line_starting_with_a_block_marker_is_sent_as_plain_text() {
+    let body = |paragraphs: &[&str], steps: &[&str]| {
+        issue_body(&Sheet {
+            title: "t".into(),
+            sections: vec![SheetSection {
+                heading: "What happened".into(),
+                paragraphs: paragraphs.iter().map(|p| p.to_string()).collect(),
+                steps: steps.iter().map(|s| s.to_string()).collect(),
+            }],
+        })
+    };
+    assert_eq!(body(&["- The button does nothing.", "---"], &[]), "### What happened\n\n\\- The button does nothing.\n\n\\---\n");
+    let expected = [
+        "### What happened",
+        "",
+        "\\+ one",
+        "",
+        "\\* two",
+        "",
+        "\\*\\*\\*",
+        "",
+        "\\_\\_\\_",
+        "",
+        "\\# three",
+        "",
+        "\\> four",
+        "",
+        "1\\. five",
+        "",
+        "2\\) six",
+        "",
+        "Fine",
+        "\\- seven",
+        "12\\. eight",
+        "\\===",
+        "",
+        "1. \\- a step",
+        "2. 3\\. another",
+        "",
+    ];
+    assert_eq!(
+        body(&["+ one", "* two", "***", "___", "# three", "> four", "1. five", "2) six", "Fine\n- seven\n  12. eight\n==="], &["- a step", "3. another"]),
+        expected.join("\n")
+    );
+    // Not at the start of a line, the same characters are words and stay as they are.
+    assert_eq!(body(&["It costs 3.5 - 1 + 2 = 4.5)"], &[]), "### What happened\n\nIt costs 3.5 - 1 + 2 = 4.5)\n");
+    // The last scrub reads the words GitHub shows: no stray backslash, so a body written out from
+    // its card is left as it is, and an address after an escaped number is left out whole.
+    let plain = body(&["- The button does nothing.", "---", "1. five"], &["2) six"]);
+    assert_eq!(Scrubber::default().scrub_markdown(&plain), plain);
+    assert_eq!(Scrubber::default().scrub_markdown(&body(&["1.jane@example.com wrote it."], &[])), "### What happened\n\n\\[an email address\\] wrote it.\n");
+    // Review rv-20261010T204141Z-53407e2a-dc94: a line indented four or more spaces (pasted during
+    // Change it) was a GitHub code block, where the added backslashes show. Indentation means
+    // nothing in a bug report, so no line keeps it: none starts a code block, and the escape is
+    // on the line's real first character.
+    assert_eq!(body(&[], &["Click Save.\n\n        - No response\n        ---"]), "### What happened\n\n1. Click Save.\n\n\\- No response\n\\---\n");
+    assert_eq!(body(&["\t\t1. five\n    plain words"], &[]), "### What happened\n\n1\\. five\nplain words\n");
+}
+
 /// **WHAT GOES, AND THE CARD THE USER LAST SAW WHEN IT WENT**: Send pressed on `card` under
 /// `check`, with `rich` as Rich's last pass, and pressed once more on the card shown again if it
 /// is shown again, as the window does. A card shown again is Rich's version, so the second press
@@ -1799,4 +1865,131 @@ fn a_last_pass_with_a_malformed_section_is_not_a_report_and_waits_on_this_mac() 
     let done = checked(Ok(answer), &screen(), false, VERSION, &Scrubber::default(), |_| Ok(good.clone())).unwrap();
     assert_eq!(sheet_of(&done.draft), card);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---- nightly 48's walk, D23 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+
+#[test]
+fn every_stand_in_on_the_card_is_marked_and_counted_whatever_rich_listed_beside_it() {
+    // D23: Rich wrote the stand-ins himself and listed nothing private beside them (what his
+    // prompt asks for: what is still in his words, and nothing was). On d0d06501c none of the four
+    // was marked, and the line under the card said "Nothing private was in it, so nothing was left
+    // out." under all four. The line and the marks follow the words, not the list.
+    let written = serde_json::json!({
+        "title": "Sidebar names are cut off when the text size is made bigger",
+        "what_happened": "In [a conversation], the user made the text bigger and the names in the sidebar got cut off. \
+                          They say [a person] at [a company] sees the same thing. They also say their notes in \
+                          [a file on this Mac] now look empty.",
+        "where": "The sidebar on the left.",
+        "steps": [],
+        "expected": "",
+        "checked": "",
+        "private": []
+    })
+    .to_string();
+    let draft = checked(Ok(written), &screen(), false, VERSION, &Scrubber::new(terms()), rich_keeps).unwrap().draft;
+    let mut all: Vec<Segment> = draft.title.clone();
+    for section in &draft.sections {
+        all.extend(section.paragraphs.iter().chain(&section.steps).flatten().cloned());
+    }
+    let marked: Vec<(&str, Option<Kind>)> = all.iter().filter(|s| s.kind.is_some()).map(|s| (s.text.as_str(), s.kind)).collect();
+    assert_eq!(
+        marked,
+        [
+            ("[a conversation]", Some(Kind::ConversationName)),
+            ("[a person]", Some(Kind::PersonName)),
+            ("[a company]", Some(Kind::CompanyName)),
+            ("[a file on this Mac]", Some(Kind::FilePath)),
+        ],
+        "a stand-in on the card is not marked"
+    );
+    // Nothing accounts for what they replaced, so none claims to know.
+    assert!(all.iter().all(|s| s.was.is_none()), "{all:?}");
+    assert_eq!(
+        left_out_line(&all),
+        "Left out, because anyone can read GitHub issues: one conversation name, one person's name, one company name \
+         and one file path. The underlined words stand in for them; point at one to see what it replaced."
+    );
+    // The words are Rich's, to the character.
+    assert!(draft_words(&draft).contains("They say [a person] at [a company] sees the same thing."));
+}
+
+// ---- the review of f29db7082 (rv-20261010T180313Z-f29db708-733e), finding 1, fixture `change-standins.rs` ----
+
+#[test]
+fn stand_ins_in_a_change_are_marked_and_counted_as_in_the_first_draft() {
+    // On f29db7082 `scrub_change` left the stand-ins Rich wrote in a change as plain words, so the
+    // card said "Nothing private was in it, so nothing was left out." under "[a person] could not
+    // open [a file on this Mac] either." A name the scanner leaves out beside them keeps what it
+    // replaced; his own say their kind alone, as in the first draft.
+    let change = change_naming("[a person] could not open [a file on this Mac] either, and Jane Doe saw it.", "[]");
+    let report = vec![PrivateTerm::new("Jane Doe", Kind::PersonName)];
+    let (add, _) = scrub_change(&change, &[], &report);
+    assert_eq!(joined(&add), "[a person] could not open [a file on this Mac] either, and [a person] saw it.");
+    let marked: Vec<(&str, Option<Kind>, Option<&str>)> =
+        add.iter().filter(|s| s.is_stand_in()).map(|s| (s.text.as_str(), s.kind, s.was.as_deref())).collect();
+    assert_eq!(
+        marked,
+        [
+            ("[a person]", Some(Kind::PersonName), None),
+            ("[a file on this Mac]", Some(Kind::FilePath), None),
+            ("[a person]", Some(Kind::PersonName), Some("Jane Doe")),
+        ],
+        "a stand-in in the change is not marked: {add:?}"
+    );
+    assert_eq!(
+        left_out_line(&add),
+        "Left out, because anyone can read GitHub issues: two people's names and one file path. The underlined words \
+         stand in for them; point at one to see what it replaced."
+    );
+    // The review's own words, alone: both marked, none plain.
+    let (add, _) = scrub_change(&change_naming("[a person] could not open [a file on this Mac] either.", "[]"), &[], &[]);
+    assert_eq!(add.iter().filter(|s| s.is_stand_in()).count(), 2, "{add:?}");
+    assert_eq!(joined(&add), "[a person] could not open [a file on this Mac] either.");
+}
+
+// ---- the review of 9463220ef (rv-20261010T072702Z-9463220e-543f), fixture `mixed-stand-in-receipts.py` ----
+
+/// What each stand-in on `draft`'s card says it replaced, in the order they are met.
+fn receipts(draft: &Draft) -> Vec<Option<String>> {
+    let mut all: Vec<&Segment> = draft.title.iter().collect();
+    for section in &draft.sections {
+        all.extend(section.paragraphs.iter().chain(&section.steps).flatten());
+    }
+    all.into_iter().filter(|s| s.is_stand_in()).map(|s| s.was.clone()).collect()
+}
+
+#[test]
+fn a_stand_in_names_only_the_words_it_replaced_where_it_stands() {
+    // Finding 1: a report already carries a [a person] Rich wrote for Bob, and the user adds "Alex
+    // saw it too" with Change it, Alex being a name RichOS holds. On 9463220ef the scanner's receipt
+    // for Alex went to the first [a person] of the report, so Bob's stand-in said it replaced Alex
+    // and Alex's said nothing. A stand-in is tied to what it replaced by its place, or claims nothing.
+    let alex = [PrivateTerm::new("Alex", Kind::PersonName)];
+    let edit = |said: &str| Edited {
+        sheet: Sheet {
+            title: "Window froze".into(),
+            sections: vec![SheetSection { heading: "What happened".into(), paragraphs: vec![said.into()], steps: vec![] }],
+        },
+        private: vec![],
+    };
+
+    // The review's fixture: the earlier stand-in claims nothing; Alex's names Alex.
+    let done = checked_edit(&edit("[a person] saw it. Alex saw it too."), &alex, rich_keeps).unwrap();
+    assert_eq!(draft_words(&done.draft), "Window froze\n[a person] saw it. [a person] saw it too.", "the words changed");
+    assert_eq!(receipts(&done.draft), [None, Some("Alex".to_string())], "a stand-in names words it did not replace");
+
+    // Rich cleans up a name written before the scanner's: each names its own.
+    let done = checked_edit(&edit("Carol saw it. Alex saw it too."), &alex, rich_replaces("Carol", "person", "[a person]")).unwrap();
+    assert_eq!(receipts(&done.draft), [Some("Carol".to_string()), Some("Alex".to_string())]);
+
+    // Rich writes a stand-in he lists nothing for beside the scanner's: which one is Alex's cannot
+    // be told, so neither claims to know.
+    let rich_hides_bob = |prompt: &str| {
+        let mut report: serde_json::Value = serde_json::from_str(&report_in(prompt).to_string().replace("Bob", "[a person]")).unwrap();
+        report["private"] = serde_json::json!([]);
+        Ok(report.to_string())
+    };
+    let done = checked_edit(&edit("Bob saw it. Alex saw it too."), &alex, rich_hides_bob).unwrap();
+    assert_eq!(receipts(&done.draft), [None, None]);
 }
