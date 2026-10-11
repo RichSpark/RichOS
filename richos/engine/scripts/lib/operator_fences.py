@@ -1373,7 +1373,7 @@ def route_refused_review(ledger, tips, repo):
                 recovery.route_request(repo, work, tip, findings, "refused-landing", ledger)
 
 
-def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None):
+def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None, enforce_lease=True):
     """[(line, why, detail)] of refused updates, [] when everything passes.
 
     `lines` are (old, new, ref). Almost every refusal is a missing lease, and
@@ -1426,7 +1426,7 @@ def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None):
                           (not new.startswith("ref:") and not is_zero(new))
             if leaves_main and writer_argv()[:2] != ["worktree", "add"]:
                 need, why = True, "switching the main checkout away from main"
-        if need and not lease_held():
+        if need and enforce_lease and not lease_held():
             refused.append(((old, new, ref), why, None))
         elif need and ref == MAIN and main_worktree and not is_zero(new):
             detail = _holder_refusal(files, gitdir, lease, new)
@@ -1495,14 +1495,14 @@ def fence_refusal_text(conf, files, refused, lease, repo, rewrote=None):
         others = [r for r in refused if r[1] != REVIEW_WHY]
         tail = ["  Also: " + fence_refusal_text(conf, files, others, lease, repo, rewrote)] if others else []
         return "\n".join(reviews[:1] + tail + [
-            "  If this refusal is a defect in the fence itself, Rich turns it off with one",
-            "  command: %s/scripts/operator-fences.sh off" % engine])
+            "  Review and recovery acceptance stays active while lease fencing is off.",
+            "  Route the exact blocking finding with scripts/recovery.sh dispute for an independent applicability check."])
     held_over = [detail for _l, _w, detail in refused if detail]
     if held_over:
         return "\n".join(["=== OPERATOR FENCE: refused in %s, even for the lease holder ===" % repo]
                          + ["  " + d for d in held_over]
                          + ["  If this refusal is a defect in the fence itself, Rich turns it off with one",
-                            "  command: %s/scripts/operator-fences.sh off" % engine])
+                            "  command: %s/scripts/operator-fences.sh off --repo %s --reason '<verified operator reason>'" % (engine, shlex.quote(repo))])
     state = lease_state(lease)
     if state == "none":
         held = "The land lease for this repository is free."
@@ -1531,7 +1531,7 @@ def fence_refusal_text(conf, files, refused, lease, repo, rewrote=None):
         "  Abort a merge only if you started it.",
         "  Never get around this with `git -c core.hooksPath=...` or a direct ref write.",
         "  If this refusal is a defect in the fence itself, Rich turns it off with one",
-        "  command: %s/scripts/operator-fences.sh off" % engine,
+        "  command: %s/scripts/operator-fences.sh off --repo %s --reason '<verified operator reason>'" % (engine, shlex.quote(repo)),
     ])
 
 
@@ -1542,7 +1542,7 @@ def cmd_fence(argv):
         return 2
     conf = read_launcher(argv[0])
     phase = argv[1]
-    if not fenced(conf):
+    if not conf or (not fenced(conf) and not conf.get("REVIEWS")):
         return 0
     files = Files(conf)
     lines = []
@@ -1555,7 +1555,7 @@ def cmd_fence(argv):
     gitdir = os.path.realpath(out.strip()) if rc == 0 and out.strip() else common
     chain = ancestors()
     if phase == "prepared":
-        refused = fence_decide(lines, common, gitdir, files, chain)
+        refused = fence_decide(lines, common, gitdir, files, chain, enforce_lease=fenced(conf))
         if not refused:
             return 0
         lease = read_lease(files)
@@ -1577,6 +1577,11 @@ def cmd_fence(argv):
                 rec["residue_paths"] = index_residue(os.getcwd())
                 rec["residue"] = bool(rec["residue_paths"])
             append_jsonl(files.refusals, rec)
+        if any(why==REVIEW_WHY for _line,why,_detail in refused):
+            try:
+                route_refused_review(files.reviews, [line[1] for line,why,_detail in refused if why==REVIEW_WHY], repo)
+            except (OSError, ValueError):
+                pass  # Refusal is still real; routing availability is reported by the watcher.
         sys.stderr.write(fence_refusal_text(conf, files, refused, lease, repo, rewrote) + "\n")
         return 1
     if phase == "committed" and os.path.realpath(gitdir) == os.path.realpath(common):

@@ -4145,6 +4145,36 @@ ENGINE = os.path.realpath(os.path.join(HERE, "..", ".."))
 
 class SecondReview_NoWorkLandsUnreviewed(Base):
 
+    def test_off_requires_a_reason_and_audits_native_authority(self):
+        before=open(os.path.join(self.other,'.git/hooks/reference-transaction')).read()
+        refused=run('bash',self.fences,'off','--repo',self.other,check=False)
+        self.assertNotEqual(refused.returncode,0)
+        self.assertIn('--reason',refused.stdout)
+        self.assertEqual(open(os.path.join(self.other,'.git/hooks/reference-transaction')).read(),before)
+        forged=run('bash',self.fences,'off','--repo',self.other,'--reason','Forged claim','--holder','unverified','--holder-pid','99999999',check=False)
+        self.assertNotEqual(forged.returncode,0)
+        self.assertEqual(open(os.path.join(self.other,'.git/hooks/reference-transaction')).read(),before)
+        run('bash',self.fences,'off','--repo',self.other,'--reason','Investigate the lease mechanism')
+        F=ws._fence_program()
+        with open(os.path.join(F._default_home(),'operator-fence-settings.jsonl')) as audit:
+            rows=[json.loads(line) for line in audit if line.strip()]
+        self.assertEqual(rows[-1]['reason'],'Investigate the lease mechanism')
+        self.assertEqual(rows[-1]['value'],'off')
+        self.assertIn('actor',rows[-1])
+        self.assertIn('authority',rows[-1])
+
+    def test_off_retains_direct_git_review_acceptance(self):
+        _cc,(tip,)=self.finished('zach-opus-off-review')
+        run('bash',self.fences,'off','--repo',self.other,'--reason','Investigate the lease mechanism')
+        before=self.head()
+        result=run('git','-C',self.other,'merge','--ff-only','cc/zach-opus-off-review',check=False)
+        self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('SECOND REVIEW',result.stderr)
+        self.assertEqual(self.head(),before)
+        self.verdict(tip,'passed')
+        run('git','-C',self.other,'merge','--ff-only','cc/zach-opus-off-review')
+        self.assertEqual(self.head(),tip)
+
     def test_conflicting_reviews_cannot_be_erased_by_a_later_pass(self):
         F = ws._fence_program()
         tip = run('git', '-C', self.other, 'rev-parse', 'HEAD').stdout.strip()
@@ -4609,9 +4639,10 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         """Review rv-20261009T025426Z-15dae5ca-3cc1, finding 2: `workspaces.sh
         merge` checked the branch tip, then had Git merge the branch NAME, so a
         commit added to the branch after the check (even while the merge gate
-        ran) landed unreviewed. Shown with the fence off, as in the review's
-        fixture, so the land command's own check is the only one."""
-        run("bash", self.fences, "off", "--repo", self.other, "--entity", self.decl)
+        ran) landed unreviewed. Lease fencing is off here; review acceptance
+        remains active in both the land command and direct Git backstop."""
+        run("bash", self.fences, "off", "--repo", self.other, "--entity", self.decl,
+            "--reason", "exercise exact reviewed-tip land with lease fencing off")
         cc, (reviewed,) = self.finished("zach-opus-rv9")
         self.verdict(reviewed, "passed")
         checked = ws._review_check
