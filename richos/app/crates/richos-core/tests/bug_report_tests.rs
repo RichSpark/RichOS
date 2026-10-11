@@ -300,6 +300,11 @@ impl Transport for FakeGitHub {
         ));
         self.answers.borrow_mut().remove(0)
     }
+    fn graphql(&self, _: &Credential, request: &serde_json::Value) -> Reply {
+        // GraphQL is how a feature idea is posted (`feature_request_tests.rs`); a bug report is an
+        // issue, and never goes there.
+        panic!("a bug report made a GraphQL request: {request}")
+    }
 }
 
 struct Token(Option<&'static str>);

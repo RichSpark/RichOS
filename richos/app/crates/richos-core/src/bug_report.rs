@@ -88,6 +88,101 @@ pub const KEYCHAIN_SERVICE: &str = "com.richos.app.bug-reports";
 pub const KEYCHAIN_ACCOUNT: &str = "github-reporting-token";
 
 // ---------------------------------------------------------------------------------------
+// TWO KINDS OF POST: A BUG REPORT, AND A FEATURE IDEA
+// ---------------------------------------------------------------------------------------
+
+/// **WHAT IS BEING WRITTEN UP**: a bug report (Bust a bug, round 21) or a feature idea (Request a
+/// feature, round 24). The CEO, 2026-10-11: *"Under the "Bust a bug" button, I want to add a
+/// "Request a feature" button. But I don't want feature requests to be submitted or branded as
+/// "issues" on GitHub."*, and *"can things not be copy-pasted from the "Bust a bug" feature?"*.
+///
+/// So an idea goes through ALL of this file exactly as a bug report does (the same scanner, Rich
+/// writing it up and having the last word, the same card, the same decision at Send, the same
+/// keeping and retrying of what could not go), and differs in two places only: the words Rich is
+/// asked to write (an idea's sections, [`Post::sections`]), and where it is posted
+/// ([`Outbox::attempt`]): a post in RichOS's GitHub Discussions under Ideas, through GraphQL's
+/// `createDiscussion` ([`post_discussion`]), never the issues endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Post {
+    #[default]
+    Bug,
+    Idea,
+}
+
+impl Post {
+    /// What Rich's prompts call it.
+    fn what(self) -> &'static str {
+        match self {
+            Post::Bug => "bug report",
+            Post::Idea => "feature idea",
+        }
+    }
+    /// Where it goes once the user approves it, as Rich's prompts say it.
+    fn goes(self) -> &'static str {
+        match self {
+            Post::Bug => "filed as a GitHub issue that anyone can read",
+            Post::Idea => "posted in RichOS's GitHub Discussions, under Ideas, where anyone can read it",
+        }
+    }
+}
+
+/// One field of Rich's write-up ([`Written`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    WhatHappened,
+    Where,
+    Steps,
+    Expected,
+}
+
+impl Post {
+    /// **EACH SECTION OF THE WRITE-UP, IN THE CARD'S ORDER**: its heading and the field of
+    /// [`Written`] it holds. The first is always there; the others only when Rich wrote them. The
+    /// version follows them all. An idea's are round 24's: *The idea*, *Why it would help*, *What
+    /// the user pictured* and *Where*.
+    fn sections(self) -> [(&'static str, Field); 4] {
+        match self {
+            Post::Bug => [("What happened", Field::WhatHappened), ("Where", Field::Where), ("Steps to see it", Field::Steps), ("What the user expected", Field::Expected)],
+            Post::Idea => [("The idea", Field::WhatHappened), ("Why it would help", Field::Expected), (BULLETED, Field::Steps), ("Where", Field::Where)],
+        }
+    }
+}
+
+impl Written {
+    fn text(&self, field: Field) -> &str {
+        match field {
+            Field::WhatHappened => &self.what_happened,
+            Field::Where => &self.where_,
+            Field::Expected => &self.expected,
+            Field::Steps => "",
+        }
+    }
+    /// The sections Rich wrote, laid out as [`Post::sections`] says: (heading, its text, its
+    /// steps), the first always, the others when they have words.
+    fn laid_out(&self) -> Vec<(&'static str, &str, &[String])> {
+        self.post
+            .sections()
+            .iter()
+            .enumerate()
+            .filter_map(|(n, &(heading, field))| {
+                let (text, steps): (&str, &[String]) = if field == Field::Steps { ("", &self.steps) } else { (self.text(field), &[]) };
+                (n == 0 || !text.is_empty() || !steps.is_empty()).then_some((heading, text, steps))
+            })
+            .collect()
+    }
+}
+
+/// The repository's Discussions category every idea is posted in (round 24; the CEO-input file
+/// `docs/ceo-input/2026-10-11_01/request.md`: Discussions turned on, category "Ideas", slug `ideas`).
+pub const IDEAS_CATEGORY_SLUG: &str = "ideas";
+
+/// **THE SECTION OF AN IDEA WHOSE POINTS ARE A BULLETED LIST** (round 24: *What the user
+/// pictured*, drawn as bullets). A bug report's steps are numbered; these points are not steps.
+/// The card cannot change a heading, so the heading is what says how its list is drawn and written.
+pub const BULLETED: &str = "What the user pictured";
+
+// ---------------------------------------------------------------------------------------
 // WHAT IS PRIVATE
 // ---------------------------------------------------------------------------------------
 
@@ -754,8 +849,14 @@ pub fn version_line(app_version: &str, macos: Option<&str>, arch: &str) -> Strin
 // ---------------------------------------------------------------------------------------
 
 /// What Rich wrote, before anything private is replaced.
+///
+/// **A FEATURE IDEA USES THE SAME FIELDS** ([`Post::sections`] names each one's heading): its
+/// `what_happened` is *The idea*, `expected` is *Why it would help*, `steps` are the points of
+/// *What the user pictured* (a bulleted list, [`BULLETED`]) and `where_` is *Where*.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Written {
+    /// A bug report or a feature idea.
+    pub post: Post,
     pub title: String,
     pub what_happened: String,
     pub where_: String,
@@ -899,6 +1000,68 @@ folder, file, email, other. [] when there is none.",
     )
 }
 
+/// The one prompt Rich writes a bug report or a feature idea from. A bug report's is
+/// [`writer_prompt`]; an idea's asks for round 24's sections (*The idea*, *Why it would help*,
+/// *What the user pictured*, *Where*), with the same rules for what is private.
+pub fn writer_prompt_for(post: Post, answer: &str, screen: &Screen, version: &str, terms: &[PrivateTerm], picture: bool) -> String {
+    if post == Post::Bug {
+        return writer_prompt(answer, screen, version, terms, picture);
+    }
+    format!(
+        "You are Rich, the user's assistant inside the RichOS desktop app. The user pressed \"Request a feature\" \
+and told you something they would like RichOS to do. Write it up as a feature idea for the RichOS developers. \
+After the user reads and approves it, it is posted in RichOS's GitHub Discussions, under Ideas, where anyone can \
+read it. It is an idea, not a bug report: never call it an issue or a bug.\n\n\
+What the user said, in their own words:\n<<<\n{answer}\n>>>\n\n\
+Where they were when they pressed the button (it may or may not be about this screen):\n{screen}\n\n\
+{evidence}\
+Private words this user has: {terms}. Write the idea with every private detail of this user's case \
+already left out: {private_details}. Write each as the stand-in for its kind, exactly: {stand_ins}.\n\n\
+Write in plain American English that a non-technical reader follows, about \"the user\", in the third person. \
+Say what the user would like RichOS to do and why, in their terms; do not design the code.\n\n\
+Answer with ONLY a JSON object, no other text, in exactly this shape:\n\
+{{\"title\": \"...\", \"idea\": \"...\", \"why\": \"...\", \"pictured\": [\"...\"], \"where\": \"...\", \
+\"checked\": \"...\", \"private\": [{{\"text\": \"...\", \"kind\": \"person\"}}]}}\n\
+- title: one line under 80 characters that names the idea.\n\
+- idea: one or two short paragraphs saying what the user would like RichOS to do; a blank line between paragraphs.\n\
+- why: why it would help the user, or \"\" when they did not say.\n\
+- pictured: the points of how the user pictured it working, one short sentence each, or [] when they did not say.\n\
+- where: the place in RichOS it is about, in words a reader of the public post understands, or \"\" when it is \
+not about one place.\n\
+- checked: under 60 characters, starting with a verb, what you saw on the screen that bears on the idea \
+(\"Saw that Corrections has no undo\"), or \"\" when the screen does not show it or you were not given it.\n\
+- private: every name of a person, company, conversation, product, client or folder, and anything else \
+private, that is still in what you wrote, copied exactly, with kind one of person, company, conversation, \
+folder, file, email, other. [] when there is none.",
+        answer = answer.trim(),
+        screen = screen_lines(screen, version),
+        evidence = idea_evidence(screen, picture),
+        terms = terms_line(terms),
+        private_details = PRIVATE_DETAILS,
+        stand_ins = stand_ins_line(),
+    )
+}
+
+/// What Rich has to look at for an idea: the same screen and picture as for a bug report
+/// ([`evidence`]), to check the idea against rather than a fault.
+fn idea_evidence(screen: &Screen, picture: bool) -> String {
+    let words = screen_words(&screen.content);
+    let mut out = String::new();
+    if !words.is_empty() {
+        out.push_str(&format!(
+            "What was on that screen when they pressed the button, its visible words top to bottom. They are \
+private: use them to understand the idea, and do not copy names from them into the post.\n<<<\n{words}\n>>>\n\n"
+        ));
+    }
+    if picture {
+        out.push_str(
+            "A picture of the RichOS window as it was when they pressed the button is attached. It is private \
+too: describe what it shows only in words a stranger may read.\n\n",
+        );
+    }
+    out
+}
+
 /// What every one of Rich's prompts calls a private detail of this user's case.
 const PRIVATE_DETAILS: &str = "names of people, companies, clients, products, projects, conversations and folders, \
 file paths, email addresses, and anything else that is theirs and private";
@@ -956,20 +1119,30 @@ pub fn digest(screen: &Screen, looked: bool, checked: &str) -> String {
 /// The prompt for a change the user TELLS Rich (round 21: *"also say it happens in the light
 /// theme too"*): he answers with the sentence to add and where it goes.
 pub fn change_prompt(sheet: &Sheet, said: &str) -> String {
+    change_prompt_for(Post::Bug, sheet, said)
+}
+
+/// [`change_prompt`] for a bug report or a feature idea: the same answer, about the post it is.
+pub fn change_prompt_for(post: Post, sheet: &Sheet, said: &str) -> String {
     let headings: Vec<&str> = sheet.sections.iter().map(|s| s.heading.as_str()).collect();
+    let (sent, thing) = match post {
+        Post::Bug => ("sent", "report"),
+        Post::Idea => ("posted", "post"),
+    };
     format!(
-        "You are Rich, inside the RichOS desktop app. You wrote this bug report and the user has not sent it \
-yet. It is public once sent; words in square brackets stand in for private details and stay as they are.\n\n\
-The report:\n<<<\n# {title}\n\n{body}>>>\n\n\
+        "You are Rich, inside the RichOS desktop app. You wrote this {what} and the user has not {sent} it \
+yet. It is public once {sent}; words in square brackets stand in for private details and stay as they are.\n\n\
+The {thing}:\n<<<\n# {title}\n\n{body}>>>\n\n\
 The user just told you what to change:\n<<<\n{said}\n>>>\n\n\
 Answer with ONLY a JSON object, no other text: {{\"section\": \"...\", \"add\": \"...\", \"private\": []}}\n\
 - section: the heading the change belongs under, exactly one of: {headings}.\n\
 - add: the sentence or two to add there, in plain American English, written about \"the user\" the way \
-the report is, with every private detail of this user's case ({private_details}) already left out, each \
+the {thing} is, with every private detail of this user's case ({private_details}) already left out, each \
 written as the stand-in for its kind, exactly: {stand_ins}.\n\
 - private: every name of a person, company, conversation, product, client or folder, and anything else \
 private, that is in what you add, copied exactly, each as {{\"text\": \"...\", \"kind\": \"person\"}} with kind \
 one of person, company, conversation, folder, file, email, other. [] when there is none.",
+        what = post.what(),
         title = sheet.title,
         body = issue_body(sheet),
         said = said.trim(),
@@ -1051,21 +1224,36 @@ fn distinct(terms: impl IntoIterator<Item = PrivateTerm>) -> Vec<PrivateTerm> {
 /// Rich's answer, read. A report needs a title and something that happened; anything less is
 /// refused rather than shown hollow, and the report waits for him to answer again ([`checked`]).
 pub fn parse_written(raw: &str) -> Result<Written, String> {
+    parse_written_for(Post::Bug, raw)
+}
+
+/// Rich's answer about a bug report or a feature idea, read: the keys [`writer_prompt_for`] asked
+/// him for. An idea needs a title and the idea itself; anything less is refused, as for a report.
+pub fn parse_written_for(post: Post, raw: &str) -> Result<Written, String> {
     let value = json_object(raw)?;
+    let list = |key: &str| -> Vec<String> {
+        value[key].as_array().map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
+    };
+    let (what, expected, steps) = match post {
+        Post::Bug => ("what_happened", "expected", "steps"),
+        Post::Idea => ("idea", "why", "pictured"),
+    };
     let written = Written {
+        post,
         title: text_of(&value, "title"),
-        what_happened: text_of(&value, "what_happened"),
+        what_happened: text_of(&value, what),
         where_: text_of(&value, "where"),
-        steps: value["steps"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
-            .unwrap_or_default(),
-        expected: text_of(&value, "expected"),
+        steps: list(steps),
+        expected: text_of(&value, expected),
         private: private_of(&value)?,
         checked: text_of(&value, "checked"),
     };
     if written.title.is_empty() || written.what_happened.is_empty() {
-        return Err("the answer had no title or no account of what happened".into());
+        return Err(match post {
+            Post::Bug => "the answer had no title or no account of what happened",
+            Post::Idea => "the answer had no title or no idea",
+        }
+        .into());
     }
     Ok(written)
 }
@@ -1102,18 +1290,31 @@ pub fn checked(
     scrubber: &Scrubber,
     finish: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<Checked, String> {
-    let written = parse_written(&rich?)?;
+    checked_for(Post::Bug, rich, screen, looked, version, scrubber, finish)
+}
+
+/// [`checked`] for a bug report or a feature idea: the same check, the same scanner, Rich last.
+pub fn checked_for(
+    post: Post,
+    rich: Result<String, String>,
+    screen: &Screen,
+    looked: bool,
+    version: &str,
+    scrubber: &Scrubber,
+    finish: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Checked, String> {
+    let written = parse_written_for(post, &rich?)?;
     let scanned = draft_from(&written, version, scrubber);
-    let draft = rich_last(&scanned, &unscanned(&written, version), scrubber.terms(), finish)?;
+    let draft = rich_last(post, &scanned, &unscanned(&written, version), scrubber.terms(), finish)?;
     Ok(Checked { digest: digest(screen, looked, &written.checked), draft })
 }
 
 /// `scanned` (what the scanner made of a report) given to Rich last ([`finish_prompt`]) beside
 /// `before`, the same report as it was before the scanner, with `app`, the names RichOS holds; and
 /// read back as the card's draft ([`finished`]).
-fn rich_last(scanned: &Draft, before: &Sheet, app: &[PrivateTerm], finish: impl FnOnce(&str) -> Result<String, String>) -> Result<Draft, String> {
+fn rich_last(post: Post, scanned: &Draft, before: &Sheet, app: &[PrivateTerm], finish: impl FnOnce(&str) -> Result<String, String>) -> Result<Draft, String> {
     let known: Vec<PrivateTerm> = app.iter().chain(&scanned.private).cloned().collect();
-    finished(finish(&finish_prompt(&sheet_of(scanned), before, &known)), scanned)
+    finished(finish(&finish_prompt_for(post, &sheet_of(scanned), before, &known)), scanned)
 }
 
 /// A paragraph's or a step's words as they were before the scanner: split at blank lines into
@@ -1128,16 +1329,8 @@ fn paragraphs_as_written(text: &str) -> Vec<String> {
 /// title, not something the scanner hid.
 fn unscanned(written: &Written, version: &str) -> Sheet {
     let section = |heading: &str, paragraphs: Vec<String>, steps: Vec<String>| SheetSection { heading: heading.into(), paragraphs, steps };
-    let mut sections = vec![section("What happened", paragraphs_as_written(&written.what_happened), vec![])];
-    if !written.where_.is_empty() {
-        sections.push(section("Where", paragraphs_as_written(&written.where_), vec![]));
-    }
-    if !written.steps.is_empty() {
-        sections.push(section("Steps to see it", vec![], written.steps.clone()));
-    }
-    if !written.expected.is_empty() {
-        sections.push(section("What the user expected", paragraphs_as_written(&written.expected), vec![]));
-    }
+    let mut sections: Vec<SheetSection> =
+        written.laid_out().into_iter().map(|(heading, text, steps)| section(heading, paragraphs_as_written(text), steps.to_vec())).collect();
     sections.push(section("Version", vec![version.to_string()], vec![]));
     Sheet { title: written.title.trim().replace('`', "'"), sections }
 }
@@ -1177,28 +1370,41 @@ fn report_json(sheet: &Sheet) -> String {
 /// and cleans up every private detail still there, writing it as the stand-in for its kind; he
 /// changes nothing else. `known` are the private words RichOS holds and the ones he named before.
 pub fn finish_prompt(sheet: &Sheet, before: &Sheet, known: &[PrivateTerm]) -> String {
+    finish_prompt_for(Post::Bug, sheet, before, known)
+}
+
+/// [`finish_prompt`] for a bug report or a feature idea: the same last pass, about the post it is.
+pub fn finish_prompt_for(post: Post, sheet: &Sheet, before: &Sheet, known: &[PrivateTerm]) -> String {
+    let (thing, filed) = match post {
+        Post::Bug => ("report", "filed"),
+        Post::Idea => ("post", "posted"),
+    };
     format!(
-        "You are Rich, inside the RichOS desktop app. Below is a bug report the user will read and approve before \
-it is filed as a GitHub issue that anyone can read. The app's automatic check for private details has already \
+        "You are Rich, inside the RichOS desktop app. Below is a {what} the user will read and approve before \
+it is {goes}. The app's automatic check for private details has already \
 been over it and wrote what it recognized as stand-ins in square brackets, but it cannot be relied on: it does \
 not know this user, and it hides ordinary words too. You are the last check, and you have the final say. Nothing \
-changes your words after you: the user sees them, and they are filed word for word.\n\n\
-The report, after the automatic check:\n<<<\n{report}\n>>>\n\n\
-The same report as it was before the automatic check:\n<<<\n{before}\n>>>\n\n\
+changes your words after you: the user sees them, and they are {filed} word for word.\n\n\
+The {thing}, after the automatic check:\n<<<\n{report}\n>>>\n\n\
+The same {thing} as it was before the automatic check:\n<<<\n{before}\n>>>\n\n\
 Private words this user has: {terms}.\n\n\
-Start from the report after the automatic check. Where it put a stand-in over words that are not private in this \
+Start from the {thing} after the automatic check. Where it put a stand-in over words that are not private in this \
 user's case (an ordinary phrase, the name of a button, words with a slash in them), put those words back exactly \
 as they were before the check. Keep every stand-in that hides something private, and every stand-in that was \
-already in the report before the check. Clean up every private detail of this user's case that is still in it: \
+already in the {thing} before the check. Clean up every private detail of this user's case that is still in it: \
 {private_details}. Write each as the stand-in for its kind, exactly: {stand_ins}. Change nothing else: every \
 other character stays exactly as it is, and no section, paragraph or step is added or taken away.\n\n\
 Answer with ONLY a JSON object, no other text, in exactly this shape:\n\
 {{\"title\": \"...\", \"sections\": [{{\"heading\": \"...\", \"paragraphs\": [\"...\"], \"steps\": [\"...\"]}}], \
 \"private\": [{{\"text\": \"...\", \"kind\": \"person\"}}]}}\n\
-- title and sections: the report after the automatic check, with what you put back and what you cleaned up, \
+- title and sections: the {thing} after the automatic check, with what you put back and what you cleaned up, \
 its sections in the same order, each with its heading, its paragraphs and its steps.\n\
 - private: every private detail you replaced now, copied exactly as it was written, with kind one of person, \
 company, conversation, folder, file, email, other. [] when there was none.",
+        what = post.what(),
+        goes = post.goes(),
+        thing = thing,
+        filed = filed,
         report = report_json(sheet),
         before = report_json(before),
         terms = terms_line(known),
@@ -1696,21 +1902,15 @@ fn paragraphs_of(text: &str, scrubber: &Scrubber) -> Vec<Vec<Segment>> {
 /// whole of it scanned as GitHub would show it ([`as_posted`]). Rich gets the last word on it ([`checked`]).
 pub fn draft_from(written: &Written, version: &str, scrubber: &Scrubber) -> Draft {
     let scrubber = scrubber.and_rich(written.private.iter().cloned());
-    let paragraphs = |text: &str| paragraphs_of(text, &scrubber);
-    let mut sections = vec![DraftSection { heading: "What happened".into(), paragraphs: paragraphs(&written.what_happened), steps: vec![] }];
-    if !written.where_.is_empty() {
-        sections.push(DraftSection { heading: "Where".into(), paragraphs: paragraphs(&written.where_), steps: vec![] });
-    }
-    if !written.steps.is_empty() {
-        sections.push(DraftSection {
-            heading: "Steps to see it".into(),
-            paragraphs: vec![],
-            steps: written.steps.iter().map(|s| scrubber.scrub(s)).collect(),
-        });
-    }
-    if !written.expected.is_empty() {
-        sections.push(DraftSection { heading: "What the user expected".into(), paragraphs: paragraphs(&written.expected), steps: vec![] });
-    }
+    let mut sections: Vec<DraftSection> = written
+        .laid_out()
+        .into_iter()
+        .map(|(heading, text, steps)| DraftSection {
+            heading: heading.into(),
+            paragraphs: paragraphs_of(text, &scrubber),
+            steps: steps.iter().map(|s| scrubber.scrub(s)).collect(),
+        })
+        .collect();
     sections.push(DraftSection { heading: "Version".into(), paragraphs: vec![vec![Segment::plain(version)]], steps: vec![] });
     as_posted(&Draft { title: scrubber.scrub(&written.title), sections, private: distinct(written.private.iter().cloned()) }, &scrubber)
 }
@@ -1860,8 +2060,10 @@ fn body_parts(sheet: &Sheet) -> Vec<Part> {
         let steps: Vec<(usize, &str)> = section.steps.iter().enumerate().map(|(k, s)| (k, s.trim())).filter(|(_, s)| !s.is_empty()).collect();
         if !steps.is_empty() {
             mark(&mut parts, "\n");
+            // An idea's pictured points are bullets, a bug report's steps are numbered ([`BULLETED`]).
+            let bulleted = section.heading.trim() == BULLETED;
             for (n, (k, step)) in steps.into_iter().enumerate() {
-                mark(&mut parts, &format!("{}. ", n + 1));
+                mark(&mut parts, &if bulleted { "- ".to_string() } else { format!("{}. ", n + 1) });
                 parts.push((Some(Place::Step(i, k)), step.to_string()));
                 mark(&mut parts, "\n");
             }
@@ -1880,6 +2082,12 @@ pub fn issue_body(sheet: &Sheet) -> String {
 /// ever open an issue of this repository, whatever the webview asks for.
 pub fn issue_page(number: u64) -> String {
     format!("https://github.com/{REPOSITORY}/issues/{number}")
+}
+
+/// The page of discussion `number` on [`REPOSITORY`] (a posted idea). Built from a number, as
+/// [`issue_page`] is, so the card's link can only ever open a discussion of this repository.
+pub fn discussion_page(number: u64) -> String {
+    format!("https://github.com/{REPOSITORY}/discussions/{number}")
 }
 
 /// The API path and JSON body that file `public` on [`REPOSITORY`]: its title and its body, and
@@ -2131,12 +2339,17 @@ pub enum AtSend {
 /// when his version is the card's words exactly they go; otherwise it is shown first; when he
 /// cannot answer, nothing goes.
 pub fn at_send(sheet: &Sheet, check: Option<&Check>, app: &[PrivateTerm], finish: impl FnOnce(&str) -> Result<String, String>) -> AtSend {
+    at_send_for(Post::Bug, sheet, check, app, finish)
+}
+
+/// [`at_send`] for a bug report or a feature idea: the one decision, the same for both.
+pub fn at_send_for(post: Post, sheet: &Sheet, check: Option<&Check>, app: &[PrivateTerm], finish: impl FnOnce(&str) -> Result<String, String>) -> AtSend {
     let card = issue_of(sheet);
     if check.is_some_and(|c| c.issue == card) {
         return AtSend::Send(Public(card));
     }
     let private = check.map(|c| c.private.clone()).unwrap_or_default();
-    match checked_edit(&Edited { sheet: sheet.clone(), private }, app, finish) {
+    match checked_edit_for(post, &Edited { sheet: sheet.clone(), private }, app, finish) {
         Err(why) => AtSend::Unchecked(why),
         Ok(his) if issue_of(&sheet_of(&his.draft)) == card => AtSend::Send(Public(card)),
         Ok(his) => AtSend::Show(his),
@@ -2182,8 +2395,13 @@ pub struct Edited {
 /// and given to Rich last (`finish`), as a card under [`EDIT_DIGEST`]. Like any check, it is
 /// shown, never sent by itself.
 pub fn checked_edit(edited: &Edited, app: &[PrivateTerm], finish: impl FnOnce(&str) -> Result<String, String>) -> Result<Checked, String> {
+    checked_edit_for(Post::Bug, edited, app, finish)
+}
+
+/// [`checked_edit`] for a bug report or a feature idea.
+pub fn checked_edit_for(post: Post, edited: &Edited, app: &[PrivateTerm], finish: impl FnOnce(&str) -> Result<String, String>) -> Result<Checked, String> {
     let scanned = redraft(&edited.sheet, &edited.private, app);
-    Ok(Checked { draft: rich_last(&scanned, &as_typed(&edited.sheet), app, finish)?, digest: EDIT_DIGEST.into() })
+    Ok(Checked { draft: rich_last(post, &scanned, &as_typed(&edited.sheet), app, finish)?, digest: EDIT_DIGEST.into() })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2232,9 +2450,95 @@ pub enum Outcome {
     TimedOut,
 }
 
-/// The one network call, made by the shell.
+/// The network calls, made by the shell: a bug report is one REST request to the issues
+/// endpoint; a feature idea is GraphQL ([`post_discussion`]), never the issues endpoint.
 pub trait Transport {
     fn create_issue(&self, credential: &Credential, path: &str, request: &serde_json::Value) -> Outcome;
+    /// One GraphQL request (`POST /graphql`, `request` being `{query, variables}`), and GitHub's
+    /// answer as it came: its HTTP status and its JSON.
+    fn graphql(&self, credential: &Credential, request: &serde_json::Value) -> Reply;
+}
+
+/// What came back from one GraphQL request.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reply {
+    /// GitHub answered: its HTTP status, and its body as JSON (`null` when it was not JSON).
+    Answered { status: u16, body: serde_json::Value },
+    /// No connection could be made.
+    Unreachable,
+    /// A connection was made and nothing came back in time.
+    TimedOut,
+}
+
+/// Finds the repository's id and its Ideas category's id, which `createDiscussion` takes.
+pub const IDEAS_LOOKUP: &str =
+    "query($owner: String!, $name: String!, $slug: String!) { repository(owner: $owner, name: $name) { id discussionCategory(slug: $slug) { id } } }";
+
+/// Posts an idea: a discussion in the Ideas category, with the card's title and body.
+pub const CREATE_DISCUSSION: &str = "mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) { createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) { discussion { number url } } }";
+
+/// **WHAT A GRAPHQL ANSWER MEANS, AS A BUG REPORT'S [`Outcome`]**, so an idea waits and is tried
+/// again for exactly the reasons a bug report does ([`classify`]). Answers the answer's `data`
+/// when there is some. GitHub answers a GraphQL request it refused with HTTP 200 and an `errors`
+/// list: a token without the right to post in Discussions comes back `FORBIDDEN` or
+/// `INSUFFICIENT_SCOPES`, a repository or category it will not show `NOT_FOUND`; each of those is
+/// GitHub refusing the account ([`Reason::Refused`], as status 403). Being rate limited is GitHub
+/// being busy (429). Any other error with no data is GitHub not answering properly (502).
+fn graphql_outcome(reply: Reply) -> Result<serde_json::Value, Outcome> {
+    let (status, body) = match reply {
+        Reply::Unreachable => return Err(Outcome::Unreachable),
+        Reply::TimedOut => return Err(Outcome::TimedOut),
+        Reply::Answered { status, body } => (status, body),
+    };
+    if status != 200 {
+        return Err(Outcome::Status { code: status });
+    }
+    let errors: Vec<String> =
+        body["errors"].as_array().map(|e| e.iter().map(|e| e["type"].as_str().unwrap_or("").to_ascii_uppercase()).collect()).unwrap_or_default();
+    if errors.iter().any(|t| matches!(t.as_str(), "FORBIDDEN" | "INSUFFICIENT_SCOPES" | "NOT_FOUND" | "UNAUTHORIZED")) {
+        return Err(Outcome::Status { code: 403 });
+    }
+    if errors.iter().any(|t| t == "RATE_LIMITED") {
+        return Err(Outcome::Status { code: 429 });
+    }
+    match body.get("data") {
+        // Data with an error beside it is still read: a discussion that came back was posted, and
+        // posting it again would post it twice.
+        Some(data) if !data.is_null() => Ok(data.clone()),
+        _ => Err(Outcome::Status { code: 502 }),
+    }
+}
+
+/// **AN IDEA, POSTED**: a discussion in the Ideas category of [`REPOSITORY`], through GitHub's
+/// GraphQL API, never the issues endpoint. Two requests: the repository's and the category's ids
+/// ([`IDEAS_LOOKUP`]), then `createDiscussion` with them ([`CREATE_DISCUSSION`]). Answers a bug
+/// report's [`Outcome`]: `Created` with the discussion's number and page, or why it waits. A
+/// category that is not there is GitHub refusing it (403): there is nowhere to post an idea.
+pub fn post_discussion(transport: &dyn Transport, credential: &Credential, title: &str, body: &str) -> Outcome {
+    let (owner, name) = REPOSITORY.split_once('/').unwrap_or((REPOSITORY, ""));
+    let lookup = serde_json::json!({ "query": IDEAS_LOOKUP, "variables": { "owner": owner, "name": name, "slug": IDEAS_CATEGORY_SLUG } });
+    let data = match graphql_outcome(transport.graphql(credential, &lookup)) {
+        Ok(data) => data,
+        Err(outcome) => return outcome,
+    };
+    let (Some(repository), Some(category)) = (data["repository"]["id"].as_str(), data["repository"]["discussionCategory"]["id"].as_str()) else {
+        return Outcome::Status { code: 403 };
+    };
+    let create = serde_json::json!({
+        "query": CREATE_DISCUSSION,
+        "variables": { "repositoryId": repository, "categoryId": category, "title": title, "body": body },
+    });
+    let data = match graphql_outcome(transport.graphql(credential, &create)) {
+        Ok(data) => data,
+        Err(outcome) => return outcome,
+    };
+    let discussion = &data["createDiscussion"]["discussion"];
+    match discussion["number"].as_u64() {
+        Some(number) => Outcome::Created { number, url: discussion["url"].as_str().map(str::to_string).unwrap_or_else(|| discussion_page(number)) },
+        // No discussion came back: not a post we can point at, so it waits rather than claiming
+        // it went up (as a 201 with no issue number does for a bug report).
+        None => Outcome::Status { code: 502 },
+    }
 }
 
 /// Why a report is waiting.
@@ -2296,6 +2600,10 @@ pub struct Sent {
     pub account: Account,
     pub title: String,
     pub sent_at_ms: u64,
+    /// A bug report (an issue) or a feature idea (a discussion under Ideas). A record kept before
+    /// ideas existed is a bug report.
+    #[serde(default)]
+    pub post: Post,
 }
 
 /// What one attempt came to.
@@ -2348,11 +2656,25 @@ fn read_all<T: serde::de::DeserializeOwned>(dir: &Path) -> io::Result<Vec<T>> {
 #[derive(Debug, Clone)]
 pub struct Outbox {
     dir: PathBuf,
+    /// What its posts are, and so where they go ([`Outbox::attempt`]).
+    post: Post,
 }
 
 impl Outbox {
+    /// Bug reports, kept in `dir`.
     pub fn open(dir: &Path) -> Self {
-        Outbox { dir: dir.to_path_buf() }
+        Outbox::open_for(dir, Post::Bug)
+    }
+
+    /// Bug reports or feature ideas, kept in `dir`: one outbox per kind, each in its own folder,
+    /// so a kept idea can only ever be posted as an idea.
+    pub fn open_for(dir: &Path, post: Post) -> Self {
+        Outbox { dir: dir.to_path_buf(), post }
+    }
+
+    /// What this outbox keeps: bug reports or feature ideas.
+    pub fn post(&self) -> Post {
+        self.post
     }
 
     fn waiting_dir(&self) -> PathBuf {
@@ -2559,14 +2881,23 @@ impl Outbox {
         let outcome = match credentials.credential() {
             None => Err((Reason::NotSetUp, None)),
             Some(credential) => {
-                let request = serde_json::json!({ "title": pending.title, "body": pending.body });
-                let answer = transport.create_issue(&credential, &format!("/repos/{REPOSITORY}/issues"), &request);
+                // THE ONE DIFFERENCE BETWEEN THE TWO: where it is posted. A bug report is an issue;
+                // a feature idea is a discussion under Ideas, and never reaches the issues endpoint
+                // (CEO, 2026-10-11: "I don't want feature requests to be submitted or branded as
+                // "issues" on GitHub").
+                let answer = match self.post {
+                    Post::Bug => {
+                        let request = serde_json::json!({ "title": pending.title, "body": pending.body });
+                        transport.create_issue(&credential, &format!("/repos/{REPOSITORY}/issues"), &request)
+                    }
+                    Post::Idea => post_discussion(transport, &credential, &pending.title, &pending.body),
+                };
                 classify(&answer).map(|ok| (ok, credential.account)).map_err(|r| (r, Some(answer)))
             }
         };
         match outcome {
             Ok(((number, url), account)) => {
-                let sent = Sent { id: pending.id.clone(), number, url, account, title: pending.title.clone(), sent_at_ms: now_ms };
+                let sent = Sent { id: pending.id.clone(), number, url, account, title: pending.title.clone(), sent_at_ms: now_ms, post: self.post };
                 self.record_sent(&sent)?;
                 Ok(Delivery::Sent(sent))
             }
