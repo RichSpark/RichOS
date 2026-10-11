@@ -4634,6 +4634,99 @@ class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
         self.assertEqual(run("git", "-C", self.other, "rev-parse", "HEAD").stdout.strip(), self.head)
         self.assertFalse(self.landed())
 
+    def test_a_land_that_renews_the_lease_while_the_turn_end_checks_keeps_it(self):
+        """Review rv-20261011T205852Z-54ae8c6a-eec1, finding 1: the turn end
+        read the lease, found no running land on it, and while it checked the
+        repository a new land renewed the same holder's lease. The delete that
+        followed checked only the holder, so the new land lost its lease."""
+        r = subprocess.run(["bash", self.lease_cmd, "acquire", "--repo", self.other],
+                           capture_output=True, text=True, env=self.envx)
+        self.assertIn("ACQUIRED", r.stdout, r.stdout + r.stderr)
+        driver = os.path.join(self.d, "turn-end.py")
+        with open(driver, "w") as f:
+            f.write("import os, sys, time\nsys.path.insert(0, %r)\nimport operator_fences as F\n"
+                    "real = F.at_rest\n"
+                    "def at_rest(*a):\n"
+                    "    open(%r, 'w').close()\n"
+                    "    guard = time.monotonic() + 60\n"
+                    "    while not os.path.exists(%r) and time.monotonic() < guard:\n"
+                    "        time.sleep(0.02)\n"
+                    "    return real(*a)\n"
+                    "F.at_rest = at_rest\nsys.exit(F.cmd_turn_end([]))\n"
+                    % (os.path.join(ENGINE, "scripts", "lib"), self.flag("checking"), self.flag("renewed")))
+        te = subprocess.Popen([sys.executable, driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, env=self.envx)
+        self.wait_for("checking", te)
+        pr = self.land_script(between=": > '%s'\nwhile [ ! -f '%s' ]; do sleep 0.02; done\n"
+                              % (self.flag("renewed"), self.flag("go")))
+        self.wait_for("renewed", pr)
+        said, err = te.communicate(timeout=60)
+        self.assertEqual(te.returncode, 0, said + err)
+        leases = [n for n in os.listdir(self.home) if n.endswith(".lease")]
+        open(self.flag("go"), "w").close()
+        out, err = pr.communicate(timeout=180)
+        self.assertEqual(len(leases), 1, "the turn end deleted the renewed lease: " + said)
+        self.assertIn("still running", said)
+        self.assertIn("RENEWED", out + err)
+        self.assertNotIn("does not hold the land lease", out + err)
+        self.assertEqual(pr.returncode, 0, out + err)
+        self.assertTrue(self.landed(), out + err)
+
+    def test_a_declared_holders_refused_merge_retakes_the_lease_as_that_holder_and_aborts(self):
+        """Review rv-20261011T205852Z-54ae8c6a-eec1, finding 2: the abort's
+        retake ran `land-lease.sh acquire` without --holder, which a declared
+        non-Claude holder (Codex) needs, so its refused merge was NOT aborted."""
+        if not shutil.which("cc"):
+            self.skipTest("no C compiler for the stand-in declared holder")
+        # The stand-in for Codex, as operator-fences-fixture.sh builds it: it
+        # stays alive as the ancestor of what it runs (a copy of /bin/bash is
+        # killed by macOS outside the system volume).
+        src = os.path.join(self.d, "fakecodex.c")
+        with open(src, "w") as f:
+            f.write("#include <sys/wait.h>\n#include <unistd.h>\nint main(int argc, char **argv) {\n"
+                    "    pid_t pid = fork();\n"
+                    "    if (pid == 0) { argv[0] = \"bash\"; execv(\"/bin/bash\", argv); _exit(127); }\n"
+                    "    int status = 0;\n"
+                    "    if (pid < 0 || waitpid(pid, &status, 0) < 0) return 126;\n"
+                    "    return WIFEXITED(status) ? WEXITSTATUS(status) : 128;\n}\n")
+        codex = os.path.join(self.d, "fakecodex")
+        run("cc", "-O0", "-o", codex, src)
+        decl = os.path.join(self.env.root, "fence-entity-codex")
+        os.makedirs(decl)
+        with open(os.path.join(decl, "orchestration.config"), "w") as f:
+            f.write('OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS="codex=%s"\nOPERATOR_FENCES_REPOS=""\n' % codex)
+        fences = os.path.join(ENGINE, "scripts", "operator-fences.sh")
+        run("bash", fences, "install", "--repo", self.other, "--entity", decl)
+        run("bash", fences, "on", "--repo", self.other, "--entity", decl)
+        # No Claude session is behind this land: only the declared holder.
+        os.unlink(os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "sessions", "%d.json" % os.getpid()))
+        self.gate()
+        self.pause_after_orig_head()
+        script = os.path.join(self.d, "codex-merge.sh")
+        with open(script, "w") as f:
+            f.write("bash '%s' acquire --repo '%s' --holder codex || exit $?\n"
+                    "'%s' '%s' --session '%s' merge '%s' -m 'Merge %s'\n"
+                    % (self.lease_cmd, self.other, sys.executable, LIB, self.sid, self.name, self.name))
+        pr = subprocess.Popen([codex, script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                              env=self.envx)
+        self.wait_for("paused", pr)
+        # Whatever frees the lease mid-merge.
+        for n in os.listdir(self.home):
+            if n.endswith(".lease"):
+                os.unlink(os.path.join(self.home, n))
+        open(self.flag("go"), "w").close()
+        out, err = pr.communicate(timeout=180)
+        self.assertIn("ACQUIRED", out + err)
+        self.assertNotEqual(pr.returncode, 0, out + err)
+        self.assertIn("does not hold the land lease", err)
+        self.assertIn("was aborted", err)
+        self.assertNotEqual(run("git", "-C", self.other, "rev-parse", "-q", "--verify", "MERGE_HEAD",
+                                check=False).returncode, 0, out + err)
+        self.assertEqual(run("git", "-C", self.other, "status", "--porcelain",
+                             "--untracked-files=no").stdout, "")
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "HEAD").stdout.strip(), self.head)
+        self.assertFalse(self.landed())
+
 
 ENGINE = os.path.realpath(os.path.join(HERE, "..", ".."))
 
