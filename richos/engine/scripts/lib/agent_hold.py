@@ -1555,12 +1555,50 @@ def _gone(pid, birth, table):
     return not row or row["birth"] != birth or row["stat"].startswith("Z")
 
 
+def _birth_now(pid):
+    """This process's start time (epoch seconds, the resolution snapshot() records) read
+    at this instant, or None when it is gone, a zombie or unreadable. On macOS one libproc
+    call (struct proc_bsdinfo, 136 bytes: status at 4, start seconds at 120); elsewhere a
+    one-process ps read with snapshot()'s parsing."""
+    if sys.platform == "darwin":
+        try:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            buf = ctypes.create_string_buffer(136)
+            if libproc.proc_pidinfo(int(pid), 3, ctypes.c_uint64(0), buf, 136) != 136:  # PROC_PIDTBSDINFO
+                return None
+            status, = struct.unpack_from("I", buf.raw, 4)
+            start, = struct.unpack_from("Q", buf.raw, 120)
+        except (OSError, ValueError, struct.error):
+            return None
+        return None if status == 5 else int(start)                                      # SZOMB
+    try:
+        out = subprocess.run(["ps", "-o", "stat=,lstart=", "-p", str(int(pid))], capture_output=True,
+                             text=True, timeout=10, env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"}).stdout
+        st, _, lstart = out.strip().partition(" ")
+        if not st or st.startswith("Z"):
+            return None
+        return calendar.timegm(time.strptime(lstart.strip(), "%a %b %d %H:%M:%S %Y"))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _signal_same(pid, birth, sig):
+    """Send `sig` only if `pid` is still the process born at `birth`, re-read from the kernel
+    immediately before (second review rv-20261011T042129Z-6b0f0810-1c93: a snapshot can be
+    older than the signal, and an id freed in between can belong to a process the agent
+    does not own). False when it is no longer that process; never signals another."""
+    if _birth_now(pid) != birth:
+        return False
+    os.kill(pid, sig)
+    return True
+
+
 def end_owned(session_id, agent_id, name="", why=""):
     """End the commands this agent still owns; never a held (paused) agent's work.
 
     The owned tree and its exclusions are owned_tree()'s, exactly as for a hold.
-    Each process is signaled only while it is still the process recorded (start
-    time re-checked): SIGTERM and SIGCONT first, SIGKILL after END_GRACE for any
+    Each process is signaled only while it is still the process recorded (its start
+    time re-read from the kernel immediately before EACH signal): SIGTERM and SIGCONT first, SIGKILL after END_GRACE for any
     that remain. Rounds catch a process forked between the snapshot and the
     signal. Every ended process is logged to ended.log. Never raises on races."""
     if not _valid_ids(session_id, agent_id):
@@ -1572,7 +1610,7 @@ def end_owned(session_id, agent_id, name="", why=""):
     t0 = time.monotonic()
     table = snapshot()
     shell_cmds = {c["pid"]: c["command"] for c in calls(session_id, agent_id, table)}
-    signaled, excluded, notes, described = {}, set(), [], {}
+    signaled, excluded, notes, described, unconfirmed = {}, set(), [], {}, {}
     for _ in range(STOP_ROUNDS):
         owned, excl, _protected, found_notes, _parents = owned_tree(session_id, agent_id, table)
         excluded |= excl
@@ -1583,10 +1621,15 @@ def end_owned(session_id, agent_id, name="", why=""):
             break
         described.update(_commands(set(targets) - set(described)))
         for pid in targets:
-            signaled[pid] = table[pid]["birth"]
+            birth = table[pid]["birth"]
             try:
-                os.kill(pid, signal.SIGTERM)
-                os.kill(pid, signal.SIGCONT)   # a stopped process takes its SIGTERM only once continued
+                # Identity re-read from the kernel before each signal, never from the snapshot.
+                if not _signal_same(pid, birth, signal.SIGTERM):
+                    unconfirmed[pid] = birth
+                    continue
+                signaled[pid] = birth
+                unconfirmed.pop(pid, None)
+                _signal_same(pid, birth, signal.SIGCONT)   # a stopped process takes its SIGTERM only once continued
             except ProcessLookupError:
                 pass
             except PermissionError:
@@ -1602,14 +1645,17 @@ def end_owned(session_id, agent_id, name="", why=""):
     killed = []
     for pid in remaining:
         try:
-            os.kill(pid, signal.SIGKILL)
-            killed.append(pid)
+            if _signal_same(pid, signaled[pid], signal.SIGKILL):
+                killed.append(pid)
         except (ProcessLookupError, PermissionError):
             pass
     if killed:
         time.sleep(0.1)
         table = snapshot()
-    survivors = sorted(p for p, b in signaled.items() if not _gone(p, b, table))
+    # A target whose identity could not be confirmed was never signaled; if the snapshot
+    # still shows it as the same process, it is still running and reported, never hidden.
+    survivors = sorted({p for p, b in signaled.items() if not _gone(p, b, table)}
+                       | {p for p, b in unconfirmed.items() if not _gone(p, b, table)})
     ended = [{"pid": p, "command": shell_cmds.get(p) or described.get(p, ""), "killed": p in killed}
              for p in sorted(signaled) if p not in survivors]
     result = {"ok": not survivors, "session_id": session_id, "agent_id": agent_id, "name": name,

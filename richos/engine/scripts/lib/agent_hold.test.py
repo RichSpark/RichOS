@@ -9,6 +9,7 @@ them within seconds with no CPU advance; after release each result must be corre
 All state is in a temporary directory; nothing outside this test's own processes
 is ever signaled.
 """
+import copy
 import hashlib
 import json
 import os
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1495,6 +1497,32 @@ class EndOwned(Base):
         self.assertTrue(state(worker).startswith("T"), "still frozen, not ended")
         agent_hold.release(self.session, self.agent)
         self.assertTrue(self.alive(worker))
+
+    def test_a_reused_process_id_is_never_signaled(self):
+        """Each signal re-reads the process's start time from the kernel first (second review
+        rv-20261011T042129Z-6b0f0810-1c93): an owned process that exits while the end is under
+        way, its id given to a process the agent does not own, is never signaled. No real signal
+        is sent; the kernel's answers are the fixture's."""
+        pid = 987654
+        kernel = {pid: {"birth": 100, "ppid": 50, "pgid": pid, "stat": "S", "cpu": 0}}
+        sent = []
+
+        def commands(_pids):
+            kernel[pid]["birth"] = 200      # it exits during the command-line read; the id is reused
+            return {pid: "the agent's own loop"}
+
+        with mock.patch.object(agent_hold, "snapshot", side_effect=lambda: copy.deepcopy(kernel)), \
+             mock.patch.object(agent_hold, "calls", return_value=[]), \
+             mock.patch.object(agent_hold, "owned_tree", side_effect=lambda _s, _a, t: (
+                 {p for p, row in t.items() if row["birth"] == 100}, set(), set(), [], {})), \
+             mock.patch.object(agent_hold, "_commands", side_effect=commands), \
+             mock.patch.object(agent_hold, "_birth_now", side_effect=lambda p: kernel.get(p, {}).get("birth")), \
+             mock.patch.object(agent_hold.os, "kill", side_effect=lambda p, s: sent.append((s, kernel[p]["birth"]))), \
+             mock.patch.object(agent_hold, "_log_end"):
+            r = agent_hold.end_owned(self.session, self.agent, "fixture-agent", "its run ended (fixture)")
+        self.assertEqual(sent, [], "a signal reached the process that took over the id")
+        self.assertEqual(r["ended"], [], r)
+        self.assertEqual(r["survivors"], [], r)
 
     def test_the_one_command_ends_it_by_hand(self):
         call = self.start_call(self.loop())
