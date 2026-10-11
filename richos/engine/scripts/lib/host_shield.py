@@ -347,16 +347,18 @@ DATA_COMMANDS = {"echo", "printf", "grep", "egrep", "fgrep", "rg", "test", "[", 
 def logical_lines(text):
     """[(first line number, text)] for every backslash-continued run of lines, joined as the
     shell joins it (review rv-20261011T141442Z-0009fe5a-a898 #3: `<path> \\` then
-    `-e '<a host sleep>'` split the command from its harmful argument)."""
+    `-e '<a host sleep>'` split the command from its harmful argument). The backslash and the
+    newline are removed and NOTHING is put in their place, exactly as the shell (and a Python or
+    JavaScript string) does: `/sbin/ha\\` then `lt` is one word (review
+    rv-20261011T192225Z-5fa33e7e-a349 #3: a space put between them hid it)."""
     out, buf, at = [], None, 0
     for n, raw in enumerate(text.split("\n"), 1):
         if buf is None:
             buf, at, joined = raw, n, False
         else:
-            buf, joined = buf + " " + raw.lstrip(), True
-        stripped = buf.rstrip()
-        if stripped.endswith("\\") and (len(stripped) - len(stripped.rstrip("\\"))) % 2 == 1:
-            buf = stripped[:-1]
+            buf, joined = buf + raw, True
+        if buf.endswith("\\") and (len(buf) - len(buf.rstrip("\\"))) % 2 == 1:
+            buf = buf[:-1]
             continue
         if joined:
             out.append((at, buf))
@@ -454,15 +456,18 @@ def scan_code(text):
     (review rv-20261011T141442Z-0009fe5a-a898 #4: an absolute halt in `subprocess.run([...])` in
     a Python suite started unchecked). A path assembled at run time is not seen."""
     path, sudo = _code_res()
-    found = []
-    for n, line in enumerate(text.split("\n"), 1):
-        for m in path.finditer(line):
-            name = os.path.basename(m.group(1)).lower()
-            found.append((n, name, line.strip()[:110], "names %s by path in code, which bypasses PATH and the "
-                          "stand-in; call it by bare name" % m.group(1), "exec"))
-        for m in sudo.finditer(line):
-            found.append((n, m.group(1).lower(), line.strip()[:110], "runs %s under sudo or doas, which resets "
-                          "PATH past the stand-in" % m.group(1), "exec"))
+    found, seen = [], set()
+    # A backslash-newline inside a Python or JavaScript string joins it too: read joined as well
+    # (a line read alone and joined is reported once).
+    for n, line in list(enumerate(text.split("\n"), 1)) + logical_lines(text):
+        hits = [(m.group(1), "names %s by path in code, which bypasses PATH and the stand-in; call it "
+                 "by bare name" % m.group(1)) for m in path.finditer(line)]
+        hits += [(m.group(1), "runs %s under sudo or doas, which resets PATH past the stand-in" % m.group(1))
+                 for m in sudo.finditer(line)]
+        for what, why in hits:
+            if (n, why) not in seen:
+                seen.add((n, why))
+                found.append((n, os.path.basename(what).lower(), line.strip()[:110], why, "exec"))
     return found
 
 

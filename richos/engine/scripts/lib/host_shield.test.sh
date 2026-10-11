@@ -270,6 +270,23 @@ if [ "$RC" = 1 ] && grep -q "h6g.test.sh:3: .*$SLEEP" "$TMP/out"; then
 else
     bad "H6g a continued command was not read joined (rc=$RC)" "$(cat "$TMP/out")"
 fi
+# H6l — the shell removes a backslash-newline and puts nothing in its place, so a command NAME
+# split across it is one word (review rv-20261011T192225Z-5fa33e7e-a349 #3: a space was put
+# between the halves). Scan only (after `exit 0`); a Python string joins the same way.
+F="$(suite h6l.test.sh "exit 0" "/sbin/${HS_CMD:0:4}\\" "${HS_CMD:4} -h +60")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "h6l.test.sh:3: /sbin/$HS_CMD" "$TMP/out"; then
+    ok "H6l /sbin/${HS_CMD:0:4}\\<newline>${HS_CMD:4} is read as /sbin/$HS_CMD and refused before it runs"
+else
+    bad "H6l a command name split by a continuation was not refused (rc=$RC)" "$(cat "$TMP/out")"
+fi
+F="$(suite h6l2.test.sh "exit 0" "/usr/bin/${OSA:0:3}\\" "${OSA:3} -e 'display dialog \"x\"'")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+    ok "H6l /usr/bin/${OSA:0:3}\\<newline>${OSA:3} -e 'display dialog' is read joined and refused before it runs"
+else
+    bad "H6l a split $OSA name was not refused (rc=$RC)" "$(cat "$TMP/out")"
+fi
 F="$(suite h6h.test.sh "exit 0" "/usr/bin/$OSA -e 'return 1' >/dev/null" "/usr/bin/$PM -g batt >/dev/null || true")"
 RC="$(shielded "$F")"
 if [ "$RC" = 0 ]; then
@@ -337,6 +354,11 @@ h6i "env REVIEW=1 bash <a suite naming /sbin/$HS_CMD>" env REVIEW=1 bash "$SUITE
 h6i "nice -n 5 env A=1 bash <a suite naming /sbin/$HS_CMD>" nice -n 5 env A=1 bash "$SUITES/h6k.test.sh"
 h6i "bash -s (its commands on stdin)" bash -s < /dev/null
 h6i "python3 - (its program on stdin)" python3 - < /dev/null
+# H6l (continued) — a Python string joined by a backslash-newline is read joined.
+printf '%s\n' 'print("PYTHON SUITE STARTED", flush=True)' 'raise SystemExit(0)' \
+    "P = \"/sbin/${HS_CMD:0:4}\\" "${HS_CMD:4}\"" > "$SUITES/h6l.test.py"
+H6ID=H6l
+h6i "a Python string split by a backslash-newline into /sbin/$HS_CMD" python3 "$SUITES/h6l.test.py"
 H6ID=
 # Scan only, no process started: under sudo PATH is reset past every stand-in, and a launcher
 # option the shield cannot step past (env -S splits a string into a command) is not guessed at.
