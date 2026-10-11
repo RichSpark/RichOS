@@ -201,9 +201,84 @@ pub fn active_team(engine: &Path, data: &Path) -> Result<std::collections::BTree
         if name.is_empty() || name.starts_with('-') || DUTIES.contains(&name)
             || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { continue; }
         let body = std::fs::read_to_string(&path).map_err(|e| RuntimeError(format!("team/{name}.md could not be read: {e}")))?;
-        team.insert(name.to_string(), body);
+        team.insert(name.to_string(), with_media_skills(&body));
     }
     Ok(team)
+}
+
+/// **The standing instruction every RichOS teammate carries** (CEO 2026-10-10: every teammate,
+/// in femcboost and in the RichOS app, uses the watch-video skill for video and the
+/// audio-transcription skill for audio). The same line the stock definitions, the shelf and the
+/// three duty texts carry; `tests/engine_profile.rs` holds this copy to theirs.
+pub const MEDIA_STANDING_INSTRUCTION: &str = "**Standing instruction:** any video or screen recording in your job is watched with the `watch-video` skill, and any audio-only file is transcribed with the `audio-transcription` skill. Invoke them with the Skill tool without being told to.";
+
+/// **A user's teammate as a lease registers it: with the Skill tool and the standing
+/// instruction, whenever it was saved** (second review of `79ba6eb7e`, finding 1). The user's
+/// file is never rewritten (plan §10 point 3), so a teammate activated from the shelf or hired
+/// before 2026-10-10 kept a `tools:` list without `Skill` and no instruction, and could not
+/// use either skill however often the engine updated. Here, and only in what is registered:
+/// - a frontmatter `tools:` list without `Skill` gets it (a comma list, a `[...]` list or a
+///   `- item` list); a definition with no `tools:` line already has every tool and is left so;
+/// - a definition with no standing-instruction line naming both skills gets
+///   [`MEDIA_STANDING_INSTRUCTION`] under its first `# ` heading, where the shelf has it (or
+///   straight after the frontmatter when there is no heading).
+///
+/// A definition that already has both is returned unchanged, byte for byte.
+pub fn with_media_skills(body: &str) -> String {
+    let mut lines: Vec<String> = body.split_inclusive('\n').map(String::from).collect();
+    let is_fence = |l: &str| l.trim_end() == "---";
+    let mut close = if lines.first().is_some_and(|l| is_fence(l)) {
+        lines.iter().skip(1).position(|l| is_fence(l)).map(|i| i + 1)
+    } else { None };
+    if let Some(close) = close.as_mut() {
+        let close_at = *close;
+        let tools = (1..close_at).find(|&i| !lines[i].starts_with(char::is_whitespace)
+            && lines[i].split_once(':').is_some_and(|(k, _)| k.trim() == "tools"));
+        if let Some(i) = tools {
+            let is_skill = |t: &str| { let t = t.trim().trim_matches(['"', '\'']); t == "Skill" || t.starts_with("Skill(") };
+            let (key, value) = lines[i].split_once(':').map(|(k, v)| (k.to_string(), v.to_string())).unwrap();
+            let ending = if value.ends_with("\r\n") { "\r\n" } else if value.ends_with('\n') { "\n" } else { "" };
+            let value = value.trim();
+            if value.is_empty() {
+                let items: Vec<usize> = (i + 1..close_at).take_while(|&j| lines[j].trim_start().starts_with('-')).collect();
+                if let Some(&last) = items.last() {
+                    if !items.iter().any(|&j| is_skill(&lines[j].trim_start()[1..])) {
+                        let indent = lines[last][..lines[last].len() - lines[last].trim_start().len()].to_string();
+                        let end = if lines[last].ends_with('\n') { "" } else { "\n" };
+                        lines[last].push_str(end);
+                        lines.insert(last + 1, format!("{indent}- Skill{ending}"));
+                        *close += 1;
+                    }
+                }
+            } else if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+                if !inner.split(',').any(is_skill) {
+                    lines[i] = format!("{key}: [{}, Skill]{ending}", inner.trim());
+                }
+            } else if !value.split(',').any(is_skill) {
+                lines[i] = format!("{key}: {value}, Skill{ending}");
+            }
+        }
+    }
+    let has_instruction = lines.iter().any(|l| l.starts_with("**Standing instruction:**")
+        && l.contains("`watch-video`") && l.contains("`audio-transcription`"));
+    if !has_instruction {
+        let start = close.map_or(0, |c| c + 1);
+        let heading = (start..lines.len()).find(|&j| !lines[j].trim().is_empty())
+            .filter(|&j| lines[j].starts_with("# "));
+        match heading {
+            Some(h) => {
+                if !lines[h].ends_with('\n') { lines[h].push('\n'); }
+                let blank = lines.get(h + 1).is_some_and(|l| l.trim().is_empty());
+                lines.splice(h + 1..h + 1, [String::from("\n"), format!("{MEDIA_STANDING_INSTRUCTION}\n")]
+                    .into_iter().chain((!blank).then(|| String::from("\n"))));
+            }
+            None => {
+                if start > 0 && !lines[start - 1].ends_with('\n') { lines[start - 1].push('\n'); }
+                lines.splice(start..start, [format!("{MEDIA_STANDING_INSTRUCTION}\n"), String::from("\n")]);
+            }
+        }
+    }
+    lines.concat()
 }
 
 /// **The digest of the team a lease registers** (proto-teammate shelf plan §1 and §6, slice 5):
