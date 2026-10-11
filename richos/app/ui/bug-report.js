@@ -1033,8 +1033,19 @@ window.RichBug = (function () {
     var c = f.card;
     if (!c) return;
     ["is-sending", "is-queued", "is-sent", "is-editing", "is-canceled"].forEach(function (k) { c.classList.remove(k); });
-    var pill = c.querySelector(".bug-pill"), acts = c.querySelector(".bug-actions"), row = c.querySelector(".bug-sentrow");
-    acts.textContent = "";
+    var pill = c.querySelector(".bug-pill"), row = c.querySelector(".bug-sentrow");
+    // **THE BUTTON ROW IS A NEW BOX AT EVERY PAINT, NOT THE OLD ONE EMPTIED** (nightly 49's walk,
+    // D29). The row is sticky; while it floats over a long report, a step that changes the card's
+    // height (Done hides the editing hint and the dashed outline) moves its place in the flow in
+    // the same update that swaps its buttons. The shipped WebKit then repainted the new buttons
+    // only where the old ones had been: after Done, "Send rep" was drawn inside Done's old 74px
+    // and Change it and Cancel not at all, while the accessibility tree had all three at full size
+    // (runs A and E; and 3 of 3 in Safari 18.6 on a guest, on the same files, where the card's
+    // height held at Done drew all three). A box put in fresh is painted whole (also measured
+    // there). Its classes (`is-stuck`) carry over so its edge does not blink before `paintStuck`.
+    var old = c.querySelector(".bug-actions");
+    var acts = node("div", old.className);
+    old.replaceWith(acts);
     row.hidden = true;
     acts.hidden = false;
     c.querySelector(".bug-edithint").hidden = f.step !== "editing";

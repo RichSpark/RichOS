@@ -78,6 +78,13 @@
 //      if the panel's talk is still on; and while a report is open, from the press until it is
 //      sent, canceled or its panel closed, Bust a bug in the Settings menu is disabled, so a press
 //      is always a first press.
+//  21. Nightly 49's walk (docs/verification/2026-10-10-nightly-49-candidate-walk.md), D28, red on
+//      13aa9bc0f: while a report is open in the Rich panel, nothing moves focus to the
+//      conversation's message box. `mock.js` holds "Not now" with `onboardingDeclineHold` until
+//      `__RICHOS_MOCK__.releaseDecline()`, so it finishes while the panel is open, as on the guest.
+//      D29, red on 13aa9bc0f: after Change it and Done with the button row floating over a long
+//      report, the row is a new box (the shipped WebKit painted the refilled old one only where
+//      Done had been), and all three buttons are drawn.
 "use strict";
 
 const path = require("path");
@@ -85,6 +92,7 @@ const fs = require("fs");
 const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled, shellSettled, openThread, HOLD_CURTAIN } = require("./lib/harness");
 const contrast = require("./lib/contrast");
 const coverings = require("./lib/overlays");
+const PNG = require("./lib/png");
 
 const PRIVATE = ["Acme deal", "Northwind Traders", "/Users/you/Projects/northwind/notes.txt"];
 const ANSWER =
@@ -1446,6 +1454,129 @@ async function main() {
     await reopen("closing the panel");
     await page.close();
     return "disabled while " + seen.join("; ");
+  });
+
+  // ---- nightly 49's walk, D28 (docs/verification/2026-10-10-nightly-49-candidate-walk.md) ----
+  // Run I on 13aa9bc0f: the panel asked "What went wrong?", "markerone" was typed into its box,
+  // and while the panel was open the conversation behind it finished its first-run "Not now".
+  // `declineFirstRunInterview` then called `inputEl.focus()`, and " markertwo" went into the
+  // conversation's message box, where Return sends it to Rich. THE RULE: while a report is open in
+  // the Rich panel, nothing moves focus to the conversation's message box. It is one method on the
+  // box (`main.js`, `inputEl.focus`), so every caller goes through it: the first-run path and the
+  // way the home screen and the question sheets reach it (`document.getElementById("input")
+  // .focus()`). Once the panel closes the box takes focus again.
+  await run.check("D28: while a report is open in the Rich panel, nothing moves focus to the conversation's message box: the first-run Not now finishing and a caller outside main.js, asked and at the card; typing and Enter stay the report's, and once the panel closes the box takes focus again", async () => {
+    const page = await open("light", { onboarding: "not-yet", onboardingDeclineHold: true, bugWriteMs: 300 });
+    const before = await page.locator("#messages .tl-user").count();
+    const where = () => page.evaluate(() => { const a = document.activeElement; return a ? (a.id ? "#" + a.id : a.tagName.toLowerCase()) : "none"; });
+    // The path the walk saw: "Not now" pressed in the conversation, its write still on the way.
+    await page.waitForSelector("#first-run-later:visible");
+    await page.click("#first-run-later");
+    await bustABug(page);
+    await page.waitForFunction(() => document.activeElement === document.getElementById("bugdock-input"));
+    await page.keyboard.type("markerone");
+    await page.evaluate(() => window.__RICHOS_MOCK__.releaseDecline());
+    await page.waitForSelector("#first-run[data-state='declined']");
+    const afterDecline = await where();
+    await page.keyboard.type(" markertwo");
+    // Any other caller, the way home.js, questions.js and permissions.js reach the box.
+    await page.evaluate(() => document.getElementById("input").focus());
+    const afterOther = await where();
+    await page.keyboard.type(" markerthree");
+    const seen = { afterDecline, afterOther, panel: await page.inputValue("#bugdock-input"), conversation: await page.inputValue("#input") };
+    assertEqual(seen, { afterDecline: "#bugdock-input", afterOther: "#bugdock-input", panel: "markerone markertwo markerthree", conversation: "" }, "focus left the panel's box");
+    // Return is the report's: the card comes, and nothing went to Rich's conversation.
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "a message went to Rich's conversation");
+    // At the card (runs F, G and J): the panel's box has the keys, and a caller does not take them.
+    await page.locator("#bugdock-input").focus();
+    await page.evaluate(() => document.getElementById("input").focus());
+    assertEqual(await where(), "#bugdock-input", "at the card, focus left the panel's box");
+    // The way out: once the panel is closed, the app focuses the box again.
+    await page.click("#bug-cancel");
+    await page.waitForSelector(".bugcard.is-canceled");
+    await page.click("#bugdock-x");
+    await page.waitForSelector("#bugdock", { state: "hidden" });
+    await page.evaluate(() => document.getElementById("input").focus());
+    assertEqual(await where(), "#input", "after the panel closed, the box cannot take focus");
+    await page.close();
+    return `after Not now finished: ${afterDecline}; after a caller outside main.js: ${afterOther}; panel "${seen.panel}", conversation "${seen.conversation}"; at the card: focus stayed; panel closed: #input focuses`;
+  });
+
+  // ---- nightly 49's walk, D29 (docs/verification/2026-10-10-nightly-49-candidate-walk.md) ----
+  // Runs A and E on 13aa9bc0f: Change it, then Done, and the sticky button row showed a gold "Send
+  // rep" inside Done's old 74px, with Change it and Cancel not drawn, while the accessibility tree
+  // had all three at full size. Reproduced on 13aa9bc0f's files in Safari 18.6 on a macOS 15.7.7
+  // test VM guest, 3 runs of 3: the row floats over a long report, and Done shrinks the card (the
+  // editing hint and the dashed outline go, 1064 -> 1006px here) in the same update that swaps the
+  // row's buttons, so the row's place in the flow moves while it stays put on screen, and the new
+  // buttons were painted only where Done had been. The same page with the card's height held at
+  // Done drew all three, and so did the same page with the row replaced by a new box; the old box
+  // given its own layer (will-change), or the panel without its entry animation, did not. The fix
+  // is that: `paintCard` puts in a new row at every paint, and a new box is painted whole.
+  //
+  // WHAT THIS CAN AND CANNOT SEE. This harness's WebKit paints the whole page for a screenshot, so
+  // its pixels show all three buttons on 13aa9bc0f too (measured before this check was written);
+  // the stale paint is only in the shipped WebKit's on-screen layers, which is where the guest
+  // check looks. So this holds the condition the walk was in (the row floating, the card shorter
+  // after Done), checks the pixels of every button anyway, and asserts the property the fix rests
+  // on: the row after Done is a new box, not the one that held Done. Red on 13aa9bc0f by that.
+  await run.check("D29: after Change it and Done, with the button row floating over a long report, the row is a new box and all three buttons are drawn at full width", async () => {
+    const steps = ["Open a conversation.", "Type a message.", "Press Send twice, quickly.", "Watch the conversation.", "Nothing appears.", "Press Send again.", "Close the window.", "Open it again from the Dock.", "Press Send twice again.", "See that nothing appears again.", "Wait a minute.", "Press Send once more."];
+    const page = await open("light", { bugSteps: steps }, { width: 1400, height: 864 });
+    await bustABug(page);
+    await answer(page, "When I press the Send button twice quickly, the second press does nothing and no message appears.");
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    // The walk's view: the report's top in sight, the row floating over the rest of it.
+    await page.evaluate(() => {
+      const sc = document.getElementById("bugdock-msgs");
+      sc.scrollTop += document.querySelector(".bugcard .bug-doc").getBoundingClientRect().top - sc.getBoundingClientRect().top - 40;
+    });
+    await page.waitForSelector(".bugcard .bug-actions.is-stuck");
+    const before = await page.evaluate(() => {
+      window.__d29Row = document.querySelector(".bugcard .bug-actions");
+      return { card: document.querySelector(".bugcard").getBoundingClientRect().height, row: window.__d29Row.getBoundingClientRect().top };
+    });
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const after = await page.evaluate(() => {
+      const row = document.querySelector(".bugcard .bug-actions");
+      const rr = row.getBoundingClientRect();
+      return {
+        card: document.querySelector(".bugcard").getBoundingClientRect().height,
+        row: rr.top,
+        stuck: row.classList.contains("is-stuck"),
+        same: row === window.__d29Row,
+        buttons: [...row.querySelectorAll(".desk-btn")].map((b) => { const r = b.getBoundingClientRect(); return { text: b.textContent, x: r.left - rr.left, y: r.top - rr.top, w: r.width, h: r.height }; }),
+      };
+    });
+    // The walk's condition: the row floats where it was while the card got shorter under it.
+    assert(after.stuck, "the row is not floating over the report after Done, so this is not the walk's view");
+    assert(after.card < before.card, `the card did not get shorter at Done (${before.card} -> ${after.card}px), so this is not the walk's view`);
+    assertEqual(Math.round(after.row), Math.round(before.row), "the row moved on screen at Done");
+    assertEqual(after.buttons.map((b) => b.text), ["Send report", "Change it", "Cancel"], "the row's buttons after Done");
+    // The pixels: down each button's right edge, for at least half its height, something other
+    // than the row's ground is drawn (the gold fill, or the outline of Change it and Cancel).
+    const shot = PNG.decode(await page.locator(".bugcard .bug-actions").screenshot());
+    const at = (x, y) => { const i = (Math.round(y) * shot.width + Math.round(x)) * shot.channels; return [shot.data[i], shot.data[i + 1], shot.data[i + 2]]; };
+    const last = after.buttons[after.buttons.length - 1];
+    const ground = at(Math.min(shot.width - 4, last.x + last.w + 12), last.y + last.h / 2);
+    const drawn = after.buttons.map((b) => {
+      let marked = 0;
+      for (let y = b.y + 1; y < b.y + b.h - 1; y++) {
+        const p = at(Math.floor(b.x + b.w - 1), y);
+        if (Math.max(...p.map((v, k) => Math.abs(v - ground[k]))) > 24) marked++;
+      }
+      return { text: b.text, marked };
+    });
+    assert(drawn.every((d, k) => d.marked > after.buttons[k].h / 2), "a button is not drawn to its right edge: " + JSON.stringify(drawn));
+    // What the fix rests on: a new box, painted whole.
+    assertEqual(after.same, false, "after Done the row is the box that held Done, emptied and refilled, not a new box");
+    await page.close();
+    return `card ${Math.round(before.card)} -> ${Math.round(after.card)}px with the row floating at ${Math.round(after.row)}px; buttons ${after.buttons.map((b) => b.text + " " + Math.round(b.w)).join(", ")}px; drawn to the right edge: ${drawn.map((d) => d.text + " " + d.marked + "px").join(", ")}; a new box: ${!after.same}`;
   });
 
   // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
