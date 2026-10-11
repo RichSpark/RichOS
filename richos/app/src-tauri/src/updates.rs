@@ -1213,7 +1213,7 @@ fn relaunch_if_clear(app: &AppHandle) {
 /// is deliberately looking at this surface. Serving him a verdict up to
 /// `WATCH_INTERVAL` old there would be the one place a stale answer is guaranteed to be
 /// seen — and it would be seen as an Install button that should not be there.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn update_state(app: AppHandle) -> UpdateView {
     refresh_work_verdict(&app);
     // The way back is re-read here for the same reason the gate is: this is the moment he
@@ -1223,12 +1223,12 @@ pub fn update_state(app: AppHandle) -> UpdateView {
     app.state::<Updates>().snapshot()
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn update_check(app: AppHandle) -> UpdateView {
     check(&app).await
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn update_install(app: AppHandle) -> UpdateView {
     let view = install(&app).await;
     // THE PRESS THAT DOWNLOADED IT ARMS THE RELAUNCH, and only that press: the selftest
@@ -1242,14 +1242,14 @@ pub async fn update_install(app: AppHandle) -> UpdateView {
 }
 
 /// The third verb, reached the same way the other two are.
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn update_rollback(app: AppHandle) -> UpdateView {
     rollback(&app).await
 }
 
 /// Compatibility endpoint for an older frontend. Updates never exit a live session;
 /// verified staging is activated automatically during the next normal app launch.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn update_relaunch(app: AppHandle) -> UpdateView {
     app.state::<Updates>().snapshot()
 }

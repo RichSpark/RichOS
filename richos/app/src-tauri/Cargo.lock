@@ -2912,6 +2912,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "richos-command"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "richos-core"
 version = "0.1.0"
 dependencies = [
@@ -2942,6 +2951,7 @@ dependencies = [
  "notify",
  "objc2",
  "reqwest",
+ "richos-command",
  "richos-core",
  "richos-user-update",
  "richos-voice",

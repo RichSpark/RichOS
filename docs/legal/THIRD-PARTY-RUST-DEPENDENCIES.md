@@ -15,9 +15,9 @@ Identity is the lockfile, not a date. Regenerate after any dependency change and
 
 | Lockfile | Workspace | sha256 |
 |---|---|---|
-| `richos/app/Cargo.lock` | `richos/app` | `a00e5451e76f29c9a7aa836411d26ed2b9fcbca4792998c58c4ca0ae26937f14` |
+| `richos/app/Cargo.lock` | `richos/app` | `ad2e83aa4a9879d1d388471689eee86fddcd92fde38ed2dcfb51762e109fe837` |
 | `richos/app/crates/richos-user-update/Cargo.lock` | `richos/app/crates/richos-user-update` | `46985b0c2a0962ab8a06f36939b83c4695d46259b2245c821c7f94c6f751f1af` |
-| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `a8e80ec91c04d8b475d16d78eccea1321c5b3be1642a7d6a1b11dbc30a362eb3` |
+| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `f97fc706bc4f4b7ffa5124357db03e6877a896001db354df5df76756649159ac` |
 | `richos/mobile/conformance/verifier/Cargo.lock` | `richos/mobile/conformance/verifier` | `8036e74423f9ef07b0d595dca1b305e4319f85a9ba03b56ffc54c1433034f2f6` |
 | `richos/tools/native-claude-stdio/Cargo.lock` | `richos/tools/native-claude-stdio` | `3f99c5fc84319ab96697e7c2086644362f6d472ebd7825425753e52e0a43380e` |
 

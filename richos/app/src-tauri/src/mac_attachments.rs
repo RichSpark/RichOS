@@ -394,7 +394,7 @@ pub fn listen_for_drops(window: &tauri::WebviewWindow) {
 
 // ---- the commands ----------------------------------------------------------------------
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn attach_dropped_file(
     state: State<'_, MacAttachments>,
     draft_id: String,
@@ -408,7 +408,7 @@ pub fn attach_dropped_file(
 
 /// The body is the file's raw bytes. Headers: `x-richos-draft`, `x-richos-attachment`,
 /// `x-richos-name` (percent-encoded) and `x-richos-type`.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn attach_pasted_file(state: State<'_, MacAttachments>, request: tauri::ipc::Request<'_>) -> Result<AttachedView, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err(NOT_SAVED.into()) };
     let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
@@ -422,7 +422,7 @@ pub fn attach_pasted_file(state: State<'_, MacAttachments>, request: tauri::ipc:
 /// *Add to chat* from the Output panel (Output side panel PRD §5.4, slice S7). The page names
 /// its draft, the attachment id it minted for the chip (as for a drop or a paste) and an
 /// output id — never a path.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn output_attach(
     state: State<'_, MacAttachments>,
     files: State<'_, OutputFiles>,
@@ -433,12 +433,12 @@ pub fn output_attach(
     state.attach_recorded(&files, &draft_id, &attachment_id, &output_id)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn discard_attachment(state: State<'_, MacAttachments>, draft_id: String, attachment_id: String) -> Result<bool, String> {
     state.discard(&draft_id, &attachment_id)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn commit_attachments(
     state: State<'_, MacAttachments>,
     thread_id: String,
