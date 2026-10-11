@@ -4463,6 +4463,178 @@ class MergeGateRefusal_LeavesTheMainCheckoutAsItWas(Base):
         self.assertIn("cc/" + name, branches(self.other))
 
 
+class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
+    """2026-10-11, both in richos from the lead's terminal, each a background
+    script that took the lease and then ran `workspaces.sh merge`:
+
+    1. 14:51 (echo-opus-feature1): `land-lease: RENEWED`, the lead's turn ended
+       a second later, and its turn-end release (operator_fences.py turn-end)
+       found the repository at rest and deleted the lease; the merge's ORIG_HEAD
+       was refused at 14:51:30, "The land lease for this repository is free."
+    2. 17:18 (echo-sonnet-quotaflake3): ACQUIRED; the merge wrote ORIG_HEAD at
+       17:18:10 under the lease; the lead's turn ended at once and its release
+       ran before the merge wrote its index (AUTO_MERGE at 17:18:12), so the
+       repository again looked at rest. The gate ran five minutes, the move of
+       main was refused at 17:23:27, and the merge's own `git merge --abort` was
+       refused by the same fence after rewriting the index, leaving MERGE_HEAD.
+
+    The test process is the Claude session (as in the class above), the land is
+    a background script it started, and the turn end is the release run as the
+    session's own child while that script is between two steps."""
+
+    def setUp(self):
+        super().setUp()
+        self.name = "zach-opus-lz"
+        cc = self.make_cc(self.name)
+        aid, _npath = self.spawn(self.name, cc=cc)
+        self.commit(cc)
+        self.finish(aid)
+        self.tip = run("git", "-C", cc, "rev-parse", "HEAD").stdout.strip()
+        # main has an upstream and is pushed, so "at rest" can be true.
+        origin = os.path.join(self.env.root, "other-origin.git")
+        run("git", "init", "-q", "--bare", origin)
+        run("git", "-C", self.other, "remote", "add", "origin", origin)
+        run("git", "-C", self.other, "push", "-q", "-u", "origin", "main")
+        decl = os.path.join(self.env.root, "fence-entity")
+        os.makedirs(decl)
+        with open(os.path.join(decl, "orchestration.config"), "w") as f:
+            f.write('OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\n')
+        fences = os.path.join(ENGINE, "scripts", "operator-fences.sh")
+        run("bash", fences, "install", "--repo", self.other, "--entity", decl)
+        run("bash", fences, "on", "--repo", self.other, "--entity", decl)
+        start = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())], capture_output=True,
+                               text=True, env=dict(os.environ, TZ="UTC0", LC_ALL="C")).stdout
+        sessions = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "sessions")
+        os.makedirs(sessions, exist_ok=True)
+        with open(os.path.join(sessions, "%d.json" % os.getpid()), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": self.sid, "cwd": self.entity,
+                       "procStart": " ".join(start.split()), "kind": "interactive"}, f)
+        self.envx = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PID", "CLAUDE_CODE_ENTRYPOINT")}
+        self.lease_cmd = os.path.join(ENGINE, "scripts", "land-lease.sh")
+        self.d = os.path.realpath(tempfile.mkdtemp(prefix="lease-land-", dir=self.env.root))
+        self.head = run("git", "-C", self.other, "rev-parse", "HEAD").stdout.strip()
+        self.home = os.path.dirname(ws.land_lock_path(self.other))
+
+    def flag(self, name):
+        return os.path.join(self.d, name)
+
+    def wait_for(self, name, pr):
+        guard = time.monotonic() + 60
+        while not os.path.exists(self.flag(name)):
+            if pr.poll() is not None:
+                self.fail("the land script ended before %s: %s" % (name, pr.communicate()))
+            self.assertLess(time.monotonic(), guard, "the land script never reached " + name)
+            time.sleep(0.02)
+
+    def gate(self):
+        """git's own merge gate, which passes (incident 2: the gate ran first)."""
+        hook = os.path.join(self.other, ".git", "hooks", "pre-merge-commit")
+        with open(hook, "w") as f:
+            f.write("#!/bin/sh\necho 'the merge gate ran and passed'\nexit 0\n")
+        os.chmod(hook, 0o755)
+
+    def pause_after_orig_head(self):
+        """Holds the merge right after Git committed its ORIG_HEAD, before it
+        writes its index: the window the 17:18 turn end fell into."""
+        chain = os.path.join(self.other, ".git", "hooks", "reference-transaction.d")
+        os.makedirs(chain, exist_ok=True)
+        hook = os.path.join(chain, "60-test-pause-after-orig-head")
+        with open(hook, "w") as f:
+            f.write("#!/bin/bash\n[ \"$1\" = committed ] || exit 0\ngrep -q ' ORIG_HEAD$' || exit 0\n"
+                    "[ -f '%(d)s/arm' ] || exit 0\nrm -f '%(d)s/arm'\n: > '%(d)s/paused'\n"
+                    "i=0; while [ ! -f '%(d)s/go' ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done\n"
+                    "exit 0\n" % {"d": self.d})
+        os.chmod(hook, 0o755)
+        open(self.flag("arm"), "w").close()
+
+    def land_script(self, between=""):
+        """The lead's script: acquire, then merge, in one background command."""
+        path = os.path.join(self.d, "merge.sh")
+        with open(path, "w") as f:
+            f.write("#!/bin/bash\nbash '%s' acquire --repo '%s' || exit $?\n%s"
+                    "'%s' '%s' --session '%s' merge '%s' -m 'Merge %s'\n"
+                    % (self.lease_cmd, self.other, between, sys.executable, LIB, self.sid, self.name,
+                       self.name))
+        return subprocess.Popen(["bash", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                env=self.envx)
+
+    def turn_end(self):
+        """The holder's turn end, as the Stop hook runs it: a child of the session."""
+        r = subprocess.run([sys.executable, os.path.join(ENGINE, "scripts", "lib", "operator_fences.py"),
+                            "turn-end"], capture_output=True, text=True, env=self.envx)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r.stdout
+
+    def landed(self):
+        return run("git", "-C", self.other, "merge-base", "--is-ancestor", self.tip, "main",
+                   check=False).returncode == 0
+
+    def test_incident_1_renewed_then_turn_end_then_merge_at_once(self):
+        # The previous land (tooling4) took the lease, so this script RENEWS it.
+        r = subprocess.run(["bash", self.lease_cmd, "acquire", "--repo", self.other],
+                           capture_output=True, text=True, env=self.envx)
+        self.assertIn("ACQUIRED", r.stdout, r.stdout + r.stderr)
+        pr = self.land_script(between=": > '%s'\nwhile [ ! -f '%s' ]; do sleep 0.02; done\n"
+                              % (self.flag("acquired"), self.flag("go")))
+        self.wait_for("acquired", pr)
+        said = self.turn_end()
+        open(self.flag("go"), "w").close()
+        out, err = pr.communicate(timeout=180)
+        self.assertIn("RENEWED", out + err)
+        self.assertNotIn("does not hold the land lease", out + err)
+        self.assertEqual(pr.returncode, 0, out + err)
+        self.assertTrue(self.landed(), out + err)
+        self.assertIn("still running", said)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "fence-refusals.jsonl")))
+
+    def test_incident_2_turn_end_inside_the_merge_then_the_gate_then_main(self):
+        self.gate()
+        self.pause_after_orig_head()
+        pr = self.land_script()
+        self.wait_for("paused", pr)
+        self.turn_end()
+        open(self.flag("go"), "w").close()
+        out, err = pr.communicate(timeout=180)
+        self.assertIn("ACQUIRED", out + err)
+        self.assertNotIn("does not hold the land lease", out + err)
+        self.assertEqual(pr.returncode, 0, out + err)
+        self.assertTrue(self.landed(), out + err)
+        self.assertNotEqual(run("git", "-C", self.other, "rev-parse", "-q", "--verify", "MERGE_HEAD",
+                                check=False).returncode, 0)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "fence-refusals.jsonl")))
+
+    def test_the_turn_end_after_the_land_has_ended_still_releases_it(self):
+        pr = self.land_script()
+        out, err = pr.communicate(timeout=180)
+        self.assertEqual(pr.returncode, 0, out + err)
+        run("git", "-C", self.other, "push", "-q", "origin", "main")
+        self.assertEqual(self.turn_end(), "")
+        self.assertEqual([n for n in os.listdir(self.home) if n.endswith(".lease")], [])
+
+    def test_a_merge_refused_for_a_lost_lease_leaves_no_merge_head(self):
+        """Whatever frees the lease mid-merge (here the holder's own explicit
+        release), the merge's own abort retakes the free lease and the refused
+        merge leaves the main checkout as it was."""
+        self.gate()
+        self.pause_after_orig_head()
+        pr = self.land_script()
+        self.wait_for("paused", pr)
+        r = subprocess.run(["bash", self.lease_cmd, "release", "--repo", self.other],
+                           capture_output=True, text=True, env=self.envx)
+        self.assertIn("RELEASED", r.stdout, r.stdout + r.stderr)
+        open(self.flag("go"), "w").close()
+        out, err = pr.communicate(timeout=180)
+        self.assertNotEqual(pr.returncode, 0, out + err)
+        self.assertIn("does not hold the land lease", err)
+        self.assertIn("was aborted", err)
+        self.assertNotEqual(run("git", "-C", self.other, "rev-parse", "-q", "--verify", "MERGE_HEAD",
+                                check=False).returncode, 0, out + err)
+        self.assertEqual(run("git", "-C", self.other, "status", "--porcelain",
+                             "--untracked-files=no").stdout, "")
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "HEAD").stdout.strip(), self.head)
+        self.assertFalse(self.landed())
+
+
 ENGINE = os.path.realpath(os.path.join(HERE, "..", ".."))
 
 

@@ -12,6 +12,10 @@
 #   T6  WITH THE SWITCH OFF a lease file is ignored: no output, nothing touched
 #   T7  no leases at all: no output; the hook always exits 0 and its stdout, when
 #       there is any, is one JSON object
+#   T8  a lease whose land command is still running (the session's background
+#       script took it and has not merged yet) is kept at the turn end, however
+#       the repository looks, and the message says so; the turn end after that
+#       command has ended releases it (2026-10-11, twice in richos)
 #
 # Usage: scripts/hooks/release-land-leases.test.sh
 
@@ -49,6 +53,17 @@ turn_end A; rc=$?
 { [ $rc = 0 ] && [ -z "$OFX_OUT" ] && [ "$(lease_count)" = 0 ]; } \
     && ok "T1 at rest: this session's lease is released at its turn end, silently" \
     || bad "T1 at rest: this session's lease is released at its turn end, silently" "rc=$rc leases=$(lease_count) $OFX_OUT"
+
+# T8: the land runs in the background of the session (a script that took the
+# lease and has not reached its merge yet) while the session's turn ends.
+ofx_in A "( $(ofx_lease acquire --repo "$R") >/dev/null; : > '$OFX/t8-taken'; while [ ! -f '$OFX/t8-go' ]; do sleep 0.05; done ) & while [ ! -f '$OFX/t8-taken' ]; do sleep 0.05; done; printf '{}' | bash '$HOOK' > '$OFX/t8-said' 2>/dev/null; ls '$OFX/locks/' | grep -c '[.]lease\$' > '$OFX/t8-count'; : > '$OFX/t8-go'; wait"
+{ [ "$(cat "$OFX/t8-count" 2>/dev/null)" = 1 ] && grep -q "still running" "$OFX/t8-said" && is_json_or_empty "$(cat "$OFX/t8-said")"; } \
+    && ok "T8 a lease whose land command still runs is kept at the turn end, and the message says so" \
+    || bad "T8 a lease whose land command still runs is kept at the turn end, and the message says so" \
+           "count=$(cat "$OFX/t8-count" 2>/dev/null) said=$(cat "$OFX/t8-said" 2>/dev/null) $OFX_OUT"
+turn_end A
+[ "$(lease_count)" = 0 ] && ok "T8 the turn end after that land has ended releases the lease" \
+    || bad "T8 the turn end after that land has ended releases the lease" "$OFX_OUT"
 
 ofx_in A "$(ofx_lease acquire --repo "$R") && cd '$R' && printf 'n\n' > n.txt && git add n.txt && git commit -q -m n"
 turn_end A; rc=$?

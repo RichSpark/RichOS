@@ -7,7 +7,10 @@
 # ancestor of this hook):
 #   * at rest (no merge, cherry-pick, revert or rebase in progress, no unmerged
 #     path, `git status --porcelain --untracked-files=no` empty, and main not
-#     ahead of its upstream) -> released, silently;
+#     ahead of its upstream) and none of the land commands the lease records
+#     still running -> released, silently. A background land between two of
+#     its steps looks at rest; on 2026-10-11 this hook released two leases that
+#     way and the fence refused both merges (operator_fences.land_process);
 #   * otherwise -> kept, and one systemMessage names the repository, the holder's
 #     conversation, the age and what is unfinished, including which paths are
 #     dirty, so a lease held up by ANOTHER writer's dirt can be told from the
