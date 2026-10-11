@@ -25,9 +25,13 @@ mutation_focus stop-at-want
 L="scripts/lib/operator_fences.py"
 
 mutant released-when-not-at-rest "T2 " "$L" \
-    '        rest, reasons, dirty = at_rest(main_paths["main"], main_paths["gitdir"]){NL}        if rest:' \
-    '        rest, reasons, dirty = at_rest(main_paths["main"], main_paths["gitdir"]){NL}        if True:' \
+    '        if rest:{NL}            flock = _Flock(files.lock)' \
+    '        if True:{NL}            flock = _Flock(files.lock)' \
     "F3: a lease would be released with a merge half done or commits unpushed, and another land would start on top."
+mutant released-under-a-running-land "T8 " "$L" \
+    '        lands = running_lands(lease)' \
+    '        lands = []' \
+    "2026-10-11: the holder's turn end would release the lease between two steps of its own background land, and the fence would refuse the land's next write (twice in richos that day)."
 mutant dirty-paths-unnamed "T3 " "$L" \
     '            reasons.append("uncommitted changes (%s)" % ", ".join(dirty[:6] + (["..."] if len(dirty) > 6 else [])))' \
     '            reasons.append("uncommitted changes")' \

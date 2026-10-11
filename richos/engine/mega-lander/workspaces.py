@@ -5203,6 +5203,11 @@ def merge_and_land(ref, me="", message=""):
             msg += ["-m", reviews[t]]
         args = ["merge", "--no-ff", "--no-edit"] + msg + [t]
         before = git(main, "rev-parse", "HEAD")[1].strip()
+        # The lease this land runs under names this command, so the holder's
+        # turn end keeps it until the command ends (2026-10-11: two merges in
+        # a background script were refused after the lead's turn end released
+        # the lease between their steps; operator_fences.land_process).
+        _fence_program().register_land(main)
         # git's own checks (pre-merge-commit) run here and may take minutes.
         r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
         if r.returncode != 0:
@@ -5532,12 +5537,48 @@ def _abort_own_merge(main, before, tip):
     if mh.strip() != tip or not before or now_head != before:
         return ("A merge is in progress in %s that is not the one this command started (MERGE_HEAD %s, HEAD %s); "
                 "it was left alone." % (main, mh.strip()[:12], now_head[:12]))
+    blocked = _lease_for_abort(main)
+    if blocked:
+        return ("The merge it started was NOT aborted and is still in progress in %s: %s"
+                % (main, blocked))
     rc, out, err = git(main, "merge", "--abort", timeout=300)
     left = git(main, "rev-parse", "-q", "--verify", "MERGE_HEAD")[0] == 0
     if rc == 0 and not left:
         return "The merge it started was aborted: %s is back at %s with no merge in progress." % (main, before[:12])
     return ("The merge it started could NOT be aborted (exit %d) and is still in progress in %s:\n%s"
             % (rc, main, (out + err).strip()[-2000:]))
+
+
+def _lease_for_abort(main):
+    """An empty string when the abort may run: the fence is off or not installed, or this
+    process holds the land lease, or the lease was free and this command has
+    just taken it again. Otherwise the reason the abort must not run.
+
+    2026-10-11 (echo-sonnet-quotaflake3): the lease was released while the
+    merge's gate ran, the fence refused the move of main, and the abort below
+    met the same fence without the lease; `git merge --abort` rewrote the index
+    before the fence refused its ORIG_HEAD and left MERGE_HEAD behind. A lease
+    that is FREE is retaken here, through land-lease.sh acquire and so with
+    every rule of an acquire, by the same holder that started the merge. A
+    lease another holder has is never taken, and then the abort is not run at
+    all, because run without the lease it rewrites the tree and is refused."""
+    try:
+        F = _fence_program()
+        conf, _paths = F.launcher_for(main)
+        if not F.fenced(conf) or F.authorized(F.Files(conf))[0]:
+            return ""
+    except Exception as exc:    # noqa: BLE001  a check that cannot decide says so
+        return "whether this command holds the land lease could not be read (%s)" % exc
+    lease_cmd = os.path.join(engine_root(), "scripts", "land-lease.sh")
+    r = subprocess.run(["bash", lease_cmd, "acquire", "--repo", main, "--wait", "30"],
+                       capture_output=True, text=True)
+    said = (r.stdout + r.stderr).strip()
+    if r.returncode == 0 and F.authorized(F.Files(conf))[0]:
+        return ""
+    return ("the land lease is not this command's and could not be taken (%s), and an abort without it "
+            "rewrites the tree and is then refused by the fence. Once the lease is free: "
+            "%s acquire --repo %s, then %s abort-orphan --repo %s."
+            % (said[-600:] or "exit %d" % r.returncode, lease_cmd, main, lease_cmd, main))
 
 
 def _require_landed(rec, chain, ignored_ok="", deadline=None, record=True):

@@ -680,6 +680,93 @@ def authorized(files, chain=None):
 
 
 # ---------------------------------------------------------------------------
+# the land commands a lease is held for (2026-10-11)
+# ---------------------------------------------------------------------------
+# A LEASE IS NOT RELEASED UNDER A LAND THAT IS STILL RUNNING. Twice on
+# 2026-10-11 the lead's background script took the lease (ACQUIRED at 17:18,
+# RENEWED at 14:51) and ran `workspaces.sh merge` in the same script, and the
+# lead's own turn ended a second later. Its turn-end release (cmd_turn_end)
+# looked at the repository, found it at rest (14:51:29: the merge had not
+# started; 17:18:11: the merge had written ORIG_HEAD at 17:18:10 but not yet
+# its index, AUTO_MERGE at 17:18:12) and deleted the lease. The fence then
+# refused the merge's ORIG_HEAD at 14:51:30, and the move of main at 17:23:27
+# after a five-minute gate, with "The land lease for this repository is free."
+# (ref-transactions.jsonl, fence-refusals.jsonl and the lead's transcript.)
+# "At rest" is a snapshot of the repository; it cannot see a land between two
+# of its steps. So the lease names the command each land runs in, the holder's
+# own child on that command's ancestry (a Claude Bash call's `zsh -c`, alive
+# until the call ends, foreground or background), and the turn-end release
+# keeps the lease while any of them still runs.
+
+def land_process(holder, chain=None):
+    """{pid, start} of the command this land runs in: the holder's own child on
+    this process's ancestry (this process itself when the holder is its parent),
+    or None when the holder is not an ancestor."""
+    me = proc(os.getpid())
+    full = ([(me["pid"], me["start"])] if me else []) + list(ancestors() if chain is None else chain)
+    try:
+        hp, hs = int(holder["pid"]), int(holder["start"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    for i, (p, s) in enumerate(full):
+        if p == hp and s == hs:
+            return {"pid": full[i - 1][0], "start": full[i - 1][1]} if i > 0 else None
+    return None
+
+
+def running_lands(lease):
+    """The land commands recorded on `lease` that still run: [{pid, start}]."""
+    out = []
+    for e in (lease or {}).get("land_processes") or []:
+        try:
+            entry = {"pid": int(e["pid"]), "start": int(e["start"])}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if entry not in out and alive(entry["pid"], entry["start"]):
+            out.append(entry)
+    return out
+
+
+def _land_processes(previous, holder, chain=None):
+    """The running land commands of the same holder carried over, plus this one."""
+    out = running_lands(previous) if previous and same_holder(previous.get("holder"), holder) else []
+    me = land_process(holder, chain)
+    if me and me not in out:
+        out.append(me)
+    return out
+
+
+def register_land(repo):
+    """Called by a land (workspaces.sh merge) before its first write: when this
+    process holds the lease of `repo`, the command it runs in is added to the
+    lease, so the holder's turn end cannot release the lease under it, whichever
+    call took the lease. True when recorded; never raises."""
+    try:
+        conf, paths = launcher_for(repo)
+        if not fenced(conf) or not paths:
+            return False
+        files = Files(conf)
+        chain = ancestors()
+        flock = _Flock(files.lock)
+        deadline = time.monotonic() + 10
+        while not flock.try_take():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+        try:
+            held, lease = authorized(files, chain)
+            if not held:
+                return False
+            lease["land_processes"] = _land_processes(lease, lease["holder"], chain)
+            write_json_atomic(files.lease, lease)
+            return True
+        finally:
+            flock.release()
+    except Exception:              # noqa: BLE001  a record that fails leaves the land as it was before
+        return False
+
+
+# ---------------------------------------------------------------------------
 # at rest (e6)
 # ---------------------------------------------------------------------------
 
@@ -1897,10 +1984,14 @@ class _Flock(object):
                 self.fh = None
 
 
-def _new_lease(holder, repo_main, previous=None, preserved=None):
+def _new_lease(holder, repo_main, previous=None, preserved=None, renewing=None):
+    """`renewing`: the same holder's lease being renewed, whose running land
+    commands are carried over (a renewal from a second call must not drop the
+    first call's land that is still running)."""
     t = now()
     lease = {"schema": 1, "repository": repo_main, "holder": holder, "acquired": iso(t),
-             "acquired_epoch": t, "renewed_epoch": t, "expires": None}
+             "acquired_epoch": t, "renewed_epoch": t, "expires": None,
+             "land_processes": _land_processes(renewing, holder)}
     if holder.get("kind") != "claude":
         lease["expires"] = t + _ttl()
     if previous:
@@ -1944,7 +2035,7 @@ def cmd_acquire(opts):
                     state = lease_state(lease)
                     if state == "none" or same_holder(lease["holder"], holder):
                         renewed = state != "none"
-                        new = _new_lease(holder, paths["main"])
+                        new = _new_lease(holder, paths["main"], renewing=lease if renewed else None)
                         if renewed:
                             new["acquired"] = lease.get("acquired")
                             new["acquired_epoch"] = lease.get("acquired_epoch")
@@ -2257,6 +2348,14 @@ def cmd_turn_end(argv):
             continue
         main_paths = repo_paths(paths["main"])
         rest, reasons, dirty = at_rest(main_paths["main"], main_paths["gitdir"])
+        # A land this session started (a background script, a merge whose gate
+        # runs for minutes) is not at rest however the repository looks between
+        # two of its steps (2026-10-11, see land_process).
+        lands = running_lands(lease)
+        if lands:
+            rest = False
+            reasons = ["its land command (process %s) is still running"
+                       % ", ".join(str(e["pid"]) for e in lands)] + reasons
         if rest:
             flock = _Flock(files.lock)
             if flock.try_take():
