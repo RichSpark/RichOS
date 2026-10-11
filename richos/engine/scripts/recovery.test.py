@@ -78,6 +78,50 @@ class Recovery(unittest.TestCase):
         self.assertEqual(current()['deadline'],deadline)
         self.assertEqual(current()['status'],'investigating')
 
+    def test_conflicting_pass_creates_one_focused_independent_reconciliation(self):
+        tip='c'*40
+        def add(rid,verdict,findings=(),earlier=(),parent=''):
+            directory=self.base/rid;directory.mkdir()
+            (directory/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=list(findings),earlier_findings=list(earlier)),earlier_findings_in=[dict(id=e['id']) for e in earlier])))
+            row=dict(id=rid,repo=str(self.repo),work=self.work,tip=tip,trigger='handover',verdict=verdict,record=str(directory),recheck_of=parent)
+            with self.ledger.open('a') as out:out.write(json.dumps(row)+'\n')
+        add('block','changes-requested',[dict(title='real blocker',blocks=True,priority=1)])
+        add('ignored','passed')
+        task=R.conflict_task(str(self.repo),self.work,tip)
+        self.assertEqual(task['prior'],'block')
+        self.assertEqual(task['findings'],['block#1'])
+        self.assertEqual(R.conflict_task(str(self.repo),self.work,tip),task)
+        self.assertIsNone(R.conflict_task(str(self.repo),'unrelated',tip))
+        add('rechecked','passed',earlier=[dict(id='block#1',status='withdrawn',blocks=False,note='independent original authority contradicts premise')],parent='block')
+        self.assertIsNone(R.conflict_task(str(self.repo),self.work,tip))
+        effective,_=R.F.review_of(R.rows(self.ledger),tip,str(self.repo))
+        self.assertEqual(effective['verdict'],'passed')
+        state=json.loads((R.root()/'reconciliations'/(task['id']+'.json')).read_text())
+        self.assertEqual(state['status'],'resolved')
+
+    def test_watcher_automatically_requests_conflict_recheck_with_frozen_claim(self):
+        import review_watch as RW
+        from types import SimpleNamespace
+        tip='c'*40
+        for rid,verdict in [('block','changes-requested'),('ignored','passed')]:
+            directory=self.base/rid;directory.mkdir()
+            (directory/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[dict(title='blocker',blocks=True)] if rid=='block' else []))))
+            with self.ledger.open('a') as out:out.write(json.dumps(dict(id=rid,repo=str(self.repo),work=self.work,tip=tip,trigger='handover',verdict=verdict,record=str(directory)))+'\n')
+        item=RW.Item(self.work,'worker',str(self.repo),tip,'b'*40,'ended',ref='worker')
+        world=SimpleNamespace(repos=['repo'],repos_error='',registry_items=lambda *a:([item],[]),codex_items=lambda *a:([],[]))
+        watcher=RW.Watcher('/fixture/engine','',world)
+        calls=[]
+        def start(candidate,trigger,*a):calls.append((candidate,trigger));return dict(repo=candidate.repo,tip=candidate.tip)
+        with patch.dict(os.environ,{'REVIEW_WATCH_STATE_DIR':str(self.base/'watch'),'RICHOS_ENTITY_ROOT':''}),patch.object(watcher,'reconcile',return_value={}),patch.object(watcher,'start',side_effect=start),patch.object(RW,'tell',return_value=[]):
+            watcher.look(1000,{})
+        self.assertEqual(len(calls),1)
+        self.assertEqual(item.recheck,'block')
+        args=item.args('handover')
+        self.assertIn('--claims-file',args)
+        task=json.loads(Path(args[args.index('--claims-file')+1]).read_text())
+        self.assertEqual(task['findings'],['block#1'])
+        self.assertEqual(task['evidence'],['block','ignored'])
+
     def test_existing_contract_probe_checks_an_adopted_recovery_declaration(self):
         source=Path(R.__file__).resolve().parents[2]
         code=(source/'scripts/hooks/contract-integrity-probe.sh').read_text().split('run_layer_RC() {',1)[1].split('\nrun_layer_R\n',1)[0]

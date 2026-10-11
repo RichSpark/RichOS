@@ -72,3 +72,11 @@ still require an explicit recheck. Each completed/reused invocation emits a host
 receipt naming its actual ledger row. The watcher validates that receipt against
 repository, source, work, purpose and input identity before accepting an older
 reused verdict. Missing or mismatched evidence remains a lost invocation.
+
+Contradictory handover verdicts at one repository, work and source create one
+durable outcome reconciliation task. The watcher requests a focused independent
+recheck with the original review IDs and blocker IDs as evidence. This applies
+through the existing review service even when advisor recovery is off. A recheck
+can resolve the task while upholding its blockers; it does not grant acceptance.
+The task does not loop after a finalized recheck. Missing verdicts retain the
+watcher's existing two-loss bound. Explicit disputes remain available afterward.

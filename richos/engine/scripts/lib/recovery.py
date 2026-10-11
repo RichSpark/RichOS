@@ -123,6 +123,42 @@ def save(record, event, ledger=None):
                    trigger_failures=len(record["failed"]), recovery_failures=record.get("recovery_failures", 0)))
 
 
+def conflict_task(repo, work, tip, ledger=None):
+    """One durable independent reconciliation for contradictory source verdicts.
+
+    A recheck that upholds the blocker finishes this task without clearing it.
+    This is review correctness and does not depend on recovery mode.
+    """
+    source=rows(ledger or F.review_ledger_default())
+    ident=F.review_repo_identity(repo)
+    scoped=[r for r in source if r.get('work')==work and r.get('tip')==tip
+            and r.get('trigger') in F.REVIEW_LAND_KINDS and r.get('verdict') and F.review_row_belongs(r,ident)]
+    if not scoped:return None
+    effective,_=F.review_of(scoped,tip,repo)
+    identity=digest(dict(repo=ident,work=work,tip=tip,purpose='outcome-reconciliation'))
+    path=root(ledger)/'reconciliations'/(identity+'.json')
+    with locked(identity,ledger):
+        task=json.loads(path.read_text()) if path.exists() else None
+        if task:
+            reviewed=[r for r in scoped if r.get('recheck_of')==task['prior']]
+            if reviewed:
+                task.update(status='resolved' if effective.get('verdict')=='passed' else 'reviewed-unresolved',review=reviewed[-1]['id'])
+                F.write_json_atomic(str(path),task)
+                return None
+            return task if task['status']=='requested' else None
+        if effective.get('verdict')!='changes-requested' or not any(r.get('verdict')=='passed' for r in scoped):return None
+        blocked=effective.get('effective_findings') or {}
+        producers={fid.split('#',1)[0] for fid in blocked}
+        prior=next((r for r in reversed(scoped) if r.get('id') in producers),None)
+        if not prior:return None
+        task=dict(schema=1,id=identity,repo=repo,repo_id=ident,work=work,tip=tip,status='requested',prior=prior['id'],
+                  evidence=[r['id'] for r in scoped],findings=sorted(blocked),created_at=time.time(),
+                  instruction='Independently reconcile these conflicting reviews at the exact unchanged source. Read original authority and every referenced verdict. Establish each blocking finding explicitly as upheld, fixed or withdrawn; neither majority vote nor a later PASS resolves it.')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        F.write_json_atomic(str(path),task)
+        return task
+
+
 def failed_attempts(ledger, repo, aliases):
     ident = F.review_repo_identity(repo)
     handovers = [r for r in ledger if r.get("work") in aliases and r.get("verdict")

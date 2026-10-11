@@ -417,6 +417,8 @@ class Item(object):
         a = ["--repo", self.repo, "--tip", self.tip, "--base", self.base, "--trigger", trigger, "--work", self.work]
         if getattr(self, "recheck", ""):
             a += ["--recheck", self.recheck]
+        if getattr(self, "reconciliation_claim", ""):
+            a += ["--claims-file", self.reconciliation_claim]
         if self.source == "app":
             # A regular RichOS user: Claude reviews (plan §2.3, "RichOS is Claude", §16), on the
             # CLI the app ships, with the user's own turn as the original words beside the
@@ -1342,8 +1344,26 @@ class Watcher(object):
                             getattr(self.world, "ws", None)) if entity else []
         attempts = read_jsonl(_p("attempts.jsonl"))
         book = Book(rows, running, attempts)
+        import recovery
+        conflicting={}
+        for row in rows:
+            key=(row.get('work'),row.get('tip'))
+            conflicting.setdefault(key,set()).add(row.get('verdict'))
+        for item in items:
+            if item.state!='ended' or not {'passed','changes-requested'}.issubset(conflicting.get((item.work,item.tip),set())):continue
+            saved={k:os.environ.get(k) for k in (item.env or {})}
+            os.environ.update(item.env or {})
+            try:
+                task=recovery.conflict_task(item.repo,item.work,item.tip)
+                if task:
+                    item.reconciliation_claim=str(recovery.root()/'reconciliations'/(task['id']+'.json'))
+                    recovery_requests=list(recovery_requests or [])+[(item,task['prior'])]
+            finally:
+                for k,v in saved.items():
+                    if v is None:os.environ.pop(k,None)
+                    else:os.environ[k]=v
         for item, prior in recovery_requests or []:
-            if item.key not in book.running:
+            if item.key not in book.running and len(book.losses.get(item.key) or [])<MAX_LOSSES:
                 item.recheck = prior
                 info = self.start(item, "handover", now, 1, None, rows)
                 if info:
