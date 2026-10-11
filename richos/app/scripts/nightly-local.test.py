@@ -579,6 +579,48 @@ Path(sys.argv[1]).write_text(str(p.pid))
                 else:
                     self.assertEqual(lines, [])
 
+    def test_a_mutation_unit_is_never_stopped_before_its_gate_deadline(self):
+        # Review rv-20261011T224950Z-e0dcac9e-f4e7 P1: the gate's 7200 s reached proof-run only;
+        # ci-shard.sh still stopped the fourteen-point unit at min(3600, max(900, 3 x weight)).
+        # Each mutation command's environment is applied to ci-shard.sh's own deadline line,
+        # in an environment holding nothing else, for the unit's committed weight and a huge one.
+        gate = m.GATE_BUDGETS[m.WORKSPACE_MUTANTS_GATE]
+        engine = Path(__file__).resolve().parents[2] / "engine"
+        shard = (engine / "scripts/ci-shard.sh").read_text()
+        rule = shard[shard.index("UNIT_TIMEOUT_FACTOR="):shard.index("# Run argv with")]
+        line = next(l.strip() for l in shard.splitlines() if l.strip().startswith('DEADLINE="'))
+        weights = dict(row.split("\t")[:2] for row in
+                       (engine / "scripts/lib/ci-unit-weights.tsv").read_text().splitlines()
+                       if row and not row.startswith("#"))
+        sys.path.insert(0, str(Path(__file__).with_name("lib")))
+        try:
+            import proof_evidence
+        finally:
+            sys.path.pop(0)
+        repo = Path(__file__).resolve().parents[3]
+        r = m.Runner(self.root, self.root, {}, io.StringIO())
+        calls = []
+        with patch.object(r, "command", side_effect=lambda *a, **kw: calls.append(kw)):
+            r.mutation_units(["mega-lander/tests/workspace-spec-fourteen.test.sh"],
+                             {"RICHOS_FOURTEEN_MUTANTS": "1"}, "fourteen")
+            r.mutation_units(m.MUTATION_PASS_UNITS, {"RICHOS_MUTATION_PASSES": "1"}, "workspace")
+        units = [["mega-lander/tests/workspace-spec-fourteen.test.sh"], list(m.MUTATION_PASS_UNITS)]
+        for kw, batch in zip(calls, units):
+            self.assertEqual(kw["timeout"], gate)
+            for unit in batch:
+                # proof-run hands an isolated check only its recipe's named variables.
+                recipe = proof_evidence.contract_for(repo, "engine " + unit)
+                if recipe.get("isolation"):
+                    self.assertIn("CI_SHARD_UNIT_TIMEOUT",
+                                  set(recipe["environment"]) | set(recipe["external"]))
+                for weight in (weights[unit], "1000000"):
+                    with self.subTest(unit=unit, weight=weight):
+                        env = {"PATH": os.environ["PATH"], **kw["env_extra"], "WEIGHT": weight}
+                        inner = subprocess.run(["bash", "-c", rule + line + '\necho "$DEADLINE"'],
+                                               env=env, capture_output=True, text=True, check=True)
+                        self.assertGreaterEqual(int(inner.stdout), gate,
+                                                "ci-shard.sh would stop the unit before the gate's deadline")
+
     def test_every_gate_has_a_named_deadline(self):
         for (phase, budget), at_once in [(item, n) for item in m.GATE_BUDGETS.items()
                                          for n in (1, "all")]:

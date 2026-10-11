@@ -816,6 +816,9 @@ GATE_SET_PER_STEP = (
     "RICHOS_FOURTEEN_MUTANTS",
     # ...and the other workspace suites' passes (MUTATION_PASS_UNITS), at the same gate.
     "RICHOS_MUTATION_PASSES",
+    # The workspace-mutants gate's deadline, handed to ci-shard.sh for each unit it runs
+    # (mutation_units), so the unit is never stopped at ci-shard's own 3600 s cap first.
+    "CI_SHARD_UNIT_TIMEOUT",
     # How many prepared-simulator leases the pool hands out at once (testdevices.py
     # pool_leases): the operator's `--simulated-phones`, set at the script-suites call site.
     SIMULATED_PHONES_ENV,
@@ -1855,12 +1858,18 @@ class Runner:
         evidence = self.state / "mutation-proof"
         evidence.mkdir(parents=True, exist_ok=True)
         logdir = Path(tempfile.mkdtemp(prefix=label + "-", dir=evidence))
+        budget = GATE_BUDGETS[WORKSPACE_MUTANTS_GATE]
         self.command(sys.executable, self.source / SCRIPTS / "proof-run.py",
                      "--commands", selection, "--log-dir", logdir,
                      # The engine never reads this output-only nightly generation id.
                      # Keep the actual id on the coordinator, normalize only this batch.
-                     env_extra={**environment, "RICHOS_NIGHTLY_RUN_ID": CONDITIONS_RUN_ID},
-                     timeout=GATE_BUDGETS[WORKSPACE_MUTANTS_GATE])
+                     # ci-shard.sh stops a unit at min(3600, max(900, 3 x weight)) unless
+                     # CI_SHARD_UNIT_TIMEOUT says otherwise, and proof-run sets no deadline
+                     # of its own on an --only-units check; so the gate's deadline is handed
+                     # to the unit too, here only (review rv-20261011T224950Z-e0dcac9e-f4e7).
+                     env_extra={**environment, "RICHOS_NIGHTLY_RUN_ID": CONDITIONS_RUN_ID,
+                                "CI_SHARD_UNIT_TIMEOUT": str(budget)},
+                     timeout=budget)
 
     def retry_red_ui_suites_alone(self, error, receipts, tests, tree, first):
         """Give each suite the sharded run left red ONE attempt alone; True when the build goes on.
