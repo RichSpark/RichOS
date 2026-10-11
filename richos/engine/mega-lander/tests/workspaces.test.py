@@ -237,6 +237,109 @@ class Base(unittest.TestCase):
 
 
 # ===========================================================================
+class RecoveryOffParity(unittest.TestCase):
+    def test_existing_native_spawn_continuation_review_and_landing_match_main_when_off(self):
+        # Golden outcomes were witnessed on frozen main 97b7cc5ff and the candidate.
+        # Real registrations and landing readers run in fresh script interpreters.
+        # The reviewer provider and review processes are fixtures, never user agents.
+        scenario = r"""import importlib.util,json,os,subprocess,sys,time
+from pathlib import Path
+engine=Path(sys.argv[1]).resolve()
+spec=importlib.util.spec_from_file_location('fixture',engine/'mega-lander/tests/workspaces.test.py')
+T=importlib.util.module_from_spec(spec);spec.loader.exec_module(T)
+w=T.ws;case=T.Base();case.setUp()
+try:
+ root=Path(case.env.root);home=Path(case.env.home)
+ os.environ['RICHOS_ENTITY_ROOT']=case.entity
+ os.environ.pop('RICHOS_APP_STATE',None);os.environ.pop('RICHOS_APP_SCOPE',None)
+ os.environ['SECOND_REVIEW_STATE_DIR']=str(root/'reviews')
+ os.environ['REVIEW_WATCH_STATE_DIR']=str(root/'watch')
+ binary=root/'bin';binary.mkdir()
+ provider=binary/'claude'
+ provider.write_text('#!'+sys.executable+'\nimport json\nprint(json.dumps({"structured_output":{"verdict":"PASS","report":"Authorized parity assignment","notes":[]}}))\n')
+ provider.chmod(0o755)
+ os.environ['PATH']=str(binary)+os.pathsep+os.environ['PATH']
+ definition=Path(case.entity)/'.claude/agents/fixture.md';definition.parent.mkdir(parents=True)
+ definition.write_text('Implement the explicitly requested fixture outcome.\n')
+ transcript=root/'native.jsonl';transcript.write_text(json.dumps(dict(type='user',message=dict(content='Implement the fixture outcome and its corrections.')))+'\n')
+ if len(sys.argv)>2 and sys.argv[2]=='off':
+  declaration=Path(case.entity)/'.claude/recovery.json'
+  declaration.write_text(json.dumps(dict(schema=1,mode='off',repositories=[case.other])))
+ result={}
+ def spawn(name,base='HEAD',extra=''):
+  cc=case.make_cc(name,base=base)
+  payload=dict(session_id=case.sid,tool_use_id='tu-'+name,tool_name='Agent',hook_event_name='PreToolUse',cwd=case.entity,transcript_path=str(transcript),tool_input=dict(name=name,subagent_type='fixture',prompt='Implement the fixture outcome.\ncross-repo-worktree: '+cc+'\n'+extra,isolation=''))
+  answer=subprocess.run([sys.executable,'-I','-B',str(engine/'mega-lander/workspaces.py'),'--entity',case.entity,'register-spawn'],input=json.dumps(payload),text=True,capture_output=True,env=os.environ.copy())
+  assert answer.returncode==0,answer.stdout+answer.stderr
+  aid='id-'+name
+  w.bind_agent(case.sid,'tu-'+name,aid,case.entity)
+  case.commit(cc,fname=name+".txt")
+  case.finish(aid)
+  return cc,case.rec(name)
+ cc,old=spawn('parity-old')
+ old['registered_at']='2026-10-10T00:00:00Z';w.save_agent(old)
+ result['native_spawn']='registered'
+ cc2,new=spawn('parity-new',base='cc/parity-old',extra='continues: parity-old\n')
+ sys.path.insert(0,str(engine/'scripts/lib'))
+ import review_watch as RW,second_review as SR,operator_fences as F
+ cfg=Path(case.entity)/'orchestration.config';cfg.write_text('SECOND_REVIEW_REPOS="other"\n')
+ world=RW.World(str(engine),str(cfg));items,problems=world.registry_items(time.time(),{})
+ item=next(i for i in items if i.name=='parity-new')
+ assert not problems,problems
+ result['continuation_identity']='old-root' if item.work=='teammate:'+old['key'] else 'new-root'
+ original=Path(SR.state_root())/'reviews/prior';original.mkdir(parents=True)
+ (original/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[dict(title='original blocker',blocks=True,priority=1)]))))
+ ledger=Path(SR.ledger_path());ledger.parent.mkdir(parents=True,exist_ok=True)
+ row=dict(id='prior',repo=case.other,repo_id=SR.repo_identity(case.other),work='teammate:'+old['key'],tip='a'*40,trigger='handover',verdict='changes-requested',record=str(original))
+ ledger.write_text(json.dumps(row)+'\n')
+ result['predecessor_findings']=len(SR.earlier_findings(item.work,item.tip,item.repo))
+ ledger.write_text('')
+ class Writer(RW.Watcher):
+  calls=0
+  def spawn(self,candidate,trigger,log_path):
+   self.calls+=1
+   record=Path(SR.state_root())/'reviews/automatic';record.mkdir(parents=True,exist_ok=True)
+   (record/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[]))))
+   row=dict(id='automatic',at=SR.iso(),repo=candidate.repo,repo_id=SR.repo_identity(candidate.repo),tip=candidate.tip,work=candidate.work,trigger=trigger,verdict='passed',record=str(record),findings=0,blocking=0,p1=0,reviewer='fixture',reviewer_model='fixture')
+   with ledger.open('a') as out:out.write(json.dumps(row)+'\n')
+   Path(log_path).write_text('fixture completed\n')
+   return 999999,'fixture-finished'
+ watcher=Writer(str(engine),str(cfg),world)
+ now=time.time();watcher.look(now,{});watcher.look(now+1,{})
+ result['automatic_handover_reviews']=watcher.calls
+ # Execute landing's existing review reader in a fresh script-like interpreter.
+ code=r'''
+import importlib.util,json,os,sys
+s=importlib.util.spec_from_file_location('w',sys.argv[1]);w=importlib.util.module_from_spec(s);s.loader.exec_module(w)
+f=w._fence_program();repo,tip,ledger=sys.argv[2:]
+w._registry_entity_map=lambda _:{}
+w._declared_review_listing=lambda *a:(True,[],None)
+w._review_ledgers=lambda *a:([ledger],None)
+try:w._review_check([(repo,'cc/parity-new',repo,tip)])
+except w.SpecError:print('refused')
+else:print('accepted')
+'''
+ def landing():
+  answer=subprocess.run([sys.executable,'-I','-B','-c',code,str(engine/'mega-lander/workspaces.py'),item.repo,item.tip,str(ledger)],capture_output=True,text=True,env=os.environ.copy())
+  assert answer.returncode==0,answer.stdout+answer.stderr
+  return answer.stdout.strip()
+ result['passing_landing_review']=landing()
+ row=json.loads(ledger.read_text().splitlines()[-1]);row.update(verdict='changes-requested',record=str(original),id='blocked')
+ ledger.write_text(json.dumps(row)+'\n')
+ result['blocking_landing_review']=landing()
+ print(json.dumps(result,sort_keys=True))
+finally:case.tearDown()
+"""
+        expected=dict(native_spawn='registered',continuation_identity='old-root',predecessor_findings=1,
+            automatic_handover_reviews=1,passing_landing_review='accepted',blocking_landing_review='refused')
+        for mode in ('absent','off'):
+            with self.subTest(mode=mode):
+                engine=os.path.dirname(os.path.dirname(os.path.realpath(LIB)))
+                result=subprocess.run([sys.executable,'-I','-B','-c',scenario,engine,mode],capture_output=True,text=True,env=os.environ.copy())
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1]),expected)
+
+
 class RecoveryChain(Base):
     def test_refused_landing_routes_in_a_fresh_cli_interpreter(self):
         code = r"""
