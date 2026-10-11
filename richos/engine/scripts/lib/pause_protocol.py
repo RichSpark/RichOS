@@ -200,7 +200,7 @@ def validate_payload(payload):
         return
     if not isinstance(target, str) or not RECIPIENT.fullmatch(target):
         raise ValueError("a pause requires the exact recipient")
-    if set(ti) - {"to", "recipient", "message", "content", "summary", "type", "messageType"}:
+    if set(ti) - {"to", "recipient", "recipient_kind", "message", "content", "summary", "type", "messageType"}:
         raise ValueError("pause payload has unexpected fields")
     if is_resume(text):
         validate_resume_text(text)
