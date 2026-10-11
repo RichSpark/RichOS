@@ -282,10 +282,14 @@ try:
  cc2,new=spawn('parity-new',base='cc/parity-old',extra='continues: parity-old\n')
  sys.path.insert(0,str(engine/'scripts/lib'))
  import review_watch as RW,second_review as SR,operator_fences as F
+ legacy=dict(new,key=new['key']+'-legacy',name='parity-legacy',continues=['withdrawn-orphan'])
+ legacy.pop('recovery_assignment',None);w.save_agent(legacy)
  cfg=Path(case.entity)/'orchestration.config';cfg.write_text('SECOND_REVIEW_REPOS="other"\n')
  world=RW.World(str(engine),str(cfg));items,problems=world.registry_items(time.time(),{})
  item=next(i for i in items if i.name=='parity-new')
  assert not problems,problems
+ result['legacy_review_included']=any(i.name=='parity-legacy' and i.work=='teammate:'+legacy['key'] for i in items)
+ legacy['disposition']='discarded';w.save_agent(legacy)
  result['continuation_identity']='old-root' if item.work=='teammate:'+old['key'] else 'new-root'
  original=Path(SR.state_root())/'reviews/prior';original.mkdir(parents=True)
  (original/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[dict(title='original blocker',blocks=True,priority=1)]))))
@@ -331,7 +335,7 @@ else:print('accepted')
 finally:case.tearDown()
 """
         expected=dict(native_spawn='registered',continuation_identity='old-root',predecessor_findings=1,
-            automatic_handover_reviews=1,passing_landing_review='accepted',blocking_landing_review='refused')
+            automatic_handover_reviews=1,passing_landing_review='accepted',blocking_landing_review='refused',legacy_review_included=True)
         for mode in ('absent','off'):
             with self.subTest(mode=mode):
                 engine=os.path.dirname(os.path.dirname(os.path.realpath(LIB)))

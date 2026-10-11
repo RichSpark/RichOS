@@ -539,7 +539,7 @@ class World(object):
                 continue
             try:
                 fin, paused, _why = ws.finished_state(rec, cache)
-                chain = ws.recovery_chain(rec)
+                chain = ws.review_chain(rec)
             except Exception:  # noqa: BLE001
                 continue
             state = "ended" if fin else ("paused" if paused else "running")
