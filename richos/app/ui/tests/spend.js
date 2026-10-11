@@ -323,61 +323,98 @@ async function main() {
     return results.join(", ");
   });
 
-  // ---- 9b. the header fits every window the app allows --------------------------------------
+  // ---- 9b. the header and the Meter fit every window and Text size the app allows ------------
   // The second review of 6c21269e6 (rv-20261011T044256Z-6c21269e-56ec, its one blocking finding):
   // round 22.1 drew the header at 1440 wide, one row; the app's smallest window is 1024 by 700
   // (src-tauri/tauri.conf.json minWidth and minHeight), which with the Rich panel docked leaves the
-  // screen a 536px column (#spend's right edge sits 488px in). Measured on the rendered boxes: every
-  // control of the header is whole inside the screen's column, none overlaps another or the
-  // Settings button, no label breaks onto a second line, and nothing in the header scrolls sideways.
-  await run.check("the header fits the app's smallest window, 1024 by 700, and its 536px column with the Rich panel docked: every control whole, none overlapping", async () => {
+  // screen a 536px column (#spend's right edge sits 488px in). The review of 41f028c17
+  // (rv-20261011T055538Z-41f028c1-c16b): in that column the live line did not wrap, so at Text size
+  // 120% and 150%, and even at 100% with 12 agents and a Fable request, its dollar price ran off
+  // the column. Measured on the rendered boxes, at every window and at Text size 100%, 120%, 135%
+  // and 150% (the app's steps above 100%), with the widest live line (12 agents, a Fable 5.1
+  // request of 448,503 tokens): every control of the header is whole inside the screen's column,
+  // none overlaps another or the Settings button, no label breaks onto a second line, and nothing
+  // in the header scrolls sideways; and every word of the Meter (the live line's price included)
+  // is inside the Meter's own column.
+  await run.check("the header and the Meter fit the app's smallest window, 1024 by 700, and its 536px docked column, at Text size 100% to 150%: every control whole, every word of the Meter (the live line's price too) inside its column", async () => {
     const out = [], wrong = [];
-    const page = await open("dark", undefined);
+    const page = await open("dark", { agents: 12 });
     await screen(page);
-    for (const [w, h, docked] of [[1440, 900, false], [1440, 900, true], [1024, 700, false], [1024, 700, true]]) {
-      await page.setViewportSize({ width: w, height: h });
-      await page.evaluate(d => document.body.classList.toggle("bug-dock-open", d), docked);
-      await settle(page);
-      const m = await page.evaluate(() => {
-        const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }; };
-        const shown = el => { const cs = getComputedStyle(el); return cs.display !== "none" && cs.visibility !== "hidden" && el.getBoundingClientRect().width > 0; };
-        // the lines a control's words take: its text's boxes (not its icon's), tops more than 8px apart
-        const lines = el => {
-          const tops = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-          for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-            if (!n.textContent.trim()) continue;
-            const r = document.createRange(); r.selectNodeContents(n);
-            for (const x of r.getClientRects()) if (x.width > 0) tops.push(x.top);
+    await page.evaluate(() => window.__RICHOS_MOCK__.spendLand({ family: "fable", name: "Fable 5.1", effort: "high", cost: 0.8214, tokens: 448503 }));
+    await page.waitForFunction(() => /448,503/.test(document.getElementById("spend-live").textContent));
+    assertEqual(await text(page, "#spend-live"), "12 agents working · last request Fable 5.1, 448,503 tokens, $0.821", "the widest live line");
+    for (const scale of [100, 120, 135, 150]) {
+      await page.evaluate(sc => document.documentElement.style.setProperty("--app-font-scale", String(sc / 100)), scale);
+      for (const [w, h, docked] of [[1440, 900, false], [1440, 900, true], [1024, 700, false], [1024, 700, true]]) {
+        await page.setViewportSize({ width: w, height: h });
+        await page.evaluate(d => document.body.classList.toggle("bug-dock-open", d), docked);
+        await settle(page);
+        const m = await page.evaluate(() => {
+          const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }; };
+          const shown = el => { const cs = getComputedStyle(el); return cs.display !== "none" && cs.visibility !== "hidden" && el.getBoundingClientRect().width > 0; };
+          const textRects = el => {
+            const found = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+              if (!n.textContent.trim()) continue;
+              const r = document.createRange(); r.selectNodeContents(n);
+              for (const x of r.getClientRects()) if (x.width > 0) found.push({ x, n });
+            }
+            return found;
+          };
+          // the lines an element's words take: its text's boxes (not its icon's), tops more than 8px apart
+          const lines = el => {
+            const tops = textRects(el).map(t => t.x.top).sort((a, b) => a - b);
+            return tops.reduce((k, t, i) => k + (i === 0 || t - tops[i - 1] > 8 ? 1 : 0), 0);
+          };
+          const head = document.querySelector(".sp-head"), col = box(document.getElementById("spend"));
+          const controls = [...head.querySelectorAll(".sp-back, .sp-title, .sp-updated, .sp-refresh, .sp-period button")].filter(shown)
+            .map(el => ({ name: (el.id || el.className.split(" ")[0]) + (el.dataset.p ? ":" + el.dataset.p : ""), ...box(el),
+              lines: lines(el) }));
+          const gear = document.getElementById("set-btn"); const g = gear && shown(gear) ? box(gear) : null;
+          const hit = (a, b) => a.l < b.r - 0.5 && b.l < a.r - 0.5 && a.t < b.b - 0.5 && b.t < a.b - 0.5;
+          const problems = [];
+          for (const c of controls) {
+            if (c.l < col.l - 0.5 || c.r > col.r + 0.5) problems.push(`${c.name} spans ${c.l.toFixed(1)} to ${c.r.toFixed(1)}, the column ${col.l} to ${col.r}`);
+            if (c.lines !== 1) problems.push(`${c.name} is on ${c.lines} lines`);
+            if (g && hit(c, g)) problems.push(`${c.name} is under the Settings button`);
           }
-          tops.sort((a, b) => a - b);
-          return tops.reduce((k, t, i) => k + (i === 0 || t - tops[i - 1] > 8 ? 1 : 0), 0);
-        };
-        const head = document.querySelector(".sp-head"), col = box(document.getElementById("spend"));
-        const controls = [...head.querySelectorAll(".sp-back, .sp-title, .sp-updated, .sp-refresh, .sp-period button")].filter(shown)
-          .map(el => ({ name: (el.id || el.className.split(" ")[0]) + (el.dataset.p ? ":" + el.dataset.p : ""), ...box(el),
-            lines: lines(el) }));
-        const gear = document.getElementById("set-btn"); const g = gear && shown(gear) ? box(gear) : null;
-        const hit = (a, b) => a.l < b.r - 0.5 && b.l < a.r - 0.5 && a.t < b.b - 0.5 && b.t < a.b - 0.5;
-        const problems = [];
-        for (const c of controls) {
-          if (c.l < col.l - 0.5 || c.r > col.r + 0.5) problems.push(`${c.name} spans ${c.l.toFixed(1)} to ${c.r.toFixed(1)}, the column ${col.l} to ${col.r}`);
-          if (c.lines !== 1) problems.push(`${c.name} is on ${c.lines} lines`);
-          if (g && hit(c, g)) problems.push(`${c.name} is under the Settings button`);
+          // the period buttons sit inside their own pill, so overlap is measured between the groups
+          const groups = [...head.children].filter(shown).map(el => ({ name: el.className.split(" ")[0], ...box(el) }));
+          for (let i = 0; i < groups.length; i++) for (let j = i + 1; j < groups.length; j++)
+            if (hit(groups[i], groups[j])) problems.push(`${groups[i].name} overlaps ${groups[j].name}`);
+          if (head.scrollWidth > head.clientWidth + 0.5) problems.push(`the header scrolls sideways (${head.scrollWidth} in ${head.clientWidth})`);
+          // every word of the Meter inside the Meter's content box (its side padding excluded)
+          const meter = document.querySelector(".sp-meter"), mb = box(meter), ms = getComputedStyle(meter);
+          const inner = { l: mb.l + parseFloat(ms.paddingLeft), r: mb.r - parseFloat(ms.paddingRight) };
+          const off = new Map();
+          for (const { x, n } of textRects(meter)) {
+            // the figure is not judged by its text boxes: its +0.02em tracking after the last digit and
+            // round 22.1's -0.03em optical margin put its advance a few px outside, never its ink; check
+            // 10 measures its ink inside the column on the pixels
+            if (n.parentElement.closest("#spend-fig")) continue;
+            if (x.left < inner.l - 0.5 || x.right > inner.r + 0.5) {
+              const owner = n.parentElement.closest("[id], .sp-live, .sp-key, .sp-tokens, .sp-sub, .sp-eyebrow") || n.parentElement;
+              const name = owner.id || owner.className.split(" ")[0];
+              off.set(name, Math.max(off.get(name) || 0, x.right - inner.r, inner.l - x.left));
+            }
+          }
+          for (const [name, by] of off) problems.push(`${name} runs ${by.toFixed(1)}px past the Meter's column (${inner.l.toFixed(0)} to ${inner.r.toFixed(0)})`);
+          const liveLines = lines(document.getElementById("spend-live"));
+          const rows = new Set(groups.map(x => Math.round(x.t + x.h / 2))).size;
+          return { problems, col: Math.round(col.w), rows, height: Math.round(box(head).h), liveLines, title: controls.some(c => c.name === "spend-title"), periods: controls.filter(c => c.name.includes(":")).length };
+        });
+        const where = `${scale}%, ${w} by ${h}${docked ? `, panel docked (${m.col}px column)` : ""}`;
+        // a picture of each window to look at (.shots/, gitignored scratch)
+        await shot(page, `spend-fit-${scale}-${w}x${h}${docked ? "-docked" : ""}`, { fullPage: false });
+        if (docked) {   // and the Meter scrolled to its end, where the live line is
+          await page.evaluate(() => { const b = document.querySelector(".sp-body"); b.scrollTop = b.scrollHeight; });
+          await shot(page, `spend-fit-${scale}-${w}x${h}-docked-end`, { fullPage: false });
+          await page.evaluate(() => { document.querySelector(".sp-body").scrollTop = 0; });
         }
-        // the period buttons sit inside their own pill, so overlap is measured between the groups
-        const groups = [...head.children].filter(shown).map(el => ({ name: el.className.split(" ")[0], ...box(el) }));
-        for (let i = 0; i < groups.length; i++) for (let j = i + 1; j < groups.length; j++)
-          if (hit(groups[i], groups[j])) problems.push(`${groups[i].name} overlaps ${groups[j].name}`);
-        if (head.scrollWidth > head.clientWidth + 0.5) problems.push(`the header scrolls sideways (${head.scrollWidth} in ${head.clientWidth})`);
-        const rows = new Set(groups.map(x => Math.round(x.t + x.h / 2))).size;
-        return { problems, col: Math.round(col.w), rows, height: Math.round(box(head).h), title: controls.some(c => c.name === "spend-title"), periods: controls.filter(c => c.name.includes(":")).length };
-      });
-      const where = `${w} by ${h}${docked ? `, panel docked (${m.col}px column)` : ""}`;
-      // a picture of each window to look at (.shots/, gitignored scratch)
-      await shot(page, `spend-header-${w}x${h}${docked ? "-docked" : ""}`, { fullPage: false });
-      if (m.periods !== 4) m.problems.push(`${m.periods} of the four periods shown`);
-      for (const p of m.problems) wrong.push(`${where}: ${p}`);
-      out.push(`${where}: ${m.rows} row${m.rows > 1 ? "s" : ""}, ${m.height}px, title ${m.title ? "shown" : "hidden"}`);
+        if (m.periods !== 4) m.problems.push(`${m.periods} of the four periods shown`);
+        for (const p of m.problems) wrong.push(`${where}: ${p}`);
+        out.push(`${where}: header ${m.rows} row${m.rows > 1 ? "s" : ""}, ${m.height}px, title ${m.title ? "shown" : "hidden"}, live line ${m.liveLines} line${m.liveLines > 1 ? "s" : ""}`);
+      }
     }
     await page.close();
     // every size measured before judging, so a failure names each window it fails in

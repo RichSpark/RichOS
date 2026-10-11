@@ -10504,6 +10504,9 @@ body.bug-dock-open #spend { right: 488px; }   /* Bust a bug from this screen: th
    1440 only); named. tests/spend.js measures the header at 1440, 1024 and both docked. */
 @media (max-width: 1199px) { .sp-title { display: none; } }
 body.bug-dock-open .sp-head { padding-right: 22px; }
+/* at Text size 150% the four periods alone are 543px, wider than the 536px docked column of the
+   smallest window: there each one's side padding is 12px, not 16px */
+@media (max-width: 1199px) { body.bug-dock-open .sp-period button { padding-left: 12px; padding-right: 12px; } }
 .sp-back { display: inline-flex; align-items: center; gap: 8px; background: none; border: 0; border-radius: 8px; padding: 6px 10px 6px 6px;
   font: inherit; font-size: 1rem; color: var(--ink-soft); cursor: pointer; transition: background-color .15s, color .15s; }
 .sp-back:hover { background: var(--gold-soft); color: var(--ink); }
@@ -10545,10 +10548,13 @@ body.bug-dock-open .sp-head { padding-right: 22px; }
 .sp-foot-note { margin: 0; text-align: right; line-height: 1.5; }
 .sp-foot-note b { font-weight: 600; color: var(--ink); }
 /* the live line: who is working now and the last request, priced in dollars */
-.sp-live { display: inline-flex; align-items: center; gap: 10px; margin: 0; font-size: 1rem; color: var(--ink-soft); white-space: nowrap; }
-.sp-live .working-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); flex: none; animation: spbreathe 1.4s ease-in-out infinite; }
+/* It wraps where the column is narrower than the line (the review of 41f028c17: in the 536px docked
+   column, 12 agents and a Fable request are 517.5px at 100%, 744px at 150%, and the price ran off the
+   column); the dot stays beside the first line, and the price keeps its figures together. */
+.sp-live { display: flex; align-items: flex-start; gap: 10px; margin: 0; font-size: 1rem; line-height: 1.5; color: var(--ink-soft); }
+.sp-live .working-dot { width: 8px; height: 8px; margin-top: calc(.75em - 4px); border-radius: 50%; background: var(--gold); flex: none; animation: spbreathe 1.4s ease-in-out infinite; }
 @keyframes spbreathe { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
-.sp-live b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.sp-live b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sp-live.is-idle .working-dot { animation: none; opacity: .5; background: var(--sw-off); }
 /* the model marks: a stacked bar with a 2px gap between segments, a legend beneath it */
 .sp-bar { display: flex; gap: 2px; height: 18px; width: 100%; }
