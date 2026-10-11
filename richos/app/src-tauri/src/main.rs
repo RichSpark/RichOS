@@ -4203,7 +4203,7 @@ fn set_assertiveness(state: State<AppState>, level: String) -> Result<(), String
 /// **Rich's model, as Preferences shows it** (§119; round 23): `{ "rich": "opus"|"fable",
 /// "stu": "opus"|"fable" }`. Rich is the conversation, Stu the team's back end, named in the
 /// app only by what each does (§110). A value another build wrote reads as Opus.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_lease_models(state: State<AppState>) -> serde_json::Value {
     let models = state.config.lock().unwrap().lease_models();
     serde_json::json!({ "rich": models.rich.as_str(), "stu": models.stu.as_str() })
@@ -4216,7 +4216,7 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
 /// (`work_host.rs`, `renew_if_model_changed`) — because a lease is never swapped mid-turn.
 /// An unknown name refuses both and writes neither, and the two rows are one write
 /// (`ConfigStore::set_lease_models`), so a failure never leaves one row saved alone.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result<(), String> {
     use richos_core::config::{LeaseModels, ModelChoice};
     let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
