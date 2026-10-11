@@ -1112,6 +1112,29 @@ def review_input_identity(w):
 
 def review(a):
     w = resolve_work(a)
+    import recovery
+    recovery_record = recovery.read(recovery.key(w.repo, w.work_key))
+    w.recovery_record = recovery_record
+    if recovery_record and recovery_record.get("wes"):
+        wes = recovery_record["wes"]
+        if wes["verdict"]["action"] in ("withdraw_finding", "correct_interpretation"):
+            w.claims.append(("Wes disputed-premise evidence for independent resolution",
+                "Verify these original sources independently. Resolve the exact earlier finding through the ordinary "
+                "earlier_findings result; this proposal grants no bypass. " + json.dumps(wes)))
+    if recovery_record and (recovery_record.get("plan") or {}).get("accepted"):
+        plan = recovery_record["plan"]
+        w.claims.append(("Accepted recovery acceptance matrix and independent proof requirements", json.dumps(plan)))
+        markers = {c["condition"]:"RECOVERY:"+recovery.digest(c["condition"])+":" for c in plan["matrix"]}
+        w.claims.append(("Required recovery proof reporting", "For each condition add one check string using its "
+            "exact supplied marker followed by actual source-qualified proof evidence. Missing coverage keeps recovery "
+            "unaccepted even if ordinary findings pass. Markers: "+json.dumps(markers)))
+        if a.name:
+            ws = load_workspaces(a.engine_root)
+            registered = find_teammate(ws, a.name)
+            space = teammate_workspace(registered, w.repo)
+            current = git(space.get("path") or w.repo, "rev-parse", "HEAD").strip()
+            if ws.finished_state(registered)[0] and current==w.tip:
+                recovery.handover(recovery_record["id"], registered["key"], w.tip)
     with execution_claim(w.repo, w.tip):
         purpose = "handover" if a.trigger in ("handover", "manual") else "progress"
         existing = [r for r in read_ledger() if r.get("tip") == w.tip and r.get("verdict")
@@ -1132,6 +1155,8 @@ def review(a):
 
 
 def _review_owned(a, w):
+    import recovery
+    recovery_record = getattr(w, "recovery_record", None)
     say = lambda s: (sys.stderr.write(s + "\n"), sys.stderr.flush())
     repo_id = repo_identity(w.repo)
     earlier = earlier_findings(w.work_key, w.tip, w.repo, repo_id)
@@ -1166,10 +1191,29 @@ def _review_owned(a, w):
             left = keep_fixtures(fx, os.path.join(record, "fixtures"))
             if left:
                 row["fixtures_not_kept"] = left[:50]
+        if recovery_record and recovery_record.get("plan") and answer and row.get("verdict"):
+            plan = recovery_record["plan"]
+            coverage = {}
+            for condition in plan["matrix"]:
+                marker = "RECOVERY:"+recovery.digest(condition["condition"])+":"
+                proofs = [check[len(marker):].strip() for check in answer.get("checks", []) if check.startswith(marker)]
+                if proofs and proofs[-1]:
+                    coverage[condition["condition"]] = proofs[-1]
+            row.update(recovery_plan=plan["id"], recovery_coverage=coverage)
+        if recovery_record and recovery_record.get("wes") and answer and row.get("verdict"):
+            row["wes_consultation"] = recovery_record["wes"]["consultation"]
         with open(os.path.join(record, "verdict.json"), "w", encoding="utf-8") as f:
             json.dump({"row": row, "answer": answer,
                        "earlier_findings_in": [dict(f, id=i) for i, f in earlier]}, f, indent=2, sort_keys=True)
         append_row(row)
+        if recovery_record and row.get("wes_consultation"):
+            with recovery.locked(recovery_record["id"]):
+                fresh = recovery.read(recovery_record["id"])
+                if fresh.get("wes", {}).get("consultation") == row["wes_consultation"]:
+                    fresh["wes"].update(independent_review=row["id"], applied=True)
+                    recovery.save(fresh, "wes-independent-review-consumed")
+        if recovery_record and row.get("recovery_coverage"):
+            recovery.complete(recovery_record["id"], row)
         if row["verdict"]:
             filed = (" %d follow-up(s) filed in %s." % (row["follow_ups"], follow_ups_path())
                      if row["verdict"] == "passed" else "")

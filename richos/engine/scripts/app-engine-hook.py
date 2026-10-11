@@ -115,6 +115,8 @@ def mid_job_notice(work, active, payload, root, emit):
 
 def handle(payload):
     root = Path(os.environ["RICHOS_APP_STATE"])
+    # Recovery, independent reviews and both admission paths share this ledger.
+    os.environ["SECOND_REVIEW_STATE_DIR"] = str(root / "second-review")
     coordination = Path(os.environ["RICHOS_ENTITY_ROOT"])
     if not root.is_absolute() or not coordination.is_absolute():
         raise ValueError("desktop roots must be explicit and absolute")
@@ -144,6 +146,11 @@ def handle(payload):
         run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-sealed-worktree.sh")], payload)
         work.validate_shell_target(payload)
         context = work.worker_context(active, payload)
+        if not payload.get("agent_id"):
+            recovery, host = work.W._recovery_adapter()
+            notice = recovery.cancellation_notice(host, str(payload.get("session_id") or ""))
+            if notice:
+                context = {"hookSpecificOutput":{"hookEventName":"PreToolUse", "additionalContext":notice}}
 
         def emit(notice):
             # One JSON answer per hook call: the verdict joins the worker's host context.
@@ -187,7 +194,7 @@ def handle(payload):
         # Only a call that passed every control is a dispatch attempt. In particular,
         # returning findings must leave the prepared receipt available for dismissal.
         work.dispatch_intent(active, payload)
-    if event in ("SessionStart", "SubagentStart", "SubagentStop", "PostToolUse", "SessionEnd"):
+    if event in ("SessionStart", "SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure", "SessionEnd"):
         run(ws + ["hook"], payload)
     if event == "PostToolUse" and payload.get("tool_name") == "Agent":
         run(["/bin/bash", str(ENGINE / "scripts/hooks/detect-nonnative-worktree.sh")], payload)

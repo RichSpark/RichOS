@@ -47,9 +47,9 @@ class Recovery(unittest.TestCase):
         proposal = dict(job=record["id"], acceptance=record["acceptance"], frontier=record["evidence_cursor"],
                         diagnosis="two components own the same transition", matrix=[dict(condition="one owner", evidence="source")],
                         proof=[dict(condition="one owner", check="transition fixture")], approach=approach,
-                        brief="Implement " + approach, control="continue")
+                        brief="Implement " + approach, control="continue", disproof="One owner already exists in the trace", retained_evidence=["existing passing transition proof"])
         plan = R.propose(record["id"], proposal, "axel-"+approach)
-        R.accept(record["id"], plan["id"], dict(plan=plan["id"], accepted=True, evidence="matrix independently checked", reviewer="independent"))
+        R.accept(record["id"], plan["id"], dict(plan=plan["id"], accepted=True, evidence="matrix independently checked", reviewer="independent", materially_different=True, difference_evidence="different state owner, checked against earlier attempts"))
         return R.read(record["id"]), plan
 
     def test_three_failed_sources_schedule_without_a_watcher(self):
@@ -101,7 +101,7 @@ class Recovery(unittest.TestCase):
 
     def test_late_control_cannot_stop_a_successor_without_its_source(self):
         value = dict(job=self.record["id"], acceptance="acceptance", frontier="old", action="stop",
-                     workers={"first":"a"*40}, reason="unsupported approach", evidence="three failed transitions")
+                     workers={"first":"a"*40+":"+"b"*64}, reason="unsupported approach", evidence="three failed transitions")
         with self.assertRaises(R.Unavailable):
             R.control(self.record["id"], value, "axel")
         value["frontier"] = self.record["evidence_cursor"]
@@ -109,7 +109,7 @@ class Recovery(unittest.TestCase):
         record, plan = self.plan()
         with self.assertRaises(R.Unavailable):
             R.admission(record, "replacement", plan["brief"], plan["id"], safe=lambda w: False)
-        self.assertEqual(result["workers"], {"first":"a"*40})
+        self.assertEqual(result["workers"], {"first":"a"*40+":"+"b"*64})
 
     def test_deadline_exhaustion_is_not_behavioral_failure(self):
         expired = self.reconcile(now=self.record["deadline"]+1)
@@ -117,6 +117,64 @@ class Recovery(unittest.TestCase):
         self.assertEqual(expired["recovery_failures"], 0)
         with self.assertRaises(R.Unavailable):
             R.admission(expired, "replacement", "anything")
+
+    def test_third_plan_needs_independent_material_difference(self):
+        for n in range(2):
+            record, plan = self.plan("strategy "+str(n))
+            R.admission(record, "writer"+str(n), plan["brief"], plan["id"])
+            R.handover(record["id"], "writer"+str(n), str(n+3)*40)
+            self.review(str(n+3)*40, "failed-recovery"+str(n))
+            self.reconcile()
+        record = R.read(self.record["id"])
+        proposal = dict(job=record["id"], acceptance=record["acceptance"], frontier=record["evidence_cursor"],
+            diagnosis="remove competing state owners", disproof="trace shows ownership is already singular",
+            retained_evidence=["passing compatibility proofs"], matrix=[dict(condition="one transition", evidence="trace")],
+            proof=[dict(condition="one transition", check="race fixture")], approach="replace the ownership mechanism",
+            brief="Replace the competing owner", control="continue")
+        plan = R.propose(record["id"], proposal, "new-axel")
+        with self.assertRaises(R.Unavailable):
+            R.accept(record["id"], plan["id"], dict(plan=plan["id"], accepted=True,
+                evidence="a different label", reviewer="independent"))
+        self.assertFalse(R.read(record["id"])["plan"]["accepted"])
+
+    def test_current_pass_requires_matrix_and_actual_control_completion(self):
+        record, plan = self.plan()
+        tip = "d"*40
+        R.handover(record["id"], "finished-writer", tip)
+        row = dict(id="independent-pass", tip=tip, repo=str(self.repo), trigger="handover", verdict="passed",
+                   work=self.work, recovery_plan=plan["id"], recovery_coverage={"one owner":"trace receipt"})
+        self.review(tip, row["id"], "passed")
+        with R.locked(record["id"]):
+            fresh = R.read(record["id"])
+            fresh["controls"].append(dict(action="stop", workers={"old":"source"}, observations={
+                "old":dict(quiescent=True, cancellation_status="requested")}))
+            R.save(fresh, "fixture-native-cancellation-pending")
+        self.assertFalse(R.complete(record["id"], row))
+        with R.locked(record["id"]):
+            fresh = R.read(record["id"])
+            fresh["controls"][0]["observations"]["old"]["cancellation_status"]="acknowledged"
+            R.save(fresh, "fixture-native-cancellation-observed")
+        self.assertTrue(R.complete(record["id"], row))
+
+    def test_explicit_dispute_is_exact_and_cannot_resolve_the_finding(self):
+        folder = self.base/"original-verdict"
+        folder.mkdir()
+        row = dict(id="original-finding", tip="e"*40, repo=str(self.repo), work=self.work,
+                   verdict="changes-requested", trigger="handover", record=str(folder))
+        finding = dict(priority=2, blocks=True, title="applicability premise", files=[], evidence="original words", fixture="")
+        (folder/"verdict.json").write_text(json.dumps(dict(row=row,answer=dict(findings=[finding],earlier_findings=[]))))
+        R.F.append_jsonl(str(self.ledger), row)
+        cli = Path(__file__).parent/"lib/recovery_admin.py"
+        argv = [sys.executable,"-B",str(cli),"dispute","--repo",str(self.repo),"--work",self.work,
+                "--tip",row["tip"],"--finding",row["id"]+"#1"]
+        for _ in range(2):
+            result = subprocess.run(argv, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(R.pending_routes(str(self.repo),self.aliases)),1)
+        effective,_ = R.F.review_of(R.rows(self.ledger),row["tip"],str(self.repo))
+        self.assertEqual(effective["verdict"],"changes-requested")
+        invalid = subprocess.run(argv[:-1]+["invented#1"], capture_output=True, text=True)
+        self.assertEqual(invalid.returncode,2)
 
 
 if __name__ == "__main__":

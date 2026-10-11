@@ -381,6 +381,10 @@ case "$VERDICT" in
         echo "NOTE: TaskStop on '$TASK_ID' — could not establish whether it is still running (${LIVE_DETAIL:-no evidence}), so it was allowed unchecked. If it IS running and has not committed, that work is now gone. $HOOK_TAG" >&2
         exit 0
         ;;
+    allow-recovery)
+        echo "TaskStop on '$TASK_ID' authorized by its recorded recovery control. Native completion is recorded separately. $HOOK_TAG" >&2
+        exit 0
+        ;;
     allow-acked)
         mkdir -p "$LOG_DIR" 2>/dev/null || true
         {

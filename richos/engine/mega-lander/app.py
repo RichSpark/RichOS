@@ -990,6 +990,8 @@ def prepare(scope_path, scope, args):
                     raise ValueError("this obligation already has unresolved work; inspect its receipt before retrying")
         name = f"{teammate}-{model}-{identity[:12]}"
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
+            "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
+                ("item_id", "title", "details", "beneficiary")}, sort_keys=True).encode()).hexdigest(),
             "instruction_ref":instruction["ledger_ref"],"request":normalized,"name":name,"status":"preparing"}
         if args.get("continue_of") is not None:
             if role != "worker" or args.get("review_of") is not None:
@@ -1216,9 +1218,9 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
             instruction = scope["user_instruction"]
             return {"kind": {"worker": "implementation", "reviewer": "review", "consult": "helper"}[request["role"]],
                     "outcome": "app:%s:%s" % (scope["binding"]["entity_id"], request["obligation_id"]),
-                    "acceptance": instruction.get("sha256") or hashlib.sha256(
+                    "acceptance": record.get("recovery_acceptance") or instruction.get("sha256") or hashlib.sha256(
                         json.dumps(instruction["ledger_ref"], sort_keys=True).encode()).hexdigest(),
-                    "authority": instruction["ledger_ref"]}
+                    "authority": instruction["ledger_ref"], "instruction": instruction}
         if review_refused:
             record["pierce_refused"] = True
             save(path,record)

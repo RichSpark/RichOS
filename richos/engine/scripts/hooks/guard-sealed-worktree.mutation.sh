@@ -25,8 +25,8 @@ mutation_focus stop-at-want
 G="scripts/hooks/guard-sealed-worktree.sh"
 
 mutant finished-passes "G03" "$G" \
-    '  LEAD|REGISTERED){NL}    exit 0 ;;' \
-    '  LEAD|REGISTERED|FINISHED){NL}    exit 0 ;;' \
+    '  REGISTERED){NL}    exit 0 ;;' \
+    '  REGISTERED|FINISHED){NL}    exit 0 ;;' \
     "a restarted finished agent could write again (point 9)."
 
 mutant finished-refusal-exits-zero "G03" "$G" \

@@ -1152,6 +1152,21 @@ def review_gaps(ledger, tips, repo):
     for tip in tips:
         row, mid = review_of(rows, tip, repo)
         if row and row.get("verdict") == "passed":
+            recovery_home = os.path.join(os.path.dirname(ledger), "recovery")
+            if os.path.isdir(recovery_home):
+                try:
+                    here = os.path.dirname(os.path.realpath(__file__))
+                    if here not in sys.path:
+                        sys.path.insert(0, here)
+                    import recovery
+                    work_keys = {r.get("work") for r in rows if r.get("tip") == tip and
+                                 review_row_belongs(r, review_repo_identity(repo)) and r.get("work")}
+                    blocked = [recovery.landing_gap(repo, work, ledger) for work in work_keys]
+                    blocked = [reason for reason in blocked if reason]
+                    if blocked:
+                        gaps[tip] = blocked
+                except (OSError, ValueError, ImportError) as error:
+                    gaps[tip] = ["recovery acceptance cannot be established: %s" % error]
             continue
         if row is None:
             why = ["no second review of %s has a verdict yet" % tip[:12]]
@@ -1342,6 +1357,20 @@ def residue_committed(files, lease, new, cwd):
         if hit:
             return rec, hit
     return None
+
+
+def route_refused_review(ledger, tips, repo):
+    """The shared landing backstop requests applicability review without ever
+    changing the effective outcome. Host watcher consumes durable requests.
+    """
+    import recovery
+    source = recovery.rows(ledger)
+    for tip in tips:
+        qualified = [r for r in source if r.get("tip")==tip and review_row_belongs(r, review_repo_identity(repo))]
+        findings = [fid for fid,f in open_review_findings(qualified).items() if f.get("blocks")]
+        for work in sorted({r["work"] for r in qualified if r.get("work")}):
+            if findings:
+                recovery.route_request(repo, work, tip, findings, "refused-landing", ledger)
 
 
 def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None):

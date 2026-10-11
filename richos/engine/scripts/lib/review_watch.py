@@ -410,6 +410,8 @@ class Item(object):
     def args(self, trigger):
         """second-review's arguments for this item."""
         a = ["--repo", self.repo, "--tip", self.tip, "--base", self.base, "--trigger", trigger, "--work", self.work]
+        if getattr(self, "recheck", ""):
+            a += ["--recheck", self.recheck]
         if self.source == "app":
             # A regular RichOS user: Claude reviews (plan §2.3, "RichOS is Claude", §16), on the
             # CLI the app ships, with the user's own turn as the original words beside the
@@ -1304,8 +1306,18 @@ class Watcher(object):
         citems, cproblems = self.world.codex_items(now, codex_state)
         items += citems
         problems += cproblems
+        import recovery_runner
+        entity = os.path.dirname(self.config) if self.config else os.environ.get("RICHOS_ENTITY_ROOT", "")
+        recovery_requests = recovery_runner.tick(items, self.engine_root, entity,
+                            getattr(self.world, "ws", None)) if entity else []
         attempts = read_jsonl(_p("attempts.jsonl"))
         book = Book(rows, running, attempts)
+        for item, prior in recovery_requests or []:
+            if item.key not in book.running:
+                item.recheck = prior
+                info = self.start(item, "handover", now, 1, None, rows)
+                if info:
+                    book.running[item.key] = info
         handover = not isinstance(self.world, AppWorld)
         for it, trigger, supersede in due(items, book, now, seen, LONG_JOB_MINUTES * 60, handover):
             n = len(book.losses.get(it.key) or []) + 1
@@ -1548,6 +1560,14 @@ def deliver(keys, now):
     for k in keys:
         delivered.setdefault(k, now)
     shared["delivered"] = delivered
+    for key in keys:
+        notice = (shared.get("recovery_refs") or {}).get(key)
+        if notice:
+            try:
+                import recovery
+                recovery.owner_delivered(notice["record"], key, notice["session"])
+            except (OSError, ValueError) as error:
+                sys.stderr.write("review-watch: recovery delivery audit unavailable: %s\n" % error)
     stall_watch._write_json(path, shared)
 
 
@@ -1640,7 +1660,14 @@ def tell(now, sstate, rows, book, items, problems, attempts):
     lost_twice = dict(("lost:%s:%s" % key, key) for key, lost in book.losses.items() if len(lost) >= MAX_LOSSES)
     ids = set(_row_key(r) for r in rows if r.get("verdict")) | set(lost_twice)
     shared["delivered"] = dict((k, t) for k, t in delivered.items() if k in ids or (
-        k.startswith("nc:") and now - float(t or 0) <= KEEP_SECONDS))
+        (k.startswith("nc:") or k.startswith("recovery:")) and now - float(t or 0) <= KEEP_SECONDS))
+    stall_watch._write_json(_p("last-told.json"), shared)
+    import recovery_runner
+    for notice in recovery_runner.NOTICES:
+        shared.setdefault("recovery_refs", {})[notice["key"]] = dict(record=notice["record"], session=notice["session"])
+        k, session = notice["key"], notice["session"]
+        if k not in delivered and ours(session):
+            add(notice["lines"], session=session, key=k)
     stall_watch._write_json(_p("last-told.json"), shared)
     verdict_blocks = len(body)
     # -- an unhandled changes-requested handover, again every 30 minutes ------------
@@ -1694,8 +1721,9 @@ def tell(now, sstate, rows, book, items, problems, attempts):
     else:
         shown, lines = [n for n, s in enumerate(owners) if for_this_monitor(s)], []
     if shown and not HOST_JSON["on"]:
-        lines = ["REVIEW-WATCH %s: %d second-review notice%s (it only starts reviews and reports: nothing was "
-                 "paused, stopped or killed)" % (hhmm(now), len(shown), "" if len(shown) == 1 else "s")]
+        recovery_on = bool(recovery_runner.NOTICES)
+        contract = "declared recovery control may stop exact affected workers" if recovery_on else "it only starts reviews and reports: nothing was paused, stopped or killed"
+        lines = ["REVIEW-WATCH %s: %d second-review notice%s (%s)" % (hhmm(now), len(shown), "" if len(shown)==1 else "s", contract)]
         used = len(lines[0])
         for i, n in enumerate(shown):
             cost = sum(len(x) + 1 for x in body[n])

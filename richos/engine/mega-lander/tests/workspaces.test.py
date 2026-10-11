@@ -238,6 +238,62 @@ class Base(unittest.TestCase):
 
 # ===========================================================================
 class RecoveryChain(Base):
+    def recovery_fixture(self, name='recovery-worker'):
+        cc = self.make_cc(name)
+        aid, _path = self.spawn(name, cc)
+        rec = next(r for r in ws.all_agents() if r.get('agent_id') == aid)
+        control, host = ws._recovery_adapter()
+        state = os.path.join(self.env.root, 'private-review-state')
+        self.env.saved.setdefault('SECOND_REVIEW_STATE_DIR', os.environ.get('SECOND_REVIEW_STATE_DIR'))
+        os.environ['SECOND_REVIEW_STATE_DIR'] = state
+        os.makedirs(state, exist_ok=True)
+        work = ws.recovery_work_key(rec)
+        ledger = os.path.join(state, 'reviews.jsonl')
+        with open(ledger, 'w') as out:
+            for n in range(3):
+                out.write(json.dumps(dict(id='failed-'+str(n), repo=self.other, work=work, tip=str(n)*40,
+                    trigger='handover', verdict='changes-requested', record=state))+'\n')
+        record = control.R.reconcile(self.other, work, {work}, self.sid,
+            rec['recovery_assignment']['acceptance'], mode='enforce')
+        rec['recovery_jobs'] = [record['id']]
+        ws.save_agent(rec)
+        return cc, aid, rec, control, host, record
+
+    def test_control_refuses_all_tools_without_manufacturing_an_end(self):
+        cc, aid, rec, control, host, record = self.recovery_fixture()
+        payload = dict(session_id=self.sid, agent_id=aid, tool_name='Write', tool_use_id='native-write')
+        self.assertEqual(ws.barrier(payload)[0], 'REGISTERED')
+        tip = control.source_identity(host, cc)
+        decision = control.R.control(record['id'], dict(job=record['id'], acceptance=record['acceptance'],
+            frontier=record['evidence_cursor'], action='stop', workers={rec['key']:tip},
+            reason='the three attempts miss the same transition', evidence='independent findings'), 'axel')
+        with patch.object(ws, 'end_owned_work', return_value={'ok':True,'survivors':[],'excluded':[]}):
+            # host keeps function references, so get it after installing the spy.
+            control, host = ws._recovery_adapter()
+            result = control.stop(host, rec['key'], record, decision, tip)
+        self.assertFalse(result['quiescent'])
+        self.assertFalse(ws.load_agent(rec['key']).get('end'))
+        for tool in ('Read', 'Write', 'Edit', 'Bash', 'Agent', 'SubagentHandback'):
+            self.assertEqual(ws.barrier(dict(payload, tool_name=tool))[0], 'CONTROLLED')
+        ws.lifecycle(dict(payload, hook_event_name='PostToolUseFailure'), self.entity)
+        self.assertEqual(ws.load_agent(rec['key'])['recovery_tools'], {})
+        self.assertEqual(ws.barrier(dict(session_id=self.sid, tool_name='Read'))[0], 'LEAD')
+
+    def test_a_stale_control_never_freezes_the_successor_source(self):
+        cc, aid, rec, control, host, record = self.recovery_fixture('stale-worker')
+        result = control.stop(host, rec['key'], record, dict(id='old', reason='old evidence'), 'f'*40)
+        self.assertEqual(result['status'], 'stale')
+        self.assertFalse(ws.load_agent(rec['key']).get('recovery_control'))
+
+    def test_uncommitted_progress_invalidates_old_applicability(self):
+        cc, aid, rec, control, host, record = self.recovery_fixture('changing-worker')
+        source = control.source_identity(host, cc)
+        with open(os.path.join(cc, 'new-source.txt'), 'w') as out:
+            out.write('A fix that the earlier judgment has not seen')
+        result = control.stop(host, rec['key'], record, dict(id='old', reason='old evidence'), source)
+        self.assertEqual(result['status'], 'stale')
+        self.assertFalse(ws.load_agent(rec['key']).get('recovery_control'))
+
     def test_correction_history_does_not_expand_lifecycle_ownership(self):
         old = ws.new_record('old-session--original', registered_at='2026-10-10T00:00:00Z',
             recovery_assignment=dict(kind='implementation', outcome='original', correction_of=[], acceptance='same'))
@@ -252,6 +308,25 @@ class RecoveryChain(Base):
         self.assertEqual(ws.recovery_work_key(reviewer), 'teammate:reviewer')
         feature = dict(successor, key='independent-feature', recovery_assignment=dict(kind='implementation', outcome='new-outcome', correction_of=[]))
         self.assertEqual(ws.recovery_work_key(feature), 'teammate:independent-feature')
+
+    def test_native_classification_reconciles_legacy_corrections_but_not_dependencies(self):
+        original=ws.new_record(self.sid+'--legacy-one',registered_at='2026-10-10T00:00:00Z')
+        second=ws.new_record(self.sid+'--legacy-two',registered_at='2026-10-10T01:00:00Z')
+        ws.save_agent(original)
+        ws.save_agent(second)
+        current=ws.new_record(self.sid+'--current',entity=self.entity)
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='Implement the same accepted outcome'))
+        inspector=dict(id='inspection',classification_index=dict(sha256='source'),assignment_classification=dict(
+            kind='implementation',relation='corrective',correction_of=[original['key'],second['key']],evidence='Both original indexed briefs correct the same outcome'))
+        assignment=ws._recovery_assignment(payload,current,[],[second['key']],inspector)
+        self.assertEqual(assignment['acceptance'],'legacy:'+original['key'])
+        current['recovery_assignment']=assignment
+        self.assertEqual(len(ws.recovery_chain(current)),3)
+        independent=dict(inspector,assignment_classification=dict(kind='implementation',relation='dependent',correction_of=[],evidence='A different accepted feature depends on the merge'))
+        feature=ws._recovery_assignment(payload,dict(current,key=self.sid+'--feature'),[],[second['key']],independent)
+        self.assertNotEqual(feature['outcome'],assignment['outcome'])
+        self.assertEqual(feature['correction_of'],[])
+        self.assertEqual(len(ws._chain(current)),1)
 
     def test_read_only_classification_cannot_grant_a_writer_a_new_budget(self):
         cc = self.make_cc('helper')

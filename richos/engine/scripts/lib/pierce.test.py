@@ -51,6 +51,27 @@ class Pierce(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
+    def test_recovery_classification_requires_observed_correction_sources(self):
+        index=self.root/"candidates.json"
+        data=json.dumps([dict(key="native--previous")]).encode()
+        index.write_bytes(data)
+        request=dict(recovery_assignment_context=dict(index=dict(reference=str(index),sha256=hashlib.sha256(data).hexdigest())))
+        value=dict(kind="implementation",relation="corrective",correction_of=["native--previous"],evidence="Original indexed brief retains the same acceptance")
+        P.validate_classification(request,dict(assignment_classification=value))
+        for change in (dict(correction_of=["unobserved"]),dict(kind="review"),dict(relation="dependent")):
+            with self.assertRaises(ValueError):
+                P.validate_classification(request,dict(assignment_classification={**value,**change}))
+        index.write_text("[]")
+        with self.assertRaises(ValueError):
+            P.validate_classification(request,dict(assignment_classification=value))
+
+    def test_default_inspection_does_not_accept_unrequested_job_authority(self):
+        answer=dict(assignment_classification=dict(kind="helper"))
+        P.validate_classification({},answer)
+        self.assertNotIn("assignment_classification",answer)
+        self.assertEqual(P.SCHEMA["required"],["verdict","report","notes"])
+        self.assertIn("assignment_classification",P.classification_schema()["required"])
+
     def test_full_user_messages_and_actual_inherited_definition(self):
         captured = []
         def reviewer(request, profile):
