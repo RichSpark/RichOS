@@ -133,8 +133,11 @@ const MEASURE = `(a) => {
   const bug = document.getElementById("bug-btn");
   const old = document.getElementById("zz-settings-fit-spacer");
   if (old) old.remove();
-  if (a.bare) { menu.style.maxHeight = "none"; menu.style.overflowY = "visible"; }
-  else { menu.style.maxHeight = ""; menu.style.overflowY = ""; }
+  // The shipped candidate also had no sticky floor (style.css "THE FLOOR STAYS IN VIEW", added
+  // with the Token spend row): with the panel unbounded, a sticky Bust a bug would pin itself to
+  // the window's bottom edge and the control would reproduce nothing, so bare drops it too.
+  if (a.bare) { menu.style.maxHeight = "none"; menu.style.overflowY = "visible"; bug.style.position = "static"; }
+  else { menu.style.maxHeight = ""; menu.style.overflowY = ""; bug.style.position = ""; }
   menu.scrollTop = 0;
   const natural = menu.getBoundingClientRect().height;
   if (a.grow) {
