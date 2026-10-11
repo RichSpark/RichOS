@@ -1294,7 +1294,13 @@ def publication_completeness_gate(repo, what):
     check the engine's commit guard runs at every commit, so no commit could pass after it."""
     script = repo.top / PUBLICATION_COMPLETENESS
     if not script.is_file():
-        say(f"autocheck: {what}: {PUBLICATION_COMPLETENESS} is not in this tree; publication completeness NOT checked")
+        declared = [d for d in (".publication-boundary", ".richos/publication-boundary") if (repo.top / d).is_file()]
+        if declared:
+            banner(f"{what.upper()} REFUSED: the publication-completeness checker is missing from the tree being landed",
+                   [f"{PUBLICATION_COMPLETENESS} is not in this tree, but it declares a publication boundary ({declared[0]}).",
+                    "A missing checker is a check that did not run, not a pass. Restore the file on the branch and land again."])
+            return 1
+        say(f"autocheck: {what}: publication completeness NOT APPLICABLE (no .publication-boundary)")
         return 0
     scope = ["--skip-private-trees"] if "--skip-private-trees" in script.read_text(errors="replace") else []
     say(f"+ bash {PUBLICATION_COMPLETENESS} --root . {' '.join(scope)}".rstrip())
