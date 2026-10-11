@@ -1708,6 +1708,15 @@ impl Spine {
         Ok(())
     }
 
+    /// **The declination was written from the published view; now stop offering.** The
+    /// spine's half of [`crate::read_view::ReadView::record_onboarding_declination`]: every
+    /// front desk primed with the offer is un-primed, exactly as
+    /// [`Spine::record_onboarding_declination`] does after its own write. Run once the spine
+    /// is free, so "Not now" never waits for a prime to finish.
+    pub fn onboarding_answer_recorded(&mut self) {
+        self.unprime_every_front_desk();
+    }
+
     /// Run after restoring the active company (or its first explicit selection). Legacy
     /// records cannot identify a company, so this is a one-time, explicit compatibility step.
     pub fn migrate_legacy_onboarding_declination(&mut self) -> Result<bool, crate::doctrine::DoctrineError> {

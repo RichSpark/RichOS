@@ -5384,6 +5384,20 @@ fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<Onboa
 }
 
 /// The body of [`decline_onboarding`], without Tauri's `State`, so a test can drive it.
+///
+/// **IT NEVER WAITS FOR THE SPINE** (a user's tap is answered at once; nothing he just did
+/// waits behind work the app does for itself). It used to take the spine for the whole of
+/// it, and at boot the spine is held by `prime_front_desk` for a model turn: measured
+/// 2026-10-11 in the built app, the decline asked at +7898 ms and got the spine at
+/// +98797 ms, so the card stayed on screen 90899 ms after he pressed "Not now"
+/// (`docs/verification/2026-10-11-preferences-close-walk/README.md`, step 17).
+///
+/// So the answer is checked and written from ONE published snapshot (the record's path and
+/// the open company are both published, `read_view.rs`), and the card gets its answer from
+/// the same read the window already uses. The one thing that needs the spine, un-priming the
+/// desks primed with the offer, goes to a thread that waits for it. Until that runs, a desk
+/// primed before the answer still carries the offer; that was already true while the decline
+/// sat waiting, and his own message sent meanwhile is drained by the prime either way.
 fn decline_onboarding_in(
     spine: &Arc<Mutex<Spine>>,
     reader: &SpineReader,
@@ -5391,12 +5405,16 @@ fn decline_onboarding_in(
     now_millis: u64,
 ) -> Result<OnboardingView, String> {
     let outcome = {
-        let mut spine = take_the_spine(spine);
-        if spine.active_binding().map(|b| b.entity_id().to_string()).as_deref() != Some(entity_id) {
+        let view = reader.snapshot();
+        if view.active_binding().map(|b| b.entity_id().as_str()) != Some(entity_id) {
             return Err("The company changed. Please use the offer for the company now open.".into());
         }
-        spine.record_onboarding_declination(now_millis)
+        view.record_onboarding_declination(now_millis)
     };
+    if outcome.is_ok() {
+        let spine = Arc::clone(spine);
+        std::thread::spawn(move || take_the_spine(&spine).onboarding_answer_recorded());
+    }
     if let Err(why) = outcome {
         // THE ERROR THE CEO SEES IS NOT THE ERROR THE CRATE RAISED, and that is deliberate
         // rather than a wrapper for its own sake. `record_declination` writes through

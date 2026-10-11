@@ -79,6 +79,29 @@ impl SpineView for ReadView {
     }
 }
 
+impl ReadView {
+    /// **HE SAID "NOT NOW", written down without the spine.** The same write as
+    /// [`Spine::record_onboarding_declination`], from the published view.
+    ///
+    /// The write needs two facts, where the record lives and which company is open, and both
+    /// are published here. Taking the spine for them put "Not now" behind whatever held it: at
+    /// boot that is `prime_front_desk`, a model turn, and on 2026-10-11 the card stayed on
+    /// screen 90899 ms. What still needs the spine is un-priming the desks primed with the
+    /// offer; the caller hands that to [`Spine::onboarding_answer_recorded`] once it is free.
+    ///
+    /// The same refusals as the spine's: no record configured, or no company open.
+    pub fn record_onboarding_declination(&self, now_millis: u64) -> Result<(), crate::doctrine::DoctrineError> {
+        let path = self.metadata.onboarding_record.as_ref().ok_or_else(|| crate::doctrine::DoctrineError::Unwritable {
+            path: "<no onboarding record configured>".into(),
+            why: "nobody told this spine where the declination record lives, so there is nowhere to write".into(),
+        })?;
+        let binding = self.metadata.active.as_ref().ok_or_else(|| crate::doctrine::DoctrineError::Unwritable {
+            path: path.display().to_string(), why: "no company is selected; no answer was recorded".into(),
+        })?;
+        crate::onboarding::OnboardingRecord::record_declination_for_entity(path, binding.entity_id(), now_millis)
+    }
+}
+
 #[derive(Clone)]
 pub struct SpineReader(Arc<RwLock<Arc<ReadView>>>);
 
