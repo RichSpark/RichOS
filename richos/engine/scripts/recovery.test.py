@@ -80,6 +80,68 @@ class Recovery(unittest.TestCase):
         self.assertEqual(current()['deadline'],deadline)
         self.assertEqual(current()['status'],'investigating')
 
+    def test_fourth_named_fix_triggers_with_no_failed_reviews(self):
+        self.ledger.write_text('')
+        for name in ('zach-opus-hostshim1', 'zach-opus-hostshim2', 'zach-opus-hostshim3'):
+            self.assertIsNone(R.reconcile(str(self.repo), name, {name}, 'owner', 'acceptance', name=name))
+        # Both real incidents had ordinary explanations and passing reviews.
+        # Neither is an exemption from inspection at the visible number four.
+        for name in ('zach-opus-hostshim4', 'zach-opus-lease4'):
+            self.review('a'*40, name, verdict='passed', work=name)
+            record = R.reconcile(str(self.repo), name, {name}, 'owner', 'acceptance', name=name)
+            self.assertEqual(record['status'], 'investigating')
+            self.assertEqual(record['repeat_signal']['iteration'], 4)
+            self.assertEqual(record['failed'], [])
+            self.assertEqual(record['recovery_failures'], 0)
+            self.assertTrue(all(R.repeat_pending(record, role) for role in ('axel', 'wes')))
+
+    def test_repeat_inspection_does_not_renew_pending_budget_or_count_a_failure(self):
+        self.ledger.write_text('')
+        def check(name, now):
+            return R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name=name, now=now)
+        first = check('zach-opus-hostshim4', 100)
+        self.assertEqual(first, check('zach-opus-hostshim4', 100))
+        later = check('echo-sonnet-hostshim5', 200)
+        self.assertEqual(later['deadline'], first['deadline'])
+        self.assertNotEqual(later['evidence_cursor'], first['evidence_cursor'])
+        self.assertEqual(later['repeat_signal']['iteration'], 5)
+        self.assertEqual(check('zach-opus-hostshim3', 201)['repeat_signal']['iteration'], 5)
+        self.assertEqual(later['recovery_failures'], 0)
+        self.assertEqual(later['aliases'], ['numbered'])
+
+    def test_both_advisors_must_justify_continuation_before_alarm_closes(self):
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-lease4')
+        advice = dict(job=record['id'], acceptance=record['acceptance'], frontier=record['evidence_cursor'],
+            action='continue', workers={}, reason='One bounded cleanup with an explicit finish condition', evidence='original brief and predecessor handover')
+        for role in ('axel', 'wes'):
+            action = R.control(record['id'], advice, role)
+            checked = R.repeat_checked(record['id'], role, action)
+            self.assertEqual(checked['status'], 'investigating' if role == 'axel' else 'resolved_findings')
+        self.assertIsNone(checked['plan'])
+        self.assertFalse(R.repeat_pending(checked, 'axel'))
+        again = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-lease5')
+        self.assertEqual(again['status'], 'investigating')
+        self.assertTrue(R.repeat_pending(again, 'wes'))
+
+    def test_one_advisors_continue_cannot_erase_the_others_intervention(self):
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-hostshim4')
+        for role, action in (('wes', 'redirect'), ('axel', 'continue')):
+            advice = dict(job=record['id'], acceptance=record['acceptance'], frontier=record['evidence_cursor'],
+                action=action, workers={}, reason='Review original purpose', evidence='original brief')
+            checked = R.repeat_checked(record['id'], role, R.control(record['id'], advice, role))
+        self.assertEqual(checked['status'], 'investigating')
+        self.assertTrue(checked['repeat_recovery'])
+        self.assertEqual(checked['recovery_failures'], 0)
+
+    def test_repetition_never_clears_exhausted_recovery(self):
+        record = R.read(self.record['id'])
+        record['status'] = 'awaiting_alex'
+        R.save(record, 'fixture-escalation')
+        current = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', name='zach-opus-lease4')
+        self.assertEqual(current['status'], 'awaiting_alex')
+
     def test_conflicting_pass_creates_one_focused_independent_reconciliation(self):
         self.work='teammate:conflict-only'
         tip='c'*40

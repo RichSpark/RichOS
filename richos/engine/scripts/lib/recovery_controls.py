@@ -30,7 +30,7 @@ def admitted(ws, payload, rec, assignment, repos, entity, dry=False):
     declaration = R.mode(entity)
     if declaration["mode"] == "observe":
         assignment = rec.get("recovery_observation_assignment") or assignment
-    if declaration["mode"] == "off" or assignment["kind"] != "implementation":
+    if declaration["mode"] == "off" or (assignment["kind"] != "implementation" and not R.repeat_signal(rec.get("name"))):
         return []
     if declaration["mode"] == "observe":
         try:
@@ -60,7 +60,7 @@ def _admitted(ws, payload, rec, assignment, repos, declaration, dry):
         if repo not in {os.path.realpath(p) for p in declaration["repositories"]}:
             continue
         record = R.reconcile(repo, identity, aliases, rec["session_id"], acceptance,
-                             mode=declaration["mode"], dry=dry, premises=declaration.get("wes_policy", "carried"))
+                             mode=declaration["mode"], dry=dry, premises=declaration.get("wes_policy", "carried"), name=rec.get("name", ""))
         if not record:
             continue
         R.admission(record, rec["key"], body, disposition[0] if disposition else "", dry=dry,
@@ -308,7 +308,7 @@ def _schedule(record, engine, env=None):
         recovery_runner.launch(record, "control", engine, env=env)
     if record.get("axel_required", True):
         recovery_runner.launch(record, "axel", engine, env=env)
-    if record.get("wes_candidates"):
+    if record.get("wes_candidates") or record.get("repeat_signal"):
         recovery_runner.launch(record, "wes", engine, env=env)
 
 

@@ -19,9 +19,9 @@ A consultation, report or passing patch test is not recovery completion. Follow 
 
 ## When you participate
 
-The host routes you when the initial implementation and two corrective handovers have failed acceptance. Run outside the dispatch hook while the next implementation round can proceed. Keep the investigation active across worker replacements and consume evidence updates within its original finite budget. This policy requires the qualified host integration; this definition alone does not schedule you.
+The host summons both you and Wes as soon as a registered job name reaches iteration 4, for example agent-model-task4. Fix 3 is the last ordinary chance. No failed test, blocking finding, review verdict or manual declaration is needed. The existing three-failed-handover route remains an additional trigger. Run outside the dispatch hook while the next implementation round can proceed. Keep the investigation active across worker replacements and consume evidence updates within its original finite budget. This policy requires the qualified host integration; this definition alone does not schedule you.
 
-Do not count agent names, branch names, repeated notifications or tool retries as corrective rounds. Use the durable job, attempt and outcome records. If the required context is missing, request its bounded recovery through the host. Do not pretend a threshold was observed from an agent's summary alone.
+The visible iteration number is sufficient to trigger inspection. A session limit, passing reviews or a description of the work as cleanup must not suppress that inspection. Decide why the job is still running, whether the current approach and remaining work are justified and what will end it. Repetition is a reason to intervene, not proof of a technical defect. Use durable accepted-plan outcomes for the separate recovery-failure budget; a number in a name does not consume that budget.
 
 Do not inspect every tool call or repeatedly inspect unchanged accepted plans. Reuse applicable evidence and inspect the change that matters.
 

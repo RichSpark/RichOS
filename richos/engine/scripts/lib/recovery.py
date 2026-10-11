@@ -19,6 +19,7 @@ from pathlib import Path
 import operator_fences as F
 
 THRESHOLD = 3
+REPEAT_ITERATION = 4
 MAX_RECOVERIES = 3
 EXECUTION_SECONDS = 3 * 3600
 LOCK_SECONDS = 4
@@ -173,11 +174,52 @@ def failed_attempts(ledger, repo, aliases):
     return failed
 
 
-def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", dry=False, premises=False):
+def repeat_signal(name):
+    """A visible fourth iteration is enough to ask for intervention.
+
+    This is an alarm, not proof of a failed attempt or an identity join.
+    No review outcome, predecessor record or manually declared dispute is needed.
+    """
+    match = re.fullmatch(r"[^-\s/]+-[^-\s/]+-([A-Za-z][A-Za-z0-9_-]*?)([0-9]{1,9})", name or "")
+    if not match:
+        return None
+    number = int(match[2])
+    return dict(name=name, job=match[1], iteration=number) if number >= REPEAT_ITERATION else None
+
+
+def repeat_pending(record, role):
+    return bool(record.get("repeat_signal") and
+                (record.get("repeat_checks", {}).get(role) or {}).get("frontier") != record["evidence_cursor"])
+
+
+def repeat_checked(identity, role, control):
+    """Both advisors judge the alarm. A continue needs no invented repair plan."""
+    if role not in ("axel", "wes"):
+        raise Unavailable("unknown repetition advisor")
+    with locked(identity):
+        record = read(identity)
+        if control["frontier"] != record["evidence_cursor"]:
+            raise Unavailable("iteration changed during advisor inspection")
+        record.setdefault("repeat_checks", {})[role] = dict(frontier=control["frontier"],
+            action=control["action"], reason=control["reason"], consultation=control["consultation"])
+        if control["action"] != "continue":
+            record["repeat_recovery"] = True
+            # Wake Axel if Wes redirects after Axel's first inspection ended.
+            record["update_needed"] = control["id"]
+        elif (not any(repeat_pending(record, r) for r in ("axel", "wes")) and
+              not record.get("repeat_recovery") and len(record["failed"]) < THRESHOLD and
+              not record.get("wes_candidates") and not record["attempts"]):
+            record["status"] = "resolved_findings"
+        save(record, "repetition-inspected")
+        return record
+
+
+def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", dry=False, premises=False, name=""):
     """Level-triggered, including when no watcher has polled. The original
     deadline survives source movement and worker replacement.
     """
     now = time.time() if now is None else now
+    repetition = repeat_signal(name)
     ledger = rows(F.review_ledger_default())
     failed = failed_attempts(ledger, repo, aliases)
     relevant = [r for r in ledger if r.get("work") in aliases and F.review_row_belongs(r, F.review_repo_identity(repo))]
@@ -196,7 +238,7 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
     identity = key(repo, work)
     with (contextlib.nullcontext() if dry else locked(identity)):
         record = read(identity)
-        if record is None and len(failed) < THRESHOLD and not candidates:
+        if record is None and len(failed) < THRESHOLD and not candidates and not repetition:
             return None
         if record is None:
             record = dict(schema=1, id=identity, repo=os.path.realpath(repo),
@@ -212,15 +254,23 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
         before = digest(record)
         previous_count = record.get("recovery_failures", 0)
         record.update(failed=failed, aliases=sorted(aliases), owner=owner, mode=mode, wes_candidates=candidates)
+        previous = record.get("repeat_signal")
+        if repetition and (not previous or repetition["iteration"] > previous["iteration"]):
+            record["repeat_signal"] = repetition
+            record["repeat_checks"] = {}
+            if record["status"] in ("accepted", "resolved_findings", "reviewing_premise"):
+                record.update(status="investigating", plan=None, deadline=now + EXECUTION_SECONDS,
+                              wes_deadline=now + EXECUTION_SECONDS)
+                record["budgets"].append(dict(start=now, deadline=record["deadline"], reason="fourth or later named iteration"))
         if len(failed)>=THRESHOLD and (not record.get("axel_required", True) or record["status"]=="resolved_findings"):
             record["deadline"] = now + EXECUTION_SECONDS
             record["budgets"].append(dict(start=now, deadline=record["deadline"], reason="recovery threshold crossed after premise resolution"))
             record["status"] = "investigating"
             record["plan"] = None
-        record["axel_required"] = record.get("axel_required", True) or len(failed)>=THRESHOLD
+        record["axel_required"] = record.get("axel_required", True) or len(failed)>=THRESHOLD or bool(record.get("repeat_signal"))
         if record["axel_required"] and record["status"] == "reviewing_premise":
             record["status"] = "investigating"
-        record["evidence_cursor"] = digest(failed)
+        record["evidence_cursor"] = digest([failed, record["repeat_signal"]]) if record.get("repeat_signal") else digest(failed)
         failures = {a["tip"] for a in failed}
         for attempt in record["attempts"]:
             attempt["failed"] = bool(attempt.get("tip") in failures)
@@ -234,7 +284,7 @@ def reconcile(repo, work, aliases, owner, acceptance, now=None, mode="observe", 
                 constraints="No fourth correction or budget reset without a new explicit Alex decision.",
                 options=["Reauthorize with a changed outcome or new constraints", "Defer the job", "Discard the job"],
                 approaches=[p.get("approach") for p in record.get("plans",[])], delivered=False)
-        elif len(failed) < THRESHOLD and not record["attempts"] and (record["axel_required"] or not candidates):
+        elif not record.get("repeat_signal") and len(failed) < THRESHOLD and not record["attempts"] and (record["axel_required"] or not candidates):
             record["status"] = "resolved_findings"
         elif count > previous_count:
             # A newly established recovery failure permits the next bounded

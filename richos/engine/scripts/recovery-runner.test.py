@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -163,6 +164,59 @@ class Async(unittest.TestCase):
     tearDown = fixture.Recovery.tearDown
     review = fixture.Recovery.review
     reconcile = fixture.Recovery.reconcile
+
+    def numbered(self, number):
+        name = 'zach-opus-hostshim'+str(number)
+        rec = dict(name=name, key=name, session_id='owner')
+        ws = SimpleNamespace(recovery_chain=lambda r, observation=False: [r],
+            recovery_work_key=lambda r, observation=False: 'teammate:'+r['key'],
+            load_agent=lambda key: rec, save_agent=lambda r: None, Lock=lambda: R.contextlib.nullcontext(),
+            prompt_lines=lambda prompt, field: [])
+        return rec, ws
+
+    def test_dispatch_and_watcher_schedule_both_on_four_without_a_review_or_assignment(self):
+        import recovery_controls as C
+        self.ledger.write_text('')
+        declaration = dict(mode='enforce', repositories=[str(self.repo)], wes_policy='carried')
+        for number in (3, 4):
+            rec, ws = self.numbered(number)
+            item = SimpleNamespace(source='native', repo=str(self.repo), ref=rec['key'], session='owner',
+                state='running', started=1, env={}, claude='', accounts='', tip='a'*40)
+            with patch.object(R, 'mode', return_value=declaration), patch.object(RR.SR, 'find_teammate', return_value=rec), \
+                    patch.object(RR, 'launch') as launch:
+                RR.tick([item], str(HERE.parent), 'entity', ws)
+                self.assertEqual([c.args[1] for c in launch.call_args_list], [] if number == 3 else ['axel', 'wes'])
+            # The dispatch path records the same alarm before the watcher polls.
+            with patch.object(R, 'mode', return_value=declaration), patch.object(RR, 'consultation') as model:
+                jobs = C.admitted(ws, {}, rec, dict(kind='implementation'), [str(self.repo)], 'entity')
+                self.assertEqual(len(jobs), 0 if number == 3 else 1)
+                model.assert_not_called()
+        with patch.object(R, 'mode', return_value=dict(mode='off')), patch.object(RR, 'launch') as launch:
+            RR.tick([item], str(HERE.parent), 'entity', ws)
+            self.assertEqual(C.admitted(ws, {}, rec, dict(kind='implementation'), [str(self.repo)], 'entity'), [])
+            launch.assert_not_called()
+
+    def test_repetition_runs_both_judgments_without_forcing_a_repair_plan(self):
+        import recovery_controls as C
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-lease4')
+        calls = []
+        def consult(identity, role, phase, prompt, shape, executable, account):
+            calls.append((role, phase))
+            self.assertIn('fix number four', prompt)
+            self.assertIn('even when all reviews passed', prompt)
+            self.assertEqual(shape['properties']['frontier']['enum'], [record['evidence_cursor']])
+            return dict(job=identity, acceptance='acceptance', frontier=record['evidence_cursor'], action='continue',
+                workers={}, reason='A bounded justified cleanup', evidence='Original outcome and handover'), role+'-result'
+        with patch.object(RR.SR, 'load_workspaces', return_value=object()), patch.object(RR.SR, 'find_claude', return_value='provider'), \
+                patch.object(RR, 'snapshot', return_value='original evidence'), patch.object(RR, 'consultation', side_effect=consult), \
+                patch.object(C, 'schedule'):
+            self.assertEqual(RR.run(record['id'], 'axel', str(HERE.parent)), 0)
+            self.assertEqual(RR.run(record['id'], 'wes', str(HERE.parent)), 0)
+        self.assertEqual(calls, [('axel', 'repetition'), ('wes', 'repetition')])
+        self.assertEqual(R.read(record['id'])['status'], 'resolved_findings')
+        self.assertIsNone(R.read(record['id'])['plan'])
+
     def test_actual_background_pipeline_and_exact_profile_capabilities(self):
         provider = self.base / "fake-claude"
         provider.write_text('''#!/usr/bin/env python3
