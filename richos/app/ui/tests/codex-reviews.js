@@ -100,7 +100,9 @@ async function main() {
     const order = await page.evaluate(() => [...document.querySelectorAll("#set-menu > *")].map(e => e.id || e.className));
     const techy = order.indexOf("set-techy-row");
     assert(techy >= 0, "Technical view is in the menu: " + order);
-    assertEqual(order[techy + 1], "set-codex", "the row comes directly after Technical view: " + order);
+    // Round 22.1 put the Token spend row directly under Technical view, above this row's rule.
+    assertEqual(order[techy + 1], "set-spend", "Token spend directly after Technical view (round 22.1): " + order);
+    assertEqual(order[techy + 2], "set-codex", "the row comes directly after Token spend: " + order);
     assertEqual(await page.locator("#set-codex > .set-rule").count(), 2, "a rule above and below");
     assertEqual(await text(page, "#cx-title"), "Let Codex review your team's work");
     assertEqual(await text(page, "#cx-who"), "Reviewing now: Claude");

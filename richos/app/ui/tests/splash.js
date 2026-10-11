@@ -1872,8 +1872,12 @@ async function main() {
     assert(/fn splash_default\(\) -> bool \{\s*true\s*\}/.test(cfg), "config.rs's splash default is not `true`");
     assert(/#\[serde\(default = "splash_default"\)\]\s*\n\s*splash_enabled: bool/.test(cfg), "splash_enabled does not use the named default");
     assert(/read\(KEY_ENABLED\) !== "false"/.test(fs.readFileSync(RENDERER_FILE, "utf8")), "splash.js does not treat an absent value as ON");
+    // A window command is `#[richos_command::command]` since a498a1e1c (it expands to
+    // `#[tauri::command(async)]` over a body that never blocks an async worker); the bare
+    // Tauri attribute is still accepted, and either may carry arguments.
+    const COMMAND_ATTR = "#\\[(?:richos_command|tauri)::command(?:\\([^)\\]]*\\))?\\]";
     for (const cmd of ["splash_enabled", "set_splash_enabled", "splash_note_shown"]) {
-      assert(new RegExp("#\\[tauri::command(?:\\(async\\))?\\]\\s*\\nfn " + cmd + "\\b").test(rs), cmd + " is not a command");
+      assert(new RegExp(COMMAND_ATTR + "\\s*\\nfn " + cmd + "\\b").test(rs), cmd + " is not a command");
       assert(new RegExp("^\\s*" + cmd + "[,\\s]*$", "m").test(rs), cmd + " is not registered in generate_handler!");
       assert(js.includes('"' + cmd + '"'), cmd + " is never invoked by main.js");
     }

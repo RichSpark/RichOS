@@ -3138,6 +3138,15 @@ fn main() {
             // + retry (or a crash recovery attempt) has a real respawn path rather than none.
             let permissions = Arc::new(richos_core::permissions::PermissionDesk::default());
             let quota = Arc::new(richos_core::quota::Service::open_account_wide(&data_dir)?);
+            // THE FIRST READ OF THE WHOLE HISTORY, off the launch path (§118): every account's
+            // transcripts priced once, so the Token spend screen opens on its figure. 9.28 GB took
+            // 15.97 s on the CEO's Mac (2026-10-11); it waits 20 s so the launch has the machine.
+            // A screen opened before it ends says it is counting; later reads take only new lines.
+            let spend_weak = Arc::downgrade(&quota);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                if let Some(quota) = spend_weak.upgrade() { quota.spend_update(); }
+            });
             // Read immediately at startup, regardless of the pause switch. Session
             // starts and account changes wake this same reader. Otherwise its cache
             // enforces five-minute polling, with reset deadlines and error backoff.
@@ -3810,6 +3819,8 @@ fn main() {
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             claude_quota_activity,
+            spend_view,
+            spend_live,
             set_claude_quota_policy,
             claude_account_add,
             claude_account_sign_in,
@@ -5788,6 +5799,21 @@ fn provider_auth_cancel(state: State<AppState>) -> richos_core::provider_auth::A
 fn claude_quota(state: State<AppState>, refresh: bool) -> richos_core::quota::View {
     let bin = state.claude_bin.lock().unwrap().clone();
     state.quota.refresh(&bin, refresh)
+}
+
+/// **API-equivalent token spend** (§118, round 22.1): the Token spend screen's snapshot of every
+/// request at or after `from` (Unix ms: the webview's local midnight, Monday or first of the
+/// month; 0 for all time), priced at the published API rates (`richos_core::spend`).
+#[richos_command::command]
+fn spend_view(state: State<AppState>, from: u64) -> richos_core::spend::ledger::SpendView {
+    state.quota.spend_view(from)
+}
+
+/// The Token spend screen's live line: the agents working, the latest request in dollars, and
+/// how many requests have been counted (more than the snapshot's puts the dot on Refresh).
+#[richos_command::command]
+fn spend_live(state: State<AppState>) -> richos_core::spend::ledger::SpendLive {
+    state.quota.spend_live()
 }
 
 #[richos_command::command]

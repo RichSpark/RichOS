@@ -878,6 +878,10 @@ window.RichHome = (function () {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape") return onHomeEscape(e);
     if (e.key !== "Enter" || e.shiftKey) return;
+    // The Token spend screen (round 22.1, `spend.js`) covers this one whole while it is open: Enter
+    // there is its own (Back, Refresh, a period), never the door's. Keyed on the screen being up,
+    // not on where focus sits, so no Enter reaches the door of a screen nobody can see.
+    if (document.body.classList.contains("spend-open")) return;
     var t = e.target;
     if (t && t.closest) {
       if (t.closest(".home-prefs")) return;
@@ -1449,6 +1453,10 @@ window.RichHome = (function () {
     // layer): its answer box takes focus, and pulling it back to the door
     // would leave a report on screen that cannot be answered.
     if (t.closest && t.closest("#bugdock")) return;
+    // ...AND THE TOKEN SPEND SCREEN (round 22.1, `spend.js`), which opens from Settings OVER this
+    // screen and covers it whole: its Back takes focus, and pulling it back to the door would put
+    // the keyboard on a screen nobody can see.
+    if (t.closest && t.closest("#spend")) return;
     focusHome();
   }
 

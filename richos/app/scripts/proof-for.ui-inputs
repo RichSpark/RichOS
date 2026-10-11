@@ -84,11 +84,11 @@
 affordances.js          @allui richos/app/src-tauri/src/ richos/app/crates/
 appearance.js           @allui
 contrast.js             @allui richos/app/ui/tests/contrast-debt.json
-corrections.js          @allui richos/app/ui/tests/fixtures/loro-proposal.json richos/app/ui/tests/fixtures/loro-proposal-asked-again.json richos/app/ui/tests/fixtures/heard-candidate.json
-feedback.js             @allui richos/app/ui/tests/fixtures/feedback-vocabulary.json richos/app/ui/tests/fixtures/feedback-previews.json richos/app/ui/tests/fixtures/feedback-entries.json
+corrections.js          @allui richos/app/ui/tests/fixtures/loro-proposal.json richos/app/ui/tests/fixtures/loro-proposal-asked-again.json richos/app/ui/tests/fixtures/heard-candidate.json richos/app/src-tauri/src/main.rs
+feedback.js             @allui richos/app/ui/tests/fixtures/feedback-vocabulary.json richos/app/ui/tests/fixtures/feedback-previews.json richos/app/ui/tests/fixtures/feedback-entries.json richos/app/src-tauri/src/main.rs
 memory.js               @allui
 setup.js                @allui
-splash.js               @allui
+splash.js               @allui richos/app/src-tauri/src/main.rs
 
 # ---- the chat surface and its states ----------------------------------------------------
 compaction-notice.js    @shell
@@ -103,11 +103,11 @@ slow-bridge.js          @shell richos/app/ui/updates.js
 waiting-state.js        @shell richos/app/ui/mock.js
 waiting-lifecycle.js    @shell richos/app/ui/mock.js
 second-mouth.js         @shell richos/app/ui/mock.js
-dialect.js              @shell richos/app/ui/mock.js
+dialect.js              @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs
 dictation-overlay.js    richos/app/ui/dictation-bar.html richos/app/ui/dictation-bar.js richos/app/ui/dictation-menu.html richos/app/ui/dictation-menu.js richos/app/ui/dictation-overlay.css richos/app/ui/style.css richos/app/ui/theme-boot.js richos/app/ui/index.html
 retention.js            @shell richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
 rich-model.js           @shell richos/app/ui/mock.js richos/app/ui/settings-button.js
-onboarding.js           @shell richos/app/ui/mock.js
+onboarding.js           @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs
 onboarding-lifecycle.js @shell richos/app/ui/mock.js
 first-run-sheet.js      @shell richos/app/ui/mock.js
 voice-model.js          @shell richos/app/ui/mock.js
@@ -115,25 +115,26 @@ quota.js                @shell richos/app/ui/quota.js richos/app/ui/settings-but
 accounts.js             @shell richos/app/ui/accounts.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js
 dictation.js            @shell richos/app/ui/dictation.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js
-codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js
+codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/spend.js
+spend.js                @shell richos/app/ui/spend.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/home.js richos/app/src-tauri/src/main.rs
 provider-auth.js        @shell
 
 # ---- the timeline renderer ---------------------------------------------------------------
 inspector.js            @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 output.js               @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/src-tauri/src/output_files.rs
 output-truth.js         @shell richos/app/ui/mock.js
-interruption.js         @shell richos/app/ui/timeline.js
+interruption.js         @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
 job-question.js         @shell richos/app/ui/timeline.js
 local-notice.js         @shell richos/app/ui/timeline.js
 operator-notice.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 markdown.js             @shell richos/app/ui/timeline.js
 memory-strategy.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
-outage.js               @shell richos/app/ui/timeline.js
+outage.js               @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
 realbytes.js            @shell richos/app/ui/timeline.js
 restart-scope.js        @shell richos/app/ui/timeline.js richos/app/ui/mock.js
-scale.js                @shell richos/app/ui/timeline.js
+scale.js                @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
 steering.js             @shell richos/app/ui/timeline.js richos/app/ui/mock.js
-techy.js                @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/machinery-payload.json richos/app/src-tauri/src/machinery_view.rs
+techy.js                @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/machinery-payload.json richos/app/src-tauri/src/machinery_view.rs richos/app/src-tauri/src/main.rs
 workers.js              @shell richos/app/ui/timeline.js
 
 # ---- the home screen and the window's chrome ---------------------------------------------
@@ -149,7 +150,7 @@ speckled-ground.js      @shell @home @splash richos/app/ui/speckle.js richos/app
 
 # ---- one screen each -----------------------------------------------------------------------
 background-work.js      @shell richos/app/ui/work-summary.js
-no-home-network.js      @shell @phone
+no-home-network.js      @shell @phone richos/app/src-tauri/src/main.rs
 permissions.js          @shell richos/app/ui/permissions.js
 questions.js            @shell richos/app/ui/questions.js richos/app/ui/timeline.js
 phone.js                @shell @phone richos/app/ui/mock.js
