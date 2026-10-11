@@ -99,6 +99,38 @@ class Recovery(unittest.TestCase):
         state=json.loads((R.root()/'reconciliations'/(task['id']+'.json')).read_text())
         self.assertEqual(state['status'],'resolved')
 
+    def test_recheck_severity_and_filing_agree_across_producer_gate_and_next_review(self):
+        import second_review as SR
+        tip='c'*40
+        first=self.base/'severity-first';first.mkdir()
+        finding=dict(title='original finding',blocks=True,priority=2,files=[],evidence='source',fixture='')
+        (first/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[finding]))))
+        original=dict(id='severity-first',repo=str(self.repo),tip=tip,work=self.work,trigger='handover',verdict='changes-requested',record=str(first))
+        for source,parent,note,witness,allowed in ((tip,'severity-first','independent severity evidence',True,True),
+                ('d'*40,'','new-source severity evidence',True,True),(tip,'','unrelated PASS',True,False),
+                (tip,'severity-first','',True,False),(tip,'severity-first','no input witness',False,False),
+                ('d'*40,'','no input witness',False,False)):
+            for blocks in (True,False):
+                with self.subTest(source=source,parent=parent,note=note,blocks=blocks):
+                    folder=Path(tempfile.mkdtemp(dir=self.base))
+                    carried=dict(id='severity-first#1',**finding,filed=True)
+                    answer=dict(findings=[],earlier_findings=[dict(id=carried['id'],status='still-open',blocks=blocks,note=note)])
+                    (folder/'verdict.json').write_text(json.dumps(dict(answer=answer,earlier_findings_in=[carried] if witness else [])))
+                    verdict='changes-requested' if SR.blocking(answer) else 'passed'
+                    current=dict(original,id=folder.name,tip=source,recheck_of=parent,verdict=verdict,record=str(folder))
+                    opened=R.F.open_review_findings([original,current])
+                    effective,_=R.F.review_of([original,current],tip,str(self.repo))
+                    expected_blocking=blocks or not allowed
+                    self.assertEqual(opened[carried['id']]['blocks'],expected_blocking)
+                    self.assertEqual(R.F.open_review_findings([original,current,original,current]),opened)
+                    self.assertEqual(bool(effective.get('effective_findings')),expected_blocking if source==tip else True)
+                    if not expected_blocking:
+                        self.assertTrue(opened[carried['id']]['filed'])
+                        with patch.object(SR,'read_ledger',return_value=[original,current]):
+                            next_findings=SR.earlier_findings(self.work,'e'*40,str(self.repo))
+                        self.assertEqual(next_findings[0][1]['blocks'],False)
+                        self.assertTrue(next_findings[0][1]['filed'])
+
     def test_watcher_automatically_requests_conflict_recheck_with_frozen_claim(self):
         import review_watch as RW
         from types import SimpleNamespace

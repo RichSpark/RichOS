@@ -1073,8 +1073,11 @@ def open_review_findings(rows):
     remove it. A same-source withdrawal must be an explicit independent recheck
     carrying the original finding; a later PASS cannot erase another review.
     """
-    opened, by_id = {}, {r.get("id"): r for r in rows}
+    opened, by_id, seen = {}, {r.get("id"): r for r in rows}, set()
     for row in rows:
+        if row.get("id") and row["id"] in seen:
+            continue
+        seen.add(row.get("id"))
         record = review_record(row)
         answer = record.get("answer") or {}
         parent = by_id.get(row.get("recheck_of"))
@@ -1082,7 +1085,7 @@ def open_review_findings(rows):
         parent_ids = {"%s#%d" % (parent.get("id"), n) for n, _ in enumerate(
                       (parent_record.get("answer") or {}).get("findings") or [], 1)} if parent else set()
         parent_ids.update(e.get("id") for e in parent_record.get("earlier_findings_in") or [])
-        witnessed = {e.get("id") for e in record.get("earlier_findings_in") or []}
+        witnessed = {e.get("id"): e for e in record.get("earlier_findings_in") or []}
         for e in answer.get("earlier_findings") or []:
             fid = e.get("id")
             if fid not in opened or fid not in witnessed:
@@ -1092,8 +1095,13 @@ def open_review_findings(rows):
             allowed = not same_source or (parent and parent.get("tip") == old_tip and fid in parent_ids)
             if e.get("status") in ("fixed", "withdrawn") and e.get("note", "").strip() and allowed:
                 opened.pop(fid)
-            elif e.get("status") == "still-open" and e.get("blocks") is not False:
-                opened[fid]["blocks"] = True
+            elif e.get("status") == "still-open":
+                if e.get("blocks") is not False:
+                    opened[fid]["blocks"] = True
+                elif e.get("note", "").strip() and allowed:
+                    opened[fid]["blocks"] = False
+                if opened[fid].get("blocks") is False and witnessed[fid].get("filed"):
+                    opened[fid]["filed"] = True
         findings = answer.get("findings") or []
         for n, finding in enumerate(findings, 1):
             if not isinstance(finding, dict):
