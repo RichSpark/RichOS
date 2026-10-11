@@ -526,16 +526,16 @@ PY
 printf 'base\nslice one\nfix\nmore\n' >"$REPO/a.txt"
 G commit -qam "Dictation slice 1: more"
 FU_BEFORE="$(wc -l <"$FU" | tr -d ' ')"
-FAKE_MODE=blocking-passed run --name echo-sonnet-x1 --repo "$REPO" --work teammate:cross-repo
+FAKE_MODE=blocking-passed run --name echo-sonnet-x1 --repo "$REPO"
 RID17="$(field "$(last_row)" 'r["id"]')"
-FAKE_EARLIER=still-open FAKE_MODE=pass run --name echo-sonnet-x1 --repo "$REPO2" --work teammate:cross-repo
+FAKE_EARLIER=still-open FAKE_MODE=pass run --name echo-sonnet-x1 --repo "$REPO2"
 P="$(cat "$(last_call)/prompt.md" 2>/dev/null)"
 ROW="$(last_row)"
 [ "$RC" -eq 0 ] && ! has "$P" "$RID17#" && [ "$(field "$ROW" 'r["earlier_findings"]')" = "0" ] \
   && [ "$(field "$ROW" 'r["follow_ups"]')" = "0" ] && [ "$(wc -l <"$FU" | tr -d ' ')" = "$FU_BEFORE" ]
 check "C17 a review in a second repository of the same work is not asked about, and files nothing of, the first repository's findings" $? \
     "rc=$RC row=$ROW ledger=$(cat "$FU" 2>/dev/null)"
-FAKE_EARLIER=still-open FAKE_MODE=pass run --name echo-sonnet-x1 --repo "$REPO" --work teammate:cross-repo
+FAKE_EARLIER=still-open FAKE_MODE=pass run --name echo-sonnet-x1 --repo "$REPO"
 ROW="$(last_row)"
 python3 - "$FU" "$RID17" "$REPO" "$(field "$ROW" 'r["id"]')" <<'PY'
 import json, os, sys
@@ -575,7 +575,9 @@ for in_use in ("2", "1"):
     with open(accounts, "w") as f:
         json.dump({"accounts": [{"id": "1", "label": "Home"}, {"id": "2", "label": "Work", "folder": folder}],
                    "inUse": in_use}, f)
-    it = rw.Item("teammate:x1", "echo-sonnet-x1", repo, tip, base, "running", ref="echo-sonnet-x1",
+    import second_review as sr
+    work = sr.load_workspaces(os.path.dirname(scripts)).recovery_work_key(sr.find_teammate(sr.load_workspaces(os.path.dirname(scripts)), "echo-sonnet-x1"))
+    it = rw.Item(work, "echo-sonnet-x1", repo, tip, base, "running", ref="echo-sonnet-x1",
                  source="app", words=[words])
     it.claude, it.accounts = claude, accounts
     watcher = rw.Watcher(os.path.dirname(scripts), "", world=SimpleNamespace())
@@ -632,7 +634,9 @@ for name, on, env in cases:
             json.dump({"on": on}, f)
     saved = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
-    it = rw.Item("teammate:x1", "echo-sonnet-x1", repo, tip, base, "running", ref="echo-sonnet-x1",
+    import second_review as sr
+    work = sr.load_workspaces(os.path.dirname(scripts)).recovery_work_key(sr.find_teammate(sr.load_workspaces(os.path.dirname(scripts)), "echo-sonnet-x1"))
+    it = rw.Item(work, "echo-sonnet-x1", repo, tip, base, "running", ref="echo-sonnet-x1",
                  source="app", words=[words])
     it.claude, it.codex_reviews = claude, setting
     watcher = rw.Watcher(os.path.dirname(scripts), "", world=SimpleNamespace())

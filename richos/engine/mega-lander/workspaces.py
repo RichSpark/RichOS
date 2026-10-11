@@ -1753,11 +1753,13 @@ def register_spawn(payload, entity, dry=False):
             + [main_checkout(p) or realpath(p) for p in cc_paths if p not in planned_by_path] \
             + planned_repos
         _refuse_unrecorded(work_repos, "the spawn of %s" % name)
+        recovery_assignment = _recovery_assignment(payload, rec, continuation_keys, lands_pending)
         if dry:
             return rec
         for r_ in work_repos:
             _bind_body_of_work(rec, r_)
         rec.update({"tool_use_id": tuid, "subagent_type": str(ti.get("subagent_type") or ""),
+                    "recovery_assignment": recovery_assignment,
                     "isolation": isolation, "session_identity": ident,
                     "ceo_ordered": (ceo_ordered[0] if ceo_ordered else rec.get("ceo_ordered")),
                     "continues": continuation_keys,
@@ -3010,8 +3012,9 @@ def _deferred(report, rec):
 
 def _item(rec, why, cache, me):
     waiting = rec.get("waiting") or {}
-    helpers = [a for a in all_agents() if rec["name"] in (a.get("lands_pending") or [])
-               or rec["key"] in (a.get("continues") or [])]
+    helpers = [a for a in all_agents() if rec["key"] in (
+               (a.get("recovery_assignment") or {}).get("correction_of") or a.get("continues") or [])
+               or rec["name"] in (a.get("lands_pending") or [])]
     # A helper the user stopped is not "working to land it" (V2-05): its
     # platform-recorded ending is read, without adopting it, before asking.
     started = [a for a in helpers if not finished_state(platform_view(a), cache)[0]]
@@ -4714,6 +4717,81 @@ def _chain(rec):
             if o:
                 todo.append(o)
     return out
+
+
+def recovery_chain(rec):
+    """Correction identity without changing merge/discard/cleanup ownership.
+
+    New registrations carry exact host-bound correction keys. Legacy
+    lands-pending links remain candidates, not permission to combine budgets.
+    They need source-qualified reconciliation before recovery enforcement.
+    """
+    out, seen, todo = [], set(), [rec]
+    while todo:
+        current = todo.pop()
+        if current["key"] in seen:
+            continue
+        seen.add(current["key"])
+        out.append(current)
+        assignment = current.get("recovery_assignment") or {}
+        refs = assignment.get("correction_of", []) if assignment else current.get("continues", [])
+        if assignment and assignment.get("kind") != "implementation":
+            refs = []
+        for reference in refs:
+            previous = load_agent(reference)
+            if not previous:
+                raise SpecError("recovery predecessor %s is missing; reconcile its source record" % reference)
+            if assignment and (previous.get("recovery_assignment") or {}).get("outcome") not in (
+                    None, assignment.get("outcome")):
+                raise SpecError("recovery relationship joins different authorized outcomes")
+            todo.append(previous)
+    return sorted(out, key=lambda r: (str(r.get("registered_at") or ""), r["key"]))
+
+
+def recovery_work_key(rec):
+    outcome = (rec.get("recovery_assignment") or {}).get("outcome") or ""
+    if outcome.startswith("app:"):
+        return outcome
+    return "teammate:%s" % recovery_chain(rec)[0]["key"]
+
+
+def _recovery_assignment(payload, rec, continues, lands_pending):
+    prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
+    # Top-level host metadata is supplied by the app adapter after it verifies
+    # the exact prepared Agent payload. It is never read from the model's tool
+    # input or an invented helper name.
+    host = payload.get("richos_recovery_assignment") or {}
+    roles = prompt_lines(prompt, "recovery-role")
+    kind = host.get("kind") or (roles[0] if roles else "implementation")
+    if kind not in ("implementation", "review", "helper"):
+        raise SpecError("recovery-role must name implementation, review or helper")
+    refs = list(continues)
+    if kind == "implementation":
+        for reference in lands_pending:
+            previous = _resolve_record(reference, str(payload.get("session_id") or ""))
+            refs.append(previous["key"])
+    else:
+        refs = []
+    inherited = []
+    for reference in refs:
+        previous = load_agent(reference)
+        if not previous:
+            raise SpecError("recovery predecessor %s is missing" % reference)
+        inherited.append((previous.get("recovery_assignment") or {}).get("outcome") or
+                         "teammate:%s" % recovery_chain(previous)[0]["key"])
+    if len(set(inherited)) > 1:
+        raise SpecError("one correction cannot silently combine different jobs")
+    source = {"session": str(payload.get("session_id") or ""),
+              "tool_use_id": str(payload.get("tool_use_id") or ""),
+              "transcript": str(payload.get("transcript_path") or ""),
+              "brief_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
+    if host:
+        source["host"] = host
+    return {"kind": kind,
+            "outcome": inherited[0] if inherited else (host.get("outcome") or "teammate:%s" % rec["key"]),
+            "correction_of": sorted(set(refs)), "authority": source,
+            "acceptance": host.get("acceptance") or (load_agent(refs[0]).get("recovery_assignment", {}).get("acceptance")
+                          if refs else None) or hashlib.sha256(prompt.encode()).hexdigest()}
 
 
 def _branch_targets(chain):
@@ -6489,6 +6567,9 @@ def barrier(payload):
             aid, rec.get("name"), why)
     if fin:
         return "FINISHED", "agent %s (%s) is finished: %s" % (aid, rec.get("name"), why)
+    if (rec.get("recovery_assignment") or {}).get("kind") in ("review", "helper") and str(
+            payload.get("tool_name") or "") not in ("Read", "Glob", "Grep", "SubagentHandback"):
+        return "READONLY", "agent %s is a read-only review/helper; request bounded host evidence instead" % aid
     # POINT 2, AT THE TOOL: "An agent never works inside a codex/ workspace."
     # The Bash guard refuses a command run there; the only hook that sees a
     # Write, Edit, MultiEdit or NotebookEdit is this one, and until round 8 an

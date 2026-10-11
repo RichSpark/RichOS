@@ -237,6 +237,30 @@ class Base(unittest.TestCase):
 
 
 # ===========================================================================
+class RecoveryChain(Base):
+    def test_correction_history_does_not_expand_lifecycle_ownership(self):
+        old = ws.new_record('old-session--original', registered_at='2026-10-10T00:00:00Z',
+            recovery_assignment=dict(kind='implementation', outcome='original', correction_of=[], acceptance='same'))
+        ws.save_agent(old)
+        successor = ws.new_record('new-session--replacement', registered_at='2026-10-11T00:00:00Z',
+            lands_pending=[old['key']], recovery_assignment=dict(kind='implementation', outcome='original',
+                correction_of=[old['key']], acceptance='same'))
+        ws.save_agent(successor)
+        self.assertEqual([r['key'] for r in ws.recovery_chain(successor)], [old['key'], successor['key']])
+        self.assertEqual([r['key'] for r in ws._chain(successor)], [successor['key']])
+        reviewer = dict(successor, key='reviewer', recovery_assignment=dict(kind='review', outcome='original', correction_of=[]))
+        self.assertEqual(ws.recovery_work_key(reviewer), 'teammate:reviewer')
+        feature = dict(successor, key='independent-feature', recovery_assignment=dict(kind='implementation', outcome='new-outcome', correction_of=[]))
+        self.assertEqual(ws.recovery_work_key(feature), 'teammate:independent-feature')
+
+    def test_read_only_classification_cannot_grant_a_writer_a_new_budget(self):
+        cc = self.make_cc('helper')
+        aid, _path = self.spawn('helper', cc, extra='recovery-role: helper')
+        self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Bash'))[0], 'READONLY')
+        self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Edit'))[0], 'READONLY')
+        self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Read'))[0], 'REGISTERED')
+
+
 class Point01_CcNaming(Base):
     """1. Every non-native Claude workspace is named cc/."""
 

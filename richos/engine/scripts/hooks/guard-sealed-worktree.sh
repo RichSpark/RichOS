@@ -280,6 +280,9 @@ case "$KIND" in
       echo "$HOOK_TAG"
     } >&2
     exit 2 ;;
+  READONLY)
+    echo "=== Read-only assignment: REFUSED === $DETAIL $HOOK_TAG" >&2
+    exit 2 ;;
   CODEX)
     {
       echo "=== A codex/ workspace: REFUSED ==="

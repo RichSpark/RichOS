@@ -155,7 +155,7 @@ def handle(payload):
         if not mid_job_notice(work, active, payload, root, emit) and context:
             print(json.dumps(context))
     if event == "PreToolUse" and payload.get("tool_name") == "Agent":
-        work.dispatch_intent(active, payload, inspect_only=True)
+        payload["richos_recovery_assignment"] = work.dispatch_intent(active, payload, inspect_only=True)
         # WHICH GUARDS JUDGE A DISPATCH THE APP MAKES — read from
         # spawn-guard-audience.declaration, never typed here.
         #

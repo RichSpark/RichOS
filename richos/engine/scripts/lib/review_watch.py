@@ -517,7 +517,7 @@ class World(object):
             return [], ["the workspace registry could not be read (%s)" % exc.__class__.__name__]
         continued = set()
         for r in recs:
-            continued.update(r.get("continues") or [])
+            continued.update((r.get("recovery_assignment") or {}).get("correction_of") or r.get("continues") or [])
         items, problems, cache = [], [], {}
         th_silent = stall_watch.thresholds()["silent"]
         for rec in recs:
@@ -530,12 +530,11 @@ class World(object):
                 continue
             try:
                 fin, paused, _why = ws.finished_state(rec, cache)
-                chain = ws._chain(rec)
+                chain = ws.recovery_chain(rec)
             except Exception:  # noqa: BLE001
                 continue
             state = "ended" if fin else ("paused" if paused else "running")
-            root = sorted(chain, key=lambda r: str(r.get("registered_at") or ""))[0]
-            work = "teammate:%s" % root["key"]
+            work = ws.recovery_work_key(rec)
             started = None
             for k in ("started_at", "spawned_at", "registered_at"):
                 started = parse_iso(rec.get(k))

@@ -1212,7 +1212,13 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
             raise ValueError("dispatch has no matching native call identity")
         read_scope(os.environ["RICHOS_APP_SCOPE"])
         if inspect_only:
-            return
+            request = record["request"]
+            instruction = scope["user_instruction"]
+            return {"kind": {"worker": "implementation", "reviewer": "review", "consult": "helper"}[request["role"]],
+                    "outcome": "app:%s:%s" % (scope["binding"]["entity_id"], request["obligation_id"]),
+                    "acceptance": instruction.get("sha256") or hashlib.sha256(
+                        json.dumps(instruction["ledger_ref"], sort_keys=True).encode()).hexdigest(),
+                    "authority": instruction["ledger_ref"]}
         if review_refused:
             record["pierce_refused"] = True
             save(path,record)

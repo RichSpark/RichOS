@@ -384,7 +384,7 @@ def resolve_work(a):
         w.workspace = os.path.realpath(space.get("path") or "")
         w.branch = a.branch or str(space.get("branch") or "")
         w.author = str(rec.get("name") or a.name)
-        w.work_key = "teammate:%s" % rec.get("key")
+        w.work_key = ws.recovery_work_key(rec)
         transcript = ws.platform_agent_transcript(rec)
         if transcript:
             words, model, report = transcript_facts(transcript)
@@ -437,6 +437,8 @@ def resolve_work(a):
     if not any(t.strip() for _, t in w.words):
         raise Refused("no original words: a review needs the request the work answers (the teammate's own "
                       "transcript through --name, or --words-file); refused before any reviewer started")
+    if a.name and a.work and a.work != w.work_key:
+        raise Refused("--work differs from the host-bound recovery identity %s" % w.work_key)
     w.work_key = a.work or w.work_key or ("branch:%s:%s" % (w.repo, w.branch) if w.branch
                                           else "range:%s:%s" % (w.repo, w.base))
     return w
