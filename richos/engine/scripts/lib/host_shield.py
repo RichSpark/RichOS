@@ -26,7 +26,9 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
      inline `-c`/`-e` code) is read too. No shell parser can tell its data from its calls, so
      ANY absolute path to one of these commands in it, or sudo/doas beside one, refuses it.
      The command line itself is judged as well: a host command started by path, or a shell's
-     inline string.
+     inline string. Launchers (`env A=1`, `nice`, `timeout 5`...) and the interpreter's own
+     options (`bash -e`, `python3 --`) are stepped past to the file they start; a form whose
+     script cannot be read (stdin, sudo, a launcher option it does not know) is refused.
   2. The suite runs with `host-shield/` FIRST ON PATH. That directory holds one stand-in per
      command the guard judges. A stand-in judges its own argv with the GUARD'S OWN judge()
      (read out of guard-host-display-power.sh, so the two cannot drift), plus the TEST-RUN
@@ -526,37 +528,161 @@ def suite_of(argv):
     return next((value for kind, value, _lang in sources_of(argv) if kind == "file"), None)
 
 
+# LAUNCHERS a check may be started under, and how to step past each one's options to the
+# command it starts (review rv-20261011T192225Z-5fa33e7e-a349 #2: `env REVIEW=1 python3 <file>`
+# started the file unread). {name: (options that take a value, options that take none)}. An
+# option not listed here cannot be stepped past, so the check is refused, never started unread.
+# sudo and doas are not listed: they reset PATH past every stand-in, so a check started under
+# one is refused outright.
+LAUNCHERS = {
+    "env": ({"-u", "--unset", "-P"}, {"-i", "-0", "-v", "--ignore-environment", "--null", "-"}),
+    "nice": ({"-n", "--adjustment"}, set()),
+    "nohup": (set(), set()),
+    "time": (set(), {"-p", "-l", "-h"}),
+    "command": (set(), {"-p"}),
+    "exec": ({"-a"}, {"-c", "-l"}),
+    "stdbuf": ({"-i", "-o", "-e", "--input", "--output", "--error"}, set()),
+    "setsid": (set(), {"-f", "-w", "-c", "--fork", "--wait", "--ctty"}),
+    "timeout": ({"-s", "-k", "--signal", "--kill-after"}, {"--foreground", "--preserve-status", "-v",
+                                                           "--verbose", "-f", "-p"}),
+    "gtimeout": ({"-s", "-k", "--signal", "--kill-after"}, {"--foreground", "--preserve-status", "-v",
+                                                            "--verbose"}),
+}
+ASSIGN_WORD = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
+# Options of a shell that take the next word as their value.
+SHELL_VALUE_OPTS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
+
+
+def unwrap(argv):
+    """(argv from the command a launcher chain starts, None) or ([], why it cannot be read)."""
+    argv = list(argv)
+    while argv:
+        base = os.path.basename(argv[0])
+        if base in ("sudo", "doas"):
+            return [], ("it is started under %s, which resets PATH past the stand-ins" % base)
+        if base not in LAUNCHERS:
+            return argv, None
+        values, flags = LAUNCHERS[base]
+        i = 1
+        while i < len(argv):
+            a = argv[i]
+            if a == "--":
+                i += 1
+                break
+            if base == "env" and ASSIGN_WORD.match(a):
+                i += 1
+                continue
+            if a in values:
+                i += 2
+                continue
+            if a in flags or (a.split("=", 1)[0] in values and "=" in a) \
+                    or (base == "nice" and re.match(r"^-\d+$", a)) \
+                    or (base == "stdbuf" and re.match(r"^-[ioe].+$", a)):
+                i += 1
+                continue
+            if a.startswith("-"):
+                return [], ("its launcher %s is given the option %s, which the shield cannot step past "
+                            "to the command it starts" % (base, a))
+            break
+        if base in ("timeout", "gtimeout") and i < len(argv):
+            i += 1          # the duration
+        argv = argv[i:]
+    return argv, None
+
+
+def _shell_sources(argv):
+    """A shell's script: its file operand after its options, or its -c string (a `c` in any
+    option cluster: `-ec`). A shell reading stdin cannot be read."""
+    i, inline = 1, False
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--", "-"):
+            i += 1
+            break
+        if a in SHELL_VALUE_OPTS:
+            i += 2
+            continue
+        if a.startswith("--"):
+            i += 1
+            continue
+        if a[:1] in "-+" and len(a) > 1:
+            if a[0] == "-" and "c" in a[1:]:
+                inline = True
+            if a[0] == "-" and "s" in a[1:]:
+                return [("unreadable", "it starts a shell that reads its commands from stdin", None)]
+            i += 2 if ("o" in a[1:] or "O" in a[1:]) else 1
+            continue
+        break
+    if i >= len(argv):
+        return [("unreadable", "it starts a shell with no script file, which reads its commands from stdin",
+                 None)]
+    if inline:
+        return [("inline", argv[i], "shell")]
+    return [("file", argv[i], None)] if os.path.isfile(argv[i]) else []
+
+
+def _interpreter_sources(argv, lang):
+    """Python's or Node's script: its file operand after its options (`--` included), or its
+    inline code (Python's -c, also inside a cluster such as `-Bc`; Node's -e/-p)."""
+    values = PYTHON_VALUE_OPTS if lang == "python" else NODE_VALUE_OPTS
+    inline = {"-c"} if lang == "python" else {"-e", "--eval", "-p", "--print"}
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a in inline:
+            return [("inline", argv[i + 1], lang)] if i + 1 < len(argv) else []
+        if a == "-m":
+            return []
+        if a == "-":
+            return [("unreadable", "it starts %s reading its program from stdin" % lang, None)]
+        if a == "--":
+            i += 1
+            break
+        if a in values:
+            i += 2
+            continue
+        if lang == "python" and re.match(r"^-[A-Za-z]{2,}$", a):
+            # A cluster: the first of c, m, W, X takes the rest of it, or the next word.
+            for k, ch in enumerate(a[1:], 1):
+                if ch in "cmWX":
+                    value = a[k + 1:] or (argv[i + 1] if i + 1 < len(argv) else None)
+                    if ch == "c":
+                        return [("inline", value, lang)] if value is not None else []
+                    if ch == "m":
+                        return []
+                    i += 1 if a[k + 1:] else 2
+                    break
+            else:
+                i += 1
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        break
+    if lang == "node" and "--test" in argv[1:i]:
+        # The test runner: every operand is a test file (none: it finds them itself, unread).
+        return [("file", f, lang) for f in argv[i:] if os.path.isfile(f)]
+    if i >= len(argv):
+        return [("unreadable", "it starts %s with no program file, which reads it from stdin" % lang, None)]
+    return [("file", argv[i], lang)] if os.path.isfile(argv[i]) else []
+
+
 def sources_of(argv):
     """[(kind, value, language)] the check will run: ("file", path, lang) for a suite file,
-    ("inline", code, lang) for Python's -c or Node's -e/-p. A shell's own inline string is judged
-    with the command line itself (direct_findings). `python3 -m <module>` names no file here:
-    stated in the header."""
+    ("inline", code, lang) for Python's -c, Node's -e/-p or a shell's -c, ("unreadable", why,
+    None) for a form whose script cannot be read (stdin, a launcher option it cannot step past,
+    sudo). Launchers (env, nice, timeout...) are stepped past first, and every interpreter's
+    options. `python3 -m <module>` names no file here: stated in the header."""
+    argv, why = unwrap(argv)
+    if why:
+        return [("unreadable", why, None)]
     if not argv:
         return []
     base = os.path.basename(argv[0])
     if base in SHELLS:
-        if len(argv) >= 2 and not argv[1].startswith("-") and os.path.isfile(argv[1]):
-            return [("file", argv[1], None)]
-        return []
+        return _shell_sources(argv)
     if PYTHON_RE.match(base) or base in NODES:
-        lang = "python" if PYTHON_RE.match(base) else "node"
-        values = PYTHON_VALUE_OPTS if lang == "python" else NODE_VALUE_OPTS
-        inline = {"-c"} if lang == "python" else {"-e", "--eval", "-p", "--print"}
-        i = 1
-        while i < len(argv):
-            a = argv[i]
-            if a in inline:
-                return [("inline", argv[i + 1], lang)] if i + 1 < len(argv) else []
-            if a in ("-m", "-", "--"):
-                return []
-            if a in values:
-                i += 2
-                continue
-            if a.startswith("-"):
-                i += 1
-                continue
-            return [("file", a, lang)] if os.path.isfile(a) else []
-        return []
+        return _interpreter_sources(argv, "python" if PYTHON_RE.match(base) else "node")
     try:
         with open(argv[0], "rb") as fh:
             # A script started directly (a `#!` line, or a .sh file), never a binary.
@@ -637,6 +763,8 @@ def cmd_run(argv):
             findings, found_declared, errors = scan_file(value, lang)
             declared.update(found_declared)
             lines.extend(refusal_lines(value, findings, errors))
+        elif kind == "unreadable":
+            lines.extend(refusal_lines("the command line", [], ["%s, so what it runs cannot be checked" % value]))
         else:
             findings, errors = scan_source(value, lang, {})
             lines.extend(refusal_lines("%s (its inline code)" % argv[0], findings, errors))

@@ -297,9 +297,9 @@ h6i() {  # <label> <argv...>
     rc="$(shielded_argv "$@")"
     if [ "$rc" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out" && ! grep -q "SUITE STARTED" "$TMP/out" \
             && [ ! -s "$TRIP/trip.log" ]; then
-        ok "H6i refused before it starts: $label"
+        ok "${H6ID:-H6i} refused before it starts: $label"
     else
-        bad "H6i not refused before it started: $label (rc=$rc)" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+        bad "${H6ID:-H6i} not refused before it started: $label (rc=$rc)" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
     fi
 }
 h6i "a Python suite naming /sbin/$HS_CMD" python3 "$SUITES/h6i.test.py"
@@ -317,6 +317,41 @@ if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
     ok "H6j refused before it runs: $H6J_LINE"
 else
     bad "H6j not refused: $H6J_LINE (rc=$RC)" "$(cat "$TMP/out")"
+fi
+
+# H6k — the interpreter's own options and a launcher in front of it do not hide the file it
+# starts (review rv-20261011T192225Z-5fa33e7e-a349 #2: `bash -e`, `bash --`, `python3 --` and
+# `env REVIEW=1 python3` started their file unread). Each payload prints that it started and
+# exits before its host call; a shell or Python reading stdin cannot be read and is refused.
+printf '%s\n' '#!/usr/bin/env bash' 'echo "SHELL SUITE STARTED"' 'exit 0' "/sbin/$HS_CMD -h +60" > "$SUITES/h6k.test.sh"
+# (Inline code prints its marker split in two: the refusal quotes the code, never the marker.)
+H6ID=H6k
+h6i "bash -e <a suite naming /sbin/$HS_CMD>" bash -e "$SUITES/h6k.test.sh"
+h6i "bash -- <a suite naming /sbin/$HS_CMD>" bash -- "$SUITES/h6k.test.sh"
+h6i "bash -o pipefail <a suite naming /sbin/$HS_CMD>" bash -o pipefail "$SUITES/h6k.test.sh"
+h6i "bash -ec <code naming /sbin/$HS_CMD>" bash -ec "echo SHELL SUITE ''STARTED; exit 0; /sbin/$HS_CMD -h +60"
+h6i "python3 -- <a suite naming /sbin/$HS_CMD>" python3 -- "$SUITES/h6i.test.py"
+h6i "python3 -Bc <code naming /sbin/$HS_CMD>" python3 -Bc "print('PYTHON SUITE ' + 'STARTED'); raise SystemExit(0); import subprocess; subprocess.run(['/sbin/$HS_CMD'])"
+h6i "env REVIEW=1 python3 <a suite naming /sbin/$HS_CMD>" env REVIEW=1 python3 "$SUITES/h6i.test.py"
+h6i "env REVIEW=1 bash <a suite naming /sbin/$HS_CMD>" env REVIEW=1 bash "$SUITES/h6k.test.sh"
+h6i "nice -n 5 env A=1 bash <a suite naming /sbin/$HS_CMD>" nice -n 5 env A=1 bash "$SUITES/h6k.test.sh"
+h6i "bash -s (its commands on stdin)" bash -s < /dev/null
+h6i "python3 - (its program on stdin)" python3 - < /dev/null
+H6ID=
+# Scan only, no process started: under sudo PATH is reset past every stand-in, and a launcher
+# option the shield cannot step past (env -S splits a string into a command) is not guessed at.
+python3 -S - "$HS_TOOL" "$SUITES/h6k.test.sh" > "$TMP/h6k" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("host_shield", sys.argv[1])
+hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
+for argv in (["sudo", "bash", sys.argv[2]], ["doas", "bash", sys.argv[2]], ["env", "-S", "bash " + sys.argv[2]]):
+    kinds = [k for k, _v, _l in hs.sources_of(argv)]
+    print("%s %s" % ("refused" if kinds == ["unreadable"] else "READ AS %s" % kinds, argv[:2]))
+PY
+if [ "$(grep -c '^refused ' "$TMP/h6k")" = 3 ]; then
+    ok "H6k sudo, doas and env -S in front of a suite are refused, not stepped over (scan only)"
+else
+    bad "H6k sudo/doas/env -S were not refused" "$(cat "$TMP/h6k")"
 fi
 
 # H6e — the screen-saver binary has a stand-in of its own: a bare-name call is refused.
