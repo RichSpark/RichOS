@@ -94,6 +94,16 @@ pub trait LeaseFactory: Send {
         None
     }
 
+    /// **The models the next leases would start on** (the CEO's §119): Rich's for a
+    /// conversation lease and Stu's for a work lease, as the stored setting says now. Read at
+    /// each boundary and compared with the lease in the chair's own
+    /// [`Cognition::lease_model`]; a difference renews the lease there, so a choice saved
+    /// when Preferences closes is the model of the next reply and the next job. `None` — the
+    /// default — means this factory cannot say, and nothing is renewed on the strength of it.
+    fn lease_models(&self) -> Option<crate::config::LeaseModels> {
+        None
+    }
+
     /// Spawn the SECOND lease — the background-work spec's work lease (§2.1).
     ///
     /// **It is a separate method rather than an argument, because the two leases differ in
@@ -233,6 +243,9 @@ pub trait Cognition: Send {
     /// **Fill-first: the Claude account this lease runs under** (`claude_accounts.rs`). `None`
     /// for a lease that cannot say, which is never rotated for an account switch.
     fn account(&self) -> Option<&str> { None }
+    /// **The model this lease was started on** (§119: `--model` in its argument vector).
+    /// `None` for a lease that cannot say, which is never renewed for a model change.
+    fn lease_model(&self) -> Option<crate::config::ModelChoice> { None }
     /// The latest usage reading this lease's own child streamed (`rate_limit_event`), and when.
     /// Read before every turn so the switch decision uses the freshest figure there is.
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> { None }

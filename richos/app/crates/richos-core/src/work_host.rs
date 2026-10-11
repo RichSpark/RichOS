@@ -1566,6 +1566,9 @@ impl WorkHost {
             // 0c. Fill-first: this back end's account must be left (its freshest reading and
             //     measured speed, `claude_accounts.rs`) — move it now, at this boundary.
             self.renew_if_account_changed(backend, binding);
+            // 0c'. §119: the model he chose in Preferences for directing the team, from the
+            //      next job after it closed.
+            self.renew_if_model_changed(backend, binding);
             // 0d. A teammate saved, refitted or retired since this back end opened (slice 5).
             //     After the two above, because either renewal registers the team as it is now.
             self.renew_if_team_changed(backend, binding);
@@ -3980,6 +3983,26 @@ impl WorkHost {
         }
     }
 
+    /// **THE MODEL HE CHOSE FOR DIRECTING HIS TEAM** (§119) — `run_one` step 0c'. The
+    /// conversation's [`crate::spine::MODEL_CHANGED`] renewal for the back end: at an
+    /// assignment boundary with nothing live, a back end started on a model his setting no
+    /// longer names is renewed, so the next job runs on the one he chose when Preferences
+    /// closed. A run already under way finishes on the model it started on. Deferred while a
+    /// command it started may still be running; a lease or factory that cannot say renews
+    /// nothing; a failed renewal leaves the incumbent working.
+    fn renew_if_model_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
+        let Some(wanted) = self.factory.lock().unwrap().lease_models() else { return };
+        let running_on = backend.lease.lock().unwrap().as_ref().and_then(|lease| lease.lease_model());
+        if running_on.is_none_or(|model| model == wanted.stu)
+            || self.renewal_waits_for_a_command(backend, "its model changed in Preferences")
+        {
+            return;
+        }
+        if let Err(why) = self.rotate(backend, binding, crate::spine::MODEL_CHANGED) {
+            eprintln!("[richos] back end: not moved to the model chosen in Preferences ({why})");
+        }
+    }
+
     /// **Must this back end leave its Claude account now?** The check before every turn, the
     /// conversation's (`spine.rs`'s `account_switch_due`) for background work: the lease's own
     /// streamed reading goes to the quota service, which decides on the freshest readings and
@@ -4969,6 +4992,8 @@ mod tests {
     /// A work lease that runs a scripted turn and records what it was asked to bind.
     struct WorkLease {
         session: String,
+        /// §119: the model the factory's stored setting named when this lease was spawned.
+        model: Option<crate::config::ModelChoice>,
         bound: Arc<Mutex<Vec<WorkAssignment>>>,
         revoked: Arc<AtomicUsize>,
         cancel: Arc<Fence>,
@@ -5045,6 +5070,9 @@ mod tests {
     /// back end saving a teammate with `richos_work.team` during that turn would.
     #[derive(Default)]
     struct TeamScript {
+        /// §119: the stored setting for directing the team, as `lease_models` answers it.
+        /// `None` is a factory that cannot say — every test written before round 23.
+        model: Option<crate::config::ModelChoice>,
         digest: Option<String>,
         in_turn: VecDeque<Option<String>>,
     }
@@ -5136,6 +5164,9 @@ mod tests {
     impl Cognition for WorkLease {
         fn session_id(&self) -> &str {
             &self.session
+        }
+        fn lease_model(&self) -> Option<crate::config::ModelChoice> {
+            self.model
         }
         fn running_commands(&self) -> Option<crate::lease_commands::CommandReading> {
             self.fill.lock().unwrap().command_reads += 1;
@@ -5376,6 +5407,10 @@ mod tests {
         fn team_digest(&self) -> Option<String> {
             self.team.lock().unwrap().digest.clone()
         }
+        fn lease_models(&self) -> Option<crate::config::LeaseModels> {
+            let stu = self.team.lock().unwrap().model?;
+            Some(crate::config::LeaseModels { rich: crate::config::ModelChoice::Opus, stu })
+        }
         fn spawn_work(&self, _binding: &ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
             // BEFORE the counter and before the refusal, because this is the point the one
             // test that shuts the gate needs to be able to say has not been reached.
@@ -5395,6 +5430,7 @@ mod tests {
                 account
             };
             Ok(Box::new(WorkLease {
+                model: self.team.lock().unwrap().model,
                 account,
                 fill: self.fill.clone(),
                 // The FIRST back end keeps the name every other test in this file already
@@ -10076,6 +10112,50 @@ mod tests {
     ///
     /// Controls: nothing changed, nothing renewed; a command still running defers it to the
     /// next boundary; a factory that cannot say what the team is renews nothing.
+    #[test]
+    fn the_model_chosen_for_directing_the_team_is_the_model_of_the_next_job() {
+        // §119 and its addendum: the choice is saved as Preferences closes and implemented
+        // from there — for the team's back end, at the next assignment boundary.
+        use crate::config::ModelChoice;
+        use crate::lease_commands::CommandReading;
+        let h = harness(5);
+        h.team.lock().unwrap().model = Some(ModelChoice::Opus);
+        h.host.start();
+        *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Settled);
+        let run = |n: u64| {
+            h.host
+                .register(&h.binding, &Registration { obligation_id: format!("obligation-model-{n}"), ..registration(&h) })
+                .unwrap();
+            assert!(h.host.wait_for_completed(n, std::time::Duration::from_secs(10)));
+        };
+        run(1);
+        run(2);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
+        assert_eq!(h.host.rotations("thread-one").0, 0, "a back end was renewed with its model unchanged");
+
+        // Preferences closed with the team row on Fable: the next job runs on a Fable back end.
+        h.team.lock().unwrap().model = Some(ModelChoice::Fable);
+        run(3);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 2, "the next job ran on the back end opened on Opus");
+        assert_eq!(h.host.rotations("thread-one"), (1, Some(crate::spine::MODEL_CHANGED.to_string())));
+        run(4);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 2, "a back end already on Fable was renewed again");
+
+        // Back to Opus while a command it started runs: deferred, then renewed once it ends.
+        h.team.lock().unwrap().model = Some(ModelChoice::Opus);
+        *h.commands.lock().unwrap() = Some(CommandReading::Running(1));
+        run(5);
+        assert_eq!(h.host.rotations("thread-one").0, 1, "a model renewal ended a command the back end was running");
+        *h.commands.lock().unwrap() = Some(CommandReading::Clear);
+        run(6);
+        assert_eq!(h.host.rotations("thread-one"), (2, Some(crate::spine::MODEL_CHANGED.to_string())));
+
+        // A setting that cannot be read is not a changed setting.
+        h.team.lock().unwrap().model = None;
+        run(7);
+        assert_eq!(h.host.rotations("thread-one").0, 2);
+    }
+
     #[test]
     fn a_team_changed_since_the_back_end_opened_renews_it_before_the_next_assignment() {
         use crate::lease_commands::CommandReading;
