@@ -39,7 +39,9 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
      key code (modifier or not: it reaches whatever is frontmost on the host), an app set
      frontmost, activated or launched, a shell run from inside it, the Objective-C bridge
      or raw Apple events, a dialog or the clipboard, any `tell` or `Application(...)`, and
-     a compiled script it cannot read. A script whose harm cannot be ruled out is refused.
+     a compiled script it cannot read. A script whose harm cannot be ruled out is refused:
+     every word outside a string must be on a short inert list (OSA_INERT_WORDS), so an
+     action nobody listed is refused, never assumed harmless.
   3. When the suite ends, every logged call is printed as `  FAIL  host-shield: ...` and the
      suite fails, whatever it exited with.
 
@@ -136,7 +138,112 @@ def test_run_rule(name, judged):
         for rx, why in TEST_RUN_OSA:
             if rx.search(script):
                 return ("osascript", why)
+        why = osa_not_inert(judged[1:])
+        if why:
+            return ("osascript", why)
     return None
+
+
+# THE INERT VOCABULARY. The list above names what is known to be harmful; a script is handed on
+# only when every word in it is on this list too, so an action nobody listed (`choose URL`,
+# `say`, `beep`, `set volume`) is refused rather than assumed harmless (review
+# rv-20261011T192225Z-5fa33e7e-a349 #1: `choose URL` was handed on). String literals and
+# comments are data and are not read; every other word must be one of these.
+OSA_INERT_WORDS = {
+    "applescript": {"return", "log", "true", "false", "and", "or", "not", "is", "equal", "equals",
+                    "to", "than", "greater", "less", "mod", "div", "as", "text", "integer", "real",
+                    "number", "string", "list", "boolean", "item", "of", "the", "count", "length",
+                    "if", "then", "else", "end", "error", "missing", "value", "contains",
+                    "linefeed", "tab", "space", "quote"},
+    "javascript": {"return", "true", "false", "null", "undefined", "console", "log", "JSON",
+                   "stringify"},
+}
+# The punctuation an inert script may carry once its strings and comments are taken out.
+OSA_INERT_CHARS = {"applescript": set("+-*/^&=<>(){},.:¬≠≤≥ \t\r\n"),
+                   "javascript": set("+-*/%=<>!&|?:;,.()[]{} \t\r\n")}
+
+
+def osa_not_inert(args):
+    """None when the osascript call's every -e script is plainly inert, else why it is not.
+    Anything this cannot read (another language, an option it does not know, a script in a
+    file or on stdin, a word or character outside the inert vocabulary) is NOT inert."""
+    lang, scripts, i = "applescript", [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-e", "-l", "-s"):
+            if i + 1 >= len(args):
+                return "%s is given no value" % a
+            if a == "-e":
+                scripts.append(args[i + 1])
+            elif a == "-l":
+                lang = args[i + 1].lower()
+            i += 2
+            continue
+        if a.startswith("-") and a != "-":
+            return "it is given the option %s, which the shield does not know" % a
+        break           # the first operand: the arguments the script is handed, which are data
+    lang = {"js": "javascript"}.get(lang, lang)
+    if lang not in OSA_INERT_WORDS:
+        return "its language %s cannot be read, so it cannot be judged harmless" % lang
+    if not scripts:
+        return "its script is in a file or on stdin that the shield could not read"
+    for script in scripts:
+        rest = _osa_residue(script, lang)
+        if rest is None:
+            return "a JavaScript template string can run code, so it cannot be judged harmless"
+        odd = sorted({c for c in rest if not (c.isalnum() or c == "_") and c not in OSA_INERT_CHARS[lang]})
+        if odd:
+            return "it carries %s outside a string, which the shield cannot judge harmless" % " ".join(odd)
+        for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", rest):
+            if (w.lower() if lang == "applescript" else w) not in OSA_INERT_WORDS[lang]:
+                return ("it does an action the shield does not recognize as inert (`%s`); a script whose "
+                        "harm cannot be ruled out is refused" % w)
+    return None
+
+
+def _osa_residue(text, lang):
+    """The script with its string literals and comments taken out (each string becomes `0`).
+    None for a JavaScript template string, whose `${...}` runs code."""
+    out, i, n = [], 0, len(text)
+    quotes = '"' if lang == "applescript" else "\"'"
+    at_line_start = True
+    while i < n:
+        c = text[i]
+        if c in quotes:
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == "\\" else 1
+            out.append(" 0 ")
+            i, at_line_start = j + 1, False
+            continue
+        if lang == "javascript" and c == "`":
+            return None
+        line_comment = text.startswith("--" if lang == "applescript" else "//", i) \
+            or (lang == "applescript" and c == "#" and at_line_start)
+        if line_comment:
+            while i < n and text[i] not in "\r\n":
+                i += 1
+            continue
+        opener, closer = ("(*", "*)") if lang == "applescript" else ("/*", "*/")
+        if text.startswith(opener, i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if lang == "applescript" and text.startswith(opener, j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith(closer, j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            out.append(" ")
+            i = j
+            continue
+        out.append(c)
+        if c in "\r\n":
+            at_line_start = True
+        elif not c.isspace():
+            at_line_start = False
+        i += 1
+    return "".join(out)
 
 
 # What _osascript_text returns for a program file it cannot read as text (a compiled .scpt).

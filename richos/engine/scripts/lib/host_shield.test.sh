@@ -156,6 +156,31 @@ for form in "$OPEN -a TextEdit" "$OPEN https://example.com" "$OPEN -g -b com.app
         bad "H4c $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
     fi
 done
+# H4e — an osascript is handed on only when every word in it is on the inert list: an action
+# nobody listed is refused, never assumed harmless (review rv-20261011T192225Z-5fa33e7e-a349 #1:
+# `choose URL` was handed on). The inert forms still reach the next command on PATH.
+for form in "$OSA -e 'choose URL'" "$OSA -e 'beep'" "$OSA -e 'say \"hello\"'" \
+        "$OSA -e 'set volume output volume 0'" "$OSA -e 'current date'" \
+        "$OSA -l JavaScript -e 'Path(\"/tmp\")'" "$OSA -l AppleScriptObjC -e 'return 1'" \
+        "$OSA -i -e 'return 1'"; do
+    F="$(suite h4e.test.sh "$form || true" "exit 0")"
+    trip_clean
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "^  FAIL  host-shield: refused \`${form%% *} " "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
+        ok "H4e $form is refused and logged; nothing reached the tripwire"
+    else
+        bad "H4e $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+    fi
+done
+F="$(suite h4f.test.sh "$OSA -e 'return (1 + 2) as text -- a comment' -e 'log \"hello\"'" \
+        "$OSA -l JavaScript -e 'JSON.stringify([1, \"x\"])'")"
+trip_clean
+RC="$(shielded "$F")"
+if [ "$RC" = 0 ] && [ "$(grep -c "^TRIPWIRE $OSA " "$TRIP/trip.log")" = 2 ]; then
+    ok "H4f inert $OSA scripts (words only in strings and comments) still reach the next $OSA on PATH"
+else
+    bad "H4f rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+fi
 # A compiled script cannot be read, so it cannot be judged harmless.
 printf 'FasdUAS 1.101.10\000\000' > "$TMP/compiled.scpt"
 F="$(suite h4d.test.sh "$OSA '$TMP/compiled.scpt' || true" "exit 0")"
