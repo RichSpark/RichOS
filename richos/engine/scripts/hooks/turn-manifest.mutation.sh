@@ -179,7 +179,7 @@ echo "=== turn-manifest: every property, proven load-bearing by removing it ==="
 # ---------------------------------------------------------------------------
 mutant scoping-session-wide "c." scripts/hooks/turn-manifest.py \
     "    in_turn = False" \
-    "    in_turn = True" \
+    "    in_turn = True; offset = 0" \
     "A session-wide window reports every call the session ever made as this turn's."
 
 # ---------------------------------------------------------------------------
