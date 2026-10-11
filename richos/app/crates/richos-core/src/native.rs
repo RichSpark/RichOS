@@ -825,6 +825,30 @@ pub fn child_args(session_id: &str) -> Vec<String> {
     .collect()
 }
 
+/// **The effort every lease runs at** — the CEO's §119 (2026-10-10): *"Rich and Stu stay on
+/// Opus high effort in RichOS by default."* Not a setting; his option is the model only.
+pub const LEASE_EFFORT: &str = "high";
+
+/// **The flags that name the model and the effort for a lease of this role** — appended to
+/// every lease's vector by [`NativeClient::spawn_with_tools`], and the one function the tests
+/// assert on. Rich is the conversation lease and Stu the work lease (§110); each gets the
+/// model its stored setting names ([`crate::engine_profile::EngineProfile::lease_models`],
+/// read from `config.json` at every spawn). A lease spawned without an engine profile (the
+/// headless and test paths, which read no settings) gets the default, Opus.
+///
+/// Until §119 the app passed neither flag, so both sessions ran on the CLI's own default for
+/// the account. Measured on `claude` 2.1.295 with the lease's `--setting-sources ''` on
+/// 2026-10-10: `--model opus --effort high` answered as `claude-opus-5-5`, and
+/// `--model fable --effort high` as `claude-fable-5-1`.
+pub fn lease_model_args(role: LeaseRole, profile: Option<&crate::engine_profile::EngineProfile>) -> Vec<String> {
+    let models = profile.map(|p| p.lease_models).unwrap_or_default();
+    let model = match role {
+        LeaseRole::Conversation => models.rich,
+        LeaseRole::Work => models.stu,
+    };
+    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), LEASE_EFFORT.into()]
+}
+
 pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<String> {
     let mut args = child_args(session_id);
     args.push(APPEND_SYSTEM_PROMPT_FILE.to_string());
@@ -1979,6 +2003,8 @@ impl NativeClient {
             Some((d, s)) => chat_child_args(&session_id, desktop_doctrine.as_deref().unwrap_or(d), s),
             None => child_args(&session_id),
         };
+        // §119: Opus at high effort unless his setting for this role says Fable.
+        args.extend(lease_model_args(role, profile));
         if let Some((executable, scope, assignments, status)) = onboarding {
             let config = mcp_config(executable, scope, assignments, status, continuity, continuity_tools, profile, role, bin);
             args.extend(["--strict-mcp-config".into(), "--mcp-config".into(), config.to_string()]);
@@ -4994,7 +5020,7 @@ done
             },
             work_scope: None,
             permissions: std::sync::Arc::new(crate::permissions::PermissionDesk::default()),
-            operator_desk: None, claude_account: None, token_sink: None, speech_model: None,
+            operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(),
         }
     }
 
@@ -6076,6 +6102,34 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         }
         // The 5 stock definitions and the 3 duties, with the shelf beside them.
         assert!(checked > 8, "only {checked} definitions were read");
+    }
+
+    #[test]
+    fn every_lease_is_started_on_opus_at_high_effort_by_default() {
+        // §119 (CEO, 2026-10-10): "Rich and Stu stay on Opus high effort in RichOS by default."
+        // Read off the argument vector the child actually received, on a real
+        // `spawn_with_tools`, one per role. The per-role Fable setting is
+        // `each_role_starts_on_opus_at_high_effort_unless_its_setting_says_fable`
+        // (`tests/engine_profile.rs`), through the same `lease_model_args`.
+        let handshake = "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$(dirname \"$0\")/argv\"\n\
+             read -r line\n\
+             printf '%s\\n' '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"req_init\",\"response\":{}}}'\n\
+             sleep 5\n";
+        for (tag, role) in [("models-desk", LeaseRole::Conversation), ("models-work", LeaseRole::Work)] {
+            let script = write_script(tag, handshake);
+            let _client = NativeClient::spawn_with_tools(
+                &script, Path::new("/tmp"),
+                Some((doctrine_fixture().as_path(), skills_fixture().as_path())),
+                None, None, None, None, None, role,
+            ).expect("the handshake should succeed");
+            let argv: Vec<String> = std::fs::read_to_string(script.parent().unwrap().join("argv")).unwrap()
+                .lines().map(String::from).collect();
+            let at = argv.iter().position(|a| a == "--model")
+                .unwrap_or_else(|| panic!("{role:?} was started without --model: {argv:?}"));
+            assert_eq!(&argv[at..at + 4], ["--model", "opus", "--effort", "high"], "{role:?}: {argv:?}");
+            assert_eq!(argv.iter().filter(|a| *a == "--model" || *a == "--effort").count(), 2,
+                "{role:?} names a model or an effort twice: {argv:?}");
+        }
     }
 
     #[test]
@@ -7224,7 +7278,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None
+                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

@@ -150,7 +150,6 @@ TOKEN = re.compile(r"[A-Za-z]+|\d+")
 CONTEXT_BUDGET = 9600
 CONTEXT_MAX_LINES = 180
 
-MAX_TRANSCRIPT = 256 * 1024 * 1024
 GIT_TIMEOUT = 10
 COMMIT_SKEW_S = 5
 
@@ -494,21 +493,81 @@ def parse_ts(s):
         return None
 
 
+def turn_start_offset(path, prompt_id, chunk=4 * 1024 * 1024):
+    """Byte offset of the first record carrying prompt_id, found by reading
+    backward from the END of the file, so a long session costs no more than its
+    last turn does (2026-10-10: no hook may skip itself because a transcript is
+    large).
+
+    The first record is accepted only when a record of ANOTHER turn precedes it
+    in the window already read (or the window reaches the start of the file);
+    otherwise the window doubles. When the prompt cannot be located without
+    pulling in more than 64 MB, the answer is 0 and the caller's forward
+    streaming read from the start takes over, which is the previous behavior.
+    """
+    needle = prompt_id.encode("utf-8", "replace")
+
+    def pid_of(raw):
+        try:
+            rec = json.loads(raw)
+        except Exception:
+            return None
+        return rec.get("promptId") if isinstance(rec, dict) else None
+
+    try:
+        size = os.path.getsize(path)
+        window = chunk
+        with open(path, "rb") as fh:
+            while True:
+                pos = max(0, size - window)
+                fh.seek(pos)
+                buf = fh.read(size - pos)
+                base = 0
+                if pos > 0:
+                    nl = buf.find(b"\n")
+                    base = len(buf) if nl < 0 else nl + 1
+                lines, at = [], pos + base
+                for ln in buf[base:].split(b"\n"):
+                    lines.append((at, ln))
+                    at += len(ln) + 1
+                first = None
+                for idx, (_o, ln) in enumerate(lines):
+                    if needle in ln and pid_of(ln) == prompt_id:
+                        first = idx
+                        break
+                if first is not None:
+                    if pos == 0:
+                        return lines[first][0]
+                    for _o, ln in reversed(lines[:first]):
+                        if b'"promptId"' in ln:
+                            other = pid_of(ln)
+                            if other and other != prompt_id:
+                                return lines[first][0]
+                if pos == 0 or window >= 64 * 1024 * 1024:
+                    return 0
+                window *= 2
+    except OSError:
+        return 0
+
+
 def read_turn(path, prompt_id):
     """(records-in-turn, error). The turn opens on the first record carrying
     prompt_id and runs to the end of the file."""
     if not path or not os.path.isfile(path):
         return None, "the transcript is not a readable file at %s" % path
     try:
-        if os.path.getsize(path) > MAX_TRANSCRIPT:
-            return None, "the transcript is over this gate's read cap"
+        os.path.getsize(path)
     except OSError as exc:
         return None, "the transcript could not be sized (%s)" % exc
     out = []
     in_turn = False
+    # No size cap: the turn is located from the end of the file.
+    offset = turn_start_offset(path, prompt_id)
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            for raw in fh:
+                line = raw.decode("utf-8", "replace")
                 if not in_turn and prompt_id not in line:
                     continue
                 try:

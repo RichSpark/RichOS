@@ -122,6 +122,11 @@ pub struct EngineProfile {
     /// nothing is set: the skill tells the CEO it watched the pictures only. Resolved by the shell
     /// because this crate does not depend on `richos-voice` (no native audio here).
     pub speech_model: Option<PathBuf>,
+    /// **The model each session starts on** (the CEO's §119, 2026-10-10): read by
+    /// [`Self::prepare`] from `config.json` in the data directory, so every lease spawn sees the
+    /// setting as it is at that moment. `native.rs` gives the conversation lease (Rich) `rich`
+    /// and the work lease (Stu) `stu`.
+    pub lease_models: crate::config::LeaseModels,
 }
 
 /// **Which speech model the video skill transcribes with**, the value of
@@ -415,7 +420,8 @@ impl EngineProfile {
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         Ok(Self { engine, coordination, plugin, state, runtime, work_scope: None, permissions: Default::default(),
-                  operator_desk: None, claude_account: None, token_sink: None, speech_model: None })
+                  operator_desk: None, claude_account: None, token_sink: None, speech_model: None,
+                  lease_models: crate::config::lease_models_from_config(&data) })
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.

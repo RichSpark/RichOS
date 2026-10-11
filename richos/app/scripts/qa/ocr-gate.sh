@@ -3,6 +3,7 @@
 # ocr-gate.sh — no frame goes into the record carrying a real person's details.
 #
 #   ocr-gate.sh <dir-or-png> [more...] [--control <png>] [--no-control <reason>]
+#   ocr-gate.sh --text <file-or-dir> [--text ...] [<dir-or-png> ...]
 #   ocr-gate.sh --help
 #
 # Exit 0 CLEAN, 1 a hit (named, with the frame), 2 the gate could not run.
@@ -48,6 +49,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTROL="$HERE/fixtures/ocr-control.png"
 NO_CONTROL=""
 TARGETS=()
+TEXTS=()
 
 # Address-shaped, home-path-shaped, phone-shaped. Deliberately broad: a false
 # positive costs one look, a false negative is published.
@@ -62,17 +64,19 @@ while [ $# -gt 0 ]; do
         -h|--help)     usage; exit 0 ;;
         --control)     CONTROL="${2:-}"; shift 2 || { echo "ocr-gate.sh: $1 needs a value" >&2; exit 2; } ;;
         --no-control)  NO_CONTROL="${2:-}"; shift 2 || { echo "ocr-gate.sh: $1 needs a value" >&2; exit 2; } ;;
+        --text)        TEXTS+=("${2:-}"); shift 2 || { echo "ocr-gate.sh: $1 needs a value" >&2; exit 2; } ;;
         -*)            echo "ocr-gate.sh: unknown option '$1'. --help" >&2; exit 2 ;;
         *)             TARGETS+=("$1"); shift ;;
     esac
 done
 
-if [ "${#TARGETS[@]}" -eq 0 ]; then
+if [ "${#TARGETS[@]}" -eq 0 ] && [ "${#TEXTS[@]}" -eq 0 ]; then
     echo "ocr-gate.sh: name a directory of frames or one or more PNGs. --help" >&2
     exit 2
 fi
 
 TESS="${RICHOS_QA_TESSERACT:-}"
+if [ "${#TARGETS[@]}" -gt 0 ]; then   # text-only runs need no reader
 if [ -z "$TESS" ]; then
     TESS="$(command -v tesseract || true)"
 fi
@@ -105,6 +109,7 @@ else
         exit 2
     fi
     echo "positive control: the reader found the known address. 0 hits below means 0."
+fi
 fi
 
 # --- the named-person predicate ---------------------------------------------
@@ -139,6 +144,65 @@ case "$NP_STATE" in
         echo "             Shape patterns below still run, but no ROSTER was checked." >&2
         NP="" ;;
 esac
+
+# --- a walk record's text files ---------------------------------------------
+# Step lists and the record itself are text, so the frame reader never sees them. A home path
+# that is not the guest's own /Users/admin, an address, or a listed name in one of them is
+# published exactly as a frame would be. A synthetic line proves the scan first.
+TEXT_HITS=0
+if [ "${#TEXTS[@]}" -gt 0 ]; then
+    TSHAPES='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|/Users/[A-Za-z][A-Za-z0-9._-]+'
+    text_hits() { grep -oiE "$TSHAPES" | grep -vxE '/Users/admin' | sort -u | head -5 || true; }
+    CTLTXT="$(printf 'x /Users/qafixture/run y qa-fixture@example.invalid' | text_hits)"
+    if [ "$(printf '%s\n' "$CTLTXT" | grep -c .)" -lt 2 ]; then
+        echo "ocr-gate.sh: TEXT POSITIVE CONTROL FAILED: the scan did not flag a synthetic home path and address." >&2
+        exit 2
+    fi
+    echo "text positive control: a synthetic home path and address were flagged."
+    TFILES=()
+    for t in "${TEXTS[@]}"; do
+        if [ -d "$t" ]; then
+            while IFS= read -r f; do TFILES+=("$f"); done \
+                < <(find "$t" -type f \( -name '*.json' -o -name '*.md' -o -name '*.txt' -o -name '*.tree' -o -name '*.sh' -o -name '*.py' \) | LC_ALL=C sort)
+        elif [ -f "$t" ]; then
+            TFILES+=("$t")
+        else
+            echo "ocr-gate.sh: no such file or directory: $t" >&2
+            exit 2
+        fi
+    done
+    if [ "${#TFILES[@]}" -eq 0 ]; then
+        echo "ocr-gate.sh: found NO text files under the --text paths. Refusing to call an empty set clean." >&2
+        exit 2
+    fi
+    for f in "${TFILES[@]}"; do
+        TXT="$(cat "$f")"
+        FOUND=""
+        HIT="$(printf '%s' "$TXT" | text_hits)"
+        [ -n "$HIT" ] && FOUND="shape"
+        if [ -n "$NP" ]; then
+            case "$(printf '%s' "$TXT" | python3 "$NP" --scan-text "$(basename "$f")" 2>/dev/null || true)" in
+                FOUND*) FOUND="${FOUND:+$FOUND+}roster" ;;
+            esac
+        fi
+        if [ -n "$FOUND" ]; then
+            TEXT_HITS=$((TEXT_HITS + 1))
+            echo "HIT  $f  [$FOUND]"
+            while IFS= read -r m; do
+                [ -n "$m" ] && echo "       shape match, ${#m} characters, starting '${m:0:2}...'"
+            done <<< "$HIT"
+            case "$FOUND" in *roster*) echo "       a listed person's name is in this file" ;; esac
+        fi
+    done
+    echo "--- TEXT GATE: $TEXT_HITS of ${#TFILES[@]} text file(s) carry something that must not ship ---"
+    if [ "${#TARGETS[@]}" -eq 0 ]; then
+        if [ "$TEXT_HITS" -gt 0 ]; then
+            echo "Remove them from the file and run this gate again." >&2
+            exit 1
+        fi
+        exit 0
+    fi
+fi
 
 # --- collect the frames ------------------------------------------------------
 FRAMES=()
@@ -200,7 +264,7 @@ for f in "${FRAMES[@]}"; do
 done
 
 echo "--- OCR GATE: $HITS of ${#FRAMES[@]} frame(s) carry something that must not ship ---"
-if [ "$HITS" -gt 0 ]; then
+if [ "$HITS" -gt 0 ] || [ "$TEXT_HITS" -gt 0 ]; then
     echo "Redact them with redact.py and run this gate again on the OUTPUT." >&2
     exit 1
 fi

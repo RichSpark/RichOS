@@ -76,6 +76,18 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     mod.step_run('no-such-vm', {'op': 'keys', 'text': 'Say "hi"'}, Path(tmp))
     check('V04 the keys step hands guest.sh the escaped script', seen and seen[0][-1].endswith('keystroke "Say \\"hi\\""'), seen)
 
+    # A push names its source relative to the repository root (the folder holding `richos/`), so a
+    # committed step list carries no home path. Candidate 49's walk: it resolved one folder too high,
+    # and every relative push failed "no such file on this Mac".
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'push', 'src': 'richos/app/scripts/qa/frame.py', 'dest': '/tmp/frame.py'}, Path(tmp))
+    pushed = Path(seen[0][-2]) if seen else None
+    check('a relative push source resolves inside this repository and names a file that exists',
+          pushed is not None and pushed.exists() and pushed == TOOL.parents[4] / 'richos/app/scripts/qa/frame.py', seen)
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'push', 'src': '/abs/where.txt', 'dest': '/tmp/x'}, Path(tmp))
+    check('an absolute push source is used as written', seen and seen[0][-2] == '/abs/where.txt', seen)
+
     # S8: a relaunch is a step, so "the choice survives a relaunch" is a walk's data, not a new script.
     seen.clear()
     mod.step_run('no-such-vm', {'op': 'relaunch'}, Path(tmp))
@@ -85,6 +97,22 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     mod.run = lambda args, timeout=120: (2, 'recorded app PID no longer belongs to this payload')
     code, text = mod.step_run('no-such-vm', {'op': 'relaunch'}, Path(tmp))
     check('a relaunch that fails fails its step, with relaunch.py\'s sentence', code == 2 and 'no longer belongs' in text, (code, text))
+
+    # A real mouse click is a step: `ax click --at` is an accessibility press at a point, which does
+    # not focus a text box (candidate 50 rewalk, run K). The same point twice is a click.
+    seen.clear()
+    mod.run = lambda args, timeout=120: (seen.append(args) or (0, ''))
+    mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['850,902', '850,902']}, Path(tmp))
+    check('pointer runs pointer-drag.sh on the walk\'s own VM with the points as given',
+          len(seen) == 1 and seen[0][0].endswith('/pointer-drag.sh') and seen[0][1:] == ['no-such-vm', '850,902', '850,902'], seen)
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['1,2', '1,2'], 'right': True}, Path(tmp))
+    check('pointer with right adds --right', seen and seen[0][-1] == '--right', seen)
+    check('a two-point pointer step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2']}]) == [],
+          mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2']}]))
+    for bad in ([], ['1,2'], ['12', '1,2'], [1, 2], '1,2'):
+        got = mod.problems([{'op': 'pointer', 'points': bad}])
+        check('a pointer step with points %r is refused with a sentence' % (bad,), bool(got), got)
 
 print('steps-walk.test.py: %d failed' % len(failures))
 sys.exit(1 if failures else 0)

@@ -113,7 +113,11 @@ THE VERDICT (plan §2.2, §2.4)
     a verdict about another commit is refused.
   * The verdict follows the findings (ruling §116): every finding, and every
     earlier finding still open, says whether it blocks. It blocks only when a
-    user could hit it in normal use of the work AND it breaks what the work
+    regular user of the app would notice it in normal use AND it would matter
+    to them (CEO 2026-10-10: "why is there a need for a change if it 'doesn't
+    matter'?"). How text renders somewhere other than the app, a missing or
+    weak test, wording and anything only a developer would see never block.
+    The author's claims are what the reviewer checks against, never extra
     promises. Changes-requested exactly when at least one blocks; passed
     otherwise, whatever the reviewer wrote. Priority is information only.
   * A passed review files each finding it did not block on, new or still open
@@ -581,11 +585,14 @@ def build_input(w, a, export, earlier):
         "- Find what the author's tests miss. Where you can, prove a finding with a small fixture: write it "
         "under `fixtures/`, run it, and quote its output in the finding's evidence. Name the fixture's path in "
         "`fixture` (empty when there is none).\n"
-        "- Every finding says whether it blocks (`blocks`). It blocks only when BOTH hold: a user could hit it "
-        "in normal use of this work, AND it breaks what the work promises (the original words and the author's "
-        "claims above). Anything that needs an unusual setup, a hand-edited file, a deliberately hostile local "
-        "process or a rare race does not block, however serious it sounds: it is filed as a follow-up "
-        "automatically when the review passes.\n"
+        "- Every finding says whether it blocks (`blocks`). It blocks only when a regular user of the app would "
+        "notice it in normal use AND it would matter to them. These never block, however they sound: how text "
+        "renders somewhere other than the app (GitHub, a terminal, a Markdown viewer), a missing or weak test, "
+        "wording, and anything only a developer would see; nor anything that needs an unusual setup, a "
+        "hand-edited file, a deliberately hostile local process or a rare race. A finding that does not block "
+        "is filed as a follow-up automatically when the review passes.\n"
+        "- The author's claims above are what you check the work against, never extra promises: a difference "
+        "from a claim blocks only when it passes the same test.\n"
         "- The verdict follows the findings: changes-requested exactly when at least one finding, or one "
         "earlier finding still open, blocks; passed otherwise, whatever `verdict` says. This replaces the "
         "duty's rule on an unresolved verification requirement: a claim you could not see hold is a finding, "

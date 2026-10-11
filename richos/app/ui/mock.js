@@ -1231,6 +1231,11 @@
   // would be rehearsing the surface against a sentence the product does not raise.
   let onboardingState = preset.onboarding || "described";
   const onboardingDeclineFails = preset.onboardingDeclineFails === true;
+  // `onboardingDeclineHold: true` keeps "Not now"'s answer back until
+  // `__RICHOS_MOCK__.releaseDecline()`, so a suite can have it finish while something else is
+  // on screen, as the real write does when the spine is slow (nightly 49's walk, D28: it
+  // finished behind an open Bust a bug panel).
+  let onboardingDeclineHeld = preset.onboardingDeclineHold === true ? [] : null;
   const ONBOARDING_DECLINE_REFUSED =
     "I couldn't write that down, so it isn't recorded and I'll ask again next time. I'd " +
     "rather say so than let you think it was settled. Whoever set RichOS up will need to " +
@@ -2550,6 +2555,12 @@
   // every sheet that actually went out.
   // `preset.bugSteps` is the numbered steps Rich writes under What happened (none by default), so
   // a suite can change and paste into a step (review rv-20261009T225657Z-b3b5c573-96c0).
+  // `preset.bugRichWrote` is What happened as Rich wrote it, with his own stand-ins and nothing
+  // listed beside them (nightly 48's walk, D23). The core marks each by its kind alone, with no
+  // replaced words (`richos_core::bug_report::finished`, `Segment::unaccounted`); so does this.
+  // `preset.bugRichSection` (`{heading, text}`) is one more section Rich writes, last, its heading
+  // as he wrote it: a heading is plain words in the draft, stand-ins and all (review
+  // rv-20261010T183313Z-fe4cd6b1-1e66).
   const bugMock = {
     net: preset.bugNet || "online",
     account: preset.bugAccount || { kind: "reporting" },
@@ -2558,7 +2569,7 @@
     sent: [],
     calls: [],
     seq: 0,
-    held: { change: [], cancel: [], private: [], sendcheck: [] },
+    held: { change: [], cancel: [], private: [], sendcheck: [], stop: [] },
     claude: preset.bugClaude || "up",
     unchecked: [],
     checks: {},
@@ -2573,7 +2584,7 @@
   };
   const BUG_REASON = { offline: "offline", down: "github-down", "not-set-up": "not-set-up" };
   const BUG_VERSION = "RichOS 1.2.0, preview · macOS 15.6 · Apple silicon";
-  const BUG_KINDS = { conversation_name: "[a conversation]", company_name: "[a company]", person_name: "[a person]", file_path: "[a file on this Mac]", email_address: "[an email address]", private_word: "[a private word]" };
+  const BUG_KINDS = { conversation_name: "[a conversation]", company_name: "[a company]", person_name: "[a person]", folder_name: "[a folder]", file_path: "[a file on this Mac]", email_address: "[an email address]", private_word: "[a private word]" };
   function bugTerms() {
     const list = [];
     threads.forEach((t) => { if (/\s/.test(t.title)) list.push({ text: t.title, kind: "conversation_name" }); });
@@ -2598,6 +2609,21 @@
     if (last < text.length || !out.length) out.push({ text: text.slice(last) });
     return out;
   }
+  /// Words Rich wrote, each stand-in in them marked by its kind with no replaced words (the core's
+  /// `marked` when nothing accounts for one).
+  function bugMarked(text) {
+    const kinds = Object.keys(BUG_KINDS);
+    const re = new RegExp(kinds.map((k) => BUG_KINDS[k].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+    const out = [];
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) out.push({ text: text.slice(last, m.index) });
+      out.push({ text: m[0], kind: kinds.find((k) => BUG_KINDS[k] === m[0]) });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length || !out.length) out.push({ text: text.slice(last) });
+    return out;
+  }
   function bugSentence(t) {
     t = t.trim();
     t = t.charAt(0).toUpperCase() + t.slice(1);
@@ -2614,10 +2640,10 @@
     return {
       title: bugScrub(first.charAt(0).toUpperCase() + first.slice(1), rich),
       sections: [
-        { heading: "What happened", paragraphs: [bugScrub(bugSentence(answer), rich)], steps: (preset.bugSteps || []).map((t) => bugScrub(t, rich)) },
+        { heading: "What happened", paragraphs: [preset.bugRichWrote ? bugMarked(preset.bugRichWrote) : bugScrub(bugSentence(answer), rich)], steps: (preset.bugSteps || []).map((t) => bugScrub(t, rich)) },
         { heading: "Where", paragraphs: [[{ text: pub.charAt(0).toUpperCase() + pub.slice(1) + ". It was on screen when the report was started." }]], steps: [] },
         { heading: "Version", paragraphs: [[{ text: BUG_VERSION }]], steps: [] },
-      ],
+      ].concat(preset.bugRichSection ? [{ heading: preset.bugRichSection.heading, paragraphs: [bugMarked(preset.bugRichSection.text)], steps: [] }] : []),
       private: rich,
     };
   }
@@ -2667,6 +2693,7 @@
     releaseChange: () => bugRelease("change"),
     releaseCancel: () => bugRelease("cancel"),
     releasePrivate: () => bugRelease("private"),
+    releaseStop: () => bugRelease("stop"),
     /// An utterance recognized by the shell, as `rich://voice-transcript` carries it. The shell
     /// emits it whether or not it held the words back for a report (`bug_report_voice`).
     say(text) { emit("rich://voice-transcript", { text, at: now() }); },
@@ -3207,6 +3234,7 @@
         case "decline_onboarding":
           onboardingCalls.push({ cmd: "decline_onboarding", entityId: args.entityId });
           if (!args.entityId || args.entityId !== onboardingViewOf().entityId) return Promise.reject("The selected company changed. Open its conversation and choose Not now again.");
+          if (onboardingDeclineHeld) await new Promise((r) => onboardingDeclineHeld.push(r));
           if (onboardingDeclineFails) return Promise.reject(ONBOARDING_DECLINE_REFUSED);
           onboardingByEntity.set(args.entityId, "declined");
           return onboardingViewOf();
@@ -4076,9 +4104,10 @@
           // Claude could not be asked: nothing is added (the shell's answer, word for word).
           if (bugMock.claude === "down") throw "I couldn't check that change just now, so nothing was added.";
           const said = String(args.said || "").replace(/^(also|and|please)\s+/i, "").replace(/^(say|mention|add)\s+(that\s+)?/i, "");
-          // The report's own private words go on applying to every change (the shell's `scrub_change`).
+          // The report's own private words go on applying to every change (the shell's `scrub_change`),
+          // and every stand-in already in his words is marked by its kind, as in the first draft.
           const kept = args.private || [];
-          const add = bugScrub(bugSentence(said), kept);
+          const add = bugScrub(bugSentence(said), kept).flatMap((s) => (s.kind ? [s] : bugMarked(s.text)));
           // The card with his words added is a changed card: at Send it goes through the scanner
           // and then Rich, last (the core's `at_send`, CEO §115), as words changed by hand do.
           return { section: "What happened", add, private: kept, workedMs: 4000 };
@@ -4136,10 +4165,13 @@
         // The preview has no microphone, so voice mode never opens here (main.js says so in one
         // line). `preset.bugVoice` opens it for the Bust a bug suite, which drives what the user
         // says with `__RICHOS_MOCK_BUG__.say` and reads the hold off `bug_report_voice`'s calls.
+        // `preset.bugStopHold` keeps each stop unanswered until `releaseStop()`, as a microphone
+        // that takes a moment to close does (review rv-20261010T183313Z-fe4cd6b1-1e66 finding 2).
         case "start_voice_capture":
         case "stop_voice_capture":
           if (!preset.bugVoice) return Promise.reject(`mock: no such command "${cmd}"`);
           bugMock.calls.push({ cmd, threadId: args.threadId });
+          if (cmd === "stop_voice_capture" && preset.bugStopHold) await bugHold("stop");
           return { started: cmd === "start_voice_capture" };
         case "bug_report_open_issue":
           bugMock.calls.push({ cmd, number: args.number });
@@ -4945,6 +4977,12 @@
     /// suite proves "Not now" actually recorded something rather than merely looking pressed
     /// — the exact failure the command it calls was written to end.
     onboardingCalls() { return onboardingCalls.slice(); },
+    /// Lets a "Not now" held by `onboardingDeclineHold` answer, and every later one at once.
+    releaseDecline() {
+      const held = onboardingDeclineHeld || [];
+      onboardingDeclineHeld = null;
+      held.forEach((r) => r());
+    },
     /// ---- what did not load out of the ledger (2026-09-05) -----------------------------
     /// Put the history notice into a state. The default is CLEAN, so a suite that wants the
     /// notice on screen has to ask for it — the surface can never be shown to be working by

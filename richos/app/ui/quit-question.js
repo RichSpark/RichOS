@@ -30,7 +30,6 @@
   panel.className = "overlay";
   panel.hidden = true;
   panel.setAttribute("role", "dialog");
-  panel.setAttribute("aria-modal", "true");
   panel.setAttribute("aria-labelledby", "quit-question-title");
   // ESCAPE KEEPS WORKING, the same way the permission sheet's Escape declines: the safe
   // answer is the one that changes nothing.

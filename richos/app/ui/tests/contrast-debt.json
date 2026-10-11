@@ -51,7 +51,8 @@
       "opening-screen": "The opening screen measures 0 of 450 nodes while the shell measures 92 of 448. Its two extra considered nodes are within the three-node tolerance, so the count floor cannot prove arrival. The driver instead holds the curtain and asserts RichSplash.state() still reports a held curtain with no dismissal reason.",
       "settings": "The assertiveness popover unhides existing markup: both it and the shell consider 448 nodes. It measures 74 against the shell's 92 because the panel obscures the shell. The driver requires #assertiveness-popover:not([hidden]) and awaits its completed entry animation; an unopened panel fails that wait.",
       "settings-tooltip": "The tooltip is stylesheet-generated content, not a DOM text node. Its node counts equal the shell's 92 of 448. The driver requires an opaque ::after pseudo-element, and check 11b separately requires the authored Settings string to be measured.",
-      "quota-work-status": "A single status sentence adds only two nodes across both themes, inside the unchanged three-node tolerance. Its driver waits for #quota-work-status:not([hidden]) and asserts the saved-work sentence before measuring it."
+      "quota-work-status": "A single status sentence adds only two nodes across both themes, inside the unchanged three-node tolerance. Its driver waits for #quota-work-status:not([hidden]) and asserts the saved-work sentence before measuring it.",
+      "quit-question": "Re-derived 2026-10-10 (walk48fix20): the sheet no longer claims aria-modal, so the shell behind it is filed obscured rather than measured through an inert layer, and the surface measures only its own 12 nodes against the shell's 102. Its text ships in the shared shell, hidden until shown, so it considers 724 against the shell's 722, inside the three-node tolerance. The driver raises it through RichQuitQuestion.show, the listener's own entry point, and waits for #quit-question to be visible with its entry animation finished (overlaySettled); an unshown sheet fails that wait. tests/quit-question.js measures its ratios."
     }
   },
   "surfaceFloors": {
@@ -239,13 +240,15 @@
       "considered": 674
     },
     "accounts-sheet": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Round 18 (Claude accounts for everyone, the CEO's feedback item 9): the accounts sheet with two cards, the handover line, the 5-hour choice and Recent changes. Set from its first run, 2026-10-06, both themes: 202 measured of 782 considered against the bare shell's 102 of 686 in the same run, so a driver that never opened the sheet fails by 97 measured nodes after the tolerance. Every state of the sheet is also walked by tests/accounts.js.",
-      "checked": 202,
-      "considered": 774
+      "checked": 102,
+      "considered": 820
     },
     "repositories": {
-      "checked": 114,
-      "considered": 658
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
+      "checked": 20,
+      "considered": 738
     },
     "permission": {
       "checked": 112,
@@ -260,19 +263,22 @@
       "considered": 658
     },
     "quit-question": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The quit question (background-work spec 2.5/2.5a). 12 measured nodes across both themes: the title, the question and the two controls, each measured in dark and light, plus the two the shell shares with every surface. Its own suite, ui/tests/quit-question.js, states the ratios; this floor is what stops a sheet that has stopped rendering from reading as clean.",
-      "checked": 106,
-      "considered": 644
+      "checked": 12,
+      "considered": 724
     },
     "phone-pairing": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The pairing screen. `checked` 56 is lower than the bare shell's 92 because the sheet covers the shell it opened over, so the floor that bites for this surface is the `considered` one: 580 against the shell's 506 is a margin of 74, far outside the three-node tolerance, so check 9z's control passes without a `cannotBite` declaration. Both numbers fell under CEO §61 — `considered` by 58 with the rest of the sheet's shared markup, `checked` by 14, which is the only large visible drop in the set: the two unverified-certificate warnings, the trust address and the sixteen certificate taps were all ON this screen rather than hidden in the shared markup.",
-      "checked": 148,
-      "considered": 662
+      "checked": 54,
+      "considered": 742
     },
     "phone-paired": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The same panel once a phone is paired. Its margin over the shell was four nodes when this floor was first set and twelve after the 2026-09-19 shrink; it is 64 now (considered 570 against the shell's 506) because §61 took 66 nodes out of the shell and 68 out of this surface. `checked` is untouched at 22: the card's own lines are filled by the render from the device record, and the two that changed wording did not change in number. Its driver's real proof of arrival is still waiting for `#phone-device-name` to carry text, which only the paired state paints.",
-      "checked": 116,
-      "considered": 658
+      "checked": 22,
+      "considered": 738
     },
     "techy-scope": {
       "//": "§7.1's three-way scope sheet (CEO, 2026-09-18), walked on `hiring` — see the driver's own note for why not `acme`. 18 of 572 across both themes: NINE measured nodes per theme, which is the whole sheet (title, three option labels, Cancel, the confirm button, and the three radio indicators) and nothing else, because an `aria-modal` sheet files everything behind it as obscured — the same shape `quit-question` has. FEWER measured nodes than the bare shell's 92, so `checked` cannot prove arrival here; `considered` can and does, at 572 against the shell's 556, which is 16 clear and well outside the three-node tolerance. That is why this surface needs no `cannotBite` entry: a driver that never opened the sheet leaves 556 against a floor of 569 and fails. RE-DERIVED 2026-10-04 (fill-first), and the reason is not this surface: the Claude Code quota sheet's markup (`quota.js`) is appended to the always-present shell, and fill-first added eight hidden text-bearing elements to it (Add account, Claude accounts, the new-account label, Add and sign in, Cancel, the at-threshold legend and its two choices), so EVERY surface's `considered` rose by 16 (8 per theme) and no `checked` moved. Measured: contrast.js on main 11cc84ff6 gives the bare shell 98 of 646 and this surface 18 of 662, 9z green; on the fill-first branch the shell is 98 of 662 and this surface 18 of 678, and 9z went red because the bare shell came within the three-node tolerance of the old floor. The floor is the branch measurement itself, restoring the 16-node margin over the bare shell it had on main. RE-DERIVED AGAIN 2026-10-04 (round 16), for the same kind of reason: the quota sheet rebuilt to round 16 (`quota.js`, the CEO's chosen design) keeps more hidden text-bearing markup in the always-present shell (the inline add form, the verbs inside the one sentence, the sentence tail, the multi-account boundary), so EVERY surface's `considered` rose by 14 (7 per theme) and no `checked` moved. Measured: contrast.js on HEAD 34c54f9f4 + this branch gives the bare shell 98 of 676 (it was 98 of 662) and this surface 18 of 692. The floor is that measurement, keeping its margin over the bare shell; nothing this surface renders changed. RE-DERIVED 2026-10-09 (round 20.2, the Codex review switch in Settings, the CEO's ruling §114), and the reason is not this surface: the row's tooltip keeps every state's words in the always-present shell (`codex-reviews.js`, hidden but text-bearing), so the bare shell's `considered` rose to 722 and no `checked` moved. Measured in the same run on the branch: the bare shell 102 of 722 and this surface 18 of 738 (the floor was 688). The floor is that measurement, restoring the margin over the bare shell; nothing this surface renders changed.",
@@ -280,53 +286,63 @@
       "considered": 738
     },
     "phone-identity": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "CEO §61.1's identity screen, which since §61 is the FIRST screen of the sheet rather than a screen behind a chosen route — its driver no longer clicks anything to reach it, and that is the arrival proof that matters here. 34 measured of 572 across both themes. `checked` 34 is lower than the bare shell's 92 because the sheet covers the shell it opened over, so the floor that bites is `considered`: 572 against the shell's 506 is a margin of 66, far outside the three-node tolerance — it was 2 when this surface was declared unable to bite and 4 after the first shrink. `checked` fell by 2 under §61: the `Pick a different way` beside `I understand`, in both themes. THE NOTE THIS ROW USED TO CARRY IS RETIRED WITH ITS SUBJECT: it recorded that this was the only surface where a control's BORDER separated two decisions (`.phone-route > button` at `--line-control`, 3.79:1 dark and 4.06:1 light). §61 removed the screen with two decisions on it. The token still carries that job on `.desk-btn` itself, measured at the same ratios from the rendered pixels — Urban's G6 — because on the paired card that border is the only thing that makes a button a button.",
-      "checked": 128,
-      "considered": 656
+      "checked": 34,
+      "considered": 736
     },
     "phone-rejected": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The screen the phone's `They do not match` leaves behind — Ray's nightly `.8` walk in the test VM, defect 1. Measured in one run on 2026-09-20: 104 of 566 across both themes, against a bare shell of 92 of 562 in the same run. `considered` is the absolute count and it is the number that bites here: 566 against the shell's 562 is a margin of 4, outside the three-node tolerance, so a driver that never reached this state fails check 9 — which is why no `cannotBite` declaration is needed and why check 9z passes with this row in. `checked` is the surface's OWN contribution, 12, on the same footing as the three rows below it: the shell's 92 measurable nodes are counted on every surface, and holding this figure absolute would turn any future edit to the sheet's shared markup into a red run on this one surface alone. The screen carries one heading, one sentence and one control; `tests/phone.js` check 9f measures that sentence itself in both themes (5.78:1 dark, 6.38:1 light at 16px) rather than leaving it to the walk's node count.",
-      "checked": 110,
-      "considered": 648
+      "checked": 16,
+      "considered": 728
     },
     "phone-tailscale-ready": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The ready screen with an account known and a phone that is registered and switched off — the state this Mac was actually in on 2026-09-19. 24 measured of 570 across both themes: the tailnet name in monospace, the sentence naming the provider and login name, the exposure note, the phone-watch line and the one control. 570 against the shell's 506 is a margin of 64, far outside the three-node tolerance, so the floor bites without a `cannotBite` declaration. `checked` fell by 2 under CEO §61 — the `Pick a different way` beside `Set my phone up`, in both themes — which leaves `Set my phone up` and the account line it sits under.",
-      "checked": 118,
-      "considered": 654
+      "checked": 24,
+      "considered": 734
     },
     "phone-connect-setup": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Measured in both themes with #phone-connect and the state-specific control visible. The bare shell is 94 checked / 580 considered; this floor must reject it under unchanged tolerance 3.",
-      "checked": 118,
-      "considered": 646
+      "checked": 24,
+      "considered": 726
     },
     "phone-connect-pairing": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Measured in both themes with #phone-connect and the state-specific control visible. The bare shell is 94 checked / 580 considered; this floor must reject it under unchanged tolerance 3.",
-      "checked": 130,
-      "considered": 660
+      "checked": 36,
+      "considered": 740
     },
     "phone-connect-recovery": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "Measured in both themes with #phone-connect and the state-specific control visible. The bare shell is 94 checked / 580 considered; this floor must reject it under unchanged tolerance 3.",
-      "checked": 124,
-      "considered": 658
+      "checked": 30,
+      "considered": 738
     },
     "phone-awaiting-mac": {
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "The card a phone reaches, waiting for the press on this Mac (Sage's pairing review F1): the six words derived over the key that phone registered, and They match / They do not match. Set from the run that opened it; its considered margin over the shell (584) is 18, outside the three-node tolerance, so it bites without a cannotBite entry.",
-      "checked": 114,
-      "considered": 660
+      "checked": 20,
+      "considered": 740
     },
     "quota-offer": {
-      "checked": 202,
-      "considered": 700,
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
+      "checked": 116,
+      "considered": 804,
       "//": "Measured across both themes with the quota panel and state-specific control visible; unchanged three-node tolerance rejects the bare shell."
     },
     "quota-approved": {
-      "checked": 204,
-      "considered": 702,
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
+      "checked": 118,
+      "considered": 806,
       "//": "Measured across both themes with the quota panel and state-specific control visible; unchanged three-node tolerance rejects the bare shell."
     },
     "quota-uncertain": {
-      "checked": 202,
-      "considered": 700,
+      "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
+      "checked": 116,
+      "considered": 804,
       "//": "Measured across both themes with the quota panel and state-specific control visible; unchanged three-node tolerance rejects the bare shell."
     },
     "quota-work-status": {

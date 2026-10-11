@@ -4150,6 +4150,16 @@ module.exports = [
       "and hidden — no chip, no pane, no way to see the work (esc-20260918T114550Z-64ae379a).",
   },
   {
+    "s": "waiting to start",
+    "c": "FRAGMENT",
+    "why":
+      "The tail of the work chip's own count for work held until a sign-in or the work " +
+      "connection comes back — '2 assignments waiting to start' (nightly 48's walk, D26) — " +
+      "classified beside `waiting for the screen` above and for the same reason: it never " +
+      "renders alone, and the count IS the affordance, the chip opening the pane the " +
+      "assignments live in. The hold's own notice says what ends it.",
+  },
+  {
     "s": "Waiting on you:",
     "c": "FRAGMENT",
     "why":
@@ -5418,12 +5428,15 @@ module.exports = [
   {"s": "Left out, because anyone can read GitHub issues:", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The start of the left-out line under the sheet, before the counted kinds."},
   {"s": "Open issue #", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The sent card's link, before the issue number; the link is the control."},
   {"s": "Stands in for “", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The start of the stand-in tooltip, before the words it replaced."},
+  {"s": "Stands in for", "c": "FRAGMENT", "why": "Bust a bug (nightly 48's walk, D23; bug-report.js). The start of the tooltip of a stand-in whose replaced words the app was not told, before its kind (\"a person's name\")."},
   {"s": "This Mac wouldn't open the issue. It's at github.com/WebDevBooster/richos/issues/", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). A notice when /usr/bin/open refused the issue's page, before the number; the address is the way there."},
   {"s": "Your bug report went out: issue #", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The notice when a waiting report went out by itself, before the number."},
   {"s": "filed from the RichOS reporting account, because RichOS isn't signed in to a GitHub account of yours.", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The end of Rich's line after a report went out from the reporting account."},
   {"s": "filed from your GitHub account, @", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The end of Rich's line after a report went out from the user's own account (once RichOS can sign in to GitHub), before the login."},
   {"s": "your GitHub account,", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The From line for the user's own GitHub account, before the login."},
   {"s": "the RichOS reporting account", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The From line's account and the sent card's \"filed from\"."},
+  {"s": "a RichOS window", "c": "FRAGMENT", "why": "Bust a bug (review rv-20261010T081721Z-66ba5386-a4d1 finding 2; bug-report.js openWindow). Where the user was, inside Rich's question, and the report's Where, for a dialog on screen that names no title."},
+  {"s": "the RichOS window titled", "c": "FRAGMENT", "why": "Bust a bug (review rv-20261010T081721Z-66ba5386-a4d1 finding 2; bug-report.js openWindow). The report's Where for a dialog on screen, before its title."},
   {"s": "a RichOS screen", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The report's Where for a screen Bust a bug does not name, inside \"<place>. It was on screen when the report was started.\""},
   {"s": "a company's page", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). Where the user was, inside Rich's question."},
   {"s": "a company's page, with its conversations", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The report's Where for a company's page."},
@@ -5488,7 +5501,6 @@ module.exports = [
   {"s": "I've checked the bug report you told me about earlier.", "c": "FRAGMENT", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The start of Rich's line in the Rich panel when he checked a report kept before a quit or a reload, before \"Here's the report as I'd file it…\"."},
   {"s": "Canceled. Nothing was sent, and it's no longer saved on this Mac.", "c": "INFORMATIONAL", "why": "Bust a bug (round 21, CEO §115; bug-report.js). Rich's line after Cancel report on a report he could not check yet."},
   {"s": "I couldn't take the report off this Mac, so it's still saved here. Press Cancel report to try again.", "c": "ACTIONABLE", "control": "#bug-unchecked-cancel", "fixture": null, "why": "Bust a bug (round 21, CEO §115; bug-report.js). Cancel report on a report Rich could not check yet failed to take it off this Mac (bug_report_take_unchecked's Err in src-tauri/src/bug_report.rs, and the window's own line); Cancel report is offered again."},
-  {"s": "Rich checked your bug report. It's waiting for you to send it.", "c": "INFORMATIONAL", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The notice when Rich checked a report whose conversation is not on screen; its card is there."},
   {"s": "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers, and show it to you here.", "c": "INFORMATIONAL", "why": "Bust a bug (round 21, CEO §115; bug-report.js). The notice when the Rich panel is closed while its report waits for Rich's check."},
   {"s": "nothing was sent", "c": "NOT-RENDERED", "why": "Bust a bug (round 21, CEO §115; bug-report.js). bug_report_send's Err for an attempt that returned nothing, which Outbox::send never does; the window draws its own line on any Err."},
   {"s": "Rich is checking your changes…", "c": "INFORMATIONAL", "why": "Bust a bug (round 21, CEO §115; bug-report.js). While Send is held for Rich's check of words the user changed by hand (review rv-20261009T174727Z-3007e320-578a finding 1): Rich's working line, and the card's badge meanwhile."},

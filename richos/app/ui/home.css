@@ -1284,8 +1284,12 @@ body.home-open {
 .home-prefs {
   position: fixed;
   inset: 0;
-  /* Above the settings menu (300), because it is what that menu opened. */
-  z-index: 340;
+  /* BELOW SETTINGS (300), like every overlay the button sits above (review
+     rv-20261010T081721Z-66ba5386-a4d1 finding 2: at 340 its scrim covered Settings, and a press
+     there closed this panel instead of opening the menu). Above the home screen (150) and the
+     held opening screen (200); below the Bust a bug panel raised over them (250), which
+     bug-report.js raises over this panel too, so a report started from Settings here is seen. */
+  z-index: 240;
   display: flex;
   align-items: center;
   justify-content: center;

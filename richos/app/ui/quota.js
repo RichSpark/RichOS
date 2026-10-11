@@ -13,7 +13,7 @@
   const bridge = window.RichBridge;
   const sheet = document.createElement("div");
   sheet.id = "quota-sheet"; sheet.className = "overlay"; sheet.hidden = true;
-  sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("role", "dialog");
   sheet.setAttribute("aria-labelledby", "quota-title"); sheet.setAttribute("data-dismiss", "control:#quota-close");
   sheet.innerHTML = `<section class="overlay-panel quota-panel">
     <header class="quota-heading"><div><p class="quota-eyebrow">Settings · Technical view</p>
