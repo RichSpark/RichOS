@@ -8,7 +8,12 @@
 // `bug_report_*` commands (the shell's own half, and what is private, are tested in Rust:
 // crates/richos-core/tests/bug_report_tests.rs):
 //
-//   1. Bust a bug starts the exchange with Rich in the conversation on screen; no notice.
+//   0. ONE PLACE (CEO, 2026-10-10: "pressing Bust a bug always shows the bug report on top, ready
+//      to answer"). The report always lives in the Rich panel, never in the conversation: over
+//      every overlay `lib/overlays.js` finds, plus Dictation and the bare conversation, with
+//      plain typing, Talk to Rich on, and Dictation waiting for a key, it is on top with the keys in its answer box, takes typing, Enter and its talk
+//      button, Change it takes typing, and nothing goes to the conversation.
+//   1. Bust a bug starts the exchange with Rich in the Rich panel; no notice.
 //   2. The draft is shown before anything is sent: nothing reaches `bug_report_send` until Send.
 //   3. Private details are left out: the card shows stand-ins, each saying what it replaced only
 //      to the user, and the sheet that is sent carries the stand-ins and never the names.
@@ -17,7 +22,7 @@
 //      itself when the connection is back, and Rich and a notice say so.
 //   6. Change it (in place, with the privacy heads-up, and by telling Rich), Cancel, and one
 //      report at a time.
-//   7. Where a window covers the conversation, the exchange happens in the Rich panel beside it.
+//   7. Over a window, the report is in the Rich panel beside it and the window stays open.
 //   8. Both themes: every word on the card and in the panel meets WCAG AA and the 16px floor,
 //      and every indicator 3:1, computed in WebKit (the "changing" and "canceling" states too).
 //   9. The second review's cases (rv-20261009T102303Z-1c3dda1d-4c78, on 1c3dda1dc), each red
@@ -41,20 +46,53 @@
 //      wait on this Mac, unsent, when Claude can't check them. Whether a sheet may go is the
 //      shell's decision (`richos_core::bug_report::decide`, tested in Rust); `mock.js` decides it
 //      the same way and `filed()` is what actually went out.
-//  14. The review of 665df1bb3 (rv-20261009T223503Z-665df1bb-17bf), each red there: Bust a bug
-//      pressed again over Corrections shows the report already in the conversation, on top and
-//      answerable; and the heads-up reads a line break typed in a change the way Send does, so a
-//      name on two lines is named. `mock.js` matches a name across any whitespace, as the core does.
+//  14. The review of 665df1bb3 (rv-20261009T223503Z-665df1bb-17bf), red there: the heads-up
+//      reads a line break typed in a change the way Send does, so a name on two lines is named.
+//      `mock.js` matches a name across any whitespace, as the core does. (Its other case, Bust a
+//      bug pressed again over Corrections, cannot happen since item 20.)
 //  15. The review of b3b5c573d (rv-20261009T225657Z-b3b5c573-96c0), each red there: what Send reads
 //      is what the card shows when a step holds a nested list, and a rich-text paste (a nested
 //      list, a table, styled words) comes in as plain text. `mock.js` writes steps from
 //      `preset.bugSteps`.
+//  16. The review of ec2349eee (rv-20261010T121456Z-ec2349ee-5ac3), finding 2, red on 26a0213b5:
+//      a new report started over Dictation, opened from Settings for the first time, put the Rich
+//      panel under Dictation's sheet. The panel is the app's top layer now (one rule in
+//      `style.css`), checked over every overlay `lib/overlays.js` derives from the shipped CSS.
+//  17. The reviews of 4cc6e34db (rv-20261010T150403Z-4cc6e34d-61db, rv-20261010T150420Z-4cc6e34d-84f1):
+//      Talk to Rich turned on before Bust a bug. Since the one-place design (item 0) the report
+//      is in the panel then too, voice mode goes off, and the panel's talk button takes the answer.
+//  18. The reviews of cac278721 (rv-20261010T153832Z-cac27872-e986, rv-20261010T153823Z-cac27872-1b7a),
+//      each red there: a report in the Rich panel takes the input alone. It ends Dictation's
+//      "Press a different key" through its own Cancel (the tool's key tap disarmed with it) and
+//      turns conversation voice mode off through its own off path; the panel's talk button is
+//      how the user speaks to it.
+//  19. The reviews of f29db7082 (rv-20261010T180327Z-f29db708-24e0, rv-20261010T180313Z-f29db708-733e),
+//      each red there: the panel's microphone is on only while the report waits for the user's
+//      words, so while Rich checks it is stopped first and only then is the hold released (read
+//      from the order of `stop_voice_capture` and `bug_report_voice`, as the mock does not run the
+//      shell's submission). Stand-ins in a change are marked and counted in Rust
+//      (`stand_ins_in_a_change_are_marked_and_counted_as_in_the_first_draft`).
+//  20. The reviews of fe4cd6b14 (rv-20261010T183313Z-fe4cd6b1-1e66, rv-20261010T183337Z-fe4cd6b1-ce45)
+//      and the CEO (2026-10-10), each red there: every stand-in in the card's final words is
+//      marked and counted, whoever wrote it; a microphone start that waited for a stop runs only
+//      if the panel's talk is still on; and while a report is open, from the press until it is
+//      sent, canceled or its panel closed, Bust a bug in the Settings menu is disabled, so a press
+//      is always a first press.
+//  21. Nightly 49's walk (docs/verification/2026-10-10-nightly-49-candidate-walk.md), D28, red on
+//      13aa9bc0f: while a report is open in the Rich panel, nothing moves focus to the
+//      conversation's message box. `mock.js` holds "Not now" with `onboardingDeclineHold` until
+//      `__RICHOS_MOCK__.releaseDecline()`, so it finishes while the panel is open, as on the guest.
+//      D29, red on 13aa9bc0f: after Change it and Done with the button row floating over a long
+//      report, the row is a new box (the shipped WebKit painted the refilled old one only where
+//      Done had been), and all three buttons are drawn.
 "use strict";
 
 const path = require("path");
 const fs = require("fs");
 const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled, shellSettled, openThread, HOLD_CURTAIN } = require("./lib/harness");
 const contrast = require("./lib/contrast");
+const coverings = require("./lib/overlays");
+const PNG = require("./lib/png");
 
 const PRIVATE = ["Acme deal", "Northwind Traders", "/Users/you/Projects/northwind/notes.txt"];
 const ANSWER =
@@ -89,13 +127,13 @@ async function main() {
     await page.click("#bug-btn");
   }
   async function answer(page, text) {
-    await page.fill("#input", text);
+    await page.fill("#bugdock-input", text);
     await page.keyboard.press("Enter");
     await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
   }
   /// Rich's last words in the exchange: his line(s), without the speaker label.
   const lastSaid = (page, scope) =>
-    page.locator((scope || "#bug-flows") + " .bug-rich").last().locator(".tl-prose").allInnerTexts().then((t) => t.join("\n"));
+    page.locator((scope || "#bugdock-msgs") + " .bug-rich").last().locator(".tl-prose").allInnerTexts().then((t) => t.join("\n"));
   const calls = (page, cmd) => page.evaluate((c) => window.__RICHOS_MOCK_BUG__.calls.filter((x) => x.cmd === c), cmd);
   /// Every sheet that actually went out (not every one Send was pressed for: the shell decides).
   const filed = (page) => page.evaluate(() => window.__RICHOS_MOCK_BUG__.filed());
@@ -107,23 +145,26 @@ async function main() {
     await page.screenshot({ path: path.join(SHOTS, name + ".png") });
   }
 
-  await run.check("Bust a bug starts the exchange with Rich in the conversation on screen, not a notice", async () => {
+  await run.check("Bust a bug starts the exchange with Rich in the Rich panel, not a notice, and nothing of it in the conversation", async () => {
     const page = await open("dark");
     const before = await page.locator("#messages .tl-user").count();
     await bustABug(page);
-    await page.waitForSelector("#bug-flows .bugflow .bug-divider");
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    assertEqual(await page.locator("#conversation .bug-rich, #conversation .bugcard").count(), 0, "the report is in the conversation");
+    await page.waitForFunction(() => document.activeElement === document.getElementById("bugdock-input"));
+    assertEqual(await page.locator("#bugdock-where").innerText(), "· Acme deal", "panel header");
     assert(await page.isHidden("#set-menu"), "Settings stayed open");
     assertEqual(await page.locator("#bug-toast:visible").count(), 0, "the old notice is still what the button does");
-    const asked = await page.locator("#bug-flows .bug-rich .tl-prose").first().innerText();
+    const asked = await page.locator("#bugdock-msgs .bug-rich .tl-prose").first().innerText();
     assert(asked.startsWith("What went wrong? Tell me in your own words, typed or out loud"), asked);
     assert(asked.includes("I've noted that you were on the Acme deal conversation."), asked);
-    assertEqual(await page.getAttribute("#input", "placeholder"), "Tell Rich what went wrong…", "the composer does not say what it is waiting for");
+    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Tell Rich what went wrong…", "the composer does not say what it is waiting for");
     assert(await page.isVisible("#bug-never-mind"), "no way out before answering");
     await shot(page, "ask-dark");
     // Never mind ends it with nothing written up, and the composer is Rich's again.
     await page.click("#bug-never-mind");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text('No problem. Nothing was written up or sent.')");
-    assertEqual(await page.getAttribute("#input", "placeholder"), "Talk to Rich…", "the composer still belongs to the report");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('No problem. Nothing was written up or sent.')");
+    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Talk to Rich…", "the composer still belongs to the report");
     assertEqual(await page.locator("#messages .tl-user").count(), before, "a message went to Rich's conversation");
     await page.close();
     return asked;
@@ -133,13 +174,13 @@ async function main() {
     const page = await open("dark");
     const before = await page.locator("#messages .tl-user").count();
     await bustABug(page);
-    await page.fill("#input", ANSWER);
+    await page.fill("#bugdock-input", ANSWER);
     await page.keyboard.press("Enter");
     await page.waitForSelector(".bug-working:has-text('Rich is checking…')");
     await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
     // The words were the report's: in the exchange, and not a message to Rich's conversation.
     assertEqual(await page.locator("#messages .tl-user").count(), before, "the answer went to Rich's conversation");
-    assert((await page.locator("#bug-flows .bug-user").innerText()).includes("Acme deal chat"), "the answer is not shown as the user's");
+    assert((await page.locator("#bugdock-msgs .bug-user").innerText()).includes("Acme deal chat"), "the answer is not shown as the user's");
     assertEqual((await calls(page, "bug_report_write")).length, 1, "Rich was not asked to write it up");
     assertEqual((await calls(page, "bug_report_send")).length, 0, "something was sent before Send");
     assert((await page.locator(".bug-turn .tl-duration-label").innerText()).startsWith("Worked for "), "no Worked for line");
@@ -171,6 +212,104 @@ async function main() {
     return `${subs.length} stand-ins; tooltip: ${tip}`;
   });
 
+  // ---- nightly 48's walk, D23 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+  await run.check("stand-ins Rich wrote himself, with nothing listed beside them, are marked and counted, and none is called nothing private", async () => {
+    // D23: on d0d06501c a report carrying [a person], [a company], [a conversation] and [a file
+    // on this Mac] said "Nothing private was in it, so nothing was left out." and marked none of
+    // them, because nothing told the card what they replaced. The shell now sends each one with
+    // its kind and no replaced words (`Segment::unaccounted`); `mock.js` does the same with
+    // `bugRichWrote`.
+    const page = await open("light", {
+      bugRichWrote: "In [a conversation], the user made the text bigger and the names got cut off. They say [a person] at [a company] sees the same thing, and their notes in [a file on this Mac] now look empty.",
+    });
+    await bustABug(page);
+    await answer(page, "The names in the sidebar get cut off when I make the text bigger.");
+    const subs = await page.locator(".bugcard .bug-doc .bug-sub").evaluateAll((n) => n.map((s) => [s.textContent, s.dataset.kind, s.tabIndex]));
+    assertEqual(subs.map(([t]) => t), ["[a conversation]", "[a person]", "[a company]", "[a file on this Mac]"], "a stand-in on the card is not marked: " + JSON.stringify(subs));
+    assert(subs.every(([, , tab]) => tab === 0), "a stand-in cannot be reached with Tab: " + JSON.stringify(subs));
+    const line = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(
+      line,
+      "Left out, because anyone can read GitHub issues: one conversation name, one person's name, one company name and one file path. The underlined words stand in for them; point at one to see what it replaced.",
+      "the line under the card"
+    );
+    // Pointing at one says what kind of detail it leaves out, and claims no words it was not given.
+    await page.hover(".bugcard .bug-sub >> nth=1");
+    await page.waitForSelector("#bug-subtip.is-shown");
+    const tip = await page.locator("#bug-subtip").innerText();
+    // Its kind alone: the card does not know who wrote a stand-in it has no words for (review
+    // rv-20261010T183313Z-fe4cd6b1-1e66: the user can type one too).
+    assertEqual(tip, "Stands in for a person's name.", "the stand-in's tip");
+    await page.mouse.move(5, 5);
+    await page.focus(".bugcard .bug-sub >> nth=3");
+    await page.waitForSelector("#bug-subtip.is-shown");
+    assertEqual(await page.locator("#bug-subtip").innerText(), "Stands in for a file path.", "the tip on Tab");
+    await page.close();
+    return `${subs.length} marked; line: ${line}; tip: ${tip}`;
+  });
+
+  // ---- the review of fe4cd6b14 (rv-20261010T183313Z-fe4cd6b1-1e66), finding 1 ----
+  await run.check("every stand-in in the card's final words is marked and counted, whoever wrote it: edited from another, typed by the user, in Rich's change and in a heading", async () => {
+    // Fixture `edited-stand-in.js`: on fe4cd6b14, Change it, "[a person]" edited into "[a company]",
+    // Done, and the card said "Nothing private was in it, so nothing was left out." under it. The
+    // marking came from where a stand-in was written; now it is read from the card's words.
+    const page = await open("dark", {
+      bugRichPrivate: [{ text: "Jane Doe", kind: "person_name" }],
+      bugRichSection: { heading: "Seen at [a company]", text: "It started after the last update." },
+    });
+    await bustABug(page);
+    await answer(page, "The names on the left get cut off. Jane Doe saw it first.");
+    const marks = () => page.locator(".bugcard .bug-doc .bug-sub").evaluateAll((n) => n.map((s) => [s.textContent, s.dataset.kind, s.dataset.was == null ? null : s.dataset.was]));
+    const before = await marks();
+    assertEqual(JSON.stringify(before), JSON.stringify([["[a person]", "person_name", "Jane Doe"], ["[a company]", "company_name", null]]), "the first draft's stand-ins (the heading's included)");
+    const lineBefore = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(lineBefore, "Left out, because anyone can read GitHub issues: one person's name and one company name. The underlined words stand in for them; point at one to see what it replaced.", "the line under the first draft");
+    // Change it: the caret is at the end of the title; the user types a stand-in there, then
+    // edits the words inside "[a person]" into "[a company]".
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    await page.keyboard.type(" in [a folder]");
+    await page.evaluate(() => {
+      const sub = [...document.querySelectorAll(".bugcard .bug-doc .bug-sub")].find((s) => s.dataset.was === "Jane Doe");
+      const words = sub.firstChild;
+      sub.closest("[contenteditable]").focus();
+      const r = document.createRange();
+      r.setStart(words, 3);
+      r.setEnd(words, words.length - 1);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    });
+    await page.keyboard.type("company");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    assert((await page.locator(".bugcard .bug-sec p").first().innerText()).includes("[a company] saw it first"), "the edit did not land inside the stand-in");
+    const done = await marks();
+    assertEqual(
+      JSON.stringify(done),
+      JSON.stringify([["[a folder]", "folder_name", null], ["[a company]", "company_name", null], ["[a company]", "company_name", null]]),
+      "after Done: the typed one and the edited one marked by their kind, the edited one no longer claiming Jane Doe"
+    );
+    const lineDone = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(lineDone, "Left out, because anyone can read GitHub issues: one folder name and two company names. The underlined words stand in for them; point at one to see what it replaced.", "the line after Done");
+    // Pointing at the edited one says its kind alone.
+    await page.hover(".bugcard .bug-sec p .bug-sub");
+    await page.waitForSelector("#bug-subtip.is-shown");
+    assertEqual(await page.locator("#bug-subtip").innerText(), "Stands in for a company name.", "the edited stand-in's tip");
+    await page.mouse.move(5, 5);
+    // Told to Rich: his change carries a stand-in.
+    await page.fill("#bugdock-input", "Also say [a private word] is cut off as well");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bug-sec p.is-added");
+    const added = await page.locator(".bug-sec p.is-added .bug-sub").evaluateAll((n) => n.map((s) => [s.textContent, s.dataset.kind]));
+    assertEqual(JSON.stringify(added), JSON.stringify([["[a private word]", "private_word"]]), "the stand-in in Rich's change");
+    const line = await page.locator(".bugcard .lo-text").innerText();
+    assertEqual(line, "Left out, because anyone can read GitHub issues: one folder name, two company names and one private word. The underlined words stand in for them; point at one to see what it replaced.", "the line after Rich's change");
+    assertEqual((await marks()).length, 4, "stand-ins marked on the card");
+    await page.close();
+    return line;
+  });
+
   await run.check("Send files it, from the RichOS reporting account, with the words the card showed", async () => {
     const page = await open("dark");
     await bustABug(page);
@@ -189,7 +328,7 @@ async function main() {
     // The link opens the issue by its number, never by an address the page passes.
     await page.click(".bug-sentrow .bug-link");
     assertEqual((await calls(page, "bug_report_open_issue"))[0].number, 412, "Open issue");
-    assertEqual(await page.getAttribute("#input", "placeholder"), "Talk to Rich…", "the composer still belongs to the report");
+    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Talk to Rich…", "the composer still belongs to the report");
     await shot(page, "sent-dark");
     await page.close();
     return said.split("\n")[0];
@@ -254,19 +393,16 @@ async function main() {
     await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
     assert(await page.isVisible(".bug-warn"), "the heads-up went away while the private word is still there");
     // Told to Rich: he adds it to What happened and says so.
-    await page.fill("#input", "Also say it happens in the light theme too");
+    await page.fill("#bugdock-input", "Also say it happens in the light theme too");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".bug-sec p.is-added");
     assertEqual(await page.locator(".bug-sec p.is-added").innerText(), "It happens in the light theme too.", "the change");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text('Added that to What happened, above. It still waits for you to send it.')");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('Added that to What happened, above. It still waits for you to send it.')");
     await shot(page, "changed-dark");
-    // One report at a time: Bust a bug again goes back to this one.
-    await bustABug(page);
-    assertEqual(await page.locator("#bug-flows .bugflow").count(), 1, "a second report was started");
     await page.click("#bug-cancel");
     await page.waitForSelector(".bugcard.is-canceled .bug-pill:has-text('Canceled · nothing sent')");
     assert((await page.locator(".bug-ctitle").innerText()).includes("for Acme deal"), "the folded card does not show its title");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text('Canceled. Nothing was sent.')");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('Canceled. Nothing was sent.')");
     assertEqual((await calls(page, "bug_report_send")).length, 0, "a canceled report was sent");
     await shot(page, "canceled-dark");
     await page.close();
@@ -314,7 +450,7 @@ async function main() {
   }
 
   // ---- the second review's cases (rv-20261009T102303Z-1c3dda1d-4c78, on 1c3dda1dc) ----
-  const prose = (page) => page.locator("#bug-flows .bug-rich .tl-prose").allInnerTexts().then((t) => t.join("\n"));
+  const prose = (page) => page.locator("#bugdock-msgs .bug-rich .tl-prose").allInnerTexts().then((t) => t.join("\n"));
 
   await run.check("a private name Rich found stays left out through every change, and the heads-up names it", async () => {
     // Finding 4: on the tip Rich's own private words applied to the first draft only.
@@ -322,7 +458,7 @@ async function main() {
     await bustABug(page);
     await answer(page, "The names on the left get cut off. Jane Doe saw it first.");
     assert(!(await page.locator(".bugcard .bug-doc").innerText()).includes("Jane Doe"), "Rich's private name is on the first draft");
-    await page.fill("#input", "Also say Jane Doe saw it in light mode too");
+    await page.fill("#bugdock-input", "Also say Jane Doe saw it in light mode too");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".bug-sec p.is-added");
     const asked = (await calls(page, "bug_report_change"))[0];
@@ -375,7 +511,7 @@ async function main() {
     // name out (review rv-20261009T174727Z-3007e320-578a finding 1: on 3007e3200 it was filed as
     // typed). The card comes back as it would go, unsent.
     await page.click("#bug-send");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text('I checked it again before sending')");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('I checked it again before sending')");
     assertEqual((await filed(page)).length, 0, "the name went out before Rich checked it");
     assert(!(await page.locator(".bugcard .bug-doc").innerText()).includes("Jane Doe"), "the card shown again still has the name");
     await page.click("#bug-send");
@@ -430,39 +566,50 @@ async function main() {
     return warn;
   });
 
-  await run.check("leaving the report's conversation gives the voice back to Rich, and coming back gives it to the report", async () => {
+  await run.check("the shell holds speech back only while the panel's talk button is on: Talk to Rich turned on again is Rich's conversation", async () => {
     // Finding 3, fixture `voice-routing.js`: on the tip the shell's hold (`bug_report_voice`)
-    // stayed on after another conversation opened, so the shell dropped every spoken turn there
-    // while the window drew it as sent. The hold now follows the same conditions as the report's
-    // own taking of a transcript, on every navigation.
+    // stayed on while what was said was meant for Rich, so the shell dropped every spoken turn
+    // while the window drew it as sent. The hold and the report's taking of a transcript follow
+    // ONE condition (`takesSpeech`): a report waiting on words with the panel's talk button on.
     const page = await open("dark", { bugVoice: true });
+    const lastHold = () => page.evaluate(() => {
+      const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+      return v.length ? v[v.length - 1].on : null;
+    });
     const holding = (on) => page.waitForFunction((want) => {
       const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
       return v.length > 0 && v[v.length - 1].on === want;
     }, on);
     const said = (text) => page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), text);
     await bustABug(page);
-    await page.waitForSelector("#bug-flows .bugflow .bug-divider");
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    // Talk to Rich turned on again while the report is open: what is said is Rich's.
     await page.click("#talk-toggle");
+    await page.waitForSelector("#voice-panel:not([hidden])");
+    assertEqual(await lastHold(), false, "the shell holds speech back with only Talk to Rich on");
+    await said("Is the hiring plan ready?");
+    await page.waitForSelector("#messages .tl-user:has-text('Is the hiring plan ready?')");
+    assertEqual(await page.locator("#bugdock .bug-user").count(), 0, "the report took words said to Rich");
+    // The panel's talk button: voice mode goes off by its own path, and the report takes what is said.
+    await page.click("#bugdock-talk");
     await holding(true);
-    // Said in the report's conversation: the report's words, not a message to Rich.
+    assertEqual(await page.getAttribute("#talk-toggle", "aria-pressed"), "false", "Talk to Rich still on beside the panel's talk button");
     const before = await page.locator("#messages .tl-user").count();
     await said("The names on the left get cut off when the text is bigger.");
     await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
     assertEqual(await page.locator("#messages .tl-user").count(), before, "the report's answer went to Rich's conversation");
-    await holding(true);
-    // Another conversation: the shell stops holding, so what is said there is a turn for Rich.
-    await openThread(page, "hiring");
+    // The microphone went off while Rich checked the answer (review rv-20261010T180327Z-f29db708-24e0):
+    // the talk button turns it on again for a spoken change.
+    assertEqual(await page.getAttribute("#bugdock-talk", "aria-pressed"), "false", "the panel's talk button after Rich checked");
     await holding(false);
-    await said("Is the hiring plan ready?");
-    await page.waitForSelector("#messages .tl-user:has-text('Is the hiring plan ready?')");
-    assertEqual(await page.locator("#bug-flows .bug-user").count(), 1, "the report took words said in another conversation");
-    // Back to the report's conversation: the report takes what is said again.
-    await openThread(page, "acme");
+    await page.click("#bugdock-talk");
     await holding(true);
     await said("Also say it happens in the light theme too");
     await page.waitForSelector(".bug-sec p.is-added");
     assertEqual(await page.locator(".bug-sec p.is-added").innerText(), "It happens in the light theme too.", "the spoken change");
+    // Off again: the hold goes with it.
+    await page.click("#bugdock-talk");
+    await holding(false);
     const holds = (await calls(page, "bug_report_voice")).map((c) => c.on);
     await page.close();
     return "bug_report_voice: " + holds.join(" → ");
@@ -498,7 +645,7 @@ async function main() {
     // the address out; the card comes back as it would go, and goes on the next press.
     await page.click("#bug-send");
     assert(JSON.stringify((await calls(page, "bug_report_send"))[0].sheet).includes("alice@büro.de"), "Send was not asked with the words as the user wrote them");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text('I checked it again before sending')");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('I checked it again before sending')");
     assertEqual((await filed(page)).length, 0, "the address went out before Rich checked the changed words");
     await page.click("#bug-send");
     await page.waitForSelector(".bugcard.is-sent");
@@ -529,9 +676,9 @@ async function main() {
     const SAID = "Jane Doe at SecretCo saw the window freeze while opening the plan.";
     const page = await open("dark", { bugClaude: "down", bugRichPrivate: [{ text: "Jane Doe", kind: "person_name" }, { text: "SecretCo", kind: "company_name" }] });
     await bustABug(page);
-    await page.fill("#input", SAID);
+    await page.fill("#bugdock-input", SAID);
     await page.keyboard.press("Enter");
-    await page.waitForSelector(`#bug-flows .bug-rich:has-text("${NOT_CHECKED}")`);
+    await page.waitForSelector(`#bugdock-msgs .bug-rich:has-text("${NOT_CHECKED}")`);
     const said = await lastSaid(page);
     assertEqual(await page.locator(".bugcard").count(), 0, "a report Rich did not check was offered");
     for (const id of ["#bug-send", "#bug-change"]) assertEqual(await page.locator(id).count(), 0, id + " is offered");
@@ -539,7 +686,7 @@ async function main() {
     assertEqual(await kept(page), 1, "the report is not kept on this Mac");
     assertEqual((await calls(page, "bug_report_send")).length, 0, "something was sent");
     assert(await page.isVisible("#bug-unchecked-cancel"), "no way to cancel the report that waits");
-    assertEqual(await page.getAttribute("#input", "placeholder"), "Talk to Rich…", "the composer still waits for the report");
+    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Talk to Rich…", "the composer still waits for the report");
     await shot(page, "unchecked-dark");
     // Claude answers (twice over, as the shell's loop says it until the window takes it): Rich
     // checks it, and ONE card comes, unsent and without the names.
@@ -555,9 +702,9 @@ async function main() {
     assertEqual((await calls(page, "bug_report_send")).length, 0, "it was sent before the user pressed Send");
     // A change while Claude can't check it adds nothing.
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setClaude("down"));
-    await page.fill("#input", "Also say Marta saw it too");
+    await page.fill("#bugdock-input", "Also say Marta saw it too");
     await page.keyboard.press("Enter");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text(\"I couldn't change the report just now\")");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"I couldn't change the report just now\")");
     assertEqual(await page.locator(".bug-sec p.is-added").count(), 0, "a change Rich did not check was added");
     await page.close();
     return said + " / then: " + checkedLine.split(".")[0];
@@ -566,11 +713,11 @@ async function main() {
   await run.check("a report Rich could not check can be canceled, and one kept from before is shown once he checks it", async () => {
     const page = await open("dark", { bugClaude: "down" });
     await bustABug(page);
-    await page.fill("#input", "The names on the left get cut off.");
+    await page.fill("#bugdock-input", "The names on the left get cut off.");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#bug-unchecked-cancel");
     await page.click("#bug-unchecked-cancel");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text(\"Canceled. Nothing was sent, and it's no longer saved on this Mac.\")");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"Canceled. Nothing was sent, and it's no longer saved on this Mac.\")");
     assertEqual(await kept(page), 0, "the canceled report is still kept");
     // Claude answering afterwards brings nothing back.
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.claudeAnswers());
@@ -614,7 +761,7 @@ async function main() {
     const page = await open("dark", { bugChangeHold: true });
     await bustABug(page);
     await answer(page, "Not now fades a suggestion but leaves it.");
-    await page.fill("#input", "Also say it happens in the light theme too");
+    await page.fill("#bugdock-input", "Also say it happens in the light theme too");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".bug-working:has-text('Rich is changing the report…')");
     await page.waitForSelector(".bugcard .bug-pill:has-text('Changing it…')");
@@ -642,7 +789,7 @@ async function main() {
     await page.click("#bug-send");
     await page.waitForSelector(".bugcard.is-queued");
     await page.click("#bug-cancel");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text(\"I couldn't cancel the report\")");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"I couldn't cancel the report\")");
     await page.waitForSelector(".bugcard.is-queued .bug-pill:has-text('Waiting to send · saved on this Mac')");
     assert(!(await prose(page)).includes("Nothing was sent"), "it said nothing was sent: " + (await prose(page)));
     assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "the report is no longer waiting");
@@ -664,7 +811,7 @@ async function main() {
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.retryGoesOut());
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseCancel());
     await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Sent · #412')");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text('It had already gone out')");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('It had already gone out')");
     const all = await prose(page);
     assert(!all.includes("Nothing was sent"), "it said nothing was sent: " + all);
     assertEqual(await page.locator(".bugcard.is-canceled").count(), 0, "the card says canceled");
@@ -684,7 +831,7 @@ async function main() {
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.retryGoesOut());
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseCancel());
     await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Sent · #412')");
-    await page.waitForSelector("#bug-flows .bug-rich:has-text(\"so it can't be changed\")");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"so it can't be changed\")");
     assertEqual(await page.locator(".bugcard.is-editing").count(), 0, "a sent report was opened for changes");
     const said = await lastSaid(page);
     await page.close();
@@ -707,7 +854,7 @@ async function main() {
     return content.length + " characters of the screen, e.g. " + JSON.stringify(content.slice(0, 80));
   });
 
-  await run.check("where a window covers the conversation, the exchange happens in the Rich panel beside it", async () => {
+  await run.check("over a window, the report is in the Rich panel beside it, and the window stays open", async () => {
     const page = await open("dark");
     await page.click("#nav-corrections");
     await page.waitForSelector("#corrections-overlay:not([hidden])");
@@ -715,7 +862,7 @@ async function main() {
     await page.waitForSelector("#bugdock:not([hidden])");
     assertEqual(await page.locator("#bugdock-where").innerText(), "· Corrections", "panel header");
     assert(await page.isVisible("#corrections-overlay"), "the window did not stay open");
-    assertEqual(await page.locator("#bug-flows .bugflow").count(), 0, "it also started in the conversation");
+    assertEqual(await page.locator("#conversation .bug-rich").count(), 0, "it also started in the conversation");
     const asked = await page.locator("#bugdock-msgs .bug-rich .tl-prose").first().innerText();
     assert(asked.includes("I've noted that you were in Corrections, and it stays open beside us."), asked);
     // Side by side: the window moved left of the panel.
@@ -788,15 +935,15 @@ async function main() {
     await run.check(`Bust a bug on ${name}: the report is on top of it and can be answered at once`, async () => {
       const page = await openCovered(where);
       await bustABug(page);
-      await page.waitForSelector("#bug-flows .bug-rich, #bugdock-msgs .bug-rich", { state: "attached" });
+      await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
       // The report's own entrance only: a HELD opening screen's animations are paused, and their
       // `finished` never comes, so the suite-wide `settle` would wait on it forever.
       await page.evaluate(() => Promise.all(document.getAnimations()
-        .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#bugdock, #bug-flows"))
+        .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#bugdock"))
         .map((a) => a.finished.catch(() => null))));
       const top = await page.evaluate(() => {
-        const q = document.querySelector("#bugdock-msgs .bug-rich .tl-prose, #bug-flows .bug-rich .tl-prose");
-        const input = q.closest("#bugdock") ? document.getElementById("bugdock-input") : document.getElementById("input");
+        const q = document.querySelector("#bugdock-msgs .bug-rich .tl-prose");
+        const input = document.getElementById("bugdock-input");
         // The curtain is `pointer-events: none` (splash.css), so hit-testing looks straight through
         // it: for the length of this read it is made hit-testable, so a curtain painted over the
         // report is what `elementFromPoint` answers rather than whatever is under both.
@@ -842,43 +989,741 @@ async function main() {
     });
   }
 
-  // ---- the review of 665df1bb3 (rv-20261009T223503Z-665df1bb-17bf) ----
-  await run.check("Bust a bug pressed again over Corrections shows the report already open in the conversation, on top and answerable", async () => {
-    // Finding 1, fixture `reopen-report.js`: on 665df1bb3 the report already in the conversation
-    // was focused UNDER Corrections (a full-window overlay at z-index 60), which stayed open, and
-    // the user pressed Bust a bug and saw Corrections.
-    const page = await open("dark");
-    await bustABug(page);
-    await page.waitForSelector("#bug-flows .bug-rich .tl-prose");
-    await page.click("#nav-corrections");
-    await page.waitForSelector("#corrections-overlay:not([hidden])");
-    await bustABug(page);
-    await page.waitForFunction(() => document.activeElement === document.getElementById("input"));
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-    const top = await page.evaluate(() => {
-      const q = document.querySelector("#bug-flows .bug-rich .tl-prose");
-      const input = document.getElementById("input");
-      const hitAt = (el) => {
-        const r = el.getBoundingClientRect();
-        const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        return h === el || el.contains(h) ? "ON-TOP" : "COVERED by " + (h ? h.tagName.toLowerCase() + (h.id ? "#" + h.id : h.className ? "." + String(h.className).split(" ")[0] : "") : "nothing");
-      };
-      return { asked: q.textContent.trim(), question: hitAt(q), input: hitAt(input) };
+  // ---- ONE PLACE: every press, over everything, in every input mode (CEO, 2026-10-10) ----
+  // His sentence is the spec: "pressing Bust a bug always shows the bug report on top, ready to
+  // answer." The report always lives in the Rich panel, so there is one case, and this check walks
+  // it over every place it can be pressed: every element a covering rule in the shipped CSS matches
+  // (`lib/overlays.js`, one made from the selector where none is in the page yet, put on screen with
+  // focus inside it, as `appearance.js` check 7c does), Dictation opened from Settings, and the bare
+  // conversation. Over each, a press (always a first one: while a report is open Bust a bug is
+  // disabled, checked below), with plain typing, with Talk to Rich on, and with Dictation waiting
+  // for a different key. In every cell: the report is in the panel and nothing of it anywhere else;
+  // what it shows and its answer box are what is painted at their places (the overlay made
+  // hit-testable for the read, so a cover that lets the pointer through still counts); the keys are
+  // in the answer box without a click; Talk to Rich and Dictation's wait are off; keys typed and
+  // Enter reach the report; the panel's talk button takes what is said; Change it takes typing in
+  // the card's title; and no message reaches the conversation. The setup clicks (Talk to Rich,
+  // Press a different key) are made with the element's own click, as they are the starting state
+  // and not what is under test; every press of Bust a bug and everything after it is a person's.
+  // Left out: the two first-run questions main.js's own QUESTION_SELECTOR finds; while one is up
+  // Settings cannot be pressed (`setup.js` check 20), so no report starts over it.
+  const FIRST_RUN_QUESTIONS = ["memory-setup", "setup-sheet"];
+  const MODES = ["typing", "Talk to Rich on", "Dictation waiting for a key"];
+  /// Put target `t` on screen with focus inside it: `{name, sel}`, `{question}` or `{error}`.
+  async function showTarget(page, t, qsel) {
+    if (t.conversation) return { name: "the conversation", sel: null };
+    if (t.dictation) {
+      if (await page.locator("#dictation-sheet:not([hidden])").count() === 0) {
+        await page.click("#set-btn");
+        await page.click("#set-dictation-open");
+        await page.waitForSelector("#dictation-sheet:not([hidden])");
+      }
+      return { name: "div#dictation-sheet (opened from Settings)", sel: "#dictation-sheet" };
+    }
+    return page.evaluate(({ sel, index, qsel, firstRun }) => {
+      let el = index >= 0 ? document.querySelectorAll(sel)[index] : null;
+      if (el && el.matches(qsel) && firstRun.includes(el.id)) return { question: el.id };
+      let made = false;
+      if (!el) {
+        const m = sel.match(/^([a-z]+)?((?:[#.][\w-]+)+)$/i);
+        if (!m) return { error: "no element matches it, and it is not a simple selector to make one from" };
+        el = document.createElement(m[1] || "div");
+        for (const part of m[2].match(/[#.][\w-]+/g)) {
+          if (part[0] === "#") el.id = part.slice(1);
+          else el.classList.add(part.slice(1));
+        }
+        document.body.appendChild(el);
+        made = true;
+      }
+      for (let n = el; n && n.nodeType === 1; n = n.parentElement) if (n.hidden) n.hidden = false;
+      if (!el.getClientRects().length || getComputedStyle(el).display === "none") el.style.display = "block";
+      const first = el.querySelector("button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])");
+      if (first) first.focus();
+      // Hit-testable from the start: a cover that lets the pointer through (the opening curtain
+      // is one, `splash.css`) is still a cover.
+      el.style.pointerEvents = "auto";
+      el.setAttribute("data-under-test", "");
+      const name = el.tagName.toLowerCase() + (el.id ? "#" + el.id : "." + String(el.className).split(" ")[0]);
+      return { name: made ? name + " (made from " + sel + ")" : name, sel: "[data-under-test]" };
+    }, { sel: t.sel, index: t.index, qsel, firstRun: FIRST_RUN_QUESTIONS });
+  }
+  /// One cell: target `t`, input `mode`. Returns a line; throws with what was wrong.
+  async function oneCell(t, mode, qsel) {
+    const page = await open("dark", { dictation: true, bugVoice: true });
+    try {
+      const before = await page.locator("#messages .tl-user").count();
+      if (mode === "Talk to Rich on") {
+        await page.evaluate(() => document.getElementById("talk-toggle").click());
+        await page.waitForSelector("#voice-panel:not([hidden])");
+      }
+      if (mode === "Dictation waiting for a key") {
+        await page.click("#set-btn");
+        await page.click("#set-dictation-open");
+        await page.waitForSelector("#dictation-sheet:not([hidden])");
+        await page.evaluate(() => document.getElementById("dict-capture").click());
+        await page.waitForSelector("#dict-capture-cancel");
+      }
+      const shown = await showTarget(page, t, qsel);
+      if (shown.question) return { skipped: "#" + shown.question };
+      if (shown.error) throw new Error(shown.error);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      await bustABug(page);
+      await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich", { state: "attached" });
+      await page.evaluate(() => Promise.all(document.getAnimations()
+        .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#bugdock"))
+        .map((a) => a.finished.catch(() => null))));
+      // `focusAnswer` puts the keys there in a zero-delay timer queued as the panel was shown; a
+      // timer queued after it has run after it, so this reads the fact, not the clock.
+      const ready = await page.evaluate(() => new Promise((r) => setTimeout(() => r(document.activeElement === document.getElementById("bugdock-input")), 0)));
+      const st = await page.evaluate(({ sel }) => {
+        const cover = sel ? document.querySelector(sel) : null;
+        const was = cover ? cover.style.pointerEvents : "";
+        if (cover) cover.style.pointerEvents = "auto";
+        const box = document.getElementById("bugdock-msgs").getBoundingClientRect();
+        const hitAt = (el) => {
+          if (!el) return "MISSING";
+          const r = el.getBoundingClientRect();
+          const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return h === el || el.contains(h) ? "ON-TOP" : "COVERED by " + (h ? h.tagName.toLowerCase() + (h.id ? "#" + h.id : "." + String(h.className).split(" ")[0]) : "nothing");
+        };
+        const shownEl = document.querySelector("#bugdock-msgs .bug-rich .tl-prose");
+        const out = {
+          shown: hitAt(shownEl),
+          input: hitAt(document.getElementById("bugdock-input")),
+          outside: [...document.querySelectorAll(".bug-rich, .bug-user, .bugcard")].filter((n) => !n.closest("#bugdock")).length,
+          reports: [...document.querySelectorAll("#bugdock-msgs .bug-rich .tl-prose")].filter((p) => p.textContent.startsWith("What went wrong?")).length,
+          capturing: !!document.getElementById("dict-capture-cancel"),
+          voice: document.getElementById("talk-toggle").getAttribute("aria-pressed"),
+        };
+        if (cover) cover.style.pointerEvents = was;
+        return out;
+      }, { sel: shown.sel });
+      const bad = [];
+      if (st.shown !== "ON-TOP") bad.push("Rich's question " + st.shown);
+      if (st.input !== "ON-TOP") bad.push("the answer box " + st.input);
+      if (!ready) bad.push("the keys are not in the answer box");
+      if (st.outside) bad.push(st.outside + " part(s) of the report outside the panel");
+      if (st.reports !== 1) bad.push(st.reports + " reports asked for");
+      if (st.capturing) bad.push("Dictation still waits for a key");
+      if (st.voice !== "false") bad.push("Talk to Rich still on");
+      if (bad.length) throw new Error(bad.join("; "));
+      // Typing, then Enter, without a click first: ready to answer.
+      const typed = "The names on the left get cut off when I make the text bigger.";
+      await page.keyboard.type(typed);
+      const value = await page.inputValue("#bugdock-input");
+      if (value !== typed) throw new Error("the keys typed reached the answer box as " + JSON.stringify(value));
+      await page.keyboard.press("Enter");
+      const added = () => page.locator("#bugdock .bug-sec p.is-added").count();
+      await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+      // The panel's talk button takes what is said.
+      await page.waitForSelector("#bugdock #bug-change", { state: "visible" });
+      const had = await added();
+      await page.click("#bugdock-talk");
+      await page.waitForSelector("#bugdock-voice:not([hidden])");
+      await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "Also say it shows in Search too");
+      await page.waitForFunction((n) => document.querySelectorAll("#bugdock .bug-sec p.is-added").length === n, had + 1);
+      await page.click("#bugdock-talk");
+      await page.waitForSelector("#bugdock-form:not([hidden])");
+      // Change it takes typing in the card.
+      await page.waitForSelector("#bugdock #bug-change", { state: "visible" });
+      await page.click("#bugdock #bug-change");
+      await page.waitForSelector("#bugdock .bugcard.is-editing");
+      await page.waitForFunction(() => document.activeElement && document.activeElement.classList.contains("bug-title"));
+      await page.keyboard.type(" (seen twice)");
+      const title = await page.locator("#bugdock .bugcard .bug-title").innerText();
+      if (!title.endsWith("(seen twice)")) throw new Error("Change it did not take typing: the title is " + JSON.stringify(title));
+      await page.click("#bugdock #bug-done");
+      await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet · changed')");
+      const after = await page.locator("#messages .tl-user").count();
+      const outside = await page.evaluate(() => [...document.querySelectorAll(".bug-rich, .bug-user, .bugcard")].filter((n) => !n.closest("#bugdock")).length);
+      if (after !== before || outside) throw new Error("the conversation got " + (after - before) + " message(s) and " + outside + " part(s) of the report");
+      return { line: "on top, ready, typed, Enter, talk, Change it" };
+    } finally {
+      await page.close();
+    }
+  }
+  await run.check("ONE PLACE: over every overlay, Dictation and the bare conversation, typing, Talk to Rich on and Dictation waiting for a key: the report is in the panel, on top, ready to answer, takes typing, Enter, its talk button and Change it, and nothing goes to the conversation", async () => {
+    const qsel = (fs.readFileSync(path.join(UI_DIR, "main.js"), "utf8").match(/^const QUESTION_SELECTOR = '([^']+)';$/m) || [])[1];
+    assert(qsel, "main.js has no `const QUESTION_SELECTOR = '...';` to read the first-run questions from");
+    const rules = coverings.coveringRules();
+    const scout = await open("dark", { dictation: true });
+    const counts = await scout.evaluate((sels) => sels.map((s) => document.querySelectorAll(s).length), rules.map((r) => r.selector));
+    await scout.close();
+    const targets = [{ conversation: true }, { dictation: true }];
+    rules.forEach((r, k) => {
+      if (counts[k] === 0) targets.push({ sel: r.selector, index: -1 });
+      for (let i = 0; i < counts[k]; i++) targets.push({ sel: r.selector, index: i });
     });
-    assert(top.asked.startsWith("What went wrong?"), "not the report's question: " + JSON.stringify(top.asked));
-    assertEqual(top.question, "ON-TOP", "Rich's question is not what is painted where it is");
-    assertEqual(top.input, "ON-TOP", "the box the answer goes in is not what is painted where it is");
-    assertEqual(await page.locator("#bug-flows .bugflow").count(), 1, "a second report was started");
-    assert(await page.isHidden("#bugdock"), "the report moved into the panel");
-    // Answered the way a person does: a click into the box, then the keys.
+    const cells = [];
+    for (const t of targets) for (const mode of MODES) cells.push({ t, mode });
+    const wrong = [];
+    const skipped = new Set();
+    let passed = 0;
+    // Four pages at a time: each cell is its own page, so none leans on another's state.
+    let next = 0;
+    async function worker() {
+      while (next < cells.length) {
+        const c = cells[next++];
+        const label = (c.t.conversation ? "the conversation" : c.t.dictation ? "Dictation" : c.t.sel + (c.t.index >= 0 ? "[" + c.t.index + "]" : " (made)")) + ", " + c.mode;
+        try {
+          const r = await oneCell(c.t, c.mode, qsel);
+          if (r.skipped) skipped.add(r.skipped);
+          else passed++;
+        } catch (e) {
+          wrong.push(label + ": " + String(e && e.message ? e.message : e).split("\n")[0]);
+        }
+      }
+    }
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    assertEqual(wrong, [], "the report is not on top and ready to answer in every cell");
+    assert(passed > 2 * MODES.length, "EMPTY INVENTORY: only " + passed + " cells walked");
+    return passed + " cells passed (" + (targets.length - skipped.size) + " places x " + MODES.length + " input modes); left out, the first-run questions (Settings cannot be pressed over them): " + [...skipped].join(", ");
+  });
+
+  // ---- the reviews of 4cc6e34db (rv-20261010T150420Z-4cc6e34d-84f1) and cac278721 (rv-20261010T153832Z-cac27872-e986, rv-20261010T153823Z-cac27872-1b7a) ----
+  await run.check("with Dictation waiting for a different key, Bust a bug ends that wait: the panel's report takes typing and Enter, and a function key from the tool's tap leaves Dictation's key alone", async () => {
+    // Settings, Dictation, Press a different key, Settings, Bust a bug. A report in the panel takes
+    // the keyboard alone: it ends Dictation's wait through Dictation's own Cancel, which also
+    // disarms the tool's key tap (rv-20261010T153832Z-cac27872-e986). On cac278721 the wait and
+    // the tap stayed on under the report.
+    const page = await open("dark", { dictation: true });
+    await page.click("#set-btn");
+    await page.click("#set-dictation-open");
+    await page.waitForSelector("#dictation-sheet:not([hidden])");
+    await page.click("#dict-capture");
+    await page.waitForSelector("#dict-capture-cancel");
+    await bustABug(page);
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
+    assertEqual(await page.locator("#dict-capture-cancel").count(), 0, "Dictation still waits for a different key under the report");
+    const tap = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_capture_key").map((c) => c.on);
+    assertEqual(JSON.stringify(tap), "[true,false]", "the tool's key tap, armed then disarmed");
     const said = "The names on the left get cut off when I make the text bigger.";
-    await page.click("#input");
+    await page.click("#bugdock-input");
     await page.keyboard.type(said);
+    assertEqual(await page.inputValue("#bugdock-input"), said, "what was typed in the panel's answer box");
     await page.keyboard.press("Enter");
-    await page.waitForSelector("#bug-flows .bug-user:has-text('" + said + "')");
-    await page.waitForSelector("#bug-flows .bugcard .bug-pill:has-text('Not sent yet')");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    // F7 delivered by the tool's tap (`rich://dictation {key}`), the report in focus. The mock's
+    // event and Dictation's handler run synchronously, so a key change is recorded by the time
+    // the call returns.
+    await page.focus("#bugdock .bugcard #bug-send");
+    await page.evaluate(() => window.__RICHOS_MOCK__.dictationKey(7));
+    const set = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_set_key");
+    assertEqual(JSON.stringify(set), "[]", "Dictation's key was changed by a function key from the tool's tap");
+    assert(await page.evaluate(() => document.activeElement && document.activeElement.id === "bug-send"), "focus left the report");
     await page.close();
-    return `question ${top.question}, answer box ${top.input}; answered, card written`;
+    return "the wait ended (tap " + JSON.stringify(tap) + "); typed and sent in the panel; F7 from the tap set no key";
+  });
+
+  // ---- the review of 060668495 (rv-20261010T161328Z-06066849-659f) ----
+  await run.check("a report already in the panel, then Press a different key in Dictation, then back to the report: the wait ends, and the report takes typing and Enter", async () => {
+    // Settings, Dictation, Bust a bug, Press a different key in the sheet that stays open, then
+    // the report's answer box. On 060668495 the wait was ended only when the panel was shown, so
+    // the second wait and its key tap kept every key: the typing and Enter never reached the report.
+    const page = await open("dark", { dictation: true });
+    await page.click("#set-btn");
+    await page.click("#set-dictation-open");
+    await page.waitForSelector("#dictation-sheet:not([hidden])");
+    await bustABug(page);
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
+    await page.click("#dict-capture");
+    await page.waitForSelector("#dict-capture-cancel");
+    await page.click("#bugdock-input");
+    assertEqual(await page.locator("#dict-capture-cancel").count(), 0, "Dictation still waits for a different key with the report's answer box in focus");
+    const tap = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_capture_key").map((c) => c.on);
+    assertEqual(JSON.stringify(tap), "[true,false]", "the tool's key tap, armed then disarmed");
+    const said = "The names on the left get cut off when I make the text bigger.";
+    await page.keyboard.type(said);
+    assertEqual(await page.inputValue("#bugdock-input"), said, "what was typed in the panel's answer box");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    // The talk button is the other way back to the report: it ends a wait started again too.
+    await page.click("#dict-capture");
+    await page.waitForSelector("#dict-capture-cancel");
+    await page.click("#bugdock-talk");
+    assertEqual(await page.locator("#dict-capture-cancel").count(), 0, "Dictation still waits for a different key after the report's talk button");
+    const tap2 = (await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls())).filter((c) => c.cmd === "dictation_capture_key").map((c) => c.on);
+    assertEqual(JSON.stringify(tap2), "[true,false,true,false]", "the tool's key tap, armed and disarmed twice");
+    await page.close();
+    return "the wait ended on the click into the answer box (tap " + JSON.stringify(tap) + "); typed and sent in the panel; ended again by the talk button (tap " + JSON.stringify(tap2) + ")";
+  });
+
+  await run.check("Talk to Rich on, Dictation open, Bust a bug: voice mode goes off, nothing said goes to the conversation, and the panel's talk button takes the answer", async () => {
+    // rv-20261010T153823Z-cac27872-1b7a: on cac278721 the report opened in the panel with
+    // conversation voice mode still on, so the spoken answer became a message to Rich.
+    const page = await open("dark", { bugVoice: true, dictation: true });
+    await page.click("#talk-toggle");
+    await page.waitForSelector("#voice-panel:not([hidden])");
+    await page.click("#set-btn");
+    await page.click("#set-dictation-open");
+    await page.waitForSelector("#dictation-sheet:not([hidden])");
+    await bustABug(page);
+    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
+    assertEqual(await page.getAttribute("#talk-toggle", "aria-pressed"), "false", "conversation voice mode under the report (Talk to Rich pressed)");
+    const stops = (await calls(page, "stop_voice_capture")).length;
+    assertEqual(stops, 1, "conversation voice mode's own off path (stop_voice_capture calls)");
+    // Said now, before the panel's talk button: neither the conversation nor the report takes it.
+    // The transcript listeners run synchronously; two frames let a drawn message land.
+    const before = await page.locator("#messages .tl-user").count();
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "Rich, what's on my calendar today?");
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "what was said went to Rich's conversation");
+    assertEqual(await page.locator("#bugdock .bug-user").count(), 0, "what was said with the panel's talk button off went to the report");
+    // The panel's talk button is how the user speaks to the report.
+    await page.click("#bugdock-talk");
+    await page.waitForSelector("#bugdock-voice:not([hidden])");
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "The names on the left get cut off when the text is bigger.");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "the spoken answer went to Rich's conversation");
+    await page.close();
+    return "voice mode off (Talk to Rich not pressed, 1 stop_voice_capture); nothing said went to the conversation; the panel's talk button took the answer";
+  });
+
+  // ---- the reviews of f29db7082 (rv-20261010T180327Z-f29db708-24e0, rv-20261010T180313Z-f29db708-733e) ----
+  /// The order of the voice calls made after call number `from`: `stop`, `start`, `hold on`, `hold off`.
+  const voiceOrder = (page, from) => page.evaluate((n) => window.__RICHOS_MOCK_BUG__.calls.slice(n)
+    .filter((c) => c.cmd === "stop_voice_capture" || c.cmd === "start_voice_capture" || c.cmd === "bug_report_voice")
+    .map((c) => (c.cmd === "bug_report_voice" ? "hold " + (c.on ? "on" : "off") : c.cmd === "stop_voice_capture" ? "stop" : "start")), from);
+  const callCount = (page) => page.evaluate(() => window.__RICHOS_MOCK_BUG__.calls.length);
+  const heldNow = (page) => page.evaluate(() => {
+    const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+    return v.length ? v[v.length - 1].on : null;
+  });
+
+  await run.check("the panel's microphone is on only while the report waits for the user's words: while Rich checks, it is stopped first, then the hold is released, and nothing said goes anywhere", async () => {
+    // Both reviews, fixtures `panel-voice-state.js` and `report-state.js`: on f29db7082 moving to
+    // checking released the shell's hold with the microphone still on, so the next sentence said
+    // became a turn in Rich's conversation (the shell submits it whenever nothing holds it back).
+    // The mock does not run the shell's submission, so this reads the ORDER of the calls: the
+    // microphone is stopped (`stop_voice_capture`) before the hold is released.
+    const page = await open("dark", { bugVoice: true, bugWriteMs: 1500 });
+    await bustABug(page);
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    await page.click("#bugdock-talk");
+    await page.waitForSelector("#bugdock-voice:not([hidden])");
+    assertEqual(await heldNow(page), true, "the hold while the report waits for the spoken answer");
+    const from = await callCount(page);
+    const before = await page.locator("#messages .tl-user").count();
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "The names on the left get cut off when the text is bigger.");
+    await page.waitForSelector("#bugdock .bug-working");
+    await page.waitForFunction(() => {
+      const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+      return v[v.length - 1].on === false;
+    });
+    const checking = await page.evaluate(() => ({
+      step: window.RichBug.state().slice(-1)[0].step,
+      talk: document.getElementById("bugdock-talk").getAttribute("aria-pressed"),
+      form: !document.getElementById("bugdock-form").hidden,
+    }));
+    assertEqual(checking.step, "checking", "the step while Rich checks");
+    assertEqual(checking.talk, "false", "the panel's talk button still on while Rich checks");
+    const order = await voiceOrder(page, from);
+    assertEqual(order, ["stop", "hold off"], "the voice calls on the way to checking: the microphone stopped, then the hold released");
+    // Said while Rich checks: the report does not take it, and nothing reaches the conversation.
+    await page.evaluate((t) => window.__RICHOS_MOCK_BUG__.say(t), "And it happens in the light theme too.");
+    // The talk button cannot turn the microphone on again while nothing waits for words.
+    await page.click("#bugdock-talk");
+    assertEqual(await page.getAttribute("#bugdock-talk", "aria-pressed"), "false", "the talk button turned the microphone on while Rich checks");
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#bugdock .bug-user").count(), 1, "what was said while Rich checked went to the report");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "what was said went to Rich's conversation");
+    const all = await voiceOrder(page, from);
+    assertEqual(all, ["stop", "hold off"], "voice calls from the spoken answer to the card (no start while Rich checked)");
+    await page.close();
+    return "talk off while checking; voice calls: " + all.join(" → ") + "; the second sentence went nowhere";
+  });
+
+  // ---- the review of fe4cd6b14 (rv-20261010T183313Z-fe4cd6b1-1e66), finding 2 ----
+  await run.check("a microphone start that waited for a stop runs only if the panel's talk is still on: on, off, on, off while the stops run opens nothing", async () => {
+    // Fixture `pending-mic-restart.js`: on fe4cd6b14 talk turned on while a stop was still running
+    // queued an unconditional start; turned off again, the start still ran once the stops ended,
+    // and the microphone was open with the hold released. `bugStopHold` keeps each stop running
+    // until `releaseStop()`.
+    const page = await open("dark", { bugVoice: true, bugStopHold: true });
+    await bustABug(page);
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    await page.click("#bugdock-talk");
+    await page.waitForSelector("#bugdock-voice:not([hidden])");
+    const from = await callCount(page);
+    await page.click("#bugdock-talk"); // off: its stop is still running
+    await page.click("#bugdock-talk"); // on again: the start waits for that stop
+    await page.click("#bugdock-talk"); // off again before the stop ends
+    assertEqual(await page.getAttribute("#bugdock-talk", "aria-pressed"), "false", "the talk button after on, off, on, off");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseStop());
+    await page.waitForFunction(() => {
+      const v = window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_voice");
+      return v[v.length - 1].on === false;
+    });
+    // Anything queued behind the stops has run by the time two more frames have gone.
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const order = await voiceOrder(page, from);
+    assertEqual(order, ["stop", "stop", "hold off"], "the voice calls: both stops, no start, then the hold released");
+    await page.close();
+    return "voice calls: " + order.join(" → ");
+  });
+
+  // ---- the CEO, 2026-10-10, and rv-20261010T183337Z-fe4cd6b1-ce45 finding 1 ----
+  // "WHY THE FUCK IS IT EVEN POSSIBLE TO CLICK THE FUCKING BUTTON AGAIN IF THE ACTION RELATED TO
+  // THAT IS ALREADY GOING ON???" On fe4cd6b14 Bust a bug could be pressed again over a report in
+  // progress (the review's case: while Rich checked, the press put the keys in an answer box whose
+  // Enter did nothing). Now it is disabled from the press until the report is sent, canceled or its
+  // panel closed.
+  /// Settings open, then every way to press Bust a bug: the pointer, the element's own click, and
+  /// focus for the keyboard. Returns what the menu showed and whether anything started.
+  async function pressBugAgain(page) {
+    await page.click("#set-btn");
+    await page.waitForSelector("#set-menu:not([hidden]) #bug-btn");
+    const count = () => page.evaluate(() => ({
+      flows: window.RichBug.state().length,
+      looks: window.__RICHOS_MOCK_BUG__.calls.filter((c) => c.cmd === "bug_report_look").length,
+      asked: document.querySelectorAll("#bugdock-msgs .bug-rich .tl-prose").length,
+    }));
+    const before = await count();
+    const shown = await page.evaluate(() => {
+      const b = document.getElementById("bug-btn");
+      const cs = getComputedStyle(b);
+      return { disabled: b.disabled, shown: !!b.getClientRects().length && cs.visibility !== "hidden" && cs.display !== "none" };
+    });
+    await page.click("#bug-btn", { force: true });
+    await page.evaluate(() => document.getElementById("bug-btn").click());
+    const focused = await page.evaluate(() => { const b = document.getElementById("bug-btn"); b.focus(); return document.activeElement === b; });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const after = await count();
+    if (await page.isVisible("#set-menu")) await page.click("#set-btn");
+    await page.waitForSelector("#set-menu", { state: "hidden" });
+    return { disabled: shown.disabled, shown: shown.shown, focusable: focused, started: JSON.stringify(after) !== JSON.stringify(before) };
+  }
+  await run.check("while a report is open, Bust a bug in Settings is shown disabled and cannot be pressed (asked, Rich checking, the card, Change it, Rich changing it, sending); after Send, Cancel or closing the panel it works again", async () => {
+    const page = await open("dark", { bugWriteMs: 4000, bugChangeHold: true, bugSendCheckHold: true });
+    const open_ = { disabled: true, shown: true, focusable: false, started: false };
+    const seen = [];
+    async function expectOpen(step) {
+      const st = await pressBugAgain(page);
+      assertEqual(st, open_, step + ": Bust a bug in the Settings menu");
+      seen.push(step);
+    }
+    await bustABug(page);
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    await expectOpen("asked");
+    await page.fill("#bugdock-input", "The names on the left get cut off when I make the text bigger.");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock .bug-working");
+    assertEqual(await page.evaluate(() => window.RichBug.state().slice(-1)[0].step), "checking", "the step");
+    await expectOpen("Rich checking");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    await expectOpen("the card");
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    await expectOpen("Change it");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    await page.fill("#bugdock-input", "Also say it happens in the light theme too");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Changing it…')");
+    await expectOpen("Rich changing it");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseChange());
+    await page.waitForSelector(".bug-sec p.is-added");
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-sending");
+    await expectOpen("sending");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseSendCheck());
+    await page.waitForSelector(".bugcard.is-sent");
+    // Sent: it works again, and a press is a new report.
+    const reopen = async (after) => {
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu:not([hidden]) #bug-btn");
+      assertEqual(await page.evaluate(() => document.getElementById("bug-btn").disabled), false, after + ": Bust a bug is still disabled");
+      const flows = await page.evaluate(() => window.RichBug.state().length);
+      await page.click("#bug-btn");
+      await page.waitForFunction((n) => window.RichBug.state().length === n + 1 && window.RichBug.state()[n].step === "ask", flows);
+      await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+      seen.push("after " + after + ": pressed, a new report");
+    };
+    await reopen("Send");
+    await expectOpen("a new report, asked");
+    // Canceled: it works again.
+    await page.fill("#bugdock-input", "The window froze while opening the plan.");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')", { timeout: 30000 });
+    await page.click("#bug-cancel");
+    await page.waitForSelector(".bugcard.is-canceled");
+    await reopen("Cancel");
+    // The panel closed: it works again.
+    await page.click("#bugdock-x");
+    await page.waitForSelector("#bugdock", { state: "hidden" });
+    await reopen("closing the panel");
+    await page.close();
+    return "disabled while " + seen.join("; ");
+  });
+
+  // ---- nightly 49's walk, D28 (docs/verification/2026-10-10-nightly-49-candidate-walk.md) ----
+  // Run I on 13aa9bc0f: the panel asked "What went wrong?", "markerone" was typed into its box,
+  // and while the panel was open the conversation behind it finished its first-run "Not now".
+  // `declineFirstRunInterview` then called `inputEl.focus()`, and " markertwo" went into the
+  // conversation's message box, where Return sends it to Rich. THE RULE: while a report is open in
+  // the Rich panel, nothing moves focus to the conversation's message box. It is one method on the
+  // box (`main.js`, `inputEl.focus`), so every caller goes through it: the first-run path and the
+  // way the home screen and the question sheets reach it (`document.getElementById("input")
+  // .focus()`). Once the panel closes the box takes focus again.
+  await run.check("D28: while a report is open in the Rich panel, nothing moves focus to the conversation's message box: the first-run Not now finishing and a caller outside main.js, asked and at the card; typing and Enter stay the report's, and once the panel closes the box takes focus again", async () => {
+    const page = await open("light", { onboarding: "not-yet", onboardingDeclineHold: true, bugWriteMs: 300 });
+    const before = await page.locator("#messages .tl-user").count();
+    const where = () => page.evaluate(() => { const a = document.activeElement; return a ? (a.id ? "#" + a.id : a.tagName.toLowerCase()) : "none"; });
+    // The path the walk saw: "Not now" pressed in the conversation, its write still on the way.
+    await page.waitForSelector("#first-run-later:visible");
+    await page.click("#first-run-later");
+    await bustABug(page);
+    await page.waitForFunction(() => document.activeElement === document.getElementById("bugdock-input"));
+    await page.keyboard.type("markerone");
+    await page.evaluate(() => window.__RICHOS_MOCK__.releaseDecline());
+    await page.waitForSelector("#first-run[data-state='declined']");
+    const afterDecline = await where();
+    await page.keyboard.type(" markertwo");
+    // Any other caller, the way home.js, questions.js and permissions.js reach the box.
+    await page.evaluate(() => document.getElementById("input").focus());
+    const afterOther = await where();
+    await page.keyboard.type(" markerthree");
+    const seen = { afterDecline, afterOther, panel: await page.inputValue("#bugdock-input"), conversation: await page.inputValue("#input") };
+    assertEqual(seen, { afterDecline: "#bugdock-input", afterOther: "#bugdock-input", panel: "markerone markertwo markerthree", conversation: "" }, "focus left the panel's box");
+    // Return is the report's: the card comes, and nothing went to Rich's conversation.
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator("#messages .tl-user").count(), before, "a message went to Rich's conversation");
+    // At the card (runs F, G and J): the panel's box has the keys, and a caller does not take them.
+    await page.locator("#bugdock-input").focus();
+    await page.evaluate(() => document.getElementById("input").focus());
+    assertEqual(await where(), "#bugdock-input", "at the card, focus left the panel's box");
+    // The way out: once the panel is closed, the app focuses the box again.
+    await page.click("#bug-cancel");
+    await page.waitForSelector(".bugcard.is-canceled");
+    await page.click("#bugdock-x");
+    await page.waitForSelector("#bugdock", { state: "hidden" });
+    await page.evaluate(() => document.getElementById("input").focus());
+    assertEqual(await where(), "#input", "after the panel closed, the box cannot take focus");
+    await page.close();
+    return `after Not now finished: ${afterDecline}; after a caller outside main.js: ${afterOther}; panel "${seen.panel}", conversation "${seen.conversation}"; at the card: focus stayed; panel closed: #input focuses`;
+  });
+
+  // ---- nightly 49's walk, D29 (docs/verification/2026-10-10-nightly-49-candidate-walk.md) ----
+  // Runs A and E on 13aa9bc0f: Change it, then Done, and the sticky button row showed a gold "Send
+  // rep" inside Done's old 74px, with Change it and Cancel not drawn, while the accessibility tree
+  // had all three at full size. Reproduced on 13aa9bc0f's files in Safari 18.6 on a macOS 15.7.7
+  // test VM guest, 3 runs of 3: the row floats over a long report, and Done shrinks the card (the
+  // editing hint and the dashed outline go, 1064 -> 1006px here) in the same update that swaps the
+  // row's buttons, so the row's place in the flow moves while it stays put on screen, and the new
+  // buttons were painted only where Done had been. The same page with the card's height held at
+  // Done drew all three, and so did the same page with the row replaced by a new box; the old box
+  // given its own layer (will-change), or the panel without its entry animation, did not. The fix
+  // is that: `paintCard` puts in a new row at every paint, and a new box is painted whole.
+  //
+  // WHAT THIS CAN AND CANNOT SEE. This harness's WebKit paints the whole page for a screenshot, so
+  // its pixels show all three buttons on 13aa9bc0f too (measured before this check was written);
+  // the stale paint is only in the shipped WebKit's on-screen layers, which is where the guest
+  // check looks. So this holds the condition the walk was in (the row floating, the card shorter
+  // after Done), checks the pixels of every button anyway, and asserts the property the fix rests
+  // on: the row after Done is a new box, not the one that held Done. Red on 13aa9bc0f by that.
+  await run.check("D29: after Change it and Done, with the button row floating over a long report, the row is a new box and all three buttons are drawn at full width", async () => {
+    const steps = ["Open a conversation.", "Type a message.", "Press Send twice, quickly.", "Watch the conversation.", "Nothing appears.", "Press Send again.", "Close the window.", "Open it again from the Dock.", "Press Send twice again.", "See that nothing appears again.", "Wait a minute.", "Press Send once more."];
+    const page = await open("light", { bugSteps: steps }, { width: 1400, height: 864 });
+    await bustABug(page);
+    await answer(page, "When I press the Send button twice quickly, the second press does nothing and no message appears.");
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    // The walk's view: the report's top in sight, the row floating over the rest of it.
+    await page.evaluate(() => {
+      const sc = document.getElementById("bugdock-msgs");
+      sc.scrollTop += document.querySelector(".bugcard .bug-doc").getBoundingClientRect().top - sc.getBoundingClientRect().top - 40;
+    });
+    await page.waitForSelector(".bugcard .bug-actions.is-stuck");
+    const before = await page.evaluate(() => {
+      window.__d29Row = document.querySelector(".bugcard .bug-actions");
+      return { card: document.querySelector(".bugcard").getBoundingClientRect().height, row: window.__d29Row.getBoundingClientRect().top };
+    });
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet')");
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const after = await page.evaluate(() => {
+      const row = document.querySelector(".bugcard .bug-actions");
+      const rr = row.getBoundingClientRect();
+      return {
+        card: document.querySelector(".bugcard").getBoundingClientRect().height,
+        row: rr.top,
+        stuck: row.classList.contains("is-stuck"),
+        same: row === window.__d29Row,
+        buttons: [...row.querySelectorAll(".desk-btn")].map((b) => { const r = b.getBoundingClientRect(); return { text: b.textContent, x: r.left - rr.left, y: r.top - rr.top, w: r.width, h: r.height }; }),
+      };
+    });
+    // The walk's condition: the row floats where it was while the card got shorter under it.
+    assert(after.stuck, "the row is not floating over the report after Done, so this is not the walk's view");
+    assert(after.card < before.card, `the card did not get shorter at Done (${before.card} -> ${after.card}px), so this is not the walk's view`);
+    assertEqual(Math.round(after.row), Math.round(before.row), "the row moved on screen at Done");
+    assertEqual(after.buttons.map((b) => b.text), ["Send report", "Change it", "Cancel"], "the row's buttons after Done");
+    // The pixels: down each button's right edge, for at least half its height, something other
+    // than the row's ground is drawn (the gold fill, or the outline of Change it and Cancel).
+    const shot = PNG.decode(await page.locator(".bugcard .bug-actions").screenshot());
+    const at = (x, y) => { const i = (Math.round(y) * shot.width + Math.round(x)) * shot.channels; return [shot.data[i], shot.data[i + 1], shot.data[i + 2]]; };
+    const last = after.buttons[after.buttons.length - 1];
+    const ground = at(Math.min(shot.width - 4, last.x + last.w + 12), last.y + last.h / 2);
+    const drawn = after.buttons.map((b) => {
+      let marked = 0;
+      for (let y = b.y + 1; y < b.y + b.h - 1; y++) {
+        const p = at(Math.floor(b.x + b.w - 1), y);
+        if (Math.max(...p.map((v, k) => Math.abs(v - ground[k]))) > 24) marked++;
+      }
+      return { text: b.text, marked };
+    });
+    assert(drawn.every((d, k) => d.marked > after.buttons[k].h / 2), "a button is not drawn to its right edge: " + JSON.stringify(drawn));
+    // What the fix rests on: a new box, painted whole.
+    assertEqual(after.same, false, "after Done the row is the box that held Done, emptied and refilled, not a new box");
+    await page.close();
+    return `card ${Math.round(before.card)} -> ${Math.round(after.card)}px with the row floating at ${Math.round(after.row)}px; buttons ${after.buttons.map((b) => b.text + " " + Math.round(b.w)).join(", ")}px; drawn to the right edge: ${drawn.map((d) => d.text + " " + d.marked + "px").join(", ")}; a new box: ${!after.same}`;
+  });
+
+  // ---- nightly 48's walk, D25 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+  // On d0d06501c the Rich panel showed a horizontal scroll bar under its messages, its thumb
+  // almost the panel's width (runs B2 and P2): the content was a few pixels wider than the panel.
+  //
+  // WHAT THIS CAN AND CANNOT SEE. The guest has no trackpad, so macOS draws classic scroll bars that
+  // take width from the box; this WebKit draws overlay ones that take none, and on the mock's words
+  // nothing overflowed here, with or without a 15px classic bar, and a long unbroken word already
+  // wraps (all measured before this check was written). The guest's exact few pixels were not
+  // reproduced. So the check puts the walk's observed state in directly, under two declared
+  // stand-ins: a 15px classic scroll bar on the messages (the guest's always-on bars) and one
+  // element a few pixels wider than the box (the overflow the walk saw). No horizontal scroll bar
+  // may be drawn under it. Then, with that element gone, the panel's own content must be no wider
+  // than the box and reach past nothing, so the clip that keeps the bar away cuts nothing off.
+  const CLASSIC_BARS = "#bugdock-msgs::-webkit-scrollbar{width:15px;height:15px;background:#5a6070}#bugdock-msgs::-webkit-scrollbar-thumb{background:#9aa0ad}";
+  const sideways = (page, wider) =>
+    page.evaluate((wider) => {
+      const box = document.getElementById("bugdock-msgs");
+      let probe = null;
+      if (wider) {
+        probe = document.createElement("div");
+        probe.style.cssText = "flex:none;height:1px;width:calc(100% + " + wider + "px)";
+        box.appendChild(probe);
+      }
+      const cs = getComputedStyle(box);
+      const r = box.getBoundingClientRect();
+      // The padding box's right edge: where the content may reach, the vertical bar left aside.
+      const edge = r.left + parseFloat(cs.borderLeftWidth) + box.clientWidth;
+      const wide = [...box.querySelectorAll("*")]
+        .filter((n) => n !== probe && n.getClientRects().length && getComputedStyle(n).position !== "absolute" && n.getBoundingClientRect().right > edge + 0.5)
+        .slice(0, 3)
+        .map((n) => n.tagName.toLowerCase() + (typeof n.className === "string" && n.className ? "." + n.className.split(" ")[0] : "") + " +" + (n.getBoundingClientRect().right - edge).toFixed(1) + "px");
+      const bar = box.offsetHeight - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth) - box.clientHeight;
+      const over = box.scrollWidth - box.clientWidth;
+      if (probe) probe.remove();
+      return { over, bar, wide };
+    }, wider || 0);
+  await run.check("the Rich panel's messages never scroll sideways: over Corrections and on the home screen, asked and with the card", async () => {
+    const seen = [];
+    for (const where of ["corrections", "home"]) {
+      let page;
+      if (where === "corrections") {
+        page = await open("dark");
+        await page.click("#nav-corrections");
+        await page.waitForSelector("#corrections-overlay:not([hidden])");
+      } else {
+        page = await openCovered("home");
+      }
+      await page.addStyleTag({ content: CLASSIC_BARS });
+      await bustABug(page);
+      await page.waitForSelector("#bugdock:not([hidden]) .bug-rich .tl-prose");
+      await settle(page);
+      const asked = await sideways(page, 6);
+      assertEqual(asked.bar, 0, where + ", asked, with content 6px wider than the panel: a horizontal scroll bar is drawn under the messages (" + asked.bar + "px)");
+      await page.fill("#bugdock-input", "The names in the sidebar get cut off when I make the text bigger.");
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+      await settle(page);
+      const wider = await sideways(page, 6);
+      assertEqual(wider.bar, 0, where + ", with the card and content 6px wider than the panel: a horizontal scroll bar is drawn under the messages (" + wider.bar + "px)");
+      const own = await sideways(page);
+      assertEqual(own.over, 0, where + ", with the card: the panel's own content is " + own.over + "px wider than the box: " + JSON.stringify(own.wide));
+      assertEqual(own.wide, [], where + ", with the card: something of the panel's own reaches past its edge and is cut off");
+      seen.push(`${where}: no sideways bar with content 6px wider (asked ${asked.bar}px, card ${wider.bar}px); own content ${own.over}px wider`);
+      await page.close();
+    }
+    return seen.join("; ");
+  });
+
+  // ---- nightly 48's walk, D24 (docs/verification/2026-10-10-nightly-48-candidate-walk.md) ----
+  //
+  // On d0d06501c, with Corrections open and focus inside it, the Settings button was missing from
+  // the accessibility tree and a press at its place did nothing (runs B, B3, R, K; once it worked,
+  // run Q, with focus left on the rail). Corrections claimed `aria-modal="true"`, and WebKit
+  // leaves everything outside a modal dialog that holds focus out of the tree, so the press the
+  // walk makes (System Events `click at`, which presses the accessibility element at a point)
+  // never reached the button. A pointer is not the only way in; the tree is how VoiceOver gets
+  // there too.
+  //
+  // IN THE TREE, COMPUTED: Playwright 1.61 ships no accessibility snapshot (control-names.js says
+  // the same), so this applies WebKit's rules from the DOM: not hidden, not `inert`, not under
+  // `aria-hidden`, and not outside an `aria-modal` dialog that holds focus. An approximation of
+  // one platform's tree, declared as one; it is the rule that was broken.
+  const settingsReach = (page) =>
+    page.evaluate(() => {
+      const btn = document.getElementById("set-btn");
+      const r = btn.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const named = (n) => (n ? n.tagName.toLowerCase() + (n.id ? "#" + n.id : "") : "nothing");
+      let why = null;
+      for (let n = btn; n && n.nodeType === 1 && !why; n = n.parentElement) {
+        if (n.hidden || n.hasAttribute("inert") || n.getAttribute("aria-hidden") === "true") why = "hidden or inert at " + named(n);
+      }
+      const focus = document.activeElement;
+      for (const modal of document.querySelectorAll('[aria-modal="true"]')) {
+        if (why || modal.hidden || !modal.getClientRects().length) continue;
+        if (modal.contains(focus) && !modal.contains(btn)) why = "outside " + named(modal) + ", an aria-modal dialog that holds focus (on " + named(focus) + ")";
+      }
+      return { top: hit === btn || btn.contains(hit) ? "ON-TOP" : "COVERED by " + named(hit), tree: why || "IN THE TREE", focus: named(focus) };
+    });
+  // Each overlay with the presses, in order, that open it the way a person does.
+  const OVERLAYS = [
+    ["Corrections", ["#nav-corrections"], "#corrections-overlay"],
+    ["Feedback", ["#nav-feedback"], "#feedback-overlay"],
+    ["Search", ["#nav-search"], "#search-overlay"],
+    ["the company picker", ["#rail-new-thread"], "#entity-picker"],
+    // The second review of 9463220ef (rv-20261010T072702Z-9463220e-543f), finding 2, fixture
+    // `settings-techy-scope.js`: opened from Settings in a conversation, the Technical view question
+    // was aria-modal at z-index 310 over Settings (300), and focus went to its first choice.
+    ["the Technical view question", ["#set-btn", "#set-techy"], "#techy-scope"],
+    // The review of 66ba53861 (rv-20261010T081721Z-66ba5386-a4d1), finding 2, fixture
+    // `settings-overlays.js`: Settings -> Home screen opened an aria-modal panel at z-index 340
+    // over Settings (300). Every other overlay is found, not listed, by appearance.js check 7c.
+    ["the Home screen buttons", ["#set-btn", "#set-home-open"], "#home-prefs"],
+  ];
+  await run.check("with Corrections open and focus inside it, the Settings button is on top, in the accessibility tree, and opens the menu; the same over every overlay it sits above", async () => {
+    const seen = [];
+    for (const [label, openers, overlay] of OVERLAYS) {
+      const page = await open("dark");
+      for (const opener of openers) await page.click(opener);
+      await page.waitForSelector(overlay + ":not([hidden])");
+      // The failing state is the normal one: focus inside the overlay. Where the overlay does not
+      // move it there itself, it is put on its first control, as Tab would.
+      await page.evaluate((sel) => {
+        const o = document.querySelector(sel);
+        if (!o.contains(document.activeElement)) o.querySelector("button, input, select, textarea, [tabindex]:not([tabindex='-1'])").focus();
+      }, overlay);
+      await page.waitForFunction((sel) => document.querySelector(sel).contains(document.activeElement), overlay);
+      const reach = await settingsReach(page);
+      assertEqual(reach.top, "ON-TOP", label + ": the Settings button is not what is painted at its place");
+      assertEqual(reach.tree, "IN THE TREE", label + ": the Settings button is not in the accessibility tree");
+      // Pressed the way a person does: the pointer at its place.
+      const r = await page.locator("#set-btn").boundingBox();
+      await page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
+      await page.waitForSelector("#set-menu:not([hidden]) #bug-btn");
+      assert(await page.isVisible(overlay), label + " closed when Settings was pressed");
+      if (label === "Corrections") {
+        // And Bust a bug starts from there: the Rich panel opens beside Corrections, which stays.
+        await page.click("#bug-btn");
+        await page.waitForSelector("#bugdock:not([hidden]) .bug-rich .tl-prose");
+        assert(await page.isVisible(overlay), "Corrections closed when Bust a bug started");
+      }
+      seen.push(`${label}: ${reach.top}, ${reach.tree}, focus on ${reach.focus}, menu opened`);
+      await page.close();
+    }
+    return seen.join("; ");
   });
 
   await run.check("the privacy heads-up reads a line break typed in a change as a break, so a name on two lines is still named", async () => {
@@ -1056,7 +1901,7 @@ async function main() {
     await page.waitForSelector(".bugcard .bug-pill:has-text('Rich is checking your changes…')");
     assertEqual((await filed(page)).length, 0, "the changed words went out before Rich checked them");
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.releaseSendCheck());
-    await page.waitForSelector("#bug-flows .bug-rich:has-text('I checked it again before sending')");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('I checked it again before sending')");
     assertEqual(await page.locator(".bugcard").count(), 1, "the card shown again is a second card");
     assertEqual(await page.locator(".bug-working").count(), 0, "Rich is still shown checking");
     const again = await page.locator(".bugcard .bug-doc").innerText();
@@ -1076,7 +1921,7 @@ async function main() {
     await down.evaluate(() => window.__RICHOS_MOCK_BUG__.setClaude("down"));
     await changeByHand(down, SAID_BY_HAND);
     await down.click("#bug-send");
-    await down.waitForSelector("#bug-flows .bug-rich:has-text(\"I couldn't check your changes for private details yet\")");
+    await down.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"I couldn't check your changes for private details yet\")");
     await down.waitForSelector(".bugcard .bug-pill:has-text(\"Waiting for Rich's check · saved on this Mac\")");
     const said = await lastSaid(down);
     assertEqual(await down.locator("#bug-send").count(), 0, "Send is offered for words Rich hasn't checked");
@@ -1085,7 +1930,7 @@ async function main() {
     assert(kept.length === 1 && JSON.stringify(kept[0].edited).includes(SAID_BY_HAND), "the changed words are not kept: " + JSON.stringify(kept));
     assertEqual((await filed(down)).length, 0, "something went out");
     await down.evaluate(() => window.__RICHOS_MOCK_BUG__.claudeAnswers());
-    await down.waitForSelector("#bug-flows .bug-rich:has-text(\"I've checked your changes now.\")");
+    await down.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"I've checked your changes now.\")");
     assertEqual(await down.locator(".bugcard").count(), 1, "the checked card is a second card");
     const checked = await down.locator(".bugcard .bug-doc").innerText();
     assert(!checked.includes("Jane Doe") && !checked.includes("SecretCo"), checked);
@@ -1099,7 +1944,7 @@ async function main() {
   });
 
   // ---- both themes: contrast, the type floor, indicators ----
-  const ROOTS = "#bug-flows, #bugdock:not([hidden]), #bug-subtip.is-shown";
+  const ROOTS = "#bugdock:not([hidden]), #bug-subtip.is-shown";
   // Declared skippable, each the conversation's own 14px tier (style.css's Bust a bug note).
   const SKIPPABLE = ".tl-rich-meta, .bug-worked, .bugdock-send";
   const INDICATORS = [
@@ -1112,10 +1957,10 @@ async function main() {
     ["editing", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.click("#bug-change"); await p.keyboard.type(" Acme deal"); await p.waitForSelector(".bug-warn:not([hidden])"); }],
     ["sent", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.click("#bug-send"); await p.waitForSelector(".bugcard.is-sent"); }],
     ["queued", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.click("#bug-send"); await p.waitForSelector(".bugcard.is-queued"); }, { bugNet: "offline" }],
-    ["changing", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.fill("#input", "Also say it happens in the light theme too"); await p.keyboard.press("Enter"); await p.waitForSelector(".bugcard .bug-pill:has-text('Changing it…')"); }, { bugChangeHold: true }],
+    ["changing", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.fill("#bugdock-input", "Also say it happens in the light theme too"); await p.keyboard.press("Enter"); await p.waitForSelector(".bugcard .bug-pill:has-text('Changing it…')"); }, { bugChangeHold: true }],
     ["canceling", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.click("#bug-send"); await p.waitForSelector(".bugcard.is-queued"); await p.click("#bug-cancel"); await p.waitForSelector(".bugcard .bug-pill:has-text('Canceling…')"); }, { bugNet: "offline", bugCancel: "hold" }],
     ["canceled", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.click("#bug-cancel"); await p.waitForSelector(".bugcard.is-canceled"); }],
-    ["unchecked", async (p) => { await bustABug(p); await p.fill("#input", ANSWER); await p.keyboard.press("Enter"); await p.waitForSelector("#bug-unchecked-cancel"); }, { bugClaude: "down" }],
+    ["unchecked", async (p) => { await bustABug(p); await p.fill("#bugdock-input", ANSWER); await p.keyboard.press("Enter"); await p.waitForSelector("#bug-unchecked-cancel"); }, { bugClaude: "down" }],
     ["checking-changes", async (p) => { await bustABug(p); await answer(p, ANSWER); await changeByHand(p, SAID_BY_HAND); await p.click("#bug-send"); await p.waitForSelector(".bugcard .bug-pill:has-text('Rich is checking your changes…')"); }, { bugSendCheckHold: true }],
     ["changes-unchecked", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.evaluate(() => window.__RICHOS_MOCK_BUG__.setClaude("down")); await changeByHand(p, SAID_BY_HAND); await p.click("#bug-send"); await p.waitForSelector("#bug-unchecked-cancel"); }],
     ["panel", async (p) => { await p.click("#nav-corrections"); await bustABug(p); await p.fill("#bugdock-input", ANSWER); await p.keyboard.press("Enter"); await p.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')"); }],
@@ -1168,7 +2013,7 @@ async function main() {
           return { failures, worst, worstIndicator, nodes };
         }, { ROOTS, SKIPPABLE, INDICATORS });
         assertEqual(result.failures, [], `${theme} ${name}: contrast and type`);
-        // The unchecked state has no card: the divider, Rich's question, the user's words, his
+        // The unchecked state has no card: the panel's title, Rich's question, the user's words, his
         // line and Cancel report (7 text nodes measured), so its floor is that, not a card's.
         const floor = name === "unchecked" ? 6 : 10;
         assert(result.nodes > floor, `${theme} ${name}: EMPTY INVENTORY (${result.nodes} nodes)`);

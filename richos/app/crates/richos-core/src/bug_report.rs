@@ -173,13 +173,17 @@ impl PrivateTerm {
     }
 }
 
-/// A run of report text: plain words, or a stand-in with what it replaced.
+/// A run of report text: plain words, or a stand-in (it has a `kind`), with what it replaced when
+/// that is known.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Segment {
     pub text: String,
-    /// What the stand-in replaced. Shown to the user on the card; never part of the issue.
+    /// What the stand-in replaced. Shown to the user on the card; never part of the issue. `None`
+    /// on a stand-in nothing accounts for: Rich wrote it himself and listed nothing beside it
+    /// ([`finished`]), so the app does not know the words, and the card says only their kind.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub was: Option<String>,
+    /// The kind of private detail a stand-in leaves out. `None` on plain words, and only there.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub kind: Option<Kind>,
 }
@@ -190,6 +194,18 @@ impl Segment {
     }
     fn stand_in(was: &str, kind: Kind) -> Self {
         Segment { text: kind.stand_in().to_string(), was: Some(was.to_string()), kind: Some(kind) }
+    }
+    /// A stand-in whose replaced words nothing accounts for: marked, counted and explained by its
+    /// kind alone (nightly 48's walk, D23).
+    fn unaccounted(kind: Kind) -> Self {
+        Segment { text: kind.stand_in().to_string(), was: None, kind: Some(kind) }
+    }
+    /// **A STAND-IN, KNOWN OR NOT WHAT IT REPLACED**: the one test of whether a segment is one.
+    /// On d0d06501c this was "it has `was`", so a stand-in Rich wrote himself was plain words: it
+    /// was not underlined, and the line under the card said nothing private was in a report that
+    /// carried four (D23).
+    pub fn is_stand_in(&self) -> bool {
+        self.kind.is_some()
     }
 }
 
@@ -1241,8 +1257,13 @@ fn section_of(his: &serde_json::Value, n: usize, ours: &DraftSection) -> Result<
 /// waits.
 ///
 /// Nothing here changes a word of his. Each stand-in in his words is only MARKED for the card's
-/// tooltip ([`marked`]): with what the scanner replaced there, in order, then what he says he
-/// replaced; a stand-in nobody accounts for stays plain words. What the scanner hid and he put
+/// tooltip ([`marked`]): with what the stand-in in the same place of the report replaced, the
+/// scanner's or what he says he replaced, and with its kind alone where that place cannot be
+/// told (review rv-20261010T072702Z-9463220e-543f finding 1). **EVERY stand-in in his words is marked**, whatever he listed beside them: one nobody
+/// accounts for is marked with its kind and no replaced words ([`Segment::unaccounted`]), so the
+/// card underlines it and the line under it counts it (nightly 48's walk, D23: on d0d06501c it
+/// stayed plain words, and "Nothing private was in it" sat under four stand-ins Rich had written
+/// himself, his `private` list empty because nothing private was still in his words). What the scanner hid and he put
 /// back is in his words as it was, so it marks no stand-in. What he replaced is kept with the
 /// report's private words, so the scanner leaves it out of every later change too.
 pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, String> {
@@ -1255,37 +1276,42 @@ pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, 
     let his_sections =
         scanned.sections.iter().zip(theirs).enumerate().map(|(n, (ours, his))| section_of(his, n + 1, ours)).collect::<Result<Vec<_>, String>>()?;
     let replaced = private_of(&value)?;
-    // What each stand-in in his words stands for, in the order they will be met.
-    let mut queue: Vec<(Kind, String)> = Vec::new();
-    let mut take = |segments: &[Segment]| {
-        queue.extend(segments.iter().filter_map(|s| Some((s.kind?, s.was.clone()?))));
-    };
-    take(&scanned.title);
-    for section in &scanned.sections {
-        section.paragraphs.iter().chain(&section.steps).for_each(|p| take(p));
-    }
-    // What the scanner hid that he put back: each time its words are in his, stand-ins aside.
-    let mut his_words = title.clone();
-    for (heading, paragraphs, steps) in &his_sections {
-        his_words.extend(std::iter::once(heading).chain(paragraphs).chain(steps).flat_map(|w| ["\n", w.as_str()]));
-    }
-    for kind in Kind::ALL {
-        his_words = his_words.replace(kind.stand_in(), "\n");
-    }
-    let mut put_back: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for (_, was) in &queue {
-        if !was.is_empty() && !put_back.contains_key(was) {
-            put_back.insert(was.clone(), his_words.matches(was.as_str()).count());
+    // **EVERY STAND-IN OF THE REPORT AS THE SCANNER LEFT IT, IN ITS PLACE** (review
+    // rv-20261010T072702Z-9463220e-543f finding 1): the report as [`Piece`]s, its texts (title,
+    // then each section's paragraphs and steps) one after another. A stand-in the scanner wrote
+    // carries what it replaced; one already in the words carries `None`, which nothing here knows
+    // (one Rich wrote before, kept through Change it).
+    let mut report: Vec<Piece> = Vec::new();
+    let units = std::iter::once(&scanned.title).chain(scanned.sections.iter().flat_map(|s| s.paragraphs.iter().chain(&s.steps)));
+    for (n, unit) in units.enumerate() {
+        if n > 0 {
+            push_words(&mut report, "\n");
+        }
+        for s in unit {
+            match s.kind {
+                Some(kind) => report.push(Piece::StandIn(kind, s.was.clone())),
+                None => {
+                    let mut at = 0;
+                    for (start, kind) in stand_ins_in(&s.text) {
+                        push_words(&mut report, &s.text[at..start]);
+                        report.push(Piece::StandIn(kind, None));
+                        at = start + kind.stand_in().len();
+                    }
+                    push_words(&mut report, &s.text[at..]);
+                }
+            }
         }
     }
-    queue.retain(|(_, was)| match put_back.get_mut(was) {
-        Some(left) if *left > 0 => {
-            *left -= 1;
-            false
-        }
-        _ => true,
-    });
-    queue.extend(replaced.iter().map(|t| (t.kind, t.text.clone())));
+    // **A STAND-IN NOT TIED TO ITS PLACE CLAIMS NOTHING** (review
+    // rv-20261010T081721Z-66ba5386-a4d1 finding 1): what each stand-in in his words replaced, read
+    // off the one way his words are the report's ([`receipts`]), or only its kind where that way
+    // is not certain. On 66ba53861 what he replaced took the first place its words were found,
+    // whole or not, so in "Mary Ann saw it. Bob saw it. Ann saw it too." Ann was found inside
+    // Mary Ann, and Bob's and Ann's receipts swapped; and what he put back was counted by its
+    // words, not its place, so the wrong one of two hidden names could be taken as put back.
+    let his_texts: Vec<&str> =
+        std::iter::once(title.as_str()).chain(his_sections.iter().flat_map(|(_, paragraphs, steps)| paragraphs.iter().chain(steps)).map(String::as_str)).collect();
+    let mut queue = receipts(&report, &his_texts, &replaced);
     let mut mark = |text: &str| marked(text, &mut queue);
     let title = mark(&title);
     let sections = his_sections
@@ -1299,32 +1325,231 @@ pub fn finished(rich: Result<String, String>, scanned: &Draft) -> Result<Draft, 
     Ok(Draft { title, sections, private: distinct(scanned.private.iter().cloned().chain(replaced)) })
 }
 
-/// `text` as segments, its words unchanged: each stand-in in it ([`Kind::stand_in`]) marked with the
-/// first entry of `queue` of its kind, which it then takes; one with none is plain words.
-fn marked(text: &str, queue: &mut Vec<(Kind, String)>) -> Vec<Segment> {
+/// Each stand-in written in `text` ([`Kind::stand_in`]), where it starts and its kind, in order.
+fn stand_ins_in(text: &str) -> Vec<(usize, Kind)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some((start, kind)) =
+        Kind::ALL.iter().filter_map(|k| text[at..].find(k.stand_in()).map(|i| (at + i, *k))).min_by_key(|&(i, k)| (i, std::cmp::Reverse(k.stand_in().len())))
+    {
+        found.push((start, kind));
+        at = start + kind.stand_in().len();
+    }
+    found
+}
+
+/// `text` as segments, its words unchanged: each stand-in in it ([`stand_ins_in`]) marked with the
+/// first entry of `queue` of its kind, which it then takes; one whose entry knows no words, or
+/// with no entry, is marked with its kind alone ([`Segment::unaccounted`]). Every stand-in written
+/// is a stand-in on the card.
+fn marked(text: &str, queue: &mut Vec<(Kind, Option<String>)>) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let plain = |out: &mut Vec<Segment>, words: &str| match out.last_mut() {
-        Some(last) if last.was.is_none() => last.text.push_str(words),
+        Some(last) if !last.is_stand_in() => last.text.push_str(words),
         _ if !words.is_empty() => out.push(Segment::plain(words)),
         _ => {}
     };
     let mut at = 0;
-    loop {
-        let next = Kind::ALL.iter().filter_map(|k| text[at..].find(k.stand_in()).map(|i| (at + i, *k))).min_by_key(|&(i, k)| (i, std::cmp::Reverse(k.stand_in().len())));
-        let Some((start, kind)) = next else { break };
-        let end = start + kind.stand_in().len();
+    for (start, kind) in stand_ins_in(text) {
         plain(&mut out, &text[at..start]);
-        match queue.iter().position(|(k, _)| *k == kind) {
-            Some(i) => out.push(Segment::stand_in(&queue.remove(i).1, kind)),
-            None => plain(&mut out, &text[start..end]),
+        match queue.iter().position(|(k, _)| *k == kind).map(|i| queue.remove(i).1) {
+            Some(Some(was)) => out.push(Segment::stand_in(&was, kind)),
+            _ => out.push(Segment::unaccounted(kind)),
         }
-        at = end;
+        at = start + kind.stand_in().len();
     }
     plain(&mut out, &text[at..]);
     if out.is_empty() {
         out.push(Segment::plain(""));
     }
     out
+}
+
+/// One piece of the report as the scanner left it ([`finished`]): words, or a stand-in with
+/// what it replaced (`None` for one already in the words, which nothing here knows).
+enum Piece {
+    Words(String),
+    StandIn(Kind, Option<String>),
+}
+
+/// `text` added to the words at the end of `pieces`, or as new words after a stand-in.
+fn push_words(pieces: &mut Vec<Piece>, text: &str) {
+    match pieces.last_mut() {
+        Some(Piece::Words(words)) => words.push_str(text),
+        _ if !text.is_empty() => pieces.push(Piece::Words(text.to_string())),
+        _ => {}
+    }
+}
+
+/// `text` with every run of white space written as one space: a paragraph split or joined
+/// differently, or a line break written as a space, is still the same words.
+fn one_spaced(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut gap = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            if !gap {
+                out.push(' ');
+            }
+            gap = true;
+        } else {
+            out.push(c);
+            gap = false;
+        }
+    }
+    out
+}
+
+/// The most ways of reading a report [`receipts`] follows before it calls the report uncertain:
+/// far above any real report (one way per character per place it could be), and a bound on what a
+/// pathological one costs.
+const MOST_READINGS: usize = 400_000;
+
+/// **WHAT EACH STAND-IN IN RICH'S WORDS REPLACED, ONLY WHERE THAT IS CERTAIN** (review
+/// rv-20261010T081721Z-66ba5386-a4d1 finding 1). `his` are his texts in the order of `report`'s
+/// (title, then each section's paragraphs and steps); the answer has one entry per stand-in in
+/// them ([`stand_ins_in`]), in order, for [`marked`].
+///
+/// His words are the report's with only two kinds of change: a stand-in the scanner wrote put
+/// back as the words it replaced, and words of `replaced` (what he says he replaced now) written
+/// as the stand-in for their kind. Every reading of the report under those changes that gives
+/// exactly his words, white space aside ([`one_spaced`]), is followed, character by character:
+/// each reading ties each of his stand-ins to one place, a whole stand-in of the report or the
+/// whole words of a replaced term, never part of either and never two at once. A stand-in names
+/// what it replaced only when EVERY reading names the same; and when any stand-in of a kind is
+/// in doubt (two readings disagree), or no reading gives his words at all (a word changed, a
+/// stand-in nothing accounts for, a count that does not reconcile), every stand-in of that kind,
+/// or of every kind, says only its kind ([`Segment::unaccounted`]).
+fn receipts(report: &[Piece], his: &[&str], replaced: &[PrivateTerm]) -> Vec<(Kind, Option<String>)> {
+    let in_order: Vec<Kind> = his.iter().flat_map(|text| stand_ins_in(text)).map(|(_, kind)| kind).collect();
+    let in_doubt = || in_order.iter().map(|&kind| (kind, None)).collect::<Vec<_>>();
+    let words = one_spaced(&his.join("\n"));
+    let words = words.trim();
+    let spans = stand_ins_in(words);
+    // Spacing must leave his stand-ins as they were: one written across a line break is a stand-in
+    // to the reading and not to the card.
+    if spans.iter().map(|&(_, kind)| kind).ne(in_order.iter().copied()) {
+        return in_doubt();
+    }
+    let span_at: std::collections::HashMap<usize, (usize, Kind)> = spans.iter().enumerate().map(|(n, &(at, kind))| (at, (n, kind))).collect();
+    let mut inside = vec![false; words.len() + 1];
+    for &(at, kind) in &spans {
+        inside[at..at + kind.stand_in().len()].iter_mut().for_each(|b| *b = true);
+    }
+    let clear = |from: usize, to: usize| !inside[from..to].iter().any(|&b| b);
+    // The report's words spaced the same way, the ends of the whole trimmed as his are.
+    let mut pieces: Vec<Piece> = report
+        .iter()
+        .map(|p| match p {
+            Piece::Words(w) => Piece::Words(one_spaced(w)),
+            Piece::StandIn(kind, was) => Piece::StandIn(*kind, was.clone()),
+        })
+        .collect();
+    let last = pieces.len().saturating_sub(1);
+    if let Some(Piece::Words(w)) = pieces.first_mut() {
+        *w = w.trim_start().to_string();
+    }
+    if let Some(Piece::Words(w)) = pieces.get_mut(last) {
+        *w = w.trim_end().to_string();
+    }
+    let terms: Vec<(String, &PrivateTerm)> = replaced.iter().map(|t| (one_spaced(&t.text), t)).filter(|(spaced, _)| !spaced.trim().is_empty()).collect();
+
+    // A reading's place: the piece, how far into its words, and how far into his.
+    type Place = (usize, usize, usize);
+    let mut number: std::collections::HashMap<Place, usize> = std::collections::HashMap::new();
+    let mut places: Vec<Place> = vec![(0, 0, 0)];
+    number.insert((0, 0, 0), 0);
+    // The stand-in of his a step ties, if any: its number among his, and what it replaced.
+    type Tie = Option<(usize, Option<String>)>;
+    // Each step: from, to, and what it ties.
+    let mut steps: Vec<(usize, usize, Tie)> = Vec::new();
+    let mut todo = vec![0];
+    while let Some(from) = todo.pop() {
+        let (i, j, p) = places[from];
+        let mut next: Vec<(Place, Tie)> = Vec::new();
+        match pieces.get(i) {
+            None => {}
+            Some(Piece::Words(w)) if j == w.len() => next.push(((i + 1, 0, p), None)),
+            Some(Piece::Words(w)) => {
+                // The same character, outside his stand-ins.
+                if let Some(c) = w[j..].chars().next() {
+                    let n = c.len_utf8();
+                    if words[p..].starts_with(c) && clear(p, p + n) {
+                        next.push(((i, j + n, p + n), None));
+                    }
+                }
+                // Or the whole words of a term he replaced, as the whole stand-in of its kind.
+                if let Some(&(span, kind)) = span_at.get(&p) {
+                    for (spaced, term) in &terms {
+                        if term.kind == kind && w[j..].starts_with(spaced.as_str()) {
+                            next.push(((i, j + spaced.len(), p + kind.stand_in().len()), Some((span, Some(term.text.clone())))));
+                        }
+                    }
+                }
+            }
+            Some(Piece::StandIn(kind, was)) => {
+                // Kept: the whole stand-in, in the same place.
+                if let Some(&(span, k)) = span_at.get(&p) {
+                    if k == *kind {
+                        next.push(((i + 1, 0, p + k.stand_in().len()), Some((span, was.clone()))));
+                    }
+                }
+                // Or put back: the whole words it replaced, outside his stand-ins.
+                if let Some(back) = was.as_deref().map(one_spaced) {
+                    if !back.trim().is_empty() && words[p..].starts_with(back.as_str()) && clear(p, p + back.len()) {
+                        next.push(((i + 1, 0, p + back.len()), None));
+                    }
+                }
+            }
+        }
+        for (place, tie) in next {
+            let to = match number.get(&place) {
+                Some(&to) => to,
+                None => {
+                    places.push(place);
+                    number.insert(place, places.len() - 1);
+                    todo.push(places.len() - 1);
+                    places.len() - 1
+                }
+            };
+            steps.push((from, to, tie));
+        }
+        if places.len() > MOST_READINGS {
+            return in_doubt();
+        }
+    }
+    // The places a reading that gives all of his words passes through, walked back from its end.
+    let mut whole = vec![false; places.len()];
+    let mut back: Vec<Vec<usize>> = vec![Vec::new(); places.len()];
+    for &(from, to, _) in &steps {
+        back[to].push(from);
+    }
+    let mut walk: Vec<usize> = (0..places.len()).filter(|&n| places[n].0 == pieces.len() && places[n].2 == words.len()).collect();
+    for &n in &walk {
+        whole[n] = true;
+    }
+    while let Some(n) = walk.pop() {
+        for &from in &back[n] {
+            if !whole[from] {
+                whole[from] = true;
+                walk.push(from);
+            }
+        }
+    }
+    if !whole[0] {
+        return in_doubt();
+    }
+    // What each of his stand-ins replaced, in every whole reading.
+    let mut named: Vec<Vec<Option<String>>> = vec![Vec::new(); spans.len()];
+    for (_, to, tie) in steps {
+        if let (true, Some((span, was))) = (whole[to], tie) {
+            if !named[span].contains(&was) {
+                named[span].push(was);
+            }
+        }
+    }
+    let doubted: std::collections::HashSet<Kind> = spans.iter().zip(&named).filter(|(_, names)| names.len() != 1).map(|(&(_, kind), _)| kind).collect();
+    spans.iter().zip(named).map(|(&(_, kind), mut names)| (kind, if doubted.contains(&kind) { None } else { names.pop().flatten() })).collect()
 }
 
 /// **A REPORT RICH COULD NOT CHECK YET**, kept on this Mac until he can: the user's words and
@@ -1386,10 +1611,22 @@ pub fn parse_change(raw: &str) -> Result<Change, String> {
 /// (`report`), and any he names in this change. Returns the words to add and the report's
 /// private words from now on, so a name Rich found once stays left out on every later change
 /// (second review finding 4: on 1c3dda1dc his names applied to the first draft only).
+///
+/// **EVERY STAND-IN IN HIS ADDITION IS MARKED AND COUNTED, AS IN THE FIRST DRAFT** (review
+/// rv-20261010T180313Z-f29db708-733e finding 1): his prompt asks him to write private details as
+/// stand-ins, and on f29db7082 the ones he wrote stayed plain words, so the card said "Nothing
+/// private was in it" under "[a person] could not open [a file on this Mac] either." Each is marked
+/// by [`marked`], the first draft's rule; his change lists what is still in his words, never what
+/// he replaced, so nothing accounts for one and each says its kind alone ([`Segment::unaccounted`]).
 pub fn scrub_change(change: &Change, app: &[PrivateTerm], report: &[PrivateTerm]) -> (Vec<Segment>, Vec<PrivateTerm>) {
     let report = distinct(report.iter().chain(&change.private).cloned());
     let scrubber = Scrubber::with_rich(app.to_vec(), report.clone());
-    (scrubber.scrub(&change.add), report)
+    let add = scrubber
+        .scrub(&change.add)
+        .into_iter()
+        .flat_map(|segment| if segment.is_stand_in() { vec![segment] } else { marked(&segment.text, &mut Vec::new()) })
+        .collect();
+    (add, report)
 }
 
 /// **THE CARD'S HEADS-UP, ASKED OF THE SCRUBBER THAT CLEANS THE REPORT**: the private words in
@@ -1430,7 +1667,7 @@ pub struct Draft {
 fn paragraphs_of(text: &str, scrubber: &Scrubber) -> Vec<Vec<Segment>> {
     let mut out: Vec<Vec<Segment>> = vec![vec![]];
     for segment in scrubber.scrub(text) {
-        if segment.was.is_some() {
+        if segment.is_stand_in() {
             out.last_mut().expect("never empty").push(segment);
             continue;
         }
@@ -1443,13 +1680,13 @@ fn paragraphs_of(text: &str, scrubber: &Scrubber) -> Vec<Vec<Segment>> {
     }
     out.into_iter()
         .filter_map(|mut paragraph| {
-            if let Some(first) = paragraph.first_mut().filter(|s| s.was.is_none()) {
+            if let Some(first) = paragraph.first_mut().filter(|s| !s.is_stand_in()) {
                 first.text = first.text.trim_start().to_string();
             }
-            if let Some(last) = paragraph.last_mut().filter(|s| s.was.is_none()) {
+            if let Some(last) = paragraph.last_mut().filter(|s| !s.is_stand_in()) {
                 last.text = last.text.trim_end().to_string();
             }
-            paragraph.retain(|s| s.was.is_some() || !s.text.is_empty());
+            paragraph.retain(|s| s.is_stand_in() || !s.text.is_empty());
             (!paragraph.is_empty()).then_some(paragraph)
         })
         .collect()
@@ -1506,6 +1743,13 @@ pub struct SheetSection {
 /// here would be a way for a name to be shown that the scrub did not read.
 const MARKS: &str = "\\`*_[]<>#|~&";
 
+/// **THE MARKS THAT ARE MARKDOWN ONLY AT THE START OF A LINE** (review
+/// rv-20261010T194410Z-796ff877-381f: "- The button does nothing." went out as a bullet, "---" as a
+/// divider): a list's `-` or `+`, a line of `=` under a line (a heading), and the `.` or `)` after
+/// a line's leading number (a numbered list). [`escaped_lines`] escapes them there only; `*`, `_`,
+/// `#` and `>` are in [`MARKS`] and escaped everywhere already. [`shown`] reads each as itself.
+const LINE_MARKS: &str = "-+=.)";
+
 /// **WHAT FOLLOWS EVERY `@` IN AN ISSUE'S BODY**: a zero-width space, so "@octocat" is not a
 /// mention: GitHub neither links it nor notifies that account, and the reader still sees
 /// "@octocat" (review rv-20261009T183159Z-a2fc94dc-20e7, the leak cc/echo-opus-bug13's handover
@@ -1531,6 +1775,29 @@ fn escaped(text: &str) -> String {
     out
 }
 
+/// The card's words as [`escaped`] writes them, each line without the spaces and tabs it starts
+/// with, and on every line the mark that would start a Markdown block there ([`LINE_MARKS`])
+/// escaped too: a leading `-`, `+` or `=`, and the `.` or `)` after a leading number. So the line
+/// GitHub shows is the line the user approved, not a list, a divider or a heading. Indentation
+/// means nothing in a bug report and is dropped (review rv-20261010T204141Z-53407e2a-dc94: a line
+/// indented four spaces was a code block, where the escapes show), so no line is a code block and
+/// every escape is on the line's real first character.
+fn escaped_lines(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            let rest = line.trim_start_matches([' ', '\t']);
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            let (number, rest) = rest.split_at(digits);
+            match rest.chars().next() {
+                Some(c @ ('.' | ')')) if !number.is_empty() => format!("{number}\\{c}{}", escaped(&rest[1..])),
+                Some(c @ ('-' | '+' | '=')) if number.is_empty() => format!("\\{c}{}", escaped(&rest[1..])),
+                _ => escaped(&format!("{number}{rest}")),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// **THE WORDS GITHUB SHOWS** for a body this module wrote ([`issue_body`]): every escaped mark
 /// read as the mark itself, and the [`MENTION_BREAK`] after each `@` read as nothing, so these
 /// are the words as the user wrote them (an email address is whole again for the scrub). With
@@ -1542,7 +1809,7 @@ fn shown(markdown: &str) -> (String, Vec<(usize, usize)>) {
     let mut chars = markdown.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         let c = match chars.peek() {
-            Some(&(_, next)) if c == '\\' && MARKS.contains(next) => {
+            Some(&(_, next)) if c == '\\' && (MARKS.contains(next) || LINE_MARKS.contains(next)) => {
                 chars.next();
                 next
             }
@@ -1604,9 +1871,9 @@ fn body_parts(sheet: &Sheet) -> Vec<Part> {
 }
 
 /// The issue's body: each section as a heading and its words, nothing added, every word escaped
-/// ([`escaped`]) so GitHub shows the words themselves.
+/// ([`escaped_lines`]) so GitHub shows the words themselves.
 pub fn issue_body(sheet: &Sheet) -> String {
-    body_parts(sheet).into_iter().map(|(place, text)| if place.is_some() { escaped(&text) } else { text }).collect()
+    body_parts(sheet).into_iter().map(|(place, text)| if place.is_some() { escaped_lines(&text) } else { text }).collect()
 }
 
 /// The page of issue `number` on [`REPOSITORY`]. Built from a number, so the card's link can only
@@ -1670,7 +1937,7 @@ pub fn issue_of(sheet: &Sheet) -> Issue {
 /// Stand-ins already on `draft` stay as they are, with what they replaced.
 pub fn as_posted(draft: &Draft, scrubber: &Scrubber) -> Draft {
     let mut card = tidied(draft);
-    for segment in card.title.iter_mut().filter(|s| s.was.is_none()) {
+    for segment in card.title.iter_mut().filter(|s| !s.is_stand_in()) {
         segment.text = segment.text.replace('`', "'");
     }
     loop {
@@ -1721,7 +1988,7 @@ fn left_out(segments: &[Segment], spans: &[Span]) -> Vec<Segment> {
     let mut at = 0;
     for segment in segments {
         let end = at + segment.text.len();
-        if segment.was.is_some() {
+        if segment.is_stand_in() {
             out.push(segment.clone());
             at = end;
             continue;
@@ -1754,20 +2021,20 @@ fn tidied(draft: &Draft) -> Draft {
     let words = |segments: &[Segment]| -> Vec<Segment> {
         let mut out: Vec<Segment> = Vec::new();
         for segment in segments {
-            let stand_in = segment.was.is_some() && Kind::ALL.iter().any(|k| k.stand_in() == segment.text);
+            let stand_in = segment.is_stand_in() && Kind::ALL.iter().any(|k| k.stand_in() == segment.text);
             match out.last_mut() {
-                Some(last) if !stand_in && last.was.is_none() => last.text.push_str(&segment.text),
+                Some(last) if !stand_in && !last.is_stand_in() => last.text.push_str(&segment.text),
                 _ if stand_in => out.push(segment.clone()),
                 _ => out.push(Segment::plain(&segment.text)),
             }
         }
-        if let Some(first) = out.first_mut().filter(|s| s.was.is_none()) {
+        if let Some(first) = out.first_mut().filter(|s| !s.is_stand_in()) {
             first.text = first.text.trim_start().to_string();
         }
-        if let Some(last) = out.last_mut().filter(|s| s.was.is_none()) {
+        if let Some(last) = out.last_mut().filter(|s| !s.is_stand_in()) {
             last.text = last.text.trim_end().to_string();
         }
-        out.retain(|s| s.was.is_some() || !s.text.is_empty());
+        out.retain(|s| s.is_stand_in() || !s.text.is_empty());
         out
     };
     let kept = |list: &[Vec<Segment>]| list.iter().map(|p| words(p)).filter(|p| !p.is_empty()).collect();
@@ -2364,5 +2631,243 @@ mod tests {
         let segments = scrubber.scrub("“Zoë Kim” — café");
         let text: String = segments.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(text, "“[a person]” — café");
+    }
+
+    // ---- the review of 66ba53861 (rv-20261010T081721Z-66ba5386-a4d1), finding 1 ----
+
+    /// What happened to one name in a generated report: the scanner hid it and Rich kept the
+    /// stand-in, the scanner hid it and Rich put it back, it was a stand-in already in the words,
+    /// Rich replaced it now (listing it), or it stayed as it was.
+    #[derive(Clone, Copy, Debug)]
+    enum Fate {
+        Kept,
+        PutBack,
+        Already,
+        Replaced,
+        Stays,
+    }
+
+    /// One report, as the scanner left it (`scanned`) and as Rich answered (`answer`), with what
+    /// each stand-in in his words truly replaced (`truth`, in order; `None` for one already there).
+    struct Case {
+        scanned: Draft,
+        answer: String,
+        truth: Vec<(Kind, Option<String>)>,
+        about: String,
+    }
+
+    /// `paragraphs` of (words before, name, its kind, its fate), in one section, and Rich's list.
+    fn case_of(paragraphs: &[Vec<(&str, &str, Kind, Fate)>], listed: &[(&str, Kind)]) -> Case {
+        let mut scanned_paragraphs = Vec::new();
+        let mut his_paragraphs = Vec::new();
+        let mut truth = Vec::new();
+        let mut about = String::new();
+        for paragraph in paragraphs {
+            let mut segments: Vec<Segment> = Vec::new();
+            let mut his = String::new();
+            let plain = |segments: &mut Vec<Segment>, words: &str| match segments.last_mut() {
+                Some(last) if !last.is_stand_in() => last.text.push_str(words),
+                _ => segments.push(Segment::plain(words)),
+            };
+            for &(before, name, kind, fate) in paragraph {
+                plain(&mut segments, before);
+                his.push_str(before);
+                about.push_str(&format!("{before}<{name}:{fate:?}>"));
+                match fate {
+                    Fate::Kept => {
+                        segments.push(Segment::stand_in(name, kind));
+                        his.push_str(kind.stand_in());
+                        truth.push((kind, Some(name.to_string())));
+                    }
+                    Fate::PutBack => {
+                        segments.push(Segment::stand_in(name, kind));
+                        his.push_str(name);
+                    }
+                    Fate::Already => {
+                        plain(&mut segments, kind.stand_in());
+                        his.push_str(kind.stand_in());
+                        truth.push((kind, None));
+                    }
+                    Fate::Replaced => {
+                        plain(&mut segments, name);
+                        his.push_str(kind.stand_in());
+                        truth.push((kind, Some(name.to_string())));
+                    }
+                    Fate::Stays => {
+                        plain(&mut segments, name);
+                        his.push_str(name);
+                    }
+                }
+            }
+            about.push_str(" | ");
+            if segments.is_empty() {
+                segments.push(Segment::plain(""));
+            }
+            scanned_paragraphs.push(segments);
+            his_paragraphs.push(his.trim().to_string());
+        }
+        let rich_kind = |k: Kind| match k {
+            Kind::PersonName => "person",
+            Kind::CompanyName => "company",
+            _ => "other",
+        };
+        let answer = serde_json::json!({
+            "title": "Window froze",
+            "sections": [{"heading": "What happened", "paragraphs": his_paragraphs, "steps": []}],
+            "private": listed.iter().map(|&(t, k)| serde_json::json!({"text": t, "kind": rich_kind(k)})).collect::<Vec<_>>(),
+        })
+        .to_string();
+        let scanned = Draft {
+            title: vec![Segment::plain("Window froze")],
+            sections: vec![DraftSection { heading: "What happened".into(), paragraphs: scanned_paragraphs, steps: vec![] }],
+            private: vec![],
+        };
+        Case { scanned, answer, truth, about: format!("{about} listed {listed:?}") }
+    }
+
+    /// What each stand-in on `draft` says it replaced, in order, with its kind.
+    fn receipts_on(draft: &Draft) -> Vec<(Kind, Option<String>)> {
+        let mut all: Vec<&Segment> = draft.title.iter().collect();
+        for section in &draft.sections {
+            all.extend(section.paragraphs.iter().chain(&section.steps).flatten());
+        }
+        all.into_iter().filter_map(|s| s.kind.map(|k| (k, s.was.clone()))).collect()
+    }
+
+    /// **NO STAND-IN NAMES WORDS IT DID NOT REPLACE, AND DOUBT COVERS THE WHOLE KIND.** Each
+    /// stand-in either names exactly what it replaced in its own place, or claims nothing; a kind
+    /// with any stand-in that claims nothing has all of them claim nothing.
+    fn holds(case: &Case) -> Result<bool, String> {
+        let draft = finished(Ok(case.answer.clone()), &case.scanned)?;
+        let got = receipts_on(&draft);
+        if got.len() != case.truth.len() {
+            return Err(format!("{} stand-ins on the card for {} in his words: {}", got.len(), case.truth.len(), case.about));
+        }
+        for ((kind, was), (true_kind, true_was)) in got.iter().zip(&case.truth) {
+            if kind != true_kind || (was.is_some() && was != true_was) {
+                return Err(format!("a stand-in names words it did not replace: got {got:?}, truly {:?}: {}", case.truth, case.about));
+            }
+        }
+        for kind in Kind::ALL {
+            let of_kind: Vec<_> = got.iter().zip(&case.truth).filter(|((k, _), _)| *k == kind).collect();
+            let doubted = of_kind.iter().any(|((_, was), (_, true_was))| was != true_was);
+            if doubted && of_kind.iter().any(|((_, was), _)| was.is_some()) {
+                return Err(format!("{kind:?}: some stand-ins claim words while others of the kind are in doubt: {got:?}: {}", case.about));
+            }
+        }
+        Ok(got == case.truth)
+    }
+
+    #[test]
+    fn a_stand_in_names_what_it_replaced_only_where_that_is_certain() {
+        use Fate::*;
+        use Kind::{CompanyName as C, PersonName as P};
+        // The review's fixture `overlapping-private-receipts.py`: "Mary Ann saw it. Bob saw it. Ann
+        // saw it too.", all three replaced by Rich. On 66ba53861 "Ann" was found inside the
+        // claimed "Mary Ann" (only start positions were reserved), and Bob's and Ann's receipts
+        // swapped.
+        let review = case_of(
+            &[vec![("", "Mary Ann", P, Replaced), (" saw it. ", "Bob", P, Replaced), (" saw it. ", "Ann", P, Replaced), (" saw it too.", "", P, Stays)]],
+            &[("Mary Ann", P), ("Bob", P), ("Ann", P)],
+        );
+        assert_eq!(holds(&review), Ok(true), "the review's case");
+        // The same with Rich listing them in any order, and "Ann" listed before "Mary Ann".
+        let reordered = case_of(
+            &[vec![("", "Mary Ann", P, Replaced), (" saw it. ", "Bob", P, Replaced), (" saw it. ", "Ann", P, Replaced)]],
+            &[("Ann", P), ("Bob", P), ("Mary Ann", P)],
+        );
+        assert_eq!(holds(&reordered), Ok(true), "listed in another order");
+        // The earlier rounds' cases still name their own: an earlier stand-in claims nothing and
+        // the scanner's names Alex; a name Rich cleans up before the scanner's names itself.
+        let mixed = case_of(&[vec![("", "", P, Already), (" saw it. ", "Alex", P, Kept), (" saw it too.", "", P, Stays)]], &[]);
+        assert_eq!(holds(&mixed), Ok(true), "the mixed edit");
+        let before = case_of(&[vec![("", "Carol", P, Replaced), (" saw it. ", "Alex", P, Kept)]], &[("Carol", P)]);
+        assert_eq!(holds(&before), Ok(true), "a name before the scanner's");
+        // Rich hides a name and lists nothing for it: nothing ties his stand-ins to their
+        // places, so none of the kind claims anything.
+        let unlisted = case_of(&[vec![("", "Bob", P, Replaced), (" saw it. ", "Alex", P, Kept)]], &[]);
+        let draft = finished(Ok(unlisted.answer.clone()), &unlisted.scanned).unwrap();
+        assert_eq!(receipts_on(&draft), [(P, None), (P, None)], "an unlisted stand-in");
+        // He changes a word beside them: the words no longer reconcile, so none claims anything.
+        let mut changed = case_of(&[vec![("", "Bob", P, Kept), (" saw it. ", "Acme", C, Replaced)]], &[("Acme", C)]);
+        changed.answer = changed.answer.replace("saw it", "said it");
+        let draft = finished(Ok(changed.answer.clone()), &changed.scanned).unwrap();
+        assert_eq!(receipts_on(&draft), [(P, None), (C, None)], "words that do not reconcile");
+    }
+
+    #[test]
+    fn generated_reports_never_give_a_stand_in_words_it_did_not_replace() {
+        use Fate::*;
+        use Kind::{CompanyName as C, PersonName as P};
+        // GENERATED MIXES: repeated, nested and overlapping names, glued to each other or apart,
+        // across paragraphs, each hidden by the scanner and kept or put back, already a stand-in,
+        // replaced by Rich, or left; his list in any order, with repeats and with names he did
+        // not use. Every one must hold, and the plain ones must be exact.
+        let names: [(&str, Kind); 10] = [
+            ("Ann", P),
+            ("Mary Ann", P),
+            ("Anna", P),
+            ("Mary", P),
+            ("Ann Lee", P),
+            ("Bob", P),
+            ("Bobby", P),
+            ("Acme", C),
+            ("Acme Corp", C),
+            ("Corp", C),
+        ];
+        let between = ["", " ", " saw it. ", " and ", ", ", "\n", "  "];
+        let fates = [Kept, PutBack, Already, Replaced, Stays];
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let (mut exact, mut doubted) = (0, 0);
+        for _ in 0..3000 {
+            let mut paragraphs = Vec::new();
+            let mut used: Vec<(&str, Kind)> = Vec::new();
+            for _ in 0..1 + next(3) {
+                let mut paragraph = Vec::new();
+                for _ in 0..1 + next(6) {
+                    let (name, kind) = names[next(names.len())];
+                    let fate = fates[next(fates.len())];
+                    if let Replaced = fate {
+                        used.push((name, kind));
+                    }
+                    paragraph.push((between[next(between.len())], name, kind, fate));
+                }
+                paragraph.push((between[next(between.len())], "", P, Stays));
+                paragraphs.push(paragraph);
+            }
+            // His list: what he replaced, each once or twice, in any order, sometimes with a name
+            // he did not replace.
+            let mut listed: Vec<(&str, Kind)> = Vec::new();
+            for &u in &used {
+                if !listed.contains(&u) || next(4) == 0 {
+                    listed.push(u);
+                }
+            }
+            if next(3) == 0 {
+                listed.push(names[next(names.len())]);
+            }
+            for i in (1..listed.len()).rev() {
+                listed.swap(i, next(i + 1));
+            }
+            let case = case_of(&paragraphs, &listed);
+            match holds(&case) {
+                Ok(true) => exact += 1,
+                Ok(false) => {
+                    doubted += 1;
+                    println!("in doubt: {}", case.about.replace('\n', "\\n"));
+                }
+                Err(why) => panic!("{why}"),
+            }
+        }
+        // Doubt is rare among reports that follow the rules; it is the honest answer only where
+        // the words really do not tell (measured, not assumed: the count is printed).
+        println!("generated: {exact} exact, {doubted} in doubt");
+        assert!(exact > 2500, "only {exact} of 3000 generated reports were exact ({doubted} in doubt)");
     }
 }

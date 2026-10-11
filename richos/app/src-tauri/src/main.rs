@@ -4253,6 +4253,9 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
     // spec puts one back-end Rich behind each thread, and another thread's live assignment is
     // the one answer that is never useful on this thread's surface.
     let live = state.work.live_on(&thread_id).map(|live| live.id);
+    // Written down and held until a sign-in or the work connection comes back: the window says
+    // these are waiting to start, never "starting" (nightly 48's walk, D26).
+    let held = state.work.held_on(&thread_id);
     Ok(serde_json::json!({
         "assignments": rows.iter().map(|row| {
             // **What this assignment is waiting on HIM for** (spec §5.2, §5.5, §7.8). The
@@ -4304,6 +4307,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "registeredAtMs": row.registered_at_ms,
                 "canStop": row.state.is_open(),
                 "onTheConnection": live.as_deref() == Some(row.id.as_str()),
+                "held": held.contains(&row.id),
                 "awaitingYou": waiting,
             })
         }).collect::<Vec<_>>()

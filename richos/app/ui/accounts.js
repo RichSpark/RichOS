@@ -140,7 +140,7 @@
   // ---- the sheet --------------------------------------------------------------------------
   const sheet = document.createElement("div");
   sheet.id = "accounts-sheet"; sheet.className = "overlay"; sheet.hidden = true;
-  sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("role", "dialog");
   sheet.setAttribute("aria-labelledby", "acc-title"); sheet.setAttribute("data-dismiss", "control:#acc-close");
   sheet.innerHTML = `<section class="overlay-panel acc-panel">
     <header class="acc-heading"><div><p class="acc-eyebrow">Settings</p><h2 id="acc-title">Claude accounts</h2><p id="acc-lede" class="acc-lede"></p></div>

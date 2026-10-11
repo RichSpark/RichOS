@@ -275,9 +275,13 @@ has "$P" "BASE: $BASE"; check "C01 the input names the base" $? "base $BASE"
 has "$P" "COMMIT-MESSAGE-LINE"; check "C01 the input holds the author's commit message" $? ""
 has "$P" "LAST-REPORT-LINE: 12 tests green."; check "C01 the input holds the author's last report" $? ""
 has "$P" "AGENTS-RULE-LINE"; check "C01 the input holds the repository's own rules" $? ""
-has "$P" "a user could hit it in normal use of this work, AND it breaks what the work promises" \
-  && has "$P" "a deliberately hostile local process or a rare race does not block"
+has "$P" "It blocks only when a regular user of the app would notice it in normal use AND it would matter to them." \
+  && has "$P" "a deliberately hostile local process or a rare race"
 check "C01 the input gives the reviewer the blocking test" $? ""
+has "$P" "how text renders somewhere other than the app (GitHub, a terminal, a Markdown viewer), a missing or weak test, wording, and anything only a developer would see" \
+  && has "$P" "The author's claims above are what you check the work against, never extra promises" \
+  && ! has "$P" "it breaks what the work promises" && ! has "$P" "and the author's claims above)"
+check "C01 the blocking test is the user's: off-app rendering, tests, wording and developer-only findings never block, and the author's claims are checked against, never counted as promises" $? ""
 ARGV="$(field "$(cat "$C/call.json")" '" ".join(r["argv"])')"
 CWD="$(field "$(cat "$C/call.json")" 'r["cwd"]')"
 has " $ARGV " " exec "; check "C01 Codex runs as codex exec" $? "$ARGV"
@@ -361,7 +365,7 @@ CARGV="$(field "$(cat "$CL/call.json")" '" ".join(r["argv"])')"
 check "C06 Codex at its usage limit: the Claude fallback reviews on Opus, and says why" $? "rc=$RC row=$ROW argv=$CARGV"
 [ "$(field "$ROW" 'r["reviewer_model"]')" = "claude-opus-5-5" ] && [ "$(field "$ROW" 'r["author_model"]')" = "sonnet" ]
 check "C06 the verdict says which model reviewed" $? "$ROW"
-has "$(cat "$CL/prompt.md")" "a user could hit it in normal use of this work, AND it breaks what the work promises"
+has "$(cat "$CL/prompt.md")" "It blocks only when a regular user of the app would notice it in normal use AND it would matter to them."
 check "C06 the Claude fallback gets the same blocking test as Codex" $? "$CL/prompt.md"
 has "$CARGV" '"sandbox": {"enabled": true' && has "$CARGV" '"allowUnsandboxedCommands": false' \
   && has "$CARGV" "--disallowedTools Edit,Write,NotebookEdit" && has "$CARGV" "--setting-sources  "
