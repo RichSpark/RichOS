@@ -355,6 +355,31 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             proc_tree.supervise(os.getpid(), ['true'], guard_role='anything-else')
 
+    def test_the_canonical_config_named_explicitly_still_registers_and_a_private_one_does_not(self):
+        # Second review of af4b68db1 (rv-20261011T123904Z): CLAUDE_CONFIG_DIR set to the
+        # ordinary ~/.claude made the supervisor skip registration, so package-app.sh
+        # compiled without the release-build role. A private (fixture) config still skips.
+        import proc_tree
+        import pwd
+        saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+        self.addCleanup(lambda: [signal.signal(sig, handler) for sig, handler in saved.items()])
+        home = pwd.getpwuid(os.getuid()).pw_dir
+        env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_CONFIG_DIR'}
+        cases = [(os.path.join(home, '.claude'), 1), (os.path.join(home, '.claude') + '/', 1),
+                 (os.path.join(home, '.claude', '..', '.claude'), 1), (self.tmp.name, 0)]
+        for config, registrations in cases:
+            with self.subTest(config=config), \
+                    patch.dict(os.environ, {**env, 'HOME': home, 'CLAUDE_CONFIG_DIR': config}, clear=True), \
+                    patch.object(G, 'verification_enabled', return_value=False), \
+                    patch.object(G, 'inherited_verification_owner', return_value=None), \
+                    patch.object(G, 'healthy', return_value=True), \
+                    patch.object(G, 'register') as register, \
+                    patch.object(proc_tree.subprocess, 'Popen', side_effect=OSError('fixture stops here')):
+                self.assertEqual(proc_tree.supervise(os.getpid(), ['cargo'], guard_role='release-build'), 127)
+                self.assertEqual(register.call_count, registrations)
+                if registrations:
+                    register.assert_called_once_with(os.getpid(), 'managed cargo', 'release-build')
+
     def test_caps_cannot_be_overridden(self):
         gradle=N.capped(['./gradlew','test'])
         self.assertIn('--max-workers=1',gradle)
