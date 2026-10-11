@@ -15,10 +15,13 @@ WHAT IT DOES. Every test runner starts each suite through `host_shield.py run --
 
   1. A shell suite's SOURCE is read first. A line that runs one of the commands below by an
      ABSOLUTE OR RELATIVE PATH (which bypasses PATH), or under sudo/doas (which resets PATH),
-     in a form guard-host-display-power.sh refuses, refuses the suite before it runs, inside
-     `if`/`while`/`!` and the other control words too. So does a path to an always-bad command
-     anywhere on a line, and a path to ANY stood-in command assigned to a variable
-     (`POWER=/usr/bin/<it>` then `$POWER ...` would bypass PATH and the stand-in alike).
+     in a form guard-host-display-power.sh refuses OR the test-run rules below refuse,
+     refuses the suite before it runs, inside `if`/`while`/`!` and the other control words
+     too. Every physical line is read, and every backslash-continued command is read joined
+     as well. So does a path to an always-bad command anywhere on a line, and a path to ANY
+     stood-in command assigned to a variable (`POWER=/usr/bin/<it>` then `$POWER ...` would
+     bypass PATH and the stand-in alike). An osascript by path whose script is in a file or
+     on stdin is refused too: the source check cannot read that script.
   2. The suite runs with `host-shield/` FIRST ON PATH. That directory holds one stand-in per
      command the guard judges. A stand-in judges its own argv with the GUARD'S OWN judge()
      (read out of guard-host-display-power.sh, so the two cannot drift), plus the TEST-RUN
@@ -39,7 +42,9 @@ A SUITE THAT GENUINELY NEEDS ONE DECLARES IT, in its own source, with a reason:
 
     # host-shield: names <command>[,<command>...] -- <reason>
         the source NAMES it (a fixture, a refusal message) and never runs it: the source check
-        skips it. The stand-in still refuses a call at run time.
+        skips a path to it in the arguments of a data command (echo, printf, grep, test), and
+        nothing else. A call by path or under sudo is still refused before the suite runs, and
+        the stand-in still refuses a call at run time.
     # host-shield: runs <command>[,<command>...] -- <reason>
         the suite RUNS it for real: the stand-in hands it to the real command (and the source
         check skips it). None should; every one is a decision somebody can read.
@@ -216,18 +221,53 @@ def _trigger_re():
     return re.compile(r"(?i)\b(?:%s)\b" % "|".join(re.escape(n) for n in sorted(names)))
 
 
+# Commands whose arguments are only ever data: a path to a host command named after one of
+# them (`printf '%s\n' /sbin/<it>`) is a MENTION, the one kind of finding a `names`
+# declaration exempts. Anywhere else (`xargs <path>`, `timeout 5 <path>`, the command word)
+# the same path may run, and only `runs` exempts it (review rv-20261011T141442Z-0009fe5a-a898 #6).
+DATA_COMMANDS = {"echo", "printf", "grep", "egrep", "fgrep", "rg", "test", "[", "[[", ":"}
+
+
+def logical_lines(text):
+    """[(first line number, text)] for every backslash-continued run of lines, joined as the
+    shell joins it (review rv-20261011T141442Z-0009fe5a-a898 #3: `<path> \\` then
+    `-e '<a host sleep>'` split the command from its harmful argument)."""
+    out, buf, at = [], None, 0
+    for n, raw in enumerate(text.split("\n"), 1):
+        if buf is None:
+            buf, at, joined = raw, n, False
+        else:
+            buf, joined = buf + " " + raw.lstrip(), True
+        stripped = buf.rstrip()
+        if stripped.endswith("\\") and (len(stripped) - len(stripped.rstrip("\\"))) % 2 == 1:
+            buf = stripped[:-1]
+            continue
+        if joined:
+            out.append((at, buf))
+        buf = None
+    if buf is not None and buf.strip():
+        out.append((at, buf))
+    return out
+
+
 def scan_text(text, G=None, depth=0):
-    """[(line, command word, snippet, why)] for every line that reaches a judged command
-    without going through PATH."""
+    """[(line, command word, snippet, why, kind)] for every line that reaches a judged command
+    without going through PATH. Every physical line is read, and so is every backslash-
+    continued command joined into one: either one finding refuses. `kind` is "mention" for a
+    path in a data command's arguments, else "exec"."""
     trig = _trigger_re()
-    found = []
-    for n, line in enumerate(text.split("\n"), 1):
+    found, seen = [], set()
+    lines = list(enumerate(text.split("\n"), 1)) + logical_lines(text)
+    for n, line in lines:
         if not trig.search(line):
             continue
         G = G or guard()     # loaded only when a line names one: most suites never do
         always = {k.lower() for k in G["ALWAYS_BAD"]}
         for seg in G["split_segments"](G["strip_comments"](line)):
-            found.extend((n,) + f for f in _scan_segment(seg, G, always, depth))
+            for f in _scan_segment(seg, G, always, depth):
+                if (n, f[0], f[2]) not in seen:     # a line read alone and joined: once
+                    seen.add((n, f[0], f[2]))
+                    found.append((n,) + f)
     return found
 
 
@@ -236,6 +276,11 @@ def _scan_segment(seg, G, always, depth):
     raw = G["words"](seg)
     if not raw:
         return out
+    words = raw
+    while words and words[0] in CONTROL_WORDS:
+        words = words[1:]
+    argv, sudoed = G["resolve"](words)
+    data = bool(argv) and not sudoed and os.path.basename(argv[0]) in DATA_COMMANDS
     guarded = {n.lower() for n in standin_names()}
     for w in raw:
         assigned = bool(G["ASSIGN_RE"].match(w))
@@ -244,14 +289,12 @@ def _scan_segment(seg, G, always, depth):
         if "/" not in value:
             continue
         if name in always:
-            out.append((name, seg.strip()[:110], "names %s by path: %s" % (value, G["ALWAYS_BAD"].get(name, "always refused"))))
+            out.append((name, seg.strip()[:110], "names %s by path: %s" % (value, G["ALWAYS_BAD"].get(name, "always refused")),
+                        "mention" if data and not assigned else "exec"))
         elif assigned and name in guarded and value.startswith(("/", "~")):
             # Absolute only: `X="$STUBS/open"` is the suite's own recording stub, not the host's.
             out.append((name, seg.strip()[:110], "assigns the path %s to a variable: calling it through the "
-                        "variable bypasses PATH and the stand-in" % value))
-    while raw and raw[0] in CONTROL_WORDS:
-        raw = raw[1:]
-    argv, sudoed = G["resolve"](raw)
+                        "variable bypasses PATH and the stand-in" % value, "exec"))
     if not argv:
         return out
     base = os.path.basename(argv[0])
@@ -264,10 +307,17 @@ def _scan_segment(seg, G, always, depth):
         return out
     if "/" not in argv[0] and not sudoed:
         return out          # a bare name goes through PATH, where the stand-in is
-    v = G["judge"](argv, sudoed)
+    # A path (or sudo) never reaches a stand-in, so the source check applies the TEST-RUN
+    # RULES here as well as the guard's: an absolute caffeinate or osascript keystroke is
+    # refused exactly as its bare-name call is (review rv-20261011T141442Z-0009fe5a-a898 #1).
+    name = base.lower()
+    v = G["judge"](argv, sudoed) or test_run_rule(name, argv)
+    if not v and name == "osascript" and "-e" not in argv[1:]:
+        v = ("osascript", "its script is in a file or on stdin, which the source check cannot read; "
+                          "call it by bare name so the stand-in judges the script")
     if v:
         how = "under sudo, which resets PATH" if sudoed and "/" not in argv[0] else "by path, which bypasses PATH"
-        out.append((os.path.basename(argv[0]).lower(), " ".join(argv)[:110], "%s (%s)" % (v[1], how)))
+        out.append((name, " ".join(argv)[:110], "%s (%s)" % (v[1], how), "exec"))
     return out
 
 
@@ -280,10 +330,17 @@ def scan_file(path):
         return [], {}, ["cannot read %s: %s" % (path, exc)]
     declared, errors = declarations(text)
     try:
-        found = [f for f in scan_text(text) if f[1] not in declared]
+        found = [f for f in scan_text(text) if not exempt(f, declared)]
     except GuardUnavailable as exc:
         return [], declared, [str(exc)]
     return found, declared, errors
+
+
+def exempt(finding, declared):
+    """`runs` exempts every finding for its command; `names` only a MENTION (a path in a data
+    command's arguments), never a call that could run it past the stand-in."""
+    kind = declared.get(finding[1])
+    return kind == "runs" or (kind == "names" and finding[4] == "mention")
 
 
 def suite_of(argv):
@@ -300,7 +357,7 @@ def refusal_lines(suite, findings, errors):
     lines = []
     for e in errors:
         lines.append("  FAIL  host-shield: %s: %s" % (suite, e))
-    for n, _name, snip, why in findings:
+    for n, _name, snip, why, _kind in findings:
         lines.append("  FAIL  host-shield: %s:%d: %s -- %s" % (suite, n, snip, why))
     if lines:
         lines.append("host-shield: REFUSED before it ran: %s reaches a command that changes this Mac's "

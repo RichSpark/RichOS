@@ -1883,7 +1883,7 @@
     "engine scripts/hooks/guard-host-display-power.test.sh": {
       "review": "The hook receives historical power commands as payload strings, never executes them and resolves citations against generated private ruling records. Every entity/config path is private, including opt-out and missing-adoption cases. Nested mutants recreate these fixtures. Clock fields are audit output; no host display, model, remote service or installed application is exercised.",
       "sources": {
-        "richos/engine/scripts/hooks/guard-host-display-power.test.sh": "6804abd0f93083318cdea615e2dc16b2ff1479c73206bc6017737671e320125a",
+        "richos/engine/scripts/hooks/guard-host-display-power.test.sh": "fb16b51c3041fc6969bcd76f804450d3ad3e5ff0a43ddf7a1f32fe5cc222cc29",
         "richos/engine/scripts/hooks/host-display-power.mutation.sh": "75a7aad662b3a85ca8069f5f053c14b0991bb753976a44e190ea8fa40e500428",
         "richos/engine/scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "richos/engine/scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",

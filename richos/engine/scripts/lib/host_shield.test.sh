@@ -225,6 +225,34 @@ for line in "if /usr/bin/$PM $SLEEPNOW; then :; fi" \
     fi
 done
 
+# H6f — a path never reaches a stand-in, so the source check applies the TEST-RUN rules to it
+# too (review rv-20261011T141442Z-0009fe5a-a898 #1), and refuses an osascript by path whose
+# script it cannot read. H6g — a backslash-continued command is read joined (#3).
+for line in "/usr/bin/$CAF -is true" "/usr/bin/$OSA -e '$SE key code 53'" "/usr/bin/$OPEN -a TextEdit" \
+            "/usr/bin/$OSA ./a-script.applescript"; do
+    F="$(suite h6f.test.sh "exit 0" "$line")"
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+        ok "H6f refused before it runs: $line"
+    else
+        bad "H6f not refused: $line (rc=$RC)" "$(cat "$TMP/out")"
+    fi
+done
+F="$(suite h6g.test.sh "exit 0" "/usr/bin/$OSA \\" "  -e '$SE $SLEEP'")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "h6g.test.sh:3: .*$SLEEP" "$TMP/out"; then
+    ok "H6g a host command continued across lines is read as one command and refused before it runs"
+else
+    bad "H6g a continued command was not read joined (rc=$RC)" "$(cat "$TMP/out")"
+fi
+F="$(suite h6h.test.sh "exit 0" "/usr/bin/$OSA -e 'return 1' >/dev/null" "/usr/bin/$PM -g batt >/dev/null || true")"
+RC="$(shielded "$F")"
+if [ "$RC" = 0 ]; then
+    ok "H6h an inert $OSA -e and $PM -g by path still pass the source check (scan only: they sit after exit 0)"
+else
+    bad "H6h rc=$RC" "$(cat "$TMP/out")"
+fi
+
 # H6e — the screen-saver binary has a stand-in of its own: a bare-name call is refused.
 F="$(suite h6e.test.sh "$SSE || true" "exit 0")"
 trip_clean
@@ -236,17 +264,29 @@ else
     bad "H6e rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
 fi
 
-# H7 — declarations. `names` lets the source carry it; a bare-name call is still refused.
+# H7 — declarations. `names` lets the source carry it as data; a bare-name call is still refused.
 F="$(suite h7.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" \
-        "$HS_CMD -h +60 || true" "exit 0" "/sbin/$HS_CMD -h +60")"
+        "$HS_CMD -h +60 || true" "printf '%s\n' /sbin/$HS_CMD" "exit 0")"
 trip_clean
 RC="$(shielded "$F")"
 if [ "$RC" = 1 ] && ! grep -q "REFUSED before it ran" "$TMP/out" && grep -q "^  FAIL  host-shield: refused" "$TMP/out" \
         && [ ! -s "$TRIP/trip.log" ]; then
-    ok "H7  a 'names' declaration lets the source name it, and the stand-in still refuses the call"
+    ok "H7  a 'names' declaration lets the source name it as data, and the stand-in still refuses the call"
 else
     bad "H7  rc=$RC" "$(cat "$TMP/out")"
 fi
+# H7d — `names` never exempts a call that would run it past the stand-in: by path, or as an
+# argument something else runs (review rv-20261011T141442Z-0009fe5a-a898 #6). Each sits after
+# `exit 0`: the source check reads it, nothing runs it.
+for line in "/sbin/$HS_CMD -h +60" "xargs /sbin/$HS_CMD -h" "sudo $HS_CMD -h +60"; do
+    F="$(suite h7d.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" "exit 0" "$line")"
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+        ok "H7d a 'names' declaration does not exempt a call: $line"
+    else
+        bad "H7d a 'names' declaration exempted a call: $line (rc=$RC)" "$(cat "$TMP/out")"
+    fi
+done
 F="$(suite h7b.test.sh "# host-shield: names $HS_CMD" "exit 0")"
 RC="$(shielded "$F")"
 if [ "$RC" = 1 ] && grep -q "declares nothing" "$TMP/out"; then

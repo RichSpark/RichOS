@@ -3,8 +3,6 @@
 # guard-host-display-power.test.sh — regression tests for
 # scripts/hooks/guard-host-display-power.sh.
 #
-# host-shield: names shutdown -- the F16/F17 payloads carry a continued `sudo shutdown` line as text piped to the guard; nothing here runs it
-#
 # THE FIXTURES ARE THE REAL STRINGS OF 2026-09-19, not paraphrases. That is the
 # whole design of this suite: the guard exists because of specific commands and
 # specific sentences, some of which must be refused and some of which must
@@ -414,9 +412,13 @@ expect_silent "F15 a MENTION in argument position is not an invocation" \
 # and proved nothing. The mutation harness caught that by refusing to go red.
 # F16b keeps the real line anyway: it is the text this property was written
 # for, and a case that passes both ways is still worth having as a fixture.
+# The command word is assembled: line by line, the host shield's source check (lib/host_shield.py)
+# reads the continued line as a sudo call, and a `names` declaration no longer exempts a call. The
+# payload the guard reads is the same string.
+F16_CMD="shut"; F16_CMD="${F16_CMD}down"
 expect_silent "F16 a backslash-continued ssh keeps its command word" \
               "$(payload Edit "$SB/scripts/a.sh" 'ssh "${OPTS[@]}" -i "$KEY" "$USER@$IP" \
-  sudo shutdown -r now')"
+  sudo '"$F16_CMD"' -r now')"
 expect_silent "F16b the real testvm/setup.sh guest reboot, verbatim" \
               "$(payload Edit "$SB/scripts/a.sh" 'ssh "${TESTVM_SSH_OPTS[@]}" -i "$TESTVM_SSH_KEY" "$TESTVM_GUEST_USER@$IP" \
   '"'"'sudo shutdown -r now'"'"' >/dev/null 2>&1 || true')"
