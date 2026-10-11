@@ -16,7 +16,9 @@
 //   3. closing Preferences saves it, by every way it closes (the gear, Escape, a click
 //      outside), and says what is now true in one toast; a choice flipped and flipped back
 //      saves nothing and says nothing;
-//   4. reopening shows it, and so does the next launch.
+//   4. reopening shows it, and so does the next launch;
+//   5. reopening while the close's save is still on its way never paints the old choice back
+//      (the second review's reproduction, held by a gate rather than a clock).
 // The APPLYING half — the lease in use moves to the stored model at its next boundary — is
 // Rust: `the_model_he_chose_in_preferences_answers_his_next_reply`
 // (crates/richos-core/tests/rotation_tests.rs, his next reply) and
@@ -269,6 +271,42 @@ async function main() {
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "reopen and relaunch";
+  });
+
+  // ---- 5. a reopen while the save is on its way never paints the old choice back ----------
+  await run.check("5. reopening Preferences while the close's save is still on its way shows the new choice", async () => {
+    // The second review's reproduction (rv-20261011T040418Z): the save is held open, so the
+    // read that reopening makes would answer from the store as it was before the save. Held by
+    // a gate this check releases, not by a clock, so the order is the same on any host.
+    const page = await openApp(browser);
+    await page.evaluate(() => {
+      const inner = window.RichBridge.invoke;
+      window.__saveGate = new Promise((release) => (window.__releaseSave = release));
+      window.__readsDone = 0;
+      window.RichBridge.invoke = async (cmd, args) => {
+        if (cmd === "set_lease_models") await window.__saveGate;
+        try {
+          return await inner(cmd, args);
+        } finally {
+          if (cmd === "get_lease_models") window.__readsDone++;
+        }
+      };
+    });
+    await openPrefs(page);
+    await rowsShow(page, { rich: "opus", stu: "opus" });
+    await page.click('#md-rich .seg-opt[data-v="fable"]');
+    await page.click("#rail-settings"); // close: the save starts and is held
+    const readsBefore = await page.evaluate(() => window.__readsDone);
+    await openPrefs(page); // reopen: its read starts while the save is held
+    await page.evaluate(() => window.__releaseSave());
+    await toastSays(page, "Rich now talks with you on Fable.");
+    await page.waitForFunction((n) => window.__readsDone > n, readsBefore).catch(() => {});
+    assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the save landed");
+    const r = await rows(page);
+    assertEqual([r.rich.chosen, r.stu.chosen], ["fable", "opus"], "the reopened rows after the save and the read settled");
+    assertEqual(page.__errors, [], "no page errors");
+    await page.close();
+    return "read waited for the save";
   });
 
   await browser.close();

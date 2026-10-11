@@ -251,25 +251,6 @@
           <label class="popover-option"><input type="radio" name="assertiveness" value="quiet" /> Quiet</label>
           <label class="popover-option"><input type="radio" name="assertiveness" value="balanced" /> Balanced</label>
           <label class="popover-option"><input type="radio" name="assertiveness" value="urgent-only" /> Only when it's urgent</label>
-
-          <div class="popover-divider" role="presentation"></div>
-          <!-- YOUR NAME — the field the rail footer's unset state points at.
-
-               It is here rather than in a settings screen of its own because this popover
-               is already "the app's own preferences", and because the alternative was a
-               footer that says "Set your name" with nowhere to set it. There is deliberately
-               NO placeholder name in the input: the whole point of the unset state is that
-               the product does not invent one. -->
-          <p class="popover-title">Your name</p>
-          <input
-            id="user-name-input"
-            class="popover-input"
-            type="text"
-            autocomplete="name"
-            spellcheck="false"
-            aria-label="Your name"
-          />
-          <p class="popover-hint" id="user-name-hint">Shown at the foot of the rail, with your initials.</p>
           </div>
           <div class="prefs-col">
 
@@ -364,6 +345,29 @@
           <div class="popover-divider" role="presentation"></div>
           <p class="popover-title">Splash screen</p>
           <label class="popover-option"><input type="checkbox" id="splash-enabled" /> Show it when RichOS starts</label>
+
+          <div class="popover-divider" role="presentation"></div>
+          <!-- YOUR NAME — the field the rail footer's unset state points at.
+
+               It is here rather than in a settings screen of its own because this popover
+               is already "the app's own preferences", and because the alternative was a
+               footer that says "Set your name" with nowhere to set it. There is deliberately
+               NO placeholder name in the input: the whole point of the unset state is that
+               the product does not invent one.
+
+               ROUND 23: it is not in the round-23 mockup (the app gained it after round
+               10.1), so it closes the right-hand column, after every section the mockup
+               places, which also evens the two columns' heights. -->
+          <p class="popover-title">Your name</p>
+          <input
+            id="user-name-input"
+            class="popover-input"
+            type="text"
+            autocomplete="name"
+            spellcheck="false"
+            aria-label="Your name"
+          />
+          <p class="popover-hint" id="user-name-hint">Shown at the foot of the rail, with your initials.</p>
           </div>
           </div>
         </div>

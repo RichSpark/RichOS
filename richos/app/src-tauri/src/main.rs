@@ -4212,15 +4212,14 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
 /// and implemented."*). Saved here; implemented at the next boundary of each lease — the next
 /// reply for Rich (`spine.rs`, `MODEL_CHANGED`), the next job for the team
 /// (`work_host.rs`, `renew_if_model_changed`) — because a lease is never swapped mid-turn.
-/// An unknown name refuses both and writes neither.
+/// An unknown name refuses both and writes neither, and the two rows are one write
+/// (`ConfigStore::set_lease_models`), so a failure never leaves one row saved alone.
 #[tauri::command(async)]
 fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result<(), String> {
-    use richos_core::config::ModelChoice;
+    use richos_core::config::{LeaseModels, ModelChoice};
     let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
     let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
-    let mut config = state.config.lock().unwrap();
-    config.set_rich_model(rich).map_err(|e| e.to_string())?;
-    config.set_stu_model(stu).map_err(|e| e.to_string())
+    state.config.lock().unwrap().set_lease_models(LeaseModels { rich, stu }).map_err(|e| e.to_string())
 }
 
 /// UX §3.2 / architecture P3.2: the optional AI-worker drill-down.

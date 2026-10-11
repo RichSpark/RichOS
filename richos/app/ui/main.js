@@ -4955,10 +4955,16 @@ function pickModel(who, v, focus) {
   }
   paintModelRows(null);
 })();
+/// The save the last close sent, until it settles. A read waits for it, so reopening
+/// Preferences while a save is still on its way can never read the store from before it and
+/// paint the old choice back (second review, rv-20261011T040418Z: "persisted=fable; reopened
+/// row=opus").
+let modelSaving = Promise.resolve();
 /// Read the stored choice. Paints it only while nothing has been picked since Preferences
 /// opened, so a slow answer never overwrites a click.
 async function syncModelsFromBackend() {
   try {
+    await modelSaving;
     const stored = await Bridge.invoke("get_lease_models");
     const untouched = modelDraft.rich === modelSaved.rich && modelDraft.stu === modelSaved.stu;
     modelSaved = { rich: modelValue(stored && stored.rich), stu: modelValue(stored && stored.stu) };
@@ -4978,15 +4984,18 @@ function commitModelChoice() {
   if (changed.length === 0) return;
   const before = modelSaved;
   modelSaved = next;
-  Bridge.invoke("set_lease_models", { rich: next.rich, stu: next.stu })
+  modelSaving = Bridge.invoke("set_lease_models", { rich: next.rich, stu: next.stu })
     .then(() => {
       if (window.RichSettings) window.RichSettings.toast(changed.map((who) => MODEL_TOAST[who][next[who]]).join(" "));
     })
     .catch(() => {
-      // Not saved: the leases keep the model they are on, and the rows go back to say so.
+      // Not saved: the leases keep the model they are on, and the rows go back to say so —
+      // unless Preferences was reopened and a row picked since, which is a newer choice.
       modelSaved = before;
-      modelDraft = { ...before };
-      paintModelRows(null);
+      if (modelDraft.rich === next.rich && modelDraft.stu === next.stu) {
+        modelDraft = { ...before };
+        paintModelRows(null);
+      }
       if (window.RichSettings) window.RichSettings.toast("Rich's model could not be saved, so nothing changed.");
     });
 }

@@ -5879,7 +5879,9 @@ body.bp-narrow .tl-user-bubble {
   font-size: 1rem;
   color: var(--ink-soft);
   white-space: nowrap;
-  transition: color 0.25s ease;
+  /* NO color transition, unlike the mockup's `.25s`: `contrast.js` check 19 measures the very
+     frame after a theme switch, and a fading label passed through 1.35:1 (#171e2d on #2e3544)
+     on its way from light to dark. The hover change is instant; the thumb still slides. */
 }
 .seg-opt:hover {
   color: var(--ink);
