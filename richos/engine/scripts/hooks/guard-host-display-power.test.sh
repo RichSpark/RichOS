@@ -43,13 +43,14 @@
 #   (j) the self-exemption is by BASENAME and covers exactly four files;
 #   (k) the one hard refusal: a missing scripts/lib/resolve-roots.sh prints the
 #       shared BROKEN INSTALL banner and exits 2;
-#   (l) a code identifier named shutdown is not the command: the real
-#       2026-10-11 Rust doc comment, method calls, a plain call and a shell
-#       function definition pass; the command itself is still refused on a
-#       shell line, on Bash, in a JS backtick and behind a // path. Comments are
-#       found by lexing: code after a closed comment, a // line inside a JS
-#       template, and code after a "/*" string are refused; an Edit starts in
-#       the lexer state its old_string has in the file on disk.
+#   (l) a code identifier named shutdown is not the command, in exactly two
+#       shapes: a name against "()" or "(&" (method calls, a Rust call with a
+#       borrow, a shell function definition) and a Rust /// or //! line whose
+#       every trigger is a bare name in backticks (the real 2026-10-11 doc
+#       comment). Everything else main refuses is still refused: the command on
+#       a shell line, on Bash, in a JS backtick, behind a // path, every case
+#       from both reviews of the comment-stripping branches, every zsh glob
+#       qualifier form, and each condition of the doc-comment shape.
 #
 # Run directly: scripts/hooks/guard-host-display-power.test.sh
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -584,9 +585,11 @@ expect_silent "L1  the real 2026-10-11 Rust test, its doc comment naming shutdow
 expect_silent "L2  method calls and a definition named shutdown PASS" \
               "$(payload Edit "$SB/src/quota.rs" '        state.quota.shutdown();
     pub fn shutdown(&self) {
-        .shutdown()
-    /* `shutdown` drains the leases */
-     * `shutdown()` returns quickly')"
+        .shutdown()')"
+expect_rc     "L2b a BLOCK comment naming shutdown in backticks is REFUSED, as on main: only a Rust /// or //! line is exempt" 2 \
+              "$(payload Edit "$SB/src/quota.rs" '    /* `shutdown` drains the leases */')"
+expect_silent "L2c ... and a block-comment line naming shutdown() PASSES by the parenthesis rule alone" \
+              "$(payload Edit "$SB/src/quota.rs" '     * `shutdown()` returns quickly')"
 expect_silent "L3  a plain function call named shutdown PASSES" \
               "$(payload Edit "$SB/src/quota.rs" '        shutdown(&quota);')"
 expect_silent "L4  ... and so does a shell function DEFINED with that name" \
@@ -600,9 +603,11 @@ expect_rc     "L7  ... and a backtick command on a CODE line of non-shell source
               "$(payload Edit "$SB/src/a.js" 'execSync(`shutdown -h now`);')"
 expect_rc     "L8  ... and a // line in a SHELL script is a path, not a comment" 2 \
               "$(payload Edit "$SB/scripts/a.sh" '//sbin/shutdown -h now')"
-# A COMMENT IS FOUND BY LEXING, NEVER BY THE SHAPE OF A LINE. The second review of
-# af4b68db1 (rv-20261011T123904Z) measured L9 and L10 refused on main and passed by
-# a guard that skipped every line STARTING like a comment.
+# NO COMMENT OR STRING IS STRIPPED FROM NON-SHELL SOURCE. Two branches tried, and
+# their reviews measured every case below refused on main and passed by them:
+# L9 and L10 by a guard that skipped lines STARTING like a comment (af4b68db1,
+# rv-20261011T123904Z), L13 to L16 by a comment lexer (b0f108e97,
+# rv-20261011T131622Z). Each is refused again, exactly as on main.
 expect_rc     "L9  code after a CLOSED block comment on the same line is still REFUSED" 2 \
               "$(payload Write "$SB/src/cleanup.js" '/* cleanup */ execSync(`pmset displaysleepnow`);')"
 expect_rc     "L10 ... and a // line INSIDE a multiline JS template is shell text, REFUSED" 2 \
@@ -611,14 +616,57 @@ expect_rc     "L10 ... and a // line INSIDE a multiline JS template is shell tex
 `);')"
 expect_rc     "L11 ... and a /* inside a STRING opens no comment, so the code after it is REFUSED" 2 \
               "$(payload Write "$SB/src/cleanup.js" 'const a = "/*"; execSync(`pmset displaysleepnow`); const b = "*/";')"
-# AN EDIT IS A FRAGMENT: it starts where its old_string sits in the file on disk.
+# An Edit is judged on its text alone, wherever its old_string sits in the file.
 mkdir -p "$SB/src"
 printf '%s\n' 'execSync(`' 'PLACEHOLDER' '`);' >"$SB/src/in-template.js"
 printf '%s\n' 'function drain() {' '  PLACEHOLDER' '}' >"$SB/src/in-code.js"
-expect_rc     "L12 an Edit whose old_string sits INSIDE a template is judged as template text, REFUSED" 2 \
+expect_rc     "L12 an Edit whose old_string sits INSIDE a template is REFUSED" 2 \
               "$(payload Edit "$SB/src/in-template.js" '//sbin/shutdown -h now')"
-expect_silent "L13 ... and the same // text where the old_string sits in CODE is a comment, PASSES" \
+expect_rc     "L13 ... and a JavaScript // line naming shutdown in backticks is REFUSED, as on main" 2 \
               "$(payload Edit "$SB/src/in-code.js" '// `shutdown` drains the leases')"
+expect_rc     "L14 a regex after a control condition, then a template carrying the command, is REFUSED" 2 \
+              "$(payload Write "$SB/src/cleanup.js" 'if (true) /"/.test(""); execSync(`
+//sbin/shutdown -h now
+`);')"
+expect_rc     "L15 ... and a C# raw multiline string carrying it, REFUSED" 2 \
+              "$(payload Write "$SB/src/Cleanup.cs" 'var command = """
+//sbin/shutdown -h now
+""";
+Process.Start("/bin/sh", command);')"
+expect_rc     "L16 ... and a C++ raw multiline string carrying it, REFUSED" 2 \
+              "$(payload Write "$SB/src/cleanup.cpp" 'int main() { std::system(R"(
+//sbin/shutdown -h now
+)"); }')"
+# ONLY "()" AND "(&" AFTER A NAME ARE A FUNCTION. Anything else in the parentheses
+# is a zsh glob qualifier and zsh RUNS the word: measured 2026-10-11 with /bin/echo,
+# zsh ran /bin/echo(N), /bin/echo(x) and /bin/echo(:t). The Bash surface here is
+# zsh. Every case below was refused on main and passed by af4b68db1 and b0f108e97.
+expect_rc     "L17 a host command carrying a zsh glob qualifier (N) on Bash is REFUSED" 2 \
+              "$(payload Bash "" '/sbin/shutdown(N) -h now')"
+expect_rc     "L18 ... behind sudo, with the qualifier (x)" 2 \
+              "$(payload Bash "" 'sudo /sbin/reboot(x)')"
+expect_rc     "L19 ... in a shell script, with the modifier (:t)" 2 \
+              "$(payload Edit "$SB/scripts/a.sh" '/sbin/reboot(:t)')"
+expect_rc     "L20 ... and a bare call with a plain argument in Rust, as on main" 2 \
+              "$(payload Edit "$SB/src/quota.rs" '        shutdown(x);')"
+# THE RUST DOC-COMMENT EXCEPTION IS ONE LINE SHAPE, and each condition is held.
+expect_silent "L21 an inner Rust doc comment (//!) naming shutdown in backticks PASSES" \
+              "$(payload Write "$SB/src/lib.rs" '//! The service quits (`shutdown`) and opens again.')"
+expect_rc     "L22 a doc-comment span holding the command WITH ARGUMENTS is REFUSED" 2 \
+              "$(payload Write "$SB/src/lib.rs" '/// run `shutdown -h now` to stop')"
+expect_rc     "L23 ... and a trigger word OUTSIDE the backticks is REFUSED" 2 \
+              "$(payload Write "$SB/src/lib.rs" '/// `shutdown` then reboot -q')"
+expect_rc     "L23b ... in any letter case: macOS finds the binary for Reboot too" 2 \
+              "$(payload Write "$SB/src/lib.rs" '/// `shutdown`; Reboot -q')"
+expect_rc     "L24 ... and a doc line continued by a backslash carries the next line, REFUSED" 2 \
+              "$(payload Write "$SB/src/lib.rs" '/// `shutdown` \
+halt -q')"
+expect_rc     "L25 ... and the same doc line in a .js file is REFUSED: the exception is Rust only" 2 \
+              "$(payload Write "$SB/src/a.js" '/// The service quits (`shutdown`) and opens again.')"
+expect_rc     "L26 ... and four slashes is not a doc comment, REFUSED" 2 \
+              "$(payload Write "$SB/src/lib.rs" '//// The service quits (`shutdown`).')"
+expect_rc     "L27 ... and a span holding a PATH is REFUSED" 2 \
+              "$(payload Write "$SB/src/lib.rs" '/// calls (`/sbin/shutdown`)')"
 
 # --- the mutation harness --------------------------------------------------
 # A suite that cannot fail proves nothing. The harness breaks the guard in ways

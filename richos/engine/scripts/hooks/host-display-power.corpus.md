@@ -204,61 +204,83 @@ which is the outcome this corpus exists to prevent.
 
 Driven through the guard on that day, `quota.shutdown()`, `fn shutdown(&self)` and
 `.shutdown()` already passed; what was refused was a bare identifier in command
-position:
+position.
 
-| text | before | after |
-|---|---|---|
-| the real doc comment, `` (`shutdown`) `` | refused | passes: the characters of a `//` or `/* */` comment in non-shell source are blanked before judging |
-| `` /* `shutdown` drains the leases */ `` | refused | passes, same rule |
-| `shutdown(&quota);` | refused | passes: a name written against `(` is a call or a definition |
-| `shutdown() { echo "stopping the runner"; }` in a `.sh` | refused | passes, same rule |
-| `shutdown -h now` in a `.sh`, `sudo shutdown -r now` on Bash | refused | refused |
-| `` execSync(`shutdown -h now`); `` on a JS code line | refused | refused |
-| `//sbin/shutdown -h now` in a `.sh` | refused | refused: `//` is a comment only in the listed non-shell extensions |
+### Two rounds of comment stripping made the guard weaker
 
-`richos/app/crates/richos-core/src/work_host.rs` carries the same shape in three doc
-comments (lines 1460, 2366 and 6629 at `527dc5acd`), so a Write of that whole file was
-refused before this change. Suite cases L1 to L8; mutants
-`name-against-paren-is-a-command` and `slash-comments-judged`.
+`af4b68db1` skipped every line that STARTED like a comment; `b0f108e97` replaced that
+with a character lexer for `//` and `/* */` languages. Each second review measured
+text refused on `main` and passed on the branch:
 
-**What writing the case cost.** The first draft of L1 read its fixture through a
+| text | `main` | `af4b68db1` | `b0f108e97` | now |
+|---|---|---|---|---|
+| `` /* cleanup */ execSync(`pmset displaysleepnow`); `` (`.js`) | refused | **passed** | refused | refused |
+| a multiline `` execSync(` `` template whose middle line is `//sbin/shutdown -h now` | refused | **passed** | refused | refused |
+| `if (true) /"/.test("");` before that template (`.js`) | refused | **passed** | **passed** | refused |
+| a C# `"""` raw string carrying that line to `/bin/sh` | refused | **passed** | **passed** | refused |
+| a C++ `R"(...)"` raw string carrying it to `std::system` | refused | **passed** | **passed** | refused |
+| `` /* `shutdown` drains the leases */ `` (`.rs`) | refused | passed | passed | refused |
+| `` // `shutdown` drains the leases `` (`.js`) | refused | passed | passed | refused |
+
+(`rv-20261011T123904Z-af4b68db-e695`, `rv-20261011T131622Z-b0f108e9-2052`.) A general
+lexer for every one of those languages inside a shell guard cannot be complete, and
+each gap is a host-safety hole. So nothing is stripped any more. The guard refuses
+everything `main` refuses, with exactly two narrow exceptions.
+
+### The parenthesis rule of both rounds was a hole of its own
+
+Both branches dropped any name written against `(`. zsh, the shell of the Bash
+surface on this Mac, reads a trailing `(...)` on a word as a GLOB QUALIFIER and runs
+the result. Measured 2026-10-11 with nothing but `/bin/echo`: zsh ran
+`/bin/echo(N) x`, `/bin/echo(x) x` and `/bin/echo(:t) x`, and with a file named
+`echo` in the directory, `echo(N) x` too. So `/sbin/shutdown(N) -h now`, refused on
+`main`, passed on both branches. Neither review caught it.
+
+### The two exceptions
+
+| text | `main` | now | why it cannot run the command |
+|---|---|---|---|
+| `shutdown() { echo "stopping the runner"; }` in a `.sh` | refused | passes | `name()` DEFINES a function in bash, sh and zsh (measured for zsh) |
+| `shutdown(&quota);`, `` `shutdown()` `` in a comment | refused | passes | `name(&` is a parse error in zsh (measured) and bash |
+| `shutdown(x);`, `/sbin/shutdown(N) -h now`, `/sbin/reboot(:t)` | refused | refused | any other parenthesis is a zsh glob qualifier |
+| the real doc comment, `` /// (`shutdown`) `` in a `.rs` | refused | passes | see below |
+| `` //! The service quits (`shutdown`). `` in a `.rs` | refused | passes | same rule |
+| `` /// run `shutdown -h now` ``, `` /// (`/sbin/shutdown`) `` | refused | refused | the span is the command, not a name |
+| `` /// `shutdown` then reboot -q `` (or `Reboot`) | refused | refused | a trigger outside the backticks; the file system here finds `Reboot` |
+| the same doc lines in a `.js`, or written `////` | refused | refused | Rust doc comments only |
+| `shutdown -h now` in a `.sh`, `sudo shutdown -r now` on Bash, `` execSync(`shutdown -h now`); `` | refused | refused | |
+
+THE DOC-COMMENT RULE IS ONE LINE SHAPE, judged on the line alone: a `.rs` line starting
+`///` or `//!`, every trigger word on it inside backticks (compared without case), and
+every span holding one a bare name (letters, digits, `_ . :`, optionally `()`). The
+last condition is what keeps it safe without a lexer: a line cannot tell whether it
+sits in a doctest or inside a multiline Rust string handed to a shell, so the span
+must be harmless even there, and a bare name can only run that program with no
+arguments. A doc line continued by a backslash is judged together with the line it
+carries.
+
+**Corpus, measured on `b0f108e97`'s tree.** Every tracked file the guard judges on the
+code surface that contains a trigger word (473 files), each offered as one Write, all
+findings compared by line: `main` and this guard agree on 472. The one difference is
+`richos/app/crates/richos-core/src/work_host.rs`, whose doc-comment lines 1460 and 6629
+pass now; its line 2366 is an ordinary `//` comment naming `shutdown` in backticks and
+is still refused, as on `main`.
+
+Suite cases L1 to L27; mutants `name-against-paren-is-a-command`,
+`rust-doc-comment-judged`, `paren-any-argument-is-a-function`,
+`doc-span-may-hold-arguments`, `doc-trigger-outside-span`,
+`doc-trigger-case-sensitive`, `doc-exception-any-language` and `four-slashes-is-doc`.
+
+Still not covered, as on `main`: a Bash heredoc writing a `.rs` file is judged with
+no exception, so the doc comment of L1 written through `cat > quota.rs <<RS` is still
+refused there; and an ordinary `//` or `/* */` comment naming `shutdown` in backticks
+is refused in every language.
+
+**What writing the first case cost.** The first draft of L1 read its fixture through a
 heredoc inside a command substitution. Bash 3.2 parses such a heredoc for quotes,
 the fixture's apostrophes unbalanced it, and the backticks around `shutdown` ran on
 this Mac as the command. It ran as a regular user and stopped at
 `shutdown: NOT super-user`; nothing was scheduled. The fixture is now read with
-`read -r -d ''`, the form every other fixture in the suite uses, and the suite was
-then run with `shutdown`, `reboot` and `halt` shimmed to a logger.
+`read -r -d ''`, the form every other fixture in the suite uses, and the suite is
+run with the host program names shimmed to a logger first on `PATH`.
 
-### The first version of the comment rule made the guard weaker
-
-It skipped every line that STARTED like a comment. The second review of `af4b68db1`
-(`rv-20261011T123904Z-af4b68db-e695`) measured two lines refused on `main` and passed
-on that branch:
-
-| text, in a `.js` | `main` | `af4b68db1` | now |
-|---|---|---|---|
-| `` /* cleanup */ execSync(`pmset displaysleepnow`); `` | refused | **passed** | refused |
-| a multiline `` execSync(` `` template whose middle line is `//sbin/shutdown -h now` | refused | **passed** | refused |
-| `const a = "/*"; execSync(...pmset displaysleepnow...); const b = "*/";` | refused | refused | refused |
-
-The rule is now a lexer (`lex_slash`): it tracks `//` and `/* */` comments (nested
-where the language nests them), `"` and `'` strings, JavaScript templates with their
-`${ }`, regular expression literals, Rust raw strings and char literals, Go raw
-strings, triple-quoted and C# verbatim strings. Only comment characters are blanked;
-newlines stay, so line numbers and per-line judging do not move. The negation cue is
-still read on the line as written. An Edit is lexed in the file on disk with the
-edits applied in order, so a `new_string` placed inside a template is template text;
-where its start cannot be known, it is judged whole, as `main` judged it.
-
-Measured on the 123 tracked source files in those languages that contain a trigger
-word, each written whole: `main`, `af4b68db1` and the lexer agree on 122; the one
-difference is `work_host.rs`, refused by `main` for its three doc comments and passed
-by both. The lexer's output has the input's length and newlines on all 1,367 tracked
-files in those languages; the slowest, a 4.9 MB `field-data.js`, lexes in 1.2 s, and
-an Edit reads a file on disk only up to 2 MB. Suite cases L9 to L13; mutants
-`closed-comment-hides-its-line`, `templates-not-tracked`, `strings-not-tracked`
-and `edit-starts-in-code`.
-
-Still not covered, as on `main`: a Bash heredoc writing a `.rs` or `.js` file is
-judged line by line with no comment lexing, so the doc comment of L1 written through
-`cat > quota.rs <<RS` is still refused there.
