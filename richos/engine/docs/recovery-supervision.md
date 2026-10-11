@@ -64,3 +64,11 @@ The snapshot does not qualify enforcement or native capabilities. The probe
 compares installed bytes and declared mode against the frozen reference and
 refuses an adopted engine comparing itself without one. Enforcement may use its
 separate reviewed qualification source pins instead.
+
+A concurrent review joins the shared source claim without taking a model worker
+permit. Its wait uses the existing producer's finite admission and fallback
+budget. After release, exact inputs reuse the recorded verdict. Changed inputs
+still require an explicit recheck. Each completed/reused invocation emits a host
+receipt naming its actual ledger row. The watcher validates that receipt against
+repository, source, work, purpose and input identity before accepting an older
+reused verdict. Missing or mismatched evidence remains a lost invocation.

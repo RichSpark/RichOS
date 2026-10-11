@@ -1084,7 +1084,7 @@ def repo_identity(path):
 
 
 @contextlib.contextmanager
-def execution_claim(repo, tip):
+def execution_claim(repo, tip, wait_seconds=0, say=None):
     """Every producer uses this kernel-held claim. Keep the inode after release.
 
     Watcher scheduling locks are not execution authority: manual reviews must
@@ -1095,13 +1095,30 @@ def execution_claim(repo, tip):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise Refused("a review already owns this repository and source; join its recorded result")
+        deadline=time.monotonic()+wait_seconds
+        announced=False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic()>=deadline:
+                    raise Refused("a review already owns this repository and source; bounded join wait expired")
+                if not announced and say:
+                    say("SECOND-REVIEW joining the existing source owner without a worker permit")
+                    announced=True
+                time.sleep(min(1,max(0,deadline-time.monotonic())))
         yield
     finally:
         os.close(fd)
+
+
+def completion_receipt(row):
+    """Names existing ledger evidence. It never creates a new review timestamp."""
+    if row.get('verdict'):
+        receipt={k:row.get(k) for k in ('id','repo_id','tip','work','input_identity')}
+        receipt['purpose']='handover' if row.get('trigger') in ('handover','manual') else 'progress'
+        print('SECOND-REVIEW RECEIPT '+json.dumps(receipt,sort_keys=True),flush=True)
 
 
 def review_input_identity(w):
@@ -1141,7 +1158,10 @@ def review(a):
             current = git(space.get("path") or w.repo, "rev-parse", "HEAD").strip()
             if ws.finished_state(registered)[0] and current==w.tip:
                 recovery.handover(recovery_record["id"], registered["key"], w.tip)
-    with execution_claim(w.repo, w.tip):
+    # A join holds no CPU worker. Its bound is the existing worst-case producer budget.
+    join_seconds=getattr(a,"admission_wait",ADMISSION_WAIT_SECONDS)+2*getattr(a,"limit_minutes",LIMIT_SECONDS/60)*60
+    say=lambda message:(sys.stderr.write(message+"\n"),sys.stderr.flush())
+    with execution_claim(w.repo, w.tip, wait_seconds=join_seconds, say=say):
         purpose = "handover" if a.trigger in ("handover", "manual") else "progress"
         existing = [r for r in read_ledger() if r.get("tip") == w.tip and r.get("verdict")
                     and same_repo(r, w.repo, repo_identity(w.repo))
@@ -1156,6 +1176,7 @@ def review(a):
                 raise Refused("this source already has a review with different inputs; use --recheck <review id>")
             print("SECOND-REVIEW reused %s (%s). Record: %s" %
                   (row["id"], row["verdict"], row.get("record")))
+            completion_receipt(row)
             return {"passed": EXIT_PASSED, "changes-requested": EXIT_CHANGES}[row["verdict"]]
         return _review_owned(a, w)
 
@@ -1231,6 +1252,7 @@ def _review_owned(a, w):
             line = "SECOND-REVIEW no verdict %s@%s: %s. Record: %s" % (os.path.basename(w.repo), w.tip[:12],
                                                                       row["why"], record)
         print(line)
+        completion_receipt(row)
         sys.stdout.flush()
         return {"passed": EXIT_PASSED, "changes-requested": EXIT_CHANGES}.get(row["verdict"], EXIT_NO_VERDICT)
 

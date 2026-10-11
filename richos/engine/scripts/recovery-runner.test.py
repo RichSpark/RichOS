@@ -24,6 +24,57 @@ spec.loader.exec_module(fixture)
 
 
 class ResponseContract(unittest.TestCase):
+    def test_source_join_waits_for_kernel_owner_then_reuses_the_same_inode(self):
+        import tempfile
+        import second_review as SR
+        with tempfile.TemporaryDirectory(prefix='review-join-') as directory,patch.dict(os.environ,{'SECOND_REVIEW_STATE_DIR':directory}):
+            repo=directory+'/repo';subprocess.run(['git','init','-q',repo],check=True)
+            code="""import sys;sys.path.insert(0,sys.argv[1]);import second_review as s
+with s.execution_claim(sys.argv[2],'a'*40,wait_seconds=10,say=lambda message:print(message,flush=True)):
+ print('joined',flush=True)
+"""
+            child=None
+            try:
+                with SR.execution_claim(repo,'a'*40):
+                    child=subprocess.Popen([sys.executable,'-B','-c',code,str(HERE/'lib'),repo],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                    # Hang guard: receive the owner's contention acknowledgment before release.
+                    import selectors
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(child.stdout,selectors.EVENT_READ)
+                        self.assertTrue(selector.select(20),'join acknowledgment missing')
+                    self.assertIn('joining',child.stdout.readline())
+                    self.assertIsNone(child.poll())
+                # load-bound: hang guard after kernel owner release; actual child exit and receipt decide the verdict.
+                stdout,stderr=child.communicate(timeout=20)
+                self.assertEqual(child.returncode,0,stderr)
+                self.assertIn('joined',stdout)
+            finally:
+                if child and child.poll() is None:child.kill();child.wait()
+
+    def test_watcher_reuses_old_qualified_verdict_without_spending_loss_budget(self):
+        import contextlib,io,tempfile
+        import second_review as SR
+        import review_watch as RW
+        with tempfile.TemporaryDirectory(prefix='review-receipt-') as directory,patch.dict(os.environ,{'REVIEW_WATCH_STATE_DIR':directory+'/watch'}):
+            repo=directory+'/repo';subprocess.run(['git','init','-q',repo],check=True)
+            row=dict(id='existing',at=SR.iso(1),repo=repo,repo_id=SR.repo_identity(repo),tip='a'*40,work='teammate:original',input_identity='exact-input',trigger='manual',verdict='passed')
+            output=io.StringIO()
+            with contextlib.redirect_stdout(output):SR.completion_receipt(row)
+            log=Path(directory)/'child.log';log.write_text(output.getvalue())
+            info=dict(repo=repo,tip=row['tip'],work=row['work'],trigger='handover',started_at=1000,log=str(log),pid=123)
+            watcher=RW.Watcher('/fixture/engine','/fixture/config',None)
+            lock=Path(directory)/'schedule.lock';lock.write_text('{}')
+            result=watcher.settle(str(lock),info,1001,[row])
+            self.assertEqual(result['outcome'],'verdict')
+            self.assertEqual(row['at'],SR.iso(1))
+            for key,value in [('work','unrelated'),('tip','b'*40),('input_identity','other'),('purpose','progress')]:
+                receipt=json.loads(output.getvalue().split('RECEIPT ',1)[1]);receipt[key]=value
+                log.write_text('SECOND-REVIEW RECEIPT '+json.dumps(receipt)+'\n')
+                self.assertIsNone(watcher.joined_verdict(info,[row]),key)
+            log.write_text('owner ended without a verdict')
+            lock.write_text('{}')
+            self.assertEqual(watcher.settle(str(lock),info,1002,[])['outcome'],'lost')
+
     def test_observed_advice_cannot_steer_reviews_or_dispatch_replacements(self):
         import second_review as SR
         record=dict(mode='observe',status='recovering',plan=dict(accepted=True,id='plan'),wes=dict(verdict=dict(action='withdraw_finding',finding='r#1')))

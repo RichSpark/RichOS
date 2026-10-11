@@ -1126,6 +1126,31 @@ class Watcher(object):
             json.dump(info, f)
         os.replace(tmp, path)
 
+    @staticmethod
+    def joined_verdict(info, rows):
+        """Accept an older reused verdict only through the child's exact host receipt."""
+        try:
+            with open(info.get('log') or '', 'rb') as source:
+                source.seek(0,os.SEEK_END)
+                size=source.tell();source.seek(max(0,size-65536))
+                lines=source.read().decode('utf-8',errors='replace').splitlines()
+            prefix='SECOND-REVIEW RECEIPT '
+            line=next((line for line in reversed(lines) if line.startswith(prefix)),None)
+            receipt=json.loads(line[len(prefix):]) if line else None
+        except (OSError,ValueError,TypeError):
+            return None
+        if not isinstance(receipt,dict):return None
+        purpose='handover' if info.get('trigger') in ('handover','manual') else 'progress'
+        for row in rows:
+            if (row.get('verdict') and row.get('input_identity')
+                and all(receipt.get(k)==row.get(k) for k in ('id','repo_id','tip','work','input_identity'))
+                and receipt.get('tip')==info.get('tip') and receipt.get('work')==info.get('work')
+                and F.review_row_belongs(row,F.review_repo_identity(info.get('repo')))
+                and receipt.get('purpose')==purpose
+                and ('handover' if row.get('trigger') in ('handover','manual') else 'progress')==purpose):
+                return row
+        return None
+
     def settle(self, path, info, now, rows, outcome=None, why=""):
         """The lock's review has ended: one attempt row, then the lock goes.
         Renamed first, so of two watchers exactly one settles it."""
@@ -1139,7 +1164,7 @@ class Watcher(object):
             mine = [r for r in rows if os.path.realpath(r.get("repo") or "") == info.get("repo")
                     and r.get("tip") == info.get("tip") and (parse_iso(r.get("at")) or 0) >= started - 5]
             got = [r for r in mine if r.get("verdict")]
-            if got:
+            if got or self.joined_verdict(info,rows):
                 outcome = "verdict"
             else:
                 outcome = "lost"
