@@ -266,6 +266,46 @@ async function main() {
     await page.close();
   });
 
+  // ---- 7b. Enter on the screen opened from Home ----------------------------------------------
+  // The review of b80728780 (rv-20261011T065607Z-b8072878-65bc): opened from Home, the screen
+  // covers Home, which stays open beneath it with its capturing key listener; that listener had no
+  // exception for this screen, so Enter on Back, Refresh or a period was canceled and hid Home
+  // instead ("Enter on spend-back: defaultPrevented=true, home hide=enter-key"). Each Enter here
+  // must do what its control says, and Home must still be there when the screen closes.
+  await run.check("opened from Home, Enter on Refresh, on a period and on Back does what the control says, and Home is still open beneath", async () => {
+    const page = await open("dark", undefined);
+    await page.evaluate(() => window.RichHome.show("spend-suite"));
+    await page.waitForFunction(() => window.RichHome.isOpen());
+    await screen(page);
+    const homeOpen = () => page.evaluate(() => window.RichHome.isOpen());
+    const views = () => page.evaluate(() => window.__RICHOS_MOCK__.spendCalls().filter(c => c.cmd === "spend_view").length);
+    const wrong = [];
+    // Refresh: a new spend_view, or Home gone, whichever happens first
+    const n = await views();
+    await page.focus("#spend-refresh");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(k => window.__RICHOS_MOCK__.spendCalls().filter(c => c.cmd === "spend_view").length > k || !window.RichHome.isOpen(), n);
+    if ((await views()) <= n) wrong.push("Enter on Refresh did not refresh");
+    if (!(await homeOpen())) wrong.push("Enter on Refresh hid Home");
+    // Today
+    await page.evaluate(() => window.RichHome.isOpen() || window.RichHome.show("spend-suite"));
+    await page.focus('#spend-period button[data-p="today"]');
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector('#spend-period button[data-p="today"]').getAttribute("aria-pressed") === "true" || !window.RichHome.isOpen());
+    if ((await page.getAttribute('#spend-period button[data-p="today"]', "aria-pressed")) !== "true") wrong.push("Enter on Today did not choose Today");
+    if (!(await homeOpen())) wrong.push("Enter on Today hid Home");
+    // Back
+    await page.evaluate(() => window.RichHome.isOpen() || window.RichHome.show("spend-suite"));
+    await page.focus("#spend-back");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.getElementById("spend").hidden || !window.RichHome.isOpen());
+    if (!(await page.evaluate(() => document.getElementById("spend").hidden))) wrong.push("Enter on Back did not close the screen");
+    if (!(await homeOpen())) wrong.push("Enter on Back hid Home");
+    await page.close();
+    assertEqual(wrong, []);
+    return "Refresh refreshed, Today chosen, Back closed the screen; Home open beneath after each";
+  });
+
   // ---- 8. the first count --------------------------------------------------------------------
   await run.check("before the first count is done the screen says it is counting and shows no partial figure, then draws the Meter", async () => {
     const page = await open("dark", { ready: false });
@@ -343,6 +383,12 @@ async function main() {
     await page.evaluate(() => window.__RICHOS_MOCK__.spendLand({ family: "fable", name: "Fable 5.1", effort: "high", cost: 0.8214, tokens: 448503 }));
     await page.waitForFunction(() => /448,503/.test(document.getElementById("spend-live").textContent));
     assertEqual(await text(page, "#spend-live"), "12 agents working · last request Fable 5.1, 448,503 tokens, $0.821", "the widest live line");
+    // and the widest effort label (the review of b80728780): app leases record no effort, so on a
+    // real Mac a mark reads "high and medium effort, some not recorded"; Refresh brings it in
+    await page.evaluate(() => window.__RICHOS_MOCK__.spendLand({ family: "opus", name: "Opus 5.5", effort: null, cost: 0.2, tokens: 400000 }));
+    await page.click("#spend-refresh");
+    await page.waitForFunction(() => /some not recorded/.test(document.querySelector('.sp-key[data-m="opus"]').textContent));
+    assertEqual(await text(page, '.sp-key[data-m="opus"] .eff'), "· high and medium effort, some not recorded", "the widest effort label");
     for (const scale of [100, 120, 135, 150]) {
       await page.evaluate(sc => document.documentElement.style.setProperty("--app-font-scale", String(sc / 100)), scale);
       for (const [w, h, docked] of [[1440, 900, false], [1440, 900, true], [1024, 700, false], [1024, 700, true]]) {

@@ -1493,7 +1493,8 @@
         const f = fam[r.family] || (fam[r.family] = { family: r.family, cost: 0, requests: 0, names: {}, efforts: {}, effortUnrecorded: false });
         f.cost += r.cost; f.requests += r.requests;
         f.names[r.name] = (f.names[r.name] || 0) + r.cost;
-        f.efforts[r.effort] = (f.efforts[r.effort] || 0) + r.cost;
+        if (r.effort) f.efforts[r.effort] = (f.efforts[r.effort] || 0) + r.cost;
+        else f.effortUnrecorded = true;   // a request with no effort, as an app lease records it
       }
       t.families = ["fable", "opus", "sonnet", "haiku"].filter(f => fam[f]).map(f => fam[f]);
       return { ready: state.ready, asOf: Date.now(), priceDate: "October 11, 2026", totals: t };

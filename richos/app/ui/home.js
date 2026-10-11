@@ -878,6 +878,10 @@ window.RichHome = (function () {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape") return onHomeEscape(e);
     if (e.key !== "Enter" || e.shiftKey) return;
+    // The Token spend screen (round 22.1, `spend.js`) covers this one whole while it is open: Enter
+    // there is its own (Back, Refresh, a period), never the door's. Keyed on the screen being up,
+    // not on where focus sits, so no Enter reaches the door of a screen nobody can see.
+    if (document.body.classList.contains("spend-open")) return;
     var t = e.target;
     if (t && t.closest) {
       if (t.closest(".home-prefs")) return;

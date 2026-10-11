@@ -10568,6 +10568,12 @@ body.bug-dock-open .sp-head { padding-right: 22px; }
    fit, the next row when they do not (a narrow window, the Rich panel docked). */
 .sp-legend { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 18px; }
 .sp-legend > .sp-key { flex: 1 1 0; min-width: max-content; }
+/* In the docked 536px column of the smallest window (488px of Meter) a mark's second line can be
+   wider than the column: "91% · high and medium effort, some not recorded" is 544px at Text size
+   150% (the review of b80728780). There a mark is never narrower than its FIRST line (the name and
+   amount, which never wrap) and its second line wraps inside it. */
+.sp-key .l1 { white-space: nowrap; }
+@media (max-width: 1199px) { body.bug-dock-open .sp-legend > .sp-key { min-width: min-content; } }
 .sp-key { display: grid; grid-template-columns: 14px 1fr; column-gap: 10px; align-items: center; margin: 0; font-size: 1rem; line-height: 1.45; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .sp-key[hidden] { display: none; }
 .sp-key .sw-m { width: 14px; height: 14px; border-radius: 4px; grid-row: 1; }

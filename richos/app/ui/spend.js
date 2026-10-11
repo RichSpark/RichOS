@@ -208,7 +208,7 @@
   function legendHTML(t, v, fam) {
     return '<div class="sp-legend">' + ORDER.map(m =>
       '<p class="sp-key" data-m="' + m + '"' + (fam[m].requests ? "" : " hidden") + '><span class="sw-m" aria-hidden="true"></span>' +
-        "<span><b>" + k(m + ".name", v[m + ".name"]) + '</b><span class="amt">' + k(m + ".amt", v[m + ".amt"]) + "</span></span>" +
+        '<span class="l1"><b>' + k(m + ".name", v[m + ".name"]) + '</b><span class="amt">' + k(m + ".amt", v[m + ".amt"]) + "</span></span>" +
         '<span class="l2"><span class="pct">' + k(m + ".pct", v[m + ".pct"]) + '</span><span class="eff"><span class="eff-sep">· </span>' + k(m + ".eff", v[m + ".eff"]) + "</span></span></p>").join("") + "</div>";
   }
 
