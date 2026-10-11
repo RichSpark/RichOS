@@ -108,7 +108,6 @@
 
   // ── numbers as words (round 22.1's) ──
   function money(v) { return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-  function moneyRound(v) { return "$" + Math.round(v).toLocaleString("en-US"); }
   function int(n) { return Math.round(n).toLocaleString("en-US"); }
   function big(n) {
     if (n >= 1e9) return (n / 1e9).toLocaleString("en-US", { maximumFractionDigits: n >= 1e10 ? 1 : 2 }) + " billion";
@@ -425,7 +424,9 @@
     const view = await call("spend_view", { from: periodStart("month", Date.now()) });
     const amt = document.getElementById("set-spend-amt");
     if (!amt) return;
-    S.rowAmt = view && view.ready ? "<b>" + esc(moneyRound(view.totals.cost)) + "</b> this month" : "";
+    // The screen's own format, cents and all (a $0.64 month is "$0.64", never "$1"), so the row
+    // and the screen's This month figure never disagree.
+    S.rowAmt = view && view.ready ? "<b>" + esc(money(view.totals.cost)) + "</b> this month" : "";
     amt.innerHTML = S.rowAmt;
   }
   if (window.RichSettings && window.RichSettings.registerSpend) {
