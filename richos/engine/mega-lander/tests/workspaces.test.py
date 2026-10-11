@@ -328,6 +328,18 @@ class RecoveryChain(Base):
         self.assertEqual(feature['correction_of'],[])
         self.assertEqual(len(ws._chain(current)),1)
 
+    def test_app_consult_keeps_its_existing_research_tools_with_recovery_off(self):
+        cc=self.make_cc('consult')
+        aid,_path=self.spawn('consult',cc)
+        rec=self.rec('consult')
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='Research the referenced video'))
+        payload['richos_recovery_assignment']=dict(kind='helper',outcome='app:consult',acceptance='research')
+        rec['recovery_assignment']=ws._recovery_assignment(payload,rec,[],[])
+        ws.save_agent(rec)
+        for tool in ('Read','Bash','WebSearch','WebFetch','Skill'):
+            self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name=tool))[0],'REGISTERED',tool)
+        self.assertEqual(rec['recovery_assignment']['kind'],'helper')
+
     def test_read_only_classification_cannot_grant_a_writer_a_new_budget(self):
         cc = self.make_cc('helper')
         aid, _path = self.spawn('helper', cc, extra='recovery-role: helper')

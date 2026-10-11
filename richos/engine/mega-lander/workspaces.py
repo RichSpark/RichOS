@@ -6642,8 +6642,10 @@ def barrier(payload):
             aid, rec.get("name"), why)
     if fin:
         return "FINISHED", "agent %s (%s) is finished: %s" % (aid, rec.get("name"), why)
+    # App consults retain their existing research/media capability policy.
+    # Axel/Wes use a separate restricted provider process; ordinary consults
+    # are not those advisors merely because neither owns implementation.
     if (rec.get("recovery_assignment") or {}).get("kind") in ("review", "helper") and not (
-            (rec.get("recovery_assignment") or {}).get("kind")=="review" and
             ((rec.get("recovery_assignment") or {}).get("authority") or {}).get("host")) and str(
             payload.get("tool_name") or "") not in ("Read", "Glob", "Grep", "SubagentHandback"):
         return "READONLY", "agent %s is a read-only review/helper; request bounded host evidence instead" % aid
