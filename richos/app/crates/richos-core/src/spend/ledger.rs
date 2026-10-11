@@ -22,7 +22,7 @@
 use super::{Buckets, Card, Family, Request};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     fs,
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -63,9 +63,11 @@ struct Saved {
 #[derive(Default)]
 struct State {
     offsets: BTreeMap<PathBuf, u64>,
-    seen: HashSet<u64>,
-    /// Hashes added since the last save (appended to `seen.bin`).
-    unsaved_seen: Vec<u64>,
+    /// Every message ever counted, by id hash: the slot it was counted in and its output, so a
+    /// later, larger copy of it adds what it adds (the second review of fc1d7bb31, finding 3).
+    seen: HashMap<u64, (u32, u32)>,
+    /// Records added since the last save (appended to `seen.bin`, 16 bytes each).
+    unsaved_seen: Vec<(u64, u32, u32)>,
     recent: HashMap<String, Request>,
     totals: BTreeMap<(u64, Card, Option<String>), (i64, Buckets)>,
     /// The latest request by its own time, for the live line.
@@ -111,10 +113,11 @@ fn transcripts(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 impl State {
-    fn put(&mut self, request: &Request, sign: i64) {
+    /// Add (`sign` 1) or take back (`sign` -1) one record's buckets, and `requests` to the count.
+    fn put(&mut self, request: &Request, sign: i64, requests: i64) {
         let slot = request.at / SLOT_MS * SLOT_MS;
         let entry = self.totals.entry((slot, request.card(), request.effort.clone())).or_default();
-        entry.0 += sign;
+        entry.0 += requests;
         let b = &request.buckets;
         let apply = |total: &mut u64, n: u64| *total = if sign > 0 { *total + n } else { total.saturating_sub(n) };
         apply(&mut entry.1.input, b.input);
@@ -127,22 +130,54 @@ impl State {
         }
     }
 
-    /// Count one request: once per message, at its largest copy while it is recent.
+    fn remember(&mut self, h: u64, at: u64, output: u64) {
+        let record = ((at / SLOT_MS) as u32, output.min(u64::from(u32::MAX)) as u32);
+        self.seen.insert(h, record);
+        self.unsaved_seen.push((h, record.0, record.1));
+    }
+
+    /// Count one request: once per message, at its largest copy. While it is recent a larger copy
+    /// replaces it; after that, a larger copy adds the output it adds, in the slot it was counted
+    /// in. A correction (`Request::correction`) is spend with no request of its own.
     fn count(&mut self, request: Request) {
+        let h = hash(&request.id);
+        if request.correction {
+            if self.seen.contains_key(&h) {
+                return;
+            }
+            self.remember(h, request.at, request.buckets.output);
+            self.put(&request, 1, 0);
+            self.dirty = true;
+            return;
+        }
         if let Some(old) = self.recent.get(&request.id) {
             if request.buckets.output <= old.buckets.output && request.buckets.total() <= old.buckets.total() {
                 return;
             }
             let old = old.clone();
-            self.put(&old, -1);
-            self.put(&request, 1);
-        } else {
-            let h = hash(&request.id);
-            if !self.seen.insert(h) {
+            self.put(&old, -1, -1);
+            self.put(&request, 1, 1);
+            self.remember(h, old.at, request.buckets.output);
+        } else if let Some(&(slot, output)) = self.seen.get(&h) {
+            if request.buckets.output <= u64::from(output) {
                 return;
             }
-            self.unsaved_seen.push(h);
-            self.put(&request, 1);
+            // Counted long ago at a smaller size: only the output this copy adds, where it was counted.
+            let at = u64::from(slot) * SLOT_MS;
+            let extra = Request {
+                at,
+                buckets: Buckets { output: request.buckets.output - u64::from(output), ..Buckets::default() },
+                card_prompt: Some(request.buckets.prompt()),
+                correction: true,
+                ..request.clone()
+            };
+            self.put(&extra, 1, 0);
+            self.remember(h, at, request.buckets.output);
+            self.dirty = true;
+            return;
+        } else {
+            self.remember(h, request.at, request.buckets.output);
+            self.put(&request, 1, 1);
             self.counted += 1;
         }
         if self.last.as_ref().is_none_or(|l| request.at >= l.at) {
@@ -166,7 +201,11 @@ impl Ledger {
             let mut seen_bytes = Vec::new();
             let seen_ok = fs::File::open(dir.join(SEEN_FILE)).and_then(|mut f| f.read_to_end(&mut seen_bytes)).is_ok();
             if seen_ok {
-                state.seen = seen_bytes.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+                // Later records of one message replace earlier ones: its latest known size.
+                state.seen = seen_bytes.chunks_exact(16).map(|c| (
+                    u64::from_le_bytes(c[..8].try_into().unwrap()),
+                    (u32::from_le_bytes(c[8..12].try_into().unwrap()), u32::from_le_bytes(c[12..].try_into().unwrap())),
+                )).collect();
                 state.offsets = saved.offsets;
                 state.recent = saved.recent.into_iter().map(|r| (r.id.clone(), r)).collect();
                 state.totals = saved.rows.into_iter().map(|r| ((r.slot, r.card, r.effort), (r.requests, r.buckets))).collect();
@@ -256,7 +295,9 @@ impl Ledger {
             last: state.last.clone(),
             counted: state.counted,
         };
-        let seen: Vec<u8> = state.unsaved_seen.iter().flat_map(|h| h.to_le_bytes()).collect();
+        let seen: Vec<u8> = state.unsaved_seen.iter()
+            .flat_map(|(h, slot, output)| h.to_le_bytes().into_iter().chain(slot.to_le_bytes()).chain(output.to_le_bytes()))
+            .collect();
         let written = (|| -> std::io::Result<()> {
             fs::create_dir_all(&self.dir)?;
             // The ids first: a crash between the two writes then re-reads bytes whose messages
@@ -293,6 +334,7 @@ impl Ledger {
             t.cache_read += buckets.cache_read;
             let (Some(cost), Some((family, name))) = (super::price(card, buckets), super::family(&card.model)) else {
                 t.unpriced_requests += requests;
+                t.unpriced_tokens += buckets.total();
                 continue;
             };
             t.cost += cost;
@@ -358,6 +400,9 @@ pub struct Totals {
     pub cache_read: u64,
     /// Requests on a model with no published rate: counted in the requests and tokens, not priced.
     pub unpriced_requests: u64,
+    /// Tokens counted and not priced: those requests', and a lease's remainder that could not be
+    /// matched to one card (`Card::unmatched`).
+    pub unpriced_tokens: u64,
     /// The start of the earliest slot with a request in the period.
     pub first_at: Option<u64>,
     pub families: Vec<FamilyTotal>,
@@ -423,6 +468,54 @@ mod tests {
         let haiku = t.families.iter().find(|f| f.family == Family::Haiku).unwrap();
         assert_eq!(haiku.names.keys().cloned().collect::<Vec<_>>(), vec!["Haiku 4.5".to_string(), "Haiku 5.5".to_string()]);
         assert!(haiku.effort_unrecorded, "Haiku 4.5's request recorded no effort");
+    }
+
+    /// **A larger copy found later adds what it adds** (the second review of fc1d7bb31, finding 3,
+    /// its own fixture): a message counted a day ago at 1 output token, then found again, at 101,
+    /// in another transcript after a relaunch. By hand at Opus 5.5's rates: 1,000 x $4 + 101 x $20
+    /// + 10,000 x $0.20 = $0.00802 (the first copy alone: $0.00602). Still one request.
+    #[test]
+    fn a_larger_copy_found_after_the_first_is_long_counted_adds_its_output() {
+        let (_root, dir) = scratch();
+        let folders = [dir.join("account")];
+        fs::write(dir.join("account/projects/p/a.jsonl"), line("historical", "claude-opus-5-5", "2026-10-10T01:00:00Z", [1000, 1, 10_000, 0, 0])).unwrap();
+        let ledger = Ledger::open(&dir.join("spend"));
+        ledger.update(&folders, NOW);
+        assert!((ledger.totals(0).cost - 0.00602).abs() < 1e-12);
+        drop(ledger);
+        let again = Ledger::open(&dir.join("spend"));
+        fs::write(dir.join("account/projects/p/b.jsonl"), line("historical", "claude-opus-5-5", "2026-10-10T01:00:00Z", [1000, 101, 10_000, 0, 0])).unwrap();
+        again.update(&folders, NOW);
+        let t = again.totals(0);
+        assert!((t.cost - 0.00802).abs() < 1e-12, "the larger copy reconciles: {} against $0.00802 by hand", t.cost);
+        assert_eq!(t.requests, 1, "a larger copy is the same request");
+        // In the slot the message was counted in, not on the day the copy was read.
+        assert_eq!(again.totals(stamp_ms("2026-10-10T02:00:00Z")).requests, 0);
+        assert!(again.totals(stamp_ms("2026-10-10T02:00:00Z")).cost.abs() < 1e-12);
+        // And a third read of either file adds nothing.
+        again.update(&folders, NOW);
+        assert!((again.totals(0).cost - 0.00802).abs() < 1e-12);
+    }
+
+    /// **A correction is spend, never a request** (the second review of fc1d7bb31, finding 2): it
+    /// adds its dollars, adds no request, and is never the latest request on the live line.
+    #[test]
+    fn a_correction_adds_spend_but_no_request_and_is_never_the_last_request() {
+        let (_root, dir) = scratch();
+        let ledger = Ledger::open(&dir.join("spend"));
+        let request = Request::of_transcript_line(line("one", "claude-opus-5-5", "2026-10-11T03:00:00Z", [1000, 1, 10_000, 0, 0]).as_bytes()).unwrap();
+        let correction = Request {
+            id: "lease:result-1:claude-opus-5-5".into(),
+            at: request.at + 1000,
+            buckets: Buckets { output: 100, ..Buckets::default() },
+            correction: true,
+            ..request.clone()
+        };
+        ledger.add(vec![request, correction.clone(), correction], NOW);
+        let t = ledger.totals(0);
+        assert_eq!((t.requests, t.counted), (1, 1));
+        assert!((t.cost - 0.00802).abs() < 1e-12, "{}", t.cost);
+        assert_eq!(ledger.last().unwrap().id, "one");
     }
 
     #[test]

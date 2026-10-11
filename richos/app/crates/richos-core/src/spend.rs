@@ -104,6 +104,10 @@ pub struct Card {
     pub fast: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub us: bool,
+    /// Spend that could not be matched to one card (a lease's `result` remainder over requests on
+    /// both of Haiku 5.5's cards): counted, never priced.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmatched: bool,
 }
 
 /// One request, as the ledger keeps it.
@@ -124,6 +128,14 @@ pub struct Request {
     /// counted, so it takes the card of the lease's latest request on that model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_prompt: Option<u64>,
+    /// Not a response of its own: tokens a lease's `result` showed beyond its messages that could
+    /// not be put on one of them (`quota::tokens::Tally`). Spend, never a request: it adds no
+    /// request to the count and is never the latest request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub correction: bool,
+    /// See [`Card::unmatched`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmatched: bool,
 }
 
 impl Request {
@@ -183,6 +195,8 @@ impl Request {
             us: usage.get("inference_geo").and_then(Value::as_str) == Some("us"),
             buckets,
             card_prompt: None,
+            correction: false,
+            unmatched: false,
         })
     }
 
@@ -190,7 +204,7 @@ impl Request {
     pub fn card(&self) -> Card {
         let model = base_model(&self.model).to_string();
         let long = model == "claude-haiku-5-5" && self.card_prompt.unwrap_or(self.buckets.prompt()) > HAIKU_LONG_PROMPT;
-        Card { model, long, fast: self.fast, us: self.us }
+        Card { model, long, fast: self.fast, us: self.us, unmatched: self.unmatched }
     }
 
     /// Its API-equivalent cost in US dollars, or `None` on a model with no published rate.
@@ -267,6 +281,9 @@ const FAST: &[(&str, f64, f64)] = &[
 
 /// The rates of one card, or `None` for a model with no published rate.
 pub fn rates(card: &Card) -> Option<Rates> {
+    if card.unmatched {
+        return None;
+    }
     let standard = if card.model == "claude-haiku-5-5" && card.long {
         HAIKU_5_5_LONG
     } else {

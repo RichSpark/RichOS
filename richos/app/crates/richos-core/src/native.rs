@@ -2372,8 +2372,9 @@ impl NativeClient {
         // Every assistant message's tokens, whichever turn it belongs to and whoever said it
         // (a helper's nested frames too, a background helper's included), and from each
         // `result` the tokens no frame showed (`quota::tokens::Tally`): they are all spent on
-        // this lease's account.
-        if ty == "assistant" || ty == "result" {
+        // this lease's account. The streamed `message_start`/`message_delta` events tell the
+        // tally each message's final output, so the spend prices it on its own request (§118).
+        if ty == "assistant" || ty == "result" || ty == "stream_event" {
             let mut st = state.lock().unwrap();
             if let Some((account, sink)) = st.token_sink.clone() {
                 for found in st.token_tally.frame(&msg, crate::util::now_millis()) { sink.push(&account, found); }
