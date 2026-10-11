@@ -34,8 +34,10 @@ class Recovery(unittest.TestCase):
         self.temp.cleanup()
 
     def review(self, tip, rid, verdict="changes-requested", work=None):
+        folder=self.base/rid;folder.mkdir(exist_ok=True)
+        (folder/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[dict(title='failed acceptance',blocks=True,priority=1)] if verdict=='changes-requested' else []))))
         row = dict(id=rid, tip=tip, verdict=verdict, trigger="handover", repo=str(self.repo),
-                   work=work or self.work, record=str(self.base / "missing-original"))
+                   work=work or self.work, record=str(folder))
         with self.ledger.open("a") as out:
             out.write(json.dumps(row) + "\n")
 
@@ -79,6 +81,7 @@ class Recovery(unittest.TestCase):
         self.assertEqual(current()['status'],'investigating')
 
     def test_conflicting_pass_creates_one_focused_independent_reconciliation(self):
+        self.work='teammate:conflict-only'
         tip='c'*40
         def add(rid,verdict,findings=(),earlier=(),parent=''):
             directory=self.base/rid;directory.mkdir()
@@ -131,7 +134,33 @@ class Recovery(unittest.TestCase):
                         self.assertEqual(next_findings[0][1]['blocks'],False)
                         self.assertTrue(next_findings[0][1]['filed'])
 
+    def test_gate_carries_prior_source_blockers_through_omitted_rechecks(self):
+        self.work='teammate:carried-source-only'
+        old_tip,new_tip,later_tip='a'*40,'b'*40,'c'*40
+        finding=dict(title='original blocker',blocks=True,priority=1,files=[],evidence='source',fixture='')
+        def row(rid,tip,verdict,findings=(),earlier=(),work=None,parent=''):
+            folder=self.base/rid;folder.mkdir()
+            (folder/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=list(findings),earlier_findings=list(earlier)),earlier_findings_in=[dict(id=e['id'],**finding,source_tip=old_tip) for e in earlier])))
+            return dict(id=rid,tip=tip,repo=str(self.repo),work=work or self.work,trigger='handover',verdict=verdict,record=str(folder),recheck_of=parent)
+        original=row('carry-origin',old_tip,'changes-requested',[finding])
+        upheld=row('carry-upheld',new_tip,'changes-requested',earlier=[dict(id='carry-origin#1',status='still-open',blocks=True,note='still broken')])
+        omitted=row('carry-omitted',new_tip,'passed',parent='carry-upheld')
+        unrelated=row('carry-other',old_tip,'changes-requested',[finding],work='unrelated')
+        future=row('carry-future',later_tip,'passed',earlier=[dict(id='carry-origin#1',status='fixed',blocks=False,note='later implementation establishes acceptance')])
+        effective,_=R.F.review_of([original,upheld,omitted,unrelated,future],new_tip,str(self.repo))
+        self.assertEqual(effective['verdict'],'changes-requested')
+        self.assertEqual(set(effective['effective_findings']),{'carry-origin#1'})
+        later,_=R.F.review_of([original,upheld,omitted,unrelated,future],later_tip,str(self.repo))
+        self.assertEqual(later['verdict'],'passed')
+        for item in (original,upheld,omitted,unrelated,future):
+            with self.ledger.open('a') as out:out.write(json.dumps(item)+'\n')
+        task=R.conflict_task(str(self.repo),self.work,new_tip)
+        self.assertEqual(task['prior'],'carry-upheld')
+        self.assertIn('carry-origin',task['evidence'])
+        self.assertNotIn('carry-future',task['evidence'])
+
     def test_watcher_automatically_requests_conflict_recheck_with_frozen_claim(self):
+        self.work='teammate:watcher-conflict-only'
         import review_watch as RW
         from types import SimpleNamespace
         tip='c'*40
@@ -332,6 +361,8 @@ class Recovery(unittest.TestCase):
         row = dict(id="independent-pass", tip=tip, repo=str(self.repo), trigger="handover", verdict="passed",
                    work=self.work, recovery_plan=plan["id"], recovery_coverage={"one owner":"trace receipt"})
         self.review(tip, row["id"], "passed")
+        carried=[dict(id='initial-%d#1'%n,title='failed acceptance',blocks=True,source_tip=str(n)*40) for n in range(3)]
+        (self.base/row['id']/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[],earlier_findings=[dict(id=f['id'],status='fixed',blocks=False,note='independent trace proves the accepted ownership matrix') for f in carried]),earlier_findings_in=carried)))
         with R.locked(record["id"]):
             fresh = R.read(record["id"])
             fresh["controls"].append(dict(action="stop", workers={"old":"source"}, observations={

@@ -1127,7 +1127,13 @@ def review_of(rows, tip, repo):
     mid = [r for r in mine if r.get("tip") == tip and r.get("trigger") in REVIEW_MID_JOB]
     effective = dict(land[-1]) if land else None
     if effective:
-        opened = open_review_findings(land)
+        # Preserve this source's job history, including findings raised at an
+        # earlier tip. Later source resolutions cannot certify an older source.
+        end = max(i for i, r in enumerate(mine) if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)
+        works = {r.get("work") for r in land if r.get("work")}
+        history = [r for r in mine[:end+1] if r.get("work") in works or
+                   (r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)]
+        opened = open_review_findings(history)
         blocked = {k: f for k, f in opened.items() if f.get("blocks") is not False}
         if blocked:
             effective.update(verdict="changes-requested", blocking=len(blocked),

@@ -131,10 +131,12 @@ def conflict_task(repo, work, tip, ledger=None):
     """
     source=rows(ledger or F.review_ledger_default())
     ident=F.review_repo_identity(repo)
-    scoped=[r for r in source if r.get('work')==work and r.get('tip')==tip
-            and r.get('trigger') in F.REVIEW_LAND_KINDS and r.get('verdict') and F.review_row_belongs(r,ident)]
+    history=[r for r in source if r.get('work')==work and r.get('verdict') and F.review_row_belongs(r,ident)]
+    scoped=[r for r in history if r.get('tip')==tip and r.get('trigger') in F.REVIEW_LAND_KINDS]
     if not scoped:return None
-    effective,_=F.review_of(scoped,tip,repo)
+    end=max(i for i,r in enumerate(history) if r.get('tip')==tip and r.get('trigger') in F.REVIEW_LAND_KINDS)
+    history=history[:end+1]
+    effective,_=F.review_of(history,tip,repo)
     identity=digest(dict(repo=ident,work=work,tip=tip,purpose='outcome-reconciliation'))
     path=root(ledger)/'reconciliations'/(identity+'.json')
     with locked(identity,ledger):
@@ -149,10 +151,9 @@ def conflict_task(repo, work, tip, ledger=None):
         if effective.get('verdict')!='changes-requested' or not any(r.get('verdict')=='passed' for r in scoped):return None
         blocked=effective.get('effective_findings') or {}
         producers={fid.split('#',1)[0] for fid in blocked}
-        prior=next((r for r in reversed(scoped) if r.get('id') in producers),None)
-        if not prior:return None
+        prior=next((r for r in reversed(scoped) if r.get('id') in producers or r.get('verdict')=='changes-requested'),scoped[-1])
         task=dict(schema=1,id=identity,repo=repo,repo_id=ident,work=work,tip=tip,status='requested',prior=prior['id'],
-                  evidence=[r['id'] for r in scoped],findings=sorted(blocked),created_at=time.time(),
+                  evidence=[r['id'] for r in history],findings=sorted(blocked),created_at=time.time(),
                   instruction='Independently reconcile these conflicting reviews at the exact unchanged source. Read original authority and every referenced verdict. Establish each blocking finding explicitly as upheld, fixed or withdrawn; neither majority vote nor a later PASS resolves it.')
         path.parent.mkdir(parents=True,exist_ok=True)
         F.write_json_atomic(str(path),task)
