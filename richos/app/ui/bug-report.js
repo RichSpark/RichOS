@@ -41,6 +41,15 @@
 // card's heads-up calls private, is in Rust and tested there. This file draws what those commands
 // answer. Everything it puts on screen is
 // built with textContent; nothing Rich or the user wrote is ever parsed as markup.
+//
+// REQUEST A FEATURE (CEO 2026-10-11, round 24: "Under the "Bust a bug" button, I want to add a
+// "Request a feature" button. But I don't want feature requests to be submitted or branded as
+// "issues" on GitHub." and "can things not be copy-pasted from the "Bust a bug" feature?"). The
+// same exchange, the same panel, the same card and the same states, carrying an idea: a flow's
+// `kind` is "bug" or "idea", every word that differs is in WORDS, and every command is told the
+// kind (`post`) so the shell writes it up as an idea and posts it in RichOS's GitHub Discussions,
+// under Ideas. Nothing a feature request puts on screen says "issue" or "bug". One at a time
+// across both buttons: while either is open, both are disabled in Settings.
 "use strict";
 
 window.RichBug = (function () {
@@ -64,6 +73,68 @@ window.RichBug = (function () {
     "m2 2 20 20",
   ];
   var GLYPH_MIC = ["M19 10v1a7 7 0 0 1-14 0v-1", "M12 18v4"];
+  var GLYPH_BULB = ["M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5", "M9 18h6", "M10 22h4"];
+
+  /// **EVERY WORD THAT DIFFERS BETWEEN A BUG REPORT AND A FEATURE IDEA** (round 24's `KIND`). A
+  /// bug report's are the words this file has always said; an idea's never say "issue" or "bug".
+  var WORDS = {
+    bug: {
+      name: "Bust a bug", card: "Bug report", glyph: GLYPH_BUG, close: "Close the bug report panel",
+      ask: "What went wrong? Tell me in your own words, typed or out loud, and where it happened if it wasn't here. ",
+      phAsk: "Tell Rich what went wrong…", phDraft: "Tell Rich what to change, or press Send…",
+      none: "No problem. Nothing was written up or sent.",
+      hereItIs: "Here's the report as I'd file it. Nothing goes out until you press Send. Anyone can read GitHub issues, so I left out names, company details and file paths.",
+      notChecked: "I couldn't check this report for private details yet, because Claude didn't answer, so it isn't ready to send. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      changesNotChecked: "I couldn't check your changes for private details yet, because Claude didn't answer, so I didn't send the report. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      shownAgain: "I checked it again before sending, and some of its words would go out differently from how the card showed them. Here it is exactly as it would go. Nothing goes out until you press Send.",
+      earlier: "I've checked the bug report you told me about earlier. ",
+      drop: "Cancel report", go: "Send report",
+      droppedUnchecked: "Canceled. Nothing was sent, and it's no longer saved on this Mac.",
+      notDropped: "I couldn't take the report off this Mac, so it's still saved here. Press Cancel report to try again.",
+      changing: "Rich is changing the report…",
+      changedQueued: " The report changed, so it waits for you to send it again.", changedDraft: " It still waits for you to send it.",
+      notChanged: "I couldn't change the report just now. Press Change it and change the words yourself, or tell me again.",
+      notCanceled: "I couldn't cancel the report: it's still saved on this Mac and will go out by itself. Press Cancel report to try again.",
+      notTakenBack: "I couldn't take the report back to change it: it's still saved on this Mac and will go out by itself. Press Change it to try again.",
+      readers: "GitHub issues", thing: "report", notInIt: "it isn't in the report.",
+      pill: { draft: "Not sent yet", changed: "Not sent yet · changed", sending: "Sending…", queued: "Waiting to send · saved on this Mac", canceled: "Canceled · nothing sent" },
+      notSaved: "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.",
+      canceled: "Canceled. Nothing was sent.",
+      savedToast: "Your bug report is saved on this Mac and goes out by itself when it can.",
+      uncheckedToast: "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers, and show it to you here.",
+    },
+    idea: {
+      name: "Request a feature", card: "Feature idea", glyph: GLYPH_BULB, close: "Close the feature request panel",
+      ask: "What would you like RichOS to do? Tell me in your own words, typed or out loud. ",
+      phAsk: "Tell Rich your idea…", phDraft: "Tell Rich what to change, or post it…",
+      none: "No problem. Nothing was written up or posted.",
+      hereItIs: "Here's your idea as I'd post it. Nothing goes out until you press Post idea. Anyone can read GitHub Discussions, so I left out names, company details and file paths.",
+      notChecked: "I couldn't check your idea for private details yet, because Claude didn't answer, so it isn't ready to post. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      changesNotChecked: "I couldn't check your changes for private details yet, because Claude didn't answer, so I didn't post your idea. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      shownAgain: "I checked it again before posting, and some of its words would go out differently from how the card showed them. Here it is exactly as it would go. Nothing goes out until you press Post idea.",
+      earlier: "I've checked the idea you told me about earlier. ",
+      drop: "Cancel post", go: "Post idea",
+      droppedUnchecked: "Canceled. Nothing was posted, and it's no longer saved on this Mac.",
+      notDropped: "I couldn't take your idea off this Mac, so it's still saved here. Press Cancel post to try again.",
+      changing: "Rich is changing the post…",
+      changedQueued: " The post changed, so it waits for you to post it again.", changedDraft: " It still waits for you to post it.",
+      notChanged: "I couldn't change the post just now. Press Change it and change the words yourself, or tell me again.",
+      notCanceled: "I couldn't cancel the post: it's still saved on this Mac and will be posted by itself. Press Cancel post to try again.",
+      notTakenBack: "I couldn't take the post back to change it: it's still saved on this Mac and will be posted by itself. Press Change it to try again.",
+      readers: "GitHub Discussions", thing: "post", notInIt: "it isn't in the post.",
+      pill: { draft: "Not posted yet", changed: "Not posted yet · changed", sending: "Posting…", queued: "Waiting to post · saved on this Mac", canceled: "Canceled · nothing posted" },
+      notSaved: "I couldn't save your idea on this Mac, so nothing was posted. Press Post idea to try again.",
+      canceled: "Canceled. Nothing was posted.",
+      savedToast: "Your idea is saved on this Mac and is posted by itself when it can.",
+      uncheckedToast: "Your idea is saved on this Mac. Rich will check it as soon as Claude answers, and show it to you here.",
+    },
+  };
+  function W(f) { return WORDS[(f && f.kind) || "bug"]; }
+  /// The section of an idea whose points are bullets, not numbered steps (the core's
+  /// `bug_report::BULLETED`, round 24's "What the user pictured").
+  var BULLETED = "What the user pictured";
+  /// What every command is told about the flow: what kind of post it is.
+  function postOf(f) { return (f && f.kind) || "bug"; }
 
   function svg(paths, cls, label) {
     var ns = "http://www.w3.org/2000/svg";
@@ -314,8 +385,8 @@ window.RichBug = (function () {
 
   function placeholderFor(f) {
     if (!f) return null;
-    if (f.step === "ask") return "Tell Rich what went wrong…";
-    if (f.step === "draft" || f.step === "queued" || f.step === "editing") return "Tell Rich what to change, or press Send…";
+    if (f.step === "ask") return W(f).phAsk;
+    if (f.step === "draft" || f.step === "queued" || f.step === "editing") return W(f).phDraft;
     if (f.step === "changing") return "Tell Rich what else to change…";
     return null;
   }
@@ -339,26 +410,26 @@ window.RichBug = (function () {
   /// The one report a press can find is one saved on this Mac whose panel the user closed (the
   /// ✕ is offered only then: waiting to send, or waiting for Rich's check): the press opens the
   /// panel on it again, which is the way back to it.
-  function start(seen) {
+  function start(seen, kind) {
     var cur = liveFlow();
     if (cur) {
-      showDock();
+      showDock(cur);
       scrollDown();
       focusAnswer();
       return cur;
     }
     var scr = seen || screenNow();
-    var f = { id: ++seq, screen: scr, step: "ask" };
+    var f = { id: ++seq, kind: kind === "idea" ? "idea" : "bug", screen: scr, step: "ask" };
     flows.push(f);
     $("bugdock-msgs").textContent = "";
     $("bugdock-where").textContent = "· " + scr.label;
-    showDock();
+    showDock(f);
     var where =
-      scr.key === "conversation" ? "I've noted that you were on " + scr.here + "."
+      scr.key === "conversation" ? "I've noted that you were on " + scr.here + (f.kind === "idea" ? ", in case it's about this screen." : ".")
       : scr.key === "unbound" ? "I've noted that you were on " + scr.here + ", which can't take messages yet, so we're talking here."
       : openWindow() ? "I've noted that you were in " + scr.here + ", and it stays open beside us."
       : "I've noted that you were on " + scr.here + ".";
-    var art = richSays(f, ["What went wrong? Tell me in your own words, typed or out loud, and where it happened if it wasn't here. " + where]);
+    var art = richSays(f, [W(f).ask + where]);
     var acts = node("div", "bug-actions-inline");
     var nm = node("button", "desk-btn", "Never mind");
     nm.type = "button";
@@ -376,7 +447,7 @@ window.RichBug = (function () {
   /// the screen's words at once, and the shell's picture of the window (`bug_report_look`) before
   /// Rich's question appears, so neither shows the exchange instead of the screen. A picture that
   /// does not come within 1.5 s is not waited for; Rich then has the words.
-  function lookThenStart() {
+  function lookThenStart(kind) {
     if (reportOpen()) return;
     if (liveFlow()) return start();
     var seen = screenNow();
@@ -388,7 +459,7 @@ window.RichBug = (function () {
       if (started) return;
       started = true;
       looking = false;
-      start(seen);
+      start(seen, kind);
     }
     bridge.invoke("bug_report_look").then(go, go);
     window.setTimeout(go, 1500);
@@ -397,7 +468,7 @@ window.RichBug = (function () {
   function neverMind(f, quiet) {
     if (f.neverMind) { f.neverMind.remove(); f.neverMind = null; }
     f.step = "closed";
-    if (!quiet) richSays(f, ["No problem. Nothing was written up or sent."]);
+    if (!quiet) richSays(f, [W(f).none]);
     paintComposers();
   }
 
@@ -430,7 +501,8 @@ window.RichBug = (function () {
     var paragraphs = [], steps = [];
     Array.prototype.forEach.call(sec.children, function (n) {
       if (n.nodeName === "P") paragraphs.push(n);
-      else if (n.nodeName === "OL") Array.prototype.forEach.call(n.children, function (li) { if (li.nodeName === "LI") steps.push(li); });
+      // An idea's pictured points are a bulleted list (round 24), read as steps are.
+      else if (n.nodeName === "OL" || n.nodeName === "UL") Array.prototype.forEach.call(n.children, function (li) { if (li.nodeName === "LI") steps.push(li); });
     });
     return { paragraphs: paragraphs, steps: steps };
   }
@@ -473,14 +545,16 @@ window.RichBug = (function () {
       f.step = "checking";
       paintComposers();
       var w = working(f, "Rich is checking…");
-      bridge.invoke("bug_report_write", { answer: text, screen: publicScreen(f.screen) }).then(function (answer) {
+      bridge.invoke("bug_report_write", { answer: text, screen: publicScreen(f.screen), post: postOf(f) }).then(function (answer) {
         w.remove();
         if (answer && answer.state === "unchecked") return keptUnchecked(f, answer.id);
-        showDraft(f, answer, HERE_IT_IS, worked(answer.workedMs));
+        showDraft(f, answer, W(f).hereItIs, worked(answer.workedMs));
       }).catch(function (e) {
         w.remove();
         f.step = "ask";
-        richSays(f, [typeof e === "string" && e ? e : "I couldn't write that up just now. Tell me again and I'll try once more."]);
+        // The shell's words name a report; an idea's are its own.
+        richSays(f, [f.kind === "idea" ? "I couldn't check your idea or save it on this Mac, so nothing was written up or posted. Tell me again and I'll try once more."
+          : typeof e === "string" && e ? e : "I couldn't write that up just now. Tell me again and I'll try once more."]);
         paintComposers();
       });
       return;
@@ -502,14 +576,11 @@ window.RichBug = (function () {
     askChange(f, text, false);
   }
 
-  var HERE_IT_IS = "Here's the report as I'd file it. Nothing goes out until you press Send. Anyone can read GitHub issues, so I left out names, company details and file paths.";
-  var NOT_CHECKED = "I couldn't check this report for private details yet, because Claude didn't answer, so it isn't ready to send. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.";
-
+  // What Rich says when he has written it up (`hereItIs`), could not check it (`notChecked`,
+  // `changesNotChecked`), or checked changed words again and his version differs from the card in
+  // any character (`shownAgain`: more left out, or a title's backtick written as an apostrophe)
+  // are in WORDS, for a bug report and for an idea.
   var CHECKING_CHANGES = "Rich is checking your changes…";
-  var CHANGES_NOT_CHECKED = "I couldn't check your changes for private details yet, because Claude didn't answer, so I didn't send the report. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.";
-  // Said when changed words went through the scanner and then Rich, and his version differs from
-  // the card in any character (more left out, or a title's backtick written as an apostrophe).
-  var SHOWN_AGAIN = "I checked it again before sending, and some of its words would go out differently from how the card showed them. Here it is exactly as it would go. Nothing goes out until you press Send.";
 
   /// Rich's checked report on its card, waiting for the user: `answer` is `{report, draft,
   /// digest}`. `report` is the id the shell keeps his check under; Send names it, and the shell
@@ -539,9 +610,9 @@ window.RichBug = (function () {
   function keptUnchecked(f, id) {
     f.uncheckedId = id;
     f.step = "unchecked";
-    var art = richSays(f, [NOT_CHECKED]);
+    var art = richSays(f, [W(f).notChecked]);
     var acts = node("div", "bug-actions-inline");
-    acts.appendChild(button("Cancel report", false, function () { dropUnchecked(f); }, "bug-unchecked-cancel"));
+    acts.appendChild(button(W(f).drop, false, function () { dropUnchecked(f); }, "bug-unchecked-cancel"));
     art.appendChild(acts);
     f.uncheckedActs = acts;
     paintComposers();
@@ -551,9 +622,9 @@ window.RichBug = (function () {
   /// or canceled). The shell says a checked one on every pass until it is taken off this Mac, so
   /// a repeat only takes it off again.
   var taken = {};
-  function takeOff(id) {
+  function takeOff(id, post) {
     // Not taken off: it stays kept, the shell says it again, and this takes it then.
-    bridge.invoke("bug_report_take_unchecked", { id: id }).catch(function () {});
+    bridge.invoke("bug_report_take_unchecked", { id: id, post: post || "bug" }).catch(function () {});
   }
 
   /// **CHANGED WORDS RICH COULD NOT CHECK AT SEND**: nothing was sent. The card stays, with no
@@ -563,9 +634,9 @@ window.RichBug = (function () {
     f.uncheckedId = id;
     f.step = "unchecked";
     paintCard(f);
-    var art = richSays(f, [CHANGES_NOT_CHECKED]);
+    var art = richSays(f, [W(f).changesNotChecked]);
     var acts = node("div", "bug-actions-inline");
-    acts.appendChild(button("Cancel report", false, function () { dropUnchecked(f); }, "bug-unchecked-cancel"));
+    acts.appendChild(button(W(f).drop, false, function () { dropUnchecked(f); }, "bug-unchecked-cancel"));
     art.appendChild(acts);
     f.uncheckedActs = acts;
     paintComposers();
@@ -576,20 +647,20 @@ window.RichBug = (function () {
     var id = f.uncheckedId;
     taken[id] = true;
     f.uncheckedActs.hidden = true;
-    bridge.invoke("bug_report_take_unchecked", { id: id }).then(function () {
+    bridge.invoke("bug_report_take_unchecked", { id: id, post: postOf(f) }).then(function () {
       if (f.step !== "unchecked") return;
       f.uncheckedActs.remove();
       f.uncheckedActs = null;
       f.uncheckedId = null;
       f.step = f.card ? "canceled" : "closed";
       if (f.card) paintCard(f);
-      richSays(f, ["Canceled. Nothing was sent, and it's no longer saved on this Mac."]);
+      richSays(f, [W(f).droppedUnchecked]);
       paintComposers();
     }).catch(function (e) {
       delete taken[id];
       if (f.step !== "unchecked") return;
       f.uncheckedActs.hidden = false;
-      richSays(f, [typeof e === "string" && e ? e : "I couldn't take the report off this Mac, so it's still saved here. Press Cancel report to try again."]);
+      richSays(f, [f.kind !== "idea" && typeof e === "string" && e ? e : W(f).notDropped]);
     });
   }
 
@@ -599,25 +670,26 @@ window.RichBug = (function () {
   /// report at a time).
   function onChecked(c) {
     if (!c || !c.id) return;
-    if (taken[c.id]) return takeOff(c.id);
+    var kind = c.post === "idea" ? "idea" : "bug";
+    if (taken[c.id]) return takeOff(c.id, kind);
     var f = flows.filter(function (x) { return x.uncheckedId === c.id; })[0];
     var earlier = !f;
     if (earlier) {
       if (liveFlow()) return;
       var label = c.here || "this screen";
-      f = { id: ++seq, screen: { key: "other", label: label, here: label, public: "a RichOS screen" }, step: "unchecked", uncheckedId: c.id };
+      f = { id: ++seq, kind: kind, screen: { key: "other", label: label, here: label, public: "a RichOS screen" }, step: "unchecked", uncheckedId: c.id };
       flows.push(f);
       $("bugdock-msgs").textContent = "";
       $("bugdock-where").textContent = "· " + label;
     }
     if (f.step !== "unchecked") return;
     taken[c.id] = true;
-    takeOff(c.id);
+    takeOff(c.id, postOf(f));
     f.uncheckedId = null;
     if (f.uncheckedActs) { f.uncheckedActs.remove(); f.uncheckedActs = null; }
-    showDock();
-    var lead = earlier ? "I've checked the bug report you told me about earlier. " : f.card ? "I've checked your changes now. " : "I've checked it now. ";
-    showDraft(f, c, lead + HERE_IT_IS, null);
+    showDock(f);
+    var lead = earlier ? W(f).earlier : f.card ? "I've checked your changes now. " : "I've checked it now. ";
+    showDraft(f, c, lead + W(f).hereItIs, null);
   }
 
   /// Rich folds one change in. While he does, the report is "changing": Send, Change it and
@@ -627,12 +699,12 @@ window.RichBug = (function () {
     f.step = "changing";
     paintCard(f);
     paintComposers();
-    var w2 = working(f, "Rich is changing the report…");
+    var w2 = working(f, W(f).changing);
     function next() {
       var more = f.nextChanges && f.nextChanges.shift();
       if (more && f.step === "draft") askChange(f, more, false);
     }
-    bridge.invoke("bug_report_change", { said: text, sheet: sheetOf(f), private: f.private || [] }).then(function (answer) {
+    bridge.invoke("bug_report_change", { said: text, sheet: sheetOf(f), private: f.private || [], post: postOf(f) }).then(function (answer) {
       w2.remove();
       if (f.step !== "changing") return;
       if (answer.private) f.private = answer.private;
@@ -642,7 +714,7 @@ window.RichBug = (function () {
       if (!sec) sec = secs[0];
       var p = node("p", "is-added");
       appendSegments(p, answer.add);
-      var ol = sec.querySelector("ol");
+      var ol = sec.querySelector("ol, ul");
       sec.insertBefore(p, ol);
       f.edited = true;
       // The card changed: at Send it goes through the scanner and then Rich, last (CEO §115).
@@ -650,7 +722,7 @@ window.RichBug = (function () {
       f.step = "draft";
       paintCard(f);
       paintComposers();
-      richSays(f, ["Added that to " + sec.querySelector("h4").textContent + ", above." + (wasQueued ? " The report changed, so it waits for you to send it again." : " It still waits for you to send it.")]);
+      richSays(f, ["Added that to " + sec.querySelector("h4").textContent + ", above." + (wasQueued ? W(f).changedQueued : W(f).changedDraft)]);
       flash(f);
       next();
     }).catch(function () {
@@ -659,7 +731,7 @@ window.RichBug = (function () {
       f.step = "draft";
       paintCard(f);
       paintComposers();
-      richSays(f, ["I couldn't change the report just now. Press Change it and change the words yourself, or tell me again."]);
+      richSays(f, [W(f).notChanged]);
       next();
     });
   }
@@ -676,7 +748,7 @@ window.RichBug = (function () {
     f.withdrawFor = purpose;
     paintCard(f);
     paintComposers();
-    bridge.invoke("bug_report_cancel", { id: id }).then(function (r) {
+    bridge.invoke("bug_report_cancel", { id: id, post: postOf(f) }).then(function (r) {
       if (f.step !== "withdrawing") return; // it went out meanwhile, and the card already says so
       if (r && r.state === "sent") return wentOutFirst(f, r);
       f.pendingId = null;
@@ -686,9 +758,7 @@ window.RichBug = (function () {
       f.step = "queued";
       paintCard(f);
       paintComposers();
-      richSays(f, [purpose === "cancel"
-        ? "I couldn't cancel the report: it's still saved on this Mac and will go out by itself. Press Cancel report to try again."
-        : "I couldn't take the report back to change it: it's still saved on this Mac and will go out by itself. Press Change it to try again."]);
+      richSays(f, [purpose === "cancel" ? W(f).notCanceled : W(f).notTakenBack]);
     });
   }
 
@@ -742,11 +812,16 @@ window.RichBug = (function () {
   /// and Send posts these words, or, when they changed, shows his version of them first.
   function buildCard(f) {
     var d = f.draft;
-    var c = node("article", "bugcard is-new");
-    c.setAttribute("aria-label", "Bug report");
+    var c = node("article", "bugcard is-new" + (f.kind === "idea" ? " is-idea" : ""));
+    c.setAttribute("aria-label", W(f).card);
     var head = node("header", "bug-head");
-    head.appendChild(svg(GLYPH_BUG, "bug-glyph"));
-    head.appendChild(node("span", "bug-kind", "Bug report"));
+    if (f.kind === "idea") {
+      // Posted, the bulb lights (round 24): the wrap carries its two rings.
+      var bulb = node("span", "bulb-wrap");
+      bulb.appendChild(svg(GLYPH_BULB, "bug-glyph"));
+      head.appendChild(bulb);
+    } else head.appendChild(svg(GLYPH_BUG, "bug-glyph"));
+    head.appendChild(node("span", "bug-kind", W(f).card));
     var pill = node("span", "bug-pill");
     pill.setAttribute("role", "status");
     head.appendChild(pill);
@@ -756,7 +831,7 @@ window.RichBug = (function () {
     route.appendChild(node("dt", null, "From"));
     route.appendChild(node("dd", "r-from"));
     route.appendChild(node("dt", null, "To"));
-    route.appendChild(node("dd", null, "RichOS on GitHub, as an issue anyone can read"));
+    route.appendChild(f.kind === "idea" ? ideasTo() : node("dd", null, "RichOS on GitHub, as an issue anyone can read"));
     c.appendChild(route);
     var doc = node("div", "bug-doc");
     var title = node("h3", "bug-title");
@@ -765,13 +840,14 @@ window.RichBug = (function () {
     d.sections.forEach(function (s) {
       var sec = node("section", "bug-sec");
       sec.appendChild(node("h4", null, s.heading));
+      var bulleted = f.kind === "idea" && s.heading === BULLETED;
       (s.paragraphs || []).forEach(function (p) {
         var para = node("p");
         appendSegments(para, p);
         sec.appendChild(para);
       });
       if (s.steps && s.steps.length) {
-        var ol = node("ol");
+        var ol = node(bulleted ? "ul" : "ol");
         s.steps.forEach(function (st) {
           var li = node("li");
           appendSegments(li, st);
@@ -799,6 +875,20 @@ window.RichBug = (function () {
     doc.addEventListener("input", function () { paintWarn(f); });
     title.addEventListener("keydown", function (e) { if (e.key === "Enter") e.preventDefault(); });
     return c;
+  }
+
+  /// **AN IDEA'S TO LINE** (round 24): RichOS on GitHub, as a post in its Discussions, under
+  /// Ideas (a small gold-ruled label with the bulb, like GitHub's own category label), where
+  /// anyone can read and upvote it.
+  function ideasTo() {
+    var dd = node("dd");
+    dd.appendChild(document.createTextNode("RichOS on GitHub, as a post in its Discussions, under "));
+    var cat = node("span", "idea-cat");
+    cat.appendChild(svg(GLYPH_BULB));
+    cat.appendChild(document.createTextNode("Ideas"));
+    dd.appendChild(cat);
+    dd.appendChild(document.createTextNode(", where anyone can read and upvote it"));
+    return dd;
   }
 
   function accountIsUser() {
@@ -919,13 +1009,13 @@ window.RichBug = (function () {
         total += 1;
       });
     });
-    if (!order.length) return "Nothing private was in it, so nothing was left out. Anyone can read GitHub issues.";
+    if (!order.length) return "Nothing private was in it, so nothing was left out. Anyone can read " + W(f).readers + ".";
     var parts = order.map(function (k) {
       var n = counts[k], w = KIND_WORDS[k] || ["private word", "private words"];
       return (NUM[n] || n) + " " + (n === 1 ? w[0] : w[1]);
     });
     var list = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
-    return "Left out, because anyone can read GitHub issues: " + list + ". The underlined words stand in for " + (total === 1 ? "it" : "them") + "; point at one to see what it replaced.";
+    return "Left out, because anyone can read " + W(f).readers + ": " + list + ". The underlined words stand in for " + (total === 1 ? "it" : "them") + "; point at one to see what it replaced.";
   }
 
   /// A stand-in whose words the user changed is the user's own text from then on: no longer
@@ -985,7 +1075,7 @@ window.RichBug = (function () {
       w.textContent = "";
       if (!found.length) return;
       w.appendChild(node("strong", null, found.map(function (x) { return "“" + x + "”"; }).join(", ") + (found.length === 1 ? " looks" : " look") + " private."));
-      w.appendChild(document.createTextNode(" Anyone can read this report on GitHub."));
+      w.appendChild(document.createTextNode(" Anyone can read this " + W(f).thing + " on GitHub."));
     }).catch(function () {
       // Not answered: the heads-up stays as it was. It decides nothing; Send is the user's.
     }).then(function () {
@@ -1059,8 +1149,8 @@ window.RichBug = (function () {
     });
     switch (f.step) {
       case "draft":
-        pill.textContent = f.edited ? "Not sent yet · changed" : "Not sent yet";
-        acts.appendChild(button("Send report", true, function () { send(f); }, "bug-send"));
+        pill.textContent = f.edited ? W(f).pill.changed : W(f).pill.draft;
+        acts.appendChild(button(W(f).go, true, function () { send(f); }, "bug-send"));
         acts.appendChild(button("Change it", false, function () { edit(f); }, "bug-change"));
         acts.appendChild(button("Cancel", false, function () { cancel(f); }, "bug-cancel"));
         break;
@@ -1071,7 +1161,7 @@ window.RichBug = (function () {
         break;
       case "sending":
         c.classList.add("is-sending");
-        pill.textContent = f.handEdited ? CHECKING_CHANGES : "Sending…";
+        pill.textContent = f.handEdited ? CHECKING_CHANGES : W(f).pill.sending;
         acts.hidden = true;
         break;
       case "unchecked":
@@ -1093,17 +1183,29 @@ window.RichBug = (function () {
         break;
       case "queued":
         c.classList.add("is-queued");
-        pill.textContent = "Waiting to send · saved on this Mac";
+        pill.textContent = W(f).pill.queued;
         acts.appendChild(button("Try now", true, function () { tryNow(f); }, "bug-try-now"));
         acts.appendChild(button("Change it", false, function () { edit(f); }, "bug-change"));
-        acts.appendChild(button("Cancel report", false, function () { cancel(f); }, "bug-cancel"));
+        acts.appendChild(button(W(f).drop, false, function () { cancel(f); }, "bug-cancel"));
         break;
       case "sent":
         c.classList.add("is-sent");
-        pill.textContent = "Sent · #" + f.issue.number;
         acts.hidden = true;
         row.hidden = false;
         row.textContent = "";
+        if (f.kind === "idea") {
+          // Posted: no number in the words (Discussions share one numbering with the repository,
+          // so the number shows only in the address), and the bulb lights.
+          pill.textContent = "Posted · in Ideas";
+          var open = node("a", "bug-link", "Open it on GitHub");
+          open.href = "#";
+          open.dataset.issue = String(f.issue.number);
+          open.dataset.post = "idea";
+          row.appendChild(open);
+          row.appendChild(node("span", null, "posted from " + (f.issue.account && f.issue.account.kind === "user" ? "@" + f.issue.account.login : "the RichOS reporting account")));
+          break;
+        }
+        pill.textContent = "Sent · #" + f.issue.number;
         var a = node("a", "bug-link", "Open issue #" + f.issue.number + " on GitHub");
         a.href = "#";
         a.dataset.issue = String(f.issue.number);
@@ -1112,7 +1214,7 @@ window.RichBug = (function () {
         break;
       case "canceled":
         c.classList.add("is-canceled");
-        pill.textContent = "Canceled · nothing sent";
+        pill.textContent = W(f).pill.canceled;
         c.querySelector(".bug-ctitle").textContent = c.querySelector(".bug-title").textContent;
         break;
     }
@@ -1168,6 +1270,22 @@ window.RichBug = (function () {
     offline: "You're back online, so I sent your bug report.",
     "github-down": "GitHub is answering again, so I sent your bug report.",
   };
+  // The same, for an idea (round 24): posted, never filed or sent as an issue. "refused" is an
+  // account GitHub will not let post in RichOS's Discussions (a token without that permission),
+  // said as it is, with the account it was.
+  var IDEA_WAITING_FIRST = {
+    offline: "This Mac is offline, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself as soon as you're back online, and tell you here when it's up.",
+    "github-down": "GitHub isn't answering right now, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll keep trying every few minutes and tell you here when it's up.",
+    "not-set-up": "The RichOS reporting account isn't set up on this Mac yet, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself once the account is set up, and tell you here when it's up.",
+  };
+  function ideaRefused() {
+    var who = accountIsUser() ? "your GitHub account, @" + context.account.login + "," : "the RichOS reporting account";
+    return "GitHub didn't let " + who + " post in RichOS's Discussions, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll try again in a few minutes and tell you here when it's up.";
+  }
+  var IDEA_CAME_BACK = {
+    offline: "You're back online, so I posted your idea.",
+    "github-down": "GitHub is answering again, so I posted your idea.",
+  };
 
   function send(f) {
     if (f.step !== "draft") return; // held while Rich changes it; never twice
@@ -1181,12 +1299,12 @@ window.RichBug = (function () {
     paintCard(f);
     paintComposers();
     var checking = f.handEdited ? working(f, CHECKING_CHANGES) : null;
-    bridge.invoke("bug_report_send", { report: f.report || null, sheet: sheetOf(f), screen: publicScreen(f.screen) }).then(function (a) {
+    bridge.invoke("bug_report_send", { report: f.report || null, sheet: sheetOf(f), screen: publicScreen(f.screen), post: postOf(f) }).then(function (a) {
       if (checking) checking.remove();
       if (f.step !== "sending") return;
       // Not sent: the changed words went through the scanner and then Rich, and his version
       // differs from the card. The card comes back as it would go.
-      if (a && a.state === "checked") return showDraft(f, a, SHOWN_AGAIN, null);
+      if (a && a.state === "checked") return showDraft(f, a, W(f).shownAgain, null);
       // Not sent: Rich couldn't check the changed words yet; they wait on this Mac.
       if (a && a.state === "unchecked") return changesKept(f, a.id);
       delivered(f, a, null);
@@ -1195,7 +1313,7 @@ window.RichBug = (function () {
       f.step = "draft";
       paintCard(f);
       paintComposers();
-      richSays(f, ["I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again."]);
+      richSays(f, [W(f).notSaved]);
     });
   }
 
@@ -1206,7 +1324,7 @@ window.RichBug = (function () {
     f.step = "sending";
     paintCard(f);
     paintComposers();
-    bridge.invoke("bug_report_try_now", { id: id }).then(function (d) {
+    bridge.invoke("bug_report_try_now", { id: id, post: postOf(f) }).then(function (d) {
       if (!d) return; // it went out by itself a moment ago; the event says so
       delivered(f, d, null);
     }).catch(function () {
@@ -1226,7 +1344,10 @@ window.RichBug = (function () {
     paintCard(f);
     paintComposers();
     if (why) return; // a retry by itself that failed again says nothing new
-    richSays(f, [(again && (WAITING_AGAIN[d.reason] || "It still didn't go out. It stays saved here, and I'll keep trying.")) || WAITING_FIRST[d.reason] || WAITING_FIRST["github-down"]]);
+    var first = f.kind === "idea"
+      ? (d.reason === "refused" ? ideaRefused() : IDEA_WAITING_FIRST[d.reason] || IDEA_WAITING_FIRST["github-down"])
+      : WAITING_FIRST[d.reason] || WAITING_FIRST["github-down"];
+    richSays(f, [(again && (WAITING_AGAIN[d.reason] || "It still didn't go out. It stays saved here, and I'll keep trying.")) || first]);
   }
 
   /// `lead`, when given, is Rich's first sentence instead (a report that went out before it
@@ -1242,6 +1363,7 @@ window.RichBug = (function () {
     pill.classList.remove("pop");
     void pill.offsetWidth;
     pill.classList.add("pop");
+    if (f.kind === "idea") return ideaPosted(f, d, why, lead);
     var acct = d.account && d.account.kind === "user" ? "filed from your GitHub account, @" + d.account.login + "."
       : "filed from the RichOS reporting account, because RichOS isn't signed in to a GitHub account of yours.";
     var opening = lead ? lead + " It's issue #" + d.number + " on GitHub, "
@@ -1254,6 +1376,26 @@ window.RichBug = (function () {
     if (why && host) host.toast("Your bug report went out: issue #" + d.number + " on GitHub.");
   }
 
+  /// **AN IDEA, POSTED** (round 24): the bulb lights, and Rich says where it went and from which
+  /// account, with the link. The words never give the post a number.
+  function ideaPosted(f, d, why, lead) {
+    var bulb = f.card.querySelector(".bulb-wrap");
+    if (bulb) {
+      bulb.classList.remove("lit");
+      void bulb.offsetWidth;
+      bulb.classList.add("lit");
+    }
+    var from = d.account && d.account.kind === "user" ? "posted from your GitHub account, @" + d.account.login + "."
+      : "posted from the RichOS reporting account, because RichOS isn't signed in to a GitHub account of yours.";
+    var opening = lead ? lead + " " : why ? (IDEA_CAME_BACK[why] || "I posted your idea.") + " " : "Posted. ";
+    var link = node("a", "bug-link", "github.com/WebDevBooster/richos/discussions/" + d.number);
+    link.href = "#";
+    link.dataset.issue = String(d.number);
+    link.dataset.post = "idea";
+    richSays(f, [opening + "It's in RichOS's Discussions on GitHub, under Ideas, " + from + " Anyone can read it and upvote it there.", link]);
+    if (why && host) host.toast("Your idea is posted in Ideas, on GitHub.");
+  }
+
   /// *Cancel* on a report not yet sent ends it at once: nothing of it is anywhere but this card.
   /// *Cancel report* on a waiting one says "Nothing was sent" only once its copy is confirmed off
   /// this Mac; if it went out first, the card says Sent and Rich says so (finding 2).
@@ -1263,7 +1405,7 @@ window.RichBug = (function () {
       f.step = "canceled";
       paintCard(f);
       paintComposers();
-      richSays(f, ["Canceled. Nothing was sent."]);
+      richSays(f, [W(f).canceled]);
     });
   }
 
@@ -1277,6 +1419,7 @@ window.RichBug = (function () {
     var f = flows.filter(function (x) { return x.pendingId === d.id; })[0];
     if (f && f.step === "withdrawing") wentOutFirst(f, d);
     else if (f) markSent(f, d, f.reason || "github-down");
+    else if (host && (d.post === "idea" || payload.post === "idea")) host.toast("Your idea is posted in Ideas, on GitHub.");
     else if (host) host.toast("Your bug report went out: issue #" + d.number + " on GitHub.");
   }
 
@@ -1288,7 +1431,6 @@ window.RichBug = (function () {
     var dock = $("bugdock");
     if (dock.dataset.filled) return;
     dock.dataset.filled = "1";
-    dock.querySelector(".bugdock-title").textContent = "Bust a bug";
     $("bugdock-x").textContent = "✕";
     $("bugdock-send").firstElementChild.textContent = "▷";
     $("bugdock-voice-label").textContent = "listening…";
@@ -1297,8 +1439,13 @@ window.RichBug = (function () {
   /// the app by one rule in `style.css` (`#bugdock`, z-index 298), above every window, sheet and
   /// backdrop, so nothing here decides when to raise it. The screen stays up behind it, as it is
   /// the screen the report is about and the one in its picture.
-  function showDock() {
+  function showDock(f) {
     fillDock();
+    // The panel says which of the two it is (round 24: "Request a feature · Corrections").
+    var words = W(f || dockFlow());
+    $("bugdock").querySelector(".bugdock-title").textContent = words.name;
+    $("bugdock").setAttribute("aria-label", words.name + ", with Rich");
+    $("bugdock-x").setAttribute("aria-label", words.close);
     quietOtherInputs();
     $("bugdock").hidden = false;
     document.body.classList.add("bug-dock-open");
@@ -1437,7 +1584,8 @@ window.RichBug = (function () {
       tip.appendChild(node("b", null, "Stands in for " + a + "."));
     } else {
       tip.appendChild(node("b", null, "Stands in for “" + s.dataset.was + "”"));
-      tip.appendChild(document.createTextNode(", " + a + ". Only you see this; it isn't in the report."));
+      var card = s.closest(".bugcard");
+      tip.appendChild(document.createTextNode(", " + a + ". Only you see this; " + (card && card.classList.contains("is-idea") ? WORDS.idea : WORDS.bug).notInIt));
     }
     tip.hidden = false;
     var r = s.getBoundingClientRect(), w = tip.offsetWidth;
@@ -1459,8 +1607,8 @@ window.RichBug = (function () {
     $("bugdock-x").addEventListener("click", function () {
       var f = dockFlow();
       if (f && f.step === "ask") neverMind(f, true);
-      if (f && f.step === "queued" && host) host.toast("Your bug report is saved on this Mac and goes out by itself when it can.");
-      if (f && f.step === "unchecked" && host) host.toast("Your bug report is saved on this Mac. Rich will check it as soon as Claude answers, and show it to you here.");
+      if (f && f.step === "queued" && host) host.toast(W(f).savedToast);
+      if (f && f.step === "unchecked" && host) host.toast(W(f).uncheckedToast);
       hideDock();
     });
     function dockSubmit() {
@@ -1499,8 +1647,11 @@ window.RichBug = (function () {
       var a = e.target.closest && e.target.closest(".bug-link");
       if (!a) return;
       e.preventDefault();
-      bridge.invoke("bug_report_open_issue", { number: Number(a.dataset.issue) }).catch(function (err) {
-        if (host) host.toast(typeof err === "string" && err ? err : "This Mac wouldn't open the issue. It's at github.com/WebDevBooster/richos/issues/" + a.dataset.issue + ".");
+      var idea = a.dataset.post === "idea";
+      bridge.invoke("bug_report_open_issue", { number: Number(a.dataset.issue), post: idea ? "idea" : "bug" }).catch(function (err) {
+        if (host) host.toast(typeof err === "string" && err ? err
+          : idea ? "This Mac wouldn't open your idea. It's at github.com/WebDevBooster/richos/discussions/" + a.dataset.issue + "."
+          : "This Mac wouldn't open the issue. It's at github.com/WebDevBooster/richos/issues/" + a.dataset.issue + ".");
       });
     });
   }
@@ -1543,14 +1694,15 @@ window.RichBug = (function () {
         if (dockVoice && !(host && host.voiceOn()) && e.payload && e.payload.text) takeSpoken(e.payload.text);
       });
       if (window.RichSettings && window.RichSettings.registerBugReport) {
-        window.RichSettings.registerBugReport({ open: function () { refreshContext(); lookThenStart(); }, busy: reportOpen });
+        // `open("idea")` is Request a feature (round 24); `open()` is Bust a bug.
+        window.RichSettings.registerBugReport({ open: function (kind) { refreshContext(); lookThenStart(kind); }, busy: reportOpen });
       }
     },
     start: start,
     takeSpoken: takeSpoken,
     /// READ-ONLY, for the acceptance harness.
     state: function () {
-      return flows.map(function (f) { return { step: f.step, pendingId: f.pendingId || null, issue: f.issue || null, screen: f.screen.key }; });
+      return flows.map(function (f) { return { kind: postOf(f), step: f.step, pendingId: f.pendingId || null, issue: f.issue || null, screen: f.screen.key }; });
     },
   };
 })();

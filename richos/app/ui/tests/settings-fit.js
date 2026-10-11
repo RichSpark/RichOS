@@ -136,8 +136,10 @@ const MEASURE = `(a) => {
   // The shipped candidate also had no sticky floor (style.css "THE FLOOR STAYS IN VIEW", added
   // with the Token spend row): with the panel unbounded, a sticky Bust a bug would pin itself to
   // the window's bottom edge and the control would reproduce nothing, so bare drops it too.
-  if (a.bare) { menu.style.maxHeight = "none"; menu.style.overflowY = "visible"; bug.style.position = "static"; }
-  else { menu.style.maxHeight = ""; menu.style.overflowY = ""; bug.style.position = ""; }
+  // Since round 24 the sticky box is the floor holding Bust a bug and Request a feature under it.
+  const floor = bug.closest(".set-floor") || bug;
+  if (a.bare) { menu.style.maxHeight = "none"; menu.style.overflowY = "visible"; floor.style.position = "static"; }
+  else { menu.style.maxHeight = ""; menu.style.overflowY = ""; floor.style.position = ""; }
   menu.scrollTop = 0;
   const natural = menu.getBoundingClientRect().height;
   if (a.grow) {
@@ -162,6 +164,8 @@ const MEASURE = `(a) => {
     scrollable: menu.scrollHeight > menu.clientHeight + 1,
     bugBottom: Math.round(br.bottom),
     bugInWindow: br.top >= 0 && br.bottom <= window.innerHeight,
+    ideaInWindow: (() => { const ir = document.getElementById("idea-btn").getBoundingClientRect(); return ir.top >= 0 && ir.bottom <= window.innerHeight; })(),
+    ideaUnderBug: document.getElementById("idea-btn").getBoundingClientRect().top >= br.bottom,
   };
 }`;
 
@@ -217,6 +221,8 @@ async function main() {
     assert(m.top === 66, `the panel's anchor moved to ${m.top}px; on the home screen the bound is derived from 66`);
     assert(m.bottom <= m.vh, `the panel's bottom edge is at ${m.bottom} in a ${m.vh}px window`);
     assert(m.bugInWindow, `"Bust a bug!" ends at ${m.bugBottom} in a ${m.vh}px window`);
+    // Round 24: Request a feature directly under Bust a bug, in view with it.
+    assert(m.ideaInWindow && m.ideaUnderBug, `"Request a feature" is not in view directly under "Bust a bug!": ${JSON.stringify(m)}`);
     return `panel ${m.height}px at top ${m.top}, bottom ${m.bottom} of ${m.vh}; Bust a bug ends at ${m.bugBottom}`;
   });
 

@@ -1943,6 +1943,175 @@ async function main() {
     return said;
   });
 
+  // =====================================================================================
+  // REQUEST A FEATURE (CEO 2026-10-11, richos-hq docs/ceo-input/2026-10-11_01/request.md, built to
+  // round 24): "Under the "Bust a bug" button, I want to add a "Request a feature" button. But I
+  // don't want feature requests to be submitted or branded as "issues" on GitHub." The same
+  // exchange, carrying an idea, posted in RichOS's Discussions under Ideas. Where it goes (GraphQL
+  // `createDiscussion`, never /issues) is the shell's, tested in Rust
+  // (crates/richos-core/tests/feature_request_tests.rs); here every command is told `post: "idea"`
+  // and `mock.js` posts it as a discussion.
+  // =====================================================================================
+  const IDEA = "It would be great if Rich sent me a short summary of each conversation every Friday afternoon, like what changed in the Acme deal this week.";
+  async function requestAFeature(page) {
+    await page.click("#set-btn");
+    await page.waitForSelector("#idea-btn");
+    await page.click("#idea-btn");
+  }
+  async function answerIdea(page, text) {
+    await page.fill("#bugdock-input", text || IDEA);
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bugcard.is-idea .bug-pill:has-text('Not posted yet')");
+  }
+  /// Every word a feature request puts on screen, in the panel and its notices: none may say
+  /// "issue" or "bug".
+  const NEVER_AN_ISSUE = /\b(issues?|bugs?)\b/i;
+  const ideaWords = (page) => page.evaluate(() => [
+    document.getElementById("bugdock").innerText,
+    (document.getElementById("bug-toast") || {}).innerText || "",
+    [...document.querySelectorAll("#bugdock [aria-label], #bugdock[aria-label]")].map((n) => n.getAttribute("aria-label")).join(" "),
+    document.getElementById("bugdock-input").placeholder,
+  ].join("\n"));
+
+  await run.check("Request a feature sits directly under Bust a bug in Settings and starts Rich's question about an idea in the Rich panel", async () => {
+    const page = await open("dark");
+    await page.click("#set-btn");
+    await page.waitForSelector("#idea-btn");
+    const order = await page.evaluate(() => {
+      const bug = document.getElementById("bug-btn"), idea = document.getElementById("idea-btn");
+      return { next: bug.nextElementSibling === idea, label: idea.textContent.trim(), below: idea.getBoundingClientRect().top >= bug.getBoundingClientRect().bottom, icons: idea.querySelectorAll("svg").length };
+    });
+    assert(order.next && order.below && order.label === "Request a feature" && order.icons === 1, "Request a feature is not directly under Bust a bug: " + JSON.stringify(order));
+    await page.click("#idea-btn");
+    await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+    assert(await page.isHidden("#set-menu"), "Settings stayed open");
+    assertEqual(await page.locator("#bugdock .bugdock-title").innerText(), "Request a feature", "the panel's title");
+    const asked = await page.locator("#bugdock-msgs .bug-rich .tl-prose").first().innerText();
+    assertEqual(asked, "What would you like RichOS to do? Tell me in your own words, typed or out loud. I've noted that you were on the Acme deal conversation, in case it's about this screen.", "Rich's question");
+    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Tell Rich your idea…", "the composer");
+    await page.waitForFunction(() => document.activeElement === document.getElementById("bugdock-input"));
+    assert(!NEVER_AN_ISSUE.test(await ideaWords(page)), "a feature request says issue or bug: " + (await ideaWords(page)));
+    await page.click("#bug-never-mind");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('No problem. Nothing was written up or posted.')");
+    assertEqual((await calls(page, "bug_report_write")).length, 0, "something was written up");
+    await page.close();
+    return asked;
+  });
+
+  await run.check("the idea's card shows From, To Discussions under Ideas and the whole post before anything goes, leaves private names out, and Post idea posts it in Ideas, never as an issue", async () => {
+    const page = await open("dark", { ideaPictured: ["A message every Friday afternoon.", "One short part per conversation."] });
+    await requestAFeature(page);
+    await answerIdea(page);
+    assertEqual((await calls(page, "bug_report_write"))[0].post, "idea", "Rich was not asked to write up an idea");
+    assertEqual((await calls(page, "bug_report_send")).length, 0, "something was posted before Post idea");
+    assertEqual(await page.locator(".bugcard .bug-kind").innerText(), "Feature idea", "the card's head");
+    assertEqual(await page.getAttribute(".bugcard", "aria-label"), "Feature idea", "the card's name");
+    assertEqual(await page.locator(".bugcard .r-from").innerText(), "the RichOS reporting account, because RichOS isn't signed in to a GitHub account of yours", "From");
+    const to = await page.locator(".bugcard .bug-route dd").nth(1).innerText();
+    assertEqual(to.replace(/\s+/g, " ").trim(), "RichOS on GitHub, as a post in its Discussions, under Ideas, where anyone can read and upvote it", "To");
+    assertEqual(await page.locator(".bugcard .idea-cat").innerText(), "Ideas", "the Ideas label");
+    const headings = await page.locator(".bugcard .bug-sec h4").allInnerTexts();
+    assertEqual(headings, ["The idea", "What the user pictured", "Where it came up", "Version"], "the post's sections");
+    assertEqual(await page.locator(".bugcard .bug-sec ul > li").count(), 2, "What the user pictured is not a bulleted list");
+    const sheet = await page.locator(".bugcard .bug-doc").innerText();
+    assert(!sheet.includes("Acme deal") && sheet.includes("[a conversation]"), "a private name is in the post: " + sheet);
+    assert((await page.locator(".bugcard .lo-text").innerText()).startsWith("Left out, because anyone can read GitHub Discussions: one conversation name."), "the left-out line");
+    assertEqual(await page.locator("#bug-send").innerText(), "Post idea", "the post button");
+    assertEqual(await page.locator("#bug-cancel").innerText(), "Cancel", "Cancel");
+    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Tell Rich what to change, or post it…", "the composer");
+    assert((await lastSaid(page)).startsWith("Here's your idea as I'd post it. Nothing goes out until you press Post idea. Anyone can read GitHub Discussions"), await lastSaid(page));
+    const before = await ideaWords(page);
+    assert(!NEVER_AN_ISSUE.test(before), "a feature request says issue or bug: " + before);
+    await shot(page, "idea-report-dark");
+
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Posted · in Ideas')");
+    const sent = await calls(page, "bug_report_send");
+    assertEqual(sent.length, 1, "Post idea did not post once");
+    assertEqual(sent[0].post, "idea", "the shell was not told it is an idea");
+    const posted = await page.evaluate(() => window.__RICHOS_MOCK_BUG__.ideasPosted());
+    assertEqual(posted.length, 1, "nothing went to Discussions");
+    assertEqual((await filed(page)).filter((x) => x.post !== "idea").length, 0, "an idea went out as an issue");
+    assert(!JSON.stringify(posted).includes("Acme deal"), "a private name was posted: " + JSON.stringify(posted));
+    assertEqual(posted[0].sections[1].steps, ["A message every Friday afternoon.", "One short part per conversation."], "the pictured points as posted");
+    const said = await lastSaid(page);
+    assertEqual(said, "Posted. It's in RichOS's Discussions on GitHub, under Ideas, posted from the RichOS reporting account, because RichOS isn't signed in to a GitHub account of yours. Anyone can read it and upvote it there.\ngithub.com/WebDevBooster/richos/discussions/413", "Rich's line");
+    assert(await page.locator(".bugcard .bulb-wrap.lit").count() === 1, "the bulb did not light");
+    const row = await page.locator(".bugcard .bug-sentrow").innerText();
+    assert(row.includes("Open it on GitHub") && row.includes("posted from the RichOS reporting account") && !/#\d/.test(row), "the posted card's row: " + row);
+    const after = await ideaWords(page);
+    assert(!NEVER_AN_ISSUE.test(after), "a posted idea says issue or bug: " + after);
+    await page.click(".bugcard .bug-link");
+    const opened = await calls(page, "bug_report_open_issue");
+    assert(opened.length === 1 && opened[0].post === "idea" && opened[0].number === 413, "the link does not open the discussion: " + JSON.stringify(opened));
+    await page.close();
+    return said;
+  });
+
+  await run.check("an idea goes out from the user's own GitHub account when RichOS has one, and says so", async () => {
+    const page = await open("light", { bugAccount: { kind: "user", login: "WebDevBooster" } });
+    await requestAFeature(page);
+    await answerIdea(page);
+    assertEqual(await page.locator(".bugcard .r-from").innerText(), "your GitHub account, @WebDevBooster", "From");
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-sent");
+    const said = await lastSaid(page);
+    assert(said.includes("posted from your GitHub account, @WebDevBooster. Anyone can read it and upvote it there."), said);
+    await page.close();
+    return said.split("\n")[0];
+  });
+
+  await run.check("offline, the idea waits on this Mac and posts by itself when back online; an account that may not post there is said honestly", async () => {
+    const page = await open("dark", { bugNet: "offline" });
+    await requestAFeature(page);
+    await answerIdea(page);
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-queued .bug-pill:has-text('Waiting to post · saved on this Mac')");
+    const waiting = await lastSaid(page);
+    assertEqual(waiting, "This Mac is offline, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself as soon as you're back online, and tell you here when it's up.", "Rich's line");
+    assertEqual(await page.locator("#bug-try-now").innerText(), "Try now", "Try now");
+    assertEqual(await page.locator("#bug-cancel").innerText(), "Cancel post", "Cancel post");
+    assert(!NEVER_AN_ISSUE.test(await ideaWords(page)), "a waiting idea says issue or bug: " + (await ideaWords(page)));
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setNet("online"));
+    await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Posted · in Ideas')");
+    const back = await lastSaid(page);
+    assert(back.startsWith("You're back online, so I posted your idea. It's in RichOS's Discussions on GitHub, under Ideas,"), back);
+    await page.waitForSelector("#bug-toast:has-text('Your idea is posted in Ideas, on GitHub.')");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.ideasPosted())).length, 1, "it was not posted once");
+    await page.close();
+
+    const refused = await open("dark", { bugNet: "refused" });
+    await requestAFeature(refused);
+    await answerIdea(refused);
+    await refused.click("#bug-send");
+    await refused.waitForSelector(".bugcard.is-queued");
+    const honest = await lastSaid(refused);
+    assertEqual(honest, "GitHub didn't let the RichOS reporting account post in RichOS's Discussions, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll try again in a few minutes and tell you here when it's up.", "the refused line");
+    await refused.close();
+    return waiting + " / " + honest;
+  });
+
+  await run.check("Change it and Cancel on an idea speak of the post, and while an idea is open both buttons in Settings are disabled", async () => {
+    const page = await open("dark");
+    await requestAFeature(page);
+    await answerIdea(page);
+    await page.fill("#bugdock-input", "Also say I'd like to pick the day and time myself");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('Added that to The idea, above. It still waits for you to post it.')");
+    assertEqual(await page.locator(".bugcard .bug-pill").innerText(), "Not posted yet · changed", "the changed badge");
+    assertEqual((await calls(page, "bug_report_change"))[0].post, "idea", "Rich was not told it is an idea");
+    await page.click("#set-btn");
+    await page.waitForSelector("#idea-btn");
+    assert(await page.isDisabled("#idea-btn") && await page.isDisabled("#bug-btn"), "a second press is possible while an idea is open");
+    await page.keyboard.press("Escape");
+    await page.click("#bug-cancel");
+    await page.waitForSelector(".bugcard.is-canceled .bug-pill:has-text('Canceled · nothing posted')");
+    assertEqual(await lastSaid(page), "Canceled. Nothing was posted.", "Rich's line");
+    assert(!NEVER_AN_ISSUE.test(await ideaWords(page)), "a canceled idea says issue or bug: " + (await ideaWords(page)));
+    await page.close();
+    return "changed, both buttons disabled, canceled";
+  });
+
   // ---- both themes: contrast, the type floor, indicators ----
   const ROOTS = "#bugdock:not([hidden]), #bug-subtip.is-shown";
   // Declared skippable, each the conversation's own 14px tier (style.css's Bust a bug note).
@@ -1964,7 +2133,17 @@ async function main() {
     ["checking-changes", async (p) => { await bustABug(p); await answer(p, ANSWER); await changeByHand(p, SAID_BY_HAND); await p.click("#bug-send"); await p.waitForSelector(".bugcard .bug-pill:has-text('Rich is checking your changes…')"); }, { bugSendCheckHold: true }],
     ["changes-unchecked", async (p) => { await bustABug(p); await answer(p, ANSWER); await p.evaluate(() => window.__RICHOS_MOCK_BUG__.setClaude("down")); await changeByHand(p, SAID_BY_HAND); await p.click("#bug-send"); await p.waitForSelector("#bug-unchecked-cancel"); }],
     ["panel", async (p) => { await p.click("#nav-corrections"); await bustABug(p); await p.fill("#bugdock-input", ANSWER); await p.keyboard.press("Enter"); await p.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')"); }],
+    // Request a feature (round 24): every state of an idea, and none of its words says issue or bug.
+    ["idea-ask", async (p) => { await requestAFeature(p); await p.waitForSelector("#bug-never-mind"); }],
+    ["idea-report", async (p) => { await requestAFeature(p); await answerIdea(p); await p.hover(".bugcard .bug-sub >> nth=0"); await p.waitForSelector("#bug-subtip.is-shown"); }, { ideaPictured: ["A message every Friday afternoon."] }],
+    ["idea-editing", async (p) => { await requestAFeature(p); await answerIdea(p); await p.click("#bug-change"); await p.keyboard.type(" Acme deal"); await p.waitForSelector(".bug-warn:not([hidden])"); }],
+    ["idea-sent", async (p) => { await requestAFeature(p); await answerIdea(p); await p.click("#bug-send"); await p.waitForSelector(".bugcard.is-sent"); }],
+    ["idea-queued", async (p) => { await requestAFeature(p); await answerIdea(p); await p.click("#bug-send"); await p.waitForSelector(".bugcard.is-queued"); }, { bugNet: "offline" }],
+    ["idea-canceled", async (p) => { await requestAFeature(p); await answerIdea(p); await p.click("#bug-cancel"); await p.waitForSelector(".bugcard.is-canceled"); }],
+    ["idea-unchecked", async (p) => { await requestAFeature(p); await p.fill("#bugdock-input", IDEA); await p.keyboard.press("Enter"); await p.waitForSelector("#bug-unchecked-cancel"); }, { bugClaude: "down" }],
+    ["idea-panel", async (p) => { await p.click("#nav-corrections"); await requestAFeature(p); await answerIdea(p, "I'd like to undo a correction after I've accepted it."); }],
   ];
+  INDICATORS.push([".idea-cat", "borderTopColor"], [".bugcard.is-idea .bug-glyph", "color"]);
   for (const theme of ["dark", "light"]) {
     await run.check(theme + ": every Bust a bug state meets AA contrast, the 16px floor and 3:1 for indicators", async () => {
       const measured = [];
@@ -2013,9 +2192,15 @@ async function main() {
           return { failures, worst, worstIndicator, nodes };
         }, { ROOTS, SKIPPABLE, INDICATORS });
         assertEqual(result.failures, [], `${theme} ${name}: contrast and type`);
+        if (name.startsWith("idea-")) {
+          const words = (await ideaWords(page)) + "\n" + (await page.evaluate(() => (document.getElementById("bug-subtip") || {}).innerText || ""));
+          assert(!NEVER_AN_ISSUE.test(words), `${theme} ${name}: a feature request says issue or bug: ${words}`);
+        }
         // The unchecked state has no card: the panel's title, Rich's question, the user's words, his
         // line and Cancel report (7 text nodes measured), so its floor is that, not a card's.
-        const floor = name === "unchecked" ? 6 : 10;
+        // An idea Rich could not check has no card either, nor does his question about an idea
+        // (the title, his question, Never mind).
+        const floor = ["unchecked", "idea-unchecked", "idea-ask"].includes(name) ? 6 : 10;
         assert(result.nodes > floor, `${theme} ${name}: EMPTY INVENTORY (${result.nodes} nodes)`);
         measured.push(`${name} ${result.worst}:1 text / ${result.worstIndicator}:1 indicator over ${result.nodes} nodes`);
         await page.close();

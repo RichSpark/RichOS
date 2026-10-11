@@ -2625,10 +2625,17 @@
   // `preset.bugRichSection` (`{heading, text}`) is one more section Rich writes, last, its heading
   // as he wrote it: a heading is plain words in the draft, stand-ins and all (review
   // rv-20261010T183313Z-fe4cd6b1-1e66).
+  //
+  // REQUEST A FEATURE (round 24): every command takes `post` ("idea"; none is a bug report), as
+  // the shell's do. An idea's write-up has round 24's sections (The idea, Where it came up,
+  // Version), and it is posted as a discussion: `filed()` entries carry `post`, `ideasPosted()` is
+  // every idea that went to the (stand-in) Discussions, and an idea never reaches an issue.
+  // `preset.bugNet` "refused" is an account GitHub will not let post there.
   const bugMock = {
     net: preset.bugNet || "online",
     account: preset.bugAccount || { kind: "reporting" },
     issue: 412,
+    discussion: 413,
     waiting: [],
     sent: [],
     calls: [],
@@ -2646,7 +2653,7 @@
     bugMock.held[kind] = "released";
     if (Array.isArray(waiting)) waiting.forEach((r) => r());
   };
-  const BUG_REASON = { offline: "offline", down: "github-down", "not-set-up": "not-set-up" };
+  const BUG_REASON = { offline: "offline", down: "github-down", "not-set-up": "not-set-up", refused: "refused" };
   const BUG_VERSION = "RichOS 1.2.0, preview · macOS 15.6 · Apple silicon";
   const BUG_KINDS = { conversation_name: "[a conversation]", company_name: "[a company]", person_name: "[a person]", folder_name: "[a folder]", file_path: "[a file on this Mac]", email_address: "[an email address]", private_word: "[a private word]" };
   function bugTerms() {
@@ -2695,12 +2702,28 @@
   }
   /// Rich's checked draft, in the shape the shell answers it, with this preview's names and
   /// `preset.bugRichPrivate` as the private words.
-  function bugDraft(answerText, screen) {
+  function bugDraft(answerText, screen, post) {
     const answer = String(answerText || "").trim();
     let first = answer.split(/[.!?]\s/)[0].replace(/[.!?]+$/, "");
     if (first.length > 76) first = first.slice(0, 76).replace(/\s+\S*$/, "");
     const pub = String((screen || {}).public || "a RichOS screen");
     const rich = preset.bugRichPrivate || [];
+    if (post === "idea") {
+      // Round 24's plain write-up of an idea: its first sentence as the title, the idea with
+      // private words replaced, where it came up, the version; and "What the user pictured" as a
+      // bulleted list when `preset.ideaPictured` gives its points.
+      const pictured = preset.ideaPictured || [];
+      return {
+        title: bugScrub(first.charAt(0).toUpperCase() + first.slice(1), rich),
+        sections: [{ heading: "The idea", paragraphs: [bugScrub(bugSentence(answer), rich)], steps: [] }]
+          .concat(pictured.length ? [{ heading: "What the user pictured", paragraphs: [], steps: pictured.map((t) => bugScrub(t, rich)) }] : [])
+          .concat([
+            { heading: "Where it came up", paragraphs: [[{ text: pub.charAt(0).toUpperCase() + pub.slice(1) + "." }]], steps: [] },
+            { heading: "Version", paragraphs: [[{ text: BUG_VERSION }]], steps: [] },
+          ]),
+        private: rich,
+      };
+    }
     return {
       title: bugScrub(first.charAt(0).toUpperCase() + first.slice(1), rich),
       sections: [
@@ -2741,14 +2764,19 @@
     const scrubbed = (preset.bugPrivateWords || []).map((w) => ({ text: w, kind: /@/.test(w) ? "email_address" : "private_word" }));
     return kept.concat(preset.bugRichCheck || [], scrubbed);
   }
-  function bugDeliver(sheet, id) {
+  function bugDeliver(sheet, id, post) {
     const reason = BUG_REASON[bugMock.net];
     if (!reason) {
+      bugMock.filed.push(Object.assign({ post: post || "bug" }, sheet));
+      if (post === "idea") {
+        // A discussion in the Ideas category, never an issue (the shell's `post_discussion`).
+        const number = bugMock.discussion++;
+        return { state: "sent", id, number, url: "https://github.com/WebDevBooster/richos/discussions/" + number, account: bugMock.account, title: sheet.title, sent_at_ms: now(), post: "idea" };
+      }
       const number = bugMock.issue++;
-      bugMock.filed.push(sheet);
-      return { state: "sent", id, number, url: "https://github.com/WebDevBooster/richos/issues/" + number, account: bugMock.account, title: sheet.title, sent_at_ms: now() };
+      return { state: "sent", id, number, url: "https://github.com/WebDevBooster/richos/issues/" + number, account: bugMock.account, title: sheet.title, sent_at_ms: now(), post: "bug" };
     }
-    if (!bugMock.waiting.some((w) => w.id === id)) bugMock.waiting.push({ id, sheet });
+    if (!bugMock.waiting.some((w) => w.id === id)) bugMock.waiting.push({ id, sheet, post: post || "bug" });
     return { state: "waiting", id, reason };
   }
   window.__RICHOS_MOCK_BUG__ = {
@@ -2764,8 +2792,9 @@
     /// A retry that was already sending when the user pressed Cancel: it goes out, and says so.
     retryGoesOut() {
       bugMock.waiting.splice(0).forEach((w) => {
-        const number = bugMock.issue++;
-        const d = { state: "sent", id: w.id, number, url: "https://github.com/WebDevBooster/richos/issues/" + number, account: bugMock.account, title: w.sheet.title, sent_at_ms: now() };
+        const idea = w.post === "idea";
+        const number = idea ? bugMock.discussion++ : bugMock.issue++;
+        const d = { state: "sent", id: w.id, number, url: "https://github.com/WebDevBooster/richos/" + (idea ? "discussions/" : "issues/") + number, account: bugMock.account, title: w.sheet.title, sent_at_ms: now(), post: w.post || "bug" };
         bugMock.sent.push(d);
         emit("rich://bug-report", { delivery: d });
       });
@@ -2775,7 +2804,7 @@
       if (net !== "online") return;
       const due = bugMock.waiting.splice(0);
       due.forEach((w) => setTimeout(() => {
-        const d = bugDeliver(w.sheet, w.id);
+        const d = bugDeliver(w.sheet, w.id, w.post);
         if (d.state === "sent") bugMock.sent.push(d);
         emit("rich://bug-report", { delivery: d });
       }, 300));
@@ -2785,8 +2814,8 @@
     /// Claude can't be asked (`preset.bugClaude` "down") or can again.
     setClaude(state) { bugMock.claude = state; },
     /// A report kept before the app was last quit: on this Mac, with no card in this window.
-    keptBefore(answer, screen) {
-      bugMock.unchecked.push({ id: "00000000-0000-4000-9000-" + String(++bugMock.seq).padStart(12, "0"), answer, screen: screen || {} });
+    keptBefore(answer, screen, post) {
+      bugMock.unchecked.push({ id: "00000000-0000-4000-9000-" + String(++bugMock.seq).padStart(12, "0"), answer, screen: screen || {}, post: post || "bug" });
     },
     /// Claude answers again: the shell's check loop asks Rich about each report he could not
     /// check and says each one on `rich://bug-report` as `{ checked }`, as it does on every pass
@@ -2796,15 +2825,17 @@
       bugMock.unchecked.forEach((u) => {
         // Changed words he could not check at Send: the scanner and then he go over those (the
         // core's `checked_edit`).
-        const draft = u.edited ? bugRedraft(u.edited.sheet, u.edited.private.concat(preset.bugRichCheck || [])) : bugDraft(u.answer, u.screen);
+        const draft = u.edited ? bugRedraft(u.edited.sheet, u.edited.private.concat(preset.bugRichCheck || [])) : bugDraft(u.answer, u.screen, u.post);
         if (!bugMock.checks[u.id]) bugKeepCheck(u.id, draft);
         const digest = u.edited ? "Checked your changes for private details" : bugDigest(u.screen);
-        emit("rich://bug-report", { checked: { id: u.id, report: u.id, draft, digest, here: u.screen.here || "" } });
+        emit("rich://bug-report", { checked: { id: u.id, report: u.id, draft, digest, here: u.screen.here || "", post: u.post || "bug" } });
       });
     },
     releaseSendCheck: () => bugRelease("sendcheck"),
     /// Every sheet that actually went out to the (stand-in) GitHub.
     filed: () => bugMock.filed.slice(),
+    /// Every idea posted to the (stand-in) Discussions, under Ideas.
+    ideasPosted: () => bugMock.filed.filter((f) => f.post === "idea"),
   };
 
   window.RichBridge = {
@@ -4160,27 +4191,27 @@
           return hits.map((h) => h[1]).filter((w, i, all) => all.indexOf(w) === i);
         }
         case "bug_report_write": {
-          bugMock.calls.push({ cmd, answer: args.answer, screen: args.screen });
+          bugMock.calls.push({ cmd, answer: args.answer, screen: args.screen, post: args.post });
           await new Promise((r) => setTimeout(r, preset.bugWriteMs ?? 600));
           // Claude could not be asked: no draft, the report is kept until Rich can check it.
           if (bugMock.claude === "down") {
             const id = "00000000-0000-4000-9000-" + String(++bugMock.seq).padStart(12, "0");
-            bugMock.unchecked.push({ id, answer: String(args.answer || ""), screen: args.screen || {} });
+            bugMock.unchecked.push({ id, answer: String(args.answer || ""), screen: args.screen || {}, post: args.post || "bug" });
             return { state: "unchecked", id, workedMs: 90000 };
           }
-          const draft = bugDraft(args.answer, args.screen);
+          const draft = bugDraft(args.answer, args.screen, args.post);
           const report = "00000000-0000-4000-a000-" + String(++bugMock.seq).padStart(12, "0");
           bugKeepCheck(report, draft);
           return { state: "checked", report, draft, digest: bugDigest(args.screen), workedMs: 9000 };
         }
         case "bug_report_take_unchecked": {
-          bugMock.calls.push({ cmd, id: args.id });
+          bugMock.calls.push({ cmd, id: args.id, post: args.post });
           const at = bugMock.unchecked.findIndex((u) => u.id === args.id);
           if (at !== -1) bugMock.unchecked.splice(at, 1);
           return at !== -1;
         }
         case "bug_report_change": {
-          bugMock.calls.push({ cmd, said: args.said, sheet: args.sheet, private: args.private });
+          bugMock.calls.push({ cmd, said: args.said, sheet: args.sheet, private: args.private, post: args.post });
           await new Promise((r) => setTimeout(r, preset.bugWriteMs ?? 400));
           if (preset.bugChangeHold) await bugHold("change");
           // Claude could not be asked: nothing is added (the shell's answer, word for word).
@@ -4192,10 +4223,10 @@
           const add = bugScrub(bugSentence(said), kept).flatMap((s) => (s.kind ? [s] : bugMarked(s.text)));
           // The card with his words added is a changed card: at Send it goes through the scanner
           // and then Rich, last (the core's `at_send`, CEO §115), as words changed by hand do.
-          return { section: "What happened", add, private: kept, workedMs: 4000 };
+          return { section: args.post === "idea" ? "The idea" : "What happened", add, private: kept, workedMs: 4000 };
         }
         case "bug_report_send": {
-          bugMock.calls.push({ cmd, report: args.report, sheet: args.sheet, screen: args.screen });
+          bugMock.calls.push({ cmd, report: args.report, sheet: args.sheet, screen: args.screen, post: args.post });
           await new Promise((r) => setTimeout(r, 300));
           const report = args.report || "00000000-0000-4000-a000-" + String(++bugMock.seq).padStart(12, "0");
           const held = bugMock.checks[report];
@@ -4205,23 +4236,23 @@
             const named = bugRichCheck(report);
             if (bugMock.claude === "down") {
               const id = "00000000-0000-4000-9000-" + String(++bugMock.seq).padStart(12, "0");
-              bugMock.unchecked.push({ id, answer: "", screen: args.screen || {}, edited: { sheet: args.sheet, private: (held || {}).private || [] } });
+              bugMock.unchecked.push({ id, answer: "", screen: args.screen || {}, post: args.post || "bug", edited: { sheet: args.sheet, private: (held || {}).private || [] } });
               return { state: "unchecked", id };
             }
             const again = bugRedraft(args.sheet, named);
             bugKeepCheck(report, again);
             if (JSON.stringify(bugSheetOf(again)) !== JSON.stringify(args.sheet)) return { state: "checked", report, draft: again, digest: "Checked your changes for private details" };
           }
-          const d = bugDeliver(args.sheet, "00000000-0000-4000-8000-" + String(++bugMock.seq).padStart(12, "0"));
+          const d = bugDeliver(args.sheet, "00000000-0000-4000-8000-" + String(++bugMock.seq).padStart(12, "0"), args.post);
           if (d.state === "sent") delete bugMock.checks[report];
           return d;
         }
         case "bug_report_try_now": {
-          bugMock.calls.push({ cmd, id: args.id });
+          bugMock.calls.push({ cmd, id: args.id, post: args.post });
           const at = bugMock.waiting.findIndex((w) => w.id === args.id);
           if (at === -1) return null;
           const w = bugMock.waiting[at];
-          const d = bugDeliver(w.sheet, w.id);
+          const d = bugDeliver(w.sheet, w.id, w.post);
           if (d.state === "sent") { bugMock.waiting.splice(at, 1); bugMock.sent.push(d); }
           return d;
         }
@@ -4256,7 +4287,7 @@
           if (cmd === "stop_voice_capture" && preset.bugStopHold) await bugHold("stop");
           return { started: cmd === "start_voice_capture" };
         case "bug_report_open_issue":
-          bugMock.calls.push({ cmd, number: args.number });
+          bugMock.calls.push({ cmd, number: args.number, post: args.post });
           return null;
 
         default:
