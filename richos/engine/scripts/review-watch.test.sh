@@ -676,7 +676,7 @@ world = rw.AppWorld.__new__(rw.AppWorld)
 world.app_state, world.claude, world.repos, world._merge_bases = app, "fictional-claude", ["(every)"], {}
 world.accounts = ""
 world.ws = SimpleNamespace(all_agents=lambda: recs, finished_state=lambda r, c: (False, False, ""),
-                         recovery_chain=lambda r: [r], recovery_work_key=lambda r: "teammate:"+r["key"])
+                         review_chain=lambda r: [r], recovery_work_key=lambda r: "teammate:"+r["key"])
 world.src = SimpleNamespace()
 now = rw.parse_iso("2026-10-09T01:01:00Z")
 with patch.object(world, "integration_tip", return_value=("b" * 40, "")), \

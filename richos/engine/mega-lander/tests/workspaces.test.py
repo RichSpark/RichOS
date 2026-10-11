@@ -266,9 +266,10 @@ try:
   declaration=Path(case.entity)/'.claude/recovery.json'
   declaration.write_text(json.dumps(dict(schema=1,mode='off',repositories=[case.other])))
  result={}
- def spawn(name,base='HEAD',extra=''):
+ def spawn(name,base='HEAD',extra='',host=None):
   cc=case.make_cc(name,base=base)
   payload=dict(session_id=case.sid,tool_use_id='tu-'+name,tool_name='Agent',hook_event_name='PreToolUse',cwd=case.entity,transcript_path=str(transcript),tool_input=dict(name=name,subagent_type='fixture',prompt='Implement the fixture outcome.\ncross-repo-worktree: '+cc+'\n'+extra,isolation=''))
+  if host:payload['richos_recovery_assignment']=host
   answer=subprocess.run([sys.executable,'-I','-B',str(engine/'mega-lander/workspaces.py'),'--entity',case.entity,'register-spawn'],input=json.dumps(payload),text=True,capture_output=True,env=os.environ.copy())
   assert answer.returncode==0,answer.stdout+answer.stderr
   aid='id-'+name
@@ -291,12 +292,19 @@ try:
  result['legacy_review_included']=any(i.name=='parity-legacy' and i.work=='teammate:'+legacy['key'] for i in items)
  legacy['disposition']='discarded';w.save_agent(legacy)
  result['continuation_identity']='old-root' if item.work=='teammate:'+old['key'] else 'new-root'
+ cc3,app=spawn('parity-app',base='cc/parity-new',extra='continues: parity-new\n',host=dict(kind='implementation',outcome='app:E:OB1',acceptance='original'))
+ app_items,app_problems=world.registry_items(time.time(),{})
+ assert not app_problems,app_problems
+ app_item=next(i for i in app_items if i.name=='parity-app')
+ result['app_review_identity']='old-root' if app_item.work=='teammate:'+old['key'] else 'new-root'
  original=Path(SR.state_root())/'reviews/prior';original.mkdir(parents=True)
  (original/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[dict(title='original blocker',blocks=True,priority=1)]))))
  ledger=Path(SR.ledger_path());ledger.parent.mkdir(parents=True,exist_ok=True)
  row=dict(id='prior',repo=case.other,repo_id=SR.repo_identity(case.other),work='teammate:'+old['key'],tip='a'*40,trigger='handover',verdict='changes-requested',record=str(original))
  ledger.write_text(json.dumps(row)+'\n')
  result['predecessor_findings']=len(SR.earlier_findings(item.work,item.tip,item.repo))
+ result['app_predecessor_findings']=len(SR.earlier_findings(app_item.work,app_item.tip,app_item.repo))
+ item=app_item
  ledger.write_text('')
  class Writer(RW.Watcher):
   calls=0
@@ -319,7 +327,7 @@ f=w._fence_program();repo,tip,ledger=sys.argv[2:]
 w._registry_entity_map=lambda _:{}
 w._declared_review_listing=lambda *a:(True,[],None)
 w._review_ledgers=lambda *a:([ledger],None)
-try:w._review_check([(repo,'cc/parity-new',repo,tip)])
+try:w._review_check([(repo,'cc/parity-app',repo,tip)])
 except w.SpecError:print('refused')
 else:print('accepted')
 '''
@@ -335,7 +343,8 @@ else:print('accepted')
 finally:case.tearDown()
 """
         expected=dict(native_spawn='registered',continuation_identity='old-root',predecessor_findings=1,
-            automatic_handover_reviews=1,passing_landing_review='accepted',blocking_landing_review='refused',legacy_review_included=True)
+            automatic_handover_reviews=1,passing_landing_review='accepted',blocking_landing_review='refused',legacy_review_included=True,
+            app_review_identity='old-root',app_predecessor_findings=1)
         for mode in ('absent','off'):
             with self.subTest(mode=mode):
                 engine=os.path.dirname(os.path.dirname(os.path.realpath(LIB)))

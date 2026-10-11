@@ -4780,8 +4780,8 @@ def recovery_stop(key, record, control, tip):
 def _baseline_review_identity(rec, observation=False):
     assignment = rec.get("recovery_assignment") or {}
     authority = assignment.get("authority") or {}
-    return not observation and not authority.get("host") and (
-        _recovery_unclassified(rec) or authority.get("mode") in ("off", "observe"))
+    return not observation and (authority.get("mode") in ("off", "observe") or
+        (not authority.get("host") and _recovery_unclassified(rec)))
 
 
 def review_chain(rec, observation=False):
