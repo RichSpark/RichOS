@@ -374,7 +374,10 @@ Every file-writing teammate spawn requires an isolated worktree — enforced str
 
 **PAUSE IS NOT STOP. Rich sends exactly one standard pause message.** Generate its
 SendMessage payload with `python3 <engine>/scripts/lib/pause_protocol.py --to <exact-agent-name>`
-(for a quota hold add `--reason quota --reset HH:MMZ`). Send the returned payload
+(for a quota hold add `--reason quota --reset HH:MMZ`). That command freezes the
+agent itself BEFORE it prints anything (`HELD <agent>: ...`, or `NOT HELD` and exit 3),
+and `--resume --to <agent>` releases it the same way, so a message Claude Code refuses
+or loses never prevents or undoes a hold. Send the returned payload
 unchanged. Do not write, append, summarize or "improve" pause instructions.
 The quota watcher uses this same template; the terminal and desktop delivery
 guards reject altered pause messages before delivery. In the desktop, use

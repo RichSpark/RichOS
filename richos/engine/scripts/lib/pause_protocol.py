@@ -4,10 +4,22 @@
 No natural-language rewrite is permitted inside a pause control message. This
 validates the whole message, including its summary, rather than banning words
 such as 'stop' which also occur in 'do not stop'. The only variable fields are a
-closed reason enum and a UTC reset time. This module never controls a process.
+closed reason enum and a UTC reset time.
+
+THE HOLD NEVER DEPENDS ON THE MESSAGE. The command line (`--to <agent>`) first
+freezes that agent through the workspace registry (workspaces.pause, which runs
+agent_hold.py) and confirms its hold is in place, and only then prints the
+message; `--resume --to <agent>` first releases the hold (workspaces.resume).
+The message's format belongs to Claude Code: on 2026-10-11 it added a field to
+SendMessage, the delivery check refused every generated pause, and nothing was
+frozen for 47 minutes, because the freeze ran only when the message got through.
+A refused or lost message now never prevents or undoes a hold; the message only
+tells the agent to wait, or to carry on. Rendering and validation (render,
+message_input, validate_payload) control nothing.
 """
 import argparse
 import json
+import os
 import re
 import sys
 
@@ -45,6 +57,11 @@ CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]Z\Z")
 # Reserve pause wording and imperative holds in outbound worker messages. This
 # deliberately also refuses prose about pausing rather than guessing its intent.
 INTENT = re.compile(r"\b(?:pause|pausing|paused)\b|\bhold(?:\s+(?:now|your|all|the|this|until|without|on|position|fire)\b|\s*[:.!?]|\s*$)", re.I)
+
+
+def until_text(reason, reset=None):
+    """What ends the pause: the message's `pause-until:` line, and the registry's record."""
+    return render(reason, reset).rsplit("\npause-until: ", 1)[1]
 
 
 def render(reason, reset=None):
@@ -218,6 +235,45 @@ def validate_payload(payload):
         raise ValueError("a pause is a message, never a shutdown request")
 
 
+def _workspaces():
+    """mega-lander/workspaces.py, the registry that records a pause and holds the agent's work."""
+    mega = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mega-lander")
+    if mega not in sys.path:
+        sys.path.insert(0, mega)
+    import workspaces
+    return workspaces
+
+
+def take_effect(to, reason="manual", reset=None, resume=False):
+    """The hold itself, before any message: (ok, line for the lead).
+
+    A pause freezes the agent (workspaces.pause runs agent_hold.hold: its running
+    commands suspended, its new ones refused with the WAIT) and is confirmed by the
+    hold record agent_hold.py keeps for it. A resume releases it (workspaces.resume
+    runs agent_hold.release) and is confirmed by that record being gone. Never
+    raises: a hold that could not be confirmed is said, never assumed."""
+    word = "RELEASED" if resume else "HELD"
+    try:
+        ws = _workspaces()
+        me = ws.current_session()
+        notes = []
+        if resume:
+            rec = ws.resume(to, me, notes)
+        else:
+            rec = ws.pause(to, until_text(reason, reset), me, notes, control=True)
+        ah = ws._agent_hold()
+        sid, aid = str(rec.get("session_id") or ""), str(rec.get("agent_id") or "")
+        mine = [r for r in ah.records() if r.get("session_id") == sid and r.get("agent_id") == aid]
+        detail = "; ".join(notes) or ("nothing was held" if resume else "no hold line was reported")
+        if resume:
+            ok = not mine and not any(": FAILED" in n for n in notes)
+        else:
+            ok = bool(mine) and not mine[0].get("not_stopped")
+        return ok, "%s %s: %s" % (word if ok else "NOT " + word, to, detail)
+    except Exception as error:     # the registry's refusal (SpecError) or anything unforeseen
+        return False, "NOT %s %s: %s" % (word, to, str(error)[:300] or type(error).__name__)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="validate a hook payload on stdin")
@@ -236,7 +292,17 @@ def main():
                 raise ValueError("invalid hook payload")
             validate_payload(value)
         else:
-            print(json.dumps(message_input(args.to, args.reason, args.reset, resume=args.resume)))
+            payload = message_input(args.to, args.reason, args.reset, resume=args.resume)
+            # The hold FIRST, so no refusal or loss of the message can prevent or undo it.
+            ok, line = take_effect(args.to, args.reason, args.reset, resume=args.resume)
+            print(line, file=sys.stderr)
+            if not ok:
+                print("The message below is still printed and still tells the agent to %s; check "
+                      "agent_hold.py status before reporting it %s." % (
+                          "carry on" if args.resume else "wait", "resumed" if args.resume else "paused"),
+                      file=sys.stderr)
+            print(json.dumps(payload))
+            return 0 if ok else 3
     except (ValueError, TypeError) as error:
         print("REFUSED: " + str(error) + ". Generate the pause with scripts/lib/pause_protocol.py --to <agent>, "
               "and the resume with --resume --to <agent>.", file=sys.stderr)
