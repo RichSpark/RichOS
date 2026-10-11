@@ -171,6 +171,30 @@ class Inputs(unittest.TestCase):
 
 
 class Closure(unittest.TestCase):
+    def test_shared_cycles_are_visited_once_without_losing_edge_semantics(self):
+        document = {"schema":1, "config_keys":["KEEP", "MASK"], "nodes":{}, "units":{}}
+        nodes = document["nodes"]
+        nodes["root"] = dict(keys=[], edges=[dict(to="left", overrides=["MASK"]), dict(to="right", fixture=True)])
+        nodes["left"] = dict(keys=[], edges=[dict(to="shared")])
+        nodes["right"] = dict(keys=["MASK"], edges=[dict(to="shared"), dict(to="broken")])
+        nodes["shared"] = dict(keys=["KEEP", "MASK"], edges=[dict(to="left")])
+        graph = inputs.Dependencies(HERE.parent, document)
+        calls = []
+        def node(name):
+            calls.append(name)
+            if name=="broken":
+                raise inputs.Unsupported("unqualified reader")
+            return dict(nodes[name], evidence="witnessed "+name)
+        graph.node = node
+        got = graph.closure("root")
+        self.assertEqual(set(got["keys"]), {"KEEP"})
+        self.assertEqual(len(got["fallback"]),1)
+        self.assertIn("root -> right -> unqualified reader",got["fallback"])
+        self.assertEqual(len(calls),len(set(calls)))
+        # Each later observation revalidates readers; no prior result is cached.
+        nodes["shared"]["keys"] = []
+        self.assertEqual(graph.closure("root")["keys"], {})
+
     def test_discovery_and_relocated_external_inputs_fail_closed(self):
         import copy
         import shutil

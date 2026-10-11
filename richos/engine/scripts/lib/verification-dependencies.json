@@ -631,7 +631,7 @@
     },
     "scripts/lib/verification_inputs.py#config": {
       "source": "scripts/lib/verification_inputs.py",
-      "sha256": "c7ddb8e54b83ad2bc84eb3eaa4d15eaf4a7c0071a6c793b31bd229143e037c43",
+      "sha256": "9de2c79483d0ccca373b1489668b6e9f75fb1bf3876f406f5d9b5f4cc7c19544",
       "evidence": "The config parser accepts assignment text as data, preserving key references and rejecting unsupported executable syntax. No selected hook or suite is invoked.",
       "keys": [],
       "edges": [],
@@ -1093,7 +1093,7 @@
     },
     "scripts/lib/verification_inputs.py": {
       "source": "scripts/lib/verification_inputs.py",
-      "sha256": "c7ddb8e54b83ad2bc84eb3eaa4d15eaf4a7c0071a6c793b31bd229143e037c43",
+      "sha256": "9de2c79483d0ccca373b1489668b6e9f75fb1bf3876f406f5d9b5f4cc7c19544",
       "evidence": "Parser and dependency APIs read supplied text/paths. Snapshot executes only Git reads. It never executes a sourced configuration or a selected hook command.",
       "keys": [],
       "edges": []
@@ -1112,7 +1112,7 @@
     },
     "scripts/verification-inputs.test.py": {
       "source": "scripts/verification-inputs.test.py",
-      "sha256": "654498e43b90d74816085c1e5b576cb60f9a61a23fa253ba28cf24db9e16f406",
+      "sha256": "5eab1f0b072e5ced88c9a2c3f11aea5fad3eaeb9d88df4799db10e89df0bf130",
       "evidence": "Uses temporary files and Git repositories for parser/closure controls. Its real-file grammar case parses every assignment and checks all eight environment path forms. Helper-source hashing and hook JSON parsing are data reads; selected hooks/suites are never executed. The added real dependency/selection cases only read bound source and hook JSON as data and use synthetic config deltas; they never launch selected suites.",
       "keys": [],
       "edges": [
