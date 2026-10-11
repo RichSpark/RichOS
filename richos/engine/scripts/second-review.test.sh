@@ -584,6 +584,10 @@ for in_use in ("2", "1"):
     before = len(os.listdir(log))
     pid, _start = watcher.spawn(it, "long-job", os.path.join(state, "review-%s.log" % in_use))
     watcher.children[pid].wait()
+    with open(os.path.join(state, "review-%s.log" % in_use)) as review_log:
+        receipts = [json.loads(line[len("SECOND-REVIEW RECEIPT "):]) for line in review_log
+                    if line.startswith("SECOND-REVIEW RECEIPT ")]
+    assert len(receipts) == 1 and receipts[0]["invocation"] == it.review_invocation
     calls = sorted(os.listdir(log))[before:]
     call = json.load(open(os.path.join(log, calls[-1], "call.json"))) if calls else {}
     got.append({"in use": in_use, "reviewer": call.get("kind"), "config": call.get("config"),

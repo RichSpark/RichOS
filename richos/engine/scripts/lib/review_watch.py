@@ -949,6 +949,10 @@ class Watcher(object):
         mark = os.urandom(16).hex()
         env = dict(os.environ, **(item.env or {}))
         env[MARK_ENV] = mark
+        # Direct app callers also use spawn without the durable start/lock path.
+        # Give those invocations a receipt identity without weakening joined-verdict checks.
+        if not getattr(item, "review_invocation", ""):
+            item.review_invocation = os.urandom(16).hex()
         env["SECOND_REVIEW_INVOCATION"] = item.review_invocation
         # PARTLY REGISTERED (second review of f14155545, finding 2): a review leads its own
         # session, so a quit that lands inside Popen (its fork done, Popen not yet returned) would
