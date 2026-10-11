@@ -304,7 +304,8 @@ def schedule(record, engine, env=None):
 
 def _schedule(record, engine, env=None):
     import recovery_runner
-    if record["mode"]=="enforce" and (record["controls"] or record["status"] in ("unavailable", "awaiting_alex")):
+    if record["mode"]=="enforce" and (record["controls"] or record["status"] == "awaiting_alex" or
+            (record["status"] == "unavailable" and (not record.get("repeat_signal") or record.get("repeat_recovery")))):
         recovery_runner.launch(record, "control", engine, env=env)
     if record.get("axel_required", True):
         recovery_runner.launch(record, "axel", engine, env=env)

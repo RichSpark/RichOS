@@ -196,26 +196,98 @@ class Async(unittest.TestCase):
             self.assertEqual(C.admitted(ws, {}, rec, dict(kind='implementation'), [str(self.repo)], 'entity'), [])
             launch.assert_not_called()
 
-    def test_repetition_runs_both_judgments_without_forcing_a_repair_plan(self):
+    def test_probing_questions_reach_rich_before_any_verdict_or_other_advisor(self):
         import recovery_controls as C
+        import review_watch as RW
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-lease4')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-hostshim4')
         calls = []
         def consult(identity, role, phase, prompt, shape, executable, account):
             calls.append((role, phase))
-            self.assertIn('fix number four', prompt)
+            self.assertIn('HARD, probing questions', prompt)
             self.assertIn('even when all reviews passed', prompt)
+            self.assertEqual(phase, 'questions')
+            self.assertNotIn('action', shape['properties'])
             self.assertEqual(shape['properties']['frontier']['enum'], [record['evidence_cursor']])
-            return dict(job=identity, acceptance='acceptance', frontier=record['evidence_cursor'], action='continue',
-                workers={}, reason='A bounded justified cleanup', evidence='Original outcome and handover'), role+'-result'
+            return dict(job=identity, acceptance='acceptance', frontier=record['evidence_cursor'],
+                questions=[dict(question='Who would write that AppleScript?', evidence='The proposed payload requires deliberate authoring')]), role+'-result'
         with patch.object(RR.SR, 'load_workspaces', return_value=object()), patch.object(RR.SR, 'find_claude', return_value='provider'), \
-                patch.object(RR, 'snapshot', return_value='original evidence'), patch.object(RR, 'consultation', side_effect=consult), \
-                patch.object(C, 'schedule'):
+                patch.object(RR, 'snapshot', return_value='{}'), patch.object(RR, 'consultation', side_effect=consult), \
+                patch.object(C, 'schedule'), patch.object(R, 'control') as control, \
+                patch.dict(os.environ, {'REVIEW_WATCH_STATE_DIR': str(self.base/'watch')}):
+            # Wes's question reaches the existing lead-delivery path while Axel
+            # has not even started. No control or answer from Rich is required.
+            for role in ('wes', 'axel'):
+                self.assertEqual(RR.run(record['id'], role, str(HERE.parent)), 0)
+                current = R.read(record['id'])
+                notice = RR.owner_notice(current)
+                self.assertIn(role.upper()+' QUESTIONS', notice['lines'][0])
+                self.assertIn('Who would write that AppleScript?', '\n'.join(notice['lines']))
+                self.assertIsNone(RR.owner_notice(dict(current, mode='observe')))
+                Path(RW._p('last-told.json')).parent.mkdir(parents=True, exist_ok=True)
+                RW.stall_watch._write_json(RW._p('last-told.json'), {'recovery_refs': {
+                    notice['key']: dict(record=notice['record'], session=notice['session'])}})
+                RW.deliver([notice['key']], 100)
+                self.assertIsNone(RR.owner_notice(R.read(record['id'])))
+            control.assert_not_called()
+        self.assertEqual(calls, [('wes', 'questions'), ('axel', 'questions')])
+        current = R.read(record['id'])
+        self.assertEqual(current['status'], 'investigating')
+        self.assertTrue(R.repeat_ready(current))
+        self.assertFalse(current.get('repeat_recovery'))
+        self.assertEqual(current['controls'], [])
+        self.assertIsNone(current['plan'])
+
+    def test_rich_self_correction_needs_no_advisor_control_or_recovery_plan(self):
+        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        phases = []
+        def consult(identity, role, phase, prompt, shape, executable, account):
+            phases.append(phase)
+            if phase == 'questions':
+                return dict(job=identity, acceptance='acceptance', frontier=record['evidence_cursor'],
+                    questions=[dict(question='What required work remains?', evidence='The main fix already landed')]), role+'-question'
+            self.assertEqual(phase, 'reply')
+            return dict(job=identity, acceptance='acceptance', frontier=record['evidence_cursor'],
+                question='axel-question', answer_ids=['reply'], outcome='self_correction',
+                reason='Rich recognizes the optional hardening and will finish without another correction.', questions=[]), 'answer'
+        with patch.object(RR.SR, 'load_workspaces', return_value=object()), patch.object(RR.SR, 'find_claude', return_value='provider'), \
+                patch.object(RR, 'snapshot', return_value='{}'), patch.object(RR, 'consultation', side_effect=consult), \
+                patch.object(RR, 'repeat_replies', return_value=[]) as replies, patch.object(R, 'control') as control:
+            for role in ('axel', 'wes'):
+                self.assertEqual(RR.run(record['id'], role, str(HERE.parent)), 0)
+                current = R.read(record['id'])
+                R.owner_delivered(str(R.root()/(record['id']+'.json')), R.repeat_question_key(current, role), 'owner')
             self.assertEqual(RR.run(record['id'], 'axel', str(HERE.parent)), 0)
-            self.assertEqual(RR.run(record['id'], 'wes', str(HERE.parent)), 0)
-        self.assertEqual(calls, [('axel', 'repetition'), ('wes', 'repetition')])
-        self.assertEqual(R.read(record['id'])['status'], 'resolved_findings')
-        self.assertIsNone(R.read(record['id'])['plan'])
+            self.assertEqual(phases, ['questions', 'questions'])
+            replies.return_value = [dict(uuid='reply', text='The fix is done. I will drop the optional hardening and finish.')]
+            self.assertEqual(RR.run(record['id'], 'axel', str(HERE.parent)), 0)
+            control.assert_not_called()
+        current = R.read(record['id'])
+        self.assertEqual(phases, ['questions', 'questions', 'reply'])
+        self.assertEqual(current['repeat_outcome'], 'self_correction')
+        self.assertEqual(current['status'], 'resolved_findings')
+        self.assertIsNone(current['plan'])
+        # Old failed handovers must not instantly undo the recognized correction.
+        self.assertEqual(R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance',
+            mode='enforce', name='zach-opus-lease4')['status'], 'resolved_findings')
+
+    def test_only_new_lead_text_after_question_delivery_is_a_response_candidate(self):
+        import datetime
+        self.ledger.write_text('')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        transcript = self.base/'lead.jsonl'
+        stamp = lambda n: datetime.datetime.fromtimestamp(n, datetime.timezone.utc).isoformat()
+        def row(uid, role, at, **extra):
+            return dict(uuid=uid, type=role, timestamp=stamp(at), message=dict(content='answer '+uid), **extra)
+        transcript.write_text('\n'.join(json.dumps(r) for r in [row('old', 'assistant', 1), row('new', 'assistant', 3),
+            row('human', 'user', 3), row('worker', 'assistant', 3, isSidechain=True)])+'\n')
+        record = R.repeat_questioned(record['id'], 'axel', dict(job=record['id'], acceptance='acceptance',
+            frontier=record['evidence_cursor'], questions=[dict(question='Why another round?', evidence='iteration 4')]), 'q', [str(transcript)])
+        self.assertEqual(RR.repeat_replies(record, 'axel'), [])
+        record['deliveries'] = {R.repeat_question_key(record, 'axel'): dict(at=2, owner='owner')}
+        self.assertEqual([r['uuid'] for r in RR.repeat_replies(record, 'axel')], ['new'])
+        record['repeat_responses'] = {'axel': [dict(answer_ids=['new'])]}
+        self.assertEqual(RR.repeat_replies(record, 'axel'), [])
 
     def test_actual_background_pipeline_and_exact_profile_capabilities(self):
         provider = self.base / "fake-claude"

@@ -16177,8 +16177,8 @@
     },
     "scripts/lib/recovery.py": {
       "source": "scripts/lib/recovery.py",
-      "sha256": "7c83b7388400f38aec1ee4fa93098a07094ff2903fc22aaa5c05246a97cc8d33",
-      "evidence": "Recovery fixtures bind review ledgers, repository identity and recovery JSON to private state. Standard-library locks and atomic state are host operations. mode reads the entity-local .claude/recovery.json and named qualification files, not orchestration.config. Runtime knobs are recorded with the fixture inputs. Storage reads absolute host RICHOS_RECOVERY_EVIDENCE_ROOT and RICHOS_RECOVERY_WIP_ROOT overrides; fixtures bind their destinations. macOS default mount and non-macOS private-state fallback are runtime inputs, never orchestration.config keys. Fourth-or-later iteration is derived from the registered worker name passed by the caller; no additional configuration or environment reader.",
+      "sha256": "e2e483b67dfda1a0640c58488f4c7e63eca75f1b674322a4392d94064d66f970",
+      "evidence": "Recovery fixtures bind review ledgers, repository identity and recovery JSON to private state. Standard-library locks and atomic state are host operations. mode reads the entity-local .claude/recovery.json and named qualification files, not orchestration.config. Runtime knobs are recorded with the fixture inputs. Storage reads absolute host RICHOS_RECOVERY_EVIDENCE_ROOT and RICHOS_RECOVERY_WIP_ROOT overrides; fixtures bind their destinations. macOS default mount and non-macOS private-state fallback are runtime inputs, never orchestration.config keys. Fourth-or-later iteration is derived from the registered worker name passed by the caller; no additional configuration or environment reader. Question delivery uses the existing owner acknowledgment ledger; response identities and question references are host-bound before any stronger control.",
       "keys": [],
       "edges": [
         {
@@ -16188,7 +16188,7 @@
     },
     "scripts/lib/recovery_controls.py": {
       "source": "scripts/lib/recovery_controls.py",
-      "sha256": "4cef03022b0800f042225b9006b312dc84a312dec4d0b0c6397dfa43fc1587b1",
+      "sha256": "07fc8cfa0b360739d66d2d867c59b37225074941022bcb88b9fcd4d74362724b",
       "evidence": "Workspace adapter closure includes recovery state, private registry/session records, exact Git commit/delta/untracked identities and owned-command observations. Production preservation uses the external SSD. Workspace fixtures hold an in-flight native tool so no WIP export is started. Ordinary fixture entities have no recovery declaration; no model launches on those paths. Observer reconciliation and scheduler errors are data gaps with no control refusal. Storage is selected by the recovery host helper, not an inherited model path. Numeric iteration admission reads the existing registered worker name and uses the same repository declaration and recovery state.",
       "keys": [],
       "edges": [
@@ -16202,8 +16202,8 @@
     },
     "scripts/lib/recovery_runner.py": {
       "source": "scripts/lib/recovery_runner.py",
-      "sha256": "d1ede17c8021c6222ab35dc32d9f694215d9ec6abe3a3ad482c8f81d58ee837d",
-      "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor. Repetition context reads the existing native registry, worker transcripts and lead authority transcript through the declared workspace, second_review and pierce edges; recent messages and same-session/repository iteration context are evidence only, not additional authority.",
+      "sha256": "e1805885c770cc94c0f7bcded53a9448ad5b8c6a839e7e7f8635a832be55f185",
+      "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor. Repetition context reads the existing native registry, worker transcripts and lead authority transcript through the declared workspace, second_review and pierce edges; recent messages and same-session/repository iteration context are evidence only, not additional authority. Question-first follow-up reads only the registered lead transcript paths through pierce, with UUIDs and timestamps after acknowledged question delivery. Worker chatter and pre-delivery text are excluded. No new config or environment readers.",
       "keys": [],
       "edges": [
         {

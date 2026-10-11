@@ -109,31 +109,82 @@ class Recovery(unittest.TestCase):
         self.assertEqual(later['recovery_failures'], 0)
         self.assertEqual(later['aliases'], ['numbered'])
 
-    def test_both_advisors_must_justify_continuation_before_alarm_closes(self):
+    def test_questions_are_not_verdicts_and_both_deliveries_complete_the_alarm(self):
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-lease4')
-        advice = dict(job=record['id'], acceptance=record['acceptance'], frontier=record['evidence_cursor'],
-            action='continue', workers={}, reason='One bounded cleanup with an explicit finish condition', evidence='original brief and predecessor handover')
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease4')
+        answer = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'],
+            questions=[dict(question='What required work remains after the fix already landed?', evidence='Predecessor handover')])
         for role in ('axel', 'wes'):
-            action = R.control(record['id'], advice, role)
-            checked = R.repeat_checked(record['id'], role, action)
-            self.assertEqual(checked['status'], 'investigating' if role == 'axel' else 'resolved_findings')
-        self.assertIsNone(checked['plan'])
-        self.assertFalse(R.repeat_pending(checked, 'axel'))
-        again = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-lease5')
+            record = R.repeat_questioned(record['id'], role, answer, role)
+        self.assertFalse(R.repeat_ready(record))
+        self.assertEqual(record['status'], 'investigating')
+        self.assertEqual(record['controls'], [])
+        reference = str(R.root()/(record['id']+'.json'))
+        R.owner_delivered(reference, R.repeat_question_key(record, 'axel'), 'wrong-owner')
+        self.assertFalse(R.read(record['id']).get('deliveries'))
+        for role in ('axel', 'wes'):
+            R.owner_delivered(reference, R.repeat_question_key(record, role), 'owner')
+            record = R.read(record['id'])
+            self.assertEqual(record['status'], 'investigating')
+        self.assertTrue(R.repeat_ready(record))
+        self.assertFalse(record.get('repeat_outcome'))
+        answer = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'],
+            question=record['repeat_questions']['wes']['consultation'], answer_ids=['reply-1'], outcome='self_correction',
+            reason='Rich recognized the unnecessary work and will finish the original outcome.', questions=[])
+        record = R.repeat_response(record['id'], 'wes', answer, 'response-1', [dict(uuid='reply-1')])
+        self.assertEqual(record['repeat_outcome'], 'self_correction')
+        self.assertEqual(record['status'], 'resolved_findings')
+        self.assertIsNone(record['plan'])
+        self.assertEqual(record['controls'], [])
+        again = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-lease5')
         self.assertEqual(again['status'], 'investigating')
         self.assertTrue(R.repeat_pending(again, 'wes'))
+        self.assertFalse(R.repeat_ready(again))
+        with self.assertRaises(R.Unavailable):
+            R.repeat_questioned(again['id'], 'wes', answer, 'stale')
 
-    def test_one_advisors_continue_cannot_erase_the_others_intervention(self):
+    def test_delivered_questions_do_not_discharge_real_recovery_or_existing_control(self):
+        record = R.reconcile(str(self.repo), self.work, self.aliases, 'owner', 'acceptance', mode='enforce', name='zach-opus-hostshim4')
+        answer = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'],
+            questions=[dict(question='Why is the same failure still recurring?', evidence='Three failed handovers')])
+        for role in ('axel', 'wes'):
+            record = R.repeat_questioned(record['id'], role, answer, role)
+            R.owner_delivered(str(R.root()/(record['id']+'.json')), R.repeat_question_key(record, role), 'owner')
+        record = R.read(record['id'])
+        self.assertTrue(R.repeat_ready(record))
+        self.assertEqual(record['status'], 'investigating')
+        self.assertEqual(record['recovery_failures'], 0)
+        self.assertEqual(record['controls'], [])
+
+    def test_stronger_control_needs_a_bad_answer_then_a_delivered_followup_and_new_bad_answer(self):
         self.ledger.write_text('')
-        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', name='zach-opus-hostshim4')
-        for role, action in (('wes', 'redirect'), ('axel', 'continue')):
-            advice = dict(job=record['id'], acceptance=record['acceptance'], frontier=record['evidence_cursor'],
-                action=action, workers={}, reason='Review original purpose', evidence='original brief')
-            checked = R.repeat_checked(record['id'], role, R.control(record['id'], advice, role))
-        self.assertEqual(checked['status'], 'investigating')
-        self.assertTrue(checked['repeat_recovery'])
-        self.assertEqual(checked['recovery_failures'], 0)
+        record = R.reconcile(str(self.repo), 'numbered', {'numbered'}, 'owner', 'acceptance', mode='enforce', name='zach-opus-hostshim4')
+        questions = [dict(question='Who would write that payload?', evidence='Deliberately constructed script')]
+        record = R.repeat_questioned(record['id'], 'wes', dict(job=record['id'], acceptance='acceptance',
+            frontier=record['evidence_cursor'], questions=questions), 'question-1')
+        reference = str(R.root()/(record['id']+'.json'))
+        R.owner_delivered(reference, R.repeat_question_key(record, 'wes'), 'owner')
+        answer = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'], question='question-1',
+            answer_ids=['a1'], outcome='escalate', reason='Rich repeated the assumption without supporting evidence', questions=[])
+        with self.assertRaises(R.Unavailable):
+            R.repeat_response(record['id'], 'wes', answer, 'premature', [dict(uuid='a1')])
+        control = dict(job=record['id'], acceptance='acceptance', frontier=record['evidence_cursor'], action='stop',
+            workers={}, reason='A fourth name alone', evidence='name')
+        with self.assertRaises(R.Unavailable):
+            R.control(record['id'], control, 'premature-control')
+        self.assertIsNone(R.admission(record, 'worker', 'brief'))
+        self.assertEqual(R.landing_gap(str(self.repo), 'numbered'), '')
+        record = R.repeat_response(record['id'], 'wes', dict(answer, outcome='probe_again', questions=questions),
+            'question-2', [dict(uuid='a1')])
+        second = dict(answer, question='question-2', answer_ids=['a2'])
+        with self.assertRaises(R.Unavailable):
+            R.repeat_response(record['id'], 'wes', second, 'undelivered', [dict(uuid='a2')])
+        R.owner_delivered(reference, R.repeat_question_key(record, 'wes'), 'owner')
+        with self.assertRaises(R.Unavailable):
+            R.repeat_response(record['id'], 'wes', dict(second, answer_ids=['a1']), 'duplicate', [dict(uuid='a1')])
+        record = R.repeat_response(record['id'], 'wes', second, 'supported', [dict(uuid='a2')])
+        self.assertTrue(record['repeat_recovery'])
+        self.assertEqual(R.control(record['id'], control, 'supported')['action'], 'stop')
 
     def test_repetition_never_clears_exhausted_recovery(self):
         record = R.read(self.record['id'])
