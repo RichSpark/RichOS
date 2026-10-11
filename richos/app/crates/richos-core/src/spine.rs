@@ -1255,7 +1255,8 @@ impl Spine {
         }
     }
 
-    /// How many times every front desk has been un-primed ([`Spine::unprime_every_front_desk`]).
+    /// How many times every front desk has been un-primed ([`Spine::unprime_every_front_desk`]),
+    /// or the onboarding answer was applied to them ([`Spine::onboarding_answer_recorded`]).
     /// Read-only, so the shell can show that a deferred un-priming really ran.
     pub fn front_desk_generation(&self) -> u64 {
         self.front_desk_generation
@@ -1649,8 +1650,18 @@ impl Spine {
     /// The onboarding contribution to a priming turn: the company's material, the offer of an
     /// interview, or the honest note that says why there is neither (`onboarding.rs`).
     fn company_block(&self, binding: &ThreadBinding) -> Option<String> {
-        let layer = self.company_layer(binding);
-        crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding))
+        self.company_block_for(binding.entity_id())
+    }
+
+    /// [`Spine::company_block`] for a company rather than a thread: the block depends on the
+    /// company alone, and a spare desk has a company but no thread to bind.
+    fn company_block_for(&self, entity: &EntityId) -> Option<String> {
+        let layer = self.central_root.as_ref().map(|root| crate::company::CompanyLayer::read(root, entity));
+        let record = match self.onboarding_record.as_ref() {
+            Some(p) => crate::onboarding::OnboardingRecord::load(p).for_entity(entity),
+            None => crate::onboarding::OnboardingRecord::default(),
+        };
+        crate::onboarding::priming_block(entity, layer.as_ref(), &record)
     }
 
     /// One line per company for the boot log — what this launch will actually do about
@@ -1709,12 +1720,46 @@ impl Spine {
     }
 
     /// **The declination was written from the published view; now stop offering.** The
-    /// spine's half of [`crate::read_view::ReadView::record_onboarding_declination`]: every
-    /// front desk primed with the offer is un-primed, exactly as
-    /// [`Spine::record_onboarding_declination`] does after its own write. Run once the spine
-    /// is free, so "Not now" never waits for a prime to finish.
+    /// spine's half of [`crate::read_view::ReadView::record_onboarding_declination`], run once
+    /// the spine is free, so "Not now" never waits for a prime to finish.
+    ///
+    /// **ONLY A DESK STILL PRIMED WITH THE OFFER IS UN-PRIMED.** Each desk carries the block it
+    /// was primed with, and a desk whose block already matches the record is up to date. That
+    /// happens in ordinary first-run use: "Not now" pressed during boot priming, then a message
+    /// sent while it continues. `prime_front_desk` drains that message before it lets the spine
+    /// go, and the message's turn re-primes the desk with the declined block
+    /// (`prime_lease_if_needed`'s comparison). Un-priming it again here cost his next message
+    /// a second hidden model turn for nothing (review rv-20261011T101519Z-e4ab1771-98bb).
+    ///
+    /// A desk whose thread can no longer be read is un-primed, the safe direction. A spare
+    /// being primed right now with the mutex down cannot be compared, so the generation moves
+    /// and step 5 installs it un-primed, as [`Spine::unprime_every_front_desk`] does.
     pub fn onboarding_answer_recorded(&mut self) {
-        self.unprime_every_front_desk();
+        self.front_desk_generation = self.front_desk_generation.wrapping_add(1);
+        if self.lease_primed {
+            let current = self.lease_primed_thread.as_deref().and_then(|thread| self.current_block_of(thread));
+            if current.as_ref() != Some(&self.onboarding_primed_block) {
+                self.lease_primed = false;
+            }
+        }
+        let stale: Vec<String> = self.resident.iter()
+            .filter(|(thread, desk)| desk.primed && self.current_block_of(thread).as_ref() != Some(&desk.onboarding_block))
+            .map(|(thread, _)| thread.clone())
+            .collect();
+        for thread in stale {
+            if let Some(desk) = self.resident.get_mut(&thread) { desk.primed = false; }
+        }
+        let spare_stale = self.spare.as_ref()
+            .is_some_and(|spare| spare.primed && self.company_block_for(&spare.entity) != spare.onboarding_block);
+        if spare_stale {
+            if let Some(spare) = self.spare.as_mut() { spare.primed = false; }
+        }
+    }
+
+    /// The onboarding block a desk for this thread would be primed with now, or `None` when
+    /// the thread cannot be read.
+    fn current_block_of(&self, thread_id: &str) -> Option<Option<String>> {
+        self.ledger.thread_binding(thread_id).ok().map(|binding| self.company_block(&binding))
     }
 
     /// Run after restoring the active company (or its first explicit selection). Legacy
