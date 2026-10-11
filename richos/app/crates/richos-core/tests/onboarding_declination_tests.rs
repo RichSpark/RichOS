@@ -353,3 +353,208 @@ fn not_now_during_boot_priming_with_a_queued_message_costs_no_extra_priming() {
     std::fs::remove_dir_all(&central).unwrap();
     std::fs::remove_dir_all(&config).unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// 5. After "Not now", every kind of desk carries the decline at its next message, and none
+//    pays a priming turn it does not need.
+// ---------------------------------------------------------------------------
+
+/// Every priming turn any desk received, as `(desk, text)`, in order.
+type PrimeLog = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// The spawn gate: told when a spawn starts, then waited on until the test lets it go.
+type Starting = std::sync::Arc<std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>>;
+
+/// A factory whose desks are isolated per thread (so a switch parks the outgoing desk, as the
+/// shipped desks do) and log their priming turns under their own name: `desk-1`, `desk-2`, ...
+/// in spawn order. It can be duplicated, so a spare takes the road the app takes, with the
+/// spine's mutex down. When `starting` is set, the next spawn says so and then waits: a spare
+/// still starting its process.
+#[derive(Clone, Default)]
+struct DeskFactory {
+    primes: PrimeLog,
+    spawns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    starting: Starting,
+}
+
+impl richos_core::cognition::LeaseFactory for DeskFactory {
+    fn duplicate(&self) -> Option<Box<dyn richos_core::cognition::LeaseFactory>> {
+        Some(Box::new(self.clone()))
+    }
+    fn spawn(&self) -> Result<Box<dyn richos_core::cognition::Cognition>, richos_core::cognition::CognitionError> {
+        let starting = self.starting.lock().unwrap().take();
+        if let Some((entered, release)) = starting {
+            entered.send(()).unwrap();
+            release.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        }
+        let n = self.spawns.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        Ok(Box::new(LoggedDesk { name: format!("desk-{n}"), primes: self.primes.clone() }))
+    }
+}
+
+struct LoggedDesk {
+    name: String,
+    primes: PrimeLog,
+}
+
+impl richos_core::cognition::Cognition for LoggedDesk {
+    fn session_id(&self) -> &str {
+        &self.name
+    }
+    fn requires_thread_isolation(&self) -> bool {
+        true
+    }
+    fn reprime(
+        &mut self,
+        text: &str,
+        _: &mut dyn FnMut(richos_core::cognition::TurnItem),
+    ) -> Result<(), richos_core::cognition::CognitionError> {
+        self.primes.lock().unwrap().push((self.name.clone(), text.to_string()));
+        Ok(())
+    }
+    fn prompt(
+        &mut self,
+        _: &str,
+        _: &mut dyn FnMut(richos_core::cognition::TurnItem),
+    ) -> Result<String, richos_core::cognition::CognitionError> {
+        Ok("ok".into())
+    }
+}
+
+fn primes_of(log: &PrimeLog, desk: &str) -> Vec<String> {
+    log.lock().unwrap().iter().filter(|(name, _)| name == desk).map(|(_, text)| text.clone()).collect()
+}
+
+/// "Not now" is written from the published view, the way the shell writes it
+/// (`decline_onboarding_in`), and then each kind of desk takes its next message: the one in
+/// use, a parked one, and the standing spare (adopted by the next new thread). Each must be
+/// re-primed once, with the declined block, where it stands: no desk keeps offering the
+/// interview and no desk is replaced. What makes that true is the comparison every message
+/// runs (`prime_lease_if_needed`), against the block each desk carries with it. Nothing else
+/// is run between the answer and the messages.
+#[test]
+fn after_not_now_the_next_message_on_every_kind_of_desk_carries_the_decline() {
+    let (path, ledger) = tmp_ledger("every-desk");
+    let central = tmp_dir("every-desk-central");
+    let config = tmp_dir("every-desk-config");
+    let mut spine = support::spine(ledger);
+    spine.set_central_root(central.clone());
+    spine.set_onboarding_record(record_path(&config));
+    let factory = DeskFactory::default();
+    let primes = factory.primes.clone();
+    let spawns = factory.spawns.clone();
+    spine.set_lease_factory(Box::new(factory));
+
+    let parked = spine.create_thread("Parked work", &company()).unwrap();
+    let in_use = spine.create_thread("Work in use", &company()).unwrap();
+    spine.switch_thread(&parked).unwrap();
+    spine.submit_prompt("first", Source::Text).unwrap(); // desk-1, then parked
+    spine.switch_thread(&in_use).unwrap();
+    spine.submit_prompt("second", Source::Text).unwrap(); // desk-2, in the chair
+    match spine.ready_a_spare_front_desk(&company()) {
+        richos_core::spine::SpareReady::Ready { .. } => {} // desk-3, standing
+        other => panic!("the spare was not made ready: {other:?}"),
+    }
+    for desk in ["desk-1", "desk-2", "desk-3"] {
+        let p = primes_of(&primes, desk);
+        assert_eq!(p.len(), 1, "{desk} was primed once before the answer");
+        assert!(p[0].contains("He has not been asked yet."), "{desk} was primed with the offer");
+    }
+
+    spine.reader().snapshot().record_onboarding_declination(1_000).unwrap();
+
+    spine.submit_prompt("after not now, in use", Source::Text).unwrap();
+    spine.switch_thread(&parked).unwrap();
+    spine.submit_prompt("after not now, parked", Source::Text).unwrap();
+    let adopted = spine.create_thread("New work", &company()).unwrap();
+    spine.switch_thread(&adopted).unwrap();
+    spine.submit_prompt("after not now, spare", Source::Text).unwrap();
+
+    for (kind, desk) in [("in use", "desk-2"), ("parked", "desk-1"), ("spare", "desk-3")] {
+        let p = primes_of(&primes, desk);
+        let carries = p.last().is_some_and(|text| text.contains("said not now"));
+        eprintln!("[not-now-every-desk] {kind} ({desk}): {} primes; the last carries the decline: {carries}", p.len());
+        assert_eq!(p.len(), 2, "the {kind} desk is re-primed exactly once after the answer");
+        assert!(carries, "the {kind} desk's next message carries the decline: {}", p[1]);
+        assert!(!p[1].contains("He has not been asked yet."), "and no longer the offer ({kind})");
+    }
+    assert_eq!(
+        spawns.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "no desk was replaced: each was re-primed where it stood"
+    );
+    drop(spine);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir_all(&central).unwrap();
+    std::fs::remove_dir_all(&config).unwrap();
+}
+
+/// The ordering from review `rv-20261011T104029Z-c8b2a74a-37e4`, ported from its fixture
+/// (`spare_decline.rs`): the shell starts a spare at boot with the spine's mutex down, and
+/// "Not now" is pressed while its process is still starting. The spare assembles its payload
+/// after the answer, so it is primed with the decline. Its first message must not pay a
+/// second priming turn.
+///
+/// On `c8b2a74a5` the deferred step ran here (nobody holds the spine, so it runs at once),
+/// moved the generation the spare captured before it started, and the spare was installed
+/// un-primed although it already carried the decline: 1 redundant hidden priming turn.
+#[test]
+fn not_now_while_a_spare_is_starting_costs_its_first_message_no_extra_priming() {
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let (path, ledger) = tmp_ledger("not-now-spare");
+    let central = tmp_dir("not-now-spare-central");
+    let config = tmp_dir("not-now-spare-config");
+    let mut spine = support::spine(ledger);
+    let existing = spine.create_thread("Existing work", &company()).unwrap();
+    spine.switch_thread(&existing).unwrap();
+    spine.set_central_root(central.clone());
+    spine.set_onboarding_record(record_path(&config));
+    let factory = DeskFactory::default();
+    let primes = factory.primes.clone();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *factory.starting.lock().unwrap() = Some((entered_tx, release_rx));
+    spine.set_lease_factory(Box::new(factory));
+    let reader = spine.reader();
+    let spine = Arc::new(Mutex::new(spine));
+
+    let spare_spine = spine.clone();
+    let spare = std::thread::spawn(move || {
+        richos_core::spine::ready_a_spare_front_desk_without_the_spine(&spare_spine, &company())
+    });
+    entered_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+
+    // "Not now", while the spare's process is starting.
+    reader.snapshot().record_onboarding_declination(1_000).unwrap();
+    // The deferred step the shell hands the decline's spine work to; with the spare's mutex
+    // down it takes the spine at once.
+    spine.lock().unwrap().onboarding_answer_recorded();
+
+    release_tx.send(()).unwrap();
+    let verdict = spare.join().unwrap();
+    {
+        let log = primes.lock().unwrap();
+        assert_eq!(log.len(), 1, "the spare's own priming turn");
+        assert!(log[0].1.contains("said not now"), "the spare was primed after the answer, with the decline");
+    }
+
+    let mut held = spine.lock().unwrap();
+    let new_thread = held.create_thread("New work", &company()).unwrap();
+    held.switch_thread(&new_thread).unwrap();
+    held.submit_prompt("Help with my business", Source::Text).unwrap();
+    let after = primes.lock().unwrap().len();
+    eprintln!("[not-now-spare] spare installed: {verdict:?}; primes after its first message: {after}");
+    assert_eq!(
+        after,
+        1,
+        "the spare already carried the decline, yet its first message waited through {} extra \
+         hidden priming turn(s)",
+        after - 1
+    );
+    drop(held);
+    drop(spine);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir_all(&central).unwrap();
+    std::fs::remove_dir_all(&config).unwrap();
+}
