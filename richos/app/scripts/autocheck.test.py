@@ -1186,6 +1186,32 @@ class Land(Fixture):
         self.assertNotIn("REFUSED", out.stdout + out.stderr)
         self.assertNotEqual(self.head("main"), before)
 
+    def test_a_merge_whose_tree_lacks_the_publication_checker_is_refused_when_a_boundary_is_declared(self):
+        # Review rv-20261011T205250Z-6cec3232-25ed: the checker missing from the tree being landed
+        # passed silently. A declared boundary makes that a check that did not run: refuse, naming
+        # the file. A tree with no declaration stays NOT APPLICABLE and lands.
+        self.make()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        (self.repo / "richos/engine").unlink()
+        before = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land plain", "feature")
+        self.assertNotIn("REFUSED", out.stdout + out.stderr)
+        self.git("reset", "-q", "--hard", before)
+        (self.repo / "richos/engine").symlink_to(ENGINE)
+        self.write(".publication-boundary", 'PRIVATE_RECORD="the private record"\nPRIVATE_SOURCES=""\n')
+        self.write("scripts/hooks/guard-widget.sh", ': "${WIDGET_DECLARATION:=.widget}"\n')
+        self.write(".widget.example", 'WIDGET_RECORD="wherever"\n')
+        self.write("README.md", "# Sample\n\nCreate `.widget` from `.widget.example` to switch the widget guard on.\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "publication-bound")
+        (self.repo / "richos/engine").unlink()
+        before = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land bound", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO MAIN REFUSED: the publication-completeness checker is missing", text)
+        self.assertIn("richos/engine/scripts/publication-completeness.sh", text)
+        self.assertEqual(self.head("main"), before)
+
     def test_the_merge_gate_selects_with_gate_lints_the_change_and_caps_the_run(self):
         # 2026-09-30: merges of 25 to 71 minutes, whole-product suites for tooling changes and
         # no cap that a planned weight could not stretch. The land asks proof-for.sh for the
