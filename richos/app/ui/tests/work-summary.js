@@ -215,6 +215,35 @@ async function main() {
       "ms after goto; the switch showed " + JSON.stringify(onHiring.trim()) + " " + switchMs + "ms after the press";
   });
 
+  // **NIGHTLY 48'S WALK, D26** (docs/verification/2026-10-10-nightly-48-candidate-walk.md, frame
+  // `h-held`): while the queue was held for a sign-in, the status line read "2 assignments
+  // starting" right under the notice "I haven't started … yet". A held job's row is `registered`,
+  // like a job about to start; the shell now says which are held (`held`, from
+  // `WorkHost::held_on`), and the line says they are waiting to start.
+  await run.check("held work is never called starting: the line says it is waiting to start, and work that really is starting still says so", async () => {
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    const row = (id, title, held) => ({
+      id, title, state: "registered", detail: held ? "Waiting for you to sign in to Claude, in Settings under Claude accounts." : "Written down.",
+      repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, held, awaitingYou: null,
+    });
+    await page.addInitScript((rows) => window.__RICHOS_MOCK_PRESET__ = {assignments: rows}, {
+      hiring: [row("held-1", "Prepare the Northwind invoice summary", true), row("held-2", "the request behind it", true)],
+      acme: [row("fresh-1", "Draft the onboarding note", false)],
+    });
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    const held = await chipWithin(page, "assignment", "on hiring, held");
+    assert(held.includes("2 assignments waiting to start"), "the held line reads " + JSON.stringify(held.trim()));
+    assert(!held.includes("starting"), "held work is called starting: " + JSON.stringify(held.trim()));
+    // POSITIVE CONTROL: a job written down and not held is still starting.
+    await openThread(page,"acme");
+    const fresh = await chipWithin(page, "1 assignment starting", "on acme, not held");
+    assert(!fresh.includes("waiting to start"), "work that is starting is called waiting: " + JSON.stringify(fresh.trim()));
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "held: " + JSON.stringify(held.trim()) + "; not held: " + JSON.stringify(fresh.trim());
+  });
+
   await browser.close(); process.exit(run.report()?1:0);
 }
 main().catch(e=>{console.error(e);process.exit(1);});

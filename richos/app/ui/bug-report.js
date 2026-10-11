@@ -27,10 +27,13 @@
 // answer they wait on this Mac, unsent, like any report he couldn't check. This file never decides
 // that a report may go.
 //
-// Pressing Bust a bug opens nothing new: Rich asks in the conversation on screen, under a quiet
-// "Bust a bug" divider. Where a window covers the conversation (Corrections, Feedback, Search, the
-// company picker), or there is no conversation that can take messages, the same exchange happens
-// in a Rich panel at the right and the window stays open beside it.
+// ONE PLACE (CEO, 2026-10-10: "pressing Bust a bug always shows the bug report on top, ready to
+// answer"). The exchange always happens in the Rich panel (`#bugdock`), never in the conversation.
+// The panel is the app's top layer (`style.css`), so whatever screen or window the bug is on stays
+// up behind it, untouched. A press opens the panel and puts the keys in its answer box; from then
+// until the report is sent, canceled or its panel closed, Bust a bug is disabled in the Settings
+// menu (`reportOpen`), so there is no second press. Anything in the panel taking focus turns
+// Dictation's key capture and conversation voice mode off through their own off paths.
 //
 // WHAT IS NOT IN THIS FILE: what is private and its stand-ins, Rich's write-up, the issue's words,
 // the send and the keeping of what could not go. All of that is `richos_core::bug_report`, reached
@@ -114,7 +117,8 @@ window.RichBug = (function () {
   // ---- where the user was -------------------------------------------------------------------
   // [element, key, what the user calls it (the panel's header and Rich's sentence), the same
   // place for the public report]. The three windows round 21 names first, then the other sheets
-  // that cover the conversation.
+  // that cover the conversation. This names where the user was; it decides nothing about where
+  // the report goes (always the panel).
   var WINDOWS = [
     ["corrections-overlay", "corrections", "Corrections", "the Corrections window"],
     ["feedback-overlay", "feedback", "Feedback", "the Feedback window"],
@@ -128,13 +132,19 @@ window.RichBug = (function () {
       var n = $(WINDOWS[i][0]);
       if (n && !n.hidden) return WINDOWS[i];
     }
+    // ANY OTHER DIALOG ON SCREEN IS A WINDOW TOO (review rv-20261010T081721Z-66ba5386-a4d1
+    // finding 2): Settings is reachable over every overlay now, the sheets its own menu opens
+    // included (Claude accounts, the quota, the phone, repositories, dictation, the Home screen
+    // buttons, the Technical view question), so a report started over one names it.
+    var dialogs = document.querySelectorAll('[role="dialog"]');
+    for (var d = 0; d < dialogs.length; d++) {
+      var el = dialogs[d];
+      if (el.closest("[hidden], #bugdock, .settings") || !el.getClientRects().length) continue;
+      var titleId = el.getAttribute("aria-labelledby");
+      var title = (titleId && $(titleId) && $(titleId).textContent.trim()) || el.getAttribute("aria-label") || "";
+      return [el.id || "", "window", title ? "the " + title + " window" : "a RichOS window", title ? "the RichOS window titled " + title : "a RichOS window"];
+    }
     return null;
-  }
-  /// Close every window over the conversation with its own close (`main.js`'s `POPUP_CLOSERS`).
-  /// The two setup questions have none and stay: while one is up, Settings cannot be pressed.
-  function closeWindows() {
-    for (var w = openWindow(), n = 0; w && n < WINDOWS.length; w = openWindow(), n++)
-      if (!host || !host.closeWindow || !host.closeWindow(w[0])) return;
   }
   // ---- what was on the screen: for the user's own Rich to check against ----------------------
   // Round 21: "Looked at the screen you were on". The words the user could SEE when they pressed
@@ -142,7 +152,7 @@ window.RichBug = (function () {
   // scrolling box around it (a conversation scrolled away is not on screen). The exchange itself,
   // the Settings menu, notices and screen-reader-only text are not the screen. Private names stay
   // in: this goes to the user's own Claude, never into the issue (second review finding 6).
-  var NOT_THE_SCREEN = "#bug-flows, #bugdock, #set-menu, #bug-toast, #bug-subtip, .sr-only, [aria-hidden='true'], [hidden], script, style, noscript, template";
+  var NOT_THE_SCREEN = "#bugdock, #set-menu, #bug-toast, #bug-subtip, .sr-only, [aria-hidden='true'], [hidden], script, style, noscript, template";
   var SCREEN_MAX = 12000;
   function screenContent() {
     var clipOf = new Map();
@@ -184,10 +194,8 @@ window.RichBug = (function () {
     var s = window.RichSplash && window.RichSplash.state;
     return !!(s && s.shown && !s.reason && $("splash"));
   }
-  function homeOpen() {
-    return !!(window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen());
-  }
 
+  /// Where the user was when they pressed Bust a bug: what Rich says and the report's Where.
   function screenNow() {
     var scale = window.RichTheme && window.RichTheme.scale ? window.RichTheme.scale() : 100;
     var theme = document.documentElement.dataset.theme || "";
@@ -196,21 +204,21 @@ window.RichBug = (function () {
     // Pressed on the held opening screen (the settings button is on it only while it is held,
     // CEO §62): that is the screen the user was looking at, whatever is under it.
     if (curtainUp())
-      return Object.assign(base, { key: "opening", dock: true, label: "the opening screen", here: "the opening screen", public: "the opening screen RichOS shows as it starts" });
+      return Object.assign(base, { key: "opening", label: "the opening screen", here: "the opening screen", public: "the opening screen RichOS shows as it starts" });
     var w = openWindow();
-    if (w) return Object.assign(base, { key: w[1], dock: true, label: w[2], here: w[2], public: w[3] });
+    if (w) return Object.assign(base, { key: w[1], label: w[2], here: w[2], public: w[3] });
     var view = host ? host.view() : "conversation";
     var thread = host ? host.activeThread() : null;
     var title = thread && host ? host.threadTitle(thread) : "";
     if (window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen())
-      return Object.assign(base, { key: "home", dock: true, label: "the home screen", here: "the home screen", public: "the home screen, with a button for each company" });
+      return Object.assign(base, { key: "home", label: "the home screen", here: "the home screen", public: "the home screen, with a button for each company" });
     if (view === "unbound")
-      return Object.assign(base, { key: "unbound", dock: true, label: title || "this conversation", here: title ? "the " + title + " conversation" : "a conversation", conversation: title || null, public: "a conversation that isn't filed under a company yet, where sending is off" });
+      return Object.assign(base, { key: "unbound", label: title || "this conversation", here: title ? "the " + title + " conversation" : "a conversation", conversation: title || null, public: "a conversation that isn't filed under a company yet, where sending is off" });
     if (view === "entity")
-      return Object.assign(base, { key: "company", dock: true, label: "this company's page", here: "a company's page", public: "a company's page, with its conversations" });
-    if (view !== "conversation" || !thread || (host && host.blocked()))
-      return Object.assign(base, { key: "other", dock: true, label: "this screen", here: "this screen", public: "a RichOS screen" });
-    return Object.assign(base, { key: "conversation", dock: false, label: title, here: "the " + (title || "current") + " conversation", conversation: title || null, public: "a conversation, the main RichOS screen" });
+      return Object.assign(base, { key: "company", label: "this company's page", here: "a company's page", public: "a company's page, with its conversations" });
+    if (view !== "conversation" || !thread)
+      return Object.assign(base, { key: "other", label: "this screen", here: "this screen", public: "a RichOS screen" });
+    return Object.assign(base, { key: "conversation", label: title, here: "the " + (title || "current") + " conversation", conversation: title || null, public: "a conversation, the main RichOS screen" });
   }
 
   // ---- flows --------------------------------------------------------------------------------
@@ -222,17 +230,33 @@ window.RichBug = (function () {
   var TAKES_WORDS = ["ask", "draft", "queued", "editing", "changing"];
   function live(f) { return LIVE.indexOf(f.step) !== -1; }
   function liveFlow() { return flows.filter(live)[0] || null; }
-  function dockFlow() { return flows.filter(function (f) { return f.dock; }).slice(-1)[0] || null; }
+  function dockFlow() { return flows[flows.length - 1] || null; }
 
-  function box(f) { return f.dock ? $("bugdock-msgs") : f.el; }
-  function scroller(f) { return f.dock ? $("bugdock-msgs") : $("conversation"); }
-  function inputOf(f) { return f.dock ? $("bugdock-input") : $("input"); }
+  /// **A REPORT IS OPEN**: from the press (`looking`, while the window's picture is taken) until
+  /// the report is sent, canceled or its panel closed. While it is, Bust a bug in the Settings
+  /// menu is disabled (`settings-button.js` asks this, and `paintMenu` tells it when it changes):
+  /// shown, and impossible to press. The panel itself is the way out.
+  var looking = false;
+  function reportOpen() {
+    var dock = $("bugdock");
+    return looking || !!(dock && !dock.hidden && liveFlow());
+  }
+  function paintMenu() {
+    if (window.RichSettings && window.RichSettings.repaintBugReport) window.RichSettings.repaintBugReport();
+  }
 
-  function scrollDown(f) {
+  // Every report lives in the panel: its messages box and its answer box.
+  function box() { return $("bugdock-msgs"); }
+
+  function scrollDown() {
     window.setTimeout(paintStuck, 450);
-    var sc = scroller(f);
+    var sc = box();
     if (!sc) return;
     window.requestAnimationFrame(function () { sc.scrollTop = sc.scrollHeight; });
+  }
+  /// Ready to answer: the keys go to the panel's answer box.
+  function focusAnswer() {
+    window.setTimeout(function () { var i = $("bugdock-input"); if (i && !$("bugdock-form").hidden) i.focus(); }, 0);
   }
 
   /// One of Rich's lines, drawn the way the conversation draws his messages.
@@ -259,8 +283,8 @@ window.RichBug = (function () {
       art.appendChild(p);
     });
     wrap.appendChild(art);
-    box(f).appendChild(wrap);
-    scrollDown(f);
+    box().appendChild(wrap);
+    scrollDown();
     if (host) host.announce(lines.filter(function (l) { return typeof l === "string"; }).join(" "));
     return art;
   }
@@ -274,8 +298,8 @@ window.RichBug = (function () {
     t.appendChild(document.createTextNode(text));
     bubble.appendChild(t);
     art.appendChild(bubble);
-    box(f).appendChild(art);
-    scrollDown(f);
+    box().appendChild(art);
+    scrollDown();
   }
 
   function working(f, words) {
@@ -283,8 +307,8 @@ window.RichBug = (function () {
     w.setAttribute("role", "status");
     w.appendChild(node("span", "bug-working-dot"));
     w.appendChild(document.createTextNode(words));
-    box(f).appendChild(w);
-    scrollDown(f);
+    box().appendChild(w);
+    scrollDown();
     return w;
   }
 
@@ -299,55 +323,36 @@ window.RichBug = (function () {
   function paintComposers() {
     var f = liveFlow();
     var dockInput = $("bugdock-input");
-    if (dockInput) dockInput.placeholder = (f && f.dock && placeholderFor(f)) || "Talk to Rich…";
-    if (host) host.syncComposer();
+    if (dockInput) dockInput.placeholder = placeholderFor(f) || "Talk to Rich…";
     paintDock();
     syncVoiceHold();
+    paintMenu();
   }
 
-  /// **START.** One report at a time: pressing it while one is in progress takes the user back to
-  /// it and pulses its card.
+  /// **START.** The report is in the Rich panel, on top, with the keys in its answer box; the
+  /// screen behind is left as it is.
+  ///
+  /// **A PRESS IS ALWAYS A FIRST PRESS** (CEO, 2026-10-10: "WHY THE FUCK IS IT EVEN POSSIBLE TO
+  /// CLICK THE FUCKING BUTTON AGAIN IF THE ACTION RELATED TO THAT IS ALREADY GOING ON???"). From
+  /// the press until the report is sent, canceled or its panel closed, Bust a bug in the Settings
+  /// menu is disabled (`reportOpen`), so nothing here handles a press over a report in progress.
+  /// The one report a press can find is one saved on this Mac whose panel the user closed (the
+  /// ✕ is offered only then: waiting to send, or waiting for Rich's check): the press opens the
+  /// panel on it again, which is the way back to it.
   function start(seen) {
     var cur = liveFlow();
     if (cur) {
-      if (cur.dock) {
-        raiseDock(covered());
-        showDock();
-      } else {
-        // The report is in a conversation, and the home screen or a window (Corrections,
-        // Feedback, Search, the company picker) is in front of it: go to it. A window left open
-        // covered the report while the composer behind it took the keys (review of 665df1bb3).
-        if (homeOpen()) window.RichHome.hide("bug-report");
-        closeWindows();
-        if (host && cur.threadId !== host.activeThread()) host.openThread(cur.threadId);
-      }
-      if (cur.card) {
-        cur.card.classList.remove("is-flash");
-        void cur.card.offsetWidth;
-        cur.card.classList.add("is-flash");
-        cur.card.scrollIntoView({ block: "center" });
-      } else scrollDown(cur);
-      window.setTimeout(function () { var i = inputOf(cur); if (i) i.focus(); }, 0);
+      showDock();
+      scrollDown();
+      focusAnswer();
       return cur;
     }
     var scr = seen || screenNow();
-    var f = { id: ++seq, dock: scr.dock, threadId: host ? host.activeThread() : null, screen: scr, step: "ask", el: node("section", "bugflow") };
-    f.el.dataset.flow = String(f.id);
-    f.el.setAttribute("aria-label", "Bust a bug");
+    var f = { id: ++seq, screen: scr, step: "ask" };
     flows.push(f);
-    if (f.dock) {
-      $("bugdock-msgs").textContent = "";
-      $("bugdock-where").textContent = "· " + scr.label;
-      raiseDock(covered());
-      showDock();
-    } else {
-      $("bug-flows").appendChild(f.el);
-      var dv = node("div", "bug-divider");
-      dv.appendChild(svg(GLYPH_BUG));
-      dv.appendChild(node("span", null, "Bust a bug"));
-      f.el.appendChild(dv);
-      sync();
-    }
+    $("bugdock-msgs").textContent = "";
+    $("bugdock-where").textContent = "· " + scr.label;
+    showDock();
     var where =
       scr.key === "conversation" ? "I've noted that you were on " + scr.here + "."
       : scr.key === "unbound" ? "I've noted that you were on " + scr.here + ", which can't take messages yet, so we're talking here."
@@ -363,7 +368,7 @@ window.RichBug = (function () {
     art.appendChild(acts);
     f.neverMind = acts;
     paintComposers();
-    window.setTimeout(function () { var i = inputOf(f); if (i) i.focus(); }, 0);
+    focusAnswer();
     return f;
   }
 
@@ -372,12 +377,17 @@ window.RichBug = (function () {
   /// Rich's question appears, so neither shows the exchange instead of the screen. A picture that
   /// does not come within 1.5 s is not waited for; Rich then has the words.
   function lookThenStart() {
+    if (reportOpen()) return;
     if (liveFlow()) return start();
     var seen = screenNow();
     var started = false;
+    // The press has happened: Bust a bug is disabled from now, while the picture is taken too.
+    looking = true;
+    paintMenu();
     function go() {
       if (started) return;
       started = true;
+      looking = false;
       start(seen);
     }
     bridge.invoke("bug_report_look").then(go, go);
@@ -515,11 +525,11 @@ window.RichBug = (function () {
     // the one before it: one report, one card.
     if (old) old.remove();
     f.card = buildCard(f);
-    box(f).appendChild(f.card);
+    box().appendChild(f.card);
     f.step = "draft";
     paintCard(f);
     paintComposers();
-    scrollDown(f);
+    scrollDown();
     window.setTimeout(function () { if (f.card) f.card.classList.remove("is-new"); }, 2600);
   }
 
@@ -584,9 +594,9 @@ window.RichBug = (function () {
   }
 
   /// **RICH HAS CHECKED IT**: `{id, draft, digest, here}` from the shell's check loop. The card
-  /// comes where the report waits; one kept from before a quit or a reload, with no exchange in
-  /// this window, comes in the Rich panel, unless another report is in progress (then the shell
-  /// says it again later: one report at a time).
+  /// comes in the Rich panel, brought forward; one kept from before a quit or a reload comes
+  /// there too, unless another report is in progress (then the shell says it again later: one
+  /// report at a time).
   function onChecked(c) {
     if (!c || !c.id) return;
     if (taken[c.id]) return takeOff(c.id);
@@ -595,21 +605,19 @@ window.RichBug = (function () {
     if (earlier) {
       if (liveFlow()) return;
       var label = c.here || "this screen";
-      f = { id: ++seq, dock: true, threadId: null, screen: { key: "other", dock: true, label: label, here: label, public: "a RichOS screen" }, step: "unchecked", uncheckedId: c.id, el: node("section", "bugflow") };
+      f = { id: ++seq, screen: { key: "other", label: label, here: label, public: "a RichOS screen" }, step: "unchecked", uncheckedId: c.id };
       flows.push(f);
       $("bugdock-msgs").textContent = "";
       $("bugdock-where").textContent = "· " + label;
-      raiseDock(false); // shown by itself, never over the home screen or the opening screen
     }
     if (f.step !== "unchecked") return;
     taken[c.id] = true;
     takeOff(c.id);
     f.uncheckedId = null;
     if (f.uncheckedActs) { f.uncheckedActs.remove(); f.uncheckedActs = null; }
-    if (f.dock) showDock();
+    showDock();
     var lead = earlier ? "I've checked the bug report you told me about earlier. " : f.card ? "I've checked your changes now. " : "I've checked it now. ";
     showDraft(f, c, lead + HERE_IT_IS, null);
-    if (!f.dock && f.el.hidden && host) host.toast("Rich checked your bug report. It's waiting for you to send it.");
   }
 
   /// Rich folds one change in. While he does, the report is "changing": Send, Change it and
@@ -705,19 +713,28 @@ window.RichBug = (function () {
   }
 
   // ---- the report card: the send-before-approve step ------------------------------------------
+  /// A stand-in is a segment with a `kind` (`Segment::is_stand_in`), whether or not the shell knows
+  /// the words it replaced (`was`): one Rich wrote himself, with nothing listed beside it, is still
+  /// underlined and counted (nightly 48's walk, D23: on d0d06501c it was drawn as plain words, and
+  /// the line under the card said nothing private was in a report carrying four).
   function appendSegments(parent, segments) {
     (segments || []).forEach(function (s) {
-      if (s.was == null) {
+      if (!s.kind) {
         parent.appendChild(document.createTextNode(s.text));
         return;
       }
-      var sub = node("span", "bug-sub", s.text);
-      sub.tabIndex = 0;
-      sub.dataset.was = s.was;
-      sub.dataset.kind = s.kind || "";
-      sub.dataset.stand = s.text;
-      parent.appendChild(sub);
+      parent.appendChild(subSpan(s.text, s.kind, s.was));
     });
+  }
+  /// One stand-in on the card: underlined, reachable with Tab, its kind, and what it replaced
+  /// only when that is known (`was`).
+  function subSpan(text, kind, was) {
+    var sub = node("span", "bug-sub", text);
+    sub.tabIndex = 0;
+    if (was != null) sub.dataset.was = was;
+    sub.dataset.kind = kind;
+    sub.dataset.stand = text;
+    return sub;
   }
 
   /// The card draws the draft word for word and changes none: every draft the shell gives it is
@@ -808,15 +825,99 @@ window.RichBug = (function () {
     private_word: ["private word", "private words"],
   };
   var NUM = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-  /// The line under the sheet, counted from the stand-ins on it now, in Rust's words
-  /// (`left_out_line`): a stand-in the user deleted is no longer counted.
+
+  // ---- the stand-ins: read from the card's words, whoever wrote them -------------------------
+  /// **EVERY STAND-IN IS READ FROM THE CARD'S FINAL WORDS** (reviews
+  /// rv-20261010T183313Z-fe4cd6b1-1e66 finding 1 and the two before it): which words were marked
+  /// used to come from where they were written (the first draft, Rich's change), so a stand-in the
+  /// user typed, or one edited into another (`[a person]` into `[a company]`), was plain words and
+  /// the line under the card said nothing private was in it. Now every stand-in written anywhere in
+  /// the title, the headings, the paragraphs and the steps is one, and the line counts exactly
+  /// those. The stand-ins, word for word as the core writes them (`richos_core::bug_report::Kind::
+  /// stand_in`), with their kinds.
+  var STAND_IN_KIND = {
+    "[a conversation]": "conversation_name",
+    "[a company]": "company_name",
+    "[a person]": "person_name",
+    "[a folder]": "folder_name",
+    "[a file on this Mac]": "file_path",
+    "[an email address]": "email_address",
+    "[a private word]": "private_word",
+  };
+  var STAND_IN_RE = new RegExp(Object.keys(STAND_IN_KIND).sort(function (a, b) { return b.length - a.length; }).map(function (s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }).join("|"), "g");
+  /// Each stand-in written in `text`, in order (the core's `stand_ins_in`): `[at, words, kind]`.
+  function standInsIn(text) {
+    var out = [], m;
+    STAND_IN_RE.lastIndex = 0;
+    while ((m = STAND_IN_RE.exec(text))) out.push([m.index, m[0], STAND_IN_KIND[m[0]]]);
+    return out;
+  }
+  /// Every part of the card's words, in the order it shows them: the title, then each section's
+  /// heading, paragraphs and steps.
+  function cardParts(f) {
+    var parts = [f.card.querySelector(".bug-title")];
+    f.card.querySelectorAll(".bug-sec").forEach(function (s) {
+      var own = fieldsIn(s);
+      parts = parts.concat([s.querySelector("h4")], own.paragraphs, own.steps);
+    });
+    return parts;
+  }
+  /// The card's stand-ins marked from its words as they are now. Within one part: a marked span
+  /// that is no longer exactly one stand-in is plain words again; one that is keeps what it
+  /// replaced only while it is still the stand-in that was written for those words (its receipt,
+  /// `data-stand`), and otherwise says its kind alone; and every stand-in in the plain words is
+  /// marked with its kind. Never run while the card is being changed, so the caret stays put.
+  function markStandIns(f) {
+    cardParts(f).forEach(function (part) {
+      var spans = part.querySelectorAll("span");
+      for (var i = spans.length - 1; i >= 0; i--) {
+        var s = spans[i];
+        var words = s.childNodes.length === 1 && s.firstChild.nodeType === 3 ? s.textContent : null;
+        var kind = words !== null && STAND_IN_KIND.hasOwnProperty(words) ? STAND_IN_KIND[words] : null;
+        if (!kind) {
+          while (s.firstChild) s.parentNode.insertBefore(s.firstChild, s);
+          s.remove();
+          continue;
+        }
+        if (s.dataset.stand !== words) delete s.dataset.was;
+        s.className = "bug-sub";
+        s.tabIndex = 0;
+        s.dataset.kind = kind;
+        s.dataset.stand = words;
+      }
+      part.normalize();
+      var texts = [];
+      var walk = document.createTreeWalker(part, NodeFilter.SHOW_TEXT);
+      for (var t = walk.nextNode(); t; t = walk.nextNode()) if (!t.parentNode.classList.contains("bug-sub")) texts.push(t);
+      texts.forEach(function (t) {
+        var found = standInsIn(t.data);
+        if (!found.length) return;
+        var frag = document.createDocumentFragment(), at = 0;
+        found.forEach(function (x) {
+          if (x[0] > at) frag.appendChild(document.createTextNode(t.data.slice(at, x[0])));
+          frag.appendChild(subSpan(x[1], x[2], null));
+          at = x[0] + x[1].length;
+        });
+        if (at < t.data.length) frag.appendChild(document.createTextNode(t.data.slice(at)));
+        t.parentNode.replaceChild(frag, t);
+      });
+    });
+  }
+
+  /// The line under the sheet, in Rust's words (`left_out_line`), COUNTED FROM THE CARD'S WORDS:
+  /// every stand-in in its title, headings, paragraphs and steps, by kind (`standInsIn`), and
+  /// nothing else. A stand-in the user deleted is no longer counted; one anybody wrote is.
   function leftOutText(f) {
-    var subs = f.card.querySelectorAll(".bug-doc .bug-sub");
-    var counts = {}, order = [];
-    subs.forEach(function (s) {
-      var k = s.dataset.kind;
-      if (!counts[k]) { counts[k] = 0; order.push(k); }
-      counts[k] += 1;
+    var counts = {}, order = [], total = 0;
+    cardParts(f).forEach(function (part) {
+      standInsIn(part.nodeName === "H4" ? part.textContent : wordsOf(part)).forEach(function (x) {
+        var k = x[2];
+        if (!counts[k]) { counts[k] = 0; order.push(k); }
+        counts[k] += 1;
+        total += 1;
+      });
     });
     if (!order.length) return "Nothing private was in it, so nothing was left out. Anyone can read GitHub issues.";
     var parts = order.map(function (k) {
@@ -824,13 +925,14 @@ window.RichBug = (function () {
       return (NUM[n] || n) + " " + (n === 1 ? w[0] : w[1]);
     });
     var list = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
-    return "Left out, because anyone can read GitHub issues: " + list + ". The underlined words stand in for " + (subs.length === 1 ? "it" : "them") + "; point at one to see what it replaced.";
+    return "Left out, because anyone can read GitHub issues: " + list + ". The underlined words stand in for " + (total === 1 ? "it" : "them") + "; point at one to see what it replaced.";
   }
 
   /// A stand-in whose words the user changed is the user's own text from then on: no longer
-  /// marked, counted or explained as a stand-in, and read by the heads-up like any other words
+  /// marked or explained as the stand-in it was, and read by the heads-up like any other words
   /// (third review: a name typed inside "[a person]" was sent with no heads-up). It stays a plain
-  /// span so the caret the user is typing at does not move.
+  /// span so the caret the user is typing at does not move. When the card is no longer being
+  /// changed, `markStandIns` reads it again: if its words are a stand-in, it is one, by its kind.
   function releaseEdited(f) {
     var released = false;
     f.card.querySelectorAll(".bug-doc .bug-sub").forEach(function (s) {
@@ -931,12 +1033,24 @@ window.RichBug = (function () {
     var c = f.card;
     if (!c) return;
     ["is-sending", "is-queued", "is-sent", "is-editing", "is-canceled"].forEach(function (k) { c.classList.remove(k); });
-    var pill = c.querySelector(".bug-pill"), acts = c.querySelector(".bug-actions"), row = c.querySelector(".bug-sentrow");
-    acts.textContent = "";
+    var pill = c.querySelector(".bug-pill"), row = c.querySelector(".bug-sentrow");
+    // **THE BUTTON ROW IS A NEW BOX AT EVERY PAINT, NOT THE OLD ONE EMPTIED** (nightly 49's walk,
+    // D29). The row is sticky; while it floats over a long report, a step that changes the card's
+    // height (Done hides the editing hint and the dashed outline) moves its place in the flow in
+    // the same update that swaps its buttons. The shipped WebKit then repainted the new buttons
+    // only where the old ones had been: after Done, "Send rep" was drawn inside Done's old 74px
+    // and Change it and Cancel not at all, while the accessibility tree had all three at full size
+    // (runs A and E; and 3 of 3 in Safari 18.6 on a guest, on the same files, where the card's
+    // height held at Done drew all three). A box put in fresh is painted whole (also measured
+    // there). Its classes (`is-stuck`) carry over so its edge does not blink before `paintStuck`.
+    var old = c.querySelector(".bug-actions");
+    var acts = node("div", old.className);
+    old.replaceWith(acts);
     row.hidden = true;
     acts.hidden = false;
     c.querySelector(".bug-edithint").hidden = f.step !== "editing";
     if (f.step !== "sent" && f.step !== "sending") paintFrom(c.querySelector(".r-from"));
+    if (f.step !== "editing") markStandIns(f);
     c.querySelector(".lo-text").textContent = leftOutText(f);
     var editable = f.step === "editing";
     fieldsOf(c).forEach(function (n) {
@@ -1179,27 +1293,37 @@ window.RichBug = (function () {
     $("bugdock-send").firstElementChild.textContent = "▷";
     $("bugdock-voice-label").textContent = "listening…";
   }
-  /// ON TOP OF THE SCREEN THE BUG IS ON. The home screen (`#home`, 150) and the held opening
-  /// screen (`.splash`, 200) cover the whole window, and the panel sits at 65: pressed there, the
-  /// report opened underneath and the user saw nothing (echo-opus-bug20's finding on f619e9e5f).
-  /// `bugdock--over` lifts it to 250, above both and below `.settings` (300); the screen stays up
-  /// behind it, as it is the screen the report is about and the one in its picture.
-  function covered() {
-    return curtainUp() || homeOpen();
-  }
-  function raiseDock(on) {
-    $("bugdock").classList.toggle("bugdock--over", !!on);
-  }
+  /// ON TOP OF THE SCREEN THE BUG IS ON, whatever that screen is: the panel is the top layer of
+  /// the app by one rule in `style.css` (`#bugdock`, z-index 298), above every window, sheet and
+  /// backdrop, so nothing here decides when to raise it. The screen stays up behind it, as it is
+  /// the screen the report is about and the one in its picture.
   function showDock() {
     fillDock();
+    quietOtherInputs();
     $("bugdock").hidden = false;
     document.body.classList.add("bug-dock-open");
     paintDock();
+    paintMenu();
+  }
+  /// **ONE INPUT AT A TIME.** A report in the panel does not share the keyboard with another
+  /// mode: Dictation's "Press a different key" ends by its own Cancel, which also disarms the
+  /// tool's key tap, so typing, Enter and a function key are the panel's again; and conversation
+  /// voice mode goes off by its own off path, so nothing said becomes a message to Rich. The
+  /// panel's own talk button is how the user speaks to the report. Both off paths put focus on
+  /// their own controls (Dictation's key button, the conversation's answer box), so focus goes
+  /// back to `keep`, the thing in the panel the user chose.
+  function quietOtherInputs(keep) {
+    var was = document.activeElement;
+    var cancel = $("dict-capture-cancel");
+    if (cancel) cancel.click();
+    if (host && host.voiceOn()) host.voiceOff();
+    if (keep && document.activeElement !== was && $("bugdock").contains(keep)) keep.focus();
   }
   function hideDock() {
     $("bugdock").hidden = true;
     document.body.classList.remove("bug-dock-open");
     setDockVoice(false);
+    paintMenu();
   }
   function paintDock() {
     var f = dockFlow();
@@ -1212,7 +1336,7 @@ window.RichBug = (function () {
   function paintStuck() {
     document.querySelectorAll(".bug-actions").forEach(function (a) {
       if (a.hidden) return;
-      var sc = a.closest(".bugdock-msgs") || $("conversation");
+      var sc = a.closest(".bugdock-msgs");
       var card = a.closest(".bugcard");
       if (!sc || !card) return;
       a.classList.toggle("is-stuck", card.getBoundingClientRect().bottom > sc.getBoundingClientRect().bottom + 2);
@@ -1225,32 +1349,63 @@ window.RichBug = (function () {
   var voiceHeld = false;
   /// **Whether what the user says now is the report's.** The ONE condition both the shell's hold
   /// (`syncVoiceHold`) and the report's taking of a transcript (`takeSpoken`) follow: a report
-  /// waiting on words, and either the panel's own talk button, or voice mode on with the report's
-  /// conversation on screen (the conditions `sync` shows its exchange under). Two conditions
-  /// drifted apart once: the hold stayed on in another conversation, and the shell dropped every
-  /// spoken turn there (fourth review finding 3).
-  function takesSpeech(f) {
-    if (!f || TAKES_WORDS.indexOf(f.step) === -1) return false;
-    if (f.dock) return dockVoice;
-    return !!(host && host.voiceOn() && host.view() === "conversation" && f.threadId === host.activeThread());
+  /// waiting on words, with the panel's own talk button on. Conversation voice mode is Rich's
+  /// conversation's, never the report's (fourth review finding 3: two conditions drifted apart
+  /// once, and the shell dropped every spoken turn in another conversation).
+  function waitsForWords(f) {
+    return !!(f && TAKES_WORDS.indexOf(f.step) !== -1);
   }
+  function takesSpeech(f) {
+    return waitsForWords(f) && dockVoice;
+  }
+  /// **THE PANEL'S MICROPHONE IS ON ONLY WHILE THE REPORT WAITS FOR THE USER'S WORDS** (reviews
+  /// rv-20261010T180327Z-f29db708-24e0 finding 2, rv-20261010T180313Z-f29db708-733e finding 3): at
+  /// every other step (Rich checking, sending, a report closed) it is stopped first, and only once
+  /// the shell has closed it is the hold released. On f29db7082 moving to checking released the
+  /// hold with the microphone still on, and the shell submits every sentence nothing holds back
+  /// (`main.rs`, `start_voice_capture`'s submit), so the next sentence became a turn in Rich's
+  /// conversation. `micStopping` is that stop while it runs: the hold stays on through it.
+  var micStopping = null;
   function syncVoiceHold() {
-    var want = takesSpeech(liveFlow());
+    var f = liveFlow();
+    if (dockVoice && !waitsForWords(f)) return setDockVoice(false);
+    var want = takesSpeech(f) || !!micStopping;
     if (want === voiceHeld || !bridge) return;
     voiceHeld = want;
     bridge.invoke("bug_report_voice", { on: want }).catch(function () {});
   }
   function setDockVoice(on) {
     if (dockVoice === on) return;
+    // Nothing waits for words: the microphone stays off.
+    if (on && !waitsForWords(liveFlow())) return;
+    // The talk button is a way into the panel just as focus is (WebKit does not focus a button
+    // that is clicked): the other input modes go off by their own off paths first.
+    if (on) quietOtherInputs($("bugdock-talk"));
     dockVoice = on;
     var t = $("bugdock-talk");
     if (t) t.setAttribute("aria-pressed", String(on));
     $("bugdock-form").hidden = on;
     $("bugdock-voice").hidden = !on;
-    syncVoiceHold();
     if (!bridge) return;
-    bridge.invoke(on ? "start_voice_capture" : "stop_voice_capture", { threadId: host ? host.activeThread() : null }).catch(function (e) {
-      if (!on) return;
+    var args = { threadId: host ? host.activeThread() : null };
+    if (!on) {
+      // Stopped first; the hold goes only once the shell says the microphone is closed. A stop
+      // that fails keeps the hold: words said then go nowhere rather than to the conversation.
+      var stop = bridge.invoke("stop_voice_capture", args);
+      micStopping = stop;
+      stop.then(function () {
+        if (micStopping === stop) micStopping = null;
+        syncVoiceHold();
+      }, function () {});
+      return;
+    }
+    // The hold is on before the microphone opens, and a stop still running finishes first.
+    // **A START THAT WAITED FOR A STOP RUNS ONLY IF THE TALK BUTTON IS STILL ON THEN** (review
+    // rv-20261010T183313Z-fe4cd6b1-1e66 finding 2): on fe4cd6b14 talk turned on and off again
+    // while a stop ran left the start queued, and it opened the microphone with the hold released.
+    syncVoiceHold();
+    var open = function () { return dockVoice ? bridge.invoke("start_voice_capture", args) : Promise.resolve(); };
+    (micStopping ? micStopping.then(open, open) : open()).catch(function (e) {
       dockVoice = false;
       if (t) t.setAttribute("aria-pressed", "false");
       $("bugdock-form").hidden = false;
@@ -1269,21 +1424,21 @@ window.RichBug = (function () {
     return true;
   }
 
-  /// Typed words from the conversation's composer. True when they were the bug report's.
-  function takeWords(text, threadId) {
-    var f = liveFlow();
-    if (!f || f.dock || f.threadId !== threadId || TAKES_WORDS.indexOf(f.step) === -1) return false;
-    say(f, text, false);
-    return true;
-  }
-
   // ---- what a stand-in replaced: seen only here --------------------------------------------
   function showSubTip(s) {
     var tip = $("bug-subtip");
     var k = KIND_WORDS[s.dataset.kind] || ["private word", "private words"];
+    var a = (/^[aeiou]/.test(k[0]) ? "an " : "a ") + k[0];
     tip.textContent = "";
-    tip.appendChild(node("b", null, "Stands in for “" + s.dataset.was + "”"));
-    tip.appendChild(document.createTextNode(", " + (/^[aeiou]/.test(k[0]) ? "an " : "a ") + k[0] + ". Only you see this; it isn't in the report."));
+    if (s.dataset.was == null) {
+      // The app does not know the words this stand-in replaced (Rich wrote it, the user typed
+      // it, or it was edited from another), so the tip says its kind and claims nothing more
+      // (D23; review rv-20261010T183313Z-fe4cd6b1-1e66: who wrote it is not known either).
+      tip.appendChild(node("b", null, "Stands in for " + a + "."));
+    } else {
+      tip.appendChild(node("b", null, "Stands in for “" + s.dataset.was + "”"));
+      tip.appendChild(document.createTextNode(", " + a + ". Only you see this; it isn't in the report."));
+    }
     tip.hidden = false;
     var r = s.getBoundingClientRect(), w = tip.offsetWidth;
     tip.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left + r.width / 2 - w / 2)) + "px";
@@ -1298,21 +1453,7 @@ window.RichBug = (function () {
     t.hidden = true;
   }
 
-  /// Show this thread's flows and only them (the conversation is redrawn for every thread), and
-  /// let the shell hold spoken words back only while the report's conversation is the one on
-  /// screen: leaving it gives the voice back to Rich, coming back gives it to the report again.
-  function sync() {
-    var thread = host ? host.activeThread() : null;
-    var shown = host ? host.view() === "conversation" : true;
-    flows.forEach(function (f) {
-      if (!f.dock) f.el.hidden = !(shown && f.threadId === thread);
-    });
-    syncVoiceHold();
-  }
-
   function wire() {
-    var conv = $("conversation");
-    if (conv) conv.addEventListener("scroll", paintStuck);
     window.addEventListener("resize", paintStuck);
     $("bugdock-msgs").addEventListener("scroll", paintStuck);
     $("bugdock-x").addEventListener("click", function () {
@@ -1340,6 +1481,13 @@ window.RichBug = (function () {
       }
     });
     $("bugdock-input").addEventListener("input", paintDockSend);
+    // ONE INPUT AT A TIME, again whenever the user comes back to the report, by ONE hook on the
+    // panel: focus reaching anything in it (the answer box, the talk button, the card's title and
+    // paragraphs while Change it is open, its buttons) ends a Dictation "Press a different key"
+    // started after the panel was shown, and turns conversation voice mode off, each by its own
+    // off path (rv-20261010T161328Z-06066849-659f). The talk button also does it as it turns on
+    // (`setDockVoice`), since WebKit does not focus a button that is clicked.
+    $("bugdock").addEventListener("focusin", function (e) { quietOtherInputs(e.target); });
     $("bugdock-talk").addEventListener("click", function () { setDockVoice(!dockVoice); });
     document.addEventListener("mouseover", function (e) { var s = e.target.closest && e.target.closest(".bug-sub"); if (s) showSubTip(s); });
     document.addEventListener("mouseout", function (e) { if (e.target.closest && e.target.closest(".bug-sub")) hideSubTip(); });
@@ -1388,29 +1536,21 @@ window.RichBug = (function () {
         if (label) label.textContent = e.payload.state === "hearing" ? "hearing you…" : e.payload.state === "thinking" ? "got it…" : "listening…";
         if (e.payload.state === "off") setDockVoice(false);
       });
-      // The panel's own talk button: main.js's voice mode is off then, so its listener does not
-      // take the words and this one does. (With the composer's voice mode on, main.js asks
-      // `takeSpoken` itself, before it draws anything.)
+      // The panel's own talk button: what is said is the report's. Exactly one listener takes
+      // each utterance: this one, or, when the conversation's voice mode was turned on again
+      // as well, main.js's, which asks `takeSpoken` itself before it draws anything.
       bridge.listen("rich://voice-transcript", function (e) {
-        if (dockVoice && e.payload && e.payload.text) takeSpoken(e.payload.text);
+        if (dockVoice && !(host && host.voiceOn()) && e.payload && e.payload.text) takeSpoken(e.payload.text);
       });
       if (window.RichSettings && window.RichSettings.registerBugReport) {
-        window.RichSettings.registerBugReport({ open: function () { refreshContext(); lookThenStart(); } });
+        window.RichSettings.registerBugReport({ open: function () { refreshContext(); lookThenStart(); }, busy: reportOpen });
       }
     },
     start: start,
-    sync: sync,
-    takeWords: takeWords,
     takeSpoken: takeSpoken,
-    placeholder: function (threadId) {
-      var f = liveFlow();
-      return f && !f.dock && f.threadId === threadId ? placeholderFor(f) : null;
-    },
-    /// The voice hold follows main.js's voice mode, which only main.js sees change.
-    voiceChanged: syncVoiceHold,
     /// READ-ONLY, for the acceptance harness.
     state: function () {
-      return flows.map(function (f) { return { step: f.step, dock: f.dock, threadId: f.threadId, pendingId: f.pendingId || null, issue: f.issue || null, screen: f.screen.key }; });
+      return flows.map(function (f) { return { step: f.step, pendingId: f.pendingId || null, issue: f.issue || null, screen: f.screen.key }; });
     },
   };
 })();

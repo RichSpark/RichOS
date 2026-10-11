@@ -4411,6 +4411,22 @@ impl WorkHost {
         ids
     }
 
+    /// **The fresh jobs waiting in THIS conversation's held queue** ([`Held`], any cause): written
+    /// down and not started, and none of them will start until the cause clears. The window counts
+    /// them apart from jobs that are starting (nightly 48's walk, D26: on d0d06501c its status line
+    /// read "2 assignments starting" right under the notice saying neither had started, because a
+    /// held job's row is `registered` like any job about to start). Read from the live hold, not
+    /// from a row's words: a job still queued after the hold ends keeps the hold's words on its
+    /// row until it is taken. Never opens a back end.
+    pub fn held_on(&self, thread: &str) -> std::collections::HashSet<String> {
+        let Some(backend) = self.backend(thread) else { return Default::default() };
+        let inner = backend.inner.lock().unwrap();
+        if inner.held.is_none() {
+            return Default::default();
+        }
+        inner.queue.iter().filter(|job| !job.resumed).map(|job| job.record.id.clone()).collect()
+    }
+
     /// This conversation's back end, if one has been opened. Never creates one — a reader
     /// must not be able to start a back end by asking about it.
     fn backend(&self, thread: &str) -> Option<Arc<Backend>> {
@@ -5991,6 +6007,9 @@ mod tests {
         until("the host never looked at the sign-in again", || readings.load(Ordering::SeqCst) >= seen + 3);
         assert_eq!(h.work_prompts.lock().unwrap().len(), 1, "one attempt for the three, not one per job");
         assert!(held_rows(&h, &ids, HELD_FOR_SIGN_IN), "none of them failed: all three are held");
+        // What the window is told is held (nightly 48's walk, D26), and only on this conversation.
+        assert_eq!(h.host.held_on("thread-one"), ids.iter().cloned().collect(), "the window is not told all three are held");
+        assert!(h.host.held_on("another-thread").is_empty(), "another conversation is told this one's hold");
         let told = |h: &Harness| h.notices.0.lock().unwrap().iter().map(|(_, n)| (n.kind, n.text.clone())).collect::<Vec<_>>();
         assert_eq!(told(&h), vec![(NoticeKind::Held, "I haven't started \"landing the three branches\" or the 2 requests \
             waiting behind it yet, because nobody is signed in to Claude on this Mac. Sign in from Settings, under \
@@ -6017,6 +6036,7 @@ mod tests {
         assert_eq!(h.work_prompts.lock().unwrap().len(), 5,
             "two refused first turns, then one turn per job: no turn spent on a clearance");
         assert!(h.notices.0.lock().unwrap().iter().all(|(_, n)| n.kind != NoticeKind::Failed), "none of them failed");
+        assert!(h.host.held_on("thread-one").is_empty(), "jobs that ran are still told as held");
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
     }

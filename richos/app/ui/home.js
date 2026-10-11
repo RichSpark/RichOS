@@ -1445,8 +1445,8 @@ window.RichHome = (function () {
     // the panel he reaches FROM the home screen could not be typed into at all. `page.fill()`
     // hid it from the older checks because it writes the value without holding focus.
     if (t.closest && t.closest(".home-prefs")) return;
-    // ...AND BUST A BUG'S RICH PANEL, which the settings menu opens ON TOP of this screen
-    // (`#bugdock.bugdock--over`): its answer box takes focus, and pulling it back to the door
+    // ...AND BUST A BUG'S RICH PANEL, which is ON TOP of this screen (`#bugdock`, the app's top
+    // layer): its answer box takes focus, and pulling it back to the door
     // would leave a report on screen that cannot be answered.
     if (t.closest && t.closest("#bugdock")) return;
     focusHome();
@@ -1530,9 +1530,11 @@ window.RichHome = (function () {
     scrim.addEventListener("click", closeSettings);
     wrap.appendChild(scrim);
 
+    // NOT aria-modal, like every overlay (review rv-20261010T081721Z-66ba5386-a4d1 finding 2):
+    // with focus on its label field, WebKit would leave the Settings button out of the
+    // accessibility tree, and Settings is above every overlay (§15).
     var panel = elem("div", "home-prefs-panel", {
       role: "dialog",
-      "aria-modal": "true",
       "aria-labelledby": "home-prefs-title",
     });
 

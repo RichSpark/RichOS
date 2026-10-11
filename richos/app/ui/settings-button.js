@@ -584,12 +584,24 @@ window.RichSettings = (function () {
     var up2 = menuEl.querySelector("#set-updates");
     if (up2 && updates && updates.render) updates.render(up2);
     if (wrap) wrap.setAttribute("data-force-dark", String(T.forcedDark()));
+    paintBug();
+  }
+
+  /// **BUST A BUG IS DISABLED WHILE A REPORT IS OPEN** (CEO, 2026-10-10: "WHY THE FUCK IS IT EVEN
+  /// POSSIBLE TO CLICK THE FUCKING BUTTON AGAIN IF THE ACTION RELATED TO THAT IS ALREADY GOING
+  /// ON???"): from the press until the report is sent, canceled or its panel closed, it is shown
+  /// disabled, never hidden; `bug-report.js` answers `busy()` and calls `repaintBugReport` when that
+  /// changes.
+  function paintBug() {
+    var b = menuEl && menuEl.querySelector("#bug-btn");
+    if (b) b.disabled = !!(bug && bug.busy && bug.busy());
   }
 
   // ---- open / close --------------------------------------------------------------------
 
   function open() {
     if (!menuEl || !menuEl.hidden) return;
+    paintBug();
     menuEl.hidden = false;
     // **IT OPENS AT ITS TOP, EVERY TIME** — Urban's G12, and he found it by being bitten by it:
     // the panel reopened at the scroll position it was closed at, his click landed a row off,
@@ -672,6 +684,9 @@ window.RichSettings = (function () {
   }
 
   function bustABug() {
+    // A report already open: the button is disabled (`paintBug`), and a press that reaches here
+    // anyway does nothing either.
+    if (bug && bug.busy && bug.busy()) return;
     close(true);
     if (bug && bug.open) {
       bug.open();
@@ -905,6 +920,12 @@ window.RichSettings = (function () {
     /** What "Bust a bug" opens: `bug-report.js` registers round 21's exchange with Rich. */
     registerBugReport: function (host) {
       bug = host || null;
+      paintBug();
+    },
+
+    /** A report opened or ended: Bust a bug is disabled or pressable again (`paintBug`). */
+    repaintBugReport: function () {
+      paintBug();
     },
 
     /** THE UPDATE SURFACE (RICH-TODOs row 12), as a SLOT rather than as data — see

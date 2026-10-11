@@ -17,8 +17,12 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
   wait   seconds                       sleep (a plain pause; prefer "until")
   until  args[] contains seconds       repeat ax.sh VM <args...> until its output contains the text
   keys   text                          guest.sh osascript keystroke into the frontmost app
-  push   src dest                      guest.sh VM --push src dest (a fixture file into the guest)
+  push   src dest                      guest.sh VM --push src dest (src relative to the repository root, or absolute)
   handfile mode path [to]              hand-file.sh VM paste|drag path [--to x,y]
+  pointer points[] [right]             pointer-drag.sh VM x,y x,y ... [--right]: the REAL mouse. The same
+                                       point twice is a click, the way a hand clicks; `ax click --at` is
+                                       System Events' accessibility press at a point and does not focus
+                                       a text box (candidate 50 rewalk, run K)
   relaunch                             relaunch.py VM: the recorded app stopped by its captured PID and
                                        started again with its fixture environment (a choice that must
                                        survive a relaunch is checked after this step)
@@ -38,6 +42,7 @@ import sys
 import time
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[3]
 
 
 def run(args, timeout=120):
@@ -73,11 +78,19 @@ def step_run(vm, step, out):
     if op == 'keys':
         return run([str(HERE / 'guest.sh'), vm, 'osascript', '-e', keys_script(step['text'])])
     if op == 'push':
-        return run([str(HERE / 'guest.sh'), vm, '--push', step['src'], step['dest']])
+        # A plan names its source relative to the repository root so it is portable and carries no
+        # home path; an absolute source is used as written. HERE is <root>/richos/app/scripts/testvm,
+        # so the repository root is HERE.parents[3]; parents[4] was the folder holding
+        # the checkout, and every relative push failed "no such file" (candidate 49 walk, run B).
+        src = Path(step['src'])
+        src = src if src.is_absolute() else REPO_ROOT / src
+        return run([str(HERE / 'guest.sh'), vm, '--push', str(src), step['dest']])
     if op == 'handfile':
         return run([str(HERE / 'hand-file.sh'), vm, step['mode'], step['path']] + (['--to', step['to']] if step.get('to') else []))
     if op == 'relaunch':
         return run([str(HERE / 'relaunch.py'), vm], timeout=90)
+    if op == 'pointer':
+        return run([str(HERE / 'pointer-drag.sh'), vm] + step['points'] + (['--right'] if step.get('right') else []))
     if op == 'wait':
         time.sleep(step['seconds'])
         return 0, ''
@@ -102,8 +115,9 @@ REQUIRED = {
     'tree': {'name': str}, 'shot': {'name': str}, 'ax': {'args': list}, 'guest': {'command': str},
     'keys': {'text': str}, 'push': {'src': str, 'dest': str}, 'handfile': {'mode': str, 'path': str},
     'wait': {'seconds': (int, float)}, 'until': {'args': list, 'contains': str}, 'relaunch': {},
+    'pointer': {'points': list},
 }
-OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
+OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
 
@@ -127,6 +141,9 @@ def problems(steps):
             if key in step and (not isinstance(step[key], kind)
                                 or (isinstance(step[key], bool) and kind != bool)):
                 found.append(f'step {i} ({op}): {key!r} has the wrong type')
+        if op == 'pointer' and isinstance(step.get('points'), list) and (
+                len(step['points']) < 2 or not all(isinstance(pt, str) and pt.count(',') == 1 for pt in step['points'])):
+            found.append(f'step {i} (pointer): \'points\' needs at least two "x,y" strings (the same one twice is a click)')
     return found
 
 

@@ -1,0 +1,15 @@
+[
+  {"op": "guest", "command": "mkdir -p \"$HOME/Acme\" && echo \"$HOME/Acme\""},
+  {"op": "until", "args": ["find", "--title", "Not now", "--role", "AXButton", "--contains", "--first"], "contains": "Not now", "seconds": 90},
+  {"op": "wait", "seconds": 2},
+  {"op": "ax", "args": ["click", "--title", "Not now", "--role", "AXButton", "--contains", "--first"]},
+  {"op": "until", "args": ["find", "--title", "Add this company", "--role", "AXButton", "--contains", "--first"], "contains": "Add this company", "seconds": 60},
+  {"op": "ax", "args": ["type", "Acme", "--role", "AXTextField", "--title", "What's the company called?", "--contains", "--first", "--replace"]},
+  {"op": "ax", "args": ["type", "/Users/admin/Acme", "--role", "AXTextField", "--title", "Its folder on this Mac", "--contains", "--first", "--replace"]},
+  {"op": "ax", "args": ["click", "--title", "Add this company", "--role", "AXButton", "--contains", "--first"]},
+  {"op": "wait", "seconds": 8},
+  {"op": "ax", "args": ["click", "--title", "Settings", "--role", "AXPopUpButton"]},
+  {"op": "wait", "seconds": 3},
+  {"op": "ax", "args": ["find", "--value", "1.2.0-nightly", "--contains"]},
+  {"op": "shot", "name": "v-settings-version", "ocr": true}
+]

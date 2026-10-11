@@ -296,6 +296,23 @@ expect "F6 frames of different sizes are refused, not compared" 1 "cannot be com
 echo ""
 echo "=== O. the OCR gate and the finder ==="
 
+# The gate also reads a walk record's text files (step lists, the record). No reader needed.
+mkdir -p "$TMP/textgate"
+printf '[{"op": "push", "src": "/Users/qafixture/wt/frame.py", "dest": "/Users/admin/qa/frame.py"}]\n' > "$TMP/textgate/leak.json"
+printf '[{"op": "push", "src": "richos/app/scripts/qa/frame.py", "dest": "/Users/admin/qa/frame.py"}]\n' > "$TMP/textgate/clean.json"
+run "$QA/ocr-gate.sh" --text "$TMP/textgate/leak.json"
+expect "O7 the text gate refuses a step list carrying an operator home path" 1 "TEXT GATE: 1 of 1"
+if printf '%s' "$OUT" | grep -Fq "qafixture"; then
+  bad "O8 the text gate does not echo the home path" "the match was printed verbatim"
+else
+  ok "O8 the text gate names the hit by shape and length, never echoing it"
+fi
+run "$QA/ocr-gate.sh" --text "$TMP/textgate/clean.json"
+expect "O9 the text gate passes a portable step list (the guest's /Users/admin is not a leak)" 0 "TEXT GATE: 0 of 1"
+mkdir -p "$TMP/textgate-empty"
+run "$QA/ocr-gate.sh" --text "$TMP/textgate-empty"
+expect "O10 an empty text set is refused, never called clean" 2 "found NO text files"
+
 if [ "$HAVE_TESS" = 0 ]; then
   skip "O1-O6 the OCR cases" "no tesseract on this machine (brew install tesseract) — the gate, the finder and the redactor's re-scan were NOT exercised"
 else
