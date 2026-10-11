@@ -124,6 +124,8 @@ pub mod screen;
 pub mod setup;
 pub mod skills;
 pub mod skip;
+/// API-equivalent token spend (§118): every request priced at Claude's published API rates.
+pub mod spend;
 pub mod spine;
 pub mod spoken;
 pub mod staging;

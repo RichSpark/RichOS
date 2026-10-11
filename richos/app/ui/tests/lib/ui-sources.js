@@ -110,6 +110,7 @@ const ROLES = {
   "bug-report.js": { role: "ui", why: "Bust a bug (round 21): Rich's question, the report card with Send report, Change it and Cancel, the stand-in tooltip, Rich's lines about sending, and the Rich panel beside a window" },
   "dictation.js": { role: "ui", why: "Dictation (round 19, dictation plan slice 2): the Settings row, the Dictation sheet, the off notice and the composer's line once dictation is on" },
   "codex-reviews.js": { role: "ui", why: "Let Codex review your team's work (round 20.2): the Settings row below Technical view, its five states, the ⓘ's tooltip and the nudge" },
+  "spend.js": { role: "ui", why: "API-equivalent token spend (round 22.1): its own screen, the Meter with its periods, Refresh and the live line, and its Token spend row in quick settings" },
   "settings-button.js": { role: "ui", why: "the universal settings button — CEO ruling §15" },
   "splash.js": { role: "ui", why: "the opening curtain's renderer" },
   "splash-library.js": { role: "ui", why: "the two approved splash compositions — data, with prose in it" },
