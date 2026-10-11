@@ -154,13 +154,13 @@ class Pierce(unittest.TestCase):
             with self.subTest(rows=rows):
                 self.write_rows(source, rows)
                 with self.assertRaisesRegex(ValueError, "successful write"):
+                    P.terminal_messages(self.transcript)
+                with self.assertRaisesRegex(ValueError, "no original human"):
                     P.human_context(self.payload)
 
-    def test_missing_restart_source_is_unavailable_even_after_new_human_question(self):
+    def test_missing_restart_source_without_fresh_human_request_is_unavailable(self):
         source, note = self.continued_terminal()
         source.unlink()
-        with self.transcript.open("a") as out:
-            out.write(json.dumps(self.human_row("What is the status?")) + "\n")
         with patch.object(P, "invoke") as reviewer:
             self.assertEqual(P.inspect(self.payload)["verdict"], "UNAVAILABLE")
             reviewer.assert_not_called()
@@ -170,14 +170,17 @@ class Pierce(unittest.TestCase):
         other = note.parent / "project_restart_other.md"
         self.write_rows(self.transcript, self.note_io("Read", note, "previous") + self.note_io("Read", other, "other"))
         with self.assertRaisesRegex(ValueError, "ambiguous"):
-            P.human_context(self.payload)
+            P.terminal_messages(self.transcript)
         source.unlink()
         outside = self.project / "previous.jsonl"
         self.write_rows(outside, [self.human_row("Different project.")])
         source.symlink_to(outside)
         self.write_rows(self.transcript, self.note_io("Read", note, "previous"))
         with self.assertRaisesRegex(ValueError, "leaves this project"):
-            P.human_context(self.payload)
+            P.terminal_messages(self.transcript)
+        with self.transcript.open("a") as out:
+            out.write(json.dumps(self.human_row("Keep working on this project's API.")) + "\n")
+        self.assertEqual(P.human_context(self.payload), "Keep working on this project's API.")
 
     def test_restart_cycle_refuses_without_review(self):
         source, note = self.continued_terminal()
@@ -187,14 +190,14 @@ class Pierce(unittest.TestCase):
         self.write_rows(self.transcript, self.note_io("Write", other, "session", "2026-10-09T01:00:00Z") +
                         self.note_io("Read", note, "previous"))
         with self.assertRaisesRegex(ValueError, "cyclic"):
-            P.human_context(self.payload)
+            P.terminal_messages(self.transcript)
 
     def test_restart_rejects_invalid_time_and_non_native_tool_roles(self):
         source, note = self.continued_terminal()
         rows = self.note_io("Read", note, "previous", at="not-a-time")
         self.write_rows(self.transcript, rows)
         with self.assertRaises(ValueError):
-            P.human_context(self.payload)
+            P.terminal_messages(self.transcript)
         rows = self.note_io("Read", note, "previous")
         rows[0]["type"] = "user"  # A quoted call cannot witness a native Read.
         self.write_rows(self.transcript, rows)
@@ -276,6 +279,85 @@ class Pierce(unittest.TestCase):
             out.write(json.dumps({**rows[0], "turn_id": "unfinished", "text": "Uncommitted instruction"}))
         with patch.dict(os.environ, {"RICHOS_APP_STATE": str(state), "RICHOS_APP_SCOPE": str(scope)}):
             self.assertNotIn("Uncommitted", P.human_context(self.payload))
+
+    def test_long_desktop_history_keeps_original_recent_and_bound_request(self):
+        state, scope, ledger, rows = self.desktop_ledger()
+        originals = [rows[0]] + [{**rows[0], "turn_id": "long-" + str(i),
+                     "text": f"Turn {i}: " + "quarterly figures " * 30} for i in range(400)]
+        originals.append({**rows[-1], "turn_id": "latest", "text": "Cancel the UI change; finish the API."})
+        self.write_rows(ledger, originals)
+        data = json.loads(scope.read_text())
+        target = originals[50]
+        data["user_instruction"] = {"ledger_ref": "ledger:thread:" + target["turn_id"],
+                                    "sha256": hashlib.sha256(target["text"].encode()).hexdigest()}
+        scope.write_text(json.dumps(data))
+        with patch.dict(os.environ, {"RICHOS_APP_STATE": str(state), "RICHOS_APP_SCOPE": str(scope),
+                                    "RICHOS_APP_READ_ROOTS": "[]"}), \
+             patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
+            result = P.inspect(self.payload)
+        self.assertEqual(result["verdict"], "PASS")
+        context = reviewer.call_args.args[0]["user_requests_in_order"]
+        self.assertLessEqual(len(context), 128000)
+        self.assertIn(rows[0]["text"], context)
+        self.assertIn(target["text"], context)
+        self.assertTrue(context.endswith(originals[-1]["text"]))
+        self.assertIn("omitted", context)
+        self.assertLess(context.index("Turn 398:"), context.index("Turn 399:"))
+
+    def test_long_terminal_restart_chain_retains_original_and_new_cancellation(self):
+        (self.root / "memory").mkdir()
+        for i in range(5):
+            path = self.transcript if i == 4 else self.root / f"source-{i}.jsonl"
+            date = f"2026-10-{i + 1:02d}"
+            rows = []
+            if i:
+                note = self.root / f"memory/project_restart_{i-1}.md"
+                rows += self.note_io("Read", note, f"source-{i-1}", date + "T00:00:00Z")
+            rows += [self.human_row(f"Session {i} turn {j}: " + "x" * 240, date + "T01:00:00Z")
+                     for j in range(150 if i < 4 else 1)]
+            if i < 4:
+                rows += self.note_io("Write", self.root / f"memory/project_restart_{i}.md",
+                                     f"source-{i}", date + "T02:00:00Z")
+            else:
+                rows.append(self.human_row("Cancel the UI change; finish the API.", date + "T03:00:00Z"))
+            self.write_rows(path, rows)
+        context = P.human_context(self.payload)
+        self.assertLessEqual(len(context), 128000)
+        self.assertTrue(context.startswith("Session 0 turn 0:"))
+        self.assertTrue(context.endswith("Cancel the UI change; finish the API."))
+        self.assertIn("omitted", context)
+        self.assertNotIn("Summary says", context)
+
+    def test_unproved_restart_lineage_reviews_fresh_human_request(self):
+        source, note = self.continued_terminal()
+        fresh = "Continue the API work. Cancel the UI change."
+        self.write_rows(self.transcript, self.note_io("Read", note, "previous") + [self.human_row(fresh)])
+        for reason in ("heredoc", "missing", "failed-write"):
+            with self.subTest(reason=reason):
+                if reason == "heredoc":
+                    self.write_rows(source, [self.human_row("Unverified older permission.")] + [
+                        {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+                         "id": "heredoc", "input": {"command": f"cat > {note} <<'END'\nrestart note\nEND"}}]}},
+                        {"type": "user", "message": {"content": [{"type": "tool_result",
+                         "tool_use_id": "heredoc", "content": ""}]}}])
+                elif reason == "missing":
+                    source.unlink()
+                else:
+                    self.write_rows(source, [self.human_row("Unverified older permission.")] +
+                                    self.note_io("Write", note, "previous", failed=True))
+                with patch.object(P, "invoke", return_value={"verdict": "PASS", "report": "PASS"}) as reviewer:
+                    result = P.inspect({**self.payload, "tool_use_id": reason})
+                self.assertEqual(result["verdict"], "PASS")
+                self.assertEqual(reviewer.call_args.args[0]["user_requests_in_order"], fresh)
+
+    def test_oversized_single_original_request_keeps_ends_without_refusal(self):
+        self.write_rows(self.transcript, [self.human_row("Original API goal. " + "x" * 150000 +
+                                                      " Cancel the UI change.")])
+        context = P.human_context(self.payload)
+        self.assertLessEqual(len(context), 128000)
+        self.assertTrue(context.startswith("Original API goal."))
+        self.assertTrue(context.endswith("Cancel the UI change."))
+        self.assertIn("omitted", context)
 
     def test_cited_private_repository_and_evidence_logs_have_canonical_read_roots(self):
         private = self.root / "richos-hq"

@@ -27,6 +27,7 @@ import time
 ENGINE = Path(__file__).resolve().parents[2]
 LIMIT = 300
 TTL = 900
+CONTEXT_LIMIT = 128000
 REVIEW_RULES = """
 FINDINGS means a demonstrated mistake that would materially misdirect the work,
 violate human authorization or make the required proof invalid. Explain that
@@ -239,6 +240,7 @@ def desktop_messages(payload):
         turns[turn] = text
         if text.strip():
             messages.append(text)
+    original = None
     instruction = scope.get("user_instruction")
     if instruction:
         if not isinstance(instruction, dict) or not isinstance(instruction.get("ledger_ref"), str):
@@ -248,7 +250,46 @@ def desktop_messages(payload):
         original = turns.get(ref[len(prefix):]) if ref.startswith(prefix) else None
         if original is None or hashlib.sha256(original.encode()).hexdigest() != instruction.get("sha256"):
             raise ValueError("desktop request does not match the host's original instruction")
-    return messages
+    return bounded_messages(messages, original)
+
+
+def bounded_messages(messages, original=None):
+    """Keep original authority and recent corrections within the review budget.
+
+    Select original turns, never a planner's summary. Retain the first request
+    and the host-bound request even when they fall outside the recent window.
+    Only an individually oversized turn needs an explicitly marked excerpt.
+    """
+    if sum(len(text) + 2 for text in messages) - 2 <= CONTEXT_LIMIT:
+        return messages
+    def excerpt(text, budget):
+        if len(text) <= budget:
+            return text
+        notice = "\n[Pierce excerpt: middle of this original turn omitted for size.]\n"
+        available = budget - len(notice)
+        start = available // 2
+        return text[:start] + notice + text[-(available - start):]
+    if len(messages) == 1:
+        return [excerpt(messages[0], CONTEXT_LIMIT)]
+    notice = ("[Pierce context window, not a human message: some original turns omitted for size. "
+              "Omission does not revoke earlier authorization or prove that scope was never authorized.]")
+    selected = {0: excerpt(messages[0], CONTEXT_LIMIT // 4)}
+    if original and original in messages:
+        index = messages.index(original)
+        selected[index] = excerpt(original, CONTEXT_LIMIT // 4)
+    used = len(notice) + 2 + sum(len(text) + 2 for text in selected.values())
+    for index in range(len(messages) - 1, 0, -1):
+        if index in selected:
+            continue
+        available = CONTEXT_LIMIT - used
+        text = messages[index]
+        if len(text) + 2 > available:
+            if index == len(messages) - 1:
+                selected[index] = excerpt(text, available - 2)
+            break
+        selected[index] = text
+        used += len(text) + 2
+    return [selected[0], notice] + [selected[index] for index in sorted(selected) if index]
 
 
 def human_context(payload):
@@ -261,14 +302,15 @@ def human_context(payload):
         messages = (desktop_messages(payload) if os.environ.get("RICHOS_APP_SCOPE") else
                     human_messages(transcript_rows(path), desktop=True))
     else:
-        messages = terminal_messages(path)
+        try:
+            messages = terminal_messages(path)
+        except (OSError, ValueError, RecursionError):
+            # An unproved handoff grants no older authority, but must not erase
+            # original requests made in this fresh native session.
+            messages = human_messages(transcript_rows(path))
     if not messages:
         raise ValueError("no original human request could be established from the transcript")
-    context = "\n\n".join(messages)
-    # Do not silently replace the user's original goal with a truncated summary.
-    if len(context) > 128000:
-        raise ValueError("original user context exceeds 128000 characters; an explicit review is needed")
-    return context
+    return "\n\n".join(bounded_messages(messages))
 
 
 def effective_assignment(payload):
