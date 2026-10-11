@@ -10491,7 +10491,19 @@ body.spend-open #app { display: none; }
   font-family: var(--font); animation: fadein .35s ease both; }
 #spend[hidden] { display: none; }
 body.bug-dock-open #spend { right: 488px; }   /* Bust a bug from this screen: the Rich panel sits beside it (round 21) */
-.sp-head { height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 18px; padding: 0 66px 0 22px; border-bottom: 1px solid var(--line-soft); }
+.sp-head { min-height: 56px; flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 8px 66px 8px 22px; border-bottom: 1px solid var(--line-soft); }
+/* THE HEADER FITS EVERY WINDOW THE APP ALLOWS (the second review of 6c21269e6). Round 22.1 drew it
+   one row at 1440 wide; the app's smallest window is 1024 by 700 (src-tauri/tauri.conf.json), and
+   with the Rich panel docked the screen is a 536px column. Measured in Inter: Back, the title, Updated,
+   Refresh and the four periods need 1152px; without the title, 824px (the 66px on the right is the
+   Settings button's). So, round 22.1's own move for a narrower header: under 1200px wide the title
+   goes (the eyebrow on the page names the screen), as it does with the panel docked. Docked, the
+   Settings button is above the panel, not this column, so the right side is 22px like the left; and
+   where even one row of Back, Updated, Refresh and the periods does not fit (the 536px column), the
+   periods take a second row rather than run off the edge. Not drawn in round 22.1 (it was drawn at
+   1440 only); named. tests/spend.js measures the header at 1440, 1024 and both docked. */
+@media (max-width: 1199px) { .sp-title { display: none; } }
+body.bug-dock-open .sp-head { padding-right: 22px; }
 .sp-back { display: inline-flex; align-items: center; gap: 8px; background: none; border: 0; border-radius: 8px; padding: 6px 10px 6px 6px;
   font: inherit; font-size: 1rem; color: var(--ink-soft); cursor: pointer; transition: background-color .15s, color .15s; }
 .sp-back:hover { background: var(--gold-soft); color: var(--ink); }
@@ -10520,7 +10532,12 @@ body.bug-dock-open #spend { right: 488px; }   /* Bust a bug from this screen: th
 .sp-period button:hover { color: var(--ink); }
 .sp-period button[aria-pressed="true"] { background: var(--gold); color: var(--on-gold); font-weight: 600; }
 .sp-period button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-.sp-body { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.sp-body { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; overflow-y: auto; }
+/* ^ where the Meter is taller than the space between the header and the footer (the 536px column of
+   the smallest window with the Rich panel docked: 722px of Meter in 489px), it scrolls here instead of
+   painting over the footer. Round 22.1 does not draw that column; there its two-line sentences
+   cannot stay two lines at the 16px floor (the tokens line's second sentence is 883px at 18px), so
+   they wrap; named, not hidden. tests/spend.js measures it. */
 .sp-foot { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 28px 18px; font-size: 1rem; color: var(--ink-soft); }
 .sp-wordmark { display: inline-flex; --mark-signal: #c2a35c; }   /* the rail's own signal gold, per theme (index.html #rail-wordmark) */
 :root[data-theme="light"] .sp-wordmark { --mark-signal: #9c7c34; }
@@ -10590,6 +10607,10 @@ body.bug-dock-open #spend { right: 488px; }   /* Bust a bug from this screen: th
    the tokens line's second sentence is 883px at 18px, so it is 24px here, and 32px in a window
    under 1100px wide (the app's smallest is 1024). tests/spend.js counts the rendered lines. */
 body.bug-dock-open .sp-meter { padding: 0 24px; }
+/* The app's smallest window is 700px tall: there round 22.1's 46px above the bar and 40px above the
+   tokens line leave the Meter 12px taller than its space (590px in 578px at 1024 by 700), so it
+   would scroll; 32px and 28px fit it whole. */
+@media (max-height: 760px) { .sp-meter .sp-bar { margin-top: 32px; } .sp-meter-foot { margin-top: 28px; } }
 @media (max-width: 1100px) { .sp-meter { padding: 0 32px; } }
 body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the screen; the header keeps Back, Refresh and the period */
 @media (prefers-reduced-motion: reduce) { .sp-figure .ch.is-new, .sp-key .is-new, .sp-refresh.is-spinning svg, #spend, .sp-live .working-dot, .sp-enter { animation: none; } }

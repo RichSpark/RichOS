@@ -16,7 +16,7 @@
 const fs = require("fs");
 const path = require("path");
 const contrast = require("./lib/contrast");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
+const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, shot } = require("./lib/harness");
 
 const MIN_GAP = 4; // round 22.1's floor: comfortably apart at 196px, never merely not touching
 const plain = s => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim();
@@ -321,6 +321,107 @@ async function main() {
       await page.close();
     }
     return results.join(", ");
+  });
+
+  // ---- 9b. the header fits every window the app allows --------------------------------------
+  // The second review of 6c21269e6 (rv-20261011T044256Z-6c21269e-56ec, its one blocking finding):
+  // round 22.1 drew the header at 1440 wide, one row; the app's smallest window is 1024 by 700
+  // (src-tauri/tauri.conf.json minWidth and minHeight), which with the Rich panel docked leaves the
+  // screen a 536px column (#spend's right edge sits 488px in). Measured on the rendered boxes: every
+  // control of the header is whole inside the screen's column, none overlaps another or the
+  // Settings button, no label breaks onto a second line, and nothing in the header scrolls sideways.
+  await run.check("the header fits the app's smallest window, 1024 by 700, and its 536px column with the Rich panel docked: every control whole, none overlapping", async () => {
+    const out = [], wrong = [];
+    const page = await open("dark", undefined);
+    await screen(page);
+    for (const [w, h, docked] of [[1440, 900, false], [1440, 900, true], [1024, 700, false], [1024, 700, true]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.evaluate(d => document.body.classList.toggle("bug-dock-open", d), docked);
+      await settle(page);
+      const m = await page.evaluate(() => {
+        const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }; };
+        const shown = el => { const cs = getComputedStyle(el); return cs.display !== "none" && cs.visibility !== "hidden" && el.getBoundingClientRect().width > 0; };
+        // the lines a control's words take: its text's boxes (not its icon's), tops more than 8px apart
+        const lines = el => {
+          const tops = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+            if (!n.textContent.trim()) continue;
+            const r = document.createRange(); r.selectNodeContents(n);
+            for (const x of r.getClientRects()) if (x.width > 0) tops.push(x.top);
+          }
+          tops.sort((a, b) => a - b);
+          return tops.reduce((k, t, i) => k + (i === 0 || t - tops[i - 1] > 8 ? 1 : 0), 0);
+        };
+        const head = document.querySelector(".sp-head"), col = box(document.getElementById("spend"));
+        const controls = [...head.querySelectorAll(".sp-back, .sp-title, .sp-updated, .sp-refresh, .sp-period button")].filter(shown)
+          .map(el => ({ name: (el.id || el.className.split(" ")[0]) + (el.dataset.p ? ":" + el.dataset.p : ""), ...box(el),
+            lines: lines(el) }));
+        const gear = document.getElementById("set-btn"); const g = gear && shown(gear) ? box(gear) : null;
+        const hit = (a, b) => a.l < b.r - 0.5 && b.l < a.r - 0.5 && a.t < b.b - 0.5 && b.t < a.b - 0.5;
+        const problems = [];
+        for (const c of controls) {
+          if (c.l < col.l - 0.5 || c.r > col.r + 0.5) problems.push(`${c.name} spans ${c.l.toFixed(1)} to ${c.r.toFixed(1)}, the column ${col.l} to ${col.r}`);
+          if (c.lines !== 1) problems.push(`${c.name} is on ${c.lines} lines`);
+          if (g && hit(c, g)) problems.push(`${c.name} is under the Settings button`);
+        }
+        // the period buttons sit inside their own pill, so overlap is measured between the groups
+        const groups = [...head.children].filter(shown).map(el => ({ name: el.className.split(" ")[0], ...box(el) }));
+        for (let i = 0; i < groups.length; i++) for (let j = i + 1; j < groups.length; j++)
+          if (hit(groups[i], groups[j])) problems.push(`${groups[i].name} overlaps ${groups[j].name}`);
+        if (head.scrollWidth > head.clientWidth + 0.5) problems.push(`the header scrolls sideways (${head.scrollWidth} in ${head.clientWidth})`);
+        const rows = new Set(groups.map(x => Math.round(x.t + x.h / 2))).size;
+        return { problems, col: Math.round(col.w), rows, height: Math.round(box(head).h), title: controls.some(c => c.name === "spend-title"), periods: controls.filter(c => c.name.includes(":")).length };
+      });
+      const where = `${w} by ${h}${docked ? `, panel docked (${m.col}px column)` : ""}`;
+      // a picture of each window to look at (.shots/, gitignored scratch)
+      await shot(page, `spend-header-${w}x${h}${docked ? "-docked" : ""}`, { fullPage: false });
+      if (m.periods !== 4) m.problems.push(`${m.periods} of the four periods shown`);
+      for (const p of m.problems) wrong.push(`${where}: ${p}`);
+      out.push(`${where}: ${m.rows} row${m.rows > 1 ? "s" : ""}, ${m.height}px, title ${m.title ? "shown" : "hidden"}`);
+    }
+    await page.close();
+    // every size measured before judging, so a failure names each window it fails in
+    assertEqual(wrong, [], out.join("; "));
+    return out.join("; ");
+  });
+
+  // ---- 9c. nothing runs under the footer ----------------------------------------------------
+  // The pictures of 9b showed it: in the 536px docked column the Meter is taller than the space
+  // between the header and the footer, and it painted over the footer (the tokens line through the
+  // price note). Measured: the body ends where the footer starts, and when its content is taller it
+  // scrolls inside the body instead of spilling out of it.
+  await run.check("nothing runs under the header or the footer at 1440 and 1024, docked or not: undocked the whole Meter is on screen; docked it scrolls inside its own space when it is taller", async () => {
+    const out = [], wrong = [];
+    const page = await open("dark", undefined);
+    await screen(page);
+    for (const [w, h, docked] of [[1440, 900, false], [1440, 900, true], [1024, 700, false], [1024, 700, true]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.evaluate(d => document.body.classList.toggle("bug-dock-open", d), docked);
+      await settle(page);
+      const m = await page.evaluate(docked => {
+        const body = document.querySelector(".sp-body"), r = body.getBoundingClientRect();
+        const head = document.querySelector(".sp-head").getBoundingClientRect(), foot = document.querySelector(".sp-foot").getBoundingClientRect();
+        const scrolls = ["auto", "scroll"].includes(getComputedStyle(body).overflowY);
+        const taller = body.scrollHeight > body.clientHeight + 0.5;
+        // the content's own extent, whether or not it is clipped
+        const ink = [...body.querySelectorAll(".sp-meter > *")].map(e => e.getBoundingClientRect()).filter(x => x.height > 0);
+        const top = Math.min(...ink.map(x => x.top)), bottom = Math.max(...ink.map(x => x.bottom));
+        const problems = [];
+        if (r.top < head.bottom - 0.5) problems.push(`the body starts at ${r.top.toFixed(1)}, under the header (${head.bottom.toFixed(1)})`);
+        if (r.bottom > foot.top + 0.5) problems.push(`the body ends at ${r.bottom.toFixed(1)}, under the footer (${foot.top.toFixed(1)})`);
+        if (taller && !scrolls) problems.push(`the Meter is ${body.scrollHeight}px in ${body.clientHeight}px and spills out (${top.toFixed(0)} to ${bottom.toFixed(0)}; the footer starts at ${foot.top.toFixed(0)})`);
+        if (!taller && (top < r.top - 0.5 || bottom > r.bottom + 0.5)) problems.push(`the Meter (${top.toFixed(0)} to ${bottom.toFixed(0)}) is outside its space (${r.top.toFixed(0)} to ${r.bottom.toFixed(0)})`);
+        // undocked, the whole Meter is on screen at once, so a screenshot of the window has all of it
+        if (!docked && taller) problems.push(`the Meter is ${body.scrollHeight}px in ${body.clientHeight}px: not all of it on screen`);
+        return { problems, room: Math.round(r.height), content: Math.round(body.scrollHeight), taller };
+      }, docked);
+      const where = `${w} by ${h}${docked ? ", panel docked" : ""}`;
+      for (const p of m.problems) wrong.push(`${where}: ${p}`);
+      out.push(`${where}: Meter ${m.content}px in ${m.room}px${m.taller ? ", taller, so it scrolls" : ""}`);
+    }
+    await page.close();
+    assertEqual(wrong, [], out.join("; "));
+    return out.join("; ");
   });
 
   // ---- 10. no two characters of the figure touch ---------------------------------------------
