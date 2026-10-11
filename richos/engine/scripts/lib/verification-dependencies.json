@@ -172,10 +172,14 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#workspace-copy": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
-      "evidence": "Q copies the governed config into Q_ENT before q_env executes the workspace guards. The enclosing Q consumer must follow those executed guards. Later changes add registration inventory literals outside the Q copy region only (guard-record-owner-memory.sh, 2026-09-28). Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here.",
+      "sha256": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
+      "evidence": "Q copies the governed config into Q_ENT before q_env executes the workspace guards. The enclosing Q consumer must follow those executed guards. Later changes add registration inventory literals outside the Q copy region only (guard-record-owner-memory.sh, 2026-09-28). Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [],
-      "edges": [],
+      "edges": [
+        {
+          "to": "scripts/lib/recovery_admin.py"
+        }
+      ],
       "region": [
         "Q_ENT=\"$Q_DIR/entity\"",
         "q_env() {"
@@ -5179,8 +5183,8 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#seated-fixture": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
-      "evidence": "Reviewed seated route and its shared R/AL/MT/MC/OF functions. The contract template keeps engine and entity in the same repository, including its linked-worktree case; the by-reference branch is unreachable. Parsed registration commands and sidecar inventories are data except the fixed canonical canary guards listed here. The test only replaces the write guard with literal inert shims or another copy of that same guard. q_hook has four fixed hook names; registry calls are integration/lifecycle. Q transports the fixture config. OF status and EP remain dependencies even when absent or undeclared in the generated fixture. The engine-status edge conservatively retains the literal execute floor outside this seated route. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here.",
+      "sha256": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
+      "evidence": "Reviewed seated route and its shared R/AL/MT/MC/OF functions. The contract template keeps engine and entity in the same repository, including its linked-worktree case; the by-reference branch is unreachable. Parsed registration commands and sidecar inventories are data except the fixed canonical canary guards listed here. The test only replaces the write guard with literal inert shims or another copy of that same guard. q_hook has four fixed hook names; registry calls are integration/lifecycle. Q transports the fixture config. OF status and EP remain dependencies even when absent or undeclared in the generated fixture. The engine-status edge conservatively retains the literal execute floor outside this seated route. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [
         "PROTECTED_PATHS",
         "ALLOWED_MODELS",
@@ -5259,6 +5263,9 @@
         },
         {
           "to": "scripts/hooks/engine-status.sh"
+        },
+        {
+          "to": "scripts/lib/recovery_admin.py"
         }
       ],
       "presence": "The probe sources the selected entity config when present and Q copies it into its nested fixture.",
@@ -11376,8 +11383,8 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#by-reference-fixtures": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
-      "evidence": "Entire by-reference branch and shared R/AL/MT/MC functions reviewed. Plugin/role/marketplace/registration rows are inspected as data. Actual execution is engine-status, the fixed BR9 worktree-isolation canary and the shared model/liveness canaries. Literal fixture shims introduce no additional reader. The shared whole-source contract retains the seated helper floor, but the branch returns before seated runtime checks. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here.",
+      "sha256": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
+      "evidence": "Entire by-reference branch and shared R/AL/MT/MC functions reviewed. Plugin/role/marketplace/registration rows are inspected as data. Actual execution is engine-status, the fixed BR9 worktree-isolation canary and the shared model/liveness canaries. Literal fixture shims introduce no additional reader. The shared whole-source contract retains the seated helper floor, but the branch returns before seated runtime checks. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [
         "PROTECTED_PATHS",
         "ALLOWED_MODELS",
@@ -11456,6 +11463,9 @@
         },
         {
           "to": "scripts/hooks/engine-status.sh"
+        },
+        {
+          "to": "scripts/lib/recovery_admin.py"
         }
       ],
       "presence": "The probe sources the selected entity config when present and Q copies it into its nested fixture.",
@@ -16160,7 +16170,7 @@
     },
     "scripts/lib/recovery.py": {
       "source": "scripts/lib/recovery.py",
-      "sha256": "dddabd6997767718b5074e6e9e2129ac385c1b2ddd54e96f9adae2733c341a36",
+      "sha256": "91ae9e755154ee41d4fd5043ffe2332810fa6e083221a0abdc093db7c0b0404e",
       "evidence": "Recovery fixtures bind review ledgers, repository identity and recovery JSON to private state. Standard-library locks and atomic state are host operations. mode reads the entity-local .claude/recovery.json and named qualification files, not orchestration.config. Runtime knobs are recorded with the fixture inputs. Storage reads absolute host RICHOS_RECOVERY_EVIDENCE_ROOT and RICHOS_RECOVERY_WIP_ROOT overrides; fixtures bind their destinations. macOS default mount and non-macOS private-state fallback are runtime inputs, never orchestration.config keys.",
       "keys": [],
       "edges": [
@@ -16219,14 +16229,14 @@
     },
     "scripts/lib/recovery_admin.py": {
       "source": "scripts/lib/recovery_admin.py",
-      "sha256": "aa0dbd6599c8b771ef9bafb88c53a77e9d3f15ea8941231870a6eb1b9caacbdb",
-      "evidence": "Private CLI fixtures bind repo/work/TIP/finding identities. Status reads state; dispute validates current blockers and appends a deduplicated routing request. Neither grants permission nor changes an effective finding.",
+      "sha256": "5804302f54d46a4d527e314504c3763be8b063945ff9b780007cd7bffbb878c7",
       "keys": [],
       "edges": [
         {
           "to": "scripts/lib/recovery.py"
         }
-      ]
+      ],
+      "evidence": "Host inspection reads bounded recovery records/events. Explicit dispute uses scoped effective findings. Contract reads host-selected installed runtime/profile files and executes its read-only mode reader with a finite subprocess timeout. CLI arguments and entity-local recovery.json are data, not orchestration.config keys. Report never mutates records or treats missing costs as zero."
     },
     "scripts/lib/operator_fences.py#recovery-readers": {
       "source": "scripts/lib/operator_fences.py",
@@ -16719,7 +16729,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/claim-roles.mutation.sh": "73f0f9a1974cd17863539183827f795c5d343ff418b6acca7e98ca7242b811b2",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
-        "scripts/hooks/contract-integrity-probe.sh": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
+        "scripts/hooks/contract-integrity-probe.sh": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
         "scripts/hooks/contract-integrity.test.sh": "380dc03b27a657310adce2fa7278c2a778fe1f4998afb6a6ac456af2931d4c16",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/guard-agent-state-claims.sh": "b7a14acc4ff57cdec91821f6fd74b3c745deb18a0bd256ac7d60a3e7dd35dd7e",
@@ -17640,7 +17650,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "26092a3bdc576ae721fceeec62fe9115aabad69586da3ac83741add530666ad4",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
-        "scripts/hooks/contract-integrity-probe.sh": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
+        "scripts/hooks/contract-integrity-probe.sh": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -17923,7 +17933,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "26092a3bdc576ae721fceeec62fe9115aabad69586da3ac83741add530666ad4",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
-        "scripts/hooks/contract-integrity-probe.sh": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
+        "scripts/hooks/contract-integrity-probe.sh": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -17981,7 +17991,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "26092a3bdc576ae721fceeec62fe9115aabad69586da3ac83741add530666ad4",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
-        "scripts/hooks/contract-integrity-probe.sh": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
+        "scripts/hooks/contract-integrity-probe.sh": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18039,7 +18049,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "26092a3bdc576ae721fceeec62fe9115aabad69586da3ac83741add530666ad4",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
-        "scripts/hooks/contract-integrity-probe.sh": "5ac2e56fcd8a663352e79718556e29dc0ef957c79bf5f6bda293daa546c648de",
+        "scripts/hooks/contract-integrity-probe.sh": "6a152ac04f7f87790ef476e48428c975e07d8e727b6be60261ae35e2887b4bbf",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",

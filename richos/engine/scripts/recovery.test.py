@@ -78,6 +78,53 @@ class Recovery(unittest.TestCase):
         self.assertEqual(current()['deadline'],deadline)
         self.assertEqual(current()['status'],'investigating')
 
+    def test_existing_contract_probe_checks_an_adopted_recovery_declaration(self):
+        source=Path(R.__file__).resolve().parents[2]
+        code=(source/'scripts/hooks/contract-integrity-probe.sh').read_text().split('run_layer_RC() {',1)[1].split('\nrun_layer_R\n',1)[0]
+        function='run_layer_RC() {'+code
+        entity=self.repo/'.claude'
+        entity.mkdir()
+        (entity/'recovery.json').write_text(json.dumps(dict(schema=1,mode='observe',repositories=[str(self.repo)])))
+        program='REPO_ROOT="$1"; ENGINE_ROOT="$2"; FAILED=0; emit_pass(){ echo "$*"; }; emit_fail(){ echo "$*"; FAILED=1; };\n'+function+'\nrun_layer_RC\nexit "$FAILED"\n'
+        result=subprocess.run(['bash','-c',program,'probe',str(self.repo),str(source)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('RC.',result.stdout)
+        (entity/'recovery.json').write_text('{"schema":1,"mode":"bogus"}')
+        result=subprocess.run(['bash','-c',program,'probe',str(self.repo),str(source)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,1,result.stdout+result.stderr)
+        self.assertIn('contract unavailable',result.stdout)
+
+    def test_report_preserves_missing_cost_and_actual_observations(self):
+        import recovery_admin
+        with R.locked(self.record['id']):
+            record=R.read(self.record['id'])
+            record['consults']=[dict(id='known',role='axel',phase='control',status='complete',started_at=10,ended_at=13,cost=dict(cost_usd=.25)),dict(id='missing',role='wes',phase='finding',status='unavailable',started_at=20)]
+            R.save(record,'report-fixture')
+        result=recovery_admin.report(self.record['id'])
+        self.assertEqual(result['axel_jobs'],1)
+        self.assertEqual(result['known_cost_usd'],.25)
+        self.assertFalse(result['cost_complete'])
+        self.assertEqual(result['jobs'][0]['consultations'][0]['elapsed_seconds'],3)
+        self.assertEqual({g['field'] for g in result['missing_data']},{'cost_usd','elapsed','tokens'})
+        self.assertEqual(R.read(self.record['id'])['consults'],record['consults'])
+
+    def test_contract_detects_installed_mode_and_source_drift(self):
+        import recovery_admin
+        import shutil
+        source=Path(R.__file__).resolve().parents[2]
+        installed=self.base/'installed'
+        for path in ['scripts/lib/operator_fences.py','scripts/lib/recovery.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py','scripts/lib/pierce.py','recovery-profiles/axel.md','recovery-profiles/wes.md','mega-lander/workspaces.py','scripts/app-engine-hook.py']:
+            destination=installed/path
+            destination.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(source/path,destination)
+        result=recovery_admin.contract(str(self.repo),str(installed))
+        self.assertEqual(result['status'],'passed',result)
+        p=installed/'scripts/lib/recovery.py'
+        p.write_text(p.read_text()+'\ndef mode(entity): return dict(mode="observe", repositories=[])\n')
+        result=recovery_admin.contract(str(self.repo),str(installed))
+        self.assertIn('scripts/lib/recovery.py',result['mismatches'])
+        self.assertIn('installed declaration/mode',result['mismatches'])
+
     def test_carried_blocker_routes_at_its_current_job_source(self):
         import recovery_admin
         work='teammate:carried'

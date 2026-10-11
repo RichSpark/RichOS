@@ -118,7 +118,9 @@ def read(identity, ledger=None):
 def save(record, event, ledger=None):
     F.write_json_atomic(str(root(ledger) / (record["id"] + ".json")), record)
     F.append_jsonl(str(root(ledger) / "events.jsonl"), dict(at=time.time(), job=record["id"],
-                   event=event, revision=digest(record), status=record["status"]))
+                   event=event, revision=digest(record), status=record["status"],
+                   axel_required=record.get("axel_required"), wes_candidates=record.get("wes_candidates", []),
+                   trigger_failures=len(record["failed"]), recovery_failures=record.get("recovery_failures", 0)))
 
 
 def failed_attempts(ledger, repo, aliases):
