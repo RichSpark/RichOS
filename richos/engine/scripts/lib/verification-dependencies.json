@@ -16176,7 +16176,7 @@
     },
     "scripts/lib/recovery_runner.py": {
       "source": "scripts/lib/recovery_runner.py",
-      "sha256": "3f56342713a1065769d9869fd77d542451264d9576bb5b648bec8178b23530c8",
+      "sha256": "7945d765bbce20451c2688c05a60aeedbf0e66b957c364449614e38ee224d3c2",
       "evidence": "Asynchronous fixture executes a literal fake provider with a private registry/ledger, explicit fake quota command and explicit CPU test seam. Other fixture closures import this module with recovery disabled and launch no model. Production model consultations use existing quota/CPU admission, fixed tools and indexed evidence. The source remains in the complete engine input floor.",
       "keys": [],
       "edges": [

@@ -187,6 +187,22 @@ def freeze_source(data, label):
     return dict(reference=str(path), original=label, sha256=fingerprint, bytes=len(data))
 
 
+def source_export(record, tip):
+    if not Path("/Volumes/E1TB").is_mount():
+        raise R.Unavailable("external SSD unavailable for recovery source export")
+    directory=Path("/Volumes/E1TB/state/richos/recovery-evidence")/R.digest(record["repo_id"])/tip
+    if not directory.is_dir():
+        directory.parent.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="recovery-export-",dir=str(directory.parent)) as tmp:
+            tree=Path(tmp)/"tree"
+            SR.export_tree(record["repo"],tip,str(tree))
+            try:
+                os.rename(tree,directory)
+            except FileExistsError:
+                pass
+    return dict(reference=str(directory),original=record["repo"],tip=tip,kind="git archive")
+
+
 def snapshot(record, ws, role):
     evidence = dict(job=record["id"], acceptance=record["acceptance"], frontier=record["evidence_cursor"],
                     outcome=record["work"], failed=record["failed"], recoveries=record["attempts"],
@@ -209,18 +225,8 @@ def snapshot(record, ws, role):
         else:
             evidence["gaps"].append("Original full verdict unavailable: "+row["id"])
     for tip in sorted({r["tip"] for r in record["failed"][-3:]}):
-        directory = Path("/Volumes/E1TB/state/richos/recovery-evidence") / R.digest(record["repo_id"]) / tip
         try:
-            if not directory.is_dir():
-                with tempfile.TemporaryDirectory(prefix="recovery-export-", dir=str(directory.parent) if directory.parent.exists() else None) as tmp:
-                    tree = Path(tmp)/"tree"
-                    SR.export_tree(record["repo"], tip, str(tree))
-                    directory.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        os.rename(tree, directory)
-                    except FileExistsError:
-                        pass
-            evidence["sources"].append(dict(reference=str(directory), original=record["repo"], tip=tip, kind="git archive"))
+            evidence["sources"].append(source_export(record,tip))
         except (OSError, ValueError, SR.Refused) as error:
             evidence["gaps"].append("Source export unavailable %s: %s" % (tip, error))
     # Retained records, including disposed workers, carry identity. A common
@@ -277,6 +283,7 @@ def snapshot(record, ws, role):
                         code, diff, error = ws.git(path, "diff", "--binary", "HEAD")
                         if code:
                             raise R.Unavailable(error)
+                        evidence["sources"].append(source_export(record,tip.split(":",1)[0]))
                         refs = [freeze_source(diff.encode(), path+": working delta")]
                         code, names, error = ws.git(path, "ls-files", "-z", "--others", "--exclude-standard")
                         if code:
