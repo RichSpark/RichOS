@@ -3488,6 +3488,75 @@ class HuntV2_02_DeclaredBuildOutputNeedsNoWaiver(Base):
             self.assertFalse(ws._is_regenerable(rel, pats), rel)
 
 
+class RichosBuildOutputDoesNotBlockAContinuation(Base):
+    """2026-10-11: five continuation spawns in one day were refused because the
+    finished workspace held the app's build and test output (ui-dist/,
+    src-tauri/gen/, ui/tests/.shots/, ui/tests/.vouch/, the connect-helper
+    link) that the main checkout lacked, and each time somebody moved it aside
+    by hand. The fixture carries THIS repository's own ignore files, exactly as
+    committed, so the proof is the declaration that actually ships."""
+
+    REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
+    IGNORES = (".gitignore", "richos/app/.gitignore", "richos/app/ui/tests/.gitignore")
+
+    def _carry_the_real_ignore_files(self):
+        if not all(os.path.isfile(os.path.join(self.REPO, rel)) for rel in self.IGNORES):
+            self.skipTest("this engine copy is not inside the richos repository")
+        for rel in self.IGNORES:
+            dest = os.path.join(self.other, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copyfile(os.path.join(self.REPO, rel), dest)
+            run("git", "-C", self.other, "add", "-f", rel)
+        # src-tauri/ holds tracked source in the real checkout, so git names
+        # gen/ and the helper link inside it rather than the whole directory.
+        os.makedirs(os.path.join(self.other, "richos/app/src-tauri"), exist_ok=True)
+        with open(os.path.join(self.other, "richos/app/src-tauri/Cargo.toml"), "w") as f:
+            f.write("[package]\n")
+        run("git", "-C", self.other, "add", "richos/app/src-tauri/Cargo.toml")
+        run("git", "-C", self.other, "commit", "-qm", "the repository's own ignore files")
+
+    def _build_and_test_output(self, path):
+        outside = os.path.join(self.env.root, "helper-cache")
+        os.makedirs(outside, exist_ok=True)
+        for rel in ("richos/app/ui-dist/index.html", "richos/app/src-tauri/gen/schemas/acl.json",
+                    "richos/app/ui/tests/.shots/home.png", "richos/app/ui/tests/.vouch/vouch.tgz"):
+            os.makedirs(os.path.dirname(os.path.join(path, rel)), exist_ok=True)
+            with open(os.path.join(path, rel), "wb") as f:
+                f.write(b"regenerated output")
+        os.symlink(outside, os.path.join(path, "richos/app/src-tauri/connect-helper"))
+
+    def test_a_workspace_holding_only_the_apps_regenerated_output_is_continued(self):
+        self._carry_the_real_ignore_files()
+        cc = self.make_cc("zach-opus-ra")
+        aid, _npath = self.spawn("zach-opus-ra", cc=cc)
+        self.commit(cc)
+        self._build_and_test_output(cc)
+        self.assertEqual(ws.uncommitted(cc)[0], [])             # all of it is ignored, none of it work
+        self.assertNotEqual(ws.uncommitted(cc)[1], [])          # and the main checkout has none of it
+        self.finish(aid)
+        cc2 = self.make_cc("zach-opus-rb", base="cc/zach-opus-ra")
+        self.spawn("zach-opus-rb", cc=cc2, extra="continues: zach-opus-ra\n")
+        self.assertEqual(self.rec("zach-opus-ra")["disposition"]["kind"], "continued")
+        self.assertFalse(os.path.exists(cc))
+
+    def test_an_undeclared_file_beside_them_still_refuses_the_continuation(self):
+        self._carry_the_real_ignore_files()
+        cc = self.make_cc("zach-opus-ka")
+        aid, _npath = self.spawn("zach-opus-ka", cc=cc)
+        self.commit(cc)
+        self._build_and_test_output(cc)
+        os.makedirs(os.path.join(cc, ".claude"), exist_ok=True)
+        with open(os.path.join(cc, ".claude", "notes.md"), "w") as f:
+            f.write("the only copy\n")
+        self.finish(aid)
+        cc2 = self.make_cc("zach-opus-kb", base="cc/zach-opus-ka")
+        with self.assertRaises(ws.SpecError) as e:
+            self.spawn("zach-opus-kb", cc=cc2, extra="continues: zach-opus-ka\n")
+        self.assertIn("(.claude/", str(e.exception))
+        self.assertNotIn("ui-dist", str(e.exception))
+        self.assertTrue(os.path.isfile(os.path.join(cc, ".claude", "notes.md")))
+
+
 class HuntV2_03_TheBudgetBoundsEveryCleanupStage(Base):
     """Hunt part 4 v2, V2-03: the shared deadline reached the retries and the
     proof, but process shutdown, container and test-instance cleanup, the

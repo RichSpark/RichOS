@@ -61,3 +61,18 @@ richos/app/ui/tests/receipts/
 
 # Source link for the pinned helper; binary bytes live in the external build cache.
 /richos/app/src-tauri/connect-helper
+
+# The app's build and test output, DECLARED regenerable so the workspace lander
+# (mega-lander/workspaces.py, V2-02) lands or continues a workspace that holds it
+# without a waiver. Each is rebuilt by the command that made it and is never the
+# only copy of anything:
+#   ui-dist/        staged from ui/ by src-tauri/build.rs on every cargo build
+#   src-tauri/gen/  tauri-build's generated schemas, rewritten on every build
+#   .shots/         one test run's screenshot receipts (ui/tests/lib/harness.js)
+#   .vouch/         vouch source fetched by ui/tests/vouch-template.js, verified by digest
+#   connect-helper  link re-created by scripts/prepare-connect-helper.py on every package
+#regenerable: richos/app/ui-dist/
+#regenerable: richos/app/src-tauri/gen/
+#regenerable: richos/app/ui/tests/.shots/
+#regenerable: richos/app/ui/tests/.vouch/
+#regenerable: richos/app/src-tauri/connect-helper
