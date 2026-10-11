@@ -222,6 +222,14 @@ import proc_tree  # noqa: E402
 import worker_tokens  # noqa: E402
 import engine_pass  # noqa: E402
 import cpu_guard  # noqa: E402
+# THE HOST SHIELD (ceo-decisions §65, engine lib/host_shield.py). Every check starts through it:
+# a shell suite's source is checked first, then the check runs with stand-ins for this Mac's power,
+# sleep, lock and display commands first on PATH, and one that called a stand-in fails with its
+# logged line. Applied to the started command only, never to item.argv or item.env, so it is no
+# part of any check's input identity or its rerun record.
+HOST_SHIELD = os.path.join(ROOT, "richos", "engine", "scripts", "lib", "host_shield.py")
+if not os.path.isfile(HOST_SHIELD):
+    HOST_SHIELD = os.environ.get("RICHOS_HOST_SHIELD_TOOL") or None
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import test_results  # noqa: E402  (what names a failing test; one reader for every caller)
 import proof_evidence  # noqa: E402
@@ -1030,7 +1038,14 @@ def launch(item, n, logdir, tokens_dir, reserved):
     if evidence:
         evidence.save(item, evidence.current_source())
     try:
-        command = proc_tree.command(item.argv, verification=getattr(item, 'verification_context', None))
+        started = item.argv
+        if HOST_SHIELD and os.path.isfile(HOST_SHIELD):
+            started = [sys.executable, "-S", HOST_SHIELD, "run", "--", *item.argv]
+        else:
+            fh.write(b"proof-run: NO HOST SHIELD in this checkout and none exported (RICHOS_HOST_SHIELD_TOOL): "
+                     b"this check runs WITHOUT the power/sleep/lock/display stand-ins.\n")
+            fh.flush()
+        command = proc_tree.command(started, verification=getattr(item, 'verification_context', None))
         if hasattr(item, "private_environment"):
             command[0] = "python3"  # The recipe's fingerprinted -s -S wrapper also covers supervision.
         item.proc = subprocess.Popen(command, cwd=item.cwd, stdout=fh, stderr=subprocess.STDOUT,
