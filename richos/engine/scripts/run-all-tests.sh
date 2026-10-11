@@ -287,6 +287,18 @@ fi
 
 WORKER_TOOL="$ENGINE_ROOT/scripts/lib/worker_tokens.py"
 PASS_TOOL="$ENGINE_ROOT/scripts/lib/engine_pass.py"
+# The host shield (lib/host_shield.py, ceo-decisions §65): each suite's source is checked first,
+# then it runs with stand-ins for this Mac's power, sleep, lock and display commands first on
+# PATH, and a suite that called one fails with the stand-in's logged line. A fixture engine
+# without it uses the one the shielded run around it exports; with neither it says so.
+SHIELD="$ENGINE_ROOT/scripts/lib/host_shield.py"
+[ -f "$SHIELD" ] || SHIELD="${RICHOS_HOST_SHIELD_TOOL:-}"
+SHIELDED=()
+if [ -n "$SHIELD" ] && [ -f "$SHIELD" ]; then
+    SHIELDED=(python3 -S "$SHIELD" run --)
+else
+    echo "run-all-tests.sh: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL): suites run WITHOUT the power/sleep/lock/display stand-ins." >&2
+fi
 for tool in "$WORKER_TOOL" "$PASS_TOOL"; do
     [ -f "$tool" ] || { echo "ERROR: missing verification admission helper: $tool" >&2; exit 2; }
 done
@@ -409,7 +421,7 @@ for t in "${SUITES[@]}"; do
     # This serial wrapper imposes no suite execution deadline.
     export RICHOS_UNIT_DEADLINE_MARKER=""
     if [ "$RECORD_BASE_HEALTHY" -eq 1 ]; then
-        ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} python3 "$WORKER_TOOL" machine --timing "$TIMING" -- env "${RC_SANDBOX_ENV[@]}" bash "$t" >"$LOG" 2>&1
+        ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} python3 "$WORKER_TOOL" machine --timing "$TIMING" -- env "${RC_SANDBOX_ENV[@]}" ${SHIELDED[@]+"${SHIELDED[@]}"} bash "$t" >"$LOG" 2>&1
         RC=$?
     else
         printf "run-all-tests.sh: NOT RUN: private home unavailable\n" >"$LOG"

@@ -1150,6 +1150,35 @@ fi
 rm -rf "$E/.claude" "$E/.git" "$E/.gitignore" "$E/scripts/lib/stateful.test.sh" "$E/scripts/lib/entity-sandbox.sh"
 fi
 
+# --- S26: the host shield (ceo-decisions §65; lib/host_shield.py) ----------
+# A unit runs through the shield: one calling the host halt command by bare name fails with the
+# stand-in's logged line, one whose source names it by path is refused before it runs. The two
+# throwaway suites and their walls are lib/host-shield-fixture.sh's; PATH is the tripwire first
+# and neither sbin. The fixture engine has no shield of its own and uses the exported one.
+if [ -z "${1:-}" ]; then
+# shellcheck source=lib/host-shield-fixture.sh
+. "$ENGINE_ROOT/scripts/lib/host-shield-fixture.sh"
+EHS="$SANDBOX/engine-hs"; mk_engine "$EHS"
+hs_fixture "$SANDBOX/hstrip" "$EHS/scripts/lib"
+hs_shard() { # <unit> -> rc; output in $SANDBOX/out
+    PATH="$(hs_path "$SANDBOX/hstrip")" RICHOS_HOST_SHIELD_TOOL="$HS_TOOL" \
+        bash "$EHS/scripts/ci-shard.sh" --only-units "$1" > "$SANDBOX/out" 2>&1
+    printf '%s' "$?"
+}
+RC="$(hs_shard scripts/lib/hs-bare.test.sh)"
+if [ "$RC" != 0 ] && grep -q "FAIL  host-shield: refused \`$HS_CMD -h +60\`" "$SANDBOX/out" && [ ! -s "$SANDBOX/hstrip/trip.log" ]; then
+    ok "S26a a unit calling $HS_CMD -h +60 by bare name fails with the stand-in's logged line; nothing reached the tripwire"
+else
+    bad "S26a rc=$RC — a bare-name host call was not stood in for"; sed 's/^/          /' "$SANDBOX/out"
+fi
+RC="$(hs_shard scripts/lib/hs-path.test.sh)"
+if [ "$RC" != 0 ] && grep -q "REFUSED before it ran" "$SANDBOX/out" && [ ! -e "$SANDBOX/hstrip/path-suite-ran" ]; then
+    ok "S26b a unit whose source names /sbin/$HS_CMD is refused before it runs"
+else
+    bad "S26b rc=$RC — a by-path host call was not refused before the unit ran"; sed 's/^/          /' "$SANDBOX/out"
+fi
+fi
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
     if [ "${1:-}" = --state-only ]; then
