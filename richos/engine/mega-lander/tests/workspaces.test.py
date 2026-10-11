@@ -4656,9 +4656,13 @@ class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
                     % (os.path.join(ENGINE, "scripts", "lib"), self.flag("checking"), self.flag("renewed")))
         te = subprocess.Popen([sys.executable, driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               text=True, env=self.envx)
+        # Both children wait on a flag this test writes; registered, so a failure
+        # or timeout before it is written still ends them (Env.close kills each).
+        self.env.procs.append(te)
         self.wait_for("checking", te)
         pr = self.land_script(between=": > '%s'\nwhile [ ! -f '%s' ]; do sleep 0.02; done\n"
                               % (self.flag("renewed"), self.flag("go")))
+        self.env.procs.append(pr)
         self.wait_for("renewed", pr)
         said, err = te.communicate(timeout=60)
         self.assertEqual(te.returncode, 0, said + err)
