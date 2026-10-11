@@ -58,6 +58,23 @@ class Evidence(unittest.TestCase):
         self.assertEqual(identity['fresh'], 'pin validator')
         checkout.assert_not_called()
 
+    def test_host_shield_stand_ins_on_path_are_no_part_of_an_identity(self):
+        # `engine receipts` runs inside the shield and re-reads identities the unshielded runner
+        # recorded; the stand-in directory first on its PATH must not make them differ.
+        shield = self.root / "engine/scripts/lib/host-shield"
+        shield.mkdir(parents=True)
+        (shield / "pmset").write_text("#!/bin/sh\n# host-shield stand-in (fixture)\nexit 1\n")
+        other = self.root / "elsewhere/host-shield"   # same name, no stand-in: a real directory
+        other.mkdir(parents=True)
+        (other / "tool").write_text("#!/bin/sh\nexit 0\n")
+        plain = {"PATH": os.pathsep.join([str(other), "/usr/bin", "/bin"]),
+                 "RICHOS_VERIFICATION_TOOL_PATH": "/usr/bin" + os.pathsep + "/bin"}
+        shielded = {"PATH": str(shield) + os.pathsep + plain["PATH"],
+                    "RICHOS_VERIFICATION_TOOL_PATH": str(shield) + os.pathsep + plain["RICHOS_VERIFICATION_TOOL_PATH"]}
+        self.assertEqual(evidence.identity_environment(shielded), plain)
+        for name in ("RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS", "RICHOS_HOST_SHIELD_TOOL"):
+            self.assertIn(name, evidence.RUN_SCOPED_ENVIRONMENT)
+
     def setUp(self):
         # The runner resolves its log and root paths. macOS's default TMPDIR is under /var,
         # a link to /private/var, so an unresolved fixture root compared as a different
@@ -624,6 +641,13 @@ class Evidence(unittest.TestCase):
                 shutil.copy2(path, engine / "scripts/lib" / path.name)
         for name in ("ci-shard.sh", "ci-units.sh"):
             shutil.copy2(source_engine / name, engine / "scripts" / name)
+        # The host shield the copied runners start every check through (ceo-decisions §65): its
+        # stand-ins and the guard whose rules it reads. Without them the copied host_shield.py
+        # refuses every check, which is its refusal working, not this fixture's subject.
+        shutil.copytree(source_engine / "lib/host-shield", engine / "scripts/lib/host-shield")
+        (engine / "scripts/hooks").mkdir()
+        shutil.copy2(source_engine / "hooks/guard-host-display-power.sh",
+                     engine / "scripts/hooks/guard-host-display-power.sh")
         # Every lib/ module proof-run.py imports: rerun_tree.py (write_rerun) and runtime_cache.py
         # (supply_runtime) included.
         for name in ("proof_evidence.py", "proof_slots.py", "test_results.py", "cargo_identity.py",

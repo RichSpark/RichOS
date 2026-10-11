@@ -132,6 +132,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export RICHOS_VERIFICATION_CHECKOUT="${RICHOS_VERIFICATION_CHECKOUT:-$ENGINE_ROOT}"
 UNITS_SH="$SCRIPT_DIR/ci-units.sh"
+# The host shield (lib/host_shield.py, ceo-decisions §65). A fixture engine without it uses the
+# one the shielded run around it exports; with neither it says so and runs unshielded.
+SHIELD="$SCRIPT_DIR/lib/host_shield.py"
+[ -f "$SHIELD" ] || SHIELD="${RICHOS_HOST_SHIELD_TOOL:-}"
+SHIELDED=()
+if [ -n "$SHIELD" ] && [ -f "$SHIELD" ]; then
+    SHIELDED=(python3 -S "$SHIELD" run --)
+else
+    echo "ci-shard.sh: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL): units run WITHOUT the power/sleep/lock/display stand-ins." >&2
+fi
 KNOWN_RED="$ENGINE_ROOT/scripts/lib/ci-known-red.tsv"
 WEIGHTS_TSV="$ENGINE_ROOT/scripts/lib/ci-unit-weights.tsv"
 
@@ -789,6 +799,10 @@ while IFS= read -r id; do
     # one definition and a section's --only cannot drift from its id.
     ARGV=()
     while IFS= read -r tok; do ARGV+=("$tok"); done < <(bash "$UNITS_SH" cmd "$id" | tr '\t' '\n')
+    # THE HOST SHIELD (ceo-decisions §65, lib/host_shield.py): the unit's source is checked
+    # first, then it runs with stand-ins for this Mac's power, sleep, lock and display commands
+    # first on PATH, and a unit that called one fails with the stand-in's logged line.
+    ARGV=(${SHIELDED[@]+"${SHIELDED[@]}"} "${ARGV[@]}")
     if [ "$RECORD_BASE_HEALTHY" -eq 1 ]; then
         ARGV=(env "${RC_SANDBOX_ENV[@]}" "${ARGV[@]}")
     fi

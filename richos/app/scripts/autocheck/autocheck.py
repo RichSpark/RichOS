@@ -172,6 +172,15 @@ def run_admitted(repo, argv, **kwargs):
     library = snapshot if (snapshot / "owned_command.py").is_file() else repo.top / "richos/app/scripts/lib"
     sys.path.insert(0, str(library))
     from owned_command import finish_group, owned_run
+    # THE HOST SHIELD (ceo-decisions §65, engine lib/host_shield.py): every fast check and quick
+    # suite starts through it, as the gate's checks do through proof-run.py. Its source is
+    # checked first, it runs with stand-ins for the host's power, sleep, lock, display and input
+    # commands first on PATH, and a check that called one fails with the stand-in's logged line.
+    shield = repo.top / "richos/engine/scripts/lib/host_shield.py"
+    if shield.is_file():
+        argv = [sys.executable, "-S", str(shield), "run", "--", *argv]
+    else:
+        say(f"autocheck: NO HOST SHIELD at {shield}: this check runs WITHOUT the stand-ins")
     # Signal the owned supervisor group once. proc_tree owns detached browsers and gets
     # nightly's full cleanup grace (its EXIT traps can take eight seconds). Walking and
     # signalling those children here as well can turn graceful browser shutdown into abort.

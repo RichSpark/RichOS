@@ -306,8 +306,52 @@ RUN_SCOPED_ENVIRONMENT = frozenset(("RICHOS_AUTOCHECK_ACTIVE", "RICHOS_TEST_RESU
                                     # remain bound below; explicit recipes still bind their own keys.
                                     "RICHOS_VERIFICATION_OWNER", "RICHOS_WORKER_BORROW_LOCK",
                                     "RICHOS_PROOF_RUN_SLOT_HELD", "RICHOS_PROOF_RUN_SLOT_FDS",
-                                    "RICHOS_UI_TESTS_LEDGER"))
+                                    "RICHOS_UI_TESTS_LEDGER",
+                                    # The host shield's per-run log, its declared runs and its own
+                                    # path (HOST SHIELD below).
+                                    "RICHOS_HOST_SHIELD_LOG", "RICHOS_HOST_SHIELD_RUNS",
+                                    "RICHOS_HOST_SHIELD_TOOL"))
 _TOOL_DIGESTS = {}
+
+# THE HOST SHIELD (ceo-decisions §65, engine lib/host_shield.py) starts every check with its
+# stand-in directory first on PATH. A process started inside a shielded check therefore reads a
+# PATH the runner that planned the check never saw: `engine receipts` (ci-shard.sh
+# --verify-receipts, itself started through the shield) re-reads each unit's recorded identity,
+# and a private-profile unit's PATH differed by exactly that directory, so every engine unit's
+# receipt was refused as "target execution inputs changed" (2026-10-11, proof-evidence's
+# cross-commit fixtures). The stand-ins only refuse host power, sleep, lock and display calls;
+# they are no input of any check. An identity reads PATH without them.
+HOST_SHIELD_MARK = b"# host-shield stand-in"
+_SHIELD_DIRS = {}
+
+
+def _is_shield_dir(directory):
+    if os.path.basename(os.path.normpath(directory or ".")) != "host-shield":
+        return False
+    if directory not in _SHIELD_DIRS:
+        found = False
+        try:
+            for name in os.listdir(directory):
+                try:
+                    with open(os.path.join(directory, name), "rb") as fh:
+                        if HOST_SHIELD_MARK in fh.read(256):
+                            found = True
+                            break
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        _SHIELD_DIRS[directory] = found
+    return _SHIELD_DIRS[directory]
+
+
+def identity_environment(environment):
+    """`environment` with every host-shield stand-in directory left out of its tool PATHs."""
+    result = dict(environment)
+    for name in ("PATH", "RICHOS_VERIFICATION_TOOL_PATH"):
+        if name in result:
+            result[name] = os.pathsep.join(d for d in result[name].split(os.pathsep) if not _is_shield_dir(d))
+    return result
 
 
 def _git_blob(data):
@@ -579,6 +623,7 @@ def _tool_digest(path):
 
 def checkout_identity(root, argv, environment, snapshot=None):
     """The identity of a check with no reviewed input contract (WHOLE_CHECKOUT above)."""
+    environment = identity_environment(environment)
     snapshot = snapshot or InputSnapshot()
     root = Path(root).resolve()
     names = list(CHECKOUT_TOOLS)
@@ -849,6 +894,7 @@ def recipe_identity(root, recipe, environment, snapshot=None):
     if set(recipe) - {"isolation", "qualification_unit", "external_paths", "git_inputs", "subset"} != required or not recipe["qualification"]:
         raise ValueError("incomplete verification input contract")
     root = Path(root).resolve()
+    environment = identity_environment(environment)
     snapshot = snapshot or InputSnapshot()
     try:
         qualification_paths = qualify_recipe(root, recipe)

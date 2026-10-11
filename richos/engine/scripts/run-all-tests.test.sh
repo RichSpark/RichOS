@@ -322,6 +322,42 @@ else
     bad "5f  a missing record canary library is refused" "rc=$RC6: $OUT6"
 fi
 
+# ===========================================================================
+# 7. THE HOST SHIELD (ceo-decisions §65; lib/host_shield.py). A suite that calls the host halt
+#    command by bare name fails with the stand-in's logged line; one whose source names it by
+#    path is refused before it runs. The throwaway suites and their walls are
+#    lib/host-shield-fixture.sh's; PATH is the tripwire first and neither sbin. The fixture
+#    engine has no shield of its own and uses the exported one.
+# ===========================================================================
+if [ "${1:-}" != --record-only ]; then
+# shellcheck source=lib/host-shield-fixture.sh
+. "$ENGINE_ROOT/scripts/lib/host-shield-fixture.sh"
+for which in bare path; do
+    E7="$SANDBOX/e7-$which"
+    build_engine "$E7"
+    hs_fixture "$SANDBOX/hstrip-$which" "$SANDBOX/hs-suites-$which"
+    cp "$SANDBOX/hs-suites-$which/hs-$which.test.sh" "$E7/engine/scripts/hooks/"
+    git_q "$E7" add -A; git_q "$E7" commit -q -m suites
+    OUT7="$( cd "$E7/engine" && PATH="$(hs_path "$SANDBOX/hstrip-$which")" RICHOS_HOST_SHIELD_TOOL="$HS_TOOL" \
+        bash scripts/run-all-tests.sh 2>&1 )"; RC7=$?
+    if [ "$which" = bare ]; then
+        if [ "$RC7" -ne 0 ] && printf '%s' "$OUT7" | grep -q "FAIL  host-shield: refused \`$HS_CMD -h +60\`" \
+                && [ ! -s "$SANDBOX/hstrip-bare/trip.log" ]; then
+            ok "7a  a suite calling $HS_CMD -h +60 by bare name fails the run with the stand-in's logged line; nothing reached the tripwire"
+        else
+            bad "7a  a bare-name host call is stood in for" "rc=$RC7: $OUT7"
+        fi
+    else
+        if [ "$RC7" -ne 0 ] && printf '%s' "$OUT7" | grep -q "REFUSED before it ran" \
+                && [ ! -e "$SANDBOX/hstrip-path/path-suite-ran" ]; then
+            ok "7b  a suite whose source names /sbin/$HS_CMD is refused before it runs"
+        else
+            bad "7b  a by-path host call is refused before the suite runs" "rc=$RC7: $OUT7"
+        fi
+    fi
+done
+fi
+
 printf '\n  %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

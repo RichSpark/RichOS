@@ -13,7 +13,9 @@
 #   A1  an instance under a SCRATCH HOME is COLLECT, and quitting it works.
 #       The §54 addendum-4 case: the candidate-.7 instance left on his screen.
 #   A2  THE NEGATIVE, WITH A POSITIVE CONTROL. An instance whose app state is
-#       the operator's real home is LEAVE — and the control is that the same
+#       the operator's (a declared stand-in outside every scratch root, never
+#       the real one; the module's default list is checked on its own) is
+#       LEAVE — and the control is that the same
 #       binary, same name, same argv, under a scratch home, is COLLECT in the
 #       same run. Without the control this case passes against a module that
 #       collects nothing at all.
@@ -238,9 +240,46 @@ fi
 # ---------------------------------------------------------------------------
 # A2 — the negative, with its positive control IN THE SAME RUN
 # ---------------------------------------------------------------------------
-REAL_STATE="$HOME/Library/Application Support/com.richos.app"
-REAL_MADE=0
-[ -d "$REAL_STATE" ] || { mkdir -p "$REAL_STATE" 2>/dev/null && REAL_MADE=1; }
+# THE OPERATOR'S APP STATE IS A FIXTURE, declared to the module through its own key
+# (APP_TEST_INSTANCE_REAL_HOME_PATHS), and never the real one. Until 2026-10-11 this case
+# opened a probe inside $HOME/Library/Application Support/com.richos.app: on a direct run
+# that is the CEO's own app state, and under ci-shard, which gives every unit a private HOME
+# inside its log directory (a scratch root), that path is scratch, so A2 and A6 failed
+# there (COLLECT) against a module that was right. The fixture sits outside every scratch
+# root (checked below, so a machine where it is not refuses instead of passing on a
+# coincidence), and the module's own default list is checked separately (A2 default).
+REAL_ROOT="/tmp/appinstances-real-state-$$"
+OUTSIDE="$OUTSIDE $REAL_ROOT"
+REAL_STATE="$REAL_ROOT/com.richos.app"
+mkdir -p "$REAL_STATE"
+export APP_TEST_INSTANCE_REAL_HOME_PATHS="$REAL_STATE"
+REAL_CHECK="$(python3 - "$REAL_STATE" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["APPINST_LIB"])
+import appinstances as A
+state = os.path.realpath(sys.argv[1])
+hit = A.RootSet().match(state)
+print("scratch:%s" % hit if hit else ("ok" if state in A.real_home_prefixes() else "undeclared"))
+PY
+)"
+if [ "$REAL_CHECK" != "ok" ]; then
+    echo "FATAL: the stand-in for the operator's app state is not usable here ($REAL_CHECK): $REAL_STATE" >&2
+    exit 1
+fi
+DEFAULT_CHECK="$(python3 - <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["APPINST_LIB"])
+os.environ.pop("APP_TEST_INSTANCE_REAL_HOME_PATHS", None)
+import appinstances as A
+want = os.path.realpath(os.path.join(os.path.expanduser("~"), "Library", "Application Support", "com.richos.app"))
+print("yes" if want in A.real_home_prefixes() else "no")
+PY
+)"
+if [ "$DEFAULT_CHECK" = "yes" ]; then
+    ok "A2 default: the app's own state under \$HOME/Library/Application Support is operator evidence with nothing declared"
+else
+    bad "A2 default: \$HOME/Library/Application Support/com.richos.app is missing from the module's own list"
+fi
 P2="$(launch "$EXE_SCRATCH" "$REAL_STATE/appinstances-test-probe.tmp")"
 V2="$(classify_pid "$P2" | verdict_of)"
 if [ "$V2" = "LEAVE" ]; then
@@ -258,7 +297,6 @@ else
 fi
 kill -9 "$P2" "$P2C" 2>/dev/null || true
 rm -f "$REAL_STATE/appinstances-test-probe.tmp" 2>/dev/null || true
-if [ "$REAL_MADE" = "1" ]; then rmdir "$REAL_STATE" 2>/dev/null || true; fi
 
 # ---------------------------------------------------------------------------
 # A3 — an instance that ignores the quit request and SIGTERM
@@ -350,8 +388,11 @@ sys.path.insert(0, os.environ["APPINST_LIB"])
 import appinstances as A
 roots = A.RootSet()
 home = A.real_home_prefixes()
+# The declared stand-in for the operator's app state (A2), not home[0]: under ci-shard's
+# private HOME, home[0] is itself scratch and the case would test nothing.
+state = os.path.realpath(os.environ["APP_TEST_INSTANCE_REAL_HOME_PATHS"])
 paths = [("3", "/private/tmp/claude-%d/slug/uuid/scratchpad/x" % os.getuid()),
-         ("4", home[0] + "/y")]
+         ("4", state + "/y")]
 print(A.classify(1, "richos-tauri", paths, roots, home).verdict)
 PY
 )"

@@ -1657,7 +1657,7 @@
     },
     "scripts/hooks/guard-host-display-power.test.sh": {
       "source": "scripts/hooks/guard-host-display-power.test.sh",
-      "sha256": "e4b3e1788d5b3c915626781969995a37dba884a81d0f39d7b7855bbabb7dbcb8",
+      "sha256": "6804abd0f93083318cdea615e2dc16b2ff1479c73206bc6017737671e320125a",
       "evidence": "Creates a private entity orchestration.config and a private ruling repository. Every hook invocation resolves that entity, its off-switch variant or an explicitly unadopted directory. Missing-resolver fixture refuses before config. Nested mutations recreate the same private settings; literal historical commands remain payload data.",
       "keys": [],
       "edges": [
@@ -2230,7 +2230,7 @@
     },
     "scripts/run-all-tests.sh#generated-inventory": {
       "source": "scripts/run-all-tests.sh",
-      "sha256": "e70d96bab5eabf9729a1c05ad92916d5f9ab19bf48a5ed7b68b966a4f835b106",
+      "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
       "evidence": "The runner discovers suites in its own engine and executes the caller-supplied inventory. This fixture copies it into an engine containing only generated marker/leak suites. Shared witness, timing, slot and worker helpers remain real; none sources the generated config.",
       "keys": [],
       "edges": [
@@ -2256,7 +2256,7 @@
     },
     "scripts/run-all-tests.test.sh": {
       "source": "scripts/run-all-tests.test.sh",
-      "sha256": "398586c248e98db820146744d98057c3251dbfb352281a3ea33b6b77a6c2b864",
+      "sha256": "c56278ebb185126d55f3b3c435927a4da817686cb0758d36b20780e15594ab51",
       "evidence": "Copies the real serial runner and finite helpers into generated Git repositories containing literal config and tiny generated clean/leaking suites. Every runner invocation changes cwd to that fixture engine. The real config is never copied or compared.",
       "keys": [],
       "edges": [
@@ -11674,7 +11674,7 @@
     },
     "scripts/run-all-tests.sh#list": {
       "source": "scripts/run-all-tests.sh",
-      "sha256": "e70d96bab5eabf9729a1c05ad92916d5f9ab19bf48a5ed7b68b966a4f835b106",
+      "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
       "evidence": "ci-units.test.sh invokes only --list. Argument parsing and filename discovery exit before worker tools, witnesses or test execution. The full source hash binds this early exit; files are names, not executed content.",
       "keys": [],
       "edges": [],
@@ -12112,7 +12112,7 @@
     },
     "scripts/ci-shard.test.sh": {
       "source": "scripts/ci-shard.test.sh",
-      "sha256": "cf8ed4e04e374576aaefecc2ccbe766d9ffe4b2a2dc83ef70b3ecc8417079881",
+      "sha256": "ef7aba7864b23e8d8a66ef2f6ee4ac7a95a37171dfbced9ae4c4aab6a70bdc5c",
       "evidence": "Full synthetic-engine fixture review: copies only runner/inventory/receipt/canary/process helpers and constructs literal suites, predicates and weight tables. No orchestration.config is copied or sourced. The allocator fixture sources scratch.sh with environment/default settings. Nested receipt verification uses emit/plain verify, without --proof-run; the normal engine-unit launcher sets RICHOS_PROOF_RUN only for its separate receipt item.",
       "keys": [],
       "edges": [
@@ -12127,7 +12127,7 @@
     },
     "scripts/ci-shard.sh#synthetic-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "544f50e639e69d107deacdfa64928f68784e0eee42b5cec0e45bfefa77dd2486",
+      "sha256": "ea848cbbe721e43a1f8467275d1b761c7ad34498f8ebea70937da20b499721b5",
       "evidence": "Reached through ci-shard.test.sh synthetic inventory only. Executes literal fixture suites and known-red shell predicates supplied by that test. Plan/weights/receipts/canary data do not execute config. The optional target-provenance route is not requested by the fixture. All actual runner helpers are bound below. The teammate-workspace default (2026-10-01: no selector in a cc/ worktree runs what ci-affected-units.sh maps the branch to; reads RICHOS_TEST_SCOPE through lib/workspace_scope.py) is inert here: the fixture copies no lib/workspace_scope.py, so that branch is skipped and neither the library nor ci-affected-units.sh is executed. The run's folder (2026-10-02) is allocated by sourcing the copied lib/scratch.sh (scratch_new/scratch_release, ledger under the suite's sandbox CLAUDE_CONFIG_DIR, TMPDIR the suite's or S24's sandbox); TERM/INT/HUP traps only defer the exit until the running unit returns. That copy is bound as a fixture (2026-10-02, integration of cc/zach-opus-tmpvanish1): its one configuration read, SCRATCH_DEFAULT_TTL_MINUTES, only sets a ledger row's ttl_minutes, which no case of ci-shard.test.sh reads, so no live configuration value can change a verdict.",
       "keys": [],
       "edges": [
@@ -12384,7 +12384,7 @@
     },
     "scripts/ci-shard.sh#boundary-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "544f50e639e69d107deacdfa64928f68784e0eee42b5cec0e45bfefa77dd2486",
+      "sha256": "ea848cbbe721e43a1f8467275d1b761c7ad34498f8ebea70937da20b499721b5",
       "evidence": "Runner-boundaries fixture copies this runner into a synthetic engine and creates literal marker/status suites and known-red data. No target-proof receipt route; all actual runner helper sources remain bound. The teammate-workspace default (2026-10-01; lib/workspace_scope.py, ci-affected-units.sh, RICHOS_TEST_SCOPE) is inert here: the synthetic engine has no lib/workspace_scope.py, so that branch is skipped. The scratch-allocator branch (2026-10-02) is inert too: the fixture copies no lib/scratch.sh, so the run's folder is the bare mktemp fallback under the fixture's TMPDIR.",
       "keys": [],
       "edges": [
@@ -13209,8 +13209,8 @@
     },
     "scripts/lib/appinstances.test.sh": {
       "source": "scripts/lib/appinstances.test.sh",
-      "sha256": "1e5e77257ef31b7a6848e728a8dcaa605466f459d97a790173edfe48f5c0667e",
-      "evidence": "Imports the complete appinstances module and scratch allocator. Test binaries are compiled literal C fixtures; all process queries use native commands. Retain the full module declared config keys; no additional engine helper or mutation driver executes.",
+      "sha256": "cde722876a7e5e069164d5048b6b5579925ef55fd735229a84ae66994e3dd840",
+      "evidence": "Imports the complete appinstances module and scratch allocator. Test binaries are compiled literal C fixtures; all process queries use native commands. Retain the full module declared config keys; no additional engine helper or mutation driver executes. The suite itself sets APP_TEST_INSTANCE_REAL_HOME_PATHS (a module key) to a fixture directory it creates under /tmp and removes; it reads no value from outside.",
       "keys": [],
       "edges": [
         {
@@ -14770,7 +14770,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "2b66e85996d2c0a1502a0afcb1b0d9fb451e144474c9041e2f4e8502dd4810a7",
+          "sha256": "a8e7bbfc4b67be09e49698b7d3013e028a7187ba488e3b220e1df6b6cc7b264c",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14782,13 +14782,13 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "097bbedcad9f52e9ef41d6c96a7ffdf87ef3f7a18e595e204c79b18cda1ec392",
+          "sha256": "40d82bfdba6fbac22af1f82cb1a6af93d4b6d1e3911e919f933ec7bd038d4b6f",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
           "path": "richos/app/scripts/run-tests.sh",
-          "sha256": "c6bb9397806274cf1d2de0500044dff01933678c0b369367ca3e46088fed5f47",
+          "sha256": "78a8cf7f1f2fa273d5a43a3a354eb634dd2240b26469e7f7417de771452cf109",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14812,13 +14812,13 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/ci-shard.sh",
-          "sha256": "544f50e639e69d107deacdfa64928f68784e0eee42b5cec0e45bfefa77dd2486",
+          "sha256": "ea848cbbe721e43a1f8467275d1b761c7ad34498f8ebea70937da20b499721b5",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
           "path": "richos/engine/scripts/run-all-tests.sh",
-          "sha256": "e70d96bab5eabf9729a1c05ad92916d5f9ab19bf48a5ed7b68b966a4f835b106",
+          "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14837,12 +14837,6 @@
           "root": "repository",
           "path": "richos/engine/scripts/lib/worker_tokens.py",
           "sha256": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/engine/scripts/lib/proc_tree.py",
-          "sha256": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14913,9 +14907,9 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "d75a6a32cf6dc3f9d9bc3db442d140a34daa6838c7ad65a1ff37e61865b7876e",
-          "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
+          "path": "richos/engine/scripts/lib/proc_tree.py",
+          "sha256": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         }
       ]
     },
@@ -15007,7 +15001,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "2b66e85996d2c0a1502a0afcb1b0d9fb451e144474c9041e2f4e8502dd4810a7",
+          "sha256": "a8e7bbfc4b67be09e49698b7d3013e028a7187ba488e3b220e1df6b6cc7b264c",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15031,7 +15025,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "097bbedcad9f52e9ef41d6c96a7ffdf87ef3f7a18e595e204c79b18cda1ec392",
+          "sha256": "40d82bfdba6fbac22af1f82cb1a6af93d4b6d1e3911e919f933ec7bd038d4b6f",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
