@@ -1838,7 +1838,7 @@
         "richos/app/scripts/make-engine-asset.sh": "ccf4f5265c69bb49ce16f2fa7b9144458cc4997fe5df556dfcf6d479a0f8b513",
         "richos/app/scripts/lib/output-lock.sh": "d58823a5ddc7fa31e0aae4053f1ccf0a9c10e0c83c72c5f8ac9e9a84f19362f6",
         "richos/app/scripts/verify-engine-asset-members.sh": "505257f5135f9c77f989245b61f162d990137e3949eb06fa17d341a762854ff6",
-        "richos/app/scripts/verify-runtime.py": "cac4509eadf6c3f83d671c6b03f9fa7d7a641e6a711ce2ac81bd541bf16a99bd",
+        "richos/app/scripts/verify-runtime.py": "a89855e1e4ddca199092c46fc604a166e73e3e52cccdd8d8c757923a66fa3067",
         "richos/engine/voice/tests/run.mjs": "81674da73960594c74b3de2331a0c193e7434a5a0bec87be2eb6b3cec2e64610",
         "richos/engine/voice/tests/models.test.mjs": "83a6dc88d1e029afab534a06410c60dd9727befa307610c7cd8a62d196bb8eee",
         "richos/engine/voice/tests/fetch.test.mjs": "595b0b9674ced3bffcbf5443b56503ffaff379909a6bb5d07bf78afff6c3b885",

@@ -7,13 +7,37 @@ import os
 from pathlib import Path
 
 
+def recipe_mismatch(root, built, recipe, sources):
+    """The refusal for a runtime built from another recipe: which sources differ, and the
+    directory name a runtime built from THIS recipe has (`lib/runtime_cache.py` keys it to the
+    recipe's SHA-256), so the log alone says what to point at (nightly 51, 2026-10-11)."""
+    old = built.get("sources") if isinstance(built, dict) else None
+    new = recipe.get("sources") if isinstance(recipe, dict) else None
+    if isinstance(old, dict) and isinstance(new, dict):
+        parts = [f"{label}: {', '.join(sorted(names))}" for label, names in (
+            ("missing", new.keys() - old.keys()),
+            ("extra", old.keys() - new.keys()),
+            ("changed", {name for name in old.keys() & new.keys() if old[name] != new[name]}),
+        ) if names]
+        if {k: v for k, v in built.items() if k != "sources"} != {k: v for k, v in recipe.items() if k != "sources"}:
+            parts.append("header fields differ")
+        detail = "; ".join(parts)
+    else:
+        detail = "recipe layout differs"
+    keyed = "runtime-" + hashlib.sha256(sources.read_bytes()).hexdigest()[:12]
+    return (f"runtime sources do not match the tracked public recipe: {root} was built from "
+            f"another recipe ({detail}); the runtime for this recipe is {keyed} in the nightly "
+            f"state directory, which nightly-local.py builds and uses when --runtime-dir is not given")
+
+
 def verify(root, sources):
     root = root.resolve(strict=True)
     identity = json.loads((root / "delivery.json").read_text())
     if identity.get("schema") != 1 or identity.get("platform") != "aarch64-apple-darwin":
         raise ValueError("unsupported runtime inventory")
-    if json.loads((root / "runtime-sources.json").read_text()) != json.loads(sources.read_text()):
-        raise ValueError("runtime sources do not match the tracked public recipe")
+    built, recipe = json.loads((root / "runtime-sources.json").read_text()), json.loads(sources.read_text())
+    if built != recipe:
+        raise ValueError(recipe_mismatch(root, built, recipe, sources))
     for name in [*identity["files"], *identity["links"]]:
         if not name or "\n" in name or Path(name).is_absolute() or any(part in ("..", ".") for part in name.split("/")):
             raise ValueError("invalid runtime member name")
