@@ -383,7 +383,8 @@ async function main() {
           for (const c of found) {
             c.scrollIntoView({ block: "nearest" });
             const r = c.getBoundingClientRect();
-            if (!(r.width > 0 && r.height > 0 && r.top >= body.top - 1 && r.bottom <= body.bottom + 1)) bad.push(c.textContent.trim() || c.id);
+            const st = getComputedStyle(c);  // Playwright's isVisible: visibility and display, non-empty box; opacity is NOT part of it
+            if (!(st.visibility === "visible" && st.display !== "none" && r.width > 0 && r.height > 0 && r.top >= body.top - 1 && r.bottom <= body.bottom + 1)) bad.push(c.textContent.trim() || c.id);
           }
           return { count: found.length, bad };
         });
