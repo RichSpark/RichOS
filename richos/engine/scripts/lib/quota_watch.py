@@ -40,6 +40,10 @@ SendMessage gates validate its complete text before delivery. The lead may not
 append termination, cancellation, hand-in or restart instructions. The pause-until
 line retains the existing registry binding; delivery is a request, not evidence
 that execution is already held. No subagent implementation is changed here.
+Each wake-up names the command that makes the pause or the resume
+(pause_protocol.py --to / --resume --to): it holds or releases the agent itself,
+before any message, so a refused or lost message never leaves an agent running
+through a pause or frozen after one (2026-10-11).
 
 THE READING, FIRST: CLAUDE CODE'S OWN `get_usage` (2026-09-25). Each poll starts
 `claude` as a CONTROL-ONLY connection and asks it for the account's usage,
@@ -788,6 +792,11 @@ def release_message(reset_at):
     return pause_protocol.render_resume("quota")
 
 
+def protocol_command(args):
+    """The one command that makes a pause or a resume take effect before its message."""
+    return "python3 %s %s" % (os.path.abspath(pause_protocol.__file__), args)
+
+
 def _print_message(text, summary):
     print("  ---- message begins ----")
     for ln in text.splitlines():
@@ -885,6 +894,10 @@ def _emit_threshold(a, r, now, w, early=""):
         print("  Send this message, unchanged, to each working agent: %s" % ", ".join(names))
     else:
         print("  Send this message, unchanged, to each working agent (the registry could not name them).")
+    print("  First, for each agent, run: " + protocol_command("--to <agent> --reason quota --reset %s"
+                                                             % hhmm(r["resets_at"])))
+    print("  It freezes that agent before any message and prints this same message to send; a refused")
+    print("  message never undoes the freeze.")
     print("  ---- message begins ----")
     for ln in pause_message(r, a.threshold).splitlines():
         print("  " + ln)
@@ -910,6 +923,8 @@ def _emit_reset(a, reset_at, w):
             print("  Paused for OTHER reasons, not named in this rule's wake: %s" % ", ".join(w["other_paused"]))
     else:
         print("  The registry could not name the paused agents; wake every agent you paused for the quota.")
+    print("  First, for each agent, run: " + protocol_command("--resume --to <agent> --reason quota"))
+    print("  It releases that agent's hold before any message and prints this same message to send.")
     _print_message(resume_message(reset_at), pause_protocol.RESUME_SUMMARY)
     print(KEEPS_POLLING + " It goes on into the new window.")
 
@@ -927,6 +942,8 @@ def _emit_release(a, reset_at, now, w):
             print("  Paused for OTHER reasons, not named in this rule's wake: %s" % ", ".join(w["other_paused"]))
     else:
         print("  The registry could not name the paused agents; wake every agent you paused for the quota.")
+    print("  First, for each agent, run: " + protocol_command("--resume --to <agent> --reason quota"))
+    print("  It releases that agent's hold before any message and prints this same message to send.")
     _print_message(release_message(reset_at), pause_protocol.RESUME_SUMMARY)
     print(KEEPS_POLLING + " Inside the last 20 minutes it pauses nobody, and it wakes you at the reset.")
 

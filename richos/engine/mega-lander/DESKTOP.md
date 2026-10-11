@@ -10,11 +10,14 @@ Your connection already carries the assignment you are working on, so
 `richos_work.prepare` and `richos_work.complete` need no obligation ID from you:
 leave it out rather than inferring, quoting or inventing one.
 
-For a pause request, get `message_payload` from `richos_work.pause_message` and
-submit it unchanged to SendMessage. That is the only pause message you may send.
-Do not compose a substitute, add instructions or change its summary. Pause is
-never TaskStop, termination, cancellation, a hand-in or a replacement. A sent
-message is a request; confirm the actual hold before reporting "paused". The
+For a pause request, call `richos_work.pause_message`: it freezes the teammate
+first, then returns `message_payload`; submit that unchanged to SendMessage. That
+is the only pause message you may send. To resume, `richos_work.resume_message`
+releases the hold first, the same way. A refused or lost message never prevents
+or undoes either. Do not compose a substitute, add instructions or change its
+summary. Pause is never TaskStop, termination, cancellation, a hand-in or a
+replacement. Report "paused" only when `pause_confirmed` is true; otherwise say
+what `hold` says. The
 host's automatic quota hold needs no extra message from you. Its 93% threshold
 applies only to the five-hour window, with the under-20-minute exception.
 

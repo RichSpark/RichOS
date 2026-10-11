@@ -84,6 +84,9 @@ def handle(args, reading, now, workers, reset_status, five_verdict):
                   "no successful reset has produced available weekly quota"))
             print("  Send the standard message unchanged to: " + (", ".join(names) or "every working agent"))
             reset = datetime.datetime.fromtimestamp(w["resets_at"], datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if w["resets_at"] and w["resets_at"] > now else None
+            print("  First, for each agent, run: python3 %s --to <agent> --reason weekly-quota%s"
+                  % (os.path.abspath(pause_protocol.__file__), " --reset " + reset if reset else ""))
+            print("  It freezes that agent before any message and prints this same message to send.")
             print(pause_protocol.render("weekly-quota", reset))
             print("  Summary: " + pause_protocol.SUMMARY)
             print("  The watcher keeps polling; a five-hour reset does not release this weekly hold.")
@@ -93,6 +96,9 @@ def handle(args, reading, now, workers, reset_status, five_verdict):
         if fresh_below(reading, now, args.stale) and five_verdict() in ("below", "near-reset"):
             print("WEEKLY-QUOTA-RELEASE: fresh weekly allowance and five-hour policy both permit work.")
             print("  Send to: " + ", ".join(paused))
+            print("  First, for each agent, run: python3 %s --resume --to <agent> --reason weekly-quota"
+                  % os.path.abspath(pause_protocol.__file__))
+            print("  It releases that agent's hold before any message and prints this same message to send.")
             # The generated RESUME, unchanged: the workspace message handler releases a
             # controlled hold on that message and on nothing else.
             print(pause_protocol.render_resume("weekly-quota"))
