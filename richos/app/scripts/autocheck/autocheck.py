@@ -176,11 +176,18 @@ def run_admitted(repo, argv, **kwargs):
     # suite starts through it, as the gate's checks do through proof-run.py. Its source is
     # checked first, it runs with stand-ins for the host's power, sleep, lock, display and input
     # commands first on PATH, and a check that called one fails with the stand-in's logged line.
+    # Without one (in the checkout or exported as RICHOS_HOST_SHIELD_TOOL) the check is REFUSED and
+    # never started, as run-tests.sh refuses (zach-opus-hostshim3, d645b9a77).
     shield = repo.top / "richos/engine/scripts/lib/host_shield.py"
-    if shield.is_file():
-        argv = [sys.executable, "-S", str(shield), "run", "--", *argv]
-    else:
-        say(f"autocheck: NO HOST SHIELD at {shield}: this check runs WITHOUT the stand-ins")
+    if not shield.is_file() and os.environ.get("RICHOS_HOST_SHIELD_TOOL"):
+        shield = Path(os.environ["RICHOS_HOST_SHIELD_TOOL"])
+    if not shield.is_file():
+        refused = (f"autocheck: REFUSED: NO HOST SHIELD at {repo.top / 'richos/engine/scripts/lib/host_shield.py'} "
+                   "and none exported (RICHOS_HOST_SHIELD_TOOL), so this check cannot run behind the power, sleep, "
+                   "lock and display stand-ins (ceo-decisions §65); it was not started.\n")
+        return subprocess.CompletedProcess(argv, 2, "" if kwargs.get("text") else b"",
+                                           refused if kwargs.get("text") else refused.encode())
+    argv = [sys.executable, "-S", str(shield), "run", "--", *argv]
     # Signal the owned supervisor group once. proc_tree owns detached browsers and gets
     # nightly's full cleanup grace (its EXIT traps can take eight seconds). Walking and
     # signalling those children here as well can turn graceful browser shutdown into abort.

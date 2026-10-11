@@ -228,13 +228,6 @@
       "keys": [],
       "edges": []
     },
-    "scripts/lib/entity-sandbox.sh": {
-      "source": "scripts/lib/entity-sandbox.sh",
-      "sha256": "523f4102a182366f536bd51d61a6cc93fc4535e9006db90f5c9ba75adae7d413",
-      "evidence": "Copies orchestration.config and the agents folder byte for byte into a fresh temporary directory (optionally a one-commit Git repository there); it reads no setting by name, so no key is declared.",
-      "keys": [],
-      "edges": []
-    },
     "scripts/hooks/guard-main-checkout-writes.sh": {
       "source": "scripts/hooks/guard-main-checkout-writes.sh",
       "sha256": "6e82fa3b4ada059d40200b56549e249d1048eb88b68a97d2961065a0504ededa",
@@ -2247,7 +2240,7 @@
     },
     "scripts/run-all-tests.sh#generated-inventory": {
       "source": "scripts/run-all-tests.sh",
-      "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
+      "sha256": "a7a8243142aa9182d7232b40dd0990325940af86e18ac367bcc5d600a384f9ea",
       "evidence": "The runner discovers suites in its own engine and executes the caller-supplied inventory. This fixture copies it into an engine containing only generated marker/leak suites. Shared witness, timing, slot and worker helpers remain real; none sources the generated config.",
       "keys": [],
       "edges": [
@@ -2273,7 +2266,7 @@
     },
     "scripts/run-all-tests.test.sh": {
       "source": "scripts/run-all-tests.test.sh",
-      "sha256": "c56278ebb185126d55f3b3c435927a4da817686cb0758d36b20780e15594ab51",
+      "sha256": "8d777240b1638a6b21e983db3ce5ae16d9081d586354a1bced498723ecc413a5",
       "evidence": "Copies the real serial runner and finite helpers into generated Git repositories containing literal config and tiny generated clean/leaking suites. Every runner invocation changes cwd to that fixture engine. The real config is never copied or compared.",
       "keys": [],
       "edges": [
@@ -11727,7 +11720,7 @@
     },
     "scripts/run-all-tests.sh#list": {
       "source": "scripts/run-all-tests.sh",
-      "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
+      "sha256": "a7a8243142aa9182d7232b40dd0990325940af86e18ac367bcc5d600a384f9ea",
       "evidence": "ci-units.test.sh invokes only --list. Argument parsing and filename discovery exit before worker tools, witnesses or test execution. The full source hash binds this early exit; files are names, not executed content.",
       "keys": [],
       "edges": [],
@@ -12165,7 +12158,7 @@
     },
     "scripts/ci-shard.test.sh": {
       "source": "scripts/ci-shard.test.sh",
-      "sha256": "ef7aba7864b23e8d8a66ef2f6ee4ac7a95a37171dfbced9ae4c4aab6a70bdc5c",
+      "sha256": "b03c4cdffe139282d951e15421ce2136113bd4d4dc76d4e601df5a884b63823e",
       "evidence": "Full synthetic-engine fixture review: copies only runner/inventory/receipt/canary/process helpers and constructs literal suites, predicates and weight tables. No orchestration.config is copied or sourced. The allocator fixture sources scratch.sh with environment/default settings. Nested receipt verification uses emit/plain verify, without --proof-run; the normal engine-unit launcher sets RICHOS_PROOF_RUN only for its separate receipt item.",
       "keys": [],
       "edges": [
@@ -12180,7 +12173,7 @@
     },
     "scripts/ci-shard.sh#synthetic-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "ea848cbbe721e43a1f8467275d1b761c7ad34498f8ebea70937da20b499721b5",
+      "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
       "evidence": "Reached through ci-shard.test.sh synthetic inventory only. Executes literal fixture suites and known-red shell predicates supplied by that test. Plan/weights/receipts/canary data do not execute config. The optional target-provenance route is not requested by the fixture. All actual runner helpers are bound below. The teammate-workspace default (2026-10-01: no selector in a cc/ worktree runs what ci-affected-units.sh maps the branch to; reads RICHOS_TEST_SCOPE through lib/workspace_scope.py) is inert here: the fixture copies no lib/workspace_scope.py, so that branch is skipped and neither the library nor ci-affected-units.sh is executed. The run's folder (2026-10-02) is allocated by sourcing the copied lib/scratch.sh (scratch_new/scratch_release, ledger under the suite's sandbox CLAUDE_CONFIG_DIR, TMPDIR the suite's or S24's sandbox); TERM/INT/HUP traps only defer the exit until the running unit returns. That copy is bound as a fixture (2026-10-02, integration of cc/zach-opus-tmpvanish1): its one configuration read, SCRATCH_DEFAULT_TTL_MINUTES, only sets a ledger row's ttl_minutes, which no case of ci-shard.test.sh reads, so no live configuration value can change a verdict.",
       "keys": [],
       "edges": [
@@ -12437,7 +12430,7 @@
     },
     "scripts/ci-shard.sh#boundary-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "ea848cbbe721e43a1f8467275d1b761c7ad34498f8ebea70937da20b499721b5",
+      "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
       "evidence": "Runner-boundaries fixture copies this runner into a synthetic engine and creates literal marker/status suites and known-red data. No target-proof receipt route; all actual runner helper sources remain bound. The teammate-workspace default (2026-10-01; lib/workspace_scope.py, ci-affected-units.sh, RICHOS_TEST_SCOPE) is inert here: the synthetic engine has no lib/workspace_scope.py, so that branch is skipped. The scratch-allocator branch (2026-10-02) is inert too: the fixture copies no lib/scratch.sh, so the run's folder is the bare mktemp fallback under the fixture's TMPDIR.",
       "keys": [],
       "edges": [
@@ -14826,7 +14819,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "4193fc0055212f1fa31b5a36f678941f307216c150d5d2637227e8a29f7d059a",
+          "sha256": "5e35937aca0a91418617f9b125afc3e125336f22fceea24c5ae2864233f2a854",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -14868,13 +14861,13 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/ci-shard.sh",
-          "sha256": "ea848cbbe721e43a1f8467275d1b761c7ad34498f8ebea70937da20b499721b5",
+          "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
           "path": "richos/engine/scripts/run-all-tests.sh",
-          "sha256": "aa071929f8830ba9155ca74e4269ed6c7ddcd58bac80c6dde52f1b49622810e4",
+          "sha256": "a7a8243142aa9182d7232b40dd0990325940af86e18ac367bcc5d600a384f9ea",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15057,7 +15050,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "4193fc0055212f1fa31b5a36f678941f307216c150d5d2637227e8a29f7d059a",
+          "sha256": "5e35937aca0a91418617f9b125afc3e125336f22fceea24c5ae2864233f2a854",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -16171,6 +16164,13 @@
           "to": "mega-lander/workspaces.py#ledger-lookup"
         }
       ]
+    },
+    "scripts/lib/entity-sandbox.sh": {
+      "source": "scripts/lib/entity-sandbox.sh",
+      "sha256": "523f4102a182366f536bd51d61a6cc93fc4535e9006db90f5c9ba75adae7d413",
+      "evidence": "Copies orchestration.config and the agents folder byte for byte into a fresh temporary directory (optionally a one-commit Git repository there); it reads no setting by name, so no key is declared.",
+      "keys": [],
+      "edges": []
     },
     "scripts/lib/recovery.py": {
       "source": "scripts/lib/recovery.py",

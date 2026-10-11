@@ -133,14 +133,14 @@ ENGINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export RICHOS_VERIFICATION_CHECKOUT="${RICHOS_VERIFICATION_CHECKOUT:-$ENGINE_ROOT}"
 UNITS_SH="$SCRIPT_DIR/ci-units.sh"
 # The host shield (lib/host_shield.py, ceo-decisions §65). A fixture engine without it uses the
-# one the shielded run around it exports; with neither it says so and runs unshielded.
+# one its caller exports (RICHOS_HOST_SHIELD_TOOL); with neither it REFUSES before the first unit
+# and starts none (below, after --list): a unit is never run without the stand-ins, as
+# run-tests.sh refuses (zach-opus-hostshim3, d645b9a77).
 SHIELD="$SCRIPT_DIR/lib/host_shield.py"
 [ -f "$SHIELD" ] || SHIELD="${RICHOS_HOST_SHIELD_TOOL:-}"
 SHIELDED=()
 if [ -n "$SHIELD" ] && [ -f "$SHIELD" ]; then
     SHIELDED=(python3 -S "$SHIELD" run --)
-else
-    echo "ci-shard.sh: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL): units run WITHOUT the power/sleep/lock/display stand-ins." >&2
 fi
 KNOWN_RED="$ENGINE_ROOT/scripts/lib/ci-known-red.tsv"
 WEIGHTS_TSV="$ENGINE_ROOT/scripts/lib/ci-unit-weights.tsv"
@@ -654,6 +654,10 @@ if [ "$LIST_ONLY" -eq 1 ]; then
     cat "$SELECTED"
     printf '%s unit(s) selected of %s in the inventory\n' "$N_SEL" "$(grep -c . "$ALL_UNITS")" >&2
     exit 0
+fi
+if [ "${#SHIELDED[@]}" -eq 0 ]; then
+    echo "ci-shard.sh: REFUSED: NO HOST SHIELD beside this copy and none exported (RICHOS_HOST_SHIELD_TOOL), so no unit can run behind the power, sleep, lock and display stand-ins (ceo-decisions §65). Nothing was run." >&2
+    exit 2
 fi
 
 # Acquire the large-plan slot before any worker permit. Unit admission below

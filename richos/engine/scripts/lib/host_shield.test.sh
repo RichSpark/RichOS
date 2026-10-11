@@ -156,6 +156,31 @@ for form in "$OPEN -a TextEdit" "$OPEN https://example.com" "$OPEN -g -b com.app
         bad "H4c $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
     fi
 done
+# H4e — an osascript is handed on only when every word in it is on the inert list: an action
+# nobody listed is refused, never assumed harmless (review rv-20261011T192225Z-5fa33e7e-a349 #1:
+# `choose URL` was handed on). The inert forms still reach the next command on PATH.
+for form in "$OSA -e 'choose URL'" "$OSA -e 'beep'" "$OSA -e 'say \"hello\"'" \
+        "$OSA -e 'set volume output volume 0'" "$OSA -e 'current date'" \
+        "$OSA -l JavaScript -e 'Path(\"/tmp\")'" "$OSA -l AppleScriptObjC -e 'return 1'" \
+        "$OSA -i -e 'return 1'"; do
+    F="$(suite h4e.test.sh "$form || true" "exit 0")"
+    trip_clean
+    RC="$(shielded "$F")"
+    if [ "$RC" = 1 ] && grep -q "^  FAIL  host-shield: refused \`${form%% *} " "$TMP/out" && [ ! -s "$TRIP/trip.log" ]; then
+        ok "H4e $form is refused and logged; nothing reached the tripwire"
+    else
+        bad "H4e $form: rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+    fi
+done
+F="$(suite h4f.test.sh "$OSA -e 'return (1 + 2) as text -- a comment' -e 'log \"hello\"'" \
+        "$OSA -l JavaScript -e 'JSON.stringify([1, \"x\"])'")"
+trip_clean
+RC="$(shielded "$F")"
+if [ "$RC" = 0 ] && [ "$(grep -c "^TRIPWIRE $OSA " "$TRIP/trip.log")" = 2 ]; then
+    ok "H4f inert $OSA scripts (words only in strings and comments) still reach the next $OSA on PATH"
+else
+    bad "H4f rc=$RC" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+fi
 # A compiled script cannot be read, so it cannot be judged harmless.
 printf 'FasdUAS 1.101.10\000\000' > "$TMP/compiled.scpt"
 F="$(suite h4d.test.sh "$OSA '$TMP/compiled.scpt' || true" "exit 0")"
@@ -245,6 +270,23 @@ if [ "$RC" = 1 ] && grep -q "h6g.test.sh:3: .*$SLEEP" "$TMP/out"; then
 else
     bad "H6g a continued command was not read joined (rc=$RC)" "$(cat "$TMP/out")"
 fi
+# H6l — the shell removes a backslash-newline and puts nothing in its place, so a command NAME
+# split across it is one word (review rv-20261011T192225Z-5fa33e7e-a349 #3: a space was put
+# between the halves). Scan only (after `exit 0`); a Python string joins the same way.
+F="$(suite h6l.test.sh "exit 0" "/sbin/${HS_CMD:0:4}\\" "${HS_CMD:4} -h +60")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "h6l.test.sh:3: /sbin/$HS_CMD" "$TMP/out"; then
+    ok "H6l /sbin/${HS_CMD:0:4}\\<newline>${HS_CMD:4} is read as /sbin/$HS_CMD and refused before it runs"
+else
+    bad "H6l a command name split by a continuation was not refused (rc=$RC)" "$(cat "$TMP/out")"
+fi
+F="$(suite h6l2.test.sh "exit 0" "/usr/bin/${OSA:0:3}\\" "${OSA:3} -e 'display dialog \"x\"'")"
+RC="$(shielded "$F")"
+if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
+    ok "H6l /usr/bin/${OSA:0:3}\\<newline>${OSA:3} -e 'display dialog' is read joined and refused before it runs"
+else
+    bad "H6l a split $OSA name was not refused (rc=$RC)" "$(cat "$TMP/out")"
+fi
 F="$(suite h6h.test.sh "exit 0" "/usr/bin/$OSA -e 'return 1' >/dev/null" "/usr/bin/$PM -g batt >/dev/null || true")"
 RC="$(shielded "$F")"
 if [ "$RC" = 0 ]; then
@@ -272,9 +314,9 @@ h6i() {  # <label> <argv...>
     rc="$(shielded_argv "$@")"
     if [ "$rc" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out" && ! grep -q "SUITE STARTED" "$TMP/out" \
             && [ ! -s "$TRIP/trip.log" ]; then
-        ok "H6i refused before it starts: $label"
+        ok "${H6ID:-H6i} refused before it starts: $label"
     else
-        bad "H6i not refused before it started: $label (rc=$rc)" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
+        bad "${H6ID:-H6i} not refused before it started: $label (rc=$rc)" "$(cat "$TMP/out"; echo '--- tripwire:'; cat "$TRIP/trip.log")"
     fi
 }
 h6i "a Python suite naming /sbin/$HS_CMD" python3 "$SUITES/h6i.test.py"
@@ -294,6 +336,46 @@ else
     bad "H6j not refused: $H6J_LINE (rc=$RC)" "$(cat "$TMP/out")"
 fi
 
+# H6k — the interpreter's own options and a launcher in front of it do not hide the file it
+# starts (review rv-20261011T192225Z-5fa33e7e-a349 #2: `bash -e`, `bash --`, `python3 --` and
+# `env REVIEW=1 python3` started their file unread). Each payload prints that it started and
+# exits before its host call; a shell or Python reading stdin cannot be read and is refused.
+printf '%s\n' '#!/usr/bin/env bash' 'echo "SHELL SUITE STARTED"' 'exit 0' "/sbin/$HS_CMD -h +60" > "$SUITES/h6k.test.sh"
+# (Inline code prints its marker split in two: the refusal quotes the code, never the marker.)
+H6ID=H6k
+h6i "bash -e <a suite naming /sbin/$HS_CMD>" bash -e "$SUITES/h6k.test.sh"
+h6i "bash -- <a suite naming /sbin/$HS_CMD>" bash -- "$SUITES/h6k.test.sh"
+h6i "bash -o pipefail <a suite naming /sbin/$HS_CMD>" bash -o pipefail "$SUITES/h6k.test.sh"
+h6i "bash -ec <code naming /sbin/$HS_CMD>" bash -ec "echo SHELL SUITE ''STARTED; exit 0; /sbin/$HS_CMD -h +60"
+h6i "python3 -- <a suite naming /sbin/$HS_CMD>" python3 -- "$SUITES/h6i.test.py"
+h6i "python3 -Bc <code naming /sbin/$HS_CMD>" python3 -Bc "print('PYTHON SUITE ' + 'STARTED'); raise SystemExit(0); import subprocess; subprocess.run(['/sbin/$HS_CMD'])"
+h6i "env REVIEW=1 python3 <a suite naming /sbin/$HS_CMD>" env REVIEW=1 python3 "$SUITES/h6i.test.py"
+h6i "env REVIEW=1 bash <a suite naming /sbin/$HS_CMD>" env REVIEW=1 bash "$SUITES/h6k.test.sh"
+h6i "nice -n 5 env A=1 bash <a suite naming /sbin/$HS_CMD>" nice -n 5 env A=1 bash "$SUITES/h6k.test.sh"
+h6i "bash -s (its commands on stdin)" bash -s < /dev/null
+h6i "python3 - (its program on stdin)" python3 - < /dev/null
+# H6l (continued) — a Python string joined by a backslash-newline is read joined.
+printf '%s\n' 'print("PYTHON SUITE STARTED", flush=True)' 'raise SystemExit(0)' \
+    "P = \"/sbin/${HS_CMD:0:4}\\" "${HS_CMD:4}\"" > "$SUITES/h6l.test.py"
+H6ID=H6l
+h6i "a Python string split by a backslash-newline into /sbin/$HS_CMD" python3 "$SUITES/h6l.test.py"
+H6ID=
+# Scan only, no process started: under sudo PATH is reset past every stand-in, and a launcher
+# option the shield cannot step past (env -S splits a string into a command) is not guessed at.
+python3 -S - "$HS_TOOL" "$SUITES/h6k.test.sh" > "$TMP/h6k" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("host_shield", sys.argv[1])
+hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
+for argv in (["sudo", "bash", sys.argv[2]], ["doas", "bash", sys.argv[2]], ["env", "-S", "bash " + sys.argv[2]]):
+    kinds = [k for k, _v, _l in hs.sources_of(argv)]
+    print("%s %s" % ("refused" if kinds == ["unreadable"] else "READ AS %s" % kinds, argv[:2]))
+PY
+if [ "$(grep -c '^refused ' "$TMP/h6k")" = 3 ]; then
+    ok "H6k sudo, doas and env -S in front of a suite are refused, not stepped over (scan only)"
+else
+    bad "H6k sudo/doas/env -S were not refused" "$(cat "$TMP/h6k")"
+fi
+
 # H6e — the screen-saver binary has a stand-in of its own: a bare-name call is refused.
 F="$(suite h6e.test.sh "$SSE || true" "exit 0")"
 trip_clean
@@ -307,7 +389,7 @@ fi
 
 # H7 — declarations. `names` lets the source carry it as data; a bare-name call is still refused.
 F="$(suite h7.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" \
-        "$HS_CMD -h +60 || true" "printf '%s\n' /sbin/$HS_CMD" "exit 0")"
+        "$HS_CMD -h +60 || true" "printf '%s\n' /sbin/$HS_CMD" "exit 0" "rg -n /sbin/$HS_CMD file.txt")"
 trip_clean
 RC="$(shielded "$F")"
 if [ "$RC" = 1 ] && ! grep -q "REFUSED before it ran" "$TMP/out" && grep -q "^  FAIL  host-shield: refused" "$TMP/out" \
@@ -319,7 +401,11 @@ fi
 # H7d — `names` never exempts a call that would run it past the stand-in: by path, or as an
 # argument something else runs (review rv-20261011T141442Z-0009fe5a-a898 #6). Each sits after
 # `exit 0`: the source check reads it, nothing runs it.
-for line in "/sbin/$HS_CMD -h +60" "xargs /sbin/$HS_CMD -h" "sudo $HS_CMD -h +60"; do
+# ripgrep's --pre RUNS its value for every file it searches, so a path there is a call, not data
+# (review rv-20261011T192225Z-5fa33e7e-a349 #4), and a path to any stood-in command there is one.
+for line in "/sbin/$HS_CMD -h +60" "xargs /sbin/$HS_CMD -h" "sudo $HS_CMD -h +60" \
+        "rg --pre /sbin/$HS_CMD needle file.txt" "rg --pre=/sbin/$HS_CMD needle file.txt" \
+        "rg -n --pre /usr/bin/$OSA needle file.txt"; do
     F="$(suite h7d.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" "exit 0" "$line")"
     RC="$(shielded "$F")"
     if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then

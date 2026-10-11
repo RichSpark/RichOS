@@ -1146,6 +1146,24 @@ try:
           "PHS3 the rerun file of a check that called %s starts it through the shield: the stand-in refuses "
           "the call and the rerun fails as the gate's run did" % halt_cmd,
           (rerun3, ran3 and ran3.returncode, said3[-600:]))
+    # PHS4 — with no shield in the checkout and none exported, a check is refused and never
+    # started (a failed check, named), as run-tests.sh refuses: never run without the stand-ins.
+    started4 = os.path.join(hs_dir, "phs4-started")
+    with open(os.path.join(hs_suites, "phs4.test.sh"), "w") as fh:
+        fh.write('#!/usr/bin/env bash\ntouch "%s"\necho "  PASS  started"\n' % started4)
+    saved_shield, pr.HOST_SHIELD = pr.HOST_SHIELD, None
+    os.environ["PATH"] = case_path
+    try:
+        it4 = pr.Item("phs4", app, ["bash", os.path.join(hs_suites, "phs4.test.sh")], None, 1.0)
+        pr.run([it4], Args(), os.path.join(tmp, "phs4-log"), sampler=idle)
+    finally:
+        os.environ["PATH"] = saved_path
+        pr.HOST_SHIELD = saved_shield
+    with open(it4.log, errors="replace") as fh:
+        log4 = fh.read()
+    check(it4.state == "failed" and "REFUSED: NO HOST SHIELD" in log4 and not os.path.exists(started4),
+          "PHS4 with no host shield in the checkout and none exported, a check is refused and never started",
+          (it4.state, os.path.exists(started4), log4[-600:]))
 
     # P9 — the log directory is bounded: the last three runs of a checkout, nothing more.
     parent = os.path.join(tmp, "rot")

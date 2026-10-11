@@ -1049,13 +1049,13 @@ def launch(item, n, logdir, tokens_dir, reserved):
     if evidence:
         evidence.save(item, evidence.current_source())
     try:
-        started = item.argv
-        if HOST_SHIELD and os.path.isfile(HOST_SHIELD):
-            started = [sys.executable, "-S", HOST_SHIELD, "run", "--", *item.argv]
-        else:
-            fh.write(b"proof-run: NO HOST SHIELD in this checkout and none exported (RICHOS_HOST_SHIELD_TOOL): "
-                     b"this check runs WITHOUT the power/sleep/lock/display stand-ins.\n")
-            fh.flush()
+        # Without a shield the check is REFUSED and never started (a failed check, named), as
+        # run-tests.sh refuses (zach-opus-hostshim3, d645b9a77): never run without the stand-ins.
+        if not (HOST_SHIELD and os.path.isfile(HOST_SHIELD)):
+            raise OSError("REFUSED: NO HOST SHIELD in this checkout and none exported (RICHOS_HOST_SHIELD_TOOL), "
+                          "so this check cannot run behind the power, sleep, lock and display stand-ins "
+                          "(ceo-decisions 65); it was not started")
+        started = [sys.executable, "-S", HOST_SHIELD, "run", "--", *item.argv]
         command = proc_tree.command(started, verification=getattr(item, 'verification_context', None))
         if hasattr(item, "private_environment"):
             command[0] = "python3"  # The recipe's fingerprinted -s -S wrapper also covers supervision.
