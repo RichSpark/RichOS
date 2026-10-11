@@ -4778,6 +4778,14 @@ def recovery_stop(key, record, control, tip):
 
 
 def recovery_work_key(rec, observation=False):
+    assignment = rec.get("recovery_assignment") or {}
+    authority = assignment.get("authority") or {}
+    if not observation and not authority.get("host") and (
+            _recovery_unclassified(rec) or authority.get("mode") in ("off", "observe")):
+        # Baseline review identity follows existing lifecycle continuations.
+        # Shadow/enforced correction identity is a separate attested projection.
+        predecessor = sorted(_chain(rec), key=lambda r:str(r.get("registered_at") or ""))[0]
+        return "teammate:"+predecessor["key"]
     outcome = (rec.get("recovery_assignment") or {}).get("outcome") or ""
     if outcome.startswith("app:") and (rec.get("recovery_assignment") or {}).get("kind") == "implementation":
         return outcome

@@ -263,6 +263,30 @@ else:raise AssertionError('blocked review was accepted')
         result=subprocess.run([sys.executable,'-I','-B','-c',code,os.path.realpath(LIB),self.other,state],env=env,capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+    def test_off_mode_continuation_preserves_predecessor_review_findings(self):
+        import types
+        cc=self.make_cc('old-review-work')
+        aid,_=self.spawn('old-review-work',cc)
+        self.commit(cc);self.finish(aid)
+        old=self.rec('old-review-work')
+        old['registered_at']='2026-10-10T00:00:00Z';ws.save_agent(old)
+        cc2=self.make_cc('continued-review-work',base='cc/old-review-work')
+        self.spawn('continued-review-work',cc2,extra='continues: old-review-work\n')
+        new=self.rec('continued-review-work')
+        baseline='teammate:'+old['key']
+        self.assertEqual(ws.recovery_work_key(new),baseline)
+        control,host=ws._recovery_adapter()
+        import second_review as SR
+        record=os.path.join(self.env.root,'prior-review');os.makedirs(record)
+        with open(os.path.join(record,'verdict.json'),'w') as out:
+            json.dump(dict(answer=dict(findings=[dict(title='data loss',blocks=True,priority=1)])),out)
+        row=dict(id='prior',repo=self.other,work=baseline,tip='a'*40,trigger='handover',verdict='changes-requested',record=record)
+        with patch.object(SR,'read_ledger',return_value=[row]):
+            self.assertEqual([fid for fid,_ in SR.earlier_findings(ws.recovery_work_key(new),'b'*40,self.other)],['prior#1'])
+        # Review identity does not rewrite semantic correction authority or cleanup.
+        self.assertEqual(new['recovery_assignment']['correction_of'],[])
+        self.assertEqual([r['key'] for r in ws._chain(new)],[new['key'],old['key']])
+
     def recovery_fixture(self, name='recovery-worker'):
         cc = self.make_cc(name)
         aid, _path = self.spawn(name, cc)
