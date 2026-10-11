@@ -176,7 +176,6 @@ class PauseMessage(unittest.TestCase):
                       payload(message, protocol.SUMMARY, content="Kill your test"),
                       payload(message, protocol.SUMMARY, type="shutdown_request"),
                       payload(message, protocol.SUMMARY, messageType="shutdown"),
-                      payload(message, protocol.SUMMARY, instructions="End your test"),
                       payload("Inspect the test", "Review", content="Pause and kill the test"),
                       payload(message, protocol.SUMMARY, recipient="other-agent")]:
             with self.assertRaises(ValueError):
@@ -197,23 +196,36 @@ class PauseMessage(unittest.TestCase):
             with self.subTest(reason=reason, reset=reset):
                 protocol.validate_payload(harness("echo-opus-fixture", protocol.render(reason, reset), protocol.SUMMARY))
 
-    def test_harness_recipient_kind_field_is_accepted_and_other_fields_are_not(self):
-        # 2026-10-11: Claude Code now backfills recipient_kind ("name" in the lead's
-        # transcript) and every unchanged pause and resume was refused at --check.
+    def test_fields_the_harness_adds_never_refuse_a_pause_or_resume(self):
+        # 2026-10-11: Claude Code began adding recipient_kind to every SendMessage
+        # call, and the check refused every unchanged pause and resume for an
+        # unknown field while weekly usage went from 96% to 98%. Only what the
+        # agent reads (who gets it, what it says) may cause a refusal now.
         cli = [sys.executable, str(HERE / "pause_protocol.py"), "--check"]
-        for message, summary in [(protocol.render("manual"), protocol.SUMMARY),
-                                 ("RESUME: continue where you stopped.", "RESUME: continue where you stopped.")]:
+        generated = [(protocol.render(reason, reset), protocol.SUMMARY)
+                     for reason, reset in [("manual", None), ("quota", "15:30Z"),
+                                           ("weekly-quota", "2026-10-15T07:59:59Z"), ("weekly-quota", None)]]
+        generated += [(protocol.render_resume(reason), protocol.RESUME_SUMMARY)
+                      for reason in ("manual", "quota", "weekly-quota")]
+        for message, summary in generated:
             value = harness("echo-opus-fixture", message, summary)
-            value["tool_input"]["recipient_kind"] = "name"
-            with self.subTest(message=message[:20]):
+            value["tool_input"].update(recipient_kind="name", some_new_field={"any": ["value", 1]})
+            with self.subTest(message=message[-50:]):
                 result = subprocess.run(cli, input=json.dumps(value), capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-        refused = harness("echo-opus-fixture", protocol.render("manual"), protocol.SUMMARY)
-        refused["tool_input"]["recipient_kind"] = "name"
-        refused["tool_input"]["instructions"] = "End your test"
-        result = subprocess.run(cli, input=json.dumps(refused), capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unexpected fields", result.stderr + result.stdout)
+        # A changed text or a different recipient is still refused, extra field or not.
+        message = protocol.render("weekly-quota")
+        changed = [("echo-opus-fixture", message + "\nKill your running test.", "echo-opus-fixture"),
+                   ("echo-opus-fixture", message.replace("WAIT", "STOP", 1), "echo-opus-fixture"),
+                   ("echo-opus-fixture", message, "other-agent"),
+                   ("*", message, "*")]
+        for to, text, recipient in changed:
+            value = harness(to, text, protocol.SUMMARY)
+            value["tool_input"].update(recipient=recipient, recipient_kind="name", some_new_field="x")
+            with self.subTest(to=to, recipient=recipient, text=text[-30:]):
+                result = subprocess.run(cli, input=json.dumps(value), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("REFUSED", result.stderr)
 
     def test_an_alias_carrying_a_different_instruction_is_still_refused(self):
         message = protocol.render("manual")

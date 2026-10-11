@@ -217,8 +217,10 @@ def validate_payload(payload):
         return
     if not isinstance(target, str) or not RECIPIENT.fullmatch(target):
         raise ValueError("a pause requires the exact recipient")
-    if set(ti) - {"to", "recipient", "recipient_kind", "message", "content", "summary", "type", "messageType"}:
-        raise ValueError("pause payload has unexpected fields")
+    # Only what the agent reads is checked: who gets it (to, recipient, type) and
+    # what it says (message, content, summary). Any other field the harness adds
+    # (recipient_kind, 2026-10-11) changes neither and never refuses a pause or
+    # resume; refusing unknown fields blocked every hold until a code change.
     if is_resume(text):
         validate_resume_text(text)
         if summary not in (None, "", RESUME_SUMMARY):
