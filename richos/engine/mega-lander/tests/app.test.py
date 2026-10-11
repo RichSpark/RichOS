@@ -177,7 +177,11 @@ class DesktopWork(unittest.TestCase):
         self.assertIn("Do not write, edit or create files",duty)
         exception=re.search(r"The one exception is ([^:]*):",duty)
         self.assertIsNotNone(exception,"the consult duty names no exception for the media skills' working folder")
-        for name in ("`watch-video`","`audio-transcription`","working folder"):
+        # Everything the skills put in that folder: a linked video is downloaded into it
+        # (watch-video step 3) and its uploaded captions written there (step 4a) before any
+        # frame or transcript exists (mid-job review of 7f6ea1dd8).
+        for name in ("`watch-video`","`audio-transcription`","working folder","copy of a linked video",
+                     "captions","frames","converted audio","transcript"):
             self.assertIn(name,exception.group(1))
         self.assertIn("No other file",duty[exception.end():])
 
