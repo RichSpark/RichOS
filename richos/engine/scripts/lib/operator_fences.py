@@ -1057,6 +1057,66 @@ def review_row_standing(row):
     return dict(row, verdict="changes-requested", unresolved_legacy_pass=True)
 
 
+def review_record(row):
+    try:
+        with open(os.path.join(row.get("record") or "", "verdict.json"), encoding="utf-8") as f:
+            record = json.load(f)
+        if not isinstance(record, dict):
+            return {}
+        return record
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def open_review_findings(rows):
+    """Finding identity survives duplicate reviews. Only witnessed resolutions
+    remove it. A same-source withdrawal must be an explicit independent recheck
+    carrying the original finding; a later PASS cannot erase another review.
+    """
+    opened, by_id, seen = {}, {r.get("id"): r for r in rows}, set()
+    for row in rows:
+        if row.get("id") and row["id"] in seen:
+            continue
+        seen.add(row.get("id"))
+        record = review_record(row)
+        answer = record.get("answer") or {}
+        parent = by_id.get(row.get("recheck_of"))
+        parent_record = review_record(parent) if parent else {}
+        parent_ids = {"%s#%d" % (parent.get("id"), n) for n, _ in enumerate(
+                      (parent_record.get("answer") or {}).get("findings") or [], 1)} if parent else set()
+        parent_ids.update(e.get("id") for e in parent_record.get("earlier_findings_in") or [])
+        witnessed = {e.get("id"): e for e in record.get("earlier_findings_in") or []}
+        for e in answer.get("earlier_findings") or []:
+            fid = e.get("id")
+            if fid not in opened or fid not in witnessed:
+                continue
+            old_tip = opened[fid].get("source_tip")
+            same_source = old_tip == row.get("tip")
+            allowed = not same_source or (parent and parent.get("tip") == old_tip and fid in parent_ids)
+            if e.get("status") in ("fixed", "withdrawn") and e.get("note", "").strip() and allowed:
+                opened.pop(fid)
+            elif e.get("status") == "still-open":
+                if e.get("blocks") is not False:
+                    opened[fid]["blocks"] = True
+                elif e.get("note", "").strip() and allowed:
+                    opened[fid]["blocks"] = False
+                if opened[fid].get("blocks") is False and witnessed[fid].get("filed"):
+                    opened[fid]["filed"] = True
+        findings = answer.get("findings") or []
+        for n, finding in enumerate(findings, 1):
+            if not isinstance(finding, dict):
+                continue
+            opened["%s#%d" % (row.get("id"), n)] = dict(finding,
+                blocks=finding.get("blocks", row.get("verdict") == "changes-requested"), source_tip=row.get("tip"),
+                filed=row.get("verdict") == "passed" and finding.get("blocks") is False)
+        if row.get("verdict") == "changes-requested" and not record:
+            opened["%s#unavailable" % row.get("id")] = {
+                "priority": 1, "blocks": True, "title": "Blocking review details unavailable",
+                "files": [], "evidence": "Recover the original review record: %s" % row.get("record"),
+                "fixture": "", "source_tip": row.get("tip")}
+    return opened
+
+
 def review_of(rows, tip, repo):
     """(the verdict row that decides `tip` in `repo`, the newest mid-job row on
     it). A row of another repository, or with no repository, never counts: the
@@ -1065,11 +1125,27 @@ def review_of(rows, tip, repo):
     mine = [review_row_standing(r) for r in rows if review_row_belongs(r, ident)]
     land = [r for r in mine if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS]
     mid = [r for r in mine if r.get("tip") == tip and r.get("trigger") in REVIEW_MID_JOB]
-    return (land[-1] if land else None), (mid[-1] if mid else None)
+    effective = dict(land[-1]) if land else None
+    if effective:
+        # Preserve this source's job history, including findings raised at an
+        # earlier tip. Later source resolutions cannot certify an older source.
+        end = max(i for i, r in enumerate(mine) if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)
+        works = {r.get("work") for r in land if r.get("work")}
+        history = [r for r in mine[:end+1] if r.get("work") in works or
+                   (r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)]
+        opened = open_review_findings(history)
+        blocked = {k: f for k, f in opened.items() if f.get("blocks") is not False}
+        if blocked:
+            effective.update(verdict="changes-requested", blocking=len(blocked),
+                             effective_findings=blocked)
+    return effective, (mid[-1] if mid else None)
 
 
 def review_findings(row, limit=6):
     """[(priority, title, files)] of a verdict, from its record."""
+    if row.get("effective_findings"):
+        return [(f.get("priority"), f.get("title"), ", ".join(f.get("files") or []))
+                for f in list(row["effective_findings"].values())[:limit]]
     try:
         with open(os.path.join(row.get("record") or "", "verdict.json"), encoding="utf-8") as fh:
             answer = (json.load(fh) or {}).get("answer") or {}
@@ -1090,6 +1166,21 @@ def review_gaps(ledger, tips, repo):
     for tip in tips:
         row, mid = review_of(rows, tip, repo)
         if row and row.get("verdict") == "passed":
+            recovery_home = os.path.join(os.path.dirname(ledger), "recovery")
+            if os.path.isdir(recovery_home):
+                try:
+                    here = os.path.dirname(os.path.realpath(__file__))
+                    if here not in sys.path:
+                        sys.path.insert(0, here)
+                    import recovery
+                    work_keys = {r.get("work") for r in rows if r.get("tip") == tip and
+                                 review_row_belongs(r, review_repo_identity(repo)) and r.get("work")}
+                    blocked = [recovery.landing_gap(repo, work, ledger) for work in work_keys]
+                    blocked = [reason for reason in blocked if reason]
+                    if blocked:
+                        gaps[tip] = blocked
+                except (OSError, ValueError, ImportError) as error:
+                    gaps[tip] = ["recovery acceptance cannot be established: %s" % error]
             continue
         if row is None:
             why = ["no second review of %s has a verdict yet" % tip[:12]]
@@ -1282,7 +1373,24 @@ def residue_committed(files, lease, new, cwd):
     return None
 
 
-def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None):
+def route_refused_review(ledger, tips, repo):
+    """The shared landing backstop requests applicability review without ever
+    changing the effective outcome. Host watcher consumes durable requests.
+    """
+    library = os.path.dirname(os.path.realpath(__file__))
+    if library not in sys.path:
+        sys.path.insert(0, library)
+    import recovery
+    source = recovery.rows(ledger)
+    for tip in tips:
+        qualified = [r for r in source if r.get("tip")==tip and review_row_belongs(r, review_repo_identity(repo))]
+        for work in sorted({r["work"] for r in qualified if r.get("work")}):
+            findings = [fid for fid,f in recovery.source_findings(source, repo, work, tip, ledger).items() if f.get("blocks")]
+            if findings:
+                recovery.route_request(repo, work, tip, findings, "refused-landing", ledger)
+
+
+def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None, enforce_lease=True):
     """[(line, why, detail)] of refused updates, [] when everything passes.
 
     `lines` are (old, new, ref). Almost every refusal is a missing lease, and
@@ -1335,7 +1443,7 @@ def fence_decide(lines, common, gitdir, files, chain, argv_of_writer=None):
                           (not new.startswith("ref:") and not is_zero(new))
             if leaves_main and writer_argv()[:2] != ["worktree", "add"]:
                 need, why = True, "switching the main checkout away from main"
-        if need and not lease_held():
+        if need and enforce_lease and not lease_held():
             refused.append(((old, new, ref), why, None))
         elif need and ref == MAIN and main_worktree and not is_zero(new):
             detail = _holder_refusal(files, gitdir, lease, new)
@@ -1404,14 +1512,14 @@ def fence_refusal_text(conf, files, refused, lease, repo, rewrote=None):
         others = [r for r in refused if r[1] != REVIEW_WHY]
         tail = ["  Also: " + fence_refusal_text(conf, files, others, lease, repo, rewrote)] if others else []
         return "\n".join(reviews[:1] + tail + [
-            "  If this refusal is a defect in the fence itself, Rich turns it off with one",
-            "  command: %s/scripts/operator-fences.sh off" % engine])
+            "  Review and recovery acceptance stays active while lease fencing is off.",
+            "  Route the exact blocking finding with scripts/recovery.sh dispute for an independent applicability check."])
     held_over = [detail for _l, _w, detail in refused if detail]
     if held_over:
         return "\n".join(["=== OPERATOR FENCE: refused in %s, even for the lease holder ===" % repo]
                          + ["  " + d for d in held_over]
                          + ["  If this refusal is a defect in the fence itself, Rich turns it off with one",
-                            "  command: %s/scripts/operator-fences.sh off" % engine])
+                            "  command: %s/scripts/operator-fences.sh off --repo %s --reason '<verified operator reason>'" % (engine, shlex.quote(repo))])
     state = lease_state(lease)
     if state == "none":
         held = "The land lease for this repository is free."
@@ -1440,7 +1548,7 @@ def fence_refusal_text(conf, files, refused, lease, repo, rewrote=None):
         "  Abort a merge only if you started it.",
         "  Never get around this with `git -c core.hooksPath=...` or a direct ref write.",
         "  If this refusal is a defect in the fence itself, Rich turns it off with one",
-        "  command: %s/scripts/operator-fences.sh off" % engine,
+        "  command: %s/scripts/operator-fences.sh off --repo %s --reason '<verified operator reason>'" % (engine, shlex.quote(repo)),
     ])
 
 
@@ -1451,7 +1559,7 @@ def cmd_fence(argv):
         return 2
     conf = read_launcher(argv[0])
     phase = argv[1]
-    if not fenced(conf):
+    if not conf or (not fenced(conf) and not conf.get("REVIEWS")):
         return 0
     files = Files(conf)
     lines = []
@@ -1464,7 +1572,7 @@ def cmd_fence(argv):
     gitdir = os.path.realpath(out.strip()) if rc == 0 and out.strip() else common
     chain = ancestors()
     if phase == "prepared":
-        refused = fence_decide(lines, common, gitdir, files, chain)
+        refused = fence_decide(lines, common, gitdir, files, chain, enforce_lease=fenced(conf))
         if not refused:
             return 0
         lease = read_lease(files)
@@ -1486,6 +1594,11 @@ def cmd_fence(argv):
                 rec["residue_paths"] = index_residue(os.getcwd())
                 rec["residue"] = bool(rec["residue_paths"])
             append_jsonl(files.refusals, rec)
+        if any(why==REVIEW_WHY for _line,why,_detail in refused):
+            try:
+                route_refused_review(files.reviews, [line[1] for line,why,_detail in refused if why==REVIEW_WHY], repo)
+            except (OSError, ValueError):
+                pass  # Refusal is still real; routing availability is reported by the watcher.
         sys.stderr.write(fence_refusal_text(conf, files, refused, lease, repo, rewrote) + "\n")
         return 1
     if phase == "committed" and os.path.realpath(gitdir) == os.path.realpath(common):

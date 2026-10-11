@@ -183,5 +183,8 @@ ofx_install() { # <repo> -- install the launcher (state off), with the fixture e
 }
 
 ofx_on()  { bash "$OFX_ENGINE/scripts/operator-fences.sh" on  --repo "$1" --entity "$OFX/entity"; }
-ofx_off() { bash "$OFX_ENGINE/scripts/operator-fences.sh" off --repo "$1"; }
+ofx_off() {
+    [ -s "$OFX/s/FenceAdmin.pid" ] || ofx_session FenceAdmin
+    ofx_in FenceAdmin "bash '$OFX_ENGINE/scripts/operator-fences.sh' off --repo '$1' --reason 'fixture exercises off state without bypassing acceptance'"
+}
 ofx_lease() { echo "bash '$OFX_ENGINE/scripts/land-lease.sh' $*"; }

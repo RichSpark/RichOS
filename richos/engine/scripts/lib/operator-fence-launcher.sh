@@ -25,14 +25,16 @@
 #      repository's own previous hook. A refused transaction is still recorded.
 #   3. Exits 1 if the fence refused, else with the chain's status.
 #
-# WITH THE STATE OFF, THIS FILE CANNOT REFUSE ANYTHING. Step 1 is skipped
-# entirely, no interpreter is started, and step 2 is the whole behavior. This
+# WITH THE STATE OFF, lease checks are skipped. Reviewed repositories still
+# enforce review/recovery acceptance and operation integrity. Unreviewed
+# repositories start no interpreter. This
 # launcher sits on every ref write in the repository, AUTO_MERGE on every commit
 # included, from the day it is installed with the switch off; a defect in it must
 # not be able to reach his terminal before the switch is ever turned on (G12).
 #
 # WITH THE STATE ON, A FENCE THAT CANNOT DECIDE REFUSES, and the refusal names the
-# way out (spec e8): Rich runs `<engine>/scripts/operator-fences.sh off`.
+# way out (spec e8): a verified operator runs `<engine>/scripts/operator-fences.sh off --reason <reason>`.
+# This disables lease enforcement; review/recovery acceptance remains active.
 
 OPERATOR_FENCES_STATE="off"
 OPERATOR_FENCES_REPO="@REPO@"
@@ -50,7 +52,7 @@ __ofl_phase="${1:-}"
 __ofl_input="$(cat 2>/dev/null)" || __ofl_input=""
 __ofl_refused=0
 
-if [ "$OPERATOR_FENCES_STATE" = "on" ]; then
+if [ "$OPERATOR_FENCES_STATE" = "on" ] || [ -n "$OPERATOR_FENCES_REVIEWS" ]; then
     __ofl_main=0; __ofl_head=0; __ofl_started=0
     while IFS=' ' read -r __ofl_o __ofl_n __ofl_r; do
         case "${__ofl_r:-}" in
@@ -85,8 +87,12 @@ __OFL_EOF__
                     echo "=== OPERATOR FENCE: the fence could not decide (exit $__ofl_frc), so nothing moved ==="
                     echo "  Repository: $OPERATOR_FENCES_REPO"
                     echo "  Program: $OPERATOR_FENCES_PROGRAM"
-                    echo "  This is a defect in the fence, not a missing lease. The way out is one command,"
-                    echo "  Rich's: $OPERATOR_FENCES_ENGINE/scripts/operator-fences.sh off"
+                    if [ -n "$OPERATOR_FENCES_REVIEWS" ]; then
+                        echo "  Restore the installed fence and recovery reader through scripts/operator-fences.sh install."
+                        echo "  Review acceptance remains active while lease fencing is off."
+                    else
+                        echo "  Rich's: $OPERATOR_FENCES_ENGINE/scripts/operator-fences.sh off --repo \"$OPERATOR_FENCES_REPO\" --reason '<verified operator reason>'"
+                    fi
                 } >&2
             fi
         fi

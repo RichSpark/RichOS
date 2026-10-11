@@ -238,6 +238,10 @@ def install_one(repo, entity, decl):
     os.makedirs(program_dir, exist_ok=True)
     program = os.path.join(program_dir, "operator_fences.py")
     shutil.copyfile(PROGRAM_SOURCE, program)
+    # The reference-transaction fence and managed land use the same recovery
+    # acceptance predicate. Ship its standard-library-only state reader beside
+    # the standalone fence rather than duplicating the predicate.
+    shutil.copyfile(os.path.join(HERE, "recovery.py"), os.path.join(program_dir, "recovery.py"))
     os.chmod(program, 0o755)  # copyfile carries no mode; check_one refuses a fence program git cannot run
     digest = F.file_digest(program)
     holders = " ".join(decl.get("LAND_LEASE_HOLDERS", "").split())
@@ -300,6 +304,32 @@ def cmd_set_state(opts, repos, state):
         if problems:
             say("operator-fences: REFUSED to turn the fences on:\n  " + "\n  ".join(problems))
             return 1
+    off_authorities = {}
+    if state == "off":
+        reason = str(opts.get("--reason") or "").strip()
+        if not reason:
+            say("operator-fences: REFUSED. off requires --reason; review/recovery acceptance remains active.")
+            return 1
+        # Validate every target before changing any launcher. Authority comes
+        # from native session/kernel ancestry and the existing operator policy,
+        # never a caller-supplied actor, acknowledgement or environment switch.
+        for repo in repos:
+            conf, paths = F.launcher_for(repo)
+            if not conf:
+                continue
+            try:
+                holder = F._identify_holder(opts, conf)
+            except (SystemExit, ValueError) as error:
+                say("operator-fences: REFUSED to turn off %s: %s" % (repo, error))
+                return 1
+            if not holder or holder.get("error"):
+                say("operator-fences: REFUSED: "+str((holder or {}).get("error") or "operator authority unavailable"))
+                return 1
+            bar = F._claim_bars(holder)
+            if bar:
+                say("operator-fences: REFUSED: "+bar)
+                return 1
+            off_authorities[repo] = dict(actor=holder, reason=reason, authority="verified operator under existing land-holder policy")
     rc = 0
     for repo in repos:
         paths = F.repo_paths(repo)
@@ -311,6 +341,10 @@ def cmd_set_state(opts, repos, state):
             continue
         with open(target, encoding="utf-8") as fh:
             text = fh.read()
+        if state=="off":
+            F.append_jsonl(os.path.join(F._default_home(), "operator-fence-settings.jsonl"),
+                dict(off_authorities[repo], at=F.iso(), repository=paths["main"], setting="OPERATOR_FENCES", value="off",
+                     previous=conf.get("STATE"), review_enforcement=bool(conf.get("REVIEWS"))))
         write_executable(target, set_state_text(text, state))
         say("%s  %s" % (state.upper(), repo))
     return rc
@@ -338,6 +372,10 @@ def check_one(repo, mode, decl=None):
     if F.file_digest(conf.get("PROGRAM", "")) != F.file_digest(PROGRAM_SOURCE):
         problems.append("%s: the installed fence program differs from the engine's; run operator-fences.sh "
                         "install" % repo)
+    recovery_source = os.path.join(HERE, "recovery.py")
+    recovery_installed = os.path.join(os.path.dirname(conf.get("PROGRAM") or ""), "recovery.py")
+    if os.path.exists(recovery_source) and F.file_digest(recovery_installed)!=F.file_digest(recovery_source):
+        problems.append("%s: the installed recovery reader differs from the engine; run operator-fences.sh install" % repo)
     ok, hooks_path = chain_reachable(paths["main"])
     if not ok:
         problems.append("%s: core.hooksPath=%s does not reach the launcher" % (repo, hooks_path))
@@ -510,7 +548,7 @@ def cmd_uninstall(opts, repos):
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         say("usage: operator-fences.sh install|on|off|status|uninstall|holders-notice [--repo <path>]... "
-            "[--entity <path>] [--declaration-check]")
+            "[--entity <path>] [--declaration-check] [--reason <off reason>]")
         return 0 if argv else 2
     sub, rest = argv[0], argv[1:]
     repos, opts, i = [], {}, 0
@@ -521,6 +559,12 @@ def main(argv):
             i += 2
         elif a == "--entity" and i + 1 < len(rest):
             opts["--entity"] = rest[i + 1]
+            i += 2
+        elif a in ("--holder", "--holder-pid") and i+1 < len(rest):
+            opts[a] = rest[i+1]
+            i += 2
+        elif a == "--reason" and i + 1 < len(rest):
+            opts[a] = rest[i+1]
             i += 2
         elif a == "--declaration-check":
             opts[a] = True

@@ -1627,11 +1627,13 @@ def _pierce_before_registration(payload):
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     inspector = _import_path("workspace_pierce", os.path.join(here, "scripts/lib/pierce.py"))
     try:
-        reason = inspector.refusal(inspector.inspect(payload))
+        result = inspector.inspect(payload)
+        reason = inspector.refusal(result)
     except (OSError, ValueError) as error:
         raise SpecError("Pierce inspection unavailable: %s" % error)
     if reason:
         raise SpecError(reason)
+    return result
 
 
 def register_spawn(payload, entity, dry=False):
@@ -1666,10 +1668,11 @@ def register_spawn(payload, entity, dry=False):
         raise SpecError("the spawn payload carries no session_id/tool_use_id, so it cannot be registered")
     if not NAME_RE.match(name):
         raise SpecError("the spawn has no usable name, so it cannot be registered")
+    inspection = None
     if not dry:
         # Command hooks can run concurrently. Inspection must finish BEFORE
         # this guard records any spawn evidence or acts on continuation state.
-        _pierce_before_registration(payload)
+        inspection = _pierce_before_registration(payload)
     cc_paths = [realpath(p) for p in prompt_lines(prompt, "cross-repo-worktree") if p]
     if ti.get("cwd"):
         cc_paths.append(realpath(str(ti.get("cwd"))))
@@ -1753,11 +1756,19 @@ def register_spawn(payload, entity, dry=False):
             + [main_checkout(p) or realpath(p) for p in cc_paths if p not in planned_by_path] \
             + planned_repos
         _refuse_unrecorded(work_repos, "the spawn of %s" % name)
+        recovery_assignment = _recovery_assignment(payload, rec, continuation_keys, lands_pending, inspection)
+        recovery, host = _recovery_adapter()
+        try:
+            recovery_jobs = recovery.admitted(host, payload, rec, recovery_assignment, work_repos, entity, dry=dry)
+        except (OSError, ValueError) as error:
+            raise SpecError("recovery admission unavailable: %s" % error)
         if dry:
             return rec
         for r_ in work_repos:
             _bind_body_of_work(rec, r_)
         rec.update({"tool_use_id": tuid, "subagent_type": str(ti.get("subagent_type") or ""),
+                    "recovery_assignment": recovery_assignment,
+                    "recovery_jobs": [r["id"] for r in recovery_jobs],
                     "isolation": isolation, "session_identity": ident,
                     "ceo_ordered": (ceo_ordered[0] if ceo_ordered else rec.get("ceo_ordered")),
                     "continues": continuation_keys,
@@ -1767,6 +1778,10 @@ def register_spawn(payload, entity, dry=False):
         save_agent(rec)
         if entity:
             _remember_repo(entity)
+    for recovery_job in recovery_jobs:
+        scheduled = recovery.schedule(recovery_job, engine_root())
+        if scheduled and scheduled.get("observation_gap"):
+            event("recovery-observation-gap", key=key, job=recovery_job["id"], gap=scheduled["observation_gap"])
     event("registered-spawn", key=key, tool_use_id=tuid, cc=cc_paths, isolation=isolation,
           continues=continues, lands_pending=lands_pending)
     return rec
@@ -3010,8 +3025,9 @@ def _deferred(report, rec):
 
 def _item(rec, why, cache, me):
     waiting = rec.get("waiting") or {}
-    helpers = [a for a in all_agents() if rec["name"] in (a.get("lands_pending") or [])
-               or rec["key"] in (a.get("continues") or [])]
+    helpers = [a for a in all_agents() if rec["key"] in (
+               (a.get("recovery_assignment") or {}).get("correction_of") or a.get("continues") or [])
+               or rec["name"] in (a.get("lands_pending") or [])]
     # A helper the user stopped is not "working to land it" (V2-05): its
     # platform-recorded ending is read, without adopting it, before asking.
     started = [a for a in helpers if not finished_state(platform_view(a), cache)[0]]
@@ -4685,6 +4701,8 @@ def observe(payload):
     agent_id is the lead's own call and can never be an agent's creation; a
     finished agent observes nothing and its open snapshot is thrown away (point
     9), so a ref Rich cuts to rescue the work afterwards stays his."""
+    recovery, host = _recovery_adapter()
+    recovery.finish_tool(host, payload)
     aid = str(payload.get("agent_id") or "")
     if not aid:
         return []
@@ -4714,6 +4732,202 @@ def _chain(rec):
             if o:
                 todo.append(o)
     return out
+
+
+def recovery_chain(rec, observation=False):
+    """Correction identity without changing merge/discard/cleanup ownership.
+
+    New registrations carry exact host-bound correction keys. Legacy
+    lands-pending links remain candidates, not permission to combine budgets.
+    They need source-qualified reconciliation before recovery enforcement.
+    """
+    out, seen, todo = [], set(), [rec]
+    while todo:
+        current = todo.pop()
+        if current["key"] in seen:
+            continue
+        seen.add(current["key"])
+        out.append(current)
+        assignment = current.get("recovery_assignment") or {}
+        refs = assignment.get("correction_of", []) if assignment else current.get("continues", [])
+        if assignment and assignment.get("kind") != "implementation":
+            refs = []
+        for reference in refs:
+            previous = load_agent(reference)
+            if not previous:
+                raise SpecError("recovery predecessor %s is missing; reconcile its source record" % reference)
+            if assignment and not (observation and _recovery_unclassified(previous)) and (previous.get("recovery_assignment") or {}).get("outcome") not in (
+                    None, assignment.get("outcome")):
+                raise SpecError("recovery relationship joins different authorized outcomes")
+            todo.append(previous)
+    return sorted(out, key=lambda r: (str(r.get("registered_at") or ""), r["key"]))
+
+
+def _recovery_adapter():
+    import types
+    here = os.path.join(engine_root(), "scripts", "lib")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import recovery_controls
+    return recovery_controls, types.SimpleNamespace(**globals())
+
+
+def recovery_stop(key, record, control, tip):
+    recovery, host = _recovery_adapter()
+    return recovery.stop(host, key, record, control, tip)
+
+
+def _baseline_review_identity(rec, observation=False):
+    assignment = rec.get("recovery_assignment") or {}
+    authority = assignment.get("authority") or {}
+    return not observation and (authority.get("mode") in ("off", "observe") or
+        (not authority.get("host") and _recovery_unclassified(rec)))
+
+
+def review_chain(rec, observation=False):
+    """Review identity and history use the same baseline or attested resolver."""
+    if _baseline_review_identity(rec, observation):
+        return sorted(_chain(rec), key=lambda r:str(r.get("registered_at") or ""))
+    return recovery_chain(rec, observation=observation)
+
+
+def recovery_work_key(rec, observation=False):
+    if _baseline_review_identity(rec, observation):
+        # Baseline review identity follows existing lifecycle continuations.
+        # Shadow/enforced correction identity is a separate attested projection.
+        predecessor = review_chain(rec)[0]
+        return "teammate:"+predecessor["key"]
+    outcome = (rec.get("recovery_assignment") or {}).get("outcome") or ""
+    if outcome.startswith("app:") and (rec.get("recovery_assignment") or {}).get("kind") == "implementation":
+        return outcome
+    return "teammate:%s" % recovery_chain(rec, observation=observation)[0]["key"]
+
+
+def _recovery_unclassified(rec):
+    assignment = rec.get("recovery_assignment") or {}
+    if assignment.get("kind", "implementation") != "implementation":
+        return False
+    authority = assignment.get("authority") or {}
+    return not (authority.get("host") or (authority.get("inspection") and not assignment.get("observation_only")))
+
+
+def _baseline_recovery_assignment(payload, rec, mode):
+    prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
+    host = payload.get("richos_recovery_assignment") or {}
+    roles = prompt_lines(prompt, "recovery-role")
+    kind = host.get("kind") or (roles[0] if roles else "implementation")
+    return dict(kind=kind if kind in ("implementation", "review", "helper") else "implementation",
+        outcome=host.get("outcome") or "teammate:"+rec["key"], correction_of=[],
+        acceptance=host.get("acceptance") or hashlib.sha256(prompt.encode()).hexdigest(),
+        observation_only=mode=="observe", authority=dict(host=host, mode=mode,
+            session=str(payload.get("session_id") or ""), tool_use_id=str(payload.get("tool_use_id") or ""),
+            transcript=str(payload.get("transcript_path") or ""), brief_sha256=hashlib.sha256(prompt.encode()).hexdigest()))
+
+
+def _recovery_assignment(payload, rec, continues, lands_pending, inspection=None):
+    recovery, _host = _recovery_adapter()
+    declaration = recovery.R.mode(rec.get("entity") or os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd"))
+    if declaration["mode"] == "off":
+        return _baseline_recovery_assignment(payload, rec, "off")
+    if declaration["mode"] == "enforce":
+        return _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection)
+    # Observation has its own projection. Never rewrite live review identity
+    # or predecessor records because a would-be classification changed.
+    baseline = _baseline_recovery_assignment(payload, rec, "observe")
+    rec.pop("recovery_observation_assignment", None)
+    rec.pop("recovery_observation_gap", None)
+    try:
+        proposal = _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection, observing=True)
+        proposal["observation_only"] = True
+        rec["recovery_observation_assignment"] = proposal
+    except (SpecError, OSError, ValueError) as error:
+        rec["recovery_observation_gap"] = str(error)
+        baseline["authority"]["observation_gap"] = str(error)
+    return baseline
+
+
+def _classified_recovery_assignment(payload, rec, continues, lands_pending, inspection=None, observing=False):
+    library = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "scripts", "lib")
+    if library not in sys.path:
+        sys.path.insert(0, library)
+    import recovery
+    virtual = {}
+    lookup = lambda key: virtual.get(key) or load_agent(key)
+    prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
+    # Top-level host metadata is supplied by the app adapter after it verifies
+    # the exact prepared Agent payload. It is never read from the model's tool
+    # input or an invented helper name.
+    host = payload.get("richos_recovery_assignment") or {}
+    roles = prompt_lines(prompt, "recovery-role")
+    classified = (inspection or {}).get("assignment_classification") or {}
+    if not host and not classified:
+        import recovery
+        declaration = recovery.mode(rec.get("entity") or os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd"))
+        if declaration["mode"]=="enforce":
+            raise SpecError("enforced native dispatch requires the bound job classification from its existing inspection")
+    kind = host.get("kind") or classified.get("kind") or (roles[0] if roles else "implementation")
+    if kind not in ("implementation", "review", "helper"):
+        raise SpecError("recovery-role must name implementation, review or helper")
+    refs = list(continues)
+    if classified:
+        refs = classified.get("correction_of", []) if classified.get("relation")=="corrective" else []
+        if classified.get("relation")=="unavailable":
+            import recovery
+            declaration = recovery.mode(rec.get("entity") or os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd"))
+            if declaration["mode"]=="enforce":
+                raise SpecError("job identity unavailable: "+classified["evidence"])
+        legacy = [lookup(ref) for ref in refs]
+        if legacy and all(r and _recovery_unclassified(r) for r in legacy):
+            import recovery
+            legacy.sort(key=lambda r:(str(r.get("registered_at") or ""),r["key"]))
+            origin = legacy[0]["key"]
+            for old in legacy:
+                for space in old.get("workspaces") or []:
+                    if space.get("repo") and recovery.read(recovery.key(space["repo"],"teammate:"+old["key"])):
+                        raise SpecError("legacy job already has tracked recovery; explicit identity reconciliation required")
+            for old in legacy:
+                old = dict(old)
+                old["recovery_assignment"] = dict(kind="implementation", outcome="teammate:"+origin,
+                    correction_of=[] if old["key"]==origin else [origin], acceptance="legacy:"+origin,
+                    authority=dict(bootstrap=True, inspection=(inspection or {}).get("id"), evidence=classified["evidence"],
+                        transcript=str(payload.get("transcript_path") or "")))
+                virtual[old["key"]] = old
+                if not observing:
+                    save_agent(old)
+    elif kind == "implementation":
+        # `lands-pending` describes merge ownership, not semantic identity.
+        # Explicit corrective links or the bound inspection supply identity.
+        for reference in [v.split()[0] for v in prompt_lines(prompt, "correction-of") if v.split()]:
+            previous = _resolve_record(reference, str(payload.get("session_id") or ""))
+            refs.append(previous["key"])
+    else:
+        refs = []
+    inherited = []
+    for reference in refs:
+        previous = lookup(reference)
+        if not previous:
+            raise SpecError("recovery predecessor %s is missing" % reference)
+        if (previous.get("recovery_assignment") or {}).get("kind", "implementation") != "implementation":
+            raise SpecError("a recovery correction cannot inherit a helper or review budget")
+        inherited.append((previous.get("recovery_assignment") or {}).get("outcome") or
+                         "teammate:%s" % recovery_chain(previous)[0]["key"])
+    if len(set(inherited)) > 1:
+        raise SpecError("one correction cannot silently combine different jobs")
+    source = {"session": str(payload.get("session_id") or ""),
+              "tool_use_id": str(payload.get("tool_use_id") or ""),
+              "transcript": str(payload.get("transcript_path") or ""),
+              "brief_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
+    if host:
+        source["host"] = host
+    if classified:
+        source["inspection"] = (inspection or {}).get("id")
+        source["classification"] = classified
+        source["classification_index"] = (inspection or {}).get("classification_index")
+    return {"kind": kind,
+            "outcome": inherited[0] if inherited else (host.get("outcome") or "teammate:%s" % rec["key"]),
+            "correction_of": sorted(set(refs)), "authority": source,
+            "acceptance": host.get("acceptance") or (lookup(refs[0]).get("recovery_assignment", {}).get("acceptance")
+                          if refs else None) or hashlib.sha256(prompt.encode()).hexdigest()}
 
 
 def _branch_targets(chain):
@@ -5041,6 +5255,11 @@ def _review_check(todo, entities=()):
             continue
         gaps = next((g for g in (F.review_gaps(ledger, [t], main) for ledger in ledgers) if g), None)
         if gaps:
+            for ledger in ledgers:
+                try:
+                    F.route_refused_review(ledger, gaps, main)
+                except (OSError, ValueError):
+                    pass
             refusals.append(F.review_refusal_text(main, gaps, engine_root()).replace(
                 "=== SECOND REVIEW: refused in %s ===" % main,
                 "=== SECOND REVIEW: %s was not merged into %s ===" % (b, main), 1))
@@ -6472,7 +6691,8 @@ def barrier(payload):
                 if stop:
                     return "RECOVERY", "%s stops agents, which a refused lead may always do (%s)" % (stop, why)
                 return "FORBIDDEN", why
-        return "LEAD", ""
+        recovery, host = _recovery_adapter()
+        return "LEAD", recovery.cancellation_notice(host, sid)
     key = key_for_id(aid)
     rec = load_agent(key) if key else None
     if not rec:
@@ -6483,12 +6703,21 @@ def barrier(payload):
     # gate or command has looked at it — so the lock-out asks the platform's
     # own record here too, rather than waiting to be told.
     rec = observe_platform_end(rec)
+    if rec.get("recovery_control"):
+        return "CONTROLLED", "recovery %s disabled this worker's tools" % rec["recovery_control"]["job"]
     fin, _paused, why = finished_state(rec)
     if fin and str(payload.get("tool_name") or "") == "SubagentHandback" and _hands_back_after_its_run(rec):
         return "HANDBACK", "agent %s (%s) hands its report back after its run ended: %s" % (
             aid, rec.get("name"), why)
     if fin:
         return "FINISHED", "agent %s (%s) is finished: %s" % (aid, rec.get("name"), why)
+    # App consults retain their existing research/media capability policy.
+    # Axel/Wes use a separate restricted provider process; ordinary consults
+    # are not those advisors merely because neither owns implementation.
+    if (rec.get("recovery_assignment") or {}).get("kind") in ("review", "helper") and not (rec.get("recovery_assignment") or {}).get("observation_only") and not (
+            ((rec.get("recovery_assignment") or {}).get("authority") or {}).get("host")) and str(
+            payload.get("tool_name") or "") not in ("Read", "Glob", "Grep", "SubagentHandback"):
+        return "READONLY", "agent %s is a read-only review/helper; request bounded host evidence instead" % aid
     # POINT 2, AT THE TOOL: "An agent never works inside a codex/ workspace."
     # The Bash guard refuses a command run there; the only hook that sees a
     # Write, Edit, MultiEdit or NotebookEdit is this one, and until round 8 an
@@ -6511,6 +6740,10 @@ def barrier(payload):
     # agent: a ref Rich cuts after the run has ended, to rescue the work, is his
     # and is never a candidate at all.
     snapshot_refs(rec, str(payload.get("tool_use_id") or ""))
+    recovery, host = _recovery_adapter()
+    allowed, reason = recovery.begin_tool(host, payload, rec)
+    if not allowed:
+        return "CONTROLLED", reason
     return "REGISTERED", rec.get("name") or ""
 
 
@@ -6858,6 +7091,9 @@ def lifecycle(payload, entity):
     sid = str(payload.get("session_id") or "")
     notices = []
     ctx = ""
+    if ev in ("PostToolUse", "PostToolUseFailure"):
+        recovery, host = _recovery_adapter()
+        recovery.finish_tool(host, payload)
     if ev == "SessionStart":
         rec, foreign = session_start(sid, str(payload.get("cwd") or entity or ""),
                                      str(payload.get("source") or ""), str(payload.get("agent_id") or ""))
@@ -6889,6 +7125,8 @@ def lifecycle(payload, entity):
                      str(payload.get("agent_type") or ""))
     elif ev == "SubagentStop":
         record_end(sid, str(payload.get("agent_id") or ""), "SubagentStop")
+        recovery, host = _recovery_adapter()
+        recovery.acknowledgement(host, sid, str(payload.get("agent_id") or ""), "SubagentStop")
         collect_test_devices(budget=8.0)
     elif ev == "TaskCompleted":
         record_handed_in(sid, str(payload.get("agent_id") or payload.get("agentId") or ""),
@@ -6908,6 +7146,8 @@ def lifecycle(payload, entity):
             aid = _taskstop_id(payload.get("tool_response"))
             if aid:
                 record_end(sid, aid, "stopped", "TaskStop")
+                recovery, host = _recovery_adapter()
+                recovery.acknowledgement(host, sid, aid, "stopped")
                 collect_test_devices(budget=8.0)
         elif tool == "SendMessage":
             to = str(ti.get("to") or "")

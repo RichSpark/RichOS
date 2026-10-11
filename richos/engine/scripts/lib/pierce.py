@@ -24,7 +24,11 @@ import sys
 import tempfile
 import time
 
-ENGINE = Path(__file__).resolve().parents[2]
+LIBRARY = Path(__file__).resolve().parent
+if str(LIBRARY) not in sys.path:
+    sys.path.insert(0, str(LIBRARY))
+
+ENGINE = LIBRARY.parents[1]
 LIMIT = 300
 TTL = 900
 CONTEXT_LIMIT = 128000
@@ -70,6 +74,125 @@ SCHEMA = {"type": "object", "properties": {
               "items": {"type": "string", "minLength": 1},
               "description": "Brief nonblocking observations. Empty when there are none."}},
     "required": ["verdict", "report", "notes"], "additionalProperties": False}
+
+
+def classification_context(payload, project):
+    """Reuse the existing inspection to attest semantic job relationships.
+    Dependency names alone never establish correction identity.
+    """
+    import recovery
+    if payload.get("richos_recovery_assignment"):
+        return None  # the desktop obligation issuer already attests identity
+    entity = os.environ.get("RICHOS_ENTITY_ROOT") or str(project)
+    declaration = recovery.mode(entity)
+    if declaration["mode"]=="off":
+        return None
+    import second_review
+    import recovery_runner
+    ws = second_review.load_workspaces(str(ENGINE))
+    sid = str(payload.get("session_id") or "")
+    prompt = (payload.get("tool_input") or {}).get("prompt") or ""
+    references = [line.split()[0] for field in ("continues", "lands-pending", "correction-of")
+                  for line in ws.prompt_lines(prompt, field) if line.split()]
+    selected = {ws._resolve_record(ref,sid)["key"] for ref in references}
+    candidates = []
+    current_key = ws.named_key(sid, str((payload.get("tool_input") or {}).get("name") or ""))
+    for rec in ws.all_agents(include_done=True):
+        if rec["key"]==current_key:
+            continue
+        if rec["key"] not in selected and rec.get("session_id")!=sid and rec.get("claimed_by")!=sid:
+            continue
+        candidate = dict(key=rec["key"], registered_at=rec.get("registered_at"),
+            assignment=None if ws._recovery_unclassified(rec) else rec.get("recovery_assignment"), observed_assignment=rec.get("recovery_observation_assignment"), continues=rec.get("continues",[]),
+            lands_pending=rec.get("lands_pending",[]))
+        transcript = ws.platform_agent_transcript(rec)
+        if transcript:
+            brief, _model, _report = second_review.transcript_facts(transcript)
+            candidate["original_worker_brief"] = recovery_runner.freeze_source(brief.encode(),transcript)
+        candidates.append(candidate)
+    candidates.sort(key=lambda r:(str(r.get("registered_at") or ""),r["key"]))
+    reference = recovery_runner.freeze_source(json.dumps(candidates,sort_keys=True).encode(), "native assignment candidates")
+    gaps=[]
+    originals=None
+    transcript=payload.get("transcript_path")
+    if transcript:
+        try:
+            try:
+                messages=terminal_messages(transcript)
+            except (OSError,ValueError,RecursionError) as error:
+                messages=human_messages(transcript_rows(transcript))
+                gaps.append("Unproved older human lineage: "+str(error))
+            originals=recovery_runner.freeze_source("\n\n".join(messages).encode(),transcript)
+        except (OSError,ValueError) as error:
+            gaps.append("Original human source unavailable: "+str(error))
+    return dict(mode=declaration["mode"], index=reference, originals=originals, gaps=gaps, candidates=candidates[-16:],
+        omitted_from_inline=max(0,len(candidates)-16), instructions=
+        "Classify this exact dispatch as new, corrective or dependent. A dependent feature is a new outcome even "
+        "when its merge needs another branch. Review/helpers are not implementation corrections. Use original "
+        "human authority and indexed native briefs, never naming stems or Git ancestry. If corrective, name exact "
+        "registered keys. For unclassified legacy work include every demonstrated same-job implementation handover "
+        "so the host can reconcile it. Never combine established distinct jobs or reset a recovery budget. If the "
+        "relationship cannot be established, return unavailable and state the missing evidence.")
+
+
+def recovery_context(payload, project):
+    """Recovery observation failures cannot turn baseline Pierce into refusal."""
+    import recovery
+    declaration = recovery.mode(os.environ.get("RICHOS_ENTITY_ROOT") or str(project))
+    try:
+        return classification_context(payload, project), []
+    except Exception as error:
+        if declaration["mode"] != "observe":
+            raise ValueError("recovery classification unavailable: "+str(error)) from error
+        return None, [str(error)]
+
+
+def checked_classification(request, verdict):
+    try:
+        validate_classification(request, verdict)
+    except (OSError, ValueError) as error:
+        if (request.get("recovery_assignment_context") or {}).get("mode") != "observe":
+            raise
+        verdict.pop("assignment_classification", None)
+        verdict["recovery_observation_gaps"] = [str(error)]
+
+
+def classification_schema(observe=False):
+    shape = json.loads(json.dumps(SCHEMA))
+    shape["properties"]["assignment_classification"] = dict(type="object", additionalProperties=False,
+        required=["kind","relation","correction_of","evidence"], properties={
+        "kind":{"enum":["implementation","review","helper"]},
+        "relation":{"enum":["new","corrective","dependent","unavailable"]},
+        "correction_of":{"type":"array","items":{"type":"string"}}, "evidence":{"type":"string"}})
+    if not observe:
+        shape["required"].append("assignment_classification")
+    return shape
+
+
+def validate_classification(request, verdict):
+    context = request.get("recovery_assignment_context")
+    if not context:
+        verdict.pop("assignment_classification", None)
+        return
+    import recovery
+    value = verdict.get("assignment_classification")
+    if (not isinstance(value,dict) or set(value)!={"kind","relation","correction_of","evidence"}
+            or value["kind"] not in ("implementation","review","helper")
+            or value["relation"] not in ("new","corrective","dependent","unavailable")
+            or not isinstance(value["correction_of"],list) or not isinstance(value["evidence"],str)
+            or not value["evidence"].strip()):
+        raise ValueError("job classification lacks structured source evidence")
+    index = context["index"]
+    data = Path(index["reference"]).read_bytes()
+    if hashlib.sha256(data).hexdigest()!=index["sha256"]:
+        raise ValueError("job classification input changed")
+    known = {r["key"] for r in json.loads(data)}
+    if not all(isinstance(r,str) and r in known for r in value["correction_of"]):
+        raise ValueError("job classification names an unobserved predecessor")
+    if value["relation"]=="corrective" and (value["kind"]!="implementation" or not value["correction_of"]):
+        raise ValueError("a correction must identify an implementation predecessor")
+    if value["relation"]!="corrective" and value["correction_of"]:
+        raise ValueError("a dependency or new outcome cannot inherit a correction budget")
 
 
 def state_dir():
@@ -476,7 +599,7 @@ METRIC_KEYS = ("total_cost_usd", "duration_ms", "duration_api_ms", "num_turns", 
                "stop_reason", "terminal_reason", "api_error_status", "safety_stops")
 
 
-def claude_command(cli, profile, read_roots, model="opus", effort=None, output_format="json"):
+def claude_command(cli, profile, read_roots, model="opus", effort=None, output_format="json", shape=None):
     """The inspector's command. With the defaults it is byte-identical to the one Pierce has
     always run (pierce.test.py asserts it); the Haiku twin passes its own model and effort."""
     command = [cli, "--print", "--safe-mode", "--restricted", "--model", model]
@@ -497,7 +620,7 @@ def claude_command(cli, profile, read_roots, model="opus", effort=None, output_f
                "--tools", "Read,Glob,Grep", "--allowedTools", "Read,Glob,Grep",
                "--permission-mode", "dontAsk", "--strict-mcp-config",
                "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
-               "--output-format", output_format, "--json-schema", json.dumps(SCHEMA)])
+               "--output-format", output_format, "--json-schema", json.dumps(shape or SCHEMA)])
     if output_format == "stream-json":
         command.append("--verbose")  # the CLI requires it with --print and stream-json
     if read_roots:
@@ -539,7 +662,8 @@ def run_review(request, profile, model="opus", effort=None, output_format="json"
     cli = os.environ.get("RICHOS_CLAUDE_BIN") if os.environ.get("RICHOS_APP_STATE") else shutil.which("claude")
     if not cli:
         raise ValueError("Claude Code executable was not found on PATH")
-    command = claude_command(cli, profile, request["read_roots"], model, effort, output_format)
+    command = claude_command(cli, profile, request["read_roots"], model, effort, output_format,
+        classification_schema((request.get("recovery_assignment_context") or {}).get("mode")=="observe") if request.get("recovery_assignment_context") else SCHEMA)
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     env["CLAUDE_CODE_SAFE_MODE"] = "1"
@@ -569,6 +693,7 @@ def run_review(request, profile, model="opus", effort=None, output_format="json"
                 or not isinstance(verdict.get("notes"), list) or len(verdict["notes"]) > 3
                 or any(not isinstance(note, str) or not note.strip() for note in verdict["notes"])):
             raise ReviewError("Claude Code returned no valid Pierce verdict", metrics)
+        checked_classification(request, verdict)
         return verdict, metrics
     except subprocess.TimeoutExpired:
         raise ReviewError("Pierce did not finish within five minutes",
@@ -722,11 +847,18 @@ def inspect(payload):
         raise ValueError("Pierce requires a runtime session and tool-call identity")
     profile = (ENGINE / "agents/pierce.md").read_text().split("---", 2)[-1].strip()
     project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()).resolve()
+    classification = None
     try:
         assignment = effective_assignment(payload)
         request = {"user_requests_in_order": human_context(payload),
                    "outgoing_assignment": assignment, "standing_instructions": instruction_text(payload),
                    "project_dir": str(project), "read_roots": read_roots(project, assignment, payload)}
+        classification, recovery_gaps = recovery_context(payload, project)
+        if recovery_gaps:
+            request["recovery_observation_gaps"] = recovery_gaps
+        if classification:
+            request["recovery_assignment_context"] = classification
+            request["read_roots"].append(str(Path(classification["index"]["reference"]).parent.parent))
         missing = None
     except (OSError, ValueError, re.error) as error:
         request = {"outgoing_assignment": ti["prompt"], "context_error": str(error)}
@@ -781,11 +913,16 @@ def inspect(payload):
                     pair = shadow_start(payload, review, profile, identity, project)
                 try:
                     verdict = invoke(review, profile)
+                    checked_classification(request, verdict)
                 except (OSError, ValueError) as error:
                     verdict = Verdict({"verdict": "UNAVAILABLE", "report": str(error)})
                     verdict.metrics = getattr(error, "metrics", {})
             result = {"id": identity, "at": time.time(), "session_id": payload["session_id"],
                       "tool_use_id": payload["tool_use_id"], "review_mode": review["review"]["mode"], **verdict}
+            if request.get("recovery_observation_gaps"):
+                result["recovery_observation_gaps"] = request["recovery_observation_gaps"]
+            if classification:
+                result["classification_index"] = classification["index"]
             atomic(path, result)
             atomic(lane_path, {"id": identity, "started": started, "request": request})
             shadow_opus(pair, result, getattr(verdict, "metrics", {}), began)

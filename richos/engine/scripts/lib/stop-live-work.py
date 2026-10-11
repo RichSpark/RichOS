@@ -289,12 +289,13 @@ def consume_ack(entity_root, ack):
 ALLOW_NOT_LIVE = "allow-not-live"
 ALLOW_SELF = "allow-self"
 ALLOW_ACK = "allow-acked"
+ALLOW_RECOVERY = "allow-recovery"
 ALLOW_UNDECIDABLE = "allow-undecidable"
 REFUSE = "refuse"
 
 
 def decide(task_id, liveness, entity_root, self_agent_id="",
-           resolved_agent_id="", now=None, session_id=""):
+           resolved_agent_id="", now=None, session_id="", recovery_authority=False):
     """The whole contract, as one pure function so the tests can drive it.
 
     `liveness` is "ALIVE" | "NOT-ALIVE" | "INDETERMINATE" — supplied by the
@@ -322,6 +323,8 @@ def decide(task_id, liveness, entity_root, self_agent_id="",
                 "liveness is INDETERMINATE for %s — allowed, and said out loud "
                 "rather than guessed" % (tid or "the target"), None)
 
+    if recovery_authority:
+        return ALLOW_RECOVERY, "exact-worker cancellation requested by recorded recovery control", None
     ack, ack_why = find_live_ack(entity_root, tid, now=now, session_id=session_id)
     if ack:
         return ALLOW_ACK, ack_why, ack
@@ -350,10 +353,20 @@ def _cli():
     ap.add_argument("--consume", action="store_true")
     a = ap.parse_args()
 
+    recovery_authority = False
+    try:
+        from pathlib import Path
+        import recovery_controls
+        import second_review
+        if recovery_controls.R.mode(a.entity_root)["mode"] != "off":
+            ws = second_review.load_workspaces(str(Path(__file__).resolve().parents[2]))
+            recovery_authority = recovery_controls.cancellation_authority(ws, a.task_id, a.session_id)
+    except (OSError, ValueError, ImportError):
+        pass  # No typed authority: the existing live-stop predicate still applies.
     verdict, why, ack = decide(
         a.task_id, a.liveness, a.entity_root,
         self_agent_id=a.self_agent_id, resolved_agent_id=a.resolved_agent_id,
-        session_id=a.session_id)
+        session_id=a.session_id, recovery_authority=recovery_authority)
     if verdict == ALLOW_ACK and ack and a.consume:
         consume_ack(a.entity_root, ack)
     print(json.dumps({"verdict": verdict, "reason": why,

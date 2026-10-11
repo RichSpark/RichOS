@@ -35,6 +35,18 @@ bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# A hook writes its runtime record under <entity>/.claude/state/. Every guard
+# invocation below is seated on a sandbox entity, never on the engine checkout:
+# an unseated run resolved the checkout and wrote unevaluated-payloads.log into
+# it (ci-shard.sh fails that as STATE-WRITTEN). The witness at the end asserts it.
+# shellcheck source=../lib/entity-sandbox.sh
+. "$ENGINE_ROOT/scripts/lib/entity-sandbox.sh"
+SANDBOX_ENT="$(entity_sandbox "$ENGINE_ROOT")"
+trap 'rm -rf "$TMP" "$SANDBOX_ENT"' EXIT
+ENGINE_STATE_DIR="$ENGINE_ROOT/.claude/state"
+STATE_BEFORE="$(ls -la "$ENGINE_STATE_DIR" 2>&1; cat "$ENGINE_STATE_DIR"/* 2>/dev/null | cksum)"
+guard_sandboxed() { RICHOS_ENTITY_ROOT="$SANDBOX_ENT" CLAUDE_PROJECT_DIR="$SANDBOX_ENT" bash "$GUARD"; }
+
 decide() {  # task liveness entity [self-agent-id] -> verdict
     python3 "$LIB" --task-id "$1" --liveness "$2" \
         --entity-root "$3" ${4:+--self-agent-id "$4"} 2>/dev/null \
@@ -187,20 +199,20 @@ echo
 echo "== THE HOOK WIRING =="
 payload() { printf '{"tool_name":"%s","tool_input":%s,"session_id":"s1","cwd":"%s","transcript_path":"%s"}' "$1" "$2" "${3:-$PWD}" "${4:-}"; }
 
-out="$(printf '%s' "$(payload Bash '{"command":"ls"}')" | bash "$GUARD" 2>&1)"; rc=$?
+out="$(printf '%s' "$(payload Bash '{"command":"ls"}')" | guard_sandboxed 2>&1)"; rc=$?
 [ $rc -eq 0 ] && [ -z "$out" ] && ok "a payload for another tool exits 0 in silence" \
     || bad "non-TaskStop payload: rc=$rc out=$out"
 
-out="$(printf 'not json at all' | bash "$GUARD" 2>&1)"; rc=$?
+out="$(printf 'not json at all' | guard_sandboxed 2>&1)"; rc=$?
 [ $rc -eq 0 ] && ok "an unreadable payload fails OPEN (never blocks a cleanup)" \
     || bad "unreadable payload blocked: rc=$rc"
 
-out="$(printf '%s' "$(payload TaskStop '{"task_id":""}')" | bash "$GUARD" 2>&1)"; rc=$?
+out="$(printf '%s' "$(payload TaskStop '{"task_id":""}')" | guard_sandboxed 2>&1)"; rc=$?
 [ $rc -eq 0 ] && ok "a TaskStop with no task_id fails OPEN and says so" \
     || bad "empty task_id blocked: rc=$rc"
 
 # A target that resolves to nothing at all -> INDETERMINATE -> allowed, noisily.
-out="$(printf '%s' "$(payload TaskStop '{"task_id":"nobody-opus-zz9"}')" | bash "$GUARD" 2>&1)"; rc=$?
+out="$(printf '%s' "$(payload TaskStop '{"task_id":"nobody-opus-zz9"}')" | guard_sandboxed 2>&1)"; rc=$?
 [ $rc -eq 0 ] && ok "an unresolvable target is allowed, not blocked" \
     || bad "unresolvable target blocked: rc=$rc out=$out"
 
@@ -281,6 +293,15 @@ JSONL
         bad "could not build a LIVE fixture (resolver exit $lrc)" "$LIVEV"
     fi
 fi
+
+echo
+echo "== THE SUITE WRITES NOTHING INTO THE ENGINE CHECKOUT =="
+STATE_AFTER="$(ls -la "$ENGINE_STATE_DIR" 2>&1; cat "$ENGINE_STATE_DIR"/* 2>/dev/null | cksum)"
+[ "$STATE_BEFORE" = "$STATE_AFTER" ] && ok "the engine's .claude/state is unchanged by this suite" \
+    || bad "the suite wrote into $ENGINE_STATE_DIR" "$STATE_AFTER"
+[ -s "$SANDBOX_ENT/.claude/state/unevaluated-payloads.log" ] \
+    && ok "the unreadable-payload record landed in the sandbox entity instead" \
+    || bad "no unreadable-payload record in the sandbox: the seat is not in effect"
 
 echo
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"

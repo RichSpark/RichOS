@@ -4060,11 +4060,28 @@ run_layer_OF() {
     fi
 }
 
+# Recovery is explicitly adopted per entity. No declaration means no new probe.
+run_layer_RC() {
+    local tool="$ENGINE_ROOT/scripts/recovery.sh" out rc
+    [ -f "$REPO_ROOT/.claude/recovery.json" ] || return 0
+    if [ ! -f "$tool" ]; then
+        emit_fail "RC. recovery is declared but its host contract reader is absent: $tool"
+        return 0
+    fi
+    out="$(bash "$tool" contract --entity "$REPO_ROOT" --installed-engine "$ENGINE_ROOT" 2>&1)" && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        emit_pass "RC. recovery declaration and installed mode/profile/source contract agree; native capabilities require separate qualification"
+    else
+        emit_fail "RC. recovery contract unavailable: $out"
+    fi
+}
+
 run_layer_R
 run_layer_AL
 run_layer_MT
 run_layer_MC
 run_layer_OF
+run_layer_RC
 # Layer EP lives in its own file, and this include is GUARDED rather than bare.
 # A bare `.` of a missing file under `set -e` ends the probe HERE — after every
 # ✗ has been printed and BEFORE the epilogue that turns them into exit 2 — so

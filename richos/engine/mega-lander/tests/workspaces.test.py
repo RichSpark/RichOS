@@ -237,6 +237,359 @@ class Base(unittest.TestCase):
 
 
 # ===========================================================================
+class RecoveryOffParity(unittest.TestCase):
+    def test_existing_native_spawn_continuation_review_and_landing_match_main_when_off(self):
+        # Golden outcomes were witnessed on frozen main 97b7cc5ff and the candidate.
+        # Real registrations and landing readers run in fresh script interpreters.
+        # The reviewer provider and review processes are fixtures, never user agents.
+        scenario = r"""import importlib.util,json,os,subprocess,sys,time
+from pathlib import Path
+engine=Path(sys.argv[1]).resolve()
+spec=importlib.util.spec_from_file_location('fixture',engine/'mega-lander/tests/workspaces.test.py')
+T=importlib.util.module_from_spec(spec);spec.loader.exec_module(T)
+w=T.ws;case=T.Base();case.setUp()
+try:
+ root=Path(case.env.root);home=Path(case.env.home)
+ os.environ['RICHOS_ENTITY_ROOT']=case.entity
+ os.environ.pop('RICHOS_APP_STATE',None);os.environ.pop('RICHOS_APP_SCOPE',None)
+ os.environ['SECOND_REVIEW_STATE_DIR']=str(root/'reviews')
+ os.environ['REVIEW_WATCH_STATE_DIR']=str(root/'watch')
+ binary=root/'bin';binary.mkdir()
+ provider=binary/'claude'
+ provider.write_text('#!'+sys.executable+'\nimport json\nprint(json.dumps({"structured_output":{"verdict":"PASS","report":"Authorized parity assignment","notes":[]}}))\n')
+ provider.chmod(0o755)
+ os.environ['PATH']=str(binary)+os.pathsep+os.environ['PATH']
+ definition=Path(case.entity)/'.claude/agents/fixture.md';definition.parent.mkdir(parents=True)
+ definition.write_text('Implement the explicitly requested fixture outcome.\n')
+ transcript=root/'native.jsonl';transcript.write_text(json.dumps(dict(type='user',message=dict(content='Implement the fixture outcome and its corrections.')))+'\n')
+ if len(sys.argv)>2 and sys.argv[2]=='off':
+  declaration=Path(case.entity)/'.claude/recovery.json'
+  declaration.write_text(json.dumps(dict(schema=1,mode='off',repositories=[case.other])))
+ result={}
+ def spawn(name,base='HEAD',extra='',host=None):
+  cc=case.make_cc(name,base=base)
+  payload=dict(session_id=case.sid,tool_use_id='tu-'+name,tool_name='Agent',hook_event_name='PreToolUse',cwd=case.entity,transcript_path=str(transcript),tool_input=dict(name=name,subagent_type='fixture',prompt='Implement the fixture outcome.\ncross-repo-worktree: '+cc+'\n'+extra,isolation=''))
+  if host:payload['richos_recovery_assignment']=host
+  answer=subprocess.run([sys.executable,'-I','-B',str(engine/'mega-lander/workspaces.py'),'--entity',case.entity,'register-spawn'],input=json.dumps(payload),text=True,capture_output=True,env=os.environ.copy())
+  assert answer.returncode==0,answer.stdout+answer.stderr
+  aid='id-'+name
+  w.bind_agent(case.sid,'tu-'+name,aid,case.entity)
+  case.commit(cc,fname=name+".txt")
+  case.finish(aid)
+  return cc,case.rec(name)
+ cc,old=spawn('parity-old')
+ old['registered_at']='2026-10-10T00:00:00Z';w.save_agent(old)
+ result['native_spawn']='registered'
+ cc2,new=spawn('parity-new',base='cc/parity-old',extra='continues: parity-old\n')
+ sys.path.insert(0,str(engine/'scripts/lib'))
+ import review_watch as RW,second_review as SR,operator_fences as F
+ legacy=dict(new,key=new['key']+'-legacy',name='parity-legacy',continues=['withdrawn-orphan'])
+ legacy.pop('recovery_assignment',None);w.save_agent(legacy)
+ cfg=Path(case.entity)/'orchestration.config';cfg.write_text('SECOND_REVIEW_REPOS="other"\n')
+ world=RW.World(str(engine),str(cfg));items,problems=world.registry_items(time.time(),{})
+ item=next(i for i in items if i.name=='parity-new')
+ assert not problems,problems
+ result['legacy_review_included']=any(i.name=='parity-legacy' and i.work=='teammate:'+legacy['key'] for i in items)
+ legacy['disposition']='discarded';w.save_agent(legacy)
+ result['continuation_identity']='old-root' if item.work=='teammate:'+old['key'] else 'new-root'
+ cc3,app=spawn('parity-app',base='cc/parity-new',extra='continues: parity-new\n',host=dict(kind='implementation',outcome='app:E:OB1',acceptance='original'))
+ app_items,app_problems=world.registry_items(time.time(),{})
+ assert not app_problems,app_problems
+ app_item=next(i for i in app_items if i.name=='parity-app')
+ result['app_review_identity']='old-root' if app_item.work=='teammate:'+old['key'] else 'new-root'
+ original=Path(SR.state_root())/'reviews/prior';original.mkdir(parents=True)
+ (original/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[dict(title='original blocker',blocks=True,priority=1)]))))
+ ledger=Path(SR.ledger_path());ledger.parent.mkdir(parents=True,exist_ok=True)
+ row=dict(id='prior',repo=case.other,repo_id=SR.repo_identity(case.other),work='teammate:'+old['key'],tip='a'*40,trigger='handover',verdict='changes-requested',record=str(original))
+ ledger.write_text(json.dumps(row)+'\n')
+ result['predecessor_findings']=len(SR.earlier_findings(item.work,item.tip,item.repo))
+ result['app_predecessor_findings']=len(SR.earlier_findings(app_item.work,app_item.tip,app_item.repo))
+ item=app_item
+ ledger.write_text('')
+ class Writer(RW.Watcher):
+  calls=0
+  def spawn(self,candidate,trigger,log_path):
+   self.calls+=1
+   record=Path(SR.state_root())/'reviews/automatic';record.mkdir(parents=True,exist_ok=True)
+   (record/'verdict.json').write_text(json.dumps(dict(answer=dict(findings=[]))))
+   row=dict(id='automatic',at=SR.iso(),repo=candidate.repo,repo_id=SR.repo_identity(candidate.repo),tip=candidate.tip,work=candidate.work,trigger=trigger,verdict='passed',record=str(record),findings=0,blocking=0,p1=0,reviewer='fixture',reviewer_model='fixture')
+   with ledger.open('a') as out:out.write(json.dumps(row)+'\n')
+   Path(log_path).write_text('fixture completed\n')
+   return 999999,'fixture-finished'
+ watcher=Writer(str(engine),str(cfg),world)
+ now=time.time();watcher.look(now,{});watcher.look(now+1,{})
+ result['automatic_handover_reviews']=watcher.calls
+ # Execute landing's existing review reader in a fresh script-like interpreter.
+ code=r'''
+import importlib.util,json,os,sys
+s=importlib.util.spec_from_file_location('w',sys.argv[1]);w=importlib.util.module_from_spec(s);s.loader.exec_module(w)
+f=w._fence_program();repo,tip,ledger=sys.argv[2:]
+w._registry_entity_map=lambda _:{}
+w._declared_review_listing=lambda *a:(True,[],None)
+w._review_ledgers=lambda *a:([ledger],None)
+try:w._review_check([(repo,'cc/parity-app',repo,tip)])
+except w.SpecError:print('refused')
+else:print('accepted')
+'''
+ def landing():
+  answer=subprocess.run([sys.executable,'-I','-B','-c',code,str(engine/'mega-lander/workspaces.py'),item.repo,item.tip,str(ledger)],capture_output=True,text=True,env=os.environ.copy())
+  assert answer.returncode==0,answer.stdout+answer.stderr
+  return answer.stdout.strip()
+ result['passing_landing_review']=landing()
+ row=json.loads(ledger.read_text().splitlines()[-1]);row.update(verdict='changes-requested',record=str(original),id='blocked')
+ ledger.write_text(json.dumps(row)+'\n')
+ result['blocking_landing_review']=landing()
+ print(json.dumps(result,sort_keys=True))
+finally:case.tearDown()
+"""
+        expected=dict(native_spawn='registered',continuation_identity='old-root',predecessor_findings=1,
+            automatic_handover_reviews=1,passing_landing_review='accepted',blocking_landing_review='refused',legacy_review_included=True,
+            app_review_identity='old-root',app_predecessor_findings=1)
+        for mode in ('absent','off'):
+            with self.subTest(mode=mode):
+                engine=os.path.dirname(os.path.dirname(os.path.realpath(LIB)))
+                result=subprocess.run([sys.executable,'-I','-B','-c',scenario,engine,mode],capture_output=True,text=True,env=os.environ.copy())
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1]),expected)
+
+
+class RecoveryChain(Base):
+    def test_refused_landing_routes_in_a_fresh_cli_interpreter(self):
+        code = r"""
+import importlib.util,json,os,sys
+spec=importlib.util.spec_from_file_location('workspaces',sys.argv[1])
+w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
+f=w._fence_program();repo=sys.argv[2];state=sys.argv[3];tip='a'*40
+record=os.path.join(state,'rv');os.makedirs(record)
+with open(os.path.join(record,'verdict.json'),'w') as out:
+ json.dump(dict(answer=dict(findings=[dict(blocks=True,priority=1,title='defect',files=['a'],evidence='original')])),out)
+ledger=os.path.join(state,'reviews.jsonl')
+with open(ledger,'w') as out:
+ out.write(json.dumps(dict(id='rv',repo=repo,repo_id=f.review_repo_identity(repo),work='teammate:fixture',tip=tip,trigger='handover',verdict='changes-requested',record=record))+'\n')
+w._registry_entity_map=lambda _:{}
+w._declared_review_listing=lambda *a:(True,[],None)
+w._review_ledgers=lambda *a:([ledger],None)
+try:w._review_check([(repo,'cc/work',repo,tip)])
+except w.SpecError:
+ assert (__import__('pathlib').Path(state)/'recovery/routing-requests.jsonl').is_file(), 'routing request absent'
+else:raise AssertionError('blocked review was accepted')
+"""
+        state=os.path.join(self.env.root,'cli-review-state');os.makedirs(state)
+        env=dict(os.environ,SECOND_REVIEW_STATE_DIR=state)
+        result=subprocess.run([sys.executable,'-I','-B','-c',code,os.path.realpath(LIB),self.other,state],env=env,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_off_mode_continuation_preserves_predecessor_review_findings(self):
+        import types
+        cc=self.make_cc('old-review-work')
+        aid,_=self.spawn('old-review-work',cc)
+        self.commit(cc);self.finish(aid)
+        old=self.rec('old-review-work')
+        old['registered_at']='2026-10-10T00:00:00Z';ws.save_agent(old)
+        cc2=self.make_cc('continued-review-work',base='cc/old-review-work')
+        self.spawn('continued-review-work',cc2,extra='continues: old-review-work\n')
+        new=self.rec('continued-review-work')
+        baseline='teammate:'+old['key']
+        self.assertEqual(ws.recovery_work_key(new),baseline)
+        control,host=ws._recovery_adapter()
+        import second_review as SR
+        record=os.path.join(self.env.root,'prior-review');os.makedirs(record)
+        with open(os.path.join(record,'verdict.json'),'w') as out:
+            json.dump(dict(answer=dict(findings=[dict(title='data loss',blocks=True,priority=1)])),out)
+        row=dict(id='prior',repo=self.other,work=baseline,tip='a'*40,trigger='handover',verdict='changes-requested',record=record)
+        with patch.object(SR,'read_ledger',return_value=[row]):
+            self.assertEqual([fid for fid,_ in SR.earlier_findings(ws.recovery_work_key(new),'b'*40,self.other)],['prior#1'])
+        # Review identity does not rewrite semantic correction authority or cleanup.
+        self.assertEqual(new['recovery_assignment']['correction_of'],[])
+        self.assertEqual([r['key'] for r in ws._chain(new)],[new['key'],old['key']])
+
+    def recovery_fixture(self, name='recovery-worker'):
+        cc = self.make_cc(name)
+        aid, _path = self.spawn(name, cc)
+        rec = next(r for r in ws.all_agents() if r.get('agent_id') == aid)
+        control, host = ws._recovery_adapter()
+        state = os.path.join(self.env.root, 'private-review-state')
+        self.env.saved.setdefault('SECOND_REVIEW_STATE_DIR', os.environ.get('SECOND_REVIEW_STATE_DIR'))
+        os.environ['SECOND_REVIEW_STATE_DIR'] = state
+        os.makedirs(state, exist_ok=True)
+        work = ws.recovery_work_key(rec)
+        ledger = os.path.join(state, 'reviews.jsonl')
+        with open(ledger, 'w') as out:
+            for n in range(3):
+                out.write(json.dumps(dict(id='failed-'+str(n), repo=self.other, work=work, tip=str(n)*40,
+                    trigger='handover', verdict='changes-requested', record=state))+'\n')
+        record = control.R.reconcile(self.other, work, {work}, self.sid,
+            rec['recovery_assignment']['acceptance'], mode='enforce')
+        rec['recovery_jobs'] = [record['id']]
+        ws.save_agent(rec)
+        return cc, aid, rec, control, host, record
+
+    def test_enforcement_tracks_tools_before_the_threshold_and_after_mode_change(self):
+        cc,aid,rec,control,host,record=self.recovery_fixture('early-tracking')
+        rec['recovery_jobs']=[]
+        rec['recovery_assignment']['observation_only']=True
+        ws.save_agent(rec)
+        payload=dict(agent_id=aid,tool_use_id='early-write',tool_name='Write')
+        with patch.object(control.R,'mode',return_value=dict(mode='enforce')):
+            self.assertEqual(control.begin_tool(host,payload,rec),(True,''))
+        self.assertIn('early-write',ws.load_agent(rec['key'])['recovery_tools'])
+        control.finish_tool(host,payload)
+        with patch.object(control.R,'mode',return_value=dict(mode='observe')),patch.object(ws,'Lock',side_effect=AssertionError('observation lock')):
+            control,host=ws._recovery_adapter()
+            self.assertEqual(control.begin_tool(host,payload,rec),(True,''))
+
+    def test_idle_hooks_do_not_scan_all_workers_or_take_the_registry_lock(self):
+        cc,aid,rec,control,host,record=self.recovery_fixture('idle-hooks')
+        with patch.object(ws,'all_agents',side_effect=AssertionError('idle registry scan')), patch.object(ws,'Lock',side_effect=AssertionError('idle registry lock')):
+            control,host=ws._recovery_adapter()
+            self.assertEqual(control.cancellation_notice(host,self.sid),'')
+            control.finish_tool(host,dict(agent_id=aid,tool_use_id='no-recovery-tool'))
+        self.assertFalse(ws.load_agent(rec['key']).get('recovery_control'))
+
+    def test_control_refuses_all_tools_without_manufacturing_an_end(self):
+        cc, aid, rec, control, host, record = self.recovery_fixture()
+        payload = dict(session_id=self.sid, agent_id=aid, tool_name='Write', tool_use_id='native-write')
+        self.assertEqual(ws.barrier(payload)[0], 'REGISTERED')
+        tip = control.source_identity(host, cc)
+        decision = control.R.control(record['id'], dict(job=record['id'], acceptance=record['acceptance'],
+            frontier=record['evidence_cursor'], action='stop', workers={rec['key']:tip},
+            reason='the three attempts miss the same transition', evidence='independent findings'), 'axel')
+        with patch.object(ws, 'end_owned_work', return_value={'ok':True,'survivors':[],'excluded':[]}):
+            # host keeps function references, so get it after installing the spy.
+            control, host = ws._recovery_adapter()
+            result = control.stop(host, rec['key'], record, decision, tip)
+        self.assertFalse(result['quiescent'])
+        self.assertIn(aid,control.cancellation_notice(host,self.sid))
+        self.assertFalse(ws.load_agent(rec['key']).get('end'))
+        for tool in ('Read', 'Write', 'Edit', 'Bash', 'Agent', 'SubagentHandback'):
+            self.assertEqual(ws.barrier(dict(payload, tool_name=tool))[0], 'CONTROLLED')
+        ws.lifecycle(dict(payload, hook_event_name='PostToolUseFailure'), self.entity)
+        self.assertEqual(ws.load_agent(rec['key'])['recovery_tools'], {})
+        self.assertEqual(ws.barrier(dict(session_id=self.sid, tool_name='Read'))[0], 'LEAD')
+
+    def test_a_stale_control_never_freezes_the_successor_source(self):
+        cc, aid, rec, control, host, record = self.recovery_fixture('stale-worker')
+        result = control.stop(host, rec['key'], record, dict(id='old', reason='old evidence'), 'f'*40)
+        self.assertEqual(result['status'], 'stale')
+        self.assertFalse(ws.load_agent(rec['key']).get('recovery_control'))
+
+    def test_uncommitted_progress_invalidates_old_applicability(self):
+        cc, aid, rec, control, host, record = self.recovery_fixture('changing-worker')
+        source = control.source_identity(host, cc)
+        with open(os.path.join(cc, 'new-source.txt'), 'w') as out:
+            out.write('A fix that the earlier judgment has not seen')
+        result = control.stop(host, rec['key'], record, dict(id='old', reason='old evidence'), source)
+        self.assertEqual(result['status'], 'stale')
+        self.assertFalse(ws.load_agent(rec['key']).get('recovery_control'))
+
+    def test_correction_history_does_not_expand_lifecycle_ownership(self):
+        old = ws.new_record('old-session--original', registered_at='2026-10-10T00:00:00Z',
+            recovery_assignment=dict(kind='implementation', outcome='original', correction_of=[], acceptance='same'))
+        ws.save_agent(old)
+        successor = ws.new_record('new-session--replacement', registered_at='2026-10-11T00:00:00Z',
+            lands_pending=[old['key']], recovery_assignment=dict(kind='implementation', outcome='original',
+                correction_of=[old['key']], acceptance='same'))
+        ws.save_agent(successor)
+        self.assertEqual([r['key'] for r in ws.recovery_chain(successor)], [old['key'], successor['key']])
+        self.assertEqual([r['key'] for r in ws._chain(successor)], [successor['key']])
+        reviewer = dict(successor, key='reviewer', recovery_assignment=dict(kind='review', outcome='original', correction_of=[]))
+        self.assertEqual(ws.recovery_work_key(reviewer), 'teammate:reviewer')
+        feature = dict(successor, key='independent-feature', recovery_assignment=dict(kind='implementation', outcome='new-outcome', correction_of=[]))
+        self.assertEqual(ws.recovery_work_key(feature), 'teammate:independent-feature')
+
+    def test_off_mode_preserves_multi_continuation_and_ignores_unadopted_correction_metadata(self):
+        first=ws.new_record(self.sid+'--first',recovery_assignment=dict(kind='implementation',outcome='a',correction_of=[],acceptance='a'))
+        second=ws.new_record(self.sid+'--second',recovery_assignment=dict(kind='implementation',outcome='b',correction_of=[],acceptance='b'))
+        ws.save_agent(first);ws.save_agent(second)
+        current=ws.new_record(self.sid+'--off',entity=self.entity)
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='correction-of: missing\nContinue both finished agents'))
+        assignment=ws._recovery_assignment(payload,current,[first['key'],second['key']],[])
+        self.assertEqual(assignment['outcome'],'teammate:'+current['key'])
+        self.assertEqual(assignment['correction_of'],[])
+
+    def test_observed_identity_is_a_projection_and_never_rewrites_live_review_work(self):
+        one=ws.new_record(self.sid+'--observed-one',registered_at='2026-10-10T00:00:00Z')
+        two=ws.new_record(self.sid+'--observed-two',registered_at='2026-10-10T01:00:00Z')
+        ws.save_agent(one);ws.save_agent(two)
+        current=ws.new_record(self.sid+'--observed-current',entity=self.entity)
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='Continue the accepted outcome'))
+        inspection=dict(id='observed',classification_index=dict(sha256='source'),assignment_classification=dict(kind='implementation',relation='corrective',correction_of=[one['key'],two['key']],evidence='indexed original briefs'))
+        control,host=ws._recovery_adapter()
+        with patch.object(control.R,'mode',return_value=dict(mode='observe',repositories=[self.other])):
+            baseline=ws._recovery_assignment(payload,current,[],[])
+            before=ws.recovery_work_key(dict(current,recovery_assignment=baseline))
+            assignment=ws._recovery_assignment(payload,current,[],[],inspection)
+            self.assertEqual(ws.recovery_work_key(dict(current,recovery_assignment=assignment)),before)
+            self.assertEqual(ws.load_agent(one['key']),one)
+            self.assertEqual(ws.load_agent(two['key']),two)
+            projection=dict(current,recovery_assignment=current['recovery_observation_assignment'])
+            work,aliases,acceptance=control.work(host,projection)
+            self.assertEqual(work,'teammate:'+one['key'])
+            self.assertEqual(aliases,{'teammate:'+r['key'] for r in [one,two,current]})
+            self.assertEqual(acceptance,'legacy:'+one['key'])
+
+    def test_native_classification_reconciles_legacy_corrections_but_not_dependencies(self):
+        original=ws.new_record(self.sid+'--legacy-one',registered_at='2026-10-10T00:00:00Z')
+        second=ws.new_record(self.sid+'--legacy-two',registered_at='2026-10-10T01:00:00Z')
+        ws.save_agent(original)
+        ws.save_agent(second)
+        current=ws.new_record(self.sid+'--current',entity=self.entity)
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='Implement the same accepted outcome'))
+        inspector=dict(id='inspection',classification_index=dict(sha256='source'),assignment_classification=dict(
+            kind='implementation',relation='corrective',correction_of=[original['key'],second['key']],evidence='Both original indexed briefs correct the same outcome'))
+        assignment=ws._classified_recovery_assignment(payload,current,[],[second['key']],inspector)
+        self.assertEqual(assignment['acceptance'],'legacy:'+original['key'])
+        current['recovery_assignment']=assignment
+        self.assertEqual(len(ws.recovery_chain(current)),3)
+        independent=dict(inspector,assignment_classification=dict(kind='implementation',relation='dependent',correction_of=[],evidence='A different accepted feature depends on the merge'))
+        feature=ws._classified_recovery_assignment(payload,dict(current,key=self.sid+'--feature'),[],[second['key']],independent)
+        self.assertNotEqual(feature['outcome'],assignment['outcome'])
+        self.assertEqual(feature['correction_of'],[])
+        self.assertEqual(len(ws._chain(current)),1)
+
+    def test_app_consult_keeps_its_existing_research_tools_with_recovery_off(self):
+        cc=self.make_cc('consult')
+        aid,_path=self.spawn('consult',cc)
+        rec=self.rec('consult')
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='Research the referenced video'))
+        payload['richos_recovery_assignment']=dict(kind='helper',outcome='app:consult',acceptance='research')
+        rec['recovery_assignment']=ws._recovery_assignment(payload,rec,[],[])
+        ws.save_agent(rec)
+        for tool in ('Read','Bash','WebSearch','WebFetch','Skill'):
+            self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name=tool))[0],'REGISTERED',tool)
+        self.assertEqual(rec['recovery_assignment']['kind'],'helper')
+
+    def test_observation_does_not_restrict_a_native_helper_or_refuse_bad_identity(self):
+        cc=self.make_cc('observed-helper')
+        aid,_path=self.spawn('observed-helper',cc)
+        rec=next(r for r in ws.all_agents() if r.get('agent_id')==aid)
+        control,host=ws._recovery_adapter()
+        payload=dict(session_id=self.sid,cwd=self.entity,tool_input=dict(prompt='research the issue'))
+        with patch.object(control.R,'mode',return_value=dict(mode='observe',repositories=[self.other])):
+            rec['recovery_assignment']=ws._recovery_assignment(payload,rec,[],[],dict(id='observed',assignment_classification=dict(kind='helper',relation='new',correction_of=[],evidence='source')))
+            ws.save_agent(rec)
+            self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Bash'))[0],'REGISTERED')
+            with patch.object(ws,'_classified_recovery_assignment',side_effect=ws.SpecError('identity gap')):
+                assignment=ws._recovery_assignment(payload,rec,[],[])
+                self.assertEqual(assignment['authority']['observation_gap'],'identity gap')
+            with patch.object(control.R,'reconcile',side_effect=control.R.Unavailable('ledger unavailable')):
+                self.assertEqual(control.admitted(host,payload,rec,dict(kind='implementation',acceptance='source'),[self.other],self.entity),[])
+                self.assertEqual(rec['recovery_observation_gap'],'ledger unavailable')
+        import recovery_runner as RR
+        with patch.object(RR,'launch',side_effect=OSError('launch unavailable')):
+            self.assertEqual(control.schedule(dict(mode='observe',axel_required=True,wes_candidates=[]),'engine')['observation_gap'],'launch unavailable')
+            with self.assertRaises(OSError):control.schedule(dict(mode='enforce',controls=[],status='investigating',axel_required=True),'engine')
+        with patch.object(control.R,'mode',return_value=dict(mode='enforce',repositories=[self.other])), patch.object(ws,'_classified_recovery_assignment',side_effect=ws.SpecError('identity gap')):
+            with self.assertRaises(ws.SpecError):ws._recovery_assignment(payload,rec,[],[])
+
+    def test_read_only_classification_cannot_grant_a_writer_a_new_budget(self):
+        cc = self.make_cc('helper')
+        aid, _path = self.spawn('helper', cc, extra='recovery-role: helper')
+        self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Bash'))[0], 'READONLY')
+        self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Edit'))[0], 'READONLY')
+        self.assertEqual(ws.barrier(dict(session_id=self.sid,agent_id=aid,tool_name='Read'))[0], 'REGISTERED')
+
+
 class Point01_CcNaming(Base):
     """1. Every non-native Claude workspace is named cc/."""
 
@@ -4114,6 +4467,63 @@ ENGINE = os.path.realpath(os.path.join(HERE, "..", ".."))
 
 
 class SecondReview_NoWorkLandsUnreviewed(Base):
+
+    def test_off_requires_a_reason_and_audits_native_authority(self):
+        before=open(os.path.join(self.other,'.git/hooks/reference-transaction')).read()
+        refused=run('bash',self.fences,'off','--repo',self.other,check=False)
+        self.assertNotEqual(refused.returncode,0)
+        self.assertIn('--reason',refused.stdout)
+        self.assertEqual(open(os.path.join(self.other,'.git/hooks/reference-transaction')).read(),before)
+        forged=run('bash',self.fences,'off','--repo',self.other,'--reason','Forged claim','--holder','unverified','--holder-pid','99999999',check=False)
+        self.assertNotEqual(forged.returncode,0)
+        self.assertEqual(open(os.path.join(self.other,'.git/hooks/reference-transaction')).read(),before)
+        run('bash',self.fences,'off','--repo',self.other,'--reason','Investigate the lease mechanism')
+        F=ws._fence_program()
+        with open(os.path.join(F._default_home(),'operator-fence-settings.jsonl')) as audit:
+            rows=[json.loads(line) for line in audit if line.strip()]
+        self.assertEqual(rows[-1]['reason'],'Investigate the lease mechanism')
+        self.assertEqual(rows[-1]['value'],'off')
+        self.assertIn('actor',rows[-1])
+        self.assertIn('authority',rows[-1])
+
+    def test_off_retains_direct_git_review_acceptance(self):
+        _cc,(tip,)=self.finished('zach-opus-off-review')
+        run('bash',self.fences,'off','--repo',self.other,'--reason','Investigate the lease mechanism')
+        before=self.head()
+        result=run('git','-C',self.other,'merge','--ff-only','cc/zach-opus-off-review',check=False)
+        self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('SECOND REVIEW',result.stderr)
+        self.assertEqual(self.head(),before)
+        self.verdict(tip,'passed')
+        run('git','-C',self.other,'merge','--ff-only','cc/zach-opus-off-review')
+        self.assertEqual(self.head(),tip)
+
+    def test_conflicting_reviews_cannot_be_erased_by_a_later_pass(self):
+        F = ws._fence_program()
+        tip = run('git', '-C', self.other, 'rev-parse', 'HEAD').stdout.strip()
+        rows = []
+        def record(rid, verdict, findings=(), earlier=(), recheck=''):
+            folder = os.path.join(self.env.root, rid)
+            os.makedirs(folder)
+            row = dict(id=rid, repo=self.other, tip=tip, trigger='handover', verdict=verdict,
+                       record=folder, recheck_of=recheck)
+            with open(os.path.join(folder, 'verdict.json'), 'w') as out:
+                json.dump(dict(answer=dict(findings=list(findings), earlier_findings=list(earlier)),
+                               earlier_findings_in=[dict(id=e['id']) for e in earlier]), out)
+            rows.append(row)
+        f = dict(blocks=True, priority=1, title='User data lost', files=['state.py'], evidence='fixture', fixture='')
+        record('first', 'changes-requested', [f])
+        record('late-pass', 'passed')
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'changes-requested')
+        record('unwitnessed', 'passed', earlier=[dict(id='first#1',status='withdrawn',note='opinion')])
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'changes-requested')
+        record('independent-resolution', 'passed', earlier=[dict(id='first#1',status='withdrawn',note='original authority inspected')], recheck='first')
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'passed')
+        record('other-blocker', 'changes-requested', [f])
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'changes-requested')
+        rows[-1]['repo'] = self.entity
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'passed')
+
     """CEO §113 (2026-10-08): "A regular RichOS user can never be expected
     anything even remotely close to that. So, this all must be completely
     automated." Slice 3 of richos-hq docs/plans/2026-10-09-automatic-second-
@@ -4552,9 +4962,10 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         """Review rv-20261009T025426Z-15dae5ca-3cc1, finding 2: `workspaces.sh
         merge` checked the branch tip, then had Git merge the branch NAME, so a
         commit added to the branch after the check (even while the merge gate
-        ran) landed unreviewed. Shown with the fence off, as in the review's
-        fixture, so the land command's own check is the only one."""
-        run("bash", self.fences, "off", "--repo", self.other, "--entity", self.decl)
+        ran) landed unreviewed. Lease fencing is off here; review acceptance
+        remains active in both the land command and direct Git backstop."""
+        run("bash", self.fences, "off", "--repo", self.other, "--entity", self.decl,
+            "--reason", "exercise exact reviewed-tip land with lease fencing off")
         cc, (reviewed,) = self.finished("zach-opus-rv9")
         self.verdict(reviewed, "passed")
         checked = ws._review_check
