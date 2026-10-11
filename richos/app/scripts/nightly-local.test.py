@@ -2359,6 +2359,70 @@ class GatesAtOnceTests(unittest.TestCase):
     NUMBERS = ("--gates-at-once", "2", "--simulated-phones", "1")
     NO_HOST_SCREEN_ARG = 5  # perform(command, force, runtime, run, checks_done_at_land, no_host_screen, ...)
 
+    def build_with_gate_parent(self, parent_mode):
+        """main() `build` with its gate folder under a fresh parent created with `parent_mode`:
+        (the refusal or None, what was reached, the Runner mock, the gate folder)."""
+        volume = self.root / f"volume-{parent_mode:o}"
+        previous = os.umask(0)  # Created with this mode; no existing folder is changed.
+        try:
+            volume.mkdir(mode=parent_mode)
+        finally:
+            os.umask(previous)
+        folder = volume / "tmp" / "richos-gates"
+        runner, reached = Mock(), []
+        (self.root / "state").mkdir(exist_ok=True)
+
+        def lock(_state):
+            reached.append("lock")
+            return contextlib.nullcontext()
+
+        with patch.dict(os.environ, {**self.BASE_ENVIRON, "HOME": os.environ["HOME"]}, clear=True), \
+                patch.object(sys, "argv", ["nightly-local.py", "build", *self.NUMBERS,
+                                           "--state-dir", str(self.root / "state")]), \
+                patch.object(m.platform, "system", return_value="Darwin"), \
+                patch.object(m.platform, "machine", return_value="arm64"), \
+                patch.object(Path, "is_mount", return_value=True), \
+                patch.object(m, "GATE_TMPDIR", folder, create=True), \
+                patch.object(m, "notary_environment", return_value={}), \
+                patch.object(m, "private_file", side_effect=Path), \
+                patch.object(m, "exclusive", side_effect=lock), \
+                patch.object(m, "TimestampedLog", return_value=contextlib.nullcontext(io.StringIO())), \
+                patch.object(m, "Runner", runner), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                m.main()
+            except ValueError as error:
+                return str(error), reached, runner, folder
+        return None, reached, runner, folder
+
+    def test_a_gate_folder_the_updater_tests_would_refuse_stops_the_build_before_any_gate(self):
+        # Nightly 49, first build (20261010T211748Z-87d4a826): gates/updater-tests failed in 3 s
+        # with "home has an unsafe ancestor" because /Volumes/E1TB was group-writable.
+        # richos-user-update root() refuses a home with a group- or world-writable ancestor
+        # unless it is root's and sticky. The build now asks the same question first.
+        refusal, reached, runner, folder = self.build_with_gate_parent(0o775)
+        self.assertIsNotNone(refusal, "a group-writable parent of the gate folder did not stop the build")
+        self.assertEqual(reached, [])  # No lock, no log, no gate.
+        runner.assert_not_called()
+        self.assertIn(str(folder.resolve()), refusal)
+        self.assertIn(f"chmod go-w {shlex.quote(str(folder.parent.parent.resolve()))}", refusal)
+        self.assertNotIn(". ", refusal)  # One sentence.
+
+        refusal, reached, runner, folder = self.build_with_gate_parent(0o755)
+        self.assertIsNone(refusal)
+        self.assertEqual(reached, ["lock"])
+        runner.return_value.perform.assert_called_once()
+        self.assertEqual(runner.call_args.args[2]["TMPDIR"], str(folder) + "/")  # Runner(repo, state, env, ...)
+
+    def test_an_acl_write_grant_on_an_ancestor_is_the_same_refusal(self):
+        # The updater's no_write_acl(): an allow entry carrying any write right refuses the home.
+        head = "drwxr-xr-x+ 3 fixture staff 96 1 Oct 00:00 /fixture\n"
+        self.assertTrue(m.acl_write_grant(head + " 0: group:everyone allow add_file,add_subdirectory\n"))
+        self.assertTrue(m.acl_write_grant(head + " 0: user:fixture allow list,search\n"
+                                                 " 1: group:staff allow writesecurity\n"))
+        self.assertFalse(m.acl_write_grant(head + " 0: group:everyone deny delete\n"))
+        self.assertFalse(m.acl_write_grant(head + " 0: group:everyone allow list,search,readattr\n"))
+        self.assertFalse(m.acl_write_grant(head.replace("+", " ")))
+
     def test_a_build_never_uses_this_macs_screen_unless_told_to(self):
         _, args = self.main_with("build", *self.NUMBERS)
         self.assertIs(args[self.NO_HOST_SCREEN_ARG], True)

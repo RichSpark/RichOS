@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import pwd
 import re
 import select
 import shlex
@@ -827,10 +828,9 @@ def gate_tmpdir(environ=None):
     disposable subdirectories there. proof-run.py gets the same root via gate_conditions.
     """
     environ = os.environ if environ is None else environ
-    if Path("/Volumes/E1TB").is_mount():
-        folder = Path("/Volumes/E1TB/tmp/richos-gates")
-        folder.mkdir(parents=True, exist_ok=True)
-        return str(folder) + "/"
+    if GATE_TMPDIR_VOLUME.is_mount():
+        GATE_TMPDIR.mkdir(parents=True, exist_ok=True)
+        return refuse_unsafe_gate_folder(str(GATE_TMPDIR) + "/")
     try:
         out = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True,
                              text=True, timeout=10, stdin=subprocess.DEVNULL)
@@ -838,8 +838,65 @@ def gate_tmpdir(environ=None):
     except (OSError, subprocess.SubprocessError):
         folder = ""
     if folder and Path(folder).is_dir():
-        return folder
-    return environ.get("TMPDIR") or tempfile.gettempdir()
+        return refuse_unsafe_gate_folder(folder)
+    return refuse_unsafe_gate_folder(environ.get("TMPDIR") or tempfile.gettempdir())
+
+
+GATE_TMPDIR_VOLUME = Path("/Volumes/E1TB")
+GATE_TMPDIR = GATE_TMPDIR_VOLUME / "tmp" / "richos-gates"
+
+# The rights an ACL "allow" entry can grant that richos-user-update's no_write_acl() refuses
+# (its write_bits), as `ls -le` spells them on macOS.
+ACL_WRITE_RIGHTS = frozenset({"write", "add_file", "delete", "append", "add_subdirectory",
+                              "delete_child", "writeattr", "writeextattr", "writesecurity", "chown"})
+
+
+def acl_write_grant(listing):
+    """True when `ls -lde` output shows an ACL entry that allows any write right."""
+    for line in listing.splitlines()[1:]:
+        fields = line.split()
+        if "allow" in fields:
+            rights = fields[fields.index("allow") + 1:]
+            if ACL_WRITE_RIGHTS & set(",".join(rights).split(",")):
+                return True
+    return False
+
+
+def refuse_unsafe_gate_folder(folder):
+    """Return `folder` when the updater tests can use homes inside it; otherwise refuse.
+
+    WHY (nightly 49, first build, 20261010T211748Z-87d4a826, 2026-10-10). gates/updater-tests
+    failed in 3 s with "home has an unsafe ancestor": the gate folder's volume root was
+    group-writable. richos-user-update root() (crates/richos-user-update/src/lib.rs) refuses a
+    home when any ancestor belongs to neither root nor this account, is group- or
+    world-writable without being root's and sticky, or has an ACL write grant. The
+    updater tests make their homes inside this folder, so the folder and every folder above it
+    must pass that rule. Asked here, before the lock, the log or any gate; never repaired here.
+    """
+    me = os.getuid()
+    fixes = []
+    resolved = Path(folder).resolve(strict=True)
+    for ancestor in (resolved, *resolved.parents):
+        st = ancestor.stat()
+        quoted = shlex.quote(str(ancestor))
+        sudo = "sudo " if st.st_uid != me else ""
+        root_sticky = st.st_uid == 0 and st.st_mode & stat.S_ISVTX
+        if st.st_uid not in (0, me):
+            fixes.append(f"sudo chown {shlex.quote(pwd.getpwuid(me).pw_name)} {quoted}")
+            sudo = ""
+        if st.st_mode & 0o022 and not root_sticky:
+            fixes.append(f"{sudo}chmod go-w {quoted}")
+        listing = subprocess.run(["/bin/ls", "-lde", str(ancestor)], capture_output=True, text=True,
+                                 timeout=10, stdin=subprocess.DEVNULL, check=True).stdout
+        if acl_write_grant(listing):
+            fixes.append(f"{sudo}chmod -N {quoted}")
+    if fixes:
+        raise ValueError(
+            f"the gate temporary folder {resolved} or a folder above it is one the updater tests "
+            "refuse (group- or world-writable, owned by another account or carrying an ACL write "
+            "grant: the rule in richos-user-update root()), so no gate has started; fix it with: "
+            + " && ".join(fixes))
+    return folder
 
 
 def local_environment(run_id=None):
