@@ -342,6 +342,22 @@ def _trigger_re():
 # declaration exempts. Anywhere else (`xargs <path>`, `timeout 5 <path>`, the command word)
 # the same path may run, and only `runs` exempts it (review rv-20261011T141442Z-0009fe5a-a898 #6).
 DATA_COMMANDS = {"echo", "printf", "grep", "egrep", "fgrep", "rg", "test", "[", "[[", ":"}
+# ...except an option of one that RUNS its value: ripgrep's `--pre <program>` starts that program
+# for every file it searches (review rv-20261011T192225Z-5fa33e7e-a349 #4: `rg --pre /sbin/<it>`
+# was a mention that `names` exempted). Such a value is a call, never a mention.
+EXEC_OPTIONS = {"rg": {"--pre"}}
+
+
+def exec_values(argv):
+    """{index in argv: the program} for every option value argv's command will RUN."""
+    opts = EXEC_OPTIONS.get(os.path.basename(argv[0]) if argv else "", set())
+    out = {}
+    for k, w in enumerate(argv):
+        if w in opts and k + 1 < len(argv):
+            out[k + 1] = argv[k + 1]
+        elif "=" in w and w.split("=", 1)[0] in opts:
+            out[k] = w.split("=", 1)[1]
+    return out
 
 
 def logical_lines(text):
@@ -400,13 +416,17 @@ def _scan_segment(seg, G, always, depth):
     argv, sudoed = G["resolve"](words)
     data = bool(argv) and not sudoed and os.path.basename(argv[0]) in DATA_COMMANDS
     guarded = {n.lower() for n in standin_names()}
-    for w in raw:
+    runs = {len(raw) - len(argv) + k: v for k, v in exec_values(argv).items()}
+    for at, w in enumerate(raw):
         assigned = bool(G["ASSIGN_RE"].match(w))
-        value = w.split("=", 1)[1] if assigned else w
+        value = w.split("=", 1)[1] if assigned else runs.get(at, w)
         name = os.path.basename(value.rstrip("/")).lower()
         if "/" not in value:
             continue
-        if name in always:
+        if at in runs and (name in always or name in guarded or name == SCREEN_SAVER.lower()):
+            out.append((name, seg.strip()[:110], "%s runs %s for every file it searches, which bypasses PATH "
+                        "and the stand-in" % (os.path.basename(argv[0]), value), "exec"))
+        elif name in always:
             out.append((name, seg.strip()[:110], "names %s by path: %s" % (value, G["ALWAYS_BAD"].get(name, "always refused")),
                         "mention" if data and not assigned else "exec"))
         elif assigned and name in guarded and value.startswith(("/", "~")):

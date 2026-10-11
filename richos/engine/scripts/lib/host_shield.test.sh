@@ -389,7 +389,7 @@ fi
 
 # H7 — declarations. `names` lets the source carry it as data; a bare-name call is still refused.
 F="$(suite h7.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" \
-        "$HS_CMD -h +60 || true" "printf '%s\n' /sbin/$HS_CMD" "exit 0")"
+        "$HS_CMD -h +60 || true" "printf '%s\n' /sbin/$HS_CMD" "exit 0" "rg -n /sbin/$HS_CMD file.txt")"
 trip_clean
 RC="$(shielded "$F")"
 if [ "$RC" = 1 ] && ! grep -q "REFUSED before it ran" "$TMP/out" && grep -q "^  FAIL  host-shield: refused" "$TMP/out" \
@@ -401,7 +401,11 @@ fi
 # H7d — `names` never exempts a call that would run it past the stand-in: by path, or as an
 # argument something else runs (review rv-20261011T141442Z-0009fe5a-a898 #6). Each sits after
 # `exit 0`: the source check reads it, nothing runs it.
-for line in "/sbin/$HS_CMD -h +60" "xargs /sbin/$HS_CMD -h" "sudo $HS_CMD -h +60"; do
+# ripgrep's --pre RUNS its value for every file it searches, so a path there is a call, not data
+# (review rv-20261011T192225Z-5fa33e7e-a349 #4), and a path to any stood-in command there is one.
+for line in "/sbin/$HS_CMD -h +60" "xargs /sbin/$HS_CMD -h" "sudo $HS_CMD -h +60" \
+        "rg --pre /sbin/$HS_CMD needle file.txt" "rg --pre=/sbin/$HS_CMD needle file.txt" \
+        "rg -n --pre /usr/bin/$OSA needle file.txt"; do
     F="$(suite h7d.test.sh "# host-shield: names $HS_CMD -- a fixture this suite only prints" "exit 0" "$line")"
     RC="$(shielded "$F")"
     if [ "$RC" = 1 ] && grep -q "REFUSED before it ran" "$TMP/out"; then
