@@ -78,22 +78,32 @@
 # UNCOVERED, and the land check refuses it until a row names it (2026-09-29, the automatic
 # land check, esc-20260929T082408Z-c96cefea).
 
+# FILES A SUITE READS ITSELF are on its row too, whatever kind they are: what it opens with
+# `fs`, `require`s, runs in `vm` or a child process (`cargo`, `python3`), and what the library
+# it calls reads for it. `lib/state-strings.js`'s `rustStrings()` and `rustSourceFiles()` read
+# every Rust file under `src-tauri/src/` and `crates/`, so a suite calling either names both
+# directories; `lib/ui-sources.js`'s `stateSources()` and `styleSources()` (and
+# `lib/overlays.js`, which reads the second) read the shipped manifest, so a suite calling
+# them names `@allui` (`dialect.js`, `bug-report.js`). Audited suite by suite on 2026-10-11
+# (echo-opus-uifix1); `proof-for.test.sh` R48 pins one selection per file found missing.
+# Not declarable: `splash.js`'s read of the private richos-hq studies, outside this tree.
+
 # ---- the eight that read the whole shipped manifest ------------------------------------
 # Each of these requires `./lib/ui-sources` and walks every file it classifies: the state
 # inventory, the contrast sweep and the dialect pass are whole-surface gates by definition.
 affordances.js          @allui richos/app/src-tauri/src/ richos/app/crates/
-appearance.js           @allui
+appearance.js           @allui richos/app/src-tauri/tauri.conf.json richos/app/crates/richos-core/src/config.rs
 contrast.js             @allui richos/app/ui/tests/contrast-debt.json
-corrections.js          @allui richos/app/ui/tests/fixtures/loro-proposal.json richos/app/ui/tests/fixtures/loro-proposal-asked-again.json richos/app/ui/tests/fixtures/heard-candidate.json
-feedback.js             @allui richos/app/ui/tests/fixtures/feedback-vocabulary.json richos/app/ui/tests/fixtures/feedback-previews.json richos/app/ui/tests/fixtures/feedback-entries.json
+corrections.js          @allui richos/app/ui/tests/fixtures/loro-proposal.json richos/app/ui/tests/fixtures/loro-proposal-asked-again.json richos/app/ui/tests/fixtures/heard-candidate.json richos/app/src-tauri/src/main.rs
+feedback.js             @allui richos/app/ui/tests/fixtures/feedback-vocabulary.json richos/app/ui/tests/fixtures/feedback-previews.json richos/app/ui/tests/fixtures/feedback-entries.json richos/app/src-tauri/src/main.rs
 memory.js               @allui
-setup.js                @allui
-splash.js               @allui
+setup.js                @allui richos/app/crates/richos-core/src/setup.rs richos/app/src-tauri/src/setup_view.rs
+splash.js               @allui richos/app/src-tauri/src/main.rs richos/app/crates/richos-core/src/config.rs richos/app/crates/richos-core/src/launch.rs
 
 # ---- the chat surface and its states ----------------------------------------------------
-compaction-notice.js    @shell
-compaction-progress.js  @shell
-attachments.js          @shell richos/app/ui/mock.js richos/app/src-tauri/src/phone/attachments.rs richos/app/src-tauri/src/mac_attachments.rs
+compaction-notice.js    @shell docs/verification/compaction-notice-2026-09-06/raw/cellT1.jsonl docs/verification/compaction-notice-2026-09-06/raw/cellT1.jsonl.timed.jsonl richos/app/crates/richos-core/src/timeline.rs
+compaction-progress.js  @shell docs/verification/inner-doctrine-opens-2026-09-06/raw/ docs/verification/compaction-notice-2026-09-06/raw/ richos/app/crates/richos-core/src/machinery.rs richos/app/crates/richos-core/src/timeline.rs
+attachments.js          @shell richos/app/ui/mock.js richos/app/src-tauri/src/phone/attachments.rs richos/app/src-tauri/src/mac_attachments.rs richos/app/src-tauri/src/output_files.rs
 composer-off.js         @shell
 composer-scroll.js      @shell
 control-names.js        @shell
@@ -103,37 +113,38 @@ slow-bridge.js          @shell richos/app/ui/updates.js
 waiting-state.js        @shell richos/app/ui/mock.js
 waiting-lifecycle.js    @shell richos/app/ui/mock.js
 second-mouth.js         @shell richos/app/ui/mock.js
-dialect.js              @shell richos/app/ui/mock.js
+dialect.js              @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs @allui richos/app/src-tauri/src/ richos/app/crates/
 dictation-overlay.js    richos/app/ui/dictation-bar.html richos/app/ui/dictation-bar.js richos/app/ui/dictation-menu.html richos/app/ui/dictation-menu.js richos/app/ui/dictation-overlay.css richos/app/ui/style.css richos/app/ui/theme-boot.js richos/app/ui/index.html
-retention.js            @shell richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
+retention.js            @shell richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js richos/app/crates/richos-core/src/config.rs richos/app/crates/richos-core/src/journal.rs
 rich-model.js           @shell richos/app/ui/mock.js richos/app/ui/settings-button.js
-onboarding.js           @shell richos/app/ui/mock.js
+onboarding.js           @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs
 onboarding-lifecycle.js @shell richos/app/ui/mock.js
 first-run-sheet.js      @shell richos/app/ui/mock.js
 voice-model.js          @shell richos/app/ui/mock.js
 quota.js                @shell richos/app/ui/quota.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 accounts.js             @shell richos/app/ui/accounts.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js
 dictation.js            @shell richos/app/ui/dictation.js richos/app/ui/settings-button.js richos/app/ui/mock.js
-bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js
-codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js
+bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js @allui
+codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/spend.js
+spend.js                @shell richos/app/ui/spend.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/home.js richos/app/src-tauri/src/main.rs
 provider-auth.js        @shell
 
 # ---- the timeline renderer ---------------------------------------------------------------
 inspector.js            @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 output.js               @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/src-tauri/src/output_files.rs
 output-truth.js         @shell richos/app/ui/mock.js
-interruption.js         @shell richos/app/ui/timeline.js
+interruption.js         @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/ richos/app/crates/
 job-question.js         @shell richos/app/ui/timeline.js
 local-notice.js         @shell richos/app/ui/timeline.js
 operator-notice.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 markdown.js             @shell richos/app/ui/timeline.js
 memory-strategy.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
-outage.js               @shell richos/app/ui/timeline.js
-realbytes.js            @shell richos/app/ui/timeline.js
+outage.js               @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/ richos/app/crates/
+realbytes.js            @shell richos/app/ui/timeline.js richos/app/src-tauri/src/ richos/app/src-tauri/examples/timeline_payload.rs richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock richos/app/crates/
 restart-scope.js        @shell richos/app/ui/timeline.js richos/app/ui/mock.js
-scale.js                @shell richos/app/ui/timeline.js
+scale.js                @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
 steering.js             @shell richos/app/ui/timeline.js richos/app/ui/mock.js
-techy.js                @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/machinery-payload.json richos/app/src-tauri/src/machinery_view.rs
+techy.js                @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/machinery-payload.json richos/app/src-tauri/src/machinery_view.rs richos/app/src-tauri/src/main.rs
 workers.js              @shell richos/app/ui/timeline.js
 
 # ---- the home screen and the window's chrome ---------------------------------------------
@@ -148,14 +159,14 @@ rail-initials-fit.js    @shell
 speckled-ground.js      @shell @home @splash richos/app/ui/speckle.js richos/app/ui/speckle-app.js richos/app/ui/speckle.css richos/app/ui/timeline.js richos/app/ui/mock.js
 
 # ---- one screen each -----------------------------------------------------------------------
-background-work.js      @shell richos/app/ui/work-summary.js
-no-home-network.js      @shell @phone
+background-work.js      @shell richos/app/ui/work-summary.js richos/app/ui/timeline.js
+no-home-network.js      @shell @phone richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/phone/ richos/web/web-app/
 permissions.js          @shell richos/app/ui/permissions.js
 questions.js            @shell richos/app/ui/questions.js richos/app/ui/timeline.js
-phone.js                @shell @phone richos/app/ui/mock.js
+phone.js                @shell @phone richos/app/ui/mock.js richos/app/src-tauri/src/phone/mod.rs richos/tools/phone-probe/lib/qr.js
 quit-question.js        @shell richos/app/ui/quit-question.js
 repositories.js         @shell richos/app/ui/repositories.js
-updates.js              @shell richos/app/ui/updates.js richos/app/ui/settings-button.js richos/app/ui/mock.js
+updates.js              @shell richos/app/ui/updates.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/src-tauri/src/updates.rs
 work-summary.js         @shell richos/app/ui/work-summary.js
 
 # ---- the two suites that read documents rather than the screen -----------------------------
@@ -163,9 +174,9 @@ work-summary.js         @shell richos/app/ui/work-summary.js
 # their rows name what they actually read. Both would otherwise be suites with no inputs,
 # which the reconciliation refuses — correctly: "reads nothing" is never true of a suite.
 docs-claims.js          richos/app/crates/ richos/app/src-tauri/src/ richos/app/ui/tests/ richos/app/scripts/proof-for.ui-inputs richos/app/README.md richos/app/STREAMING.md richos/app/ui/tests/README.md richos/app/crates/richos-core/src/stream.rs richos/app/crates/richos-core/src/live.rs richos/app/crates/richos-core/src/machinery.rs richos/app/crates/richos-core/src/upstream.rs richos/app/crates/richos-voice/src/event.rs
-vouch-template.js       .github/workflows/vouch-pr.yml .github/workflows/ui-suite-ci.yml docs/verification/pr-trust-gate-2026-09-05/README.md docs/verification/pr-trust-gate-2026-09-05/raw/close-comment-rendered.md
+vouch-template.js       .github/workflows/vouch-pr.yml .github/workflows/ui-suite-ci.yml docs/verification/pr-trust-gate-2026-09-05/README.md docs/verification/pr-trust-gate-2026-09-05/raw/close-comment-rendered.md docs/verification/pr-trust-gate-2026-09-05/raw/vouch-pin-resolution.txt
 
-thread-switch.js       @shell richos/app/ui/timeline.js richos/app/ui/mock.js
+thread-switch.js       @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/scripts/qa/contrast.py
 
 # ---- the harness's own behavior ------------------------------------------------------------
 # The navigation capture in `lib/navigation-evidence.js` (reached by the library rule), proven

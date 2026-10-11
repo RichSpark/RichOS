@@ -1452,6 +1452,72 @@
   // the Mac reports about Codex later.
   const codexReviews = Object.assign({ on: false, codex: "ready" }, preset.codexReviews || {});
   const codexReviewCalls = [];
+  // API-EQUIVALENT TOKEN SPEND (round 22.1, `spend.js`): `spend_view` and `spend_live`, in the shape
+  // richos-core's spend ledger answers them (`spend::ledger::Totals`). A seeded record of 47 days
+  // ANCHORED TO THE FIRST OF THIS MONTH (30 days before it, 17 from it), so this month's figure is
+  // the same on every day of every month: the Settings menu shows it, and the committed menu
+  // pictures must not move with the calendar. Two earlier Opus versions, so a mark names three.
+  // `preset.spend.ready: false` is the first count still running; `preset.spend.agents` the agents
+  // working. `__RICHOS_MOCK__.spendLand` puts a request on record now (the dot on Refresh, the live
+  // line), `spendReady` ends the first count, `spendAgents` sets the count working.
+  // `preset.spend.rows` replaces the seeded record with exactly those rows (the shape below), so a
+  // suite can put one small month on record (the Settings row's cents, `spend.js` check 1b).
+  const spendMock = (() => {
+    const p = preset.spend || {};
+    const DAY = 86400000, now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1, 12).getTime(); // noon on the 1st
+    const rows = [];
+    let seed = 118;
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    // per model: requests on a full day, dollars a request, tokens a request (round 22's sizes)
+    const SHAPE = { fable: [620, 0.29, 290000], opus: [9200, 0.105, 237000], sonnet: [1500, 0.04, 126000], haiku: [2600, 0.0012, 45000] };
+    const NAME = { fable: "Fable 5.1", opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5" };
+    const EFFORT = { fable: "high", opus: "high", sonnet: "medium", haiku: "low" };
+    if (Array.isArray(p.rows)) p.rows.forEach(r => rows.push(Object.assign({ cacheRead: 0 }, r)));
+    else for (let d = -30; d <= 16; d++) {
+      const at = first + d * DAY;
+      for (const f of ["fable", "opus", "sonnet", "haiku"]) {
+        if (f === "haiku" && d < 8) continue;
+        const n = Math.round(SHAPE[f][0] * (0.6 + rand() * 0.5));
+        const tokens = n * SHAPE[f][2];
+        rows.push({ at, family: f, name: NAME[f], effort: EFFORT[f], requests: n, cost: n * SHAPE[f][1] * (0.85 + rand() * 0.3), tokens, cacheRead: Math.round(tokens * 0.965) });
+      }
+    }
+    // Earlier versions on record, as on the CEO's own Mac (2026-10-11: Opus 5, 5.5 and 4.8 in one
+    // record), so a mark names three and the widest legend line is drawn.
+    if (!Array.isArray(p.rows)) {
+      rows.push({ at: first + 2 * DAY, family: "opus", name: "Opus 5", effort: "high", requests: 4000, cost: 21261.91, tokens: 920000000, cacheRead: 888000000 });
+      rows.push({ at: first + 4 * DAY, family: "opus", name: "Opus 4.8", effort: "medium", requests: 200, cost: 338.57, tokens: 46000000, cacheRead: 44000000 });
+    }
+    const state = { ready: p.ready !== false, agents: p.agents === undefined ? 4 : p.agents, last: null, calls: [] };
+    const counted = () => rows.reduce((a, r) => a + r.requests, 0);
+    function view(from) {
+      const t = { cost: 0, requests: 0, tokens: 0, cacheRead: 0, unpricedRequests: 0, unpricedTokens: 0, firstAt: null, families: [], counted: counted() };
+      const fam = {};
+      for (const r of rows) {
+        if (r.at < from) continue;
+        t.cost += r.cost; t.requests += r.requests; t.tokens += r.tokens; t.cacheRead += r.cacheRead;
+        t.firstAt = t.firstAt === null ? r.at : Math.min(t.firstAt, r.at);
+        const f = fam[r.family] || (fam[r.family] = { family: r.family, cost: 0, requests: 0, names: {}, efforts: {}, effortUnrecorded: false });
+        f.cost += r.cost; f.requests += r.requests;
+        f.names[r.name] = (f.names[r.name] || 0) + r.cost;
+        if (r.effort) f.efforts[r.effort] = (f.efforts[r.effort] || 0) + r.cost;
+        else f.effortUnrecorded = true;   // a request with no effort, as an app lease records it
+      }
+      t.families = ["fable", "opus", "sonnet", "haiku"].filter(f => fam[f]).map(f => fam[f]);
+      return { ready: state.ready, asOf: Date.now(), priceDate: "October 11, 2026", totals: t };
+    }
+    return {
+      state,
+      view: from => (state.calls.push({ cmd: "spend_view", from }), view(from || 0)),
+      live: () => (state.calls.push({ cmd: "spend_live" }), { ready: state.ready, counted: counted(), agentsWorking: state.agents, last: state.last }),
+      land(r) {
+        rows.push({ at: Date.now(), family: r.family, name: r.name, effort: r.effort, requests: 1, cost: r.cost, tokens: r.tokens, cacheRead: 0 });
+        state.last = { name: r.name, tokens: r.tokens, cost: r.cost };
+      },
+      rows: () => rows.map(r => ({ at: r.at, cost: r.cost })),
+    };
+  })();
 
   // The strings are the BACKEND'S, copied verbatim from `Component::why` and
   // `SETUP_ACCOUNT_NOTE`. A mock that paraphrased them would rehearse the surface against
@@ -3190,6 +3256,9 @@
           dictationOfferCalls.push("dictation_offer_shown");
           dictationOffered = true;
           return null;
+        // API-EQUIVALENT TOKEN SPEND (spend.js): the ledger's snapshot and its live line.
+        case "spend_view": return spendMock.view(args.from);
+        case "spend_live": return spendMock.live();
         // THE CODEX REVIEW SWITCH (codex_reviews.rs): the same facts and the same refusal: on is
         // refused while Codex is not ready, off always goes through.
         case "codex_reviews_status":
@@ -4951,6 +5020,12 @@
     codexSet(codex) { codexReviews.codex = codex; },
     /// The Codex switch's calls, in order, each with its arguments.
     codexReviewCalls() { return codexReviewCalls.slice(); },
+    /// Token spend (spend.js): a request on record now; the first count done; the agents working.
+    spendLand(r) { spendMock.land(r); },
+    spendReady() { spendMock.state.ready = true; },
+    spendAgents(n) { spendMock.state.agents = n; },
+    spendRows() { return spendMock.rows(); },
+    spendCalls() { return spendMock.state.calls.slice(); },
     /// Which provisioning commands the surface issued, in order.
     voiceModelCalls() { return mockVoiceModel.calls.slice(); },
     /// Make `provision_speech_model` reject with a sentence, the way the real command does
