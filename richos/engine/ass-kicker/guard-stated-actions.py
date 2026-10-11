@@ -1073,16 +1073,11 @@ def classify_target(path):
 
 def turn_writes(tm, transcript, prompt_id, cwd):
     """What this turn wrote, from its own calls. None plus a reason when the
-    turn cannot be read. The cap turn-manifest.py keeps for rendering is lifted
-    here: a long session's transcript passes 48 MB (one on disk is 57 MB), and
-    an arm that goes blind on long sessions goes blind exactly where it is
-    needed. The read happens only on a turn that made a claim."""
+    turn cannot be read. turn-manifest.py no longer caps the transcript size
+    (it finds the turn from the end of the file), so a long session is read
+    like any other. The read happens only on a turn that made a claim."""
     if tm is None:
         return None, "turn-manifest.py could not be loaded"
-    try:
-        tm.MAX_TRANSCRIPT = 1 << 40
-    except Exception:
-        pass
     calls, results, _examined, err = tm.read_turn(transcript, prompt_id)
     if err:
         return None, err

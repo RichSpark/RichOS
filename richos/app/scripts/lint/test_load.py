@@ -3,7 +3,10 @@
 Positive controls are the point: a rule that also flagged the hang guard, the condition
 wait or the declared site would be waived within a week.
 """
+import itertools
 from pathlib import Path
+import re
+import signal
 import tempfile
 import unittest
 
@@ -150,6 +153,48 @@ class EnvMutation(unittest.TestCase):
         text = ("static ENV_GUARD: Mutex<()> = Mutex::new(());\n#[test]\nfn grace() {\n"
                 "    let _g = ENV_GUARD.lock().unwrap();\n    std::env::set_var(\"X\", \"1\");\n}\n")
         self.assertEqual(rules(APP + "crates/c/tests/t.rs", text), [])
+
+
+class QuotedStrings(unittest.TestCase):
+    """The string stripper in assertion_text: linear on an unclosed quote, same text as before."""
+
+    # The pattern before 2026-10-11, kept as the reference the new one must agree with.
+    OLD = re.compile(r"(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*')")
+
+    def test_an_unclosed_quote_with_43_escaped_pairs_is_stripped_in_under_a_tenth_of_a_second(self):
+        # The 2026-10-10 hang: a Rust string continued on the next line, 43 escape pairs on
+        # this one. The old pattern roughly tripled its work per pair; this one is linear.
+        lines = ['    assert!(ok, "' + "\\\\" * 43, '        tail", x);']
+
+        def hung(_signum, _frame):
+            raise TimeoutError("stripping one line took over 0.1 s of CPU")
+
+        # load-bound: ITIMER_VIRTUAL counts this process's own CPU time, never time spent queued
+        # behind other work, so host load cannot trip it; it is a hang guard, not a speed verdict.
+        previous = signal.signal(signal.SIGVTALRM, hung)
+        signal.setitimer(signal.ITIMER_VIRTUAL, 0.1)
+        try:
+            joined = load_rules.assertion_text(lines, 0, "rust")
+        finally:
+            signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+            signal.signal(signal.SIGVTALRM, previous)
+        self.assertEqual(joined, " ".join(lines))
+
+    def test_every_short_line_strips_exactly_as_the_old_pattern_did(self):
+        # Every string up to six characters over the characters that matter: both quotes,
+        # the backslash, a newline and one stand-in for anything else.
+        for size in range(7):
+            for chars in itertools.product("\"'\\a\n", repeat=size):
+                line = "".join(chars)
+                self.assertEqual(load_rules.QUOTED_STRING.sub("''", line), self.OLD.sub("''", line), repr(line))
+
+    def test_strings_and_escapes_still_hide_their_delimiters(self):
+        cases = {'assert!(a == "(", "x");': 'assert!(a == \'\', \'\');',
+                 "assert(b, 'it\\'s (');": "assert(b, '');",
+                 'f("a\\"b(") + g(\'c\')': "f('') + g('')"}
+        for line, stripped in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(load_rules.QUOTED_STRING.sub("''", line), stripped)
 
 
 class Scope(unittest.TestCase):
