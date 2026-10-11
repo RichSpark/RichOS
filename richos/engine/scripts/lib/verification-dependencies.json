@@ -12586,14 +12586,14 @@
     "scripts/lib/resource_waits.py": {
       "source": "scripts/lib/resource_waits.py",
       "sha256": "14fb453a8bb49fd9f8d81924d9175805ad48d05e1f5473a4b9a2cc5ec9d5473f",
-      "evidence": "Stdlib reads private wait/slot/escalation JSON and native ps output. Only engine import is sibling escalations. Resource command strings are classified as data; wait writer loops over supplied file existence, never invokes a VM or build. Renewed 2026-10-11 (zach-opus-heldwait1, a held agent is not waiting in line): collect() also imports its sibling agent_hold.py and calls only records() and history(), which read the hold records (held/*.json) and hold-history.jsonl in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold); read only, no signal, no execution and no config value.",
+      "evidence": "Stdlib reads private wait/slot/escalation JSON and native ps output. Only engine import is sibling escalations. Resource command strings are classified as data; wait writer loops over supplied file existence, never invokes a VM or build. Renewed 2026-10-11 (zach-opus-heldwait1, a held agent is not waiting in line): collect() also imports its sibling agent_hold.py and calls only records() and history(), which read the hold records (held/*.json) and hold-history.jsonl in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold); read only, no signal, no execution and no config value. Narrowed 2026-10-11 (zach-opus-heldwait2): the edge names agent_hold.py#release, the reviewed node for records() and history(), not agent_hold.py's whole program, whose watchdog reaches the workspace recipient CLI that collect() never calls.",
       "keys": [],
       "edges": [
         {
           "to": "scripts/lib/escalations.py"
         },
         {
-          "to": "scripts/lib/agent_hold.py"
+          "to": "scripts/lib/agent_hold.py#release"
         }
       ]
     },
@@ -12626,7 +12626,7 @@
     "scripts/hooks/resource-waits.test.sh": {
       "source": "scripts/hooks/resource-waits.test.sh",
       "sha256": "1e7a72e38baaa5b8be40c73f8747e9fe8ba37a0771023066f06b0c3bce474247",
-      "evidence": "All hook calls target explicit private entity and empty/literal config, analyzer reads private wait/escalation/slot files. Generated process fixtures sleep or spawn supplied fixture commands only. Shared mutation transport remains source-bound. Renewed 2026-10-11 (zach-opus-heldwait1): RW45-RW48 set RICHOS_AGENT_HOLD_DIR to the sandbox, write hold records there through agent_hold.py's own snapshot, _held_path and _write_json, and run `agent_hold.py release` once on a hand-written record whose held map is empty, so it continues no process; no config read.",
+      "evidence": "All hook calls target explicit private entity and empty/literal config, analyzer reads private wait/escalation/slot files. Generated process fixtures sleep or spawn supplied fixture commands only. Shared mutation transport remains source-bound. Renewed 2026-10-11 (zach-opus-heldwait1): RW45-RW48 set RICHOS_AGENT_HOLD_DIR to the sandbox, write hold records there through agent_hold.py's own snapshot, _held_path and _write_json, and run `agent_hold.py release` once on a hand-written record whose held map is empty, so it continues no process; no config read. Narrowed 2026-10-11 (zach-opus-heldwait2): the edge names agent_hold.py#release: the CLI's release branch calls only release(), and snapshot, _held_path and _write_json are the ps read and hold-record path and write that release itself uses; none reaches hold(), watch() or the workspace recipient CLI.",
       "keys": [],
       "edges": [
         {
@@ -12637,7 +12637,7 @@
           "to": "scripts/lib/resource_waits.py"
         },
         {
-          "to": "scripts/lib/agent_hold.py"
+          "to": "scripts/lib/agent_hold.py#release"
         },
         {
           "to": "scripts/lib/scratch.sh"
