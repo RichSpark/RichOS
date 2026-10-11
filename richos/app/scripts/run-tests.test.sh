@@ -52,6 +52,10 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS="$DIR/run-tests.sh"
+# A box copy of the runner has no engine beside it: every run of one gets this checkout's host
+# shield through RICHOS_HOST_SHIELD_TOOL, which `env -i` would otherwise drop (without it the
+# runner refuses; review rv-20261011T173659Z-e08ee8a2-2c75 #1).
+SHIELD_TOOL="$(cd "$DIR/../../engine/scripts/lib" && pwd)/host_shield.py"
 
 # A FIXTURE IS THE HARNESS AS IT SHIPS, not the harness minus its libraries. `run-tests.sh`
 # derives every shared name — the proof store today — through `lib/worktree-resource.sh`,
@@ -141,6 +145,7 @@ harness() {  # harness [VAR=VALUE]... -- <script> [args]   -> sets OUT and CODE
           TMPDIR="$TMP" \
           LC_ALL=C \
           RUN_TESTS_STATE="$TMP/fixture-state" \
+          RICHOS_HOST_SHIELD_TOOL="$SHIELD_TOOL" \
           ${assigns[@]+"${assigns[@]}"} \
           bash "$@" 2>&1)"; CODE=$?
   return 0
@@ -1216,7 +1221,7 @@ install_harness "$C1BOX"
 C1PID="$TMP/c1.pid"; C1TMP="$TMP/c1tmp"; mkdir -p "$C1TMP"
 printf '%s\n' "bash -c 'trap \"\" TERM; echo \$\$ > \"$C1PID\"; while :; do sleep 1; done' &" \
   'wait' > "$C1BOX/stubborn.test.sh"
-env -i PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" TMPDIR="$C1TMP" LC_ALL=C \
+env -i RICHOS_HOST_SHIELD_TOOL="$SHIELD_TOOL" PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" TMPDIR="$C1TMP" LC_ALL=C \
     RUN_TESTS_STATE="$TMP/fixture-state" RUN_TESTS_KILL_GRACE=1 \
     bash "$C1BOX/run-tests.sh" > "$TMP/c1.out" 2>&1 &
 C1RUNNER=$!
@@ -1249,7 +1254,7 @@ R15PID="$TMP/r15.pid"
 printf '%s\n' \
   "if [ ! -e \"$TMP/r15.first\" ]; then touch \"$TMP/r15.first\"; echo '  FAIL  r15 first attempt'; exit 1; fi" \
   "echo \$\$ > \"$R15PID\"; exec sleep 30" > "$R15BOX/retried.test.sh"
-env -i PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
+env -i RICHOS_HOST_SHIELD_TOOL="$SHIELD_TOOL" PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
     RUN_TESTS_KILL_GRACE=1 bash "$R15BOX/run-tests.sh" > "$TMP/r15.out" 2>&1 &
 R15RUNNER=$!
 n=0; while [ ! -s "$R15PID" ] && [ "$n" -lt 150 ]; do sleep 0.1; n=$((n + 1)); done
@@ -1277,7 +1282,7 @@ fi
 R44BOX="$TMP/r44box"; mkdir -p "$R44BOX"
 install_harness "$R44BOX"
 printf '%s\n' 'echo "=== r44: all 1 passed ==="' > "$R44BOX/one.test.sh"
-env -i PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
+env -i RICHOS_HOST_SHIELD_TOOL="$SHIELD_TOOL" PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
     bash "$R44BOX/run-tests.sh" --jobs > "$TMP/r44.out" 2>&1 &
 R44PID=$!
 n=0; while kill -0 "$R44PID" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
@@ -1300,7 +1305,7 @@ install_harness "$R45BOX"
 for k in a b; do
   { printf '%s\n' '# run-tests: host-screen'; printf '%s\n' "echo \"=== r45$k: all 1 passed ===\""; } > "$R45BOX/$k.test.sh"
 done
-env -i PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
+env -i RICHOS_HOST_SHIELD_TOOL="$SHIELD_TOOL" PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
     bash "$R45BOX/run-tests.sh" --proof-out "$TMP/r45.proof" > "$TMP/r45.out" 2>&1
 R45N="$(find "$TMP" -maxdepth 1 -name 'r45.proof*' | wc -l | tr -d ' ')"
 if [ "$R45N" -eq 2 ] && grep -q 'r45a' "$TMP/r45.proof" && grep -q 'r45b' "$TMP/r45.proof.b.test.sh"; then
@@ -1309,7 +1314,7 @@ else
   bad "R45 each screen suite keeps its own proof" "found $R45N proof files; $(tr '\n' ' ' < "$TMP/r45.out" | cut -c1-300)"
 fi
 # ...and a proof path that cannot be written is not announced as written.
-env -i PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
+env -i RICHOS_HOST_SHIELD_TOOL="$SHIELD_TOOL" PATH="$FIXTURE_PATH" HOME="$FIXTURE_HOME" LC_ALL=C RUN_TESTS_STATE="$TMP/fixture-state" \
     bash "$R45BOX/run-tests.sh" --proof-out "$TMP/no-such-dir/x.proof" > "$TMP/r45b.out" 2>&1 || true
 if grep -q 'could not write the gui proof' "$TMP/r45b.out" && ! grep -q 'gui proof written' "$TMP/r45b.out"; then
   ok "R45 a failed proof write is reported, never announced as written"
@@ -1343,6 +1348,17 @@ if [ "$HSRC" -ne 0 ] && grep -q "REFUSED before it ran" "$TMP/hs2.out" && [ ! -e
   ok "HS2 a suite whose source names /sbin/$HS_CMD is refused before it runs (its first line never ran)"
 else
   bad "HS2 a by-path host call is refused before the suite runs" "exit $HSRC: $(tr '\n' ' ' < "$TMP/hs2.out" | cut -c1-600)"
+fi
+# HS3 — a copy with no shield beside it and none exported runs NOTHING (review
+# rv-20261011T173659Z-e08ee8a2-2c75 #1: it used to warn and run its suites unshielded).
+HS3BOX="$TMP/hs3box"; mkdir -p "$HS3BOX"
+install_harness "$HS3BOX"
+printf '%s\n' "touch \"$TMP/hs3-started\"" 'echo "=== hs3: all 1 passed ==="' > "$HS3BOX/started.test.sh"
+harness RICHOS_HOST_SHIELD_TOOL= "PATH=$(hs_path "$TMP/hstrip")" -- "$HS3BOX/run-tests.sh"
+if [ "$CODE" -eq 2 ] && says "REFUSED: NO HOST SHIELD" && [ ! -e "$TMP/hs3-started" ]; then
+  ok "HS3 a runner copy with no host shield refuses (exit 2) and starts no suite"
+else
+  bad "HS3 a runner copy with no host shield refuses" "exit $CODE, suite started: $([ -e "$TMP/hs3-started" ] && echo yes || echo no): $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-400)"
 fi
 
 echo ""
