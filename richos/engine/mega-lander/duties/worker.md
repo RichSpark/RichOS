@@ -1,5 +1,7 @@
 # Your duty in this assignment: implement
 
+**Standing instruction:** any video or screen recording in your job is watched with the `watch-video` skill, and any audio-only file is transcribed with the `audio-transcription` skill. Invoke them with the Skill tool without being told to.
+
 You implement an authorized change in the assigned isolated repository workspace.
 Who you are and how you work come from your own definition; how this app runs the
 work comes from this section, and where the two differ about the mechanics below,

@@ -18,11 +18,18 @@ bad() { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 echo "=== watch-video: watch.sh ==="
 [ -x "$SCRIPT" ] || { bad "watch.sh exists and is executable at $SCRIPT"; echo "1 failure"; exit 1; }
+[ -x "$HERE/admit.py" ] || { bad "admit.py (the CPU admission beside watch.sh) exists and is executable"; echo "1 failure"; exit 1; }
 command -v say >/dev/null 2>&1 || { bad "macOS say is available to make the speech fixture"; exit 1; }
 
 . "$ENGINE/scripts/lib/scratch.sh"
 SANDBOX="$(scratch_new watch-test --ttl 30)"
 trap 'scratch_release "$SANDBOX"' EXIT
+
+# The real admission waits while the Mac is busy, which would make this suite as slow as
+# the host; every run but the admission test (6) uses a stand-in that admits at once.
+printf '#!/usr/bin/env bash\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n' > "$SANDBOX/admit-now"
+chmod +x "$SANDBOX/admit-now"
+export WATCH_RESERVE="$SANDBOX/admit-now"
 
 VIDEO_FILTER="drawbox=x=40:y=40:w=240:h=160:color=white:t=fill:enable='gte(t,3)'"
 say -o "$SANDBOX/speech.aiff" "First the screen is empty. Now a white box appears on the screen."
@@ -213,6 +220,145 @@ STATUS=0
 "$ATSH" "$SANDBOX/rec.mov" "$SANDBOX/at2" --at 4.96,5.04 >/dev/null 2>&1 || STATUS=$?
 N2="$(ls "$SANDBOX/at2" 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$STATUS" -eq 0 ] && [ "$N2" = 2 ]; then ok "--at 4.96,5.04 keeps two frames"; else bad "--at 4.96,5.04 keeps two frames (exit $STATUS, $N2 files)"; fi
+
+# 9. a frame step the host stops partway (the CPU circuit breaker killed ffmpeg at 17:02 of a
+# 41-minute video on 2026-10-10 and the script died with exit 255 and no index): the stopped
+# stretch is redone alone and the run still finishes. A stand-in ffmpeg fails the frame-step
+# calls named in FAKE_FAIL_CALLS (leaving a partial frame behind, exit 255) and passes every
+# other call, and every transcription call, to the real ffmpeg.
+REAL_FFMPEG="$(command -v ffmpeg)"
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in
+    *select=*)
+        n=\$(( \$(cat "$SANDBOX/ff.count" 2>/dev/null || echo 0) + 1 ))
+        echo "\$n" > "$SANDBOX/ff.count"
+        if [ -n "\${FAKE_FAIL_ALWAYS:-}" ] || case " \$FAKE_FAIL_CALLS " in *" \$n "*) true ;; *) false ;; esac; then
+            for last; do :; done
+            : > "\${last/%%04d.png/0001.png}"
+            exit 255
+        fi ;;
+esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+chmod +x "$SANDBOX/fakebin/ffmpeg"
+rm -f "$SANDBOX/ff.count"
+STATUS=0
+PATH="$SANDBOX/fakebin:$PATH" FAKE_FAIL_CALLS="1 3" WATCH_SEGMENT_SECONDS=4 WATCH_RETRY_SECONDS=0 \
+    "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/kill1" >/dev/null 2>"$SANDBOX/err9" || STATUS=$?
+KF="$(ls "$SANDBOX/kill1/frames" 2>/dev/null | tr '\n' ' ')"
+if [ "$STATUS" -eq 0 ] && [ "$(grep -c 'redoing this 4s stretch' "$SANDBOX/err9")" = 2 ] \
+    && [ "$KF" = "frame-0001-t00m00.0s.png frame-0002-t00m03.0s.png frame-0003-t00m04.0s.png frame-0004-t00m08.0s.png " ] \
+    && [ ! -e "$SANDBOX/kill1/frames/.seg" ] && [ -f "$SANDBOX/kill1/watched.md" ]; then
+    ok "a frame step stopped twice partway is redone stretch by stretch and the run finishes with its index"
+else
+    bad "a stopped frame step is redone (exit $STATUS, frames: $KF; $(tail -3 "$SANDBOX/err9"))"
+fi
+rm -f "$SANDBOX/ff.count"
+STATUS=0
+PATH="$SANDBOX/fakebin:$PATH" FAKE_FAIL_ALWAYS=1 WATCH_FRAME_RETRIES=2 WATCH_RETRY_SECONDS=0 \
+    "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/kill2" >/dev/null 2>"$SANDBOX/err9b" || STATUS=$?
+if [ "$STATUS" -eq 4 ] && grep -q 'frame step failed 3 times' "$SANDBOX/err9b" && [ ! -e "$SANDBOX/kill2/watched.md" ]; then
+    ok "a frame step that keeps being stopped exits 4 (in SKILL.md's table) with the reason, never 255"
+else
+    bad "a frame step that keeps failing exits 4 (exit $STATUS: $(tail -3 "$SANDBOX/err9b"))"
+fi
+# And it is paced: the frame step runs under nice with limited threads, so one ffmpeg stays
+# under the breaker's 3 cores. The stand-in records its own arguments and niceness.
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *select=*) echo "nice=\$(ps -o nice= -p \$\$ | tr -d ' ') \$*" >> "$SANDBOX/ff.args" ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+PATH="$SANDBOX/fakebin:$PATH" "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/paced1" >/dev/null 2>&1 || true
+if grep -q '^nice=10 ' "$SANDBOX/ff.args" 2>/dev/null && grep -q -- '-threads 2' "$SANDBOX/ff.args" && grep -q -- '-filter_threads 2' "$SANDBOX/ff.args"; then
+    ok "the frame step runs at nice 10 with 2 decoder and 2 filter threads"
+else
+    bad "the frame step is paced (recorded: $(head -c 200 "$SANDBOX/ff.args" 2>/dev/null))"
+fi
+
+# 6. CPU admission: every frame stretch is admitted first, and waits while the Mac is
+# busy. A stand-in admission command (WATCH_RESERVE) is "busy" for 2 s on each ask; the
+# ffmpeg shim logs when a stretch really starts. Order must be ASK, OPEN, START.
+cat > "$SANDBOX/fake-reserve" <<FAKE
+#!/usr/bin/env bash
+echo ASK >> "$SANDBOX/adm.log"
+sleep 2
+echo OPEN >> "$SANDBOX/adm.log"
+while [ "\$1" != "--" ]; do shift; done
+shift
+exec "\$@"
+FAKE
+chmod +x "$SANDBOX/fake-reserve"
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *select=*) echo START >> "$SANDBOX/adm.log" ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+STATUS=0
+WATCH_RESERVE="$SANDBOX/fake-reserve" PATH="$SANDBOX/fakebin:$PATH" "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/adm1" >/dev/null 2>&1 || STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ "$(tr '\n' ' ' < "$SANDBOX/adm.log" 2>/dev/null)" = "ASK OPEN START " ]; then
+    ok "a frame stretch starts only after admission opens (busy for 2 s: ASK, OPEN, START)"
+else
+    bad "a frame stretch starts only after admission opens (exit $STATUS, log: $(tr '\n' ' ' < "$SANDBOX/adm.log" 2>/dev/null))"
+fi
+
+# 7. a failed contact-sheet step keeps the frames and the index and says the sheet is missing
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *tile=*) echo "forced sheet failure" >&2; exit 1 ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+STATUS=0
+PATH="$SANDBOX/fakebin:$PATH" "$SCRIPT" "$SANDBOX/mute.mov" "$SANDBOX/sheetfail" --sheet 2 >/dev/null 2>"$SANDBOX/sheetfail.err" || STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ "$(ls "$SANDBOX/sheetfail/frames" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] \
+    && grep -q 'FRAME' "$SANDBOX/sheetfail/watched.md" 2>/dev/null \
+    && grep -qi 'contact sheet.*missing' "$SANDBOX/sheetfail/watched.md" 2>/dev/null \
+    && grep -qi 'contact sheet.*missing' "$SANDBOX/sheetfail.err"; then
+    ok "a failed contact sheet keeps the frames and the index, exits 0 and says the sheet is missing"
+else
+    bad "a failed contact sheet keeps the frames and the index (exit $STATUS, $(tail -2 "$SANDBOX/sheetfail.err" | tr '\n' ' '))"
+fi
+
+# 8. The admission ships inside the engine: from an engine-only copy (the skills and the
+# engine's cpu_policy.py, no app/ folder, no WATCH_RESERVE), the frame stretch still asks
+# the engine's own admission and waits for it. The copy's cpu_guard.py is a stand-in that
+# reports a busy Mac for the first CPU sample and an idle one after; cpu_policy.py is the
+# engine's real file. Order must be BUSY, IDLE, START.
+EC="$SANDBOX/engine-copy"
+mkdir -p "$EC/skills" "$EC/scripts/lib"
+cp -R "$HERE" "$EC/skills/watch-video"
+[ -d "$ENGINE/skills/audio-transcription" ] && cp -R "$ENGINE/skills/audio-transcription" "$EC/skills/audio-transcription"
+cp "$ENGINE/scripts/lib/cpu_policy.py" "$EC/scripts/lib/cpu_policy.py"
+cat > "$EC/scripts/lib/cpu_guard.py" <<'STUB'
+import os
+LOG = os.environ['ADM_LOG']
+def host_ticks():
+    n = int(open(LOG + '.n').read()) if os.path.exists(LOG + '.n') else 0
+    n += 1
+    open(LOG + '.n', 'w').write(str(n))
+    if n == 2:
+        open(LOG, 'a').write('BUSY\n')
+    if n == 4:
+        open(LOG, 'a').write('IDLE\n')
+    table = {1: [0, 0, 0, 0], 2: [900, 0, 100, 0], 3: [900, 0, 100, 0]}
+    if n in table:
+        return table[n]
+    return [910 + 10 * (n - 4), 0, 1090 + 990 * (n - 4), 0]
+STUB
+cat > "$SANDBOX/fakebin/ffmpeg" <<FAKE
+#!/usr/bin/env bash
+case "\$*" in *select=*) echo START >> "$SANDBOX/eng.log" ;; esac
+exec "$REAL_FFMPEG" "\$@"
+FAKE
+STATUS=0
+env -u WATCH_RESERVE ADM_LOG="$SANDBOX/eng.log" PATH="$SANDBOX/fakebin:$PATH" "$EC/skills/watch-video/watch.sh" "$SANDBOX/mute.mov" "$SANDBOX/eng1" >/dev/null 2>"$SANDBOX/eng.err" || STATUS=$?
+# (exit 2 is fine here: the copy carries no transcription pipeline; the frames are the point)
+if { [ "$STATUS" -eq 0 ] || [ "$STATUS" -eq 2 ]; } && [ "$(ls "$SANDBOX/eng1/frames" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] && [ ! -e "$EC/app" ] && [ "$(tr '\n' ' ' < "$SANDBOX/eng.log" 2>/dev/null)" = "BUSY IDLE START " ]; then
+    ok "from an engine-only copy (no app/), the engine's own admission is asked for and honored (BUSY, IDLE, START)"
+else
+    bad "engine-only admission (exit $STATUS, log: $(tr '\n' ' ' < "$SANDBOX/eng.log" 2>/dev/null), err: $(tail -2 "$SANDBOX/eng.err" | tr '\n' ' '))"
+fi
 
 if [ "$FAIL" -eq 0 ]; then echo "PASS"; exit 0; fi
 echo "$FAIL failure(s)"

@@ -782,7 +782,36 @@ def _flatten(content):
     return "\n".join(parts)
 
 
-def read_transcript(path, prompt_id=None, limit_bytes=48 * 1024 * 1024):
+class Observed:
+    """Which of a fixed set of strings the session's records ever contained.
+
+    Stands in for the whole-session text blob this module used to build: the
+    only thing ever asked of that blob was `needle in blob`, so the set of
+    needles is registered first and one streaming pass records the hits.
+    """
+
+    def __init__(self, needles=()):
+        self._pending = {n for n in needles if n}
+        self._hit = set()
+
+    def feed(self, text):
+        if not self._pending:
+            return
+        for n in [n for n in self._pending if n in text]:
+            self._pending.discard(n)
+            self._hit.add(n)
+
+    def __contains__(self, needle):
+        if not needle:
+            return False
+        if needle in self._hit:
+            return True
+        if needle in self._pending:
+            return False
+        raise KeyError("needle was not registered before the transcript pass: %r" % needle)
+
+
+def read_transcript(path, prompt_id=None, needles=()):
     """Session-wide tool traffic, plus the tool-call names of THIS TURN ONLY.
 
     The two scopes are deliberately different and conflating them is a bug that
@@ -809,18 +838,22 @@ def read_transcript(path, prompt_id=None, limit_bytes=48 * 1024 * 1024):
     2.1.251 -- the last assistant record at Stop is the tool_use). That is why
     the message itself comes from last_assistant_message and only the tool
     traffic comes from here.
+
+    NO SIZE CAP (2026-10-10): the file is streamed one line at a time and never
+    held whole. Because grounding is a yes/no question about a few known
+    strings, the caller names those strings (`needles`) up front and the single
+    pass records which of them any record contains. The answer comes back as an
+    Observed, whose `in` operator is that record. A needle that was not named
+    raises KeyError rather than answering, so a forgotten one fails loudly in
+    the test suite and not silently in a session.
     """
-    blob, calls, refused = [], [], set()
+    seen = Observed(needles)
+    calls, refused = [], set()
     # No prompt_id -> no turn boundary -> count everything (see docstring:
     # the wide answer is the quiet one for the only question asked of it).
     turn_started = prompt_id is None
     if not path or not os.path.isfile(path):
-        return "", []
-    try:
-        if os.path.getsize(path) > limit_bytes:
-            return "", []
-    except OSError:
-        return "", []
+        return seen, []
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -845,13 +878,13 @@ def read_transcript(path, prompt_id=None, limit_bytes=48 * 1024 * 1024):
                             refused.add(b["tool_use_id"])
                 flat = _flatten(content)
                 if flat:
-                    blob.append(flat)
+                    seen.feed(flat)
     except OSError:
-        return "", []
+        return Observed(needles), []
     # A call whose result is an error was refused or failed: a refused Agent
     # dispatched nobody, so it is not this turn's tool (hunt part 3 v3, 19).
     tools = [name for cid, name in calls if not (cid and cid in refused)]
-    return "\n".join(blob), tools
+    return seen, tools
 
 
 # --------------------------------------------------------------------------
@@ -1166,15 +1199,20 @@ def main():
     extra_repos = os.environ.get("RICHOS_CLAIMS_EXTRA_REPOS", "")
     session_id = payload.get("session_id") or ""
 
-    blob, turn_tools = read_transcript(payload.get("transcript_path"),
-                                       payload.get("prompt_id"))
-
     names = agent_names(message)
     shas = sha_claims(message)
     paths = path_claims(message)
     roles = roster_roles(entity_root, teams_dir, session_id)
     rclaims = role_claims(message, roles)
     sclaims = state_claims(message)
+
+    # Every string the grounding checks below will ask about, named before the
+    # one streaming pass over the transcript (see read_transcript).
+    needles = set(names) | set(shas) | set(paths)
+    needles |= {role + "-" for role, _span in rclaims}
+    needles |= {os.path.basename(p.rstrip("/")) for p in paths}
+    blob, turn_tools = read_transcript(payload.get("transcript_path"),
+                                       payload.get("prompt_id"), needles)
 
     # --- BLOCKING: agent names ---------------------------------------------
     # Inert unless THIS session's team directory exists. Absent ground truth
