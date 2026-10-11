@@ -208,7 +208,7 @@ position:
 
 | text | before | after |
 |---|---|---|
-| the real doc comment, `` (`shutdown`) `` | refused | passes: a `//` or `/* */` line in non-shell source is not judged |
+| the real doc comment, `` (`shutdown`) `` | refused | passes: the characters of a `//` or `/* */` comment in non-shell source are blanked before judging |
 | `` /* `shutdown` drains the leases */ `` | refused | passes, same rule |
 | `shutdown(&quota);` | refused | passes: a name written against `(` is a call or a definition |
 | `shutdown() { echo "stopping the runner"; }` in a `.sh` | refused | passes, same rule |
@@ -228,3 +228,37 @@ this Mac as the command. It ran as a regular user and stopped at
 `shutdown: NOT super-user`; nothing was scheduled. The fixture is now read with
 `read -r -d ''`, the form every other fixture in the suite uses, and the suite was
 then run with `shutdown`, `reboot` and `halt` shimmed to a logger.
+
+### The first version of the comment rule made the guard weaker
+
+It skipped every line that STARTED like a comment. The second review of `af4b68db1`
+(`rv-20261011T123904Z-af4b68db-e695`) measured two lines refused on `main` and passed
+on that branch:
+
+| text, in a `.js` | `main` | `af4b68db1` | now |
+|---|---|---|---|
+| `` /* cleanup */ execSync(`pmset displaysleepnow`); `` | refused | **passed** | refused |
+| a multiline `` execSync(` `` template whose middle line is `//sbin/shutdown -h now` | refused | **passed** | refused |
+| `const a = "/*"; execSync(...pmset displaysleepnow...); const b = "*/";` | refused | refused | refused |
+
+The rule is now a lexer (`lex_slash`): it tracks `//` and `/* */` comments (nested
+where the language nests them), `"` and `'` strings, JavaScript templates with their
+`${ }`, regular expression literals, Rust raw strings and char literals, Go raw
+strings, triple-quoted and C# verbatim strings. Only comment characters are blanked;
+newlines stay, so line numbers and per-line judging do not move. The negation cue is
+still read on the line as written. An Edit is lexed in the file on disk with the
+edits applied in order, so a `new_string` placed inside a template is template text;
+where its start cannot be known, it is judged whole, as `main` judged it.
+
+Measured on the 123 tracked source files in those languages that contain a trigger
+word, each written whole: `main`, `af4b68db1` and the lexer agree on 122; the one
+difference is `work_host.rs`, refused by `main` for its three doc comments and passed
+by both. The lexer's output has the input's length and newlines on all 1,367 tracked
+files in those languages; the slowest, a 4.9 MB `field-data.js`, lexes in 1.2 s, and
+an Edit reads a file on disk only up to 2 MB. Suite cases L9 to L13; mutants
+`closed-comment-hides-its-line`, `templates-not-tracked`, `strings-not-tracked`
+and `edit-starts-in-code`.
+
+Still not covered, as on `main`: a Bash heredoc writing a `.rs` or `.js` file is
+judged line by line with no comment lexing, so the doc comment of L1 written through
+`cat > quota.rs <<RS` is still refused there.

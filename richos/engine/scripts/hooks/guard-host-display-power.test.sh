@@ -46,7 +46,10 @@
 #   (l) a code identifier named shutdown is not the command: the real
 #       2026-10-11 Rust doc comment, method calls, a plain call and a shell
 #       function definition pass; the command itself is still refused on a
-#       shell line, on Bash, in a JS backtick and behind a // path.
+#       shell line, on Bash, in a JS backtick and behind a // path. Comments are
+#       found by lexing: code after a closed comment, a // line inside a JS
+#       template, and code after a "/*" string are refused; an Edit starts in
+#       the lexer state its old_string has in the file on disk.
 #
 # Run directly: scripts/hooks/guard-host-display-power.test.sh
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -597,6 +600,25 @@ expect_rc     "L7  ... and a backtick command on a CODE line of non-shell source
               "$(payload Edit "$SB/src/a.js" 'execSync(`shutdown -h now`);')"
 expect_rc     "L8  ... and a // line in a SHELL script is a path, not a comment" 2 \
               "$(payload Edit "$SB/scripts/a.sh" '//sbin/shutdown -h now')"
+# A COMMENT IS FOUND BY LEXING, NEVER BY THE SHAPE OF A LINE. The second review of
+# af4b68db1 (rv-20261011T123904Z) measured L9 and L10 refused on main and passed by
+# a guard that skipped every line STARTING like a comment.
+expect_rc     "L9  code after a CLOSED block comment on the same line is still REFUSED" 2 \
+              "$(payload Write "$SB/src/cleanup.js" '/* cleanup */ execSync(`pmset displaysleepnow`);')"
+expect_rc     "L10 ... and a // line INSIDE a multiline JS template is shell text, REFUSED" 2 \
+              "$(payload Write "$SB/src/cleanup.js" 'execSync(`
+//sbin/shutdown -h now
+`);')"
+expect_rc     "L11 ... and a /* inside a STRING opens no comment, so the code after it is REFUSED" 2 \
+              "$(payload Write "$SB/src/cleanup.js" 'const a = "/*"; execSync(`pmset displaysleepnow`); const b = "*/";')"
+# AN EDIT IS A FRAGMENT: it starts where its old_string sits in the file on disk.
+mkdir -p "$SB/src"
+printf '%s\n' 'execSync(`' 'PLACEHOLDER' '`);' >"$SB/src/in-template.js"
+printf '%s\n' 'function drain() {' '  PLACEHOLDER' '}' >"$SB/src/in-code.js"
+expect_rc     "L12 an Edit whose old_string sits INSIDE a template is judged as template text, REFUSED" 2 \
+              "$(payload Edit "$SB/src/in-template.js" '//sbin/shutdown -h now')"
+expect_silent "L13 ... and the same // text where the old_string sits in CODE is a comment, PASSES" \
+              "$(payload Edit "$SB/src/in-code.js" '// `shutdown` drains the leases')"
 
 # --- the mutation harness --------------------------------------------------
 # A suite that cannot fail proves nothing. The harness breaks the guard in ways

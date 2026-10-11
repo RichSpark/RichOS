@@ -518,6 +518,10 @@ tool = str(d.get("tool_name", "") or "")
 path = os.environ.get("FILE_PATH", "") or ""
 
 texts = []
+# The file-surface texts again, each with what places it in the file: None for
+# a Write (the whole file), else the old_string it replaces and replace_all.
+# Only the comment lexer reads these; every other check reads blob.
+pieces = []
 if tool == "Bash":
     texts.append(str(ti.get("command", "") or ""))
 elif tool == "Agent":
@@ -531,12 +535,15 @@ elif tool == "SendMessage":
     texts.append(str(ti.get("summary", "") or ""))
 elif tool == "Write":
     texts.append(str(ti.get("content", "") or ""))
+    pieces.append((texts[-1], None, False))
 elif tool == "Edit":
     texts.append(str(ti.get("new_string", "") or ""))
+    pieces.append((texts[-1], str(ti.get("old_string", "") or ""), bool(ti.get("replace_all"))))
 elif tool == "MultiEdit":
     for e in (ti.get("edits") or []):
         if isinstance(e, dict):
             texts.append(str(e.get("new_string", "") or ""))
+            pieces.append((texts[-1], str(e.get("old_string", "") or ""), bool(e.get("replace_all"))))
 elif tool == "NotebookEdit":
     texts.append(str(ti.get("new_source", "") or ""))
 blob = "\n".join(t for t in texts if isinstance(t, str))
@@ -1009,19 +1016,209 @@ def join_continuations(lines):
 FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 NEW_BLOCK_RE = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)")
 
-# A COMMENT LINE IN NON-SHELL SOURCE CANNOT RUN. `strip_comments` removes a
-# shell comment; these languages comment with // and /* */ instead, and their
-# doc comments name methods in Markdown backticks, which the shell analyzer
-# reads as a command substitution. Measured 2026-10-11: a Rust test whose doc
-# comment said the app quits (`shutdown`) was refused, and the engineer wrote
-# the file through a script to get past the guard. Only these extensions: in a
-# shell script `//sbin/shutdown` is a path and still runs.
+# A COMMENT IN NON-SHELL SOURCE CANNOT RUN. `strip_comments` removes a shell
+# comment; these languages comment with // and /* */ instead, and their doc
+# comments name methods in Markdown backticks, which the shell analyzer reads
+# as a command substitution. Measured 2026-10-11: a Rust test whose doc comment
+# said the app quits (`shutdown`) was refused, and the engineer wrote the file
+# through a script to get past the guard. Only these extensions: in a shell
+# script `//sbin/shutdown` is a path and still runs.
+#
+# THE COMMENT IS FOUND BY LEXING, NEVER BY THE SHAPE OF A LINE. The first
+# version skipped every line that STARTED like a comment, and the second review
+# of af4b68db1 (rv-20261011T123904Z) measured what that let through: a closed
+# comment followed by code on the same line, and a line inside a multiline
+# JavaScript template, both refused on main and passed on that branch. So only
+# the characters inside a comment are blanked; code after a closed comment, and
+# anything inside a string or template, a raw string, a char literal or a
+# regular expression literal, stays and is judged exactly as before. Newlines
+# are kept, so line numbers and the per-line judging do not move.
+#
+# AN EDIT IS A FRAGMENT, and a fragment does not say whether it starts in code
+# or in the middle of a template. So the file on disk is lexed with the edits
+# applied in order, and each new_string starts in the state its old_string
+# starts in. Where that cannot be known (unreadable, too large, old_string not
+# found or ambiguous) the fragment is NOT stripped: it is judged whole, as main
+# judged every line. A missing file starts in code, the start of a new file.
 SLASH_COMMENT_EXT = {".rs", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".swift", ".kt",
                      ".kts", ".java", ".go", ".c", ".h", ".cc", ".cpp", ".hpp", ".m",
                      ".mm", ".cs", ".scala", ".dart"}
-SLASH_COMMENT_RE = re.compile(r"^\s*(?://|/\*|\*)")
+JS_EXT = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx"}
+NESTING_EXT = {".rs", ".swift", ".kt", ".kts", ".scala", ".dart"}
+TRIPLE_EXT = {".swift", ".kt", ".kts", ".java", ".scala", ".dart"}
+TRIPLE_RAW_EXT = {".kt", ".kts", ".scala"}
+CHAR_RE = re.compile(r"\x27(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}"
+                     r"|[0-7]{1,3}|[^\n])|[^\\\x27\n])\x27")
+RUST_RAW_RE = re.compile(r"(?:br|cr|r)(#*)\x22")
+REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^")
+REGEX_KW = {"return", "typeof", "case", "do", "else", "in", "of", "new", "delete",
+            "void", "throw", "yield", "await"}
+CODE_STATE = ("code", None, ())
+EDIT_FILE_MAX = 2000000
 
-def text_findings(text, prose, base=0, slash_comments=False):
+def _regex_end(text, i):
+    """End of a JavaScript regular expression literal opening at i, or 0."""
+    j, cls, n = i + 1, False, len(text)
+    while j < n:
+        ch = text[j]
+        if ch == "\n":
+            return 0
+        if ch == "\\":
+            j += 2; continue
+        if cls:
+            if ch == "]":
+                cls = False
+        elif ch == "[":
+            cls = True
+        elif ch == "/":
+            j += 1
+            while j < n and text[j].isalpha():
+                j += 1
+            return j
+        j += 1
+    return 0
+
+def lex_slash(text, ext, state=CODE_STATE, marks=()):
+    """(text with comment characters blanked, end state, {mark: state at mark}).
+
+    Output has the same length as input and the same newlines. A state is
+    (mode, arg, stack): mode is code, line, block, str, triple, raw, vstr or
+    tpl; stack holds the brace depth of each open JavaScript ${ } in a template.
+    """
+    mode, arg, stack = state[0], state[1], list(state[2])
+    js = ext in JS_EXT
+    sq_string = js or ext == ".dart"
+    multiline_dq = ext == ".rs"
+    out, at = [], {}
+    marks = sorted(set(marks))
+    mi, i, n = 0, 0, len(text)
+    last, word = "", ""
+    while i < n:
+        while mi < len(marks) and marks[mi] <= i:
+            at[marks[mi]] = (mode, arg, tuple(stack)); mi += 1
+        c = text[i]
+        if mode == "line":
+            out.append(c if c == "\n" else " "); i += 1
+            if c == "\n":
+                mode, arg = "code", None
+            continue
+        if mode == "block":
+            if text.startswith("*/", i):
+                out.append("  "); i += 2
+                if arg > 1:
+                    arg -= 1
+                else:
+                    mode, arg = "code", None
+                continue
+            if ext in NESTING_EXT and text.startswith("/*", i):
+                out.append("  "); i += 2; arg += 1; continue
+            out.append(c if c == "\n" else " "); i += 1; continue
+        if mode == "str":
+            if c == "\\" and i + 1 < n:
+                out.append(text[i:i+2]); i += 2; continue
+            out.append(c); i += 1
+            if c == arg or (c == "\n" and not (multiline_dq and arg == "\x22")):
+                mode, arg, last, word = "code", None, "a", ""
+            continue
+        if mode == "triple":
+            if c == "\\" and i + 1 < n and ext not in TRIPLE_RAW_EXT:
+                out.append(text[i:i+2]); i += 2; continue
+            if text.startswith(arg, i):
+                out.append(arg); i += len(arg); mode, arg, last, word = "code", None, "a", ""; continue
+            out.append(c); i += 1; continue
+        if mode == "raw":
+            if text.startswith(arg, i):
+                out.append(arg); i += len(arg); mode, arg, last, word = "code", None, "a", ""; continue
+            out.append(c); i += 1; continue
+        if mode == "vstr":
+            if c == "\x22":
+                if text.startswith("\x22\x22", i):
+                    out.append("\x22\x22"); i += 2; continue
+                out.append(c); i += 1; mode, arg, last, word = "code", None, "a", ""; continue
+            out.append(c); i += 1; continue
+        if mode == "tpl":
+            if c == "\\" and i + 1 < n:
+                out.append(text[i:i+2]); i += 2; continue
+            if c == "`":
+                out.append(c); i += 1; mode, last, word = "code", "a", ""; continue
+            if text.startswith("${", i):
+                out.append("${"); i += 2; stack.append(0); mode, last, word = "code", "(", ""; continue
+            out.append(c); i += 1; continue
+        # ---- code ----
+        if text.startswith("//", i):
+            out.append("  "); i += 2; mode = "line"; continue
+        if text.startswith("/*", i):
+            out.append("  "); i += 2; mode, arg = "block", 1; continue
+        if c == "\x22":
+            if ext in TRIPLE_EXT and text.startswith("\x22\x22\x22", i):
+                out.append("\x22\x22\x22"); i += 3; mode, arg = "triple", "\x22\x22\x22"; continue
+            if ext == ".cs" and i > 0 and text[i-1] == "@":
+                out.append(c); i += 1; mode = "vstr"; continue
+            out.append(c); i += 1; mode, arg = "str", c; continue
+        if c == "\x27":
+            if ext == ".dart" and text.startswith("\x27\x27\x27", i):
+                out.append("\x27\x27\x27"); i += 3; mode, arg = "triple", "\x27\x27\x27"; continue
+            if sq_string:
+                out.append(c); i += 1; mode, arg = "str", c; continue
+            m = CHAR_RE.match(text, i)
+            if m:
+                out.append(m.group(0)); i = m.end(); last, word = "a", ""; continue
+            out.append(c); i += 1; last, word = c, ""; continue
+        if c == "`" and js:
+            out.append(c); i += 1; mode = "tpl"; continue
+        if c == "`" and ext == ".go":
+            out.append(c); i += 1; mode, arg = "raw", "`"; continue
+        if ext == ".rs" and c in "brc" and (i == 0 or not (text[i-1].isalnum() or text[i-1] == "_")):
+            m = RUST_RAW_RE.match(text, i)
+            if m:
+                out.append(m.group(0)); i = m.end(); mode, arg = "raw", "\x22" + m.group(1); continue
+        if js and c == "/" and (last == "" or last in REGEX_PREV or word in REGEX_KW):
+            j = _regex_end(text, i)
+            if j:
+                out.append(text[i:j]); i = j; last, word = "a", ""; continue
+        if js and stack and c == "}":
+            if stack[-1] == 0:
+                stack.pop(); out.append(c); i += 1; mode = "tpl"; continue
+            stack[-1] -= 1
+        elif js and stack and c == "{":
+            stack[-1] += 1
+        if c.isalnum() or c in "_$":
+            word = word + c if (i > 0 and (text[i-1].isalnum() or text[i-1] in "_$")) else c
+            last = c
+        elif not c.isspace():
+            last, word = c, ""
+        out.append(c); i += 1
+    for k in marks[mi:]:
+        at[k] = (mode, arg, tuple(stack))
+    return "".join(out), (mode, arg, tuple(stack)), at
+
+def piece_states(path, pieces, ext):
+    """The lexer state each piece starts in, or None where it cannot be known."""
+    if not pieces or pieces[0][1] is None:
+        return [CODE_STATE] * len(pieces)
+    try:
+        if os.path.getsize(path) > EDIT_FILE_MAX:
+            return [None] * len(pieces)
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            cur = fh.read()
+    except FileNotFoundError:
+        return [CODE_STATE] * len(pieces)
+    except (OSError, ValueError):
+        return [None] * len(pieces)
+    out = []
+    for new, old, every in pieces:
+        offs, k = [], (cur.find(old) if old else -1)
+        while k >= 0 and len(offs) <= 64:
+            offs.append(k); k = cur.find(old, k + len(old))
+        if not offs or len(offs) > 64 or (not every and len(offs) > 1):
+            out.extend([None] * (len(pieces) - len(out)))
+            break
+        found = set(lex_slash(cur, ext, CODE_STATE, offs)[2].values())
+        out.append(found.pop() if len(found) == 1 else None)
+        cur = cur.replace(old, new) if every else cur.replace(old, new, 1)
+    return out
+
+def text_findings(text, prose, base=0, raw=None):
     """Findings in a DOCUMENT: a brief, a message, a source file, a heredoc.
 
     BLOCKS. In prose a block is what one author wrote as one thought, so
@@ -1041,10 +1238,18 @@ def text_findings(text, prose, base=0, slash_comments=False):
     # it: the guest reboot in testvm/setup.sh was still refused.
     if not prose:
         out, seen = [], set()
-        for n, line in join_continuations(text.split("\n")):
-            if slash_comments and SLASH_COMMENT_RE.match(line):
-                continue
-            if NEG_RE.search(line) and not PERMIT_RE.search(line):
+        lines = text.split("\n")
+        # The negation cue is read on the text AS WRITTEN (raw), exactly as
+        # before comments were blanked: blanking decides what is judged, never
+        # which line carries the cue.
+        raws = raw.split("\n") if raw is not None else lines
+        if len(raws) != len(lines):
+            raws = lines
+        groups = join_continuations(lines)
+        for g, (n, line) in enumerate(groups):
+            end = groups[g + 1][0] if g + 1 < len(groups) else len(lines) + 1
+            cue = " ".join(raws[n - 1:end - 1])
+            if NEG_RE.search(cue) and not PERMIT_RE.search(cue):
                 continue
             # Through candidates() rather than straight to analyze_command, so
             # that BOTH surfaces have one candidate-extraction entry point and
@@ -1193,9 +1398,13 @@ if surface == "shell":
             FINDINGS.append((1, rule, snip, why))
     for body, at, prose in heredocs:
         FINDINGS.extend(text_findings(body, prose, base=at))
+elif surface == "code" and ext in SLASH_COMMENT_EXT and pieces:
+    lexed = []
+    for (piece, _old, _every), start in zip(pieces, piece_states(path, pieces, ext)):
+        lexed.append(piece if start is None else lex_slash(piece, ext, start)[0])
+    FINDINGS.extend(text_findings("\n".join(lexed), False, raw=blob))
 else:
-    FINDINGS.extend(text_findings(blob, surface == "prose",
-                                  slash_comments=ext in SLASH_COMMENT_EXT))
+    FINDINGS.extend(text_findings(blob, surface == "prose"))
 
 if not FINDINGS:
     print("CLEAN"); sys.exit(0)

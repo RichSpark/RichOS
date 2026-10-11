@@ -225,8 +225,8 @@ mutant code-scored-by-word-scan "F15" "$G" \
 
 # 13. A TRAILING BACKSLASH IS ONE COMMAND.
 mutant continuations-not-joined "F16" "$G" \
-    '        for n, line in join_continuations(text.split(' \
-    '        for n, line in enumerate(text.split(' \
+    '        groups = join_continuations(lines)' \
+    '        groups = list(enumerate(lines, 1))' \
     "testvm/setup.sh reboots the GUEST with an ssh whose argument sits on the next line; per physical line the continuation loses its command word and a guest reboot reads as a shutdown of his Mac."
 
 # 14. AN UNRESOLVABLE $VAR IS STEPPED OVER, NOT TRUSTED.
@@ -278,9 +278,34 @@ mutant name-against-paren-is-a-command "L3 " "$G" \
     "a plain call such as shutdown(&quota) in Rust, or a shell function DEFINED as shutdown(), would read as the system command and refuse the file."
 
 mutant slash-comments-judged "L1 " "$G" \
-    '            if slash_comments and SLASH_COMMENT_RE.match(line):' \
-    '            if False:' \
+    '        lexed.append(piece if start is None else lex_slash(piece, ext, start)[0])' \
+    '        lexed.append(piece)' \
     "a Rust or Swift doc comment naming a method in Markdown backticks would read as a command substitution, and the 2026-10-11 test would be refused again."
+
+# --- 19-22. ...BUT A COMMENT IS FOUND BY LEXING, NEVER BY A LINE SHAPE -----
+# THE FIRST VERSION OF THE RULE ABOVE WAS THIS DEFECT. It skipped every line that
+# started like a comment, and the second review of af4b68db1
+# (rv-20261011T123904Z) measured two host commands it let through. Each mutant
+# below removes one boundary the lexer tracks.
+mutant closed-comment-hides-its-line "L9 " "$G" \
+    '                else:\n                    mode, arg = "code", None\n                continue' \
+    '                else:\n                    mode, arg = "line", None\n                continue' \
+    "a closed block comment would hide the code after it, so a cleanup comment followed by pmset displaysleepnow on the same line would pass."
+
+mutant templates-not-tracked "L10" "$G" \
+    '\n            out.append(c); i += 1; mode = "tpl"; continue' \
+    '\n            pass' \
+    "a // line inside a multiline JavaScript template would read as a comment, and a template carrying //sbin/shutdown -h now to execSync would pass."
+
+mutant strings-not-tracked "L11" "$G" \
+    '            out.append(c); i += 1; mode, arg = "str", c; continue' \
+    '            pass' \
+    "a /* inside a string would open a comment, so everything up to a later */ string, a host command included, would be blanked."
+
+mutant edit-starts-in-code "L12" "$G" \
+    '    if not pieces or pieces[0][1] is None:' \
+    '    if True:' \
+    "an Edit fragment would always start in code, so new text placed inside an existing template would read its //sbin/shutdown line as a comment and pass."
 
 mut_pool_drain
 mut_pool_require_submissions "$(basename "$0")"
