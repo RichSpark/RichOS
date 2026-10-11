@@ -132,10 +132,31 @@ async function main() {
     await page.waitForFunction(() => document.getElementById("set-spend-amt").textContent.length > 0);
     const s = starts(Date.now());
     const month = sumFrom(await rows(page), s.month);
-    assertEqual(await text(page, "#set-spend-amt"), "$" + Math.round(month).toLocaleString("en-US") + " this month");
+    // The screen's own format, cents and all, so the row and the screen's This month figure never disagree.
+    assertEqual(await text(page, "#set-spend-amt"), money(month) + " this month");
     assertEqual(await page.locator("#set-spend-open svg").count(), 1, "a chevron");
     assertEqual(await page.getAttribute("#set-spend-open", "aria-current"), null, "not the current page yet");
+    const row = (await text(page, "#set-spend-amt")).replace(/ this month$/, "");
+    await screen(page);
+    assertEqual(await page.getAttribute("#spend-fig", "aria-label"), row, "the row's figure is the screen's This month figure");
     await page.close();
+    return "row " + row + " this month; the screen's This month figure " + row;
+  });
+
+  // ---- 1b. the row's cents: a $0.64 month is not "$1 this month" (found by echo-opus-spend2 in the test VM) ----
+  await run.check("the row: a $0.64 month reads \"$0.64 this month\", as the screen's This month figure reads it", async () => {
+    const at = Date.now();
+    const page = await open("dark", { rows: [
+      { at, family: "opus", name: "Opus 5.5", effort: "high", requests: 3, cost: 0.4, tokens: 120000 },
+      { at, family: "haiku", name: "Haiku 5.5", effort: "low", requests: 2, cost: 0.24, tokens: 40000 },
+    ] });
+    await menu(page);
+    await page.waitForFunction(() => document.getElementById("set-spend-amt").textContent.length > 0);
+    assertEqual(await text(page, "#set-spend-amt"), "$0.64 this month");
+    await screen(page);
+    assertEqual(await page.getAttribute("#spend-fig", "aria-label"), "$0.64", "the screen's This month figure");
+    await page.close();
+    return "row $0.64 this month; the screen's This month figure $0.64";
   });
 
   // ---- 2. its own screen ---------------------------------------------------------------------
