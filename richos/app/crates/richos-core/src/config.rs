@@ -1000,6 +1000,21 @@ impl ConfigStore {
         self.persist()
     }
 
+    /// **Both rows in one write**, as Preferences saves them when it closes (round 23). Either
+    /// name refused refuses both, and the file is written once, so a failure can never leave
+    /// one row saved and the other not.
+    pub fn set_lease_models(&mut self, models: LeaseModels) -> io::Result<()> {
+        refuse_unknown_model(models.rich)?;
+        refuse_unknown_model(models.stu)?;
+        if self.config.rich_model == models.rich && self.config.stu_model == models.stu {
+            return Ok(());
+        }
+        self.config.rich_model = models.rich;
+        self.config.stu_model = models.stu;
+        // One write; on failure `persist` puts both back to what the file holds.
+        self.persist()
+    }
+
     /// The general-settings row's write for Stu, by the same rule as
     /// [`ConfigStore::set_rich_model`].
     pub fn set_stu_model(&mut self, model: ModelChoice) -> io::Result<()> {
@@ -1441,6 +1456,34 @@ mod tests {
         assert_eq!(written["rich_model"], "fable-6");
         assert_eq!(written["stu_model"], "opus");
         fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn both_model_rows_are_saved_in_one_write_or_neither_is() {
+        // Round 23: Preferences saves both rows as it closes. A refused name refuses both, and
+        // a write that fails leaves both as the file holds them, never one row moved alone.
+        let path = tmp_path("models-pair");
+        let mut store = ConfigStore::open(&path).unwrap();
+        let both = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
+        store.set_lease_models(both).unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().lease_models(), both);
+
+        let half_unknown = LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Unknown };
+        assert!(store.set_lease_models(half_unknown).is_err(), "Unknown is never a choice");
+        assert_eq!(store.lease_models(), both, "the refused pair moved a row in memory");
+        assert_eq!(ConfigStore::open(&path).unwrap().lease_models(), both, "the refused pair moved a row on disk");
+
+        // A write that cannot land: a folder now stands where the file goes.
+        fs::remove_file(&path).ok();
+        let dir = std::env::temp_dir().join(format!("richos-config-test-blocked-{}-{}", std::process::id(), crate::util::now_millis()));
+        fs::create_dir_all(&dir).unwrap();
+        let blocked = dir.join("config.json");
+        let mut store = ConfigStore::open(&blocked).unwrap();
+        fs::create_dir_all(&blocked).unwrap();
+        let opus = LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Opus };
+        assert!(store.set_lease_models(both).is_err(), "a write onto a folder reported success");
+        assert_eq!(store.lease_models(), opus, "a failed write left a row moved in memory");
+        fs::remove_dir_all(&dir).ok();
     }
 
     fn tmp_path(tag: &str) -> PathBuf {

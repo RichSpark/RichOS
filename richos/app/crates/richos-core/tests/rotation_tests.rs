@@ -1427,3 +1427,110 @@ fn a_fast_burn_alerts_once_when_the_high_speed_is_first_detected() {
     drop(std::fs::remove_file(&path));
     drop(std::fs::remove_dir_all(dir));
 }
+
+// ============================================================================
+// §119 — the model he chose in Preferences is the model of the next reply
+// ============================================================================
+
+/// A lease that knows the model it was started on, as `NativeCognition::lease_model` does,
+/// and says it in every answer so a test reads which model answered rather than assumes it.
+struct ModelLease {
+    session_id: String,
+    model: richos_core::config::ModelChoice,
+    prompts: Arc<Mutex<Vec<(String, String)>>>,
+    commands: Arc<Mutex<Option<richos_core::lease_commands::CommandReading>>>,
+}
+impl Cognition for ModelLease {
+    fn session_id(&self) -> &str { &self.session_id }
+    fn lease_model(&self) -> Option<richos_core::config::ModelChoice> { Some(self.model) }
+    fn running_commands(&self) -> Option<richos_core::lease_commands::CommandReading> { *self.commands.lock().unwrap() }
+    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+    fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        self.prompts.lock().unwrap().push((self.model.as_str().to_string(), text.to_string()));
+        on_item(TurnItem::Text { seq: 0, text: &format!("answered on {}", self.model.as_str()) });
+        Ok("end_turn".into())
+    }
+}
+
+/// The desktop's factory reduced to §119: every lease starts on the model the stored setting
+/// names at that moment (`EngineProfile::prepare` reads `config.json` at every spawn), and
+/// `lease_models` answers that same setting.
+struct ModelFactory {
+    stored: Arc<Mutex<richos_core::config::ModelChoice>>,
+    spawned: Arc<Mutex<Vec<String>>>,
+    prompts: Arc<Mutex<Vec<(String, String)>>>,
+    commands: Arc<Mutex<Option<richos_core::lease_commands::CommandReading>>>,
+}
+impl LeaseFactory for ModelFactory {
+    fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
+        let model = *self.stored.lock().unwrap();
+        let mut spawned = self.spawned.lock().unwrap();
+        spawned.push(model.as_str().to_string());
+        Ok(Box::new(ModelLease {
+            session_id: format!("sess-{}-{}", model.as_str(), spawned.len()),
+            model,
+            prompts: self.prompts.clone(),
+            commands: self.commands.clone(),
+        }))
+    }
+    fn lease_models(&self) -> Option<richos_core::config::LeaseModels> {
+        Some(richos_core::config::LeaseModels { rich: *self.stored.lock().unwrap(), stu: richos_core::config::ModelChoice::Opus })
+    }
+}
+
+/// **§119 and the CEO's addendum:** *"Closing the preferences panel IS the confirmation that the
+/// settings chosen there now need to be saved and implemented."* Saving is the shell's
+/// `set_lease_models`; this is the implementing half. With the stored choice unchanged no turn
+/// renews the lease; once it names Fable, his next reply comes from a Fable lease, renewed at
+/// the boundary before his words are sent and never inside a turn; back to Opus, the same.
+#[test]
+fn the_model_he_chose_in_preferences_answers_his_next_reply() {
+    use richos_core::config::ModelChoice;
+    use richos_core::lease_commands::CommandReading;
+    let (path, ledger) = tmp_ledger("model-changed");
+    let mut spine = support::spine(ledger);
+    let thread = spine.create_thread("General", &femcboost()).unwrap();
+    let stored = Arc::new(Mutex::new(ModelChoice::Opus));
+    let spawned = Arc::new(Mutex::new(Vec::new()));
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let commands = Arc::new(Mutex::new(Some(CommandReading::Clear)));
+    spine.attach_lease(Box::new(ModelLease {
+        session_id: "sess-opus-0".into(), model: ModelChoice::Opus, prompts: prompts.clone(), commands: commands.clone(),
+    }));
+    spine.set_lease_factory(Box::new(ModelFactory {
+        stored: stored.clone(), spawned: spawned.clone(), prompts: prompts.clone(), commands: commands.clone(),
+    }));
+    let answered_by = |text: &str| -> Vec<String> {
+        prompts.lock().unwrap().iter().filter(|(_, t)| t == text).map(|(m, _)| m.clone()).collect()
+    };
+
+    spine.submit_prompt("one", Source::Text).unwrap();
+    assert_eq!(spine.rotation_count(), 0, "the lease was renewed with the stored model unchanged");
+    assert_eq!(answered_by("one"), vec!["opus"]);
+
+    // Preferences closed with "talks with you" on Fable: the next reply is Fable's.
+    *stored.lock().unwrap() = ModelChoice::Fable;
+    spine.submit_prompt("two", Source::Text).unwrap();
+    assert_eq!(answered_by("two"), vec!["fable"], "his next reply did not come from the model he chose");
+    assert_eq!(spine.rotation_count(), 1);
+    assert_eq!(spine.last_rotation_reason(), Some(richos_core::spine::MODEL_CHANGED));
+    assert_eq!(*spawned.lock().unwrap(), vec!["fable".to_string()]);
+    spine.submit_prompt("three", Source::Text).unwrap();
+    assert_eq!(spine.rotation_count(), 1, "a lease already on Fable was renewed again");
+
+    // Back to Opus while a command the lease started is running: that turn stays on Fable,
+    // and the switch happens at the first boundary after the command ends.
+    *stored.lock().unwrap() = ModelChoice::Opus;
+    *commands.lock().unwrap() = Some(CommandReading::Running(1));
+    spine.submit_prompt("four", Source::Text).unwrap();
+    assert_eq!(answered_by("four"), vec!["fable"], "a renewal retired a lease with a command running");
+    *commands.lock().unwrap() = Some(CommandReading::Clear);
+    spine.submit_prompt("five", Source::Text).unwrap();
+    assert_eq!(answered_by("five"), vec!["opus"]);
+    assert_eq!(spine.rotation_count(), 2);
+
+    // One unbroken conversation across both renewals.
+    let mine: Vec<_> = spine.messages(&thread).unwrap().into_iter().filter(|m| m.text.starts_with("answered on ")).collect();
+    assert_eq!(mine.len(), 5, "{mine:?}");
+    drop(std::fs::remove_file(&path));
+}
