@@ -880,11 +880,15 @@ report waiting on this Mac again once its rest is over (`spawn_retry`), for each
 
 | Event name | When | Payload |
 |---|---|---|
-| `rich://bug-report` | A report that could not go when the user pressed Send (offline, GitHub down, no reporting account set up) went out by itself. | `{ delivery }`, a `Delivery::Sent`: `{ state: "sent", id, number, url, account, title, sent_at_ms }` |
-| `rich://bug-report` | Rich checked a report he could not check when the user told him (Claude failed, timed out or answered with no report), from the second loop (`spawn_check`). Said on every pass until the window takes it off this Mac (`bug_report_take_unchecked`). | `{ checked }`: `{ id, draft, digest, here }` |
+| `rich://bug-report` | A report that could not go when the user pressed Send (offline, GitHub down, no reporting account set up) went out by itself. | `{ delivery, post }`, a `Delivery::Sent`: `{ state: "sent", id, number, url, account, title, sent_at_ms, post }` |
+| `rich://bug-report` | Rich checked a report he could not check when the user told him (Claude failed, timed out or answered with no report), from the second loop (`spawn_check`). Said on every pass until the window takes it off this Mac (`bug_report_take_unchecked`). | `{ checked }`: `{ id, draft, digest, here, post }` |
 
 The report card waiting on that `id` turns to Sent and Rich says it went out; with no card on screen
 (after a relaunch) a notice says so. A report that is still waiting emits nothing. A checked report
 comes as its card, unsent, where the user told Rich about it; one kept before a relaunch comes in
 the Rich panel. No report is offered for sending without Rich's check (review
 rv-20261009T162841Z-69294215-70e6 finding 2).
+
+Request a feature (CEO 2026-10-11, round 24) uses the same event for an idea: `post` is `"idea"`
+(a discussion in RichOS's GitHub Discussions, under Ideas) or `"bug"` (an issue), and the window
+draws the card and Rich's words for that kind. A delivery's `number` is then the discussion's.

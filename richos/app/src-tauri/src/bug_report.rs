@@ -14,6 +14,15 @@
 //! `Account::User`, when a sign-in exists; the window's From line and Rich's sentences already
 //! read the account off the context and the delivery rather than assume it.
 //!
+//! # Request a feature (round 24, CEO 2026-10-11)
+//!
+//! *"can things not be copy-pasted from the "Bust a bug" feature?"*: a feature idea goes through
+//! every command and loop here exactly as a bug report does, named by the window's `post`
+//! (`"idea"`; a call without it is a bug report). Its outbox is its own folder
+//! (`feature-requests/`), so a kept idea can only ever be posted as an idea, and the one
+//! difference is where it is posted: GraphQL's `createDiscussion` under Ideas ([`GitHub`]'s
+//! `graphql`, `richos_core::bug_report::post_discussion`), never the issues endpoint.
+//!
 //! # What is NOT here: a shipped token
 //!
 //! No token is in the source or the bundle. On a Mac where none has been put in the keychain the
@@ -42,6 +51,8 @@ const KEYCHAIN_DEADLINE: Duration = Duration::from_secs(20);
 /// The app's one Bust a bug state.
 pub struct BugReports {
     outbox: bug::Outbox,
+    /// Feature ideas (Request a feature), kept and retried exactly as bug reports are.
+    ideas: bug::Outbox,
     /// One attempt at a time, so the loop and *Try now* can never file one report twice.
     sending: Mutex<()>,
     /// While a report waits on the user's words, what they say goes to it (`holding_voice`).
@@ -65,6 +76,7 @@ impl BugReports {
         best_effort("the writing folder", std::fs::create_dir_all(&quiet_dir));
         Arc::new(BugReports {
             outbox: bug::Outbox::open(&dir),
+            ideas: bug::Outbox::open_for(&data_dir.join("feature-requests"), bug::Post::Idea),
             sending: Mutex::new(()),
             hold_voice: AtomicBool::new(false),
             quiet_dir,
@@ -72,6 +84,14 @@ impl BugReports {
             look: Mutex::new(None),
             checks: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// The outbox of bug reports, or of feature ideas.
+    fn outbox(&self, post: bug::Post) -> &bug::Outbox {
+        match post {
+            bug::Post::Bug => &self.outbox,
+            bug::Post::Idea => &self.ideas,
+        }
     }
 
     /// What Rich last checked, by report. A thread that panicked while holding it left a whole
@@ -151,8 +171,8 @@ fn read_keychain(service: &str, account: &str) -> Option<String> {
 // THE REQUEST
 // ---------------------------------------------------------------------------------------
 
-/// `POST /repos/WebDevBooster/richos/issues`, to GitHub or to the stand-in named by
-/// `RICHOS_BUG_REPORT_API`.
+/// `POST /repos/WebDevBooster/richos/issues` for a bug report, and `POST /graphql` for a feature
+/// idea, to GitHub or to the stand-in named by `RICHOS_BUG_REPORT_API`.
 pub struct GitHub {
     base: String,
 }
@@ -184,9 +204,55 @@ impl bug::Transport for GitHub {
         });
         request.join().unwrap_or(bug::Outcome::Unreachable)
     }
+
+    /// One GraphQL request, `POST {base}/graphql`: a feature idea's lookup and its
+    /// `createDiscussion` (`bug::post_discussion`). Its own thread and runtime, as `create_issue`.
+    fn graphql(&self, credential: &bug::Credential, request: &serde_json::Value) -> bug::Reply {
+        crate::voice_provision::ensure_crypto_provider();
+        let url = format!("{}/graphql", self.base);
+        let body = request.to_string();
+        let token = credential.token.clone();
+        let request = std::thread::spawn(move || -> bug::Reply {
+            let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(r) => r,
+                Err(_) => return bug::Reply::Unreachable,
+            };
+            runtime.block_on(Self::graphql_post(url, token, body))
+        });
+        request.join().unwrap_or(bug::Reply::Unreachable)
+    }
 }
 
 impl GitHub {
+    async fn graphql_post(url: String, token: String, body: String) -> bug::Reply {
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(25))
+            .connect_timeout(Duration::from_secs(8))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return bug::Reply::Unreachable,
+        };
+        let sent = client
+            .post(&url)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header(reqwest::header::USER_AGENT, "RichOS")
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await;
+        let response = match sent {
+            Ok(r) => r,
+            Err(e) if e.is_timeout() => return bug::Reply::TimedOut,
+            Err(_) => return bug::Reply::Unreachable,
+        };
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        bug::Reply::Answered { status, body: serde_json::from_str(&text).unwrap_or(serde_json::Value::Null) }
+    }
+
     async fn post(url: String, token: String, body: String) -> bug::Outcome {
         {
             let client = match reqwest::Client::builder()
@@ -381,20 +447,21 @@ pub async fn bug_report_look(app: AppHandle, window: tauri::WebviewWindow) -> Re
 /// write-up that stood in for him put names no rule can know in a public issue). `report` is the
 /// id his check is kept under for Send ([`bug_report_send`]).
 #[richos_command::command]
-pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Screen) -> Result<serde_json::Value, String> {
+pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Screen, post: Option<bug::Post>) -> Result<serde_json::Value, String> {
     let started = Instant::now();
+    let post = post.unwrap_or_default();
     let (scrubber, (bin, folder), bugs) = read_state(&app);
     // Rich's write-up waits on `claude` for up to WRITE_DEADLINE, so it waits on the blocking
     // pool and never on one of the threads the window's other commands are answered on.
     off_the_ipc_threads(move || {
         let picture = bugs.look.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let looked = picture.is_some() || !bug::screen_words(&screen.content).is_empty();
-        let prompt = bug::writer_prompt(&answer, &screen, &bugs.version, scrubber.terms(), picture.is_some());
+        let prompt = bug::writer_prompt_for(post, &answer, &screen, &bugs.version, scrubber.terms(), picture.is_some());
         let input = bug::writer_input(&prompt, picture.as_ref());
         // Rich writes it, the scanner goes over it, and Rich gets the last word (CEO §115).
         let last = |prompt: &str| ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
-        let check = bug::checked(ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &input), &screen, looked, &bugs.version, &scrubber, last);
-        let write_up = bugs.outbox.keep_unless_checked(&answer, &screen, check, now_ms()).map_err(|e| {
+        let check = bug::checked_for(post, ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &input), &screen, looked, &bugs.version, &scrubber, last);
+        let write_up = bugs.outbox(post).keep_unless_checked(&answer, &screen, check, now_ms()).map_err(|e| {
             eprintln!("[richos] bug report: the report could not be kept on this Mac ({e})");
             "I couldn't check the report or save it on this Mac, so nothing was written up or sent. Tell me again and I'll try once more.".to_string()
         })?;
@@ -414,10 +481,10 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
 /// card (the card is then the report, as any draft is), or the user canceled it. `false` when it
 /// was already gone.
 #[richos_command::command]
-pub async fn bug_report_take_unchecked(app: AppHandle, id: String) -> Result<bool, String> {
+pub async fn bug_report_take_unchecked(app: AppHandle, id: String, post: Option<bug::Post>) -> Result<bool, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
-        bugs.outbox.take_unchecked(&id).map_err(|e| {
+        bugs.outbox(post.unwrap_or_default()).take_unchecked(&id).map_err(|e| {
             eprintln!("[richos] bug report {id}: could not be taken off this Mac ({e})");
             "I couldn't take the report off this Mac, so it's still saved here. Press Cancel report to try again.".to_string()
         })
@@ -435,13 +502,19 @@ pub async fn bug_report_take_unchecked(app: AppHandle, id: String) -> Result<boo
 /// The scanner goes over what he adds; the card with it added is a changed card, so at Send it
 /// goes through the scanner and then Rich, last (`bug::at_send`), like words changed by hand.
 #[richos_command::command]
-pub async fn bug_report_change(app: AppHandle, said: String, sheet: bug::Sheet, private: Option<Vec<bug::PrivateTerm>>) -> Result<serde_json::Value, String> {
+pub async fn bug_report_change(
+    app: AppHandle,
+    said: String,
+    sheet: bug::Sheet,
+    private: Option<Vec<bug::PrivateTerm>>,
+    post: Option<bug::Post>,
+) -> Result<serde_json::Value, String> {
     let started = Instant::now();
     let (scrubber, (bin, folder), bugs) = read_state(&app);
     let report_private = private.unwrap_or_default();
     off_the_ipc_threads(move || {
         let headings: Vec<String> = sheet.sections.iter().map(|s| s.heading.clone()).collect();
-        let input = bug::writer_input(&bug::change_prompt(&sheet, &said), None);
+        let input = bug::writer_input(&bug::change_prompt_for(post.unwrap_or_default(), &sheet, &said), None);
         let change = ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &input)
             .and_then(|raw| bug::parse_change(&raw))
             .and_then(|c| if headings.contains(&c.section) { Ok(c) } else { Err(format!("no section {:?}", c.section)) })
@@ -487,9 +560,9 @@ fn one_at_a_time(bugs: &BugReports) -> std::sync::MutexGuard<'_, ()> {
     bugs.sending.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn deliver(bugs: &BugReports, attempt: impl FnOnce(&bug::Outbox) -> std::io::Result<Option<bug::Delivery>>) -> Result<Option<bug::Delivery>, String> {
+fn deliver(bugs: &BugReports, post: bug::Post, attempt: impl FnOnce(&bug::Outbox) -> std::io::Result<Option<bug::Delivery>>) -> Result<Option<bug::Delivery>, String> {
     let _one_at_a_time = one_at_a_time(bugs);
-    attempt(&bugs.outbox).map_err(|e| {
+    attempt(bugs.outbox(post)).map_err(|e| {
         eprintln!("[richos] bug report: the report could not be kept on this Mac ({e})");
         "I couldn't save the report on this Mac, so nothing was sent.".to_string()
     })
@@ -510,17 +583,18 @@ fn deliver(bugs: &BugReports, attempt: impl FnOnce(&bug::Outbox) -> std::io::Res
 ///
 /// `screen` is where the report was started, kept with words waiting for his check.
 #[richos_command::command]
-pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug::Sheet, screen: bug::Screen) -> Result<serde_json::Value, String> {
+pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug::Sheet, screen: bug::Screen, post: Option<bug::Post>) -> Result<serde_json::Value, String> {
+    let post = post.unwrap_or_default();
     let (scrubber, (bin, folder), bugs) = read_state(&app);
     off_the_ipc_threads(move || {
         let report = report.filter(|r| !r.is_empty()).unwrap_or_else(bug::report_id);
         let app_terms = scrubber.terms().to_vec();
         let check = bugs.checks().get(&report).cloned();
         let last = |prompt: &str| ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
-        match bug::at_send(&sheet, check.as_ref(), &app_terms, last) {
+        match bug::at_send_for(post, &sheet, check.as_ref(), &app_terms, last) {
             bug::AtSend::Send(public) => {
                 let github = GitHub::from_env();
-                let delivery = deliver(&bugs, |o| o.send(&public, &KeychainCredentials, &github, now_ms()).map(Some))?.ok_or_else(|| "nothing was sent".to_string())?;
+                let delivery = deliver(&bugs, post, |o| o.send(&public, &KeychainCredentials, &github, now_ms()).map(Some))?.ok_or_else(|| "nothing was sent".to_string())?;
                 if matches!(delivery, bug::Delivery::Sent(_)) {
                     bugs.checks().remove(&report);
                 }
@@ -532,7 +606,7 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
             }
             bug::AtSend::Unchecked(why) => {
                 let private = check.map(|c| c.private().to_vec()).unwrap_or_default();
-                let kept = bugs.outbox.keep_edited(bug::Edited { sheet, private }, &screen, &why, now_ms()).map_err(|e| {
+                let kept = bugs.outbox(post).keep_edited(bug::Edited { sheet, private }, &screen, &why, now_ms()).map_err(|e| {
                     eprintln!("[richos] bug report: the changed report could not be kept on this Mac ({e})");
                     "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.".to_string()
                 })?;
@@ -545,11 +619,11 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
 
 /// *Try now*. `None` when it is no longer waiting.
 #[richos_command::command]
-pub async fn bug_report_try_now(app: AppHandle, id: String) -> Result<Option<bug::Delivery>, String> {
+pub async fn bug_report_try_now(app: AppHandle, id: String, post: Option<bug::Post>) -> Result<Option<bug::Delivery>, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
         let github = GitHub::from_env();
-        deliver(&bugs, |o| o.try_now(&id, &KeychainCredentials, &github, now_ms()))
+        deliver(&bugs, post.unwrap_or_default(), |o| o.try_now(&id, &KeychainCredentials, &github, now_ms()))
     })
     .await
 }
@@ -560,11 +634,11 @@ pub async fn bug_report_try_now(app: AppHandle, id: String) -> Result<Option<bug
 /// already in flight (the one-at-a-time lock, held across the request), so it waits off the IPC
 /// threads, and what that send did is what it answers.
 #[richos_command::command]
-pub async fn bug_report_cancel(app: AppHandle, id: String) -> Result<bug::Withdrawn, String> {
+pub async fn bug_report_cancel(app: AppHandle, id: String, post: Option<bug::Post>) -> Result<bug::Withdrawn, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
         let _one_at_a_time = one_at_a_time(&bugs);
-        bugs.outbox.withdraw(&id).map_err(|e| {
+        bugs.outbox(post.unwrap_or_default()).withdraw(&id).map_err(|e| {
             eprintln!("[richos] bug report {id}: could not be taken off this Mac ({e}); it still waits");
             "I couldn't take the report off this Mac, so it's still waiting to send.".to_string()
         })
@@ -579,15 +653,19 @@ pub fn bug_report_voice(bugs: State<Arc<BugReports>>, on: bool) -> bool {
     on
 }
 
-/// Open issue `number` of RichOS's repository in the browser. A number, never an address.
+/// Open issue `number` of RichOS's repository in the browser, or, for a posted idea
+/// (`post: "idea"`), discussion `number`. A number, never an address.
 #[richos_command::command]
-pub fn bug_report_open_issue(number: u64) -> Result<(), String> {
-    let page = bug::issue_page(number);
+pub fn bug_report_open_issue(number: u64, post: Option<bug::Post>) -> Result<(), String> {
+    let (page, what) = match post.unwrap_or_default() {
+        bug::Post::Bug => (bug::issue_page(number), "the issue"),
+        bug::Post::Idea => (bug::discussion_page(number), "your idea"),
+    };
     let status = std::process::Command::new("/usr/bin/open").arg(&page).status().map_err(|e| format!("this Mac would not open it: {e}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("This Mac wouldn't open the issue. It's at {}.", page.trim_start_matches("https://")))
+        Err(format!("This Mac wouldn't open {what}. It's at {}.", page.trim_start_matches("https://")))
     }
 }
 
@@ -603,18 +681,22 @@ pub fn spawn_retry(app: AppHandle) {
             let Some(bugs) = app.try_state::<Arc<BugReports>>() else { continue };
             let bugs = bugs.inner().clone();
             let github = GitHub::from_env();
-            let guard = one_at_a_time(&bugs);
-            let due = bugs.outbox.send_due(&KeychainCredentials, &github, now_ms());
-            drop(guard);
-            match due {
-                Ok(deliveries) => {
-                    for delivery in deliveries.into_iter().filter(|d| matches!(d, bug::Delivery::Sent(_))) {
-                        if let Err(e) = app.emit(EVENT, serde_json::json!({ "delivery": delivery })) {
-                            eprintln!("[richos] bug report: the window could not be told it went out: {e}");
+            // Bug reports and feature ideas alike: a waiting idea is posted by itself as a waiting
+            // report is sent (round 24: "it posts by itself when back online").
+            for post in [bug::Post::Bug, bug::Post::Idea] {
+                let guard = one_at_a_time(&bugs);
+                let due = bugs.outbox(post).send_due(&KeychainCredentials, &github, now_ms());
+                drop(guard);
+                match due {
+                    Ok(deliveries) => {
+                        for delivery in deliveries.into_iter().filter(|d| matches!(d, bug::Delivery::Sent(_))) {
+                            if let Err(e) = app.emit(EVENT, serde_json::json!({ "delivery": delivery, "post": post })) {
+                                eprintln!("[richos] bug report: the window could not be told it went out: {e}");
+                            }
                         }
                     }
+                    Err(e) => eprintln!("[richos] bug report: the waiting {post:?} posts could not be read ({e})"),
                 }
-                Err(e) => eprintln!("[richos] bug report: the waiting reports could not be read ({e})"),
             }
         })
         .map(|_| ())
@@ -638,46 +720,55 @@ fn spawn_check(app: AppHandle) {
             std::thread::sleep(RETRY_EVERY);
             let Some(bugs) = app.try_state::<Arc<BugReports>>() else { continue };
             let bugs = bugs.inner().clone();
-            // Nothing to read or ask while none waits.
-            let waiting = match bugs.outbox.unchecked() {
-                Ok(waiting) if waiting.is_empty() => continue,
-                Ok(waiting) => waiting,
-                Err(e) => {
-                    eprintln!("[richos] bug report: the reports Rich has not checked could not be read ({e})");
-                    continue;
-                }
-            };
-            let (scrubber, (bin, folder), _) = read_state(&app);
-            // The scanner first, Rich's last word on what it made (CEO §115).
-            let last = |prompt: &str| ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
-            let checked = bugs.outbox.check_due(now_ms(), |u| match &u.edited {
-                // Words the user changed that he could not check at Send: those, scanned, are his.
-                Some(edited) => bug::checked_edit(edited, scrubber.terms(), last),
-                None => {
-                    let prompt = bug::writer_prompt(&u.answer, &u.screen, &bugs.version, scrubber.terms(), false);
-                    let rich = ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(&prompt, None));
-                    bug::checked(rich, &u.screen, !bug::screen_words(&u.screen.content).is_empty(), &bugs.version, &scrubber, last)
-                }
-            });
-            // Where the user was, in their own words, for the panel's header when no card waits for it.
-            let here = |id: &str| waiting.iter().find(|u| u.id == id).map(|u| u.screen.here.clone()).unwrap_or_default();
-            match checked {
-                Ok(ready) => {
-                    for (id, done) in ready {
-                        // His check is kept under the report's own id for Send, once: a pass that
-                        // says it again must not undo a change he wrote into it since.
-                        bugs.checks().entry(id.clone()).or_insert_with(|| bug::Check::of(&done.draft));
-                        let payload = serde_json::json!({ "checked": { "id": id, "report": id, "draft": done.draft, "digest": done.digest, "here": here(&id) } });
-                        if let Err(e) = app.emit(EVENT, payload) {
-                            eprintln!("[richos] bug report: the window could not be told Rich checked it: {e}");
-                        }
-                    }
-                }
-                Err(e) => eprintln!("[richos] bug report: the reports Rich has not checked could not be kept ({e})"),
+            // Bug reports and feature ideas alike, each asked about as what it is.
+            for post in [bug::Post::Bug, bug::Post::Idea] {
+                check_once(&app, &bugs, post);
             }
         })
         .map(|_| ())
         .unwrap_or_else(|e| eprintln!("[richos] bug report: the check loop did not start ({e}); a report Rich could not check waits for the next launch"));
+}
+
+/// One pass of the check loop over the bug reports, or the feature ideas, Rich could not check.
+fn check_once(app: &AppHandle, bugs: &Arc<BugReports>, post: bug::Post) {
+    let outbox = bugs.outbox(post);
+    // Nothing to read or ask while none waits.
+    let waiting = match outbox.unchecked() {
+        Ok(waiting) if waiting.is_empty() => return,
+        Ok(waiting) => waiting,
+        Err(e) => {
+            eprintln!("[richos] bug report: the {post:?} posts Rich has not checked could not be read ({e})");
+            return;
+        }
+    };
+    let (scrubber, (bin, folder), _) = read_state(app);
+    // The scanner first, Rich's last word on what it made (CEO §115).
+    let last = |prompt: &str| ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
+    let checked = outbox.check_due(now_ms(), |u| match &u.edited {
+        // Words the user changed that he could not check at Send: those, scanned, are his.
+        Some(edited) => bug::checked_edit_for(post, edited, scrubber.terms(), last),
+        None => {
+            let prompt = bug::writer_prompt_for(post, &u.answer, &u.screen, &bugs.version, scrubber.terms(), false);
+            let rich = ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(&prompt, None));
+            bug::checked_for(post, rich, &u.screen, !bug::screen_words(&u.screen.content).is_empty(), &bugs.version, &scrubber, last)
+        }
+    });
+    // Where the user was, in their own words, for the panel's header when no card waits for it.
+    let here = |id: &str| waiting.iter().find(|u| u.id == id).map(|u| u.screen.here.clone()).unwrap_or_default();
+    match checked {
+        Ok(ready) => {
+            for (id, done) in ready {
+                // His check is kept under the report's own id for Send, once: a pass that
+                // says it again must not undo a change he wrote into it since.
+                bugs.checks().entry(id.clone()).or_insert_with(|| bug::Check::of(&done.draft));
+                let payload = serde_json::json!({ "checked": { "id": id, "report": id, "draft": done.draft, "digest": done.digest, "here": here(&id), "post": post } });
+                if let Err(e) = app.emit(EVENT, payload) {
+                    eprintln!("[richos] bug report: the window could not be told Rich checked it: {e}");
+                }
+            }
+        }
+        Err(e) => eprintln!("[richos] bug report: the {post:?} posts Rich has not checked could not be kept ({e})"),
+    }
 }
 
 #[cfg(test)]
@@ -770,6 +861,84 @@ mod tests {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let outcome = GitHub { base: format!("http://127.0.0.1:{port}") }.create_issue(&credential(), "/x", &serde_json::json!({}));
         assert_eq!(outcome, bug::Outcome::Unreachable);
+    }
+
+    /// A stand-in GitHub that answers `replies.len()` requests in turn, each with its status and
+    /// body, and hands back every request it was sent (the request line, the headers, the body).
+    /// One request as the stand-in read it: its request line, its headers and its body.
+    type Seen = (String, Vec<String>, String);
+
+    fn stand_in_answering(replies: Vec<(&'static str, &'static str)>) -> (String, std::thread::JoinHandle<Vec<Seen>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for (status, body) in replies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let mut headers = Vec::new();
+                let mut length = 0usize;
+                loop {
+                    let mut h = String::new();
+                    reader.read_line(&mut h).unwrap();
+                    let h = h.trim_end().to_string();
+                    if h.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap();
+                    }
+                    headers.push(h);
+                }
+                let mut buf = vec![0u8; length];
+                reader.read_exact(&mut buf).unwrap();
+                let reply = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(reply.as_bytes()).unwrap();
+                seen.push((line.trim_end().to_string(), headers, String::from_utf8(buf).unwrap()));
+            }
+            seen
+        });
+        (base, handle)
+    }
+
+    /// **REQUEST A FEATURE GOES TO GRAPHQL, NEVER TO ISSUES** (CEO 2026-10-11): an idea, posted
+    /// through the shell's own transport against a stand-in GitHub, is two `POST /graphql`
+    /// requests (the lookup, then `createDiscussion` in the Ideas category) with the token.
+    #[test]
+    fn an_idea_is_two_graphql_requests_and_never_the_issues_endpoint() {
+        let (base, server) = stand_in_answering(vec![
+            ("200 OK", r#"{"data": {"repository": {"id": "R_1", "discussionCategory": {"id": "DIC_ideas"}}}}"#),
+            ("200 OK", r#"{"data": {"createDiscussion": {"discussion": {"number": 413, "url": "https://github.com/WebDevBooster/richos/discussions/413"}}}}"#),
+        ]);
+        let outcome = bug::post_discussion(&GitHub { base }, &credential(), "An idea", "### The idea\n\nIt.\n");
+        assert_eq!(outcome, bug::Outcome::Created { number: 413, url: "https://github.com/WebDevBooster/richos/discussions/413".into() });
+        let seen = server.join().unwrap();
+        assert_eq!(seen.len(), 2);
+        for (line, headers, _) in &seen {
+            assert_eq!(line, "POST /graphql HTTP/1.1");
+            assert!(headers.iter().any(|h| h.eq_ignore_ascii_case("authorization: Bearer stand-in-token")), "{headers:?}");
+        }
+        let create: serde_json::Value = serde_json::from_str(&seen[1].2).unwrap();
+        assert!(create["query"].as_str().unwrap().contains("createDiscussion"), "{create}");
+        assert_eq!(create["variables"]["categoryId"], "DIC_ideas");
+        assert_eq!(create["variables"]["repositoryId"], "R_1");
+    }
+
+    /// GitHub's GraphQL answer to a token that may not post in Discussions is HTTP 200 with a
+    /// FORBIDDEN error: the shell hands it back as it came, and the idea is refused, not posted.
+    #[test]
+    fn a_forbidden_graphql_answer_is_refused() {
+        let (base, server) = stand_in_answering(vec![(
+            "200 OK",
+            r#"{"data": {"repository": null}, "errors": [{"type": "FORBIDDEN", "message": "Resource not accessible by personal access token"}]}"#,
+        )]);
+        let outcome = bug::post_discussion(&GitHub { base }, &credential(), "t", "b");
+        assert_eq!(bug::classify(&outcome), Err(bug::Reason::Refused), "{outcome:?}");
+        server.join().unwrap();
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_eq!(GitHub { base: format!("http://127.0.0.1:{port}") }.graphql(&credential(), &serde_json::json!({})), bug::Reply::Unreachable);
     }
 
     #[test]

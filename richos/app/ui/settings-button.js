@@ -132,6 +132,12 @@ window.RichSettings = (function () {
     ["path", { d: "M22 13h-4" }],
     ["path", { d: "M17.2 17c2.1.2 3.8 1.9 3.8 4" }],
   ];
+  /// Request a feature's lightbulb (round 24), the same lucide glyph the mockup draws.
+  var ICON_BULB = [
+    ["path", { d: "M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" }],
+    ["path", { d: "M9 18h6" }],
+    ["path", { d: "M10 22h4" }],
+  ];
 
   function elem(tag, cls, attrs) {
     var n = document.createElement(tag);
@@ -345,6 +351,25 @@ window.RichSettings = (function () {
     return b;
   }
 
+  /// **REQUEST A FEATURE, DIRECTLY UNDER BUST A BUG** (CEO 2026-10-11, round 24: "Under the
+  /// "Bust a bug" button, I want to add a "Request a feature" button"). The same full-row action,
+  /// with a lightbulb.
+  function buildIdeaButton() {
+    var b = elem("button", "bugbtn", { type: "button", id: "idea-btn" });
+    b.appendChild(icon(ICON_BULB));
+    b.appendChild(document.createTextNode("Request a feature"));
+    return b;
+  }
+
+  /// **THE FLOOR**: Bust a bug, and Request a feature directly under it, in one box that stays at
+  /// the panel's bottom edge while the rows above it scroll (style.css "THE FLOOR STAYS IN VIEW").
+  function buildFloor() {
+    var floor = elem("div", "set-floor", { id: "set-floor" });
+    floor.appendChild(buildBugButton());
+    floor.appendChild(buildIdeaButton());
+    return floor;
+  }
+
   /** **A ROW THAT OPENS A SHEET** — one builder for all four, which is Urban's G10 fix.
    *
    *  Four rows were written out four times, inline, and drifted: they had carried the class
@@ -525,7 +550,7 @@ window.RichSettings = (function () {
       }, "set-phone-state"));
     }
     if (updates) menu.appendChild(buildUpdatesRow()); // ...then what version this is, and what is waiting
-    menu.appendChild(buildBugButton()); // the floor, always last and always present
+    menu.appendChild(buildFloor()); // the floor, always last and always present
     return menu;
   }
 
@@ -604,8 +629,12 @@ window.RichSettings = (function () {
   /// disabled, never hidden; `bug-report.js` answers `busy()` and calls `repaintBugReport` when that
   /// changes.
   function paintBug() {
-    var b = menuEl && menuEl.querySelector("#bug-btn");
-    if (b) b.disabled = !!(bug && bug.busy && bug.busy());
+    // Request a feature is the same exchange, one at a time across both (round 24): while a bug
+    // report or an idea is open, both buttons are disabled.
+    ["#bug-btn", "#idea-btn"].forEach(function (sel) {
+      var b = menuEl && menuEl.querySelector(sel);
+      if (b) b.disabled = !!(bug && bug.busy && bug.busy());
+    });
   }
 
   // ---- open / close --------------------------------------------------------------------
@@ -717,6 +746,18 @@ window.RichSettings = (function () {
     );
   }
 
+  /// Request a feature: Rich asks what the user would like RichOS to do (`bug-report.js`, round
+  /// 24). A page with nothing registered still answers the press.
+  function requestAFeature() {
+    if (bug && bug.busy && bug.busy()) return;
+    close(true);
+    if (bug && bug.open) {
+      bug.open("idea");
+      return;
+    }
+    toast("Got it. Your idea starts from this exact screen. Nothing leaves this machine until you say so.");
+  }
+
   function toast(text) {
     var t = document.getElementById("bug-toast");
     if (!t) {
@@ -760,6 +801,8 @@ window.RichSettings = (function () {
     }
     var bugEl = menuEl.querySelector("#bug-btn");
     if (bugEl) bugEl.addEventListener("click", bustABug);
+    var ideaEl = menuEl.querySelector("#idea-btn");
+    if (ideaEl) ideaEl.addEventListener("click", requestAFeature);
     wireCompany(menuEl);
     wireHome(menuEl);
   }

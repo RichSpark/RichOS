@@ -371,6 +371,17 @@ richos/app/
                               when it is due; canceling one is confirmed (off this Mac, or
                               the issue it had already become, or an error and still
                               waiting). Fake transport and credentials throughout
+    tests/feature_request_tests.rs 9 tests for Request a feature (CEO 2026-10-11, round 24):
+                              an idea goes through Bust a bug's own machinery and is posted
+                              as a discussion under Ideas (GraphQL lookup of the repository
+                              and the `ideas` category, then `createDiscussion`), never to
+                              the issues endpoint; the user's own sign-in when there is one,
+                              the reporting account otherwise; an account that may not post
+                              there (FORBIDDEN, INSUFFICIENT_SCOPES, 401, no Ideas category)
+                              waits, refused; offline it waits and posts by itself when back
+                              online; private names are left out by the same scanner and
+                              Rich last, and nothing in the post calls it an issue or a bug.
+                              A stand-in GitHub throughout
     tests/feedback_no_outbound_tests.rs 8 tests asserting an ABSENCE: no transport in the
                               module's shipping code, no network-capable dependency in the
                               crate, no other module consuming the feature, and an approval
@@ -1183,7 +1194,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1999 tests + 5 doc-tests (1995 direct, 4 ignored)
+cargo test -p richos-core                       # 2008 tests + 5 doc-tests (2004 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

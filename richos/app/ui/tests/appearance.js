@@ -348,10 +348,13 @@ const themeOf = (page) => page.evaluate(() => document.documentElement.getAttrib
 /// is the panel's own name rather than a row — added for Ray's candidate .11 defect 3.4,
 /// because he found a panel of settings with no word on it saying it was Settings — and
 /// §15's ruling is about the ORDER OF THE ROWS. Check 11b asserts the title itself.
+/// The floor (round 24, `settings-button.js` `buildFloor`) is one sticky box holding Bust a bug
+/// and Request a feature directly under it; each of its two buttons is a row of its own.
 const menuRows = (page) =>
   page.evaluate(() =>
     [...document.querySelectorAll("#set-menu > *")]
       .filter((n) => !n.classList.contains("setmenu-title"))
+      .flatMap((n) => (n.classList.contains("set-floor") ? [...n.children] : [n]))
       .map((n) =>
         // The Codex row's name is its title; the rest of its text is its tooltip's words.
         n.querySelector(".set-name, #cx-title") ? n.querySelector(".set-name, #cx-title").textContent.trim() : n.textContent.trim()
@@ -1229,7 +1232,7 @@ async function main() {
       // defect A. One setting carried two names: this row said "Techy Mode" while the gear
       // panel said "Technical view" and THIS toggle's own modal is headed "Turn off the
       // technical view". The ORDER is untouched; only the third row's words changed.
-      ["Theme", "Text size", "Technical view", "Token spend", "Let Codex review your team’s work", "Claude Code quota", "Company", "Home screen", "Claude accounts", "Connected folders (repositories)", "Memory folder", "Use Rich from your phone", "Updates", "Bust a bug!"],
+      ["Theme", "Text size", "Technical view", "Token spend", "Let Codex review your team’s work", "Claude Code quota", "Company", "Home screen", "Claude accounts", "Connected folders (repositories)", "Memory folder", "Use Rich from your phone", "Updates", "Bust a bug!", "Request a feature"],
       "§15 fixes the first three: Text size 'directly under the theme switch', and 'directly under " +
         "that, a Techy Mode toggle'. The technical-only Claude Code quota row follows that toggle. The splash screen's off switch is not in this menu " +
         "since the CEO's 2026-10-06 feedback item 7 (it is in the gear's general settings), and Bust a bug is always the floor. " +
@@ -1259,7 +1262,9 @@ async function main() {
         "Let Codex review your team's work (2026-10-09, round 20.2, the CEO's ruling §114) sits " +
         "directly below Technical view, between two rules, as round 20.2 draws it, for everyone. " +
         "Token spend (2026-10-10, round 22.1, the CEO's ruling §118: \"That needs to be a row in " +
-        "quick settings.\") sits between them, directly under Technical view, as round 22.1 draws it."
+        "quick settings.\") sits between them, directly under Technical view, as round 22.1 draws it. " +
+        "Request a feature (2026-10-11, round 24: \"Under the 'Bust a bug' button, I want to add a " +
+        "'Request a feature' button\") is the floor's second row, directly under Bust a bug."
     );
     await page.close();
     return rows.join(" -> ");
