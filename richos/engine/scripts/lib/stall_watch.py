@@ -45,6 +45,10 @@ WHAT IS A STALL (every threshold, and why)
    least every ten minutes however long the run itself takes, and twenty is
    twice the longest honest silence. A commit is not required: a teammate that
    is working but has not committed for an hour is not silent.
+   When its turn ended but the registry deferred its end because its own
+   command still runs (workspaces.py record_end; 2026-10-11, four endless wait
+   loops of echo-opus-walk49fix1), the notice says so and names the one
+   command that ends its own commands (agent_hold.py end), never a pid hunt.
 
 3. A SELF-WAIT: a teammate process waiting for a proof-run slot or a test VM
    slot that another process of the SAME teammate holds, reported after 2
@@ -629,6 +633,25 @@ def _running(src, rec, now):
     return out
 
 
+def _deferred_end(src, rec, running, marks):
+    """Epoch of the SubagentStop the registry did not take as this agent's end because
+    its own commands still ran, when that is still why it has not ended: it is the
+    latest thing the agent did (nothing written or committed after it) and a command
+    of its own still runs. Else None."""
+    fact = getattr(src.ws, "END_DEFERRED_FACT", None)
+    if not running or not fact or src.agent_hold is None:
+        return None
+    at = None
+    for h in rec.get("history") or []:
+        if isinstance(h, dict) and h.get("fact") == fact:
+            t = parse_iso(h.get("at"))
+            if t is not None and (at is None or t > at):
+                at = t
+    if at is None or max(marks) > at + 60:
+        return None
+    return at
+
+
 def _silent(src, reg, now, session_id, th, waits):
     if src.ws is None or reg.problem:
         return [], ""
@@ -680,7 +703,20 @@ def _silent(src, reg, now, session_id, th, waits):
         for w in own_waits[:2]:
             lines.append("recorded wait: %s for %s" % (resource_waits.LABELS.get(w["resource"], w["resource"]),
                                                        span(now - w["since"])))
-        lines += _running(src, rec, now)
+        running = _running(src, rec, now)
+        lines += running
+        deferred = _deferred_end(src, rec, running, marks)
+        if deferred:
+            # 2026-10-11, echo-opus-walk49fix1: its turn ended with its handover, but its
+            # own endless wait loops kept its end deferred, and Rich looked up their pids.
+            lines.insert(0, "its turn ended at %s, but its end waits on its own command(s) still "
+                            "running (below); they end only by themselves or by the command below" % hhmm(deferred))
+            what = "its turn ended; its end waits on its own still-running command(s)"
+            action = ["end its own commands (its run then ends by itself; shared daemons and the test VM "
+                      "guest are left running): %s" % src.agent_hold.end_command(
+                          str(rec["session_id"]), str(rec["agent_id"]), name)]
+            out.append(Stall("silent:%s" % rec.get("key"), "SILENT", name, last, what, lines, action))
+            continue
         action = ["ask %s where it is (SendMessage to %s)" % (name, name),
                   "read the end of its transcript (above)",
                   "check it: %s %s" % (os.path.join(src.engine_root, "scripts", "agent-liveness.sh"),
