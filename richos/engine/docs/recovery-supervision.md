@@ -54,3 +54,13 @@ Disabling operator lease fencing deliberately follows the existing operator owne
 `recovery.sh report [--job <id>]` derives firing and scheduling counts, consultation time, known cost, native control observations and missing measurements from retained records. Historical events without firing fields are reported as incomplete. A missing cost is never zero. This report is bounded to 4096 jobs and 16 MiB of job records; select a job for larger histories.
 
 `recovery.sh contract --entity <entity> --installed-engine <engine>` checks the declared mode against the installed reader and compares runtime/profile fingerprints. The existing contract probe calls this for an entity that declares recovery. This verifies the mode/source contract; native capabilities still require their own terminal/app witnesses.
+
+The installed contract probe needs an independent frozen reference for an adopted
+observation declaration. Before deployment, run `scripts/recovery.sh
+contract-snapshot --entity <absolute entity> --output <absolute new reference>`
+from the reviewed source engine. Keep that reference outside the mutable engine
+and set `runtime_contract` to its absolute path in `.claude/recovery.json`.
+The snapshot does not qualify enforcement or native capabilities. The probe
+compares installed bytes and declared mode against the frozen reference and
+refuses an adopted engine comparing itself without one. Enforcement may use its
+separate reviewed qualification source pins instead.

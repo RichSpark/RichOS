@@ -54,19 +54,46 @@ def report(job=None):
         scope='Durable host records only. Empty or incomplete data does not prove successful native cancellation or semantic efficacy.')
 
 
+CONTRACT_PATHS = ['recovery-profiles/axel.md','recovery-profiles/wes.md','scripts/lib/recovery.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py',
+    'scripts/lib/pierce.py','mega-lander/workspaces.py','scripts/app-engine-hook.py']
+
+
+def contract_snapshot(entity):
+    engine=Path(R.__file__).resolve().parents[2]
+    return dict(schema=1,declared=R.mode(entity),source_pins={p:R.F.file_digest(str(engine/p)) for p in CONTRACT_PATHS})
+
+
 def contract(entity, installed):
     declared=R.mode(entity)
     engine=Path(R.__file__).resolve().parents[2]
-    paths=['recovery-profiles/axel.md','recovery-profiles/wes.md','scripts/lib/recovery.py','scripts/lib/recovery_runner.py','scripts/lib/recovery_controls.py',
-        'scripts/lib/pierce.py','mega-lander/workspaces.py','scripts/app-engine-hook.py']
-    fingerprints={p:R.F.file_digest(str(engine/p)) for p in paths}
-    mismatches=[p for p,value in fingerprints.items() if not value or R.F.file_digest(str(Path(installed)/p))!=value]
+    reference=declared.get('runtime_contract')
+    mismatches=[]
+    if reference:
+        path=Path(reference)
+        if not path.is_absolute() or path.stat().st_size>65536:
+            raise R.Unavailable('runtime contract must be an absolute bounded reference')
+        expected=json.loads(path.read_text())
+        fingerprints=expected.get('source_pins') or {}
+        expected_mode=expected.get('declared') or {}
+        current={k:v for k,v in declared.items() if k!='runtime_contract'}
+        frozen={k:v for k,v in expected_mode.items() if k!='runtime_contract'}
+        if expected.get('schema')!=1 or frozen!=current:mismatches.append('frozen declaration/mode')
+    elif declared.get('mode')=='enforce':
+        fingerprints=json.loads(Path(declared['qualification']).read_text()).get('source_pins') or {}
+    else:
+        fingerprints=contract_snapshot(entity)['source_pins']
+        if declared.get('mode')!='off' and engine==Path(installed).resolve():
+            mismatches.append('independent runtime_contract reference is required')
+    if not set(CONTRACT_PATHS).issubset(fingerprints):mismatches.append('incomplete source contract')
+    for path,value in fingerprints.items():
+        if Path(path).is_absolute() or '..' in Path(path).parts or not isinstance(value,str) or not value or R.F.file_digest(str(Path(installed)/path))!=value:
+            mismatches.append(path)
     command=[sys.executable,'-B','-c','import json,sys;sys.path.insert(0,sys.argv[1]);import recovery;print(json.dumps(recovery.mode(sys.argv[2]),sort_keys=True))',str(Path(installed)/'scripts/lib'),entity]
     result=subprocess.run(command,capture_output=True,text=True,timeout=10)
     observed=json.loads(result.stdout) if result.returncode==0 else None
     if observed!=declared:mismatches.append('installed declaration/mode')
     return dict(schema=1,status='passed' if not mismatches else 'unavailable',declared=declared,installed=observed,
-        source_pins=fingerprints,mismatches=mismatches,error=result.stderr if result.returncode else '',
+        source_pins=fingerprints,mismatches=mismatches,error=result.stderr if result.returncode else '',reference=reference,
         scope='Mode and source contract only. Supported native tool capabilities require separate witnesses.')
 
 
@@ -80,6 +107,9 @@ def main(argv=None):
     probe = commands.add_parser('contract')
     probe.add_argument('--entity', required=True)
     probe.add_argument('--installed-engine', required=True)
+    snapshot = commands.add_parser('contract-snapshot')
+    snapshot.add_argument('--entity', required=True)
+    snapshot.add_argument('--output', required=True)
     dispute = commands.add_parser('dispute')
     dispute.add_argument('--repo', required=True)
     dispute.add_argument('--work', required=True)
@@ -88,6 +118,12 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.command=='report':
         print(json.dumps(report(args.job),indent=2,sort_keys=True))
+        return 0
+    if args.command=='contract-snapshot':
+        path=Path(args.output)
+        if not path.is_absolute():raise R.Unavailable('contract output must be absolute')
+        with path.open('x') as out:json.dump(contract_snapshot(args.entity),out,indent=2,sort_keys=True)
+        print(str(path))
         return 0
     if args.command=='contract':
         result=contract(args.entity,args.installed_engine)

@@ -85,14 +85,35 @@ class Recovery(unittest.TestCase):
         entity=self.repo/'.claude'
         entity.mkdir()
         (entity/'recovery.json').write_text(json.dumps(dict(schema=1,mode='observe',repositories=[str(self.repo)])))
+        import recovery_admin
+        reference=self.base/'runtime-contract.json'
+        reference.write_text(json.dumps(recovery_admin.contract_snapshot(str(self.repo))))
+        declaration=json.loads((entity/'recovery.json').read_text())
+        declaration['runtime_contract']=str(reference)
+        (entity/'recovery.json').write_text(json.dumps(declaration))
         program='REPO_ROOT="$1"; ENGINE_ROOT="$2"; FAILED=0; emit_pass(){ echo "$*"; }; emit_fail(){ echo "$*"; FAILED=1; };\n'+function+'\nrun_layer_RC\nexit "$FAILED"\n'
         result=subprocess.run(['bash','-c',program,'probe',str(self.repo),str(source)],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('RC.',result.stdout)
+        frozen=json.loads(reference.read_text())
+        frozen['source_pins']['scripts/lib/recovery.py']='0'*64
+        reference.write_text(json.dumps(frozen))
+        result=subprocess.run(['bash','-c',program,'probe',str(self.repo),str(source)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,1,result.stdout+result.stderr)
+        self.assertIn('scripts/lib/recovery.py',result.stdout)
         (entity/'recovery.json').write_text('{"schema":1,"mode":"bogus"}')
         result=subprocess.run(['bash','-c',program,'probe',str(self.repo),str(source)],capture_output=True,text=True)
         self.assertEqual(result.returncode,1,result.stdout+result.stderr)
         self.assertIn('contract unavailable',result.stdout)
+
+    def test_adopted_contract_refuses_self_comparison_without_a_frozen_reference(self):
+        import recovery_admin
+        folder=self.repo/'.claude';folder.mkdir()
+        (folder/'recovery.json').write_text(json.dumps(dict(schema=1,mode='observe',repositories=[str(self.repo)])))
+        source=Path(R.__file__).resolve().parents[2]
+        result=recovery_admin.contract(str(self.repo),str(source))
+        self.assertEqual(result['status'],'unavailable')
+        self.assertIn('independent runtime_contract reference is required',result['mismatches'])
 
     def test_report_preserves_missing_cost_and_actual_observations(self):
         import recovery_admin
