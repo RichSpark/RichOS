@@ -2350,22 +2350,30 @@ def cmd_turn_end(argv):
         rest, reasons, dirty = at_rest(main_paths["main"], main_paths["gitdir"])
         # A land this session started (a background script, a merge whose gate
         # runs for minutes) is not at rest however the repository looks between
-        # two of its steps (2026-10-11, see land_process).
-        lands = running_lands(lease)
-        if lands:
-            rest = False
-            reasons = ["its land command (process %s) is still running"
-                       % ", ".join(str(e["pid"]) for e in lands)] + reasons
+        # two of its steps (2026-10-11, see land_process). The lease read above
+        # is only a snapshot: a land of the same holder can renew it, adding
+        # its command, while the repository is checked (review
+        # rv-20261011T205852Z-54ae8c6a-eec1). So the release decides from the
+        # running lands of the lease it is about to delete, read under the lock.
+        lands = []
         if rest:
             flock = _Flock(files.lock)
             if flock.try_take():
                 try:
                     current = read_lease(files)
                     if current and same_holder(current.get("holder"), h):
-                        os.unlink(files.lease)
+                        lands = running_lands(current)
+                        if not lands:
+                            os.unlink(files.lease)
                 finally:
                     flock.release()
-            continue
+            if not lands:
+                continue
+        else:
+            lands = running_lands(lease)
+        if lands:
+            reasons = ["its land command (process %s) is still running"
+                       % ", ".join(str(e["pid"]) for e in lands)] + reasons
         notes.append("Your land in %s from %s is still holding the lock after %s: %s. Other conversations' "
                      "lands wait until it finishes. If some of those paths are not yours, another writer "
                      "dirtied the tree; say so rather than finishing their work."
