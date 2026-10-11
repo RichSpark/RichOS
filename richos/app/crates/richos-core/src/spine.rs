@@ -1230,6 +1230,9 @@ impl Spine {
     /// every other thread's next turn built a lease from scratch anyway. Now they do not:
     /// a parked desk comes back with `primed: true` and would serve the CEO from material
     /// the app has stopped believing in, silently, until it rotated on its own watermark.
+    ///
+    /// Its count is [`Spine::front_desk_generation`], so a caller that hands this work to
+    /// a later moment can prove it happened.
     fn unprime_every_front_desk(&mut self) {
         // **AND THE ONE THAT IS NOT HERE YET.** A spare being primed right now holds no place
         // in `self.spare` — its steps run with this mutex down — so there is nothing here to
@@ -1250,6 +1253,12 @@ impl Spine {
         if let Some(spare) = self.spare.as_mut() {
             spare.primed = false;
         }
+    }
+
+    /// How many times every front desk has been un-primed ([`Spine::unprime_every_front_desk`]).
+    /// Read-only, so the shell can show that a deferred un-priming really ran.
+    pub fn front_desk_generation(&self) -> u64 {
+        self.front_desk_generation
     }
 
     /// Retire the least recently spoken PARKED desk while there are more than the cap.

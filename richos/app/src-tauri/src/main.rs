@@ -805,7 +805,10 @@ struct AppState {
     /// thread id rather than a bool because he has more than one conversation and each has its
     /// own desk (`spine.rs`'s residency).
     front_desk_primed_for: Mutex<Option<String>>,
-    spine: Mutex<Spine>,
+    /// Shared (`Arc`) so work that must wait for the spine can wait on a thread of its own
+    /// instead of inside a window command: `decline_onboarding` hands the un-priming its
+    /// answer owes to such a thread, so "Not now" never waits for a boot prime.
+    spine: Arc<Mutex<Spine>>,
     reader: SpineReader,
     /// Durable CEO-facing preferences (company name, the assertiveness dial) — stored
     /// alongside the ledger in the app data dir, same durability posture.
@@ -3629,7 +3632,7 @@ fn main() {
                 account_auth: Mutex::new(None),
                 front_desk_primed_for: Mutex::new(None),
                 reader: spine.reader(),
-                spine: Mutex::new(spine),
+                spine: Arc::new(Mutex::new(spine)),
                 config: Mutex::new(config),
                 machinery_root,
                 entity: Mutex::new(boot.entity),
@@ -5319,8 +5322,8 @@ const ONBOARDING_UNUSABLE_MESSAGE: &str =
     "I'm working without them, and I won't guess at what they said. Whoever set RichOS up \
      will need to look at that.";
 
-fn onboarding_view_of(state: &State<AppState>) -> OnboardingView {
-    let spine = state.reader.snapshot();
+fn onboarding_view_in(reader: &SpineReader) -> OnboardingView {
+    let spine = reader.snapshot();
     let Some(binding) = spine.active_binding() else {
         return OnboardingView {
             state: "no-central-folder".to_string(),
@@ -5354,7 +5357,7 @@ fn onboarding_view_of(state: &State<AppState>) -> OnboardingView {
 /// and `not-yet` is what makes it show the offer.
 #[richos_command::command]
 fn onboarding_view(state: State<AppState>) -> OnboardingView {
-    onboarding_view_of(&state)
+    onboarding_view_in(&state.reader)
 }
 
 /// **HE PRESSED "Not now".** Record it, and return the state that results.
@@ -5377,9 +5380,19 @@ fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<Onboa
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    decline_onboarding_in(&state.spine, &state.reader, &entity_id, now_millis)
+}
+
+/// The body of [`decline_onboarding`], without Tauri's `State`, so a test can drive it.
+fn decline_onboarding_in(
+    spine: &Arc<Mutex<Spine>>,
+    reader: &SpineReader,
+    entity_id: &str,
+    now_millis: u64,
+) -> Result<OnboardingView, String> {
     let outcome = {
-        let mut spine = take_the_spine(&state.spine);
-        if spine.active_binding().map(|b| b.entity_id().to_string()).as_deref() != Some(entity_id.as_str()) {
+        let mut spine = take_the_spine(spine);
+        if spine.active_binding().map(|b| b.entity_id().to_string()).as_deref() != Some(entity_id) {
             return Err("The company changed. Please use the offer for the company now open.".into());
         }
         spine.record_onboarding_declination(now_millis)
@@ -5398,7 +5411,7 @@ fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<Onboa
         eprintln!("[richos] onboarding: declination NOT recorded — {why}");
         return Err(ONBOARDING_DECLINE_REFUSED.to_string());
     }
-    Ok(onboarding_view_of(&state))
+    Ok(onboarding_view_in(reader))
 }
 
 /// What he is told when "Not now" could not be written down.
@@ -9868,6 +9881,9 @@ mod window_read_tests;
 
 #[cfg(test)]
 mod command_rule_tests;
+
+#[cfg(test)]
+mod onboarding_decline_tests;
 
 #[cfg(test)]
 mod turn_boundary_tests;
