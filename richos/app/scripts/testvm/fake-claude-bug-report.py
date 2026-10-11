@@ -13,6 +13,10 @@ The report quotes the user's own words (so a file path they typed reaches the ca
 left out there) and names the company the walk registered and a person, so the walk can see all
 of them replaced by stand-ins on the card and absent from what reaches the issues endpoint.
 
+For Request a feature (feature-request-walk.sh) it writes up an idea the same way, naming the same
+company and person, and to Rich's last pass over a report or a post (`finish_prompt`) it answers
+the words as the scanner left them, so the card is what the scanner made.
+
 Every other call (the conversation, its quota reads, sign-in status) goes to the fill-first fake
 (`fake-claude-fill-first.pl`, beside this file in the guest), unchanged.
 """
@@ -55,8 +59,37 @@ def users_words(text):
     return text[start:text.find("\n>>>", start)].strip()
 
 
+def between(text, head):
+    """The words between `head` + "<<<\\n" and the next "\\n>>>"."""
+    start = text.find(head + "\n<<<\n")
+    if start < 0:
+        return ""
+    start += len(head + "\n<<<\n")
+    return text[start:text.find("\n>>>", start)]
+
+
 if "Answer with ONLY a JSON object, no other text: {\"section\"" in prompt:
-    report = {"section": "What happened", "add": "It happens in the light theme too.", "private": []}
+    first = "The idea" if "feature idea" in prompt else "What happened"
+    report = {"section": first, "add": "It happens in the light theme too.", "private": []}
+elif ", after the automatic check:" in prompt:
+    # Rich's last pass (`finish_prompt`): the report or post as the scanner left it, kept as it is.
+    head = "The post, after the automatic check:" if "The post, after the automatic check:" in prompt else "The report, after the automatic check:"
+    report = json.loads(between(prompt, head))
+    report["private"] = []
+elif "pressed \"Request a feature\"" in prompt:
+    # Request a feature (round 24): the idea as Rich writes it up, naming the walk's company and a
+    # person so the walk can see both replaced on the card and absent from what is posted.
+    report = {
+        "title": "A short weekly summary of each conversation, from Rich",
+        "idea": "Once a week, Rich sends a short summary of each conversation: what changed, what was decided "
+        "and what is still open. The user would like one for the Northwind Traders conversations, and "
+        "Dana Whitfield would read it too.\n\nIn the user's words: " + users_words(prompt),
+        "why": "Catching up today means reading back through each conversation.",
+        "pictured": ["A message from Rich every Friday afternoon.", "One short part per conversation."],
+        "where": "",
+        "checked": "Saw the conversation on the screen you were on" if "visible words top to bottom" in prompt else "",
+        "private": [{"text": "Dana Whitfield", "kind": "person"}],
+    }
 else:
     report = {
         "title": "Conversation names in the sidebar are cut off at larger text sizes",

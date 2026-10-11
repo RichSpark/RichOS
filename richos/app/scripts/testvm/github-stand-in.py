@@ -12,6 +12,11 @@ it under the app's 25-second request timeout. The Authorization header is logged
 the token in the walk is a throwaway put in the guest's own keychain for this run. Anything else
 is 404. It never contacts GitHub; bug-report-walk.sh points the app at it with
 RICHOS_BUG_REPORT_API.
+
+It also answers `POST /graphql` the way GitHub does for Request a feature (round 24): the lookup
+of the repository's and its `ideas` category's ids, and `createDiscussion` with them, numbered from
+the same counter. feature-request-walk.sh reads the log to prove an idea went there and never to
+an issues path.
 """
 import json
 import sys
@@ -31,7 +36,26 @@ class Handler(BaseHTTPRequestHandler):
         with open(LOG, "a") as log:
             log.write(json.dumps({"path": self.path, "headers": dict(self.headers), "body": body, "held_s": HOLD}) + "\n")
         parts = self.path.strip("/").split("/")
-        if len(parts) == 4 and parts[0] == "repos" and parts[3] == "issues":
+        if self.path == "/graphql":
+            # Request a feature (round 24): an idea is a discussion in the Ideas category, through
+            # GitHub's GraphQL API (`richos_core::bug_report::post_discussion`): the lookup of the
+            # repository's and the category's ids, then `createDiscussion` with them.
+            request = json.loads(body or "{}")
+            query, variables = request.get("query", ""), request.get("variables", {})
+            if "createDiscussion" in query:
+                number = NEXT[0]
+                NEXT[0] += 1
+                time.sleep(HOLD)
+                ok = variables.get("repositoryId") == "R_stand_in" and variables.get("categoryId") == "DIC_stand_in_ideas"
+                url = f"https://github.com/WebDevBooster/richos/discussions/{number}"
+                self._answer(200, {"data": {"createDiscussion": {"discussion": {"number": number, "url": url}}}} if ok
+                             else {"data": {"createDiscussion": None}, "errors": [{"type": "NOT_FOUND", "message": "Could not resolve to a node"}]})
+            elif "discussionCategory" in query:
+                category = {"id": "DIC_stand_in_ideas"} if variables.get("slug") == "ideas" else None
+                self._answer(200, {"data": {"repository": {"id": "R_stand_in", "discussionCategory": category}}})
+            else:
+                self._answer(200, {"errors": [{"message": "unknown query"}]})
+        elif len(parts) == 4 and parts[0] == "repos" and parts[3] == "issues":
             number = NEXT[0]
             NEXT[0] += 1
             time.sleep(HOLD)
