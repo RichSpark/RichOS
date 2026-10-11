@@ -1315,6 +1315,14 @@ class Runner:
         if result.returncode:
             # Do not echo argv: signing commands can carry a password.
             raise RuntimeError(f"{Path(str(args[0])).name} failed (exit {result.returncode}); see the run log")
+        # A gate that passes past half its deadline is the next timeout on a busier Mac
+        # (workspace-mutants passed at 2980 s of 3600 s in run 20261010T211905Z-62031055 and
+        # timed out in run 20261011T213131Z-6a01bbe6). Say so in the run log; nothing is refused.
+        execution = getattr(result, "execution_seconds", None)
+        if (timeout and execution is not None and execution > timeout / 2
+                and self.active_phase in GATE_BUDGETS):
+            self.announce(f"  NEAR DEADLINE {self.active_phase}: passed after {execution:.1f}s "
+                          f"of execution, more than half of its {timeout}s deadline")
         return result.stdout.strip() if capture else None
 
     def checkout(self, sha=None):

@@ -548,6 +548,37 @@ Path(sys.argv[1]).write_text(str(p.pid))
                 self.assertRaisesRegex(RuntimeError, "never admitted: waited 1800s .* nothing ran"):
             m.Runner(self.root, self.root, {}, io.StringIO()).command("true", timeout=10)
 
+    def test_a_gate_passing_past_half_its_deadline_says_so_and_still_passes(self):
+        # workspace-mutants passed at 2980 s of its 3600 s in run 20261010T211905Z-62031055 and
+        # timed out a passing build in run 20261011T213131Z-6a01bbe6, unannounced. Past half of
+        # the deadline is said, never refused.
+        gate = m.WORKSPACE_MUTANTS_GATE
+        deadline = m.GATE_BUDGETS[gate]
+        for execution, said in ((deadline / 2 + 1, True), (deadline / 2, False)):
+            with self.subTest(execution=execution):
+                log = io.StringIO()
+                r = m.Runner(self.root, self.root, {}, log)
+
+                def run(args, **kwargs):
+                    result = subprocess.CompletedProcess(args, 0, "", "")
+                    result.admitted, result.admission_seconds = True, 0.0
+                    result.execution_seconds = execution
+                    return result
+
+                with patch.object(m, "owned_run", side_effect=run), \
+                        contextlib.redirect_stdout(io.StringIO()) as out:
+                    with r.phase(gate):
+                        r.command("true", timeout=deadline)
+                lines = [l for l in out.getvalue().splitlines() if "NEAR DEADLINE" in l]
+                if said:
+                    self.assertEqual(lines, [f"  NEAR DEADLINE {gate}: passed after {execution:.1f}s "
+                                             f"of execution, more than half of its {deadline}s deadline"])
+                    self.assertIn(lines[0], log.getvalue(), "the run log carries the line too")
+                    self.assertFalse(m.Runner.GATE_VERDICT.match(lines[0]),
+                                     "--gates-passed-in never reads it as a verdict")
+                else:
+                    self.assertEqual(lines, [])
+
     def test_every_gate_has_a_named_deadline(self):
         for (phase, budget), at_once in [(item, n) for item in m.GATE_BUDGETS.items()
                                          for n in (1, "all")]:
