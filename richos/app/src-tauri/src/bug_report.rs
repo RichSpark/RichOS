@@ -330,7 +330,7 @@ fn private_terms(state: &crate::AppState) -> Vec<bug::PrivateTerm> {
 
 /// Who the report goes out as. What RichOS holds that is private is not handed to the window:
 /// the card's heads-up asks `bug_report_private_in` instead (fourth review finding 2).
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn bug_report_context() -> serde_json::Value {
     serde_json::json!({
         "account": bug::Account::Reporting,
@@ -343,7 +343,7 @@ pub fn bug_report_context() -> serde_json::Value {
 /// (`bug::private_in_edit`), so the window keeps no second copy of the rules (fourth review
 /// finding 2). `private` is the report's own private words so far, as `bug_report_change` takes
 /// them. Decides nothing: the user may send anyway, having been told.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn bug_report_private_in(state: State<crate::AppState>, text: String, private: Option<Vec<bug::PrivateTerm>>) -> Vec<String> {
     bug::private_in_edit(&text, &private_terms(&state), &private.unwrap_or_default())
 }
@@ -352,7 +352,7 @@ pub fn bug_report_private_in(state: State<crate::AppState>, text: String, privat
 /// exchange covers anything (second review finding 6). Kept in memory for Rich's write-up
 /// only; the last one is dropped first, so a picture never outlives the press it was taken for.
 /// `{ taken, bytes }`; a picture that could not be had is not an error, Rich gets the words.
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn bug_report_look(app: AppHandle, window: tauri::WebviewWindow) -> Result<serde_json::Value, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
@@ -380,7 +380,7 @@ pub async fn bug_report_look(app: AppHandle, window: tauri::WebviewWindow) -> Re
 /// Rich again until he answers (review rv-20261009T162841Z-69294215-70e6 finding 2: the plain
 /// write-up that stood in for him put names no rule can know in a public issue). `report` is the
 /// id his check is kept under for Send ([`bug_report_send`]).
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Screen) -> Result<serde_json::Value, String> {
     let started = Instant::now();
     let (scrubber, (bin, folder), bugs) = read_state(&app);
@@ -413,7 +413,7 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
 /// **A report Rich could not check is taken off this Mac**: the window has shown his check on a
 /// card (the card is then the report, as any draft is), or the user canceled it. `false` when it
 /// was already gone.
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn bug_report_take_unchecked(app: AppHandle, id: String) -> Result<bool, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
@@ -434,7 +434,7 @@ pub async fn bug_report_take_unchecked(app: AppHandle, id: String) -> Result<boo
 ///
 /// The scanner goes over what he adds; the card with it added is a changed card, so at Send it
 /// goes through the scanner and then Rich, last (`bug::at_send`), like words changed by hand.
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn bug_report_change(app: AppHandle, said: String, sheet: bug::Sheet, private: Option<Vec<bug::PrivateTerm>>) -> Result<serde_json::Value, String> {
     let started = Instant::now();
     let (scrubber, (bin, folder), bugs) = read_state(&app);
@@ -509,7 +509,7 @@ fn deliver(bugs: &BugReports, attempt: impl FnOnce(&bug::Outbox) -> std::io::Res
 ///     (`{state: "unchecked", id}`), as with any report he could not check.
 ///
 /// `screen` is where the report was started, kept with words waiting for his check.
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug::Sheet, screen: bug::Screen) -> Result<serde_json::Value, String> {
     let (scrubber, (bin, folder), bugs) = read_state(&app);
     off_the_ipc_threads(move || {
@@ -544,7 +544,7 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
 }
 
 /// *Try now*. `None` when it is no longer waiting.
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn bug_report_try_now(app: AppHandle, id: String) -> Result<Option<bug::Delivery>, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
@@ -559,7 +559,7 @@ pub async fn bug_report_try_now(app: AppHandle, id: String) -> Result<Option<bug
 /// Mac, or `{state: "sent", number, …}` when it had already gone out. It waits behind a send
 /// already in flight (the one-at-a-time lock, held across the request), so it waits off the IPC
 /// threads, and what that send did is what it answers.
-#[tauri::command(async)]
+#[richos_command::command]
 pub async fn bug_report_cancel(app: AppHandle, id: String) -> Result<bug::Withdrawn, String> {
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
@@ -573,14 +573,14 @@ pub async fn bug_report_cancel(app: AppHandle, id: String) -> Result<bug::Withdr
 }
 
 /// While a report waits on the user's words and voice is on, hold spoken words for it.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn bug_report_voice(bugs: State<Arc<BugReports>>, on: bool) -> bool {
     bugs.hold_voice.store(on, Ordering::SeqCst);
     on
 }
 
 /// Open issue `number` of RichOS's repository in the browser. A number, never an address.
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn bug_report_open_issue(number: u64) -> Result<(), String> {
     let page = bug::issue_page(number);
     let status = std::process::Command::new("/usr/bin/open").arg(&page).status().map_err(|e| format!("this Mac would not open it: {e}"))?;

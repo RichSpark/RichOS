@@ -8,7 +8,9 @@
 # `cargo test -p richos-core`. See app/README.md for the rationale.
 [workspace]
 resolver = "2"
-members = ["crates/richos-core", "crates/richos-voice"]
+# richos-command is the Tauri shell's `#[richos_command::command]` attribute (a proc-macro with
+# no native dependency), a member here so its expansion tests run without the webview tree.
+members = ["crates/richos-core", "crates/richos-voice", "crates/richos-command"]
 
 # Check ignored outcomes and asynchronous work at the lint entry point.
 # Timeout refusal regression: a0b51998. These warn on related Rust mistakes;

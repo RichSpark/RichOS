@@ -259,7 +259,7 @@ pub fn start(app: AppHandle) {
         })
         .expect("start question observer");
 }
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn answer_question(
     state: tauri::State<AppState>,
     thread_id: String,
@@ -271,7 +271,7 @@ pub fn answer_question(
     }
     self::answer(&state, &thread_id, answer, &method, "mac").map(|v| v.public_value())
 }
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn question_shown(
     state: tauri::State<AppState>,
     thread_id: String,
@@ -279,7 +279,7 @@ pub fn question_shown(
 ) -> Result<(), String> {
     shown(&state, &thread_id, &question_id, "mac")
 }
-#[tauri::command(async)]
+#[richos_command::command]
 pub fn open_question_counts(state: tauri::State<AppState>) -> Result<Value, String> {
     let view = state.reader.snapshot();
     let mut counts = serde_json::Map::new();
@@ -297,4 +297,19 @@ pub fn open_question_counts(state: tauri::State<AppState>) -> Result<Value, Stri
         );
     }
     Ok(Value::Object(counts))
+}
+
+#[cfg(test)]
+mod tests {
+    /// This file's three commands answer off Tauri's async workers: each carries
+    /// `#[richos_command::command]` and none a bare Tauri attribute. The dispatch proof is
+    /// `crate::command_rule_tests`; this is the same rule held for this file by this file's
+    /// own test, so a change here selects a test that reads it.
+    #[test]
+    fn its_three_commands_run_off_the_async_workers() {
+        let source = include_str!("question_host.rs");
+        assert_eq!(crate::command_rule_tests::bare_tauri_attributes(source), Vec::<String>::new());
+        let ours = source.lines().filter(|line| line.trim() == "#[richos_command::command]").count();
+        assert_eq!(ours, 3, "answer_question, question_shown, open_question_counts");
+    }
 }

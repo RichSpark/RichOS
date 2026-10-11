@@ -1000,7 +1000,7 @@ struct AppState {
 // until Rich finished would be a settings screen nobody opens.
 
 /// What the "Use Rich from your phone" screen draws itself from.
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_status(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> phone::PhoneStatus {
     runtime.status()
 }
@@ -1020,7 +1020,7 @@ fn phone_status(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> phone::P
 /// **What CAN fail here is new.** A Mac that Tailscale will not certify used to be served the
 /// other path silently; there is no other path, so `phone::PhoneError::TailnetNotReady` comes
 /// back and the sentence below is what he reads.
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_begin_pairing(
     app: AppHandle,
     runtime: State<std::sync::Arc<phone::PhoneRuntime>>,
@@ -1034,11 +1034,11 @@ fn phone_begin_pairing(
 }
 
 /// Managed access uses the same pairing authority and phone actions as Tailscale.
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_connect_enable(app: AppHandle, runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> Result<phone::PhoneStatus, String> {
     runtime.begin_connect(app).map_err(|e| e.ceo_sentence())
 }
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_connect_disable(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> Result<phone::PhoneStatus, String> {
     runtime.disable_connect().map_err(|e| e.ceo_sentence())
 }
@@ -1050,7 +1050,7 @@ fn phone_connect_disable(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) ->
 /// cannot fail in a way he can act on — there is no key to mint and no port to bind, only
 /// things to put down — so it returns the status rather than a `Result`, and the screen it
 /// returns to is `This Mac is ready`.
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_stop_pairing(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> phone::PhoneStatus {
     runtime.stop_pairing()
 }
@@ -1058,7 +1058,7 @@ fn phone_stop_pairing(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> ph
 /// **"They match", pressed on this Mac** — Sage's pairing review F1. The only act that lets a
 /// phone which redeemed the code reach Rich; until it happens the phone's key can answer the six
 /// words and do nothing else.
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_confirm_on_mac(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> Result<phone::PhoneStatus, String> {
     runtime.confirm_on_mac().map_err(|e| {
         eprintln!("[richos] the press on this Mac could not be recorded: {e}");
@@ -1068,7 +1068,7 @@ fn phone_confirm_on_mac(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> 
 
 /// **"They do not match", pressed on this Mac** — the same teardown the phone's own answer runs:
 /// the phone is forgotten, the socket closes and the sheet says who stopped it.
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_reject_on_mac(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> phone::PhoneStatus {
     runtime.reject_on_mac()
 }
@@ -1082,7 +1082,7 @@ fn phone_reject_on_mac(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> p
 /// The screens keep the address written out beside every one of these controls, so a Mac where
 /// `open` does not work is a Mac where the user reads the address — not one where the step is
 /// impossible.
-#[tauri::command(async)]
+#[richos_command::command]
 fn open_external(target: String) -> Result<(), String> {
     opener::open(&target)
 }
@@ -1091,7 +1091,7 @@ fn open_external(target: String) -> Result<(), String> {
 ///
 /// The one thing it cannot do is remove the configuration profile from his phone, so the screen
 /// says where that is. A cleanup the user has to know to do is a cleanup that does not happen.
-#[tauri::command(async)]
+#[richos_command::command]
 fn phone_forget(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> Result<(), String> {
     runtime.forget().map_err(|e| {
         eprintln!("[richos] forgetting the phone did not complete: {e}");
@@ -1099,17 +1099,17 @@ fn phone_forget(runtime: State<std::sync::Arc<phone::PhoneRuntime>>) -> Result<(
     })
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn list_threads(state: State<AppState>) -> Vec<ThreadSummary> {
     state.reader.snapshot().threads()
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn active_thread(state: State<AppState>) -> Option<String> {
     state.reader.snapshot().active_thread().map(|s| s.to_string())
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn create_thread(state: State<AppState>, title: String) -> Result<String, String> {
     let title = if title.trim().is_empty() { "New thread".to_string() } else { title };
     // A thread cannot exist without an immutable entity home (ECS §3.2). Until the entity
@@ -1119,7 +1119,7 @@ fn create_thread(state: State<AppState>, title: String) -> Result<String, String
     take_the_spine(&state.spine).create_thread(&title, &entity).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn switch_thread(state: State<AppState>, thread_id: String) -> Result<(), String> {
     take_the_spine(&state.spine).switch_thread(&thread_id).map_err(|e| e.to_string())
 }
@@ -1127,7 +1127,7 @@ fn switch_thread(state: State<AppState>, thread_id: String) -> Result<(), String
 /// Scoped read. Now fallible: a thread written before entity scoping existed has no
 /// entity home, and `LedgerError::UnboundThread` is returned rather than an empty list —
 /// "I will not serve this" and "there is nothing here" are different statements.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_messages(state: State<AppState>, thread_id: String) -> Result<Vec<Message>, String> {
     state.reader.snapshot().messages(&thread_id).map_err(|e| e.to_string())
 }
@@ -1148,7 +1148,7 @@ fn get_messages(state: State<AppState>, thread_id: String) -> Result<Vec<Message
 /// wanted to — it never holds those bytes.
 ///
 /// Fails closed on an unbound thread, exactly like `get_messages`.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Result<serde_json::Value, String> {
     let payload = question_host::payload(&state, &thread_id);
     // **HIS FRONT DESK IS MADE READY HERE, AFTER THE SNAPSHOT AND NEVER BEFORE IT** — the CEO's
@@ -1480,8 +1480,10 @@ fn hold_the_spine<'a>(
 /// `"sync"`; the `async` attribute on a sync fn makes it `"sync_threadpool"`). A turn can
 /// last hours, so blocking there would freeze the webview AND queue `stop_turn` behind the
 /// very turn it is meant to interrupt — the stop would be structurally impossible no
-/// matter how the rest of the plumbing is written.
-#[tauri::command(async)]
+/// matter how the rest of the plumbing is written. `#[richos_command::command]` emits that
+/// `(async)` and also runs the body off the async runtime's worker threads
+/// (`crates/richos-command/src/lib.rs`), so an hours-long turn does not hold one of them either.
+#[richos_command::command]
 fn send_message(
     state: State<AppState>,
     // **THE PHONE, INJECTED RATHER THAN REACHED FOR.** It is managed unconditionally at boot
@@ -4165,24 +4167,24 @@ fn main() {
 /// UX §2.1: "Rail header = the company/CEO identity, not RichOS." Configurable,
 /// persisted, sensible fallback when unset — the fallback lives in richos-core's
 /// config.rs so this thin shell layer never has to know the placeholder string.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_company_name(state: State<AppState>) -> String {
     state.config.lock().unwrap().company_name_or_default()
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_company_name(state: State<AppState>, name: String) -> Result<(), String> {
     state.config.lock().unwrap().set_company_name(&name).map_err(|e| e.to_string())
 }
 
 /// UX §5.2: the CEO's one plain 3-way proactive-attention dial. Default = Quiet,
 /// survives restart (config.rs).
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_assertiveness(state: State<AppState>) -> String {
     state.config.lock().unwrap().assertiveness().as_str().to_string()
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_assertiveness(state: State<AppState>, level: String) -> Result<(), String> {
     let parsed = Assertiveness::parse(&level).ok_or_else(|| format!("unknown assertiveness level: {level}"))?;
     state.config.lock().unwrap().set_assertiveness(parsed).map_err(|e| e.to_string())
@@ -4201,7 +4203,7 @@ fn set_assertiveness(state: State<AppState>, level: String) -> Result<(), String
 /// `send_message` holds the spine mutex for the entire turn, and `app/ui/main.js` polls
 /// this command on TURN START. Taking the spine lock here would make the worker chip block
 /// until Rich finished — the same reason the stop control lives on this handle (§9.3).
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_worker_status(state: State<AppState>, thread_id: Option<String>) -> WorkerStatusView {
     if let Some(thread) = thread_id {
         if !state.control.active_turn().is_some_and(|turn| turn.thread_id == thread) {
@@ -4213,7 +4215,7 @@ fn get_worker_status(state: State<AppState>, thread_id: Option<String>) -> Worke
 
 /// Saved work belongs to the requested ledger thread. Do not wait on a running
 /// reasoning turn or fall back to another company's most recent receipts.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_work_status(state: State<AppState>, thread_id: String) -> Result<richos_core::work_status::WorkSummary, String> {
     let entity = if let Some(active) = state.control.active_turn() {
         if active.thread_id != thread_id { return Err("Another conversation is working. Saved work will refresh when it settles.".into()); }
@@ -4240,7 +4242,7 @@ fn get_work_status(state: State<AppState>, thread_id: String) -> Result<richos_c
 /// **It answers between turns, which is the whole point.** The one surface that shows
 /// running workers today returns an empty view whenever no turn is open on that thread,
 /// and background work lives entirely in that window.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_json::Value, String> {
     let entity = assignment_scope(&state, &thread_id)?;
     let rows = richos_core::assignment::read_all(
@@ -4319,7 +4321,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
 /// Spec §3.4: the notice is durable, so it survives him being away and it survives a
 /// relaunch; this is the read the surface does on launch as well as on the pushed event,
 /// and the durable flag is what stops him hearing the same thing twice.
-#[tauri::command(async)]
+#[richos_command::command]
 fn take_work_notices(
     state: State<AppState>,
     thread_id: String,
@@ -4337,7 +4339,7 @@ fn take_work_notices(
 /// the operator notice surface reads when a conversation opens (the operator-client record's
 /// §7 item 1: *"`take_pending` feeds the notice surface on launch"*; the surface itself is
 /// item 4, Art's). Reads AND marks, like `take_work_notices`. Empty on a product install.
-#[tauri::command(async)]
+#[richos_command::command]
 fn take_operator_notices(
     state: State<AppState>,
     thread_id: String,
@@ -4349,7 +4351,7 @@ fn take_operator_notices(
 
 /// **The per-assignment stop** (spec §4.2). Not `stop_turn`, which is the conversation's
 /// and stays the conversation's — *"OK, go with recommended"*, the CEO, 2026-09-17.
-#[tauri::command(async)]
+#[richos_command::command]
 fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: String) -> Result<(), String> {
     let entity = assignment_scope(&state, &thread_id)?;
     state.work.stop_assignment(entity.as_str(), &thread_id, &assignment_id)
@@ -4397,7 +4399,7 @@ fn assignment_scope(state: &State<AppState>, thread_id: &str) -> Result<EntityId
 /// UI event. Judgment of WHEN to raise one is explicitly NOT here — no timer/log-watcher
 /// trigger is wired yet (a later leg); this command is the seam a future trigger (or, for
 /// now, a manual/test caller) calls once it has already decided to speak.
-#[tauri::command(async)]
+#[richos_command::command]
 fn raise_proactive_message(
     state: State<AppState>,
     thread_id: Option<String>,
@@ -4519,7 +4521,7 @@ static DICTATION_SHEET_REQUEST: std::sync::atomic::AtomicBool = std::sync::atomi
 /// `true` once per request: the page takes the pending Dictation sheet request. Async dispatch
 /// like every command here (`ipc_responsiveness_tests`): one atomic swap never needs the native
 /// event loop, and a synchronous command is the one shape that could hold it.
-#[tauri::command(async)]
+#[richos_command::command]
 fn dictation_take_sheet_request() -> bool {
     DICTATION_SHEET_REQUEST.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
@@ -4642,7 +4644,7 @@ fn speech_model_for_rich() -> Option<PathBuf> {
 /// It names the party, and it is already in the affordance suite's state registry.
 ///
 /// `(async)` so the resolution's one `command -v` subprocess never runs on the IPC thread.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_readiness() -> serde_json::Value {
     let readiness = richos_voice::stt::readiness();
     let available = matches!(readiness, richos_voice::stt::SpeechReadiness::Ready(_));
@@ -4690,7 +4692,7 @@ fn voice_readiness() -> serde_json::Value {
 ///
 /// `(async)` because it is a half-gigabyte transfer: on the IPC thread it would freeze the window
 /// for the whole download. Progress, verification and the outcome arrive on `rich://voice-model`.
-#[tauri::command(async)]
+#[richos_command::command]
 async fn provision_speech_model(app: AppHandle) -> Result<serde_json::Value, String> {
     let state = ensure_model_fetch_state(&app);
     let emitter = voice_provision::TauriModelEmitter { app };
@@ -4699,7 +4701,7 @@ async fn provision_speech_model(app: AppHandle) -> Result<serde_json::Value, Str
 
 /// Stop the download that is running. A stop the CEO asked for is not a failure and does not
 /// wear one: what arrived is kept, so asking again resumes rather than starting over.
-#[tauri::command(async)]
+#[richos_command::command]
 fn cancel_speech_model_download(app: AppHandle) -> serde_json::Value {
     let state = ensure_model_fetch_state(&app);
     let was_running = state.in_flight.load(std::sync::atomic::Ordering::SeqCst);
@@ -4709,7 +4711,7 @@ fn cancel_speech_model_download(app: AppHandle) -> serde_json::Value {
 
 /// Enter voice mode: open the mic and start listening. Returns the resolved audio
 /// configuration for developer eyes; the CEO-facing UI only renders `rich://voice-state`.
-#[tauri::command(async)]
+#[richos_command::command]
 fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serde_json::Value, String> {
     let _ = thread_id; // voice rides the ACTIVE thread — there is no per-thread voice.
     // REFUSE BEFORE THE MICROPHONE, NOT AFTER IT. `VoiceController::start` resolves the
@@ -4855,7 +4857,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
 
 /// Leave voice mode. Dropping the controller closes the microphone — "off" means the mic
 /// is genuinely closed, not merely ignored.
-#[tauri::command(async)]
+#[richos_command::command]
 fn stop_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<(), String> {
     let _ = thread_id;
     ensure_voice_state(&app);
@@ -4867,7 +4869,7 @@ fn stop_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<(), S
 
 /// One `rich://chunk` delta, relayed by the UI while voice mode is on. Completed sentences
 /// are synthesized and queued immediately — this is the gapless pipelining.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_speak_delta(app: AppHandle, text: String) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
@@ -4880,7 +4882,7 @@ fn voice_speak_delta(app: AppHandle, text: String) {
 
 /// The turn's terminal event: speak the unterminated tail so Rich never swallows his last
 /// words.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_speak_end(app: AppHandle) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
@@ -4892,7 +4894,7 @@ fn voice_speak_end(app: AppHandle) {
 }
 
 /// `rich://turn-started`, relayed from the UI.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_turn_started(app: AppHandle) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
@@ -4904,7 +4906,7 @@ fn voice_turn_started(app: AppHandle) {
 }
 
 /// `rich://turn-completed` / `rich://turn-error`, relayed from the UI.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_turn_ended(app: AppHandle) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
@@ -4933,7 +4935,7 @@ fn voice_turn_ended(app: AppHandle) {
 ///
 /// Nothing queued is silenced. Sentences Rich already completed are real answer and they
 /// finish; the notice follows them. See `richos_voice::controller::CutOffDesk`.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_turn_cut_off(app: AppHandle, reason: Option<String>) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
@@ -4948,7 +4950,7 @@ fn voice_turn_cut_off(app: AppHandle, reason: Option<String>) {
 /// The UI's "tap to stop" — the CEO's instant interrupt while AEC is missing. Returns the
 /// seconds of queued speech dropped and the measured stop latency, so an interruption is
 /// reported in real units rather than as an adjective.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_barge_in(app: AppHandle) -> serde_json::Value {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
@@ -4967,7 +4969,7 @@ fn voice_barge_in(app: AppHandle) -> serde_json::Value {
 }
 
 /// Developer-facing audio facts. Never rendered to the CEO.
-#[tauri::command(async)]
+#[richos_command::command]
 fn voice_diagnostics(app: AppHandle) -> Option<String> {
     let handle = app.try_state::<VoiceHandle>()?;
     let slot = handle.controller.lock().ok()?;
@@ -5131,7 +5133,7 @@ fn active_binding_view(spine: &dyn SpineView) -> Option<ActiveContext> {
 /// THE navigation query. One call returns the whole rail: every registered entity as its
 /// own group, each group's threads resolved through the immutable binding, the unbound
 /// quarantine list, and the authoritative active scope.
-#[tauri::command(async)]
+#[richos_command::command]
 fn navigation_tree(state: State<AppState>) -> NavigationTree {
     let spine = state.reader.snapshot();
     let nav = state.nav.lock().unwrap();
@@ -5208,7 +5210,7 @@ fn build_navigation_tree(spine: &dyn SpineView, nav_state: &nav::NavState) -> Na
 ///
 /// The sentences are composed in richos-core and rendered verbatim, so this shell never
 /// gets to phrase a claim about a customer's history.
-#[tauri::command(async)]
+#[richos_command::command]
 fn history_health(state: State<AppState>) -> richos_core::ledger::HistoryHealth {
     state.reader.snapshot().ledger().history_health()
 }
@@ -5316,7 +5318,7 @@ fn onboarding_view_of(state: &State<AppState>) -> OnboardingView {
 
 /// Read where onboarding stands. The window calls it at boot and after every company change,
 /// and `not-yet` is what makes it show the offer.
-#[tauri::command(async)]
+#[richos_command::command]
 fn onboarding_view(state: State<AppState>) -> OnboardingView {
     onboarding_view_of(&state)
 }
@@ -5335,7 +5337,7 @@ fn onboarding_view(state: State<AppState>) -> OnboardingView {
 ///   3. **It is reversible by asking.** `DECLINED_BLOCK` tells Rich the interview is still
 ///      there if the CEO brings it up. The surface says the same thing in the CEO's own
 ///      words, so the button's effect and the product's behavior are one claim.
-#[tauri::command(async)]
+#[richos_command::command]
 fn decline_onboarding(state: State<AppState>, entity_id: String) -> Result<OnboardingView, String> {
     let now_millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5376,14 +5378,14 @@ const ONBOARDING_DECLINE_REFUSED: &str =
      look at that.";
 
 /// The authoritative answer to "which entity and thread is the CEO actually talking to?".
-#[tauri::command(async)]
+#[richos_command::command]
 fn active_context(state: State<AppState>) -> Option<ActiveContext> {
     active_binding_view(&*state.reader.snapshot())
 }
 
 /// One thread's durable scope. Fallible on purpose: an unbound thread returns the core's
 /// own `UnboundThread` message, which is what the UI renders in the binding-failure state.
-#[tauri::command(async)]
+#[richos_command::command]
 fn thread_scope(state: State<AppState>, thread_id: String) -> Result<ActiveContext, String> {
     let spine = state.reader.snapshot();
     spine
@@ -5407,7 +5409,7 @@ fn thread_scope(state: State<AppState>, thread_id: String) -> Result<ActiveConte
 ///
 /// §3.3: *"no pre-created thread record until the CEO sends the first message"* — so the
 /// UI holds a draft with no record and calls this on first send, not on picker open.
-#[tauri::command(async)]
+#[richos_command::command]
 fn create_thread_in(app: AppHandle, state: State<AppState>, entity_id: String, title: String) -> Result<String, String> {
     let entity = EntityId::parse(entity_id.trim()).map_err(|e| e.to_string())?;
     let title = if title.trim().is_empty() { "New thread".to_string() } else { title.trim().to_string() };
@@ -5560,7 +5562,7 @@ fn entity_choice_view(state: &State<AppState>) -> EntityChoiceView {
 
 /// Read the state of his memory. The window calls it at boot, and a `state` of `none` is
 /// what makes it ask — the same shape `entity_choice`'s `chosen: None` already uses.
-#[tauri::command(async)]
+#[richos_command::command]
 fn memory_status(state: State<AppState>) -> MemoryStatus {
     let status = state.memory.lock().unwrap().clone();
     memory::with_offered_location(status, std::env::var_os("HOME").map(PathBuf::from).as_deref())
@@ -5592,7 +5594,7 @@ fn memory_status(state: State<AppState>) -> MemoryStatus {
 ///
 /// `(async)` for the reason `choose_entity` is async: it takes the spine's mutex, which
 /// `send_message` holds for a whole turn.
-#[tauri::command(async)]
+#[richos_command::command]
 fn provision_memory(
     app: tauri::AppHandle,
     state: State<AppState>,
@@ -5714,14 +5716,14 @@ fn provision_memory(
 // must not be sold as zero-touch.
 // ---------------------------------------------------------------------------------------
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn provider_auth_status(state: State<AppState>) -> richos_core::provider_auth::AuthView {
     let bin = resolve_claude_bin();
     let view = state.provider_auth.lock().unwrap().refresh(&bin);
     state.quota.set_connecting(view.state == richos_core::provider_auth::AuthState::Connecting);
     view
 }
-#[tauri::command(async)]
+#[richos_command::command]
 fn provider_auth_start(state: State<AppState>) -> richos_core::provider_auth::AuthView {
     state.quota.set_connecting(true);
     let bin = resolve_claude_bin();
@@ -5729,7 +5731,7 @@ fn provider_auth_start(state: State<AppState>) -> richos_core::provider_auth::Au
     state.quota.set_connecting(view.state == richos_core::provider_auth::AuthState::Connecting);
     view
 }
-#[tauri::command(async)]
+#[richos_command::command]
 fn provider_auth_poll(state: State<AppState>) -> richos_core::provider_auth::AuthView {
     let bin = resolve_claude_bin();
     let view = state.provider_auth.lock().unwrap().poll(&bin);
@@ -5741,20 +5743,20 @@ fn provider_auth_poll(state: State<AppState>) -> richos_core::provider_auth::Aut
     }
     view
 }
-#[tauri::command(async)]
+#[richos_command::command]
 fn provider_auth_cancel(state: State<AppState>) -> richos_core::provider_auth::AuthView {
     let view = state.provider_auth.lock().unwrap().cancel();
     state.quota.set_connecting(false);
     view
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_quota(state: State<AppState>, refresh: bool) -> richos_core::quota::View {
     let bin = state.claude_bin.lock().unwrap().clone();
     state.quota.refresh(&bin, refresh)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_quota_activity(state: State<AppState>, thread_id: Option<String>) -> Result<richos_core::quota::holds::Activity, String> {
     let entity = thread_id.as_deref().map(|thread| assignment_scope(&state, thread)).transpose()?;
     let scope = entity.as_ref().zip(thread_id.as_ref()).map(|(entity, thread)| (entity.as_str(), thread.as_str()));
@@ -5773,18 +5775,18 @@ fn claude_quota_activity(state: State<AppState>, thread_id: Option<String>) -> R
     Ok(activity)
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn approve_claude_reset(state: State<AppState>, offer: richos_core::quota::resets::Offer) -> Result<richos_core::quota::resets::View, String> {
     let view = state.quota.resets.approve(&offer)?;
     state.quota.request_refresh();
     Ok(view)
 }
-#[tauri::command(async)]
+#[richos_command::command]
 fn revoke_claude_reset(state: State<AppState>) -> Result<richos_core::quota::resets::View, String> {
     state.quota.resets.revoke()
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_claude_quota_policy(state: State<AppState>, policy: richos_core::quota::Policy) -> Result<richos_core::quota::View, String> {
     state.quota.set_policy(policy).map_err(|e| e.to_string())
 }
@@ -5797,7 +5799,7 @@ fn set_claude_quota_policy(state: State<AppState>, policy: richos_core::quota::P
 
 /// **Add account**: a new, empty Claude Code folder, and the stock browser sign-in started
 /// for it at once (the browser opens; the account's row reads it on the next refresh).
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_account_add(state: State<AppState>, label: String, current_label: Option<String>) -> Result<richos_core::quota::View, String> {
     let view = state.quota.add_account(&label, current_label.as_deref()).map_err(|e| e.to_string())?;
     if let Some(added) = state.quota.accounts.list().last().cloned() {
@@ -5812,7 +5814,7 @@ fn claude_account_add(state: State<AppState>, label: String, current_label: Opti
 }
 
 /// Sign an added account in again (its row's "Sign in").
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_account_sign_in(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::AuthView, String> {
     let folder = state.quota.accounts.folder(&id).ok_or("Account 1 signs in from the main sign-in.")?;
     let bin = resolve_claude_bin();
@@ -5832,7 +5834,7 @@ fn claude_account_sign_in(state: State<AppState>, id: String) -> Result<richos_c
 /// work twice on one account, and the answer is `sameAccount` with the name of the account it
 /// already is (round 18: "You signed in as Home again."). A different one is "added" in Recent
 /// changes. The third element is that name.
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_account_sign_in_poll(state: State<AppState>) -> Option<(String, richos_core::provider_auth::AuthView, Option<String>)> {
     use richos_core::provider_auth::{AuthState, AuthView};
     let bin = resolve_claude_bin();
@@ -5870,7 +5872,7 @@ fn claude_account_sign_in_poll(state: State<AppState>) -> Option<(String, richos
 /// **Cancel** in round 18's add flow, or after "That is the account you already use": the
 /// sign-in that is running for `id` is stopped, the folder signed out and the account removed.
 /// An adding that never finished leaves no row in Recent changes (`Accounts::remove`).
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
     {
         let mut slot = state.account_auth.lock().unwrap();
@@ -5885,7 +5887,7 @@ fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_c
 }
 
 /// **Not now** on Rich's one-time suggestion of a second account (round 18, `one-nudge`).
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_account_nudge_answer(state: State<AppState>, answer: String) -> Result<richos_core::quota::View, String> {
     state.quota.accounts.answer_nudge(&answer).map_err(|e| e.to_string())?;
     Ok(state.quota.view())
@@ -5893,7 +5895,7 @@ fn claude_account_nudge_answer(state: State<AppState>, answer: String) -> Result
 
 /// **Remove** an added account: its folder signed out with the stock `claude auth logout`,
 /// then deleted. Account 1 is the user's own Claude Code sign-in and is never removed here.
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_account_remove(state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
     if let Some(folder) = state.quota.accounts.folder(&id) {
         richos_core::provider_auth::logout_in(&resolve_claude_bin(), &folder);
@@ -5903,13 +5905,13 @@ fn claude_account_remove(state: State<AppState>, id: String) -> Result<richos_co
 
 /// **Use first** (the CEO 2026-10-06, feedback item 8): he picks the account that drains first.
 /// Saved, so it survives a relaunch; the switch at 99% of its week works from it as from any.
-#[tauri::command(async)]
+#[richos_command::command]
 fn claude_account_use_first(state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
     state.quota.use_account_first(&id).map_err(|e| e.to_string())
 }
 
 /// The one setting (his answer 2): at 93% of the five-hour window, Pause or Switch.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_claude_at_threshold(state: State<AppState>, value: richos_core::claude_accounts::AtThreshold) -> Result<richos_core::quota::View, String> {
     state.quota.set_at_threshold(value).map_err(|e| e.to_string())
 }
@@ -5918,21 +5920,21 @@ fn set_claude_at_threshold(state: State<AppState>, value: richos_core::claude_ac
 ///
 /// Called at boot by the window, exactly as `memory_status` is: a `needs` that is non-empty is
 /// what makes it ask, and it is the only signal it needs.
-#[tauri::command(async)]
+#[richos_command::command]
 fn setup_status(state: State<AppState>) -> serde_json::Value {
     setup_view::view(&setup_view::detect(Some(&state.engine_dir.lock().unwrap())))
 }
 
 /// **May Rich offer dictation now?** (round 19, state 4) Dictation is there, the offer was never
 /// made, and which key to name. The window asks after Start, once voice is ready.
-#[tauri::command(async)]
+#[richos_command::command]
 fn dictation_offer(state: State<AppState>) -> dictation_offer::OfferView {
     dictation_offer::view(&state.data_dir, richos_core::dictation_ready())
 }
 
 /// **The offer was shown**: `offered: true` in `<data dir>/dictation.json`, so it is never made
 /// again.
-#[tauri::command(async)]
+#[richos_command::command]
 fn dictation_offer_shown(state: State<AppState>) -> Result<(), String> {
     dictation_offer::mark_shown(&state.data_dir).inspect_err(|why| {
         eprintln!("[richos] dictation offer: the offer was shown and could not be recorded: {why}")
@@ -5956,7 +5958,7 @@ fn dictation_offer_shown(state: State<AppState>) -> Result<(), String> {
 ///
 /// `(async)` keeps installation downloads off the UI thread. Setup does not acquire the
 /// running spine or start an untracked model handshake. The idle spine stays locked through replacement.
-#[tauri::command(async)]
+#[richos_command::command]
 fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json::Value, String> {
     let selected = state.engine_dir.lock().unwrap().clone();
     let registry = state.registry.lock().unwrap().clone();
@@ -6053,7 +6055,7 @@ fn ready_the_front_desk_after_a_repair(app: &AppHandle, thread_id: &str) {
     ready_the_front_desk(app, thread_id);
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn pending_permission(state: State<AppState>) -> Option<richos_core::permissions::PermissionRequest> {
     let view=state.reader.snapshot();
     state.permissions.current().filter(|request|view.active_binding().is_some_and(|b|b.thread_id()==request.binding.thread_id && b.entity_id().as_str()==request.binding.entity_id))
@@ -6068,7 +6070,7 @@ fn pending_permission(state: State<AppState>) -> Option<richos_core::permissions
 /// ASSIGNMENT, and the work host is what carries it out: approved puts the assignment back on
 /// the work lease to take the step he approved, declined stops it where it stands with
 /// nothing changed.
-#[tauri::command(async)]
+#[richos_command::command]
 fn answer_permission(state: State<AppState>, request_id: String, allow: bool) -> Result<(), String> {
     match state.permissions.resolve(&request_id, allow)? {
         richos_core::permissions::Answered::Delivered => Ok(()),
@@ -6079,7 +6081,7 @@ fn answer_permission(state: State<AppState>, request_id: String, allow: bool) ->
 }
 
 /// Explicit repository access is separate from choosing a company folder.
-#[tauri::command(async)]
+#[richos_command::command]
 fn repository_connections(state: State<AppState>) -> serde_json::Value {
     let registry = state.registry.lock().unwrap();
     serde_json::json!({"companies":registry.entities().iter().map(|e| serde_json::json!({
@@ -6098,7 +6100,7 @@ fn repository_connections(state: State<AppState>) -> serde_json::Value {
 /// creating a folder is allowed, as every Mac chooser allows; the starting folder is NOT
 /// set, so macOS opens where he last chose in this app. Waited for on the blocking pool,
 /// never on the main thread (the plugin's own rule).
-#[tauri::command(async)]
+#[richos_command::command]
 async fn pick_folder(app: tauri::AppHandle, window: tauri::WebviewWindow, title: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use tauri_plugin_dialog::DialogExt;
@@ -6115,7 +6117,7 @@ async fn pick_folder(app: tauri::AppHandle, window: tauri::WebviewWindow, title:
     .map_err(|e| format!("The folder chooser did not open: {e}"))
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn connect_repository(state: State<AppState>, entity_id: String, folder: String) -> Result<serde_json::Value, String> {
     let id = EntityId::parse(&entity_id).map_err(|e|e.to_string())?;
     let engine = state.engine_dir.lock().unwrap().clone();
@@ -6133,7 +6135,7 @@ fn connect_repository(state: State<AppState>, entity_id: String, folder: String)
 
 /// Read the state of the question. The UI calls this at boot: a `chosen` of `None` is what
 /// makes it ask, and it is the only signal it needs.
-#[tauri::command(async)]
+#[richos_command::command]
 fn entity_choice(state: State<AppState>) -> EntityChoiceView {
     entity_choice_view(&state)
 }
@@ -6159,7 +6161,7 @@ fn entity_choice(state: State<AppState>) -> EntityChoiceView {
 /// the CEO does WHILE Rich may be working, and a settings row that froze the entire IPC
 /// channel until the turn finished would be a settings row nobody touches. The DURABLE
 /// write happens before the spine is touched at all, so the answer is never lost to a wait.
-#[tauri::command(async)]
+#[richos_command::command]
 fn choose_entity(state: State<AppState>, entity_id: String) -> Result<EntityChoiceView, String> {
     if state.entity_pinned_by_env {
         return Err(ENTITY_PINNED_MESSAGE.to_string());
@@ -6334,7 +6336,7 @@ fn resolve_company_folder(raw: &str) -> Result<PathBuf, String> {
 ///
 /// `(async)` for the reason `choose_entity` is: it takes the spine's mutex, which
 /// `send_message` holds for the whole of a turn.
-#[tauri::command(async)]
+#[richos_command::command]
 fn register_entity(
     state: State<AppState>,
     display_name: String,
@@ -6482,7 +6484,7 @@ fn excerpt_at(original: &[char], at: usize, needle_len: usize) -> String {
 /// thread's TITLE (already listed in the rail, and a title is navigation metadata) but can
 /// never surface its contents. Each hit carries its entity so the renderer groups by entity
 /// without having to work out which entity a result came from.
-#[tauri::command(async)]
+#[richos_command::command]
 fn search_nav(state: State<AppState>, query: String, limit: Option<usize>) -> Vec<SearchHit> {
     let spine = state.reader.snapshot();
     let nav = state.nav.lock().unwrap();
@@ -6587,43 +6589,43 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 
 // ---- durable navigation view state (nav.rs) -------------------------------------------
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn nav_state(state: State<AppState>) -> nav::NavState {
     state.nav.lock().unwrap().state().clone()
 }
 
 /// Returns the width the store ACCEPTED (clamped to UX §2.1's 224–420px), not the width
 /// requested — so the rail renders what was persisted and the two cannot disagree.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_sidebar_width(state: State<AppState>, width: f64) -> Result<f64, String> {
     state.nav.lock().unwrap().set_sidebar_width(width).map_err(|e| e.to_string())
 }
 
 /// Returns the width the store ACCEPTED (clamped to nav.rs's 280-520px, whose maximum is
 /// derived from §20's 620px conversation floor). UX §7.2 / §25.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_inspector_width(state: State<AppState>, width: f64) -> Result<f64, String> {
     state.nav.lock().unwrap().set_inspector_width(width).map_err(|e| e.to_string())
 }
 
 /// Returns the width the store ACCEPTED: floored at 320px, never capped, because the Output
 /// panel's ceiling is the live stop the page measures (output side-panel PRD §9.5, nav.rs).
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_output_width(state: State<AppState>, width: f64) -> Result<f64, String> {
     state.nav.lock().unwrap().set_output_width(width).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_sidebar_collapsed(state: State<AppState>, collapsed: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_sidebar_collapsed(collapsed).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_entity_collapsed(state: State<AppState>, entity_id: String, collapsed: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_entity_collapsed(&entity_id, collapsed).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_thread_pinned(state: State<AppState>, thread_id: String, pinned: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_thread_pinned(&thread_id, pinned).map_err(|e| e.to_string())
 }
@@ -6631,14 +6633,14 @@ fn set_thread_pinned(state: State<AppState>, thread_id: String, pinned: bool) ->
 /// Archive REMOVES FROM THE NORMAL LIST (§3.2) — it does not delete, and it does not touch
 /// the thread's entity home. An archived thread is still bound to exactly the entity it was
 /// always bound to and is still fully readable from the archive view.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_thread_archived(state: State<AppState>, thread_id: String, archived: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_thread_archived(&thread_id, archived).map_err(|e| e.to_string())
 }
 
 /// A DISPLAY override. The ledger's title is evidence and is left exactly as written — see
 /// nav.rs's module doc for why a rename is not a ledger edit.
-#[tauri::command(async)]
+#[richos_command::command]
 fn rename_thread(state: State<AppState>, thread_id: String, title: String) -> Result<(), String> {
     state.nav.lock().unwrap().rename_thread(&thread_id, &title).map_err(|e| e.to_string())
 }
@@ -8043,7 +8045,7 @@ struct StopReport {
 
 /// §9.3: persist a stop request, then interrupt the active turn. In that order, enforced
 /// in `steering.rs` rather than here.
-#[tauri::command(async)]
+#[richos_command::command]
 fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>) -> Result<StopReport, String> {
     // Which conversation his Esc was pressed in: the control's own record of the running turn,
     // or else the thread the window shows. Both read without the spine's lock, and read BEFORE
@@ -8105,7 +8107,7 @@ struct SteerReport {
 /// turn — one turn at a time, and the continuity design's turn-boundary
 /// controller is queue-not-interrupt by construction (§3.1) — and the UI says which of
 /// those two things happened rather than letting the CEO assume the other.
-#[tauri::command(async)]
+#[richos_command::command]
 fn steer_message(state: State<AppState>, text: String) -> Result<SteerReport, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -8134,7 +8136,7 @@ struct RunningTurn {
     started_at: Option<u64>,
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn running_turn(state: State<AppState>) -> Option<RunningTurn> {
     state.control.active_turn().map(|a| RunningTurn {
         turn_id: a.turn_id,
@@ -8161,7 +8163,7 @@ fn running_turn(state: State<AppState>) -> Option<RunningTurn> {
 
 /// Whether this install can read and correct company memory at all — so the UI can show a
 /// real state instead of a dead button. Never a guess: it reflects the configured corpus.
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_available(state: State<AppState>) -> bool {
     state.correction.lock().unwrap().is_some()
 }
@@ -8202,7 +8204,7 @@ fn desk(state: &State<AppState>) -> Result<SharedCorrectionDesk, String> {
 
 /// "What does loro actually believe?" — the answer is a file. Read-only; no proposal, no
 /// confirmation, because reading is not correcting.
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_show_record(state: State<AppState>, record_ref: String) -> Result<WriteOutput, String> {
     desk(&state)?.lock().unwrap().show(&record_ref).map_err(|e| e.to_string())
 }
@@ -8231,7 +8233,7 @@ fn correction_entity_of(state: &State<AppState>) -> Result<EntityId, String> {
 /// Corrections waiting on the CEO, for the company of the conversation now open (its launch
 /// selection when none is). Scoped, not global: a proposal about one entity's memory has no
 /// business in another's queue.
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_pending_corrections(state: State<AppState>) -> Result<Vec<Proposal>, String> {
     let entity = correction_entity_of(&state)?;
     Ok(desk(&state)?.lock().unwrap().pending_for(entity.as_str()).into_iter().cloned().collect())
@@ -8241,7 +8243,7 @@ fn loro_pending_corrections(state: State<AppState>) -> Result<Vec<Proposal>, Str
 /// `why` is the CEO's own words for what is wrong, and an empty one is refused before a
 /// process is started — a correction with no stated reason is the shape an inferred one
 /// takes.
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_propose_correction(
     state: State<AppState>,
     thread_id: Option<String>,
@@ -8264,7 +8266,7 @@ fn loro_propose_correction(
 /// digest exists to stop a successor denying from absent memory (`reprime.rs`, §2.1 #6).
 /// The ledger write is best-effort and never fails the correction: the desk's own log is
 /// already durable, and losing a ledger line must not un-write a record that landed.
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_confirm_correction(state: State<AppState>, id: String) -> Result<Proposal, String> {
     let entity = correction_entity_of(&state)?;
     let done = desk(&state)?.lock().unwrap().confirm(entity.as_str(), &id).map_err(|e| e.to_string())?;
@@ -8285,20 +8287,20 @@ fn loro_confirm_correction(state: State<AppState>, id: String) -> Result<Proposa
 /// He says no. `permanent` is his explicit "don't ask about this record again" — a plain
 /// decline is NOT permanent, because a decline is ambiguous while a repeat is evidence
 /// (ceo-decisions.md §7).
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_decline_correction(state: State<AppState>, id: String, permanent: bool) -> Result<(), String> {
     desk(&state)?.lock().unwrap().decline(&id, permanent).map_err(|e| e.to_string())
 }
 
 /// The suppression list, inspectable — §7 requires it, "or a term silently refuses to
 /// learn with no way to see why".
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_suppressed_records(state: State<AppState>) -> Result<Vec<String>, String> {
     Ok(desk(&state)?.lock().unwrap().suppressed().to_vec())
 }
 
 /// ...and liftable. A list you can see and cannot clear is only half of inspectable.
-#[tauri::command(async)]
+#[richos_command::command]
 fn loro_unsuppress_record(state: State<AppState>, record_ref: String) -> Result<(), String> {
     desk(&state)?.lock().unwrap().unsuppress(&record_ref).map_err(|e| e.to_string())
 }
@@ -8330,7 +8332,7 @@ fn spoken_desk<'a>(
 
 /// Is the trigger live at all? A UI that cannot tell "nothing to ask" from "the desk is
 /// broken" would render a permanently empty HUD and call it calm.
-#[tauri::command(async)]
+#[richos_command::command]
 fn spoken_corrections_available(state: State<AppState>) -> bool {
     state.spoken.is_some()
 }
@@ -8338,7 +8340,7 @@ fn spoken_corrections_available(state: State<AppState>) -> bool {
 /// Everything awaiting §7's one-keystroke answer. Each carries the CEO's own sentence, the
 /// pair, the prompt to show, and — when the wrong form was found on the record — the line
 /// it appeared on, so the ask can quote him rather than assert at him.
-#[tauri::command(async)]
+#[richos_command::command]
 fn spoken_pending_corrections(state: State<AppState>) -> Result<Vec<Candidate>, String> {
     Ok(spoken_desk(&state)?.pending().to_vec())
 }
@@ -8352,7 +8354,7 @@ fn spoken_pending_corrections(state: State<AppState>) -> Result<Vec<Candidate>, 
 /// The ledger write is best-effort and never fails the answer, the same posture
 /// `loro_confirm_correction` takes: what the CEO decided is already durable on the desk's
 /// own log, and the action-ledger row is a record OF that decision, not the decision.
-#[tauri::command(async)]
+#[richos_command::command]
 fn spoken_confirm_correction(state: State<AppState>, key: String) -> Result<LearnOutcome, String> {
     let (outcome, canonical, mangled) = {
         let mut desk = spoken_desk(&state)?;
@@ -8375,7 +8377,7 @@ fn spoken_confirm_correction(state: State<AppState>, key: String) -> Result<Lear
 /// He says no. `permanent` is his explicit "don't ask for this term again". A plain decline
 /// is NOT permanent and the pair is asked again on its very next repeat — §7: repetition is
 /// the evidence, and waiting dilutes it.
-#[tauri::command(async)]
+#[richos_command::command]
 fn spoken_decline_correction(
     state: State<AppState>,
     key: String,
@@ -8386,13 +8388,13 @@ fn spoken_decline_correction(
 
 /// The suppression list, inspectable — §7 requires it, "or a term silently refuses to learn
 /// with no way to see why".
-#[tauri::command(async)]
+#[richos_command::command]
 fn spoken_suppressed_terms(state: State<AppState>) -> Result<Vec<String>, String> {
     Ok(spoken_desk(&state)?.suppressed().to_vec())
 }
 
 /// ...and liftable. A list you can see and cannot clear is only half of inspectable.
-#[tauri::command(async)]
+#[richos_command::command]
 fn spoken_unsuppress_term(state: State<AppState>, key: String) -> Result<(), String> {
     spoken_desk(&state)?.unsuppress(&key).map_err(|e| e.to_string())
 }
@@ -8467,7 +8469,7 @@ fn feedback_store<'a>(
 /// Can an answer be kept at all? A surface that cannot tell "nothing recorded yet" from
 /// "the file would not open" would render an empty history over a broken store and call it
 /// calm — the same distinction both correction desks draw.
-#[tauri::command(async)]
+#[richos_command::command]
 fn feedback_available(state: State<AppState>) -> bool {
     state.feedback.is_some()
 }
@@ -8478,7 +8480,7 @@ fn feedback_available(state: State<AppState>) -> bool {
 /// specifically so the UI cannot paraphrase it, and `invitesReport` comes from
 /// `Rating::invites_report` so the "only 1 and 2" rule is not re-derived on the other side
 /// of the bridge.
-#[tauri::command(async)]
+#[richos_command::command]
 fn feedback_wording() -> serde_json::Value {
     // Every rating there is. Not a list this file keeps: `Rating` has exactly three
     // variants and `0` is deliberately not one of them, so a fourth would be a compile
@@ -8514,7 +8516,7 @@ fn feedback_wording() -> serde_json::Value {
 /// THE WHOLE VOCABULARY a report can be assembled from, iterated from each term's own
 /// `ALL`. Nothing here is a list this file maintains: adding a term in `feedback.rs` puts
 /// it on screen, and removing one takes it off.
-#[tauri::command(async)]
+#[richos_command::command]
 fn feedback_taxonomy() -> serde_json::Value {
     let failure_class: Vec<serde_json::Value> = FailureClass::ALL
         .iter()
@@ -8610,7 +8612,7 @@ fn outcome_from_key(key: &str) -> Result<PromptOutcome, String> {
 /// Nothing is stored by this command and nothing is consented to by calling it. It exists
 /// so the CEO reads the report BEFORE he is asked to approve it, which is the half of his
 /// design that the type system cannot carry across an IPC boundary on its own.
-#[tauri::command(async)]
+#[richos_command::command]
 fn feedback_preview(key: String, selection: Selection) -> Result<serde_json::Value, String> {
     let rating = rating_from_key(&key)?;
     let disclosure = disclosure_for(rating, &selection)?;
@@ -8632,7 +8634,7 @@ fn feedback_preview(key: String, selection: Selection) -> Result<serde_json::Val
 /// and `FeedbackEntry::with_report` refuses a report attached to a rating that never invited
 /// one, or one that disagrees with the rating he gave. Every one of those rules lives in
 /// `feedback.rs`; none of them is re-implemented here.
-#[tauri::command(async)]
+#[richos_command::command]
 fn feedback_record(
     state: State<AppState>,
     key: String,
@@ -8663,7 +8665,7 @@ fn feedback_record(
 /// from the stored payload. `render_disclosure` is deterministic and total, so no second
 /// free-text copy of what he saw has to be kept in the record; keeping one would have put an
 /// unvalidated `String` into the durable file, which is the exact channel this design closes.
-#[tauri::command(async)]
+#[richos_command::command]
 fn feedback_history(state: State<AppState>) -> Result<Vec<serde_json::Value>, String> {
     let entries = feedback_store(&state)?.entries().map_err(|e| e.to_string())?;
     Ok(entries
@@ -8704,7 +8706,7 @@ fn feedback_history(state: State<AppState>) -> Result<Vec<serde_json::Value>, St
 /// and the toggle controls RENDERING only; making the read conditional on the flag would
 /// put policy in two places, and the second one would eventually disagree. The renderer
 /// decides whether to ask.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_machinery(state: State<AppState>, thread_id: String) -> Result<serde_json::Value, String> {
     if let Ok(mut spine) = state.spine.try_lock() {
         spine.pump_between_turn();
@@ -8726,7 +8728,7 @@ fn get_machinery(state: State<AppState>, thread_id: String) -> Result<serde_json
 /// **§7.2 is not answered here.** How long raw payloads survive is the CEO's open question;
 /// nothing in this path consults the window. Whatever he chooses — 14 days, 2 GB, or
 /// forever — this returns what is on disk and the two states stay the same two states.
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_machinery_raw(
     state: State<AppState>,
     thread_id: String,
@@ -8803,7 +8805,7 @@ fn techy_company_of(state: &State<AppState>, thread_id: &str) -> Option<String> 
 /// the company it lives in, and `"default"` when it follows the global switch — so the
 /// surface can say *"follows your default"* instead of implying a choice he did not make,
 /// and so clearing a pin is a visible, reversible act.
-#[tauri::command(async)]
+#[richos_command::command]
 fn techy_mode(state: State<AppState>, thread_id: String) -> TechyMode {
     let company = techy_company_of(&state, &thread_id);
     state.config.lock().unwrap().techy_mode(&thread_id, company.as_deref())
@@ -8820,7 +8822,7 @@ fn techy_mode(state: State<AppState>, thread_id: String) -> TechyMode {
 /// An unknown scope is REFUSED rather than rounded to a tier, and a `company` scope on a
 /// thread with no company is refused by the store. Both refusals come back as a message
 /// and leave the store untouched.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_techy_scope(
     state: State<AppState>,
     thread_id: String,
@@ -8842,7 +8844,7 @@ fn set_techy_scope(
 /// **The `null` arm is what keeps §7.1 open** (global default vs per-thread only — the
 /// CEO's, unanswered). Without it a pin is one-way, "all of their conversations" stops
 /// reaching any thread he ever touched, and the product has answered his question for him.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_techy_mode(
     state: State<AppState>,
     thread_id: String,
@@ -8863,7 +8865,7 @@ fn set_techy_mode(
 ///
 /// Threads he pinned individually are untouched — that is what makes a pin mean something,
 /// and it is the half of §7.1 a global-only build would lose.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_techy_default(state: State<AppState>, enabled: bool) -> Result<bool, String> {
     let mut config = state.config.lock().unwrap();
     config.set_techy_default(enabled).map_err(|e| e.to_string())?;
@@ -8920,7 +8922,7 @@ impl RetentionView {
 }
 
 /// What the window is set to right now, and what it currently costs.
-#[tauri::command(async)]
+#[richos_command::command]
 fn raw_retention(state: State<AppState>) -> RetentionView {
     let config = state.config.lock().unwrap();
     let bytes = MachineryJournal::new(&state.machinery_root).raw_bytes();
@@ -8933,7 +8935,7 @@ fn raw_retention(state: State<AppState>) -> RetentionView {
 /// an instruction — is REFUSED rather than rounded to something plausible. Nothing is
 /// written and nothing is evicted: the failure mode of a bad argument to a command that
 /// deletes has to be "did nothing".
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_raw_retention(state: State<AppState>, choice: String) -> Result<RetentionView, String> {
     let Some(choice) = RetentionChoice::parse(&choice) else {
         return Err(format!("unknown retention choice: {choice}"));
@@ -8965,7 +8967,7 @@ fn set_raw_retention(state: State<AppState>, choice: String) -> Result<Retention
 // ---------------------------------------------------------------------------------------
 
 /// Whether the opening screen shows at launch. Default on (`config.rs`).
-#[tauri::command(async)]
+#[richos_command::command]
 fn splash_enabled(state: State<AppState>) -> bool {
     state.config.lock().unwrap().splash_enabled()
 }
@@ -8973,7 +8975,7 @@ fn splash_enabled(state: State<AppState>) -> bool {
 /// The switch. `config.rs` stamps `splash_disabled_at` on the way off and clears it on the
 /// way back on, and ignores a write of the value already stored — so the UI syncing this
 /// preference on every launch can never walk the timestamp forward.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_splash_enabled(state: State<AppState>, enabled: bool) -> Result<(), String> {
     state
         .config
@@ -8989,7 +8991,7 @@ fn set_splash_enabled(state: State<AppState>, enabled: bool) -> Result<(), Strin
 ///
 /// It is the zero point of §7's time-to-disable, and it is MEASUREMENT, never display —
 /// §5 bans every counter and score from the CEO's screen and nothing reads this back to him.
-#[tauri::command(async)]
+#[richos_command::command]
 fn splash_note_shown(state: State<AppState>) -> Result<(), String> {
     state
         .config
@@ -9035,7 +9037,7 @@ struct Appearance {
     font_scale: u16,
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_appearance(state: State<AppState>) -> Appearance {
     let config = state.config.lock().unwrap();
     Appearance { theme: config.theme().as_str().to_string(), font_scale: config.font_scale() }
@@ -9044,7 +9046,7 @@ fn get_appearance(state: State<AppState>) -> Appearance {
 /// Persist the CEO's lighting. An unparseable string is REFUSED rather than coerced to the
 /// default: silently writing "dark" because the UI sent something unexpected would look
 /// exactly like the CEO changing his mind, on his own machine, for no reason he can see.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_theme(state: State<AppState>, theme: String) -> Result<(), String> {
     let parsed = richos_core::config::Theme::parse(&theme)
         .ok_or_else(|| format!("unknown theme {theme:?}: expected \"dark\", \"light\" or \"system\""))?;
@@ -9053,7 +9055,7 @@ fn set_theme(state: State<AppState>, theme: String) -> Result<(), String> {
 
 /// Persist the type size. Off-ladder values are snapped by `config.rs` rather than refused,
 /// for the reason stated there: rejecting would put a hand-edited file silently back to 100%.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_font_scale(state: State<AppState>, scale: u16) -> Result<(), String> {
     state.config.lock().unwrap().set_font_scale(scale).map_err(|e| e.to_string())
 }
@@ -9072,7 +9074,7 @@ struct UserIdentity {
     initials: Option<String>,
 }
 
-#[tauri::command(async)]
+#[richos_command::command]
 fn get_user_identity(state: State<AppState>) -> UserIdentity {
     let config = state.config.lock().unwrap();
     UserIdentity {
@@ -9084,7 +9086,7 @@ fn get_user_identity(state: State<AppState>) -> UserIdentity {
 /// Set (or, with a blank string, clear) the CEO's name. Clearing returns the rail footer to
 /// its honest unset state rather than storing an empty string that would render as a circle
 /// with nothing in it.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_user_name(state: State<AppState>, name: String) -> Result<(), String> {
     state.config.lock().unwrap().set_user_name(&name).map_err(|e| e.to_string())
 }
@@ -9354,7 +9356,7 @@ struct LaunchStateView {
 
 /// Read the launch record. `utc_offset_minutes` is positive east — the NEGATION of
 /// JavaScript's `getTimezoneOffset()`, so US Pacific daylight time is `-420`.
-#[tauri::command(async)]
+#[richos_command::command]
 fn launch_state(state: State<AppState>, utc_offset_minutes: i32) -> LaunchStateView {
     // The same offset lets Rich's quota lines say a clock time (round 16: "until 2:17 AM").
     state.quota.set_utc_offset(utc_offset_minutes);
@@ -9374,7 +9376,7 @@ fn launch_state(state: State<AppState>, utc_offset_minutes: i32) -> LaunchStateV
 /// Called by the surface that drew it, so the ring holds what was on screen rather than
 /// what was chosen — the two differ whenever a draw is made and the render then declines
 /// (`splash.js` has three such paths, and all three leave `state.shown` false).
-#[tauri::command(async)]
+#[richos_command::command]
 fn launch_note_splash_shown(state: State<AppState>, id: String) -> Result<(), String> {
     state.launch.lock().unwrap().note_splash_shown(&id).map_err(|e| e.to_string())
 }
@@ -9436,7 +9438,7 @@ struct HomeEntityView {
 /// command reports what IS, and the settings surface has to list every company — including
 /// the ones he has hidden — or he could never unhide one. The count that decides whether the
 /// home screen draws a row at all is `visible`, and the home screen applies it.
-#[tauri::command(async)]
+#[richos_command::command]
 fn home_entity_row(state: State<AppState>) -> Vec<HomeEntityView> {
     // Lock order, everywhere in this file: config, then entity, then spine.
     let config = state.config.lock().unwrap();
@@ -9467,7 +9469,7 @@ fn home_entity_row(state: State<AppState>) -> Vec<HomeEntityView> {
 ///
 /// It REFUSES an unregistered id rather than storing a key nothing will ever read — the same
 /// fail-closed posture `choose_entity` takes, and for the same reason.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_home_entity_label(
     state: State<AppState>,
     entity_id: String,
@@ -9485,7 +9487,7 @@ fn set_home_entity_label(
 
 /// Show or hide one company in the home screen's row. Display only — the company, its
 /// threads and its records are untouched, and it is still everywhere else in the app.
-#[tauri::command(async)]
+#[richos_command::command]
 fn set_home_entity_visible(
     state: State<AppState>,
     entity_id: String,
@@ -9563,7 +9565,7 @@ fn registered_entity(state: &State<AppState>, entity_id: &str) -> Result<EntityI
 /// measured against the CEO's own corpus on 2026-09-06. That must never run on the IPC
 /// thread, and it is never on the boot path either — `home.js` calls it from an idle
 /// callback with the demonstration already on the screen.
-#[tauri::command(async)]
+#[richos_command::command]
 fn home_field_data(state: State<AppState>) -> serde_json::Value {
     fn no(reason: impl Into<String>) -> serde_json::Value {
         serde_json::json!({ "available": false, "reason": reason.into() })
@@ -9775,7 +9777,7 @@ fn reopen_window(app: &AppHandle) {
 ///
 /// The flag is what the `ExitRequested` arm reads on the second pass; without it the same
 /// arm would prevent the exit again and the app could never be quit at all.
-#[tauri::command(async)]
+#[richos_command::command]
 fn confirm_quit_and_stop(app: AppHandle, state: State<'_, AppState>) {
     state.quit_confirmed.store(true, std::sync::atomic::Ordering::SeqCst);
     app.exit(0);
@@ -9783,7 +9785,7 @@ fn confirm_quit_and_stop(app: AppHandle, state: State<'_, AppState>) {
 
 /// **He chose to keep working.** Nothing happens to the work, which is the point: the
 /// prevent came first and the question second, so it was never touched.
-#[tauri::command(async)]
+#[richos_command::command]
 fn cancel_quit(state: State<'_, AppState>) -> bool {
     state.quit_confirmed.store(false, std::sync::atomic::Ordering::SeqCst);
     true
@@ -9793,7 +9795,7 @@ fn cancel_quit(state: State<'_, AppState>) -> bool {
 /// user's choice and what the Mac reports about Codex now, read each time Settings opens: Codex
 /// found where the review finds it and signed in by its own `login status` (a few milliseconds;
 /// `richos_core::codex_reviews`). Asked in the environment the reviews run in.
-#[tauri::command(async)]
+#[richos_command::command]
 fn codex_reviews_status(state: State<'_, AppState>) -> richos_core::codex_reviews::Status {
     let probe = richos_core::codex_reviews::Probe::system(&richos_core::codex_reviews::search_path());
     richos_core::codex_reviews::status(&state.data_dir, &probe)
@@ -9802,7 +9804,7 @@ fn codex_reviews_status(state: State<'_, AppState>) -> richos_core::codex_review
 /// **The switch pressed.** On is refused while Codex is not installed and signed in (the row
 /// shows why, and nothing is written); off always goes through. The next review the app's
 /// review-watch starts reads it. The state after.
-#[tauri::command(async)]
+#[richos_command::command]
 fn codex_reviews_set(state: State<'_, AppState>, on: bool) -> Result<richos_core::codex_reviews::Status, String> {
     let probe = richos_core::codex_reviews::Probe::system(&richos_core::codex_reviews::search_path());
     richos_core::codex_reviews::set(&state.data_dir, &probe, on)
@@ -9829,6 +9831,9 @@ mod ipc_responsiveness_tests {
 
 #[cfg(test)]
 mod window_read_tests;
+
+#[cfg(test)]
+mod command_rule_tests;
 
 #[cfg(test)]
 mod turn_boundary_tests;
