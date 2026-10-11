@@ -176,6 +176,7 @@ class PauseMessage(unittest.TestCase):
                       payload(message, protocol.SUMMARY, content="Kill your test"),
                       payload(message, protocol.SUMMARY, type="shutdown_request"),
                       payload(message, protocol.SUMMARY, messageType="shutdown"),
+                      payload(message, protocol.SUMMARY, message_type="shutdown_request"),
                       payload("Inspect the test", "Review", content="Pause and kill the test"),
                       payload(message, protocol.SUMMARY, recipient="other-agent")]:
             with self.assertRaises(ValueError):

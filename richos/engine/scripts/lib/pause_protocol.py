@@ -198,6 +198,11 @@ def is_preview(alias, text):
     return 0 < len(head) < len(text) and text.startswith(head)
 
 
+# Every spelling of a SendMessage's kind: a control message is only ever a plain
+# message, never a shutdown request, whichever name the harness uses for the field.
+KIND_FIELDS = ("type", "messageType", "message_type")
+
+
 def validate_payload(payload):
     if payload.get("tool_name") != "SendMessage":
         return
@@ -209,7 +214,7 @@ def validate_payload(payload):
     # Messages reporting to the orchestrator are not instructions from it.
     target = ti.get("to", ti.get("recipient", ""))
     if target in ("main", "team-lead", "lead", "leader", "user") and all(
-            ti.get(key, "message") == "message" for key in ("type", "messageType")):
+            ti.get(key, "message") == "message" for key in KIND_FIELDS):
         return
     text = ti.get("message", ti.get("content"))
     summary = ti.get("summary", "")
@@ -233,7 +238,7 @@ def validate_payload(payload):
     # own preview of the message is not one.
     if "content" in ti and not is_preview(ti["content"], text):
         raise ValueError("pause content alias must equal the generated message")
-    if ti.get("type", "message") != "message" or ti.get("messageType", "message") != "message":
+    if any(ti.get(key, "message") != "message" for key in KIND_FIELDS):
         raise ValueError("a pause is a message, never a shutdown request")
 
 
