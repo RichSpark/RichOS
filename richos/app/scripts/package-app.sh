@@ -1075,6 +1075,23 @@ except Exception: print("")' 2>/dev/null || true)"
 fi
 
 # ---------------------------------------------------------------------------
+# THE COMPILE RUNS UNDER THE CPU GUARD'S release-build ROLE, BY DEFAULT.
+# ---------------------------------------------------------------------------
+# rustc's LLVM phase uses a core per jobserver token, and the guard's ordinary rule stops a
+# process above 3 cores for 10 s. On 2026-10-11 it stopped three engineers' development
+# builds (rustc at 4.5 to 7.3 cores) and each rebuilt by hand under
+# `proc_tree.py run <pid> --guard-role release-build`, which is what nightly-local.py does
+# for its build step (owned_command.py). The cargo build below now runs under that same
+# supervisor and role: the compiler gets the guard's longer window (cpu_guard.BUILD_WINDOW),
+# the limit still holds, and the tree is stopped if this script is. The supervisor is owned
+# by this script's pid. Nothing else here runs under it.
+build_launch=()
+proc_tree="$(cd "$app_dir/.." && pwd)/engine/scripts/lib/proc_tree.py"
+if [ -f "$proc_tree" ]; then
+  build_launch=(python3 "$proc_tree" run "$$" --guard-role release-build --)
+fi
+
+# ---------------------------------------------------------------------------
 # --dry-run: everything decided, nothing built.
 #
 # The signing configuration is the part of a release that is wrong for weeks
@@ -1111,6 +1128,7 @@ if [ -n "$dry_run" ]; then
     fi
   fi
   say "  bundle targets      : $bundles"
+  say "  build runs under    : ${build_launch[*]:-no supervisor ($proc_tree is missing), so the 10-second CPU guard rule applies}"
   if [ -n "$updater" ]; then
     say "  update artifacts    : ON — signed with $updater_key_desc"
     say "  update manifest     : ${RICHOS_UPDATE_BASE_URL:+at ${RICHOS_UPDATE_BASE_URL}}${RICHOS_UPDATE_BASE_URL:-NOT written (RICHOS_UPDATE_BASE_URL is unset, and a guessed URL is worse than none)}"
@@ -1359,7 +1377,11 @@ if [ -n "$source_stamp" ]; then
   say "  source commit       : $source_stamp"
 fi
 
-if ! (cd "$src_tauri" && env RICHOS_SOURCE_SHA="$source_stamp" cargo "${build_args[@]}"); then
+if [ "${#build_launch[@]}" -eq 0 ]; then
+  warn "  note: $proc_tree is missing, so this compile runs without the release-build role"
+  warn "  and the CPU guard may stop rustc after 10 s above 3 cores."
+fi
+if ! (cd "$src_tauri" && ${build_launch[@]+"${build_launch[@]}"} env RICHOS_SOURCE_SHA="$source_stamp" cargo "${build_args[@]}"); then
   warn ""
   warn "the build did not complete — nothing was packaged. The output above is the reason."
   exit 4
