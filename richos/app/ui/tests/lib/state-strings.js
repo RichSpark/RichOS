@@ -504,7 +504,8 @@ function rustStringLiterals(src) {
 ///   1. `ceo_message()` — richos-voice's own name for "the calm line the CEO sees"
 ///      (controller.rs:73). Every literal inside a function of that name is CEO-facing by
 ///      the codebase's own declaration.
-///   2. The `Err(String)` of a `#[tauri::command]`, and the `const … : &str` those errors
+///   2. The `Err(String)` of a window command (`#[richos_command::command]`, which expands
+///      to `#[tauri::command(async)]`), and the `const … : &str` those errors
 ///      are built from. `main.js` relays those verbatim: `String(e)` into the local notice
 ///      (`send()`), into `#composer-blocked` (`create_thread_in`) and into
 ///      `#unbound-view-detail` (`loadTimeline`). So a sentence written beside `Err(` or
