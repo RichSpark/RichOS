@@ -4045,6 +4045,33 @@ ENGINE = os.path.realpath(os.path.join(HERE, "..", ".."))
 
 
 class SecondReview_NoWorkLandsUnreviewed(Base):
+
+    def test_conflicting_reviews_cannot_be_erased_by_a_later_pass(self):
+        F = ws._fence_program()
+        tip = run('git', '-C', self.other, 'rev-parse', 'HEAD').stdout.strip()
+        rows = []
+        def record(rid, verdict, findings=(), earlier=(), recheck=''):
+            folder = os.path.join(self.env.root, rid)
+            os.makedirs(folder)
+            row = dict(id=rid, repo=self.other, tip=tip, trigger='handover', verdict=verdict,
+                       record=folder, recheck_of=recheck)
+            with open(os.path.join(folder, 'verdict.json'), 'w') as out:
+                json.dump(dict(answer=dict(findings=list(findings), earlier_findings=list(earlier)),
+                               earlier_findings_in=[dict(id=e['id']) for e in earlier]), out)
+            rows.append(row)
+        f = dict(blocks=True, priority=1, title='User data lost', files=['state.py'], evidence='fixture', fixture='')
+        record('first', 'changes-requested', [f])
+        record('late-pass', 'passed')
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'changes-requested')
+        record('unwitnessed', 'passed', earlier=[dict(id='first#1',status='withdrawn',note='opinion')])
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'changes-requested')
+        record('independent-resolution', 'passed', earlier=[dict(id='first#1',status='withdrawn',note='original authority inspected')], recheck='first')
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'passed')
+        record('other-blocker', 'changes-requested', [f])
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'changes-requested')
+        rows[-1]['repo'] = self.entity
+        self.assertEqual(F.review_of(rows, tip, self.other)[0]['verdict'], 'passed')
+
     """CEO §113 (2026-10-08): "A regular RichOS user can never be expected
     anything even remotely close to that. So, this all must be completely
     automated." Slice 3 of richos-hq docs/plans/2026-10-09-automatic-second-

@@ -1057,6 +1057,58 @@ def review_row_standing(row):
     return dict(row, verdict="changes-requested", unresolved_legacy_pass=True)
 
 
+def review_record(row):
+    try:
+        with open(os.path.join(row.get("record") or "", "verdict.json"), encoding="utf-8") as f:
+            record = json.load(f)
+        if not isinstance(record, dict):
+            return {}
+        return record
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def open_review_findings(rows):
+    """Finding identity survives duplicate reviews. Only witnessed resolutions
+    remove it. A same-source withdrawal must be an explicit independent recheck
+    carrying the original finding; a later PASS cannot erase another review.
+    """
+    opened, by_id = {}, {r.get("id"): r for r in rows}
+    for row in rows:
+        record = review_record(row)
+        answer = record.get("answer") or {}
+        parent = by_id.get(row.get("recheck_of"))
+        parent_record = review_record(parent) if parent else {}
+        parent_ids = {"%s#%d" % (parent.get("id"), n) for n, _ in enumerate(
+                      (parent_record.get("answer") or {}).get("findings") or [], 1)} if parent else set()
+        parent_ids.update(e.get("id") for e in parent_record.get("earlier_findings_in") or [])
+        witnessed = {e.get("id") for e in record.get("earlier_findings_in") or []}
+        for e in answer.get("earlier_findings") or []:
+            fid = e.get("id")
+            if fid not in opened or fid not in witnessed:
+                continue
+            old_tip = opened[fid].get("source_tip")
+            same_source = old_tip == row.get("tip")
+            allowed = not same_source or (parent and parent.get("tip") == old_tip and fid in parent_ids)
+            if e.get("status") in ("fixed", "withdrawn") and e.get("note", "").strip() and allowed:
+                opened.pop(fid)
+            elif e.get("status") == "still-open" and e.get("blocks") is not False:
+                opened[fid]["blocks"] = True
+        findings = answer.get("findings") or []
+        for n, finding in enumerate(findings, 1):
+            if not isinstance(finding, dict):
+                continue
+            opened["%s#%d" % (row.get("id"), n)] = dict(finding,
+                blocks=finding.get("blocks", row.get("verdict") == "changes-requested"), source_tip=row.get("tip"),
+                filed=row.get("verdict") == "passed" and finding.get("blocks") is False)
+        if row.get("verdict") == "changes-requested" and not record:
+            opened["%s#unavailable" % row.get("id")] = {
+                "priority": 1, "blocks": True, "title": "Blocking review details unavailable",
+                "files": [], "evidence": "Recover the original review record: %s" % row.get("record"),
+                "fixture": "", "source_tip": row.get("tip")}
+    return opened
+
+
 def review_of(rows, tip, repo):
     """(the verdict row that decides `tip` in `repo`, the newest mid-job row on
     it). A row of another repository, or with no repository, never counts: the
@@ -1065,11 +1117,21 @@ def review_of(rows, tip, repo):
     mine = [review_row_standing(r) for r in rows if review_row_belongs(r, ident)]
     land = [r for r in mine if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS]
     mid = [r for r in mine if r.get("tip") == tip and r.get("trigger") in REVIEW_MID_JOB]
-    return (land[-1] if land else None), (mid[-1] if mid else None)
+    effective = dict(land[-1]) if land else None
+    if effective:
+        opened = open_review_findings(land)
+        blocked = {k: f for k, f in opened.items() if f.get("blocks") is not False}
+        if blocked:
+            effective.update(verdict="changes-requested", blocking=len(blocked),
+                             effective_findings=blocked)
+    return effective, (mid[-1] if mid else None)
 
 
 def review_findings(row, limit=6):
     """[(priority, title, files)] of a verdict, from its record."""
+    if row.get("effective_findings"):
+        return [(f.get("priority"), f.get("title"), ", ".join(f.get("files") or []))
+                for f in list(row["effective_findings"].values())[:limit]]
     try:
         with open(os.path.join(row.get("record") or "", "verdict.json"), encoding="utf-8") as fh:
             answer = (json.load(fh) or {}).get("answer") or {}

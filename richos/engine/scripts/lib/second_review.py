@@ -461,23 +461,10 @@ def earlier_findings(work_key, tip, repo, repo_id=""):
     files it twice."""
     rows = [r for r in read_ledger() if r.get("work") == work_key and r.get("verdict")
             and same_repo(r, repo, repo_id)]
-    if not rows:
-        return []
-    last = rows[-1]
-    try:
-        with open(os.path.join(state_root(), "reviews", last["id"], "verdict.json"), encoding="utf-8") as f:
-            v = json.load(f)
-    except (OSError, ValueError, KeyError):
-        return []
-    out = []
-    carried = {e.get("id"): e for e in v.get("earlier_findings_in") or []}
-    for e in (v.get("answer") or {}).get("earlier_findings") or []:
-        if e.get("status") == "still-open" and e.get("id") in carried:
-            out.append((e["id"], carried[e["id"]]))
-    filed = last.get("verdict") == "passed"
-    for i, f in enumerate((v.get("answer") or {}).get("findings") or [], 1):
-        out.append(("%s#%d" % (last["id"], i), dict(f, filed=True) if filed else f))
-    return out
+    # The gate and the next reviewer see the same unresolved findings, including
+    # conflicting duplicate reviews. Never carry only the last writer's subset.
+    import operator_fences as fences
+    return list(fences.open_review_findings(rows).items())
 
 
 # ---------------------------------------------------------------------------
