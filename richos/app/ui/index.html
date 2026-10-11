@@ -206,7 +206,53 @@
           </button>
         </div>
 
-        <div id="assertiveness-popover" class="popover" data-dismiss="escape" hidden>
+        <div id="assertiveness-popover" class="popover prefs" data-dismiss="escape" role="dialog" aria-labelledby="prefs-title" hidden>
+          <!-- ROUND 23 (richos-hq design/mockups/rounds/round-23): Preferences gets a heading
+               and two columns, so a fifth section does not turn the popover into a scrolling
+               tower, and "Rich's model" is the first thing in it (CEO §119: "in general
+               settings, not in quick settings" — this gear is the general settings; the
+               sliders menu at top right is the quick settings and is unchanged). -->
+          <header class="prefs-head"><p class="prefs-title" id="prefs-title">Preferences</p></header>
+          <div class="prefs-cols">
+          <div class="prefs-col">
+          <!-- RICH'S MODEL (§119): two rows, each Opus at high effort (the default) or Fable.
+               The app only ever names Rich (§110's addendum: Stu is never named in the app),
+               so the rows are the two halves of Rich, named by what each does: "talks with
+               you" is the conversation, "directs your team" is the team's back end.
+
+               HELD WHILE OPEN, SAVED AND APPLIED ON CLOSE (the CEO's addendum to §119):
+               "Closing the preferences panel IS the confirmation that the settings chosen
+               there now need to be saved and implemented." A click here changes only what
+               this popover shows; closing it writes both rows (`set_lease_models`) and says
+               what is now true in one line. There is no confirm step. -->
+          <section class="md" id="md" aria-labelledby="md-title">
+            <p class="popover-title" id="md-title">Rich's model</p>
+            <div class="md-row">
+              <p class="md-who" id="md-rich-who"><span>When he <b>talks with you</b></span><span class="md-state" id="md-rich-state">default</span></p>
+              <div class="seg" id="md-rich" data-who="rich" data-v="opus" role="radiogroup" aria-labelledby="md-title md-rich-who">
+                <span class="seg-thumb" aria-hidden="true"></span>
+                <button class="seg-opt" type="button" role="radio" data-v="opus" aria-checked="true">Opus · high effort</button>
+                <button class="seg-opt" type="button" role="radio" data-v="fable" aria-checked="false" tabindex="-1">Fable</button>
+              </div>
+            </div>
+            <div class="md-row">
+              <p class="md-who" id="md-stu-who"><span>When he <b>directs your team</b></span><span class="md-state" id="md-stu-state">default</span></p>
+              <div class="seg" id="md-stu" data-who="stu" data-v="opus" role="radiogroup" aria-labelledby="md-title md-stu-who">
+                <span class="seg-thumb" aria-hidden="true"></span>
+                <button class="seg-opt" type="button" role="radio" data-v="opus" aria-checked="true">Opus · high effort</button>
+                <button class="seg-opt" type="button" role="radio" data-v="fable" aria-checked="false" tabindex="-1">Fable</button>
+              </div>
+            </div>
+            <p class="md-note" id="md-note" aria-live="polite"></p>
+          </section>
+
+          <div class="popover-divider" role="presentation"></div>
+          <p class="popover-title">How much should Rich interrupt you?</p>
+          <label class="popover-option"><input type="radio" name="assertiveness" value="quiet" /> Quiet</label>
+          <label class="popover-option"><input type="radio" name="assertiveness" value="balanced" /> Balanced</label>
+          <label class="popover-option"><input type="radio" name="assertiveness" value="urgent-only" /> Only when it's urgent</label>
+
+          <div class="popover-divider" role="presentation"></div>
           <!-- YOUR NAME — the field the rail footer's unset state points at.
 
                It is here rather than in a settings screen of its own because this popover
@@ -224,12 +270,8 @@
             aria-label="Your name"
           />
           <p class="popover-hint" id="user-name-hint">Shown at the foot of the rail, with your initials.</p>
-
-          <div class="popover-divider" role="presentation"></div>
-          <p class="popover-title">How much should Rich interrupt you?</p>
-          <label class="popover-option"><input type="radio" name="assertiveness" value="quiet" /> Quiet</label>
-          <label class="popover-option"><input type="radio" name="assertiveness" value="balanced" /> Balanced</label>
-          <label class="popover-option"><input type="radio" name="assertiveness" value="urgent-only" /> Only when it's urgent</label>
+          </div>
+          <div class="prefs-col">
 
           <!-- §3.3: "v1 access = a keyboard shortcut, plus one line in Settings." This is
                the line. It USED TO BE the global default and nothing else, with the keyboard
@@ -243,8 +285,8 @@
                the argument that `#techy-hint` below already named a scope for it — and that
                argument quoted this app's own sentence back as though it were the CEO's. His
                has no exception in it, so ⌘⇧T opens the same sheet with the same first
-               option preselected and Enter confirms, and the hint promises the choice. -->
-          <div class="popover-divider" role="presentation"></div>
+               option preselected and Enter confirms, and the hint promises the choice.
+               (Round 23: it heads the right-hand column now, so it has no divider above it.) -->
           <!-- THE LABEL CHANGED ON 2026-09-18 AND HAD TO. It read "In every conversation"
                while this switch WAS the global default and nothing else. Since the CEO's
                §7.1 answer it reads and writes the RESOLVED state of the conversation he is
@@ -322,8 +364,8 @@
           <div class="popover-divider" role="presentation"></div>
           <p class="popover-title">Splash screen</p>
           <label class="popover-option"><input type="checkbox" id="splash-enabled" /> Show it when RichOS starts</label>
-
-
+          </div>
+          </div>
         </div>
 
         <!-- Draggable divider (§2.1: both vertical dividers are user-draggable). Keyboard

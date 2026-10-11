@@ -4861,34 +4861,167 @@ async function syncAssertivenessFromBackend() {
     // Unwired (mock harness): the localStorage-only value already painted correctly.
   }
 }
+// ---------------------------------------------------------------------------------------
+// RICH'S MODEL (CEO §119; round 23). Two rows: "talks with you" (the conversation, Rich) and
+// "directs your team" (the team's back end, Stu in the record, never named in the app, §110),
+// each Opus at high effort (the default) or Fable. Backed by `get_lease_models` /
+// `set_lease_models` (main.rs -> richos-core's config.rs).
+//
+// HELD WHILE PREFERENCES IS OPEN, SAVED AND APPLIED WHEN IT CLOSES. The CEO's addendum, his
+// words: "No, there's no need for any confirm step. The switch simply shouldn't happen while
+// the user is still on that preferences screen. Closing the preferences panel IS the
+// confirmation that the settings chosen there now need to be saved and implemented." So a
+// click on a row changes `modelDraft` and what the popover shows, and nothing else: no
+// command, no write, no toast. `commitModelChoice()` runs on every close (the gear, Escape, a
+// click outside) and is the one place the choice leaves this file. The leases take it at their
+// next boundary — his next reply, the team's next job (`spine.rs`'s `MODEL_CHANGED`,
+// `work_host.rs`'s `renew_if_model_changed`) — because a lease is never swapped mid-turn.
+// ---------------------------------------------------------------------------------------
+const MODEL_ROWS = [
+  ["rich", "md-rich", "md-rich-state"],
+  ["stu", "md-stu", "md-stu-state"],
+];
+const MODEL_NOTE = {
+  "opus,opus":
+    "Opus at high effort is the default for both. Fable is more capable than Opus and uses up your Claude limits faster.",
+  "fable,opus":
+    "<strong>Rich talks with you on Fable.</strong> Fable is more capable than Opus and uses up your Claude limits faster.",
+  "opus,fable":
+    "<strong>Rich directs your team on Fable.</strong> Fable is more capable than Opus and uses up your Claude limits faster. Your teammates keep their own models.",
+  "fable,fable":
+    "<strong>Rich is on Fable for both.</strong> Fable is more capable than Opus and uses up your Claude limits faster, on every reply and every piece of work he directs.",
+};
+const MODEL_TOAST = {
+  rich: {
+    fable: "Rich now talks with you on Fable.",
+    opus: "Rich talks with you on Opus at high effort again, the default.",
+  },
+  stu: {
+    fable: "Rich now directs your team on Fable.",
+    opus: "Rich directs your team on Opus at high effort again, the default.",
+  },
+};
+/// What is saved, as the store last said. The default until the first read answers.
+let modelSaved = { rich: "opus", stu: "opus" };
+/// What Preferences shows while it is open. Equal to `modelSaved` whenever it is closed.
+let modelDraft = { ...modelSaved };
+function modelValue(v) {
+  return v === "fable" ? "fable" : "opus";
+}
+function paintModelRows(lit) {
+  for (const [who, segId, stateId] of MODEL_ROWS) {
+    const seg = el(segId);
+    if (!seg) continue;
+    const v = modelDraft[who];
+    seg.dataset.v = v;
+    for (const opt of seg.querySelectorAll(".seg-opt")) {
+      const on = opt.dataset.v === v;
+      opt.setAttribute("aria-checked", String(on));
+      opt.tabIndex = on ? 0 : -1;
+    }
+    el(stateId).textContent = v === "opus" ? "default" : "";
+    if (lit === who && v === "fable") {
+      seg.classList.remove("is-lit");
+      void seg.offsetWidth;
+      seg.classList.add("is-lit");
+    }
+  }
+  const key = modelDraft.rich + "," + modelDraft.stu;
+  const note = el("md-note");
+  if (note) {
+    note.innerHTML = MODEL_NOTE[key];
+    note.classList.toggle("is-fable", key !== "opus,opus");
+  }
+}
+function pickModel(who, v, focus) {
+  if (modelDraft[who] === v) return;
+  modelDraft[who] = v;
+  paintModelRows(who);
+  if (focus) el(who === "rich" ? "md-rich" : "md-stu").querySelector(`[data-v="${v}"]`).focus();
+}
+(function initModelRows() {
+  for (const seg of assertivenessPopover.querySelectorAll(".seg")) {
+    const who = seg.dataset.who;
+    for (const opt of seg.querySelectorAll(".seg-opt")) {
+      opt.addEventListener("click", () => pickModel(who, opt.dataset.v, false));
+    }
+    // A radio group: Tab reaches the chosen half; the arrows, Home and End move the choice.
+    seg.addEventListener("keydown", (e) => {
+      if (!["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"].includes(e.key)) return;
+      e.preventDefault();
+      const back = e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "Home";
+      pickModel(who, back ? "opus" : "fable", true);
+    });
+  }
+  paintModelRows(null);
+})();
+/// Read the stored choice. Paints it only while nothing has been picked since Preferences
+/// opened, so a slow answer never overwrites a click.
+async function syncModelsFromBackend() {
+  try {
+    const stored = await Bridge.invoke("get_lease_models");
+    const untouched = modelDraft.rich === modelSaved.rich && modelDraft.stu === modelSaved.stu;
+    modelSaved = { rich: modelValue(stored && stored.rich), stu: modelValue(stored && stored.stu) };
+    if (untouched || assertivenessPopover.hidden) {
+      modelDraft = { ...modelSaved };
+      paintModelRows(null);
+    }
+  } catch (_e) {
+    // Unwired or unreadable: the rows keep what they show, which is the last known choice.
+  }
+}
+/// Preferences is closing: save and apply what it shows, and say what is now true. Nothing to
+/// do when it shows what is already saved, which is also the only case with no toast.
+function commitModelChoice() {
+  const next = { ...modelDraft };
+  const changed = ["rich", "stu"].filter((who) => next[who] !== modelSaved[who]);
+  if (changed.length === 0) return;
+  const before = modelSaved;
+  modelSaved = next;
+  Bridge.invoke("set_lease_models", { rich: next.rich, stu: next.stu })
+    .then(() => {
+      if (window.RichSettings) window.RichSettings.toast(changed.map((who) => MODEL_TOAST[who][next[who]]).join(" "));
+    })
+    .catch(() => {
+      // Not saved: the leases keep the model they are on, and the rows go back to say so.
+      modelSaved = before;
+      modelDraft = { ...before };
+      paintModelRows(null);
+      if (window.RichSettings) window.RichSettings.toast("Rich's model could not be saved, so nothing changed.");
+    });
+}
+
 /// Open the preferences popover, from the gear or from the unset identity row. Named
 /// because there are now two entrances and an inline listener cannot be one of them.
-function openAssertivenessPopover() {
+function openAssertivenessPopover(opts) {
   if (assertivenessPopover.hidden === false) return;
+  modelDraft = { ...modelSaved };
+  paintModelRows(null);
   assertivenessPopover.hidden = false;
   settingsBtn.setAttribute("aria-expanded", "true");
+  // Re-read the retention window and the model choice every time the popover OPENS, not just
+  // at boot: both can be changed by editing `config.json`, and the popover is the only screen
+  // that claims to say what they are — a stale claim about a setting is worse than no claim.
+  // Each read is one command over a file of a few hundred bytes, on an explicit click.
   syncRetentionFromBackend();
+  syncModelsFromBackend();
+  if (opts && opts.focusName === false) return;
   const name = el("user-name-input");
   if (name) name.focus();
 }
 /// Close it, and put `aria-expanded` back — the two halves that were written out three times
 /// and are now written once, because the Escape handler is the third caller and a copy that
 /// forgot the attribute would leave the gear announcing an open popover that is not there.
+/// Every close saves and applies the model choice (round 23), so every close comes here.
 function closeAssertivenessPopover() {
   if (assertivenessPopover.hidden) return;
   assertivenessPopover.hidden = true;
   settingsBtn.setAttribute("aria-expanded", "false");
+  commitModelChoice();
 }
 settingsBtn.addEventListener("click", () => {
-  const open = assertivenessPopover.hidden === false;
-  assertivenessPopover.hidden = open;
-  settingsBtn.setAttribute("aria-expanded", String(!open));
-  // Re-read the retention window every time the popover OPENS, not just at boot. It is the
-  // one preference in here that a person can also change by editing `config.json`, and the
-  // popover is the only screen that claims to say what it is — a stale claim about a setting
-  // that deletes is worse than no claim. The read is one command over a file of a few
-  // hundred bytes, off any hot path, on an explicit click.
-  if (!open) syncRetentionFromBackend();
+  if (assertivenessPopover.hidden === false) closeAssertivenessPopover();
+  else openAssertivenessPopover({ focusName: false });
 });
 document.addEventListener("click", (e) => {
   if (railIdentityEl && railIdentityEl.contains(e.target)) return;
@@ -9098,6 +9231,7 @@ async function init() {
   await syncAppearanceFromBackend();
   await renderUserIdentity();
   syncAssertivenessFromBackend();
+  syncModelsFromBackend();
   // The GLOBAL techy default at launch, so the Settings line is honest before any thread is
   // opened. The per-thread answer arrives with the thread (`openThread`).
   await refreshTechy("");
