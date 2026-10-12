@@ -936,7 +936,38 @@ def _match_prefix(path, prefixes):
 
 # CHECK 5: literal machine assumptions. Baseline is temporary tracked debt,
 # not a host-local override. Archived records stay out as whole trees.
-def check_machine_paths(tree, baseline_path):
+def committed_machine_baseline(tree):
+    # Native commit projections and a land both retain Git history. Main is the
+    # landing base; generic adopters without it use their current HEAD.
+    rc, _out, _err = git(tree.root, "rev-parse", "--verify", "refs/heads/main^{commit}")
+    ref = "refs/heads/main" if rc == 0 else "HEAD"
+    for declaration in (".publication-completeness", ".richos/publication-completeness"):
+        rc, text, _err = git(tree.root, "show", ref + ":" + declaration)
+        if rc:
+            continue
+        for line in text.splitlines():
+            key, separator, value = line.strip().partition("=")
+            if not separator or key != "MACHINE_PATH_BASELINE":
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            else:
+                value = value.split("#", 1)[0].strip()
+            rc, body, _err = git(tree.root, "show", ref + ":" + value)
+            if rc:
+                raise Broken("committed machine baseline cannot be read")
+            try:
+                old = json.loads(body)
+                if not isinstance(old, dict):
+                    raise ValueError("expected an object")
+                return old
+            except ValueError as exc:
+                raise Broken("invalid committed machine baseline: " + str(exc))
+    return None  # the first guard land introduces reviewed migration debt
+
+
+def check_machine_paths(tree, baseline_path, previous=None):
     baseline = {}
     if baseline_path:
         if baseline_path not in tree.files:
@@ -953,6 +984,14 @@ def check_machine_paths(tree, baseline_path):
                     raise ValueError("expected prefix counts for " + path)
         except (TypeError, ValueError) as exc:
             raise Broken("invalid machine path baseline: " + str(exc))
+    if previous is None and hasattr(tree, "root"):
+        previous = committed_machine_baseline(tree)
+    if previous is not None:
+        for path, counts in baseline.items():
+            for prefix, count in counts.items():
+                if count > previous.get(path, {}).get(prefix, 0):
+                    finding("MACHINE-PATH-GROWTH", path,
+                            "%s migration debt may only shrink relative to the committed base" % prefix)
     actual = {}
     for path in sorted(tree.files):
         if path == baseline_path or not machine_scope(path):
