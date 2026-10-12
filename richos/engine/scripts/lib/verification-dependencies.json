@@ -2156,7 +2156,7 @@
     },
     "scripts/lib/mutation-focus.test.sh": {
       "source": "scripts/lib/mutation-focus.test.sh",
-      "sha256": "01e61a7ba99c8e6187e7eafc483b0e06025a6e1456da4a58e38b6f8a30ec8365",
+      "sha256": "ea41a1b4f342d306d6ba359c9d3904af5d9ce7b784a5503edda89edca1749b4e",
       "evidence": "Creates a tiny engine with literal PROTECTED_PATHS and feature variables, then executes generated sequential/named/parallel suites under the real mutation helper. Its only eval receives fixed RULE_A/RULE_B assertions. Copied helper directories are transport; discovered production scripts are not run. All worker and supervisor helpers are separately declared.",
       "keys": [],
       "edges": [
@@ -2266,7 +2266,7 @@
     },
     "scripts/run-all-tests.test.sh": {
       "source": "scripts/run-all-tests.test.sh",
-      "sha256": "8d777240b1638a6b21e983db3ce5ae16d9081d586354a1bced498723ecc413a5",
+      "sha256": "049dd09ad703fdb7cfdba52c1a865dda7cc220e06e86daafbcf7909e486ed021",
       "evidence": "Copies the real serial runner and finite helpers into generated Git repositories containing literal config and tiny generated clean/leaking suites. Every runner invocation changes cwd to that fixture engine. The real config is never copied or compared.",
       "keys": [],
       "edges": [
@@ -4168,7 +4168,7 @@
     },
     "scripts/hooks/guard-worktree-isolation.test.sh": {
       "source": "scripts/hooks/guard-worktree-isolation.test.sh",
-      "sha256": "5988029bb00a5a61a38887d9c866c2d3b4ef1fb270851a3f3ee7002bce2cee8f",
+      "sha256": "8e9bdcf7b940c9070d803c74537d62b7ad202647d7cab33f32ddbf8fa6c247bc",
       "evidence": "Calls the real guard against the real engine adoption/config/model roster before additional literal private-config cases. Other cases copy real configuration unchanged, so private directories do not remove these dependencies. Private Git worktrees and registry records exercise register-cc/confirm-cc, integration, hook and discard; their real engine cleanup settings remain dependencies. Copies of lifecycle/sealed-worktree are inspected for presence/mode only. No model agents are launched and no nested mutation suite is run. Internal mutation scopes select existing assertions with their prerequisite fixture groups; the no-argument invocation still executes the complete suite.",
       "keys": [],
       "edges": [
@@ -5051,7 +5051,7 @@
     },
     "scripts/lib/operator_fences_admin.py#status": {
       "source": "scripts/lib/operator_fences_admin.py",
-      "sha256": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+      "sha256": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
       "evidence": "Status and declaration-check parse OPERATOR_FENCES and, to compare it with each launcher's holders, LAND_LEASE_HOLDERS from the explicit entity config. Remaining local calls read registry JSON, launcher text, file hashes, chain directory entries and Git hooksPath, and test each declared holder path for existence; no launcher, chain member or holder executes. The other config assignments parsed into the declaration dictionary are unused by status. Renewed 2026-10-09 (second review, slice 3): status also parses SECOND_REVIEW_REPOS from the same explicit entity config, to compare each launcher's baked review ledger with it. Renewed 2026-10-09 (review rv-20261009T052655Z-daf09e19-0bc6): SECOND_REVIEW_REPOS is no longer parsed as text. operator_fences.review_repos, its one reader, sources the entity's orchestration.config in a clean bash (env cleared to HOME, PATH, LC_ALL and TMPDIR from the caller's environment; cwd the config's directory; stdin /dev/null; its own process group, killed after REVIEW_READ_SECONDS) and prints only that key's value; the config is a file the engine's hooks already source. Only SECOND_REVIEW_REPOS is taken from it. No new configuration key and no new dynamic import. Off validates the native operator using the existing holder policy, requires a recorded reason and appends private setting audit before mutation. Installed recovery reader identity is compared at status. Neither path imports an executable from evidence.",
       "keys": [
         "OPERATOR_FENCES",
@@ -5092,7 +5092,7 @@
     },
     "scripts/lib/operator_fences_admin.py#holders-notice": {
       "source": "scripts/lib/operator_fences_admin.py",
-      "sha256": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+      "sha256": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
       "evidence": "cmd_holders_notice and holder_problems read only the named repositories' reference-transaction launchers as text and test each declared holder path for existence; no orchestration.config is read (the declaration comparison is status's). It prints sentences and exits 0; no launcher, chain member or holder executes. Off validates the native operator using the existing holder policy, requires a recorded reason and appends private setting audit before mutation. Installed recovery reader identity is compared at status. Neither path imports an executable from evidence.",
       "keys": [],
       "edges": [
@@ -9129,7 +9129,7 @@
     },
     "scripts/lib/operator_fences_admin.py#fixture-admin": {
       "source": "scripts/lib/operator_fences_admin.py",
-      "sha256": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+      "sha256": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
       "evidence": "All admin bodies reviewed. Reads three named keys from explicit entity configuration, copies the fixed program and renders the fixed launcher. Registry and hook files are data in admin; copied hooks do not execute here. Renewed 2026-10-09 (second review, slice 3): install also reads SECOND_REVIEW_REPOS and bakes the review ledger path (or an empty value) into the launcher; nothing is executed from it. Renewed 2026-10-09 (review rv-20261009T033652Z-f3bfe22f-9372, finding 2): install also records the entity in each repository's registry entry, as data the land command reads. Renewed 2026-10-09 (review rv-20261009T052655Z-daf09e19-0bc6): SECOND_REVIEW_REPOS is no longer parsed as text. operator_fences.review_repos, its one reader, sources the entity's orchestration.config in a clean bash (env cleared to HOME, PATH, LC_ALL and TMPDIR from the caller's environment; cwd the config's directory; stdin /dev/null; its own process group, killed after REVIEW_READ_SECONDS) and prints only that key's value; the config is a file the engine's hooks already source. Only SECOND_REVIEW_REPOS is taken from it. No new configuration key and no new dynamic import. Off validates the native operator using the existing holder policy, requires a recorded reason and appends private setting audit before mutation. Installed recovery reader identity is compared at status. Neither path imports an executable from evidence.",
       "keys": [
         "OPERATOR_FENCES",
@@ -9915,7 +9915,7 @@
     },
     "scripts/operator-fences.test.sh": {
       "source": "scripts/operator-fences.test.sh",
-      "sha256": "c5dd2f5105599f418d65bf82ac97f654ade67abde7f0a743117a0c49c3541e42",
+      "sha256": "3b15a33cd78d25d47488772929c2c113b8f8a1b72614e3c5ceb80e85b65df1d9",
       "evidence": "Full standalone suite and fixed shell-server commands reviewed: private literal entity settings, Git repositories, fence/lease state and ingress payloads. Exercises reference transaction callbacks, restore intents and land locks without launching model agents. F34 runs the fixed scripts/lib/operator-fences-holders.test.py once, outside the per-git loop.",
       "keys": [],
       "edges": [
@@ -12166,7 +12166,7 @@
     },
     "scripts/ci-shard.test.sh": {
       "source": "scripts/ci-shard.test.sh",
-      "sha256": "b03c4cdffe139282d951e15421ce2136113bd4d4dc76d4e601df5a884b63823e",
+      "sha256": "ada9ae80ca30e99f54088180e20c254a5fcd53615df1cae2aedea328803ad2f4",
       "evidence": "Full synthetic-engine fixture review: copies only runner/inventory/receipt/canary/process helpers and constructs literal suites, predicates and weight tables. No orchestration.config is copied or sourced. The allocator fixture sources scratch.sh with environment/default settings. Nested receipt verification uses emit/plain verify, without --proof-run; the normal engine-unit launcher sets RICHOS_PROOF_RUN only for its separate receipt item.",
       "keys": [],
       "edges": [
@@ -12470,7 +12470,7 @@
     },
     "scripts/lib/runner-boundaries.test.py": {
       "source": "scripts/lib/runner-boundaries.test.py",
-      "sha256": "47856083d006d7e57950f04ae2a9ba470cef7432c8cca9534594e11cd450daa7",
+      "sha256": "e6b12515f14cd287c06d4d9794cc6574710092f685d515cc60c1c2ae2963e5f7",
       "evidence": "Creates private synthetic engine with finite copied runner helpers and literal generated suites. Invokes shard and serial runners, plain receipt verify and direct process/pass APIs. No live suite inventory or orchestration config is copied or evaluated.",
       "keys": [],
       "edges": [
@@ -16799,7 +16799,7 @@
         "scripts/hooks/guard-workspace-gate.sh": "704f1516e9337a8dcdf4589fd5b74473bffffcb694c1460fa16bb43a4a2b802f",
         "scripts/hooks/guard-worktree-isolation.mutation.sh": "78c0a853cbbffd9329395faadcb69527aeaf6c12b17b45afefbbcecab995cff8",
         "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
-        "scripts/hooks/guard-worktree-isolation.test.sh": "5988029bb00a5a61a38887d9c866c2d3b4ef1fb270851a3f3ee7002bce2cee8f",
+        "scripts/hooks/guard-worktree-isolation.test.sh": "8e9bdcf7b940c9070d803c74537d62b7ad202647d7cab33f32ddbf8fa6c247bc",
         "scripts/hooks/guard-worktree-removal.mutation.sh": "fd6a2fcd7355f73ecb051035a5dafcd54016daee52098f2314d4d5c79e62ed7d",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/hooks/guard-worktree-removal.test.sh": "2b7b5c289305b351e5e5f911d5bc68f5e257e6242ed769f22db04190ff97fcba",
@@ -16842,7 +16842,7 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
         "scripts/lib/operator_fences.py": "3c18b2da638441da009578455da631b7d04c325aa40fa682360b5ad6e531b556",
-        "scripts/lib/operator_fences_admin.py": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+        "scripts/lib/operator_fences_admin.py": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
         "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
         "scripts/lib/proc_tree.py": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
@@ -17394,7 +17394,7 @@
         "scripts/lib/operator-fences-fixture.sh": "cb872b1fb06d8d090feb2b06dc9895147e88efff741d6d3187b2a44e7a6c60af",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/operator-fences.sh": "968df58f0cbfe151759ef3794970c4ae5fd382a40a2df1ae7226bac834ef40db",
-        "scripts/lib/operator_fences_admin.py": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+        "scripts/lib/operator_fences_admin.py": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
         "scripts/lib/operator_fences.py": "3c18b2da638441da009578455da631b7d04c325aa40fa682360b5ad6e531b556",
         "mega-lander/workspaces.py": "9ee54e5a5d1467da46c6c76ce6c226bba0acdcd4046f194d246daa689975ff73",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
@@ -17729,7 +17729,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "968df58f0cbfe151759ef3794970c4ae5fd382a40a2df1ae7226bac834ef40db",
         "scripts/lib/operator_fences.py": "3c18b2da638441da009578455da631b7d04c325aa40fa682360b5ad6e531b556",
-        "scripts/lib/operator_fences_admin.py": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+        "scripts/lib/operator_fences_admin.py": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -18012,7 +18012,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "968df58f0cbfe151759ef3794970c4ae5fd382a40a2df1ae7226bac834ef40db",
         "scripts/lib/operator_fences.py": "3c18b2da638441da009578455da631b7d04c325aa40fa682360b5ad6e531b556",
-        "scripts/lib/operator_fences_admin.py": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+        "scripts/lib/operator_fences_admin.py": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -18070,7 +18070,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "968df58f0cbfe151759ef3794970c4ae5fd382a40a2df1ae7226bac834ef40db",
         "scripts/lib/operator_fences.py": "3c18b2da638441da009578455da631b7d04c325aa40fa682360b5ad6e531b556",
-        "scripts/lib/operator_fences_admin.py": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+        "scripts/lib/operator_fences_admin.py": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
@@ -18128,7 +18128,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/operator-fences.sh": "968df58f0cbfe151759ef3794970c4ae5fd382a40a2df1ae7226bac834ef40db",
         "scripts/lib/operator_fences.py": "3c18b2da638441da009578455da631b7d04c325aa40fa682360b5ad6e531b556",
-        "scripts/lib/operator_fences_admin.py": "273ef723c8a059247d75767067d29a11c4a2311a7a34f63d375c3ef06298898f",
+        "scripts/lib/operator_fences_admin.py": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",

@@ -239,9 +239,10 @@ def install_one(repo, entity, decl):
     program = os.path.join(program_dir, "operator_fences.py")
     shutil.copyfile(PROGRAM_SOURCE, program)
     # The reference-transaction fence and managed land use the same recovery
-    # acceptance predicate. Ship its standard-library-only state reader beside
+    # acceptance predicate. Ship its state reader and settings dependency beside
     # the standalone fence rather than duplicating the predicate.
     shutil.copyfile(os.path.join(HERE, "recovery.py"), os.path.join(program_dir, "recovery.py"))
+    shutil.copyfile(os.path.join(HERE, "machine_settings.py"), os.path.join(program_dir, "machine_settings.py"))
     os.chmod(program, 0o755)  # copyfile carries no mode; check_one refuses a fence program git cannot run
     digest = F.file_digest(program)
     holders = " ".join(decl.get("LAND_LEASE_HOLDERS", "").split())
@@ -372,10 +373,11 @@ def check_one(repo, mode, decl=None):
     if F.file_digest(conf.get("PROGRAM", "")) != F.file_digest(PROGRAM_SOURCE):
         problems.append("%s: the installed fence program differs from the engine's; run operator-fences.sh "
                         "install" % repo)
-    recovery_source = os.path.join(HERE, "recovery.py")
-    recovery_installed = os.path.join(os.path.dirname(conf.get("PROGRAM") or ""), "recovery.py")
-    if os.path.exists(recovery_source) and F.file_digest(recovery_installed)!=F.file_digest(recovery_source):
-        problems.append("%s: the installed recovery reader differs from the engine; run operator-fences.sh install" % repo)
+    for name in ("recovery.py", "machine_settings.py"):
+        source = os.path.join(HERE, name)
+        installed = os.path.join(os.path.dirname(conf.get("PROGRAM") or ""), name)
+        if os.path.exists(source) and F.file_digest(installed) != F.file_digest(source):
+            problems.append("%s: installed %s differs from the engine; run operator-fences.sh install" % (repo, name))
     ok, hooks_path = chain_reachable(paths["main"])
     if not ok:
         problems.append("%s: core.hooksPath=%s does not reach the launcher" % (repo, hooks_path))

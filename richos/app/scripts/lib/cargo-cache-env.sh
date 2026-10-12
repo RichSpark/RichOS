@@ -7,6 +7,12 @@ richos_cargo_enable() {
   machine_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../engine/scripts/lib" && pwd -P)" || return 1
   # shellcheck source=../../../engine/scripts/lib/machine-settings.sh
   . "$machine_lib/machine-settings.sh"
+  # Cargo permits a relative environment target. The private file stays strict.
+  case "${CARGO_TARGET_DIR:-}" in
+    ''|/*) ;;
+    *) CARGO_TARGET_DIR="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CARGO_TARGET_DIR")" || return
+       export CARGO_TARGET_DIR ;;
+  esac
   richos_machine_settings || return
   richos_cargo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../bin" || return 1
   richos_cargo_bin="$(cd "$richos_cargo_bin" && pwd -P)" || return 1

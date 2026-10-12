@@ -548,7 +548,7 @@ mkdir -p "$C6NOLIB/mega-lander"
 cp "$SCRIPT_DIR/../../mega-lander/workspaces.py" "$C6NOLIB/mega-lander/"
 # The registry's recovery adapter is part of the engine even with recovery off.
 # Keep its production dependencies while omitting only the component under test.
-cp "$SCRIPT_DIR/../lib/recovery.py" "$SCRIPT_DIR/../lib/recovery_controls.py" "$SCRIPT_DIR/../lib/operator_fences.py" "$C6NOLIB/scripts/lib/"
+cp "$SCRIPT_DIR/../lib/recovery.py" "$SCRIPT_DIR/../lib/recovery_controls.py" "$SCRIPT_DIR/../lib/operator_fences.py" "$SCRIPT_DIR/../lib/machine_settings.py" "$C6NOLIB/scripts/lib/"
 cp "$SCRIPT_DIR/../lib/resolve-roots.sh" "$SCRIPT_DIR/../lib/resolve-model.sh" "$SCRIPT_DIR/../lib/resolve-main-checkout.sh" "$SCRIPT_DIR/../lib/teammate-name.sh" "$C6NOLIB/scripts/lib/"
 cp "$SCRIPT_DIR/workspace-lifecycle.sh" "$SCRIPT_DIR/guard-sealed-worktree.sh" "$C6NOLIB/scripts/hooks/"
 chmod +x "$C6NOLIB/scripts/hooks/guard-worktree-isolation.sh" "$C6NOLIB/scripts/hooks/workspace-lifecycle.sh" "$C6NOLIB/scripts/hooks/guard-sealed-worktree.sh"
@@ -1015,7 +1015,7 @@ mkdir -p "$NOTX/mega-lander"
 cp "$SCRIPT_DIR/../../mega-lander/workspaces.py" "$NOTX/mega-lander/"
 # The registry's recovery adapter is part of the engine even with recovery off.
 # Keep its production dependencies while omitting only the component under test.
-cp "$SCRIPT_DIR/../lib/recovery.py" "$SCRIPT_DIR/../lib/recovery_controls.py" "$SCRIPT_DIR/../lib/operator_fences.py" "$NOTX/scripts/lib/"
+cp "$SCRIPT_DIR/../lib/recovery.py" "$SCRIPT_DIR/../lib/recovery_controls.py" "$SCRIPT_DIR/../lib/operator_fences.py" "$SCRIPT_DIR/../lib/machine_settings.py" "$NOTX/scripts/lib/"
 chmod -x "$NOTX/scripts/hooks/guard-sealed-worktree.sh"
 NOTX_OUT="$(printf '%s' "$(json_agent 'dev' 'dev-sonnet-brk2' 'worktree' 'Do it.')" | RICHOS_ENTITY_ROOT="$NOTX" "$NOTX/scripts/hooks/guard-worktree-isolation.sh" 2>&1 >/dev/null)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$NOTX_OUT" | grep -qF 'lifecycle component NOT EXECUTABLE: scripts/hooks/guard-sealed-worktree.sh'; then

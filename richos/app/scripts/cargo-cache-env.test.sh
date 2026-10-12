@@ -25,6 +25,30 @@ export SCCACHE_SERVER_PORT="$port"
 stop_server() { SCCACHE_DIR="$work/cache" SCCACHE_SERVER_PORT="$port" "$sccache_bin" --stop-server >/dev/null 2>&1 || true; }
 trap 'stop_server; rm -rf "$work"' EXIT
 mkdir -p "$work/fixed" "$work/fresh"
+python3 - "$lib" "$work" <<'PY' || exit 1
+import os
+from pathlib import Path
+import subprocess
+import sys
+helper, root = sys.argv[1], Path(sys.argv[2])
+env = {'HOME': str(root), 'PATH': '/usr/bin:/bin', 'RUSTC_WRAPPER': '/usr/bin/true',
+       'RICHOS_MACHINE_SETTINGS_RESOLVED': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
+def initialize(values):
+    # The deadline only bounds a hung helper; exit status and resolved paths prove correctness.
+    return subprocess.run(['/bin/bash', '-c', '. "$1" || exit; printf "%s" "$CARGO_TARGET_DIR"',
+                           'fixture', helper], cwd=root, env=values, capture_output=True,
+                          text=True, timeout=15)
+for target in ('build/target with spaces', str(root / 'absolute target')):
+    result = initialize({**env, 'CARGO_TARGET_DIR': target})
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout).resolve() == (root / target).resolve(), result.stdout
+settings = root / 'private.env'
+settings.write_text('CARGO_TARGET_DIR=build/target\n')
+env.pop('RICHOS_MACHINE_SETTINGS_RESOLVED')
+result = initialize({**env, 'RICHOS_ENV_FILE': str(settings)})
+assert result.returncode != 0 and 'absolute path' in result.stderr, result
+print('ok   shell accepts Cargo environment targets while private settings remain absolute')
+PY
 echo 'pub fn f() -> u8 { 1 }' > "$work/x.rs"
 
 # The "agent": its own temp directory and working directory, deleted after it uses the cache.
