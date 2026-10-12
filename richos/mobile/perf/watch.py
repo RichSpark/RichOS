@@ -990,7 +990,8 @@ def run_platform(repo, round_id, sha, platform, work, checkout):
         if isinstance(checkout, Exception):
             raise checkout
         last = last_measurement(repo, platform, sha)
-        if last and not app_changed(repo, platform, last["commit"], sha):
+        if last and last.get("verdict") == "good" and not app_changed(repo, platform, last["commit"], sha):
+            # (A last measurement that FAILED is never carried: the phone is measured again below.)
             # Nothing that builds into this phone's app changed since its last measurement: its start
             # cannot have changed. The land's limits may have: judge those samples again, phone untouched.
             judged = judge_record(checkout, platform, last["record"], log_path)
