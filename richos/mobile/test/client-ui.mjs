@@ -3,16 +3,15 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { rmSync, mkdirSync } from 'node:fs';
+import { rmSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { stageAssets } from '../cli/simulator.mjs';
+import { cacheRoot, stageAssets } from '../cli/simulator.mjs';
 const require = createRequire(import.meta.url);
-const { createScratch } = require('./storage.cjs');
 const {createClient}=require('../core/client.js');
 const {harness}=require('../dev/client-runtime.js');
 const { loadPlaywright } = require('../../app/ui/tests/lib/harness.js');
 export async function clientUI({engine='chromium'}={}) {
-  const scratch = createScratch('client-ui'), assets = join(scratch, 'mobile-ui');
+  const scratch = mkdtempSync(join(cacheRoot(), 'client-ui-')), assets = join(scratch, 'mobile-ui');
   const knownDefects = [];
   let browser;
   try {

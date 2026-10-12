@@ -129,12 +129,14 @@ with s.execution_claim(sys.argv[2],'a'*40,wait_seconds=10,say=lambda message:pri
 
     def test_portable_storage_freezes_evidence_without_a_specific_volume(self):
         import tempfile
-        with tempfile.TemporaryDirectory(prefix='recovery-storage-') as directory, patch.dict(os.environ,{'RICHOS_RECOVERY_EVIDENCE_ROOT':directory,'RICHOS_RECOVERY_WIP_ROOT':directory+'/wip'}), patch.object(Path,'is_mount',return_value=False):
+        with tempfile.TemporaryDirectory(prefix='recovery-storage-') as directory, patch.dict(os.environ,{'RICHOS_RECOVERY_EVIDENCE_ROOT':directory,'RICHOS_RECOVERY_WIP_ROOT':directory+'/wip'}):
             reference=RR.freeze_source(b'original human authority','source')
             self.assertEqual(Path(reference['reference']).read_bytes(),b'original human authority')
             self.assertTrue(Path(reference['reference']).is_relative_to(directory))
             self.assertEqual(R.storage_root('wip'),Path(directory)/'wip')
         with patch.dict(os.environ,{'RICHOS_RECOVERY_EVIDENCE_ROOT':'relative'}):
+            with self.assertRaises(R.Unavailable):R.storage_root('evidence')
+        with patch.dict(os.environ,{'RICHOS_RECOVERY_EVIDENCE_ROOT':'/Volumes/MissingRecoveryStorage/evidence'}), patch.object(Path,'is_mount',return_value=False):
             with self.assertRaises(R.Unavailable):R.storage_root('evidence')
 
     def test_provider_schema_binds_exact_job_and_finding(self):

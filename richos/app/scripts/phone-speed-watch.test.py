@@ -603,6 +603,7 @@ class Land(Base):
         (self.repo / "richos/mobile/perf").mkdir(parents=True, exist_ok=True)
         for path in (WATCH, GUARD):
             shutil.copy(path, self.repo / "richos/mobile/perf" / path.name)
+        shutil.copy(WATCH.parent.parent / "machine_storage.py", self.repo / "richos/mobile/machine_storage.py")
         (self.repo / "richos/engine").symlink_to(HERE.parents[1] / "engine")
         (self.repo / ".git/info/exclude").write_text("richos/engine\n")
         self.commit("the check and the watch")

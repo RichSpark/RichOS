@@ -296,7 +296,10 @@ class RandroidBundle(unittest.TestCase):
                 (PERF.parent / "native-android/release/upload-certificate.sha256").read_text(),
             "richos/mobile/perf/shipgate.py": FAKE_GATE,
             "richos/mobile/perf/reviewwalk.py": (PERF / "reviewwalk.py").read_text(),
+            "richos/mobile/machine_storage.py": (PERF.parent / "machine_storage.py").read_text(),
             "richos/engine/scripts/lib/native-work.py": FAKE_GRADLE,
+            "richos/engine/scripts/lib/machine-settings.sh": (PERF.parents[1] / "engine/scripts/lib/machine-settings.sh").read_text(),
+            "richos/engine/scripts/lib/machine_settings.py": (PERF.parents[1] / "engine/scripts/lib/machine_settings.py").read_text(),
         }
         for rel, text in files.items():
             (repo / rel).parent.mkdir(parents=True, exist_ok=True)

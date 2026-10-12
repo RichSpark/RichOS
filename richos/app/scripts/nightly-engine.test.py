@@ -79,6 +79,8 @@ class NightlyEngine(unittest.TestCase):
         self.env.update(GIT_CONFIG_GLOBAL=str(self.base / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
                         FIXTURE_LOG=str(self.log), FIXTURE_ESCALATIONS=str(self.escalations))
         for rel, text in (("richos/app/scripts/nightly-engine.py", SCRIPT.read_text()),
+                          ("richos/app/scripts/lib/machine_storage.py", (HERE / "lib/machine_storage.py").read_text()),
+                          ("richos/engine/scripts/lib/machine_settings.py", (HERE.parents[1] / "engine/scripts/lib/machine_settings.py").read_text()),
                           ("richos/app/scripts/proof-run.py", PROOF_RUN),
                           ("richos/engine/scripts/ci-units.sh", UNITS),
                           ("richos/engine/scripts/escalate.sh", ESCALATE)):
