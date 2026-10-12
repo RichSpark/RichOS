@@ -239,10 +239,20 @@ import proof_slots  # noqa: E402  (how many proof runs share the Mac at once)
 # The run's host-wide slot (main); every check's supervisor holds it too, so a killed runner keeps it
 # only until its checks are stopped. Empty when run() is driven directly (the tests).
 SLOT = None
-# A caller whose deadline must not count the wait for that slot (the nightly's workspace-mutants
-# gate, lib/owned_command.py EXECUTION_MARKER_ENV) names a file this run creates once it has the
-# slot. Taken out of the environment here, so no check of this run inherits it or its identity.
+# A caller's execution deadline starts when the first check has every admission:
+# the proof slot alone leaves worker, CPU and resource queues still to wait in.
+# Consume the marker here so a child cannot start or reset its caller's clock.
 EXECUTION_MARKER = os.environ.pop("RICHOS_EXECUTION_STARTS_MARKER", "")
+
+
+def begin_execution():
+    global EXECUTION_MARKER
+    if EXECUTION_MARKER:
+        try:
+            open(EXECUTION_MARKER, "w").close()
+        except OSError as exc:  # the caller retains its bounded admission fallback
+            print("proof-run: could not tell the caller its clock starts now: %s" % exc, flush=True)
+        EXECUTION_MARKER = ""  # later checks must never reset the same gate deadline
 
 
 class Item:
@@ -1064,6 +1074,7 @@ def launch(item, n, logdir, tokens_dir, reserved):
         command = proc_tree.command(started, verification=getattr(item, 'verification_context', None))
         if hasattr(item, "private_environment"):
             command[0] = "python3"  # The recipe's fingerprinted -s -S wrapper also covers supervision.
+        begin_execution()
         item.proc = subprocess.Popen(command, cwd=item.cwd, stdout=fh, stderr=subprocess.STDOUT,
                                      stdin=subprocess.DEVNULL, start_new_session=True, env=env,
                                      pass_fds=(SLOT.fds if SLOT else ()) + tuple(item.token.fds) + tuple(getattr(item, "slot_fds", ()))
@@ -2354,11 +2365,6 @@ def run_main(argv, run_state):
         if args.summary_out:
             shutil.copyfile(os.path.join(logdir, "summary.json"), args.summary_out)
         return 1
-    if EXECUTION_MARKER:
-        try:
-            open(EXECUTION_MARKER, "w").close()
-        except OSError as exc:  # the caller then starts its clock at its own bound
-            print("proof-run: could not tell the caller its clock starts now: %s" % exc, flush=True)
     try:
         slot_line = ("inside its caller's proof-run slot (a proof run started by a check of one)" if SLOT.borrowed
                      else "proof-run slot %d on this Mac (%d run(s) at once), waited %.0f s for it" % (
@@ -2400,6 +2406,9 @@ def run_main(argv, run_state):
             if args.only_check:
                 leave_unselected(items, args.only_check)
             run(items, args, logdir)
+            # A completely reused plan launches no child. Its final validation
+            # still has a deadline; fresh plans already started it at launch.
+            begin_execution()
             args.evidence.finalize(items)
         finally:
             args.pool.close(items)
