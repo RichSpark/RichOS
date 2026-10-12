@@ -17,7 +17,7 @@ class Settings(unittest.TestCase):
     else:self.assertEqual(M.parse(case['text']),case['values'])
  def test_selector_precedence_and_snapshot(self):
   with tempfile.TemporaryDirectory() as root:
-   home=pathlib.Path(root);source=home/'Library/Application Support/RichOS/.env'
+   home=pathlib.Path(root).resolve();source=home/'Library/Application Support/RichOS/.env'
    env={'HOME':str(home),'TMPDIR':str(home)}
    self.assertEqual(M.load(env),{})
    source.parent.mkdir(parents=True);source.write_text('CARGO_TARGET_DIR=/file cache\n')
@@ -41,7 +41,7 @@ class Settings(unittest.TestCase):
    self.assertEqual(M.agent_root(env),volume/'nested/tmp/claude')
  def test_named_lifetime_symlink_and_containment(self):
   with tempfile.TemporaryDirectory() as root:
-   base=pathlib.Path(root);bulk=base/'bulk';bulk.mkdir();alias=base/'alias';alias.symlink_to(bulk,target_is_directory=True)
+   base=pathlib.Path(root).resolve();bulk=base/'bulk';bulk.mkdir();alias=base/'alias';alias.symlink_to(bulk,target_is_directory=True)
    env={'HOME':str(base),'TMPDIR':str(base),'RICHOS_BULK_ROOT':str(alias)}
    target=M.scratch('agent',env);(target/'active').write_text('still working')
    self.assertEqual(target,bulk/'tmp/claude/agent')
@@ -60,7 +60,7 @@ class Settings(unittest.TestCase):
   class Walls:
    def check(self,*args):return None
   with tempfile.TemporaryDirectory() as root:
-   base=pathlib.Path(root);job=base/'nightly/home.noindex/tmp';job.mkdir(parents=True)
+   base=pathlib.Path(root).resolve();job=base/'nightly/home.noindex/tmp';job.mkdir(parents=True)
    allocator=job/'richos-scratch';dead=allocator/'dead';live=allocator/'live'
    dead.mkdir(parents=True);live.mkdir();named=job/'richos-agents/agent';named.mkdir(parents=True)
    cfg={'age_floor_minutes':60,'scratch_root_name':'richos-scratch','default_ttl_minutes':60}
@@ -90,7 +90,7 @@ class Settings(unittest.TestCase):
   devices.assert_not_called();docker.assert_not_called();state.assert_not_called()
  def test_shell_quotes_literal_values_and_forward_array(self):
   with tempfile.TemporaryDirectory() as root:
-   base=pathlib.Path(root);source=base/'settings';marker=base/'executed'
+   base=pathlib.Path(root).resolve();source=base/'settings';marker=base/'executed'
    value='/cache space/$(touch '+str(marker)+')'
    source.write_text('CARGO_TARGET_DIR='+value+'\n')
    env={key:value for key,value in os.environ.items() if key not in M.KEYS}
