@@ -40,6 +40,9 @@ import re
 import subprocess
 import time
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import machine_storage as M
 import xml.etree.ElementTree as ET
 
 import perfcore
@@ -677,7 +680,7 @@ def seed_release(dev, files, twin_apk, release_apk, release_sha256, scratch, log
     return {"files": written, "twinSha256": twin_sha}
 
 
-KEEP_ROOT = "/Volumes/E1TB/tmp/claude/perf-keep"  # private, outside every repository
+KEEP_ROOT = str(M.agent_root() / "perf-keep")  # private, outside every repository
 KEEP_TAR = "/data/local/tmp/richos-perf-keep.tar"
 MANIFEST = f"run-as {PACKAGE} sh -c 'find . -type f -exec sha256sum {{}} +'"
 

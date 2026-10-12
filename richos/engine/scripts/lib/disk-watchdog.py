@@ -16,6 +16,8 @@ other wrote it, and the CEO would be notified twice for one event.
 import calendar
 import json
 import os
+from pathlib import Path
+import machine_settings as M
 import subprocess
 import sys
 import time
@@ -351,6 +353,33 @@ def collect_devices_for_scheduled_check():
                        "the test-device registry lock; the next pass retries" % limit)
 
 
+def storage_candidates():
+    """Effective working directories and their volumes, not the entire bulk disk."""
+    settings = M.environment()  # Malformed settings still fail before monitoring.
+    effective = []
+    # An unplugged working drive must not stop monitoring the primary disk.
+    for resolver in (M.agent_root, M.cache, M.state):
+        try:
+            effective.append(resolver(environment=settings))
+        except ValueError:
+            continue
+    for key, path in M.load(settings).items():
+        if key == "RICHOS_BULK_ROOT":
+            continue
+        try:
+            effective.append(M.validate(path))
+        except ValueError:
+            continue
+    effective = list(dict.fromkeys(effective))
+    extras = sorted({str(Path(*path.parts[:3])) for path in effective
+                     if path.parts[:2] == ('/', 'Volumes') and len(path.parts) >= 3})
+    candidates = [str(path) for path in effective] + [os.environ.get("TMPDIR") or "/tmp",
+                  "/private/tmp", os.path.expanduser("~/.claude"), os.path.expanduser("~/.richos-nightly"),
+                  os.path.expanduser("~/Library/Caches"), os.path.expanduser("~/Library/Developer"),
+                  os.path.expanduser("~/.cargo"), os.path.expanduser("~/.npm")]
+    return list(dict.fromkeys(candidates)), extras
+
+
 def main():
     mode = env("MODE", "check")
     if mode == "check":
@@ -360,14 +389,13 @@ def main():
     log_path = expand(env("LOG", os.path.join(sbase, "disk-watchdog.log")))
 
     primary = env("DISK_PRIMARY_VOLUME", "/System/Volumes/Data")
-    extras = env("DISK_EXTRA_VOLUMES", "").split()
+    candidates, extras = storage_candidates()
     rich_gb = env_num("DISK_RICH_ALERT_GB", 60)
     drop_gb = env_num("DISK_DROP_ALERT_GB", 20)
     ceo_gb = env_num("DISK_CEO_NOTIFY_GB", 50)
     urgent_gb = env_num("DISK_CEO_URGENT_GB", 25)
     repeat_h = env_num("DISK_CEO_REPEAT_HOURS", 24)
     scale = env("DISK_SCALE_EXTRA_VOLUMES", "1") == "1"
-    candidates = env("DISK_CONSUMER_CANDIDATES", "").split()
     consumers_refused = measurable(candidates)[1]
 
     prev = read_state(state_path)

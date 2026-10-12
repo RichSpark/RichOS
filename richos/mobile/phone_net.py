@@ -37,6 +37,9 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
+import machine_storage as M
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "perf"))
@@ -226,7 +229,7 @@ def cable_internet(device):
         if named:
             command = shlex.split(named)
         else:
-            root = Path("/Volumes/E1TB/tmp/claude")
+            root = M.agent_root()
             root.mkdir(parents=True, exist_ok=True)
             scratch = tempfile.mkdtemp(prefix="phone-cable-", dir=str(root))
             command = [sys.executable, str(PHONE_IOS), "net", "--device", device,
@@ -424,7 +427,7 @@ def restore(say):
         if named:
             command = named
         else:
-            root = Path("/Volumes/E1TB/tmp/claude")
+            root = M.agent_root()
             root.mkdir(parents=True, exist_ok=True)
             scratch = tempfile.mkdtemp(prefix="phone-net-", dir=str(root))
             command = [sys.executable, str(PHONE_IOS), "wifi-restore", "--out", scratch]

@@ -141,6 +141,19 @@ def ffmpeg_source_directions(source):
     return "\n".join(lines) + "\n"
 
 
+def prepare_portable_node(runtime, recipe):
+    """Standard debug stripping and portable OpenSSL module lookup; no byte edits."""
+    binary = runtime / "node/bin/node"
+    if recipe.get("strip_node_debug_symbols"):
+        subprocess.run(["/usr/bin/strip", "-S", str(binary)], check=True)
+        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(binary)], check=True)
+        subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(binary)], check=True)
+    (runtime / "node/lib/ossl-modules").mkdir()
+    wrapper = runtime / "bin/node"
+    wrapper.write_text('#!/bin/sh\n: "${OPENSSL_MODULES:=$(dirname "$0")/../node/lib/ossl-modules}"\nexport OPENSSL_MODULES\nexec "$(dirname "$0")/../node/bin/node" "$@"\n')
+    wrapper.chmod(0o755)
+
+
 def build(destination):
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise RuntimeError("this runtime recipe supports macOS arm64 only")
@@ -213,6 +226,9 @@ def build(destination):
                      "USE_HOMEBREW_LIBICONV=", "ICONVDIR=" + str(iconv_prefix),
                      "NO_PYTHON=YesPlease", "NO_RUST=YesPlease", "NO_INSTALL_HARDLINKS=YesPlease",
                      "CFLAGS=-O2 -mmacosx-version-min=13.0 -ffile-prefix-map=" + str(git_source) + "=git-source"]
+            # Static iconv needs -L at build time, not an installed build-directory rpath.
+            if manifest.get("portable_git_link_paths"):
+                flags.append("CC_LD_DYNPATH=")
             clean_env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "SDKROOT": subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()}
             try:
                 with (scratch / "git-build.log").open("w") as log:
@@ -222,7 +238,7 @@ def build(destination):
                 print((scratch / "git-build.log").read_text()[-10000:], flush=True)
                 raise
             shutil.copyfile(git_source / "COPYING", runtime / "sources/GIT-COPYING")
-        (runtime / "bin/node").symlink_to("../node/bin/node")
+        prepare_portable_node(runtime, manifest)
         # Relocation can invalidate upstream bytecode. Never rewrite signed/runtime
         # inventory files during normal execution, including direct CLI invocation.
         (runtime / "bin/python3").write_text('#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\nexec "$(dirname "$0")/../python/bin/python3" -B "$@"\n')
@@ -233,6 +249,8 @@ def build(destination):
         (runtime / "bin/git").chmod(0o755)
         # License files from binary upstream distributions are retained in full.
         (runtime / "sources/README.txt").write_text("Pinned upstream distributions are listed in runtime-sources.json. Git's exact corresponding source and COPYING are included. Python and Node license notices remain in their distributions. jq is distributed under the MIT license; see https://github.com/jqlang/jq/blob/jq-1.8.2/COPYING. whisper-cli is built from the pinned whisper.cpp source and is distributed under the MIT license in WHISPER-CPP-LICENSE. ffmpeg and ffprobe are an unmodified upstream static build distributed under GPLv3 or later in FFMPEG-COPYING.GPLv3; FFMPEG-SOURCE.txt says where their exact corresponding source is. macOS supplies bash and system libraries.\n")
+        shutil.copyfile(__file__, runtime / "sources/RICHOS-RUNTIME-BUILDER.py")
+        shutil.copyfile(Path(__file__).parent / "runtime-sources.json", runtime / "sources/runtime-sources.json")
         (runtime / "runtime-sources.json").write_text(json.dumps(manifest, indent=2) + "\n")
         env = {**os.environ, "PATH": str(runtime / "bin") + ":/usr/bin:/bin:/usr/sbin:/sbin",
                "GIT_EXEC_PATH": str(runtime / "git/libexec/git-core"), "PYTHONDONTWRITEBYTECODE": "1"}

@@ -937,34 +937,49 @@ def _match_prefix(path, prefixes):
 # CHECK 5: literal machine assumptions. Baseline is temporary tracked debt,
 # not a host-local override. Archived records stay out as whole trees.
 def committed_machine_baseline(tree):
-    # Native commit projections and a land both retain Git history. Main is the
-    # landing base; generic adopters without it use their current HEAD.
-    rc, _out, _err = git(tree.root, "rev-parse", "--verify", "refs/heads/main^{commit}")
-    ref = "refs/heads/main" if rc == 0 else "HEAD"
-    for declaration in (".publication-completeness", ".richos/publication-completeness"):
-        rc, text, _err = git(tree.root, "show", ref + ":" + declaration)
+    # Both committed predecessor and landing base constrain migration debt.
+    # After this checker is adopted, absent debt means zero, never bootstrap.
+    budgets = []
+    for ref in ("refs/heads/main", "HEAD"):
+        rc, _out, _err = git(tree.root, "rev-parse", "--verify", ref + "^{commit}")
         if rc:
             continue
-        for line in text.splitlines():
-            key, separator, value = line.strip().partition("=")
-            if not separator or key != "MACHINE_PATH_BASELINE":
-                continue
-            value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                value = value[1:-1]
-            else:
-                value = value.split("#", 1)[0].strip()
-            rc, body, _err = git(tree.root, "show", ref + ":" + value)
+        relative = os.path.relpath(__file__, tree.root)
+        rc, checker, _err = git(tree.root, "show", ref + ":" + relative)
+        adopted = rc == 0 and "def check_machine_paths(" in checker
+        old = None
+        for declaration in (".publication-completeness", ".richos/publication-completeness"):
+            rc, text, _err = git(tree.root, "show", ref + ":" + declaration)
             if rc:
-                raise Broken("committed machine baseline cannot be read")
-            try:
-                old = json.loads(body)
-                if not isinstance(old, dict):
-                    raise ValueError("expected an object")
-                return old
-            except ValueError as exc:
-                raise Broken("invalid committed machine baseline: " + str(exc))
-    return None  # the first guard land introduces reviewed migration debt
+                continue
+            for line in text.splitlines():
+                key, separator, value = line.strip().partition("=")
+                if not separator or key != "MACHINE_PATH_BASELINE":
+                    continue
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                else:
+                    value = value.split("#", 1)[0].strip()
+                rc, body, _err = git(tree.root, "show", ref + ":" + value)
+                if rc:
+                    raise Broken("committed machine baseline cannot be read")
+                try:
+                    old = json.loads(body)
+                    if not isinstance(old, dict):
+                        raise ValueError("expected an object")
+                except ValueError as exc:
+                    raise Broken("invalid committed machine baseline: " + str(exc))
+        if old is not None or adopted:
+            budgets.append(old or {})
+    if not budgets:
+        return None  # only the reviewed first introduction can initialize debt
+    allowed = budgets[0]
+    for other in budgets[1:]:
+        allowed = {path: {prefix: min(count, other.get(path, {}).get(prefix, 0))
+                          for prefix, count in counts.items()}
+                   for path, counts in allowed.items()}
+    return allowed
 
 
 def check_machine_paths(tree, baseline_path, previous=None):

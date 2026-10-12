@@ -162,7 +162,7 @@ class WifiVerdict(unittest.TestCase):
         import io
         import sys
         import tempfile
-        with tempfile.TemporaryDirectory(dir="/Volumes/E1TB/tmp") as tmp, \
+        with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(sys.modules, {"phone_net": SimpleNamespace(wifi_path=lambda _d: (path_ok, "fixture"))}), \
                 mock.patch.object(phone_ios, "hardware_udid", return_value="FIXTURE"), \
                 mock.patch.object(phone_ios, "_safari_load", return_value=(True, lines)), \

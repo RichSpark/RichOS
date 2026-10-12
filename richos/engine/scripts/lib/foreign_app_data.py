@@ -210,18 +210,18 @@ def self_test():
         'for r, d, f in os.walk(os.path.expanduser("~")):',  # foreign-app-data-exempt: self-test case
         'files = list(Path.home().rglob("*.json"))',  # foreign-app-data-exempt: self-test case
         'for e in WalkDir::new(dirs::home_dir().unwrap()) {',  # foreign-app-data-exempt: self-test case
-        'SCAN_ROOTS="$HOME/ab $HOME"',
-        'du -sk "$HOME/ab" "$HOME"',
+        'SCAN_ROOTS="$HOME/ab $HOME"', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        'du -sk "$HOME/ab" "$HOME"', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         'tar -czf backup.tgz ~',
         'y = "Library/Containers"  # foreign-app-data-exempt:',  # foreign-app-data-exempt: a bare marker must exempt nothing
     ]
     must_pass = [
-        'DISK_CONSUMER_CANDIDATES="$TMPDIR /private/tmp $HOME/.claude $HOME/ab $HOME/Library/Caches"',
-        'du -sk "$HOME/ab"',
-        'find ~/ab -name "*.log"',
+        'DISK_CONSUMER_CANDIDATES="$TMPDIR /private/tmp $HOME/.claude $HOME/ab $HOME/Library/Caches"', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        'du -sk "$HOME/ab"', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        'find ~/ab -name "*.log"', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         'find "$HOME/Library/Developer/CoreSimulator" -maxdepth 1',
         'p = os.path.join(home, "Library", "Application Support", ident)',
-        'for r, d, f in os.walk(os.path.expanduser("~/ab")):',
+        'for r, d, f in os.walk(os.path.expanduser("~/ab")):', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         'home.join("Library").join("Logs").join("RichOS")',
         '# the watchdog never measures other apps\' Containers',
         'x = "Library/Containers"  # foreign-app-data-exempt: names the folder in order to refuse it',
@@ -249,7 +249,7 @@ def self_test():
         (home + "/Library/Caches", False),
         (home + "/Library/Developer", False),
         (home + "/ab", False),
-        ("/Volumes/E1TB/vm", False),
+        ("/Volumes/E1TB/vm", False), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     ]
     for path, want in cases:
         got = entering(path, home=home) is not None
@@ -551,7 +551,7 @@ def bash_check(payload_text, log_path=None):
         return 0
     sys.stderr.write(
         "REFUSED (guard-foreign-app-data): %s\n"
-        "  Use the specific directory you need instead (for example ~/ab/<repo> or ~/.claude),\n"
+        "  Use the specific directory you need instead (for example the repository directory or ~/.claude),\n"
         "  never the whole home folder or another app's container folder.\n"
         "  If it really is needed, add `# foreign-app-data-exempt: <reason>` to the command;\n"
         "  that is logged.\n" % why)

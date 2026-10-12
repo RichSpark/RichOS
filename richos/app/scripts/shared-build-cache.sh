@@ -20,14 +20,16 @@ NIGHTLY="$HOME/.richos-nightly/source"
 if [ -d "$NIGHTLY" ] && [ "$(cd "$NIGHTLY" && pwd -P)" = "$CHECKOUT" ]; then
   echo "nightly release checkout manages its own build output" >&2; exit 2
 fi
-CACHE_ROOT="${RICHOS_BUILD_CACHE:-${CARGO_TARGET_DIR:-/Volumes/E1TB/caches/cargo-target}}"
+. "$HERE/../../engine/scripts/lib/machine-settings.sh"
+richos_machine_settings
+CACHE_ROOT="${RICHOS_BUILD_CACHE:-$(python3 "$HERE/../../engine/scripts/lib/machine_settings.py" cache cargo-target --key CARGO_TARGET_DIR)}"
 RC=0
 for REL in richos/app richos/app/src-tauri; do
   LINK="$CHECKOUT/$REL/target"
   DEST="$(CARGO_TARGET_DIR="$CACHE_ROOT" RICHOS_CARGO_CACHE_ROOT="$CACHE_ROOT" "$HERE/bin/cargo" --richos-target-dir "$CHECKOUT/$REL")"
   if [ -L "$LINK" ]; then
     CUR="$(readlink "$LINK")"
-    if [ "$CUR" = "$DEST" ] && [ -d "$DEST" ]; then
+    if [ -d "$DEST" ] && [ -d "$LINK" ] && [ "$(cd "$LINK" && pwd -P)" = "$(cd "$DEST" && pwd -P)" ]; then
       echo "ok $REL/target -> $DEST"; continue
     fi
     if [ "$MODE" = check ]; then echo "unisolated $LINK -> $CUR" >&2; RC=1; continue; fi

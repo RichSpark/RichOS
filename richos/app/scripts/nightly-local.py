@@ -17,6 +17,9 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import machine_storage as M
 import platform
 import pwd
 import re
@@ -295,6 +298,7 @@ GUI_HOST_ENV = "RICHOS_GUI_HOST"
 # proof, the one step of a build that uses a guest.
 VM_STEP_PREFIXES = ("TESTVM_", "TART_")
 AMBIENT_NAMES = {
+    M.RESOLVED: "the storage reader has already resolved this job's private settings",
     "RICHOS_AGENT_OWNER": "the agent harness's name for the session that started this process",
     "RICHOS_AGENT_SESSION": "the agent harness's session id for this process",
 }
@@ -776,7 +780,11 @@ GATE_PASSTHROUGH = (
     # The privacy deny-list for the `named-persons.sh --tree` gate. Operator-configurable by
     # design, and defaulted below when unset.
     "RICHOS_NAMED_PERSONS_FILE",
-)
+    # The selector and supported storage locations are needed by build consumers.
+    # Cargo's input alias is normalized to RICHOS_CARGO_CACHE_ROOT below; each
+    # workspace still chooses its own keyed CARGO_TARGET_DIR.
+    "RICHOS_ENV_FILE",
+) + tuple(name for name in M.KEYS if name != "CARGO_TARGET_DIR")
 
 # WHAT THIS SCRIPT SETS FOR EVERY GATE, whatever the shell held. Declared as names here so
 # that `run-tests.test.sh` case E1 -- which re-runs the whole suite under the environment a
@@ -800,7 +808,7 @@ GATE_SET_BY_BUILD = (
     # Set by Runner.runtime() beside it: the pinned speech models gui-boot's healthy machine
     # needs now that the video tools are a setup essential (lib/runtime_cache.py).
     "RICHOS_GUI_SPEECH_MODELS",
-)
+) + tuple(name for name in M.KEYS if name != "CARGO_TARGET_DIR") + (M.RESOLVED,)
 
 # WHAT THIS SCRIPT SETS FOR ONE STEP ONLY, at that step's own call site, through
 # `command(env_extra=...)`. These never come from the shell -- that is the point of them --
@@ -842,13 +850,12 @@ def gate_tmpdir(environ=None):
     disposable subdirectories there. proof-run.py gets the same root via gate_conditions.
     """
     environ = os.environ if environ is None else environ
-    if GATE_TMPDIR_VOLUME.is_mount():
-        # The folders that already exist above it are checked before it is created, so a parent
-        # this account cannot write into is named with its fix, not a bare PermissionError
-        # (review rv-20261011T040921Z-7ac03392-1fbf).
-        refuse_unsafe_gate_folder(str(GATE_TMPDIR))
-        GATE_TMPDIR.mkdir(parents=True, exist_ok=True)
-        return refuse_unsafe_gate_folder(str(GATE_TMPDIR) + "/")
+    values = M.load(environ)
+    if values.get("RICHOS_BULK_ROOT"):
+        gate_tmp = M.validate(values["RICHOS_BULK_ROOT"], require_directory=True) / "tmp/richos-gates"
+        refuse_unsafe_gate_folder(str(gate_tmp))
+        gate_tmp.mkdir(parents=True, exist_ok=True)
+        return refuse_unsafe_gate_folder(str(gate_tmp) + "/")
     try:
         out = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True,
                              text=True, timeout=10, stdin=subprocess.DEVNULL)
@@ -860,8 +867,6 @@ def gate_tmpdir(environ=None):
     return refuse_unsafe_gate_folder(environ.get("TMPDIR") or tempfile.gettempdir())
 
 
-GATE_TMPDIR_VOLUME = Path("/Volumes/E1TB")
-GATE_TMPDIR = GATE_TMPDIR_VOLUME / "tmp" / "richos-gates"
 
 # The rights an ACL "allow" entry can grant that richos-user-update's no_write_acl() refuses
 # (its write_bits), as `ls -le` spells them on macOS.
@@ -952,9 +957,15 @@ def gate_environment(environ, run_id=None, strict=True):
     always refuses.
     """
     env = {name: environ[name] for name in GATE_PASSTHROUGH if name in environ}
+    settings = M.load(environ)
+    cargo = settings.pop("CARGO_TARGET_DIR", None)
+    if cargo:
+        settings.setdefault("RICHOS_CARGO_CACHE_ROOT", cargo)
+    env.update(settings)
+    env[M.RESOLVED] = "1"
     # Explicit PATH also works from a fresh terminal, without an interactive shell.
     env["PATH"] = f"{Path.home()}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    env["TMPDIR"] = gate_tmpdir(environ)
+    env["TMPDIR"] = gate_tmpdir({**environ, **settings, M.RESOLVED: "1"})
     # NOT NEEDED ANY MORE, AND KEPT AS A PROOF RATHER THAN A STEP. Every name these two
     # removed -- GIT_AUTHOR_*, GIT_COMMITTER_*, EMAIL, RICHOS_EXTRA_TAURI_CONFIG,
     # TAURI_CONFIG, CARGO_TARGET_DIR, RUN_TESTS_DECLARED_GAPS -- is absent from
@@ -1073,7 +1084,7 @@ def gate_conditions(gate, environ=None):
                   and (name not in GATE_PASSTHROUGH or name in GATE_SET_BY_BUILD)}
     missing = {name: "the build refuses to start without it; it is not an owner-private file here"
                for name in GATE_SET_BY_BUILD
-               if name not in env and name not in CONDITIONS_NOT_REPRODUCED}
+               if name not in env and name not in CONDITIONS_NOT_REPRODUCED and name not in M.KEYS}
     return conditions, missing
 
 

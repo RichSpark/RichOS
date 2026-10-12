@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -209,6 +210,26 @@ class GrantRuleTests(unittest.TestCase):
         self.assertEqual((L.NATIVE_ROLE, cpu_guard.NATIVE_ROLE), ('native-build', 'native-build'))
 
 
+class RuntimeDependencyTests(unittest.TestCase):
+    def test_install_stages_reader_before_launching_any_service(self):
+        with tempfile.TemporaryDirectory(prefix='controller-support-') as directory:
+            root = Path(directory)
+            state = root / 'state'
+            home = root / 'home'
+            with patch.object(L, 'STATE', state), patch.object(Path, 'home', return_value=home), \
+                    patch.object(L.subprocess, 'run', side_effect=RuntimeError('fixture stops before launchctl')):
+                with self.assertRaisesRegex(RuntimeError, 'fixture stops'):
+                    L.install(root / 'engine')
+            runtime = state / 'runtime'
+            self.assertEqual((runtime / 'machine_settings.py').read_bytes(), (HERE / 'machine_settings.py').read_bytes())
+            result = subprocess.run([sys.executable, '-B', str(runtime / 'cpu_guard.py'), 'status'],
+                                    cwd=runtime, env={**os.environ, 'HOME': str(home),
+                                    'RICHOS_CPU_GUARD_STATE': str(state), 'RICHOS_MACHINE_SETTINGS_RESOLVED':'1'},
+                                    capture_output=True, text=True, timeout=30)
+            self.assertIn(result.returncode, (0,1), result.stderr)
+            self.assertIn('healthy', json.loads(result.stdout))
+
+
 class DeployTests(unittest.TestCase):
     """Replace the running controller only from a known one, prove the swap, undo a failure."""
 
@@ -272,6 +293,21 @@ class DeployTests(unittest.TestCase):
         self.assertEqual((self.state / 'runtime/cpu_guard.py').read_bytes(), self.legacy)
         self.assertFalse((self.state / 'live-runtime.json').exists())
 
+    def test_controller_path_alias_is_accepted_but_relative_path_is_refused(self):
+        alias = Path(self.tmp.name) / 'state-alias'
+        alias.symlink_to(self.state.resolve(), target_is_directory=True)
+        config = plistlib.loads(self.plist.read_bytes())
+        config['ProgramArguments'][2] = str(alias / 'runtime/cpu_guard.py')
+        self.plist.write_bytes(plistlib.dumps(config))
+        live = self.live()
+        self.assertIn('deployed', live.deploy())
+        self.assertEqual(self.restarts, [D.sha256(self.candidate)])
+        config['ProgramArguments'][2] = os.path.relpath(self.state / 'runtime/cpu_guard.py')
+        self.assertEqual(Path(config['ProgramArguments'][2]).resolve(), live.running.resolve())
+        self.plist.write_bytes(plistlib.dumps(config))
+        with self.assertRaisesRegex(SystemExit, 'does not run'):
+            live.preconditions()
+
     def test_an_unknown_running_controller_or_plist_is_refused_untouched(self):
         (self.state / 'runtime/cpu_guard.py').write_bytes(b'# somebody else\n')
         with self.assertRaisesRegex(SystemExit, 'neither the legacy controller'):
@@ -283,6 +319,12 @@ class DeployTests(unittest.TestCase):
             self.live().deploy()
         self.assertEqual(self.restarts, [])
 
+    def test_deployment_preflight_stages_the_shared_reader(self):
+        live = self.live()
+        live.interpreter = sys.executable
+        live.loads(self.candidate)
+        self.assertEqual((live.runtime / 'machine_settings.py').read_bytes(), (HERE / 'machine_settings.py').read_bytes())
+
     def test_a_candidate_that_does_not_load_under_launchds_interpreter_is_refused_untouched(self):
         # launchd runs /usr/bin/python3 (3.9 on this Mac), not the shell's python3.
         self.plist.write_bytes(plistlib.dumps({'ProgramArguments': [
@@ -291,7 +333,7 @@ class DeployTests(unittest.TestCase):
             self.live().deploy()
         self.assertEqual((self.state / 'runtime/cpu_guard.py').read_bytes(), self.legacy)
         self.assertEqual(self.restarts, [])
-        self.assertEqual(sorted(p.name for p in (self.state / 'runtime').iterdir()), ['cpu_guard.py', 'cpu_policy.py'])
+        self.assertEqual(sorted(p.name for p in (self.state / 'runtime').iterdir()), ['cpu_guard.py', 'cpu_policy.py', 'machine_settings.py'])
 
     def test_rollback_restores_the_verified_legacy_bytes(self):
         self.live().deploy()

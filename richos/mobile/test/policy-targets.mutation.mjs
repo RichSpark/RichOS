@@ -10,7 +10,7 @@
 // THE SHIPPED FILES ARE NEVER OPENED FOR WRITING. Each mutant runs in a private copy of the
 // service, core, dev and test folders on the suite's own scratch volume, removed afterwards.
 // Invoked by richos/app/scripts/mobile-headless.test.sh. Exit 0 = every leak is caught.
-import { cpSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { cpSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -45,14 +45,19 @@ const MUTANTS = [
 function run(name, edit) {
   const scratch = createScratch('policy-mutant');
   try {
-    for (const part of ['service', 'core', 'dev', 'test', 'package.json']) cpSync(join(mobile, part), join(scratch, part), { recursive: true });
+    const fixture = join(scratch, 'richos/mobile');
+    const library = join(scratch, 'richos/engine/scripts/lib');
+    mkdirSync(fixture, {recursive:true});
+    mkdirSync(library, {recursive:true});
+    cpSync(join(mobile, '../engine/scripts/lib/machine_settings.py'), join(library, 'machine_settings.py'));
+    for (const part of ['service', 'core', 'dev', 'test', 'package.json']) cpSync(join(mobile, part), join(fixture, part), { recursive: true });
     if (edit) {
-      const [file, before, after] = edit, path = join(scratch, file), text = readFileSync(path, 'utf8');
+      const [file, before, after] = edit, path = join(fixture, file), text = readFileSync(path, 'utf8');
       if (text.split(before).length !== 2) return { status: null, output: `${file} does not contain the mutated text exactly once` };
       writeFileSync(path, text.replace(before, after));
     }
     const pattern = CASE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', `--test-name-pattern=^${pattern}$`, join(scratch, 'test/policy-targets.test.js')],
+    const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', `--test-name-pattern=^${pattern}$`, join(fixture, 'test/policy-targets.test.js')],
       { encoding: 'utf8', env: { ...process.env, TMPDIR: scratch + '/' }, timeout: 60000 });
     return { status: result.status, output: `${result.stdout}${result.stderr}` };
   } finally { rmSync(scratch, { recursive: true, force: true }); }

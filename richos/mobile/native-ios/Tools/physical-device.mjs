@@ -1,3 +1,4 @@
+import { cacheDir, validateStorage } from '../../cli/machine-settings.mjs';
 // Physical native checks share the existing USB/process supervisor. The app is
 // Release, normally paired and never receives fixture arguments or lab secrets.
 //
@@ -31,7 +32,7 @@ const checks = {
   script: 'testScript',
 };
 
-export const DEFAULT_STORE = '/Volumes/E1TB/caches/richos-native-ios/physical-store';
+export const DEFAULT_STORE = cacheDir('richos-native-ios/physical-store', 'RICHOS_PHYSICAL_STORE');
 // A signed Release device build, counted from native-work's admission: the wait before it (a machine
 // worker, the build lane, CPU headroom) has its own bound, device-runner's ADMISSION_LIMIT_MS.
 export const BUILD_LIMIT_MS = 600000;
@@ -337,16 +338,15 @@ export async function main(args, env = process.env) {
   if (command !== 'stamp') settings.device = hardwareUdid(settings.device, listedDevices());
   const cache = join(env.RICHOS_NATIVE_IOS_CACHE, 'physical');
   mkdirSync(cache, { recursive: true });
-  if (!realpathSync(cache).startsWith('/Volumes/E1TB/')) throw Error('Physical cache must remain on the external SSD');
+  validateStorage(realpathSync(cache));
   const store = env.RICHOS_PHYSICAL_STORE || DEFAULT_STORE;
-  if (!resolve(store).startsWith('/Volumes/E1TB/')) throw Error('RICHOS_PHYSICAL_STORE must be on /Volumes/E1TB');
-  if (env.RICHOS_PHYSICAL_PRODUCTS && !resolve(env.RICHOS_PHYSICAL_PRODUCTS).startsWith('/Volumes/E1TB/')) {
-    throw Error('RICHOS_PHYSICAL_PRODUCTS must be on /Volumes/E1TB');
-  }
+  validateStorage(resolve(store));
+  if (env.RICHOS_PHYSICAL_PRODUCTS) validateStorage(resolve(env.RICHOS_PHYSICAL_PRODUCTS));
   let config;
   if (command === 'verify') {
     const file = env.RICHOS_MOBILE_TEST_CONFIG;
-    if (!file || !realpathSync(file).startsWith('/Volumes/E1TB/')) throw Error('Set RICHOS_MOBILE_TEST_CONFIG to the isolated external lab JSON');
+    if (!file) throw Error('Set RICHOS_MOBILE_TEST_CONFIG to the isolated lab JSON');
+    validateStorage(realpathSync(file));
     config = JSON.parse(readFileSync(file, 'utf8'));
     if (config.isolatedLab !== 'true') throw Error('The physical test configuration must explicitly mark isolatedLab: true (string)');
     if (selection === 'pairing' && (!config.pairLink?.startsWith('https://') || !config.words?.trim())) throw Error('Pairing needs a current HTTPS pairing link and exact fingerprint words');

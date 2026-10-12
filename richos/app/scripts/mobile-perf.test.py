@@ -926,15 +926,14 @@ def _():
         assert os.environ["TMPDIR"] == usertmp and os.listdir(usertmp) == []
 
 
-@case("I6b traces are refused outside the mounted external SSD, before anything is captured")
+@case("I6b traces refuse a missing selected volume before capture")
 def _():
     calls = []
     def never(cmd, **kwargs):
         calls.append(cmd)
         raise AssertionError("nothing may run")
-    with tempfile.TemporaryDirectory() as elsewhere:
-        if not os.path.realpath(elsewhere).startswith("/Volumes/E1TB/"):
-            assert "--evidence-dir" in raises(perfcore.Refused, ios.trace_series, "cold", ios.Devicectl("d", never), 1, elsewhere, never)
+    elsewhere = "/Volumes/RichOSMissingTraceFixture/cache" # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    assert "--evidence-dir" in raises(perfcore.Refused, ios.trace_series, "cold", ios.Devicectl("d", never), 1, elsewhere, never)
     assert "--evidence-dir" in raises(perfcore.Refused, ios.trace_series, "cold", ios.Devicectl("d", never), 1, None, never)
     assert not calls
 
@@ -2697,7 +2696,7 @@ def _():
         assert out["restored"] and phone.now() == before and not os.path.exists(os.path.join(backup, "RichOS")), out
 
 
-@case("C15 iPhone refusals change nothing on the phone: no stamp, no runner beside the app, no team, no SSD, a reachable Mac, a launch argument, an expected approval prompt, no saved state to put back")
+@case("C15 iPhone refusals change nothing on the phone: no stamp, no runner beside the app, no team, missing evidence drive, a reachable Mac, a launch argument, an expected approval prompt, no saved state to put back")
 def _():
     with tempfile.TemporaryDirectory() as tmp:
         for name, over, env, said in (
@@ -2717,9 +2716,9 @@ def _():
             assert phone.calls == [], (name, phone.calls)  # refused before the phone was asked anything
         phone = FakePhone(tmp + "/ssd")
         with patch.dict(os.environ, {"RICHOS_APPLE_TEAM": "ABCDEFGHIJ"}):
-            assert "/Volumes/E1TB" in raises(perfcore.Refused, ios.run_ios, ios_args(
+            assert "validated storage path" in raises(perfcore.Refused, ios.run_ios, ios_args(
                 device="test-device", conversation="fixture", mac=None, rows=None, stamp=phone_stamp(tmp + "/ssd"),
-                evidence_dir=os.path.join(tmp, "ssd", "evidence")), runner=phone)
+                evidence_dir="/Volumes/MissingPhoneStorage/evidence"), runner=phone)
         assert phone.calls == []
         noruner = tmp + "/norunner"
         os.makedirs(noruner)

@@ -8,7 +8,7 @@
 # across "Home" with qa/lab-pause.py) needs a live lab and is a walker's or engineer's check, not
 # this suite's.
 # run-tests: no-host-screen: a Swift build and three refusals; nothing is drawn, captured or pressed
-# run-tests: inputs richos/app/scripts/native-ios-lab-phone.test.sh richos/mobile/native-ios/Tools/LabPhone richos/mobile/native-ios/Core
+# run-tests: inputs richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/app/scripts/native-ios-lab-phone.test.sh richos/mobile/native-ios/Tools/LabPhone richos/mobile/native-ios/Core
 # run-tests: covers richos/mobile/native-ios/Tools/LabPhone/Package.swift richos/mobile/native-ios/Tools/LabPhone/Sources/lab-phone/main.swift
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,13 +19,14 @@ if ! command -v swift >/dev/null 2>&1; then
   echo "  NOT RUN  native-ios-lab-phone: swift is unavailable"
   exit 2
 fi
-if [ ! -d /Volumes/E1TB ]; then
-  echo "  NOT RUN  native-ios-lab-phone: /Volumes/E1TB is not mounted (build output stays off the internal disk)"
-  exit 2
-fi
+MACHINE_LIB="$ROOT/richos/engine/scripts/lib"
+# shellcheck source=../../engine/scripts/lib/machine-settings.sh
+. "$MACHINE_LIB/machine-settings.sh"
+richos_machine_settings || exit 2
+CACHE_ROOT="$(python3 "$MACHINE_LIB/machine_settings.py" cache)" || exit 2
 KEY=$(printf '%s' "$ROOT" | shasum | cut -c1-10)
-BUILD="/Volumes/E1TB/caches/richos-native-ios/lab-phone-$KEY"
-SCRATCH=$(mktemp -d "${TMPDIR:-/Volumes/E1TB/tmp}/lab-phone-test.XXXXXX")
+BUILD="$CACHE_ROOT/richos-native-ios/lab-phone-$KEY"
+SCRATCH=$(mktemp -d "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}/lab-phone-test.XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
 if ! swift build --package-path "$PKG" --scratch-path "$BUILD" > "$SCRATCH/build.log" 2>&1; then

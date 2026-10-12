@@ -1,3 +1,4 @@
+import { validateStorage } from '../cli/machine-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -18,7 +19,7 @@ test('actual mobile client pairs, signs, receives and resumes against the produc
   let server, client;
   t.after(async () => { client?.close(); await server?.close(); rmSync(cache, { recursive: true, force: true }); });
   const remoteFile = process.env.RICHOS_MOBILE_REMOTE_STATE;
-  if (remoteFile && !remoteFile.startsWith('/Volumes/E1TB/')) throw Error('Remote proof state must be on the external SSD');
+  if (remoteFile) validateStorage(remoteFile);
   server = remoteFile ? null : await startMac(cache);
   const publicRoute = !!remoteFile || process.env.RICHOS_MOBILE_USE_PUBLIC_ROUTE === '1';
   const state = remoteFile ? JSON.parse(readFileSync(remoteFile, 'utf8')) : server.state;
@@ -27,7 +28,7 @@ test('actual mobile client pairs, signs, receives and resumes against the produc
   let disk;
   const voiceFile = process.env.RICHOS_MOBILE_VOICE_FIXTURE;
   const voicePhrase = process.env.RICHOS_MOBILE_VOICE_PHRASE;
-  if (voiceFile && (!voiceFile.startsWith('/Volumes/E1TB/') || !voicePhrase)) throw Error('Voice proof requires an external WAV and expected phrase');
+  if (voiceFile) { validateStorage(voiceFile); if (!voicePhrase) throw Error('Voice proof requires a WAV and expected phrase'); }
   let replyAudio, played = false;
   // THE ROW THAT CAN BEAT THE RECEIPT. The voice proof holds the upload's answer, as a slow
   // network does, until the Mac's own `message` row for the recording has arrived on the stream,

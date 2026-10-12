@@ -487,10 +487,7 @@ FAKE_SHARED="$TMP/p/shared" RICHOS_PROOF_RUN_DIR="$TMP/p/state" RICHOS_RUNTIME_D
   python3 -c "$BOOT" "$DIR/testvm" "$DIR/proof-run.py" --keep-going --commands "$TMP/p/commands" \
   --log-dir "$TMP/p/log" > "$TMP/p/out" 2>&1
 prc=$?
-if [ "$(uname -s)" = Darwin ] && ! python3 -c 'import os,sys; sys.exit(0 if os.path.ismount("/Volumes/E1TB") else 1)'; then
-  echo "  NOT RUN  P1 proof-run.py needs /Volumes/E1TB on a Mac; R1-R4 hold run-tests.sh to the same fixture"
-  NOT_RUN="$NOT_RUN, P1 (proof-run.py needs /Volumes/E1TB)"
-elif [ "$prc" = 1 ] && python3 - "$TMP/p/log/summary.json" "$NAME" <<'PY'
+if [ "$prc" = 1 ] && python3 - "$TMP/p/log/summary.json" "$NAME" <<'PY'
 import json, os, sys
 checks = {c["check"]: c for c in json.load(open(sys.argv[1]))["checks"]}
 a, b = checks["a"], checks["b"]

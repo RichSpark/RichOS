@@ -20,13 +20,13 @@ phone_ios = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(phone_ios)
 
 # The tool refuses an --out anywhere else, so its fixtures live there too.
-SCRATCH = "/Volumes/E1TB/tmp"
+SCRATCH = tempfile.gettempdir()
 ENV = {"RICHOS_IOS_DEVICE": "fixture-phone", "RICHOS_APPLE_TEAM": "fixture-team"}
 
 
 class Fixture(unittest.TestCase):
     def setUp(self):
-        self.assertTrue(os.path.isdir(SCRATCH), f"{SCRATCH} is not mounted: the tool under test refuses any other --out")
+        self.assertTrue(os.path.isdir(SCRATCH), f"{SCRATCH} is not a scratch directory")
         self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
         self.root = Path(self.tmp.name)
 

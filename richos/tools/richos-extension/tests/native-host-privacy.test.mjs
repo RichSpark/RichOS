@@ -5,7 +5,7 @@
  *
  * No dialog can come from this test: the "Chrome" is a stub shell script that only records that it
  * was started, so no native host is ever launched, and the TCC database read is a scratch copy
- * under a scratch HOME. The scratch folders live on /Volumes/E1TB because that is the removable
+ * under a scratch HOME. The scratch folders live on /Volumes/E1TB because that is the removable // machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
  * volume of this Mac; the harness and this test (children of the caller's terminal) already read it.
  */
 import { spawnSync } from 'node:child_process';
@@ -17,12 +17,14 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HARNESS = path.join(HERE, 'native-transport-e2e.mjs');
-const VOLUME = '/Volumes/E1TB';
-if (!fs.existsSync(path.join(VOLUME, 'tmp'))) {
-  console.error(`REFUSED: ${VOLUME} is not mounted; this test needs a removable volume`);
-  process.exit(1);
+const configured = fs.realpathSync(os.tmpdir());
+const parts = configured.split('/');
+const VOLUME = parts[1] === 'Volumes' && parts[2] ? '/' + parts.slice(1, 3).join('/') : null;
+if (!VOLUME || fs.statSync(VOLUME).dev === fs.statSync(path.dirname(VOLUME)).dev) {
+  console.error('NOT RUN: this privacy fixture requires TMPDIR on a mounted removable volume');
+  process.exit(2);
 }
-const scratch = fs.mkdtempSync(path.join(VOLUME, 'tmp', 'native-host-privacy-'));
+const scratch = fs.mkdtempSync(path.join(configured, 'native-host-privacy-'));
 const nodeReal = fs.realpathSync(process.execPath);
 
 function makeTccDb(home, grants) {

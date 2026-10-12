@@ -147,7 +147,7 @@ class CiShard(unittest.TestCase):
     """ci-shard.sh with no selector: the whole inventory, except in a teammate workspace."""
 
     LIBS = ('ci-receipts.py', 'leak-canary.sh', 'record-canary.sh', 'tree-witness.sh', 'proc_tree.py',
-            'operator_fences.py', 'worker_tokens.py', 'engine_pass.py', 'workspace_scope.py')
+            'operator_fences.py', 'worker_tokens.py', 'engine_pass.py', 'machine_settings.py', 'workspace_scope.py')
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='workspace-scope-shard.')

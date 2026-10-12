@@ -6,7 +6,7 @@
 # (build plan §3.1 loop L2; stream I1). Missing macOS/Xcode/XcodeGen/an iOS runtime/the external SSD
 # is NOT RUN, exit 2; a build or check failure on a capable host is red.
 # run-tests: no-host-screen: `simctl boot` starts a dedicated simulator without Simulator.app; screenshots come from `simctl io`, never the Mac's screen
-# run-tests: inputs richos/app/scripts/lib/simulator_budget.py richos/engine/scripts/lib/worker_tokens.py richos/mobile/native-ios richos/app/scripts/native-ios-app.test.sh richos/engine/scripts/lib/proc_tree.py richos/engine/scripts/lib/testdevices.py richos/app/scripts/testvm/reserve.py richos/mobile/native-ios/App richos/mobile/native-ios/Core/Sources richos/mobile/native-ios/Core/Package.swift richos/mobile/native-ios/DevBridge richos/mobile/native-ios/project.yml richos/mobile/native-ios/Release/platform.yml richos/mobile/native-ios/ShareExtension richos/mobile/native-ios/NotificationService richos/mobile/native-ios/Release/App-Info.plist richos/mobile/native-ios/Release/RichOSNative.entitlements
+# run-tests: inputs richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/app/scripts/lib/simulator_budget.py richos/engine/scripts/lib/worker_tokens.py richos/mobile/native-ios richos/app/scripts/native-ios-app.test.sh richos/engine/scripts/lib/proc_tree.py richos/engine/scripts/lib/testdevices.py richos/app/scripts/testvm/reserve.py richos/mobile/native-ios/App richos/mobile/native-ios/Core/Sources richos/mobile/native-ios/Core/Package.swift richos/mobile/native-ios/DevBridge richos/mobile/native-ios/project.yml richos/mobile/native-ios/Release/platform.yml richos/mobile/native-ios/ShareExtension richos/mobile/native-ios/NotificationService richos/mobile/native-ios/Release/App-Info.plist richos/mobile/native-ios/Release/RichOSNative.entitlements
 # run-tests: select-inputs richos/mobile/native-ios/App richos/mobile/native-ios/Core/Sources richos/mobile/native-ios/Core/Package.swift richos/mobile/native-ios/DevBridge richos/mobile/native-ios/project.yml richos/mobile/native-ios/Release/platform.yml richos/mobile/native-ios/ShareExtension richos/mobile/native-ios/NotificationService richos/mobile/native-ios/Release/App-Info.plist richos/mobile/native-ios/Release/RichOSNative.entitlements
 # run-tests: covers richos/mobile/native-ios/project.yml richos/mobile/native-ios/App/App/AppStore.swift richos/mobile/native-ios/App/App/RichOSNativeApp.swift richos/mobile/native-ios/App/App/ShareIntake.swift richos/mobile/native-ios/DevBridge/DevBridge.swift richos/mobile/native-ios/Core/Sources/RichOSCLI/Simulator.swift richos/mobile/native-ios/Core/Sources/RichOSCore/Protocol/URLSessionTransport.swift
 set -uo pipefail
@@ -18,23 +18,18 @@ if [ -z "${RICHOS_WORKER_TOKENS:-}" ]; then
 fi
 NATIVE="$ROOT/richos/mobile/native-ios"
 RIOS="$NATIVE/bin/rios"
-VOLUME=/Volumes/E1TB
+MACHINE_LIB="$ROOT/richos/engine/scripts/lib"
+# shellcheck source=../../engine/scripts/lib/machine-settings.sh
+. "$MACHINE_LIB/machine-settings.sh"
+richos_machine_settings || exit 2
+python3 "$MACHINE_LIB/machine_settings.py" cache >/dev/null || exit 2
 
 notrun() { echo "  NOT RUN  native-ios-app: $1"; exit 2; }
 [ "$(uname -s)" = Darwin ] || notrun "macOS is required"
 for tool in xcodebuild xcodegen swift xcrun python3; do
   command -v "$tool" >/dev/null 2>&1 || notrun "$tool is unavailable"
 done
-if [ ! -d "$VOLUME" ] || [ "$(stat -f %d "$VOLUME")" = "$(stat -f %d /Volumes)" ]; then notrun "/Volumes/E1TB is not mounted"; fi
-xcrun simctl list runtimes 2>/dev/null | grep -q '^iOS .*com.apple.CoreSimulator.SimRuntime.iOS' || notrun "no iOS simulator runtime is installed"
-
-# Build caches are reused per checkout (a cold app build is minutes); the prepared simulator OS is reused, exclusively leased and shut down after each run.
-KEY="$(printf '%s' "$ROOT" | shasum -a 256 | cut -c1-10)"
-export RICHOS_NATIVE_IOS_CACHE="$VOLUME/caches/richos-native-ios-proof/$KEY-app"
-if [ "${RICHOS_SIMULATOR_CACHE_HELD:-}" != "$RICHOS_NATIVE_IOS_CACHE" ]; then
-  exec python3 "$DIR/lib/simulator_budget.py" cache "$RICHOS_NATIVE_IOS_CACHE" -- bash "${BASH_SOURCE[0]}" "$@"
-fi
-SCRATCH="$(mktemp -d "$VOLUME/tmp/native-ios-app.XXXXXX")" || { echo '  FAIL  scratch directory'; exit 1; }
+SCRATCH="$(mktemp -d "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}/native-ios-app.XXXXXX")" || { echo '  FAIL  scratch directory'; exit 1; }
 # However the run ends: the simulator is shut down, and the scratch removed.
 trap '"$RIOS" sim stop >"$SCRATCH/stop.json" 2>&1 || true; rm -rf "$SCRATCH"' EXIT HUP INT TERM
 # A simulator left recorded by a run that was killed before its trap is stopped first.

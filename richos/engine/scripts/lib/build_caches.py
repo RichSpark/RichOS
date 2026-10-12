@@ -47,6 +47,7 @@ import shutil
 import stat
 import subprocess
 import time
+import machine_settings as M
 
 HOUR = 3600
 
@@ -181,10 +182,31 @@ def live_checkouts(parents, extra=()):
     `unreadable`, and the caller deletes no orphan while any is: a checkout it could not see
     would look exactly like a deleted one."""
     found, unreadable = set(), []
+    if not parents:
+        # Discover sibling repositories from actual registered Git roots and
+        # this engine's primary checkout, never a fixed home/checkout layout.
+        parents = set()
+        for candidate in [os.path.dirname(__file__), *extra]:
+            if not candidate or not os.path.isdir(candidate):
+                continue
+            try:
+                result = subprocess.run(["git", "-C", candidate, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                        capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                unreadable.append("%s: %s" % (candidate, exc))
+                continue
+            if candidate == os.path.dirname(__file__) and result.returncode and "not a git repository" in result.stderr:
+                continue  # extracted engine code has no project Git ownership
+            common = result.stdout.strip()
+            if result.returncode == 0 and os.path.basename(common) == ".git":
+                parents.add(os.path.dirname(os.path.dirname(common)))
+            else:
+                unreadable.append("%s: cannot discover primary Git checkout" % candidate)
     for parent in parents:
         try:
             names = sorted(os.listdir(parent))
-        except OSError:
+        except OSError as exc:
+            unreadable.append("%s: %s" % (parent, exc))
             continue
         for name in names:
             repo = os.path.join(parent, name)
@@ -433,45 +455,20 @@ def delete_units(profile, keys, idle_seconds, now=None):
 
 # --- the lander's half -----------------------------------------------------------------------
 
-# One fixed read per key, written out, so the verification-inputs check can see exactly which
-# config keys this module reads (an indirect "${!name}" read hides them from it).
-_CONFIG_READS = {
-    "SCRATCH_BUILD_CACHE_ROOT":
-        '. "$1" >/dev/null 2>&1; printf "%s" "${SCRATCH_BUILD_CACHE_ROOT-}"',
-    "SCRATCH_CARGO_TARGET_ROOTS":
-        '. "$1" >/dev/null 2>&1; printf "%s" "${SCRATCH_CARGO_TARGET_ROOTS-}"',
-}
-
-
-def declared(name):
-    """A key from the environment, else from the engine's orchestration.config. The lander
-    runs without the config sourced; the scheduled sweep runs with it exported."""
-    v = (os.environ.get(name) or "").strip()
-    if v:
-        return v
-    # SCRATCH_REAPER_CONFIG first, as every other settings reader of the reaper does, so a
-    # fixture's config is the only one a test can reach.
-    config = (os.environ.get("SCRATCH_REAPER_CONFIG") or "").strip() or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "orchestration.config")
-    script = _CONFIG_READS.get(name)
-    if script is None or not os.path.isfile(config):
-        return ""
-    try:
-        r = subprocess.run(["bash", "-c", script, "build_caches", config],
-                           capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return r.stdout.strip() if r.returncode == 0 else ""
+def roots():
+    values = M.load()
+    base = str(M.cache())
+    cargo = str(M.cache("cargo-target", "CARGO_TARGET_DIR"))
+    return base, [cargo]
 
 
 def checkout_caches(checkout):
     """The cache folders keyed to one checkout, from the declared roots. Read BEFORE the
     checkout is deleted: its Cargo.toml files are listed from the tree."""
-    root = declared("SCRATCH_BUILD_CACHE_ROOT")
-    if not root or not checkout or not os.path.isdir(root) or not os.path.isdir(checkout):
+    root, cargo_roots = roots()
+    if not checkout or not os.path.isdir(checkout):
         return []
-    cargo_roots = [r for r in declared("SCRATCH_CARGO_TARGET_ROOTS").split() if os.path.isdir(r)]
+    cargo_roots = [r for r in cargo_roots if os.path.isdir(r)]
     return [p for _f, p in owned_paths(checkout, root, cargo_roots)]
 
 

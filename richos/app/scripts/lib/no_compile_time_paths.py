@@ -65,7 +65,7 @@ import sys
 # Home-directory names that are placeholders rather than a machine.
 PLACEHOLDER_HOMES = {"you", "example"}
 
-HOST_PATH = re.compile(r"/Users/([^/\s\"']+)/")
+HOST_PATH = re.compile(r"/(Users|Volumes)/([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])")
 
 # Rust accepts any whitespace inside a macro call, so `env!( "OUT_DIR" )` is the same call as
 # `env!("OUT_DIR")` and must be found too. Comments are already removed from the scanned
@@ -262,15 +262,15 @@ def scan_text(source: str, path: str, allow_homes: set[str]) -> list[Finding]:
 
     for ln, body in strings:
         for match in HOST_PATH.finditer(body):
-            who = match.group(1)
-            if who in allow_homes:
+            kind, who = match.group(1), match.group(2)
+            if kind == "Users" and who in allow_homes:
                 continue
             findings.append(
                 Finding(
                     path,
                     ln,
-                    f"a home directory in a string literal (/Users/{who}/) — shipped code must "
-                    "not name a machine's home directory",
+                    f"a machine directory in a string literal (/{kind}/{who}) - shipped code must "
+                    "not name a machine storage directory",
                     body if len(body) < 160 else body[:157] + "...",
                 )
             )
@@ -298,6 +298,9 @@ def scan_tree(root: str, allow_homes: set[str]) -> tuple[list[Finding], int]:
 
 
 SELF_TEST_CASES = [
+    ("a machine volume literal is refused", 'fn f() { let p = "/Volumes/Fixture/cache"; }', 1), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    ("a bare machine volume is refused", 'fn f() { let p = "/Volumes/Fixture"; }', 1), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+
     (
         "a CARGO_MANIFEST_DIR in shipped code is a finding",
         'fn f() { let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../x"); }',
@@ -340,7 +343,7 @@ SELF_TEST_CASES = [
     ),
     (
         "a home directory in a string literal is a finding",
-        'fn f() { let p = "/Users/alex/ab/richos"; }',
+        'fn f() { let p = "/Users/alex/ab/richos"; }', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         1,
     ),
     (
@@ -350,17 +353,17 @@ SELF_TEST_CASES = [
     ),
     (
         "a home directory in a comment is not",
-        "// measured at /Users/alex/Applications/RichOS.app\nfn f() {}",
+        "// measured at /Users/alex/Applications/RichOS.app\nfn f() {}", # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         0,
     ),
     (
         "a home directory in a doc comment is not",
-        "/// measured at /Users/alex/Applications/RichOS.app\nfn f() {}",
+        "/// measured at /Users/alex/Applications/RichOS.app\nfn f() {}", # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         0,
     ),
     (
         "a home directory in a block comment is not",
-        "/* measured at /Users/alex/Applications/RichOS.app */\nfn f() {}",
+        "/* measured at /Users/alex/Applications/RichOS.app */\nfn f() {}", # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         0,
     ),
     (
@@ -390,12 +393,12 @@ SELF_TEST_CASES = [
     ),
     (
         "a raw string carrying a home directory is a finding",
-        'fn f() { let p = r#"/Users/alex/ab"#; }',
+        'fn f() { let p = r#"/Users/alex/ab"#; }', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         1,
     ),
     (
         "an escaped quote does not end the string early",
-        'fn f() { let s = "a \\" /Users/alex/b"; }',
+        'fn f() { let s = "a \\" /Users/alex/b"; }', # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         1,
     ),
 ]

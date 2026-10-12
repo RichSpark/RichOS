@@ -142,7 +142,8 @@ world() {                  # <name>
     W_BIN="$W_DIR/bin"
     W_NOTIFY="$W_DIR/notifications.txt"
     W_FAILS="$W_DIR/scratch-failures.json"
-    mkdir -p "$W_DIR" "$W_LA" "$W_BIN"
+    unset W_MEASURED_ROOT W_PROOF_ROOT W_IOS_ROOT W_CARGO_ROOT
+    mkdir -p "$W_DIR" "$W_LA" "$W_BIN" "$W_DIR/measured" "$W_DIR/proof" "$W_DIR/ios" "$W_DIR/cargo"
     cat >"$W_BIN/osascript" <<STUB
 #!/bin/sh
 # Records the AppleScript it was handed instead of posting it.
@@ -193,6 +194,13 @@ CFG
 }
 
 run_wd() {                 # <mode-flags...>
+    RICHOS_MACHINE_SETTINGS_RESOLVED=1 \
+    RICHOS_BULK_ROOT="$W_DIR" \
+    RICHOS_BUILD_CACHE="${W_MEASURED_ROOT:-$W_DIR/measured}" \
+    RICHOS_PROOF_RUN_DIR="${W_PROOF_ROOT:-$W_DIR/proof}" \
+    RICHOS_NATIVE_IOS_CACHE="${W_IOS_ROOT:-$W_DIR/ios}" \
+    RICHOS_CARGO_CACHE_ROOT="${W_CARGO_ROOT:-$W_DIR/cargo}" \
+    CARGO_TARGET_DIR="$W_DIR/cargo" \
     PATH="$W_BIN:$PATH" \
     DISK_WATCHDOG_CONFIG="$W_CFG" \
     DISK_WATCHDOG_LOG="$W_LOG" \
@@ -218,16 +226,22 @@ else
     printf '%s\n' "$OUT" | sed 's/^/        /' | head -20
 fi
 
-# The extra-volume list is the field whose absence hid the original bug, so it
-# gets its own assertion rather than being assumed from the three above.
+# Volumes follow effective settings. A retired list must not add an unrelated
+# mount, and the selected component directory itself is not a mount.
 world decls2
-write_cfg 1 1 1 1 "/Volumes/E1TB $SANDBOX"
+write_cfg 1 1 1 1 "$SANDBOX/unrelated"
 OUT="$(run_wd --json)"
-if printf '%s' "$OUT" | grep -q "\"mount\": \"$SANDBOX\""; then
-    ok "W1b DISK_EXTRA_VOLUMES is read — the field whose silence hid the bug"
+if printf '%s' "$OUT" | python3 -c '
+import json,sys
+from pathlib import Path
+report=json.load(sys.stdin); root=Path(sys.argv[1]).resolve(); mounts={v["mount"] for v in report["volumes"]}
+assert str(root/"unrelated") not in mounts
+if root.parts[:2]==("/","Volumes"):
+    assert str(Path(*root.parts[:3])) in mounts, (root,mounts)
+' "$SANDBOX"; then
+    ok "W1b effective storage selects its mounted volume and ignores the retired list"
 else
-    bad "W1b the extra volume list was not read"
-    printf '%s\n' "$OUT" | sed 's/^/        /' | head -20
+    bad "W1b effective storage monitoring lost its volume or used the retired list"
 fi
 
 # ===========================================================================
@@ -494,11 +508,18 @@ world severity
 write_cfg 1 999999 999999 999999       # both floors unreachable -> both true
 touch "$W_LA/com.richos.disk-watchdog.plist"
 run_wd --check >/dev/null 2>&1
-N="$(wc -l <"$W_NOTIFY" 2>/dev/null | tr -d ' ')"
-if [ "${N:-0}" = "1" ]; then
-    ok "W8  below both floors, exactly ONE notification is sent"
+if python3 - "$W_STATE" "$W_NOTIFY" <<'PYNOTIFY'
+import json,sys
+report=json.load(open(sys.argv[1]));lines=open(sys.argv[2]).read().splitlines()
+assert report['volumes']
+for volume in report['volumes']:
+    assert sum(('free on '+volume['mount']+' ') in line for line in lines)==1, (volume,lines)
+assert len(lines)==len(report['volumes']), lines
+PYNOTIFY
+then
+    ok "W8  below both floors, exactly ONE notification is sent per selected volume"
 else
-    bad "W8  $N notifications for one event (expected 1)"
+    bad "W8  duplicate or missing notification for a selected volume"
     sed 's/^/        /' "$W_NOTIFY" 2>/dev/null | head -4
 fi
 if grep -q 'CRITICAL' "$W_NOTIFY" 2>/dev/null; then
@@ -1226,8 +1247,12 @@ STUB
 chmod +x "$W_BIN/du"
 # The group folder has a space in its name, which a space-separated list cannot
 # carry; its parent's holder (~/Library) and the apps' folder cover the rule.
-echo "DISK_CONSUMER_CANDIDATES=\"$W_DIR/measured $C_APPS $FAKE_HOME/Library $FAKE_HOME\"" >>"$W_CFG"
-OUT="$(HOME="$FAKE_HOME" run_wd --check)"
+W_MEASURED_ROOT="$W_DIR/measured"
+W_PROOF_ROOT="$C_APPS"
+W_IOS_ROOT="$FAKE_HOME/Library"
+W_CARGO_ROOT="$FAKE_HOME"
+mkdir -p "$SANDBOX/appdata-process-tmp"
+OUT="$(TMPDIR="$SANDBOX/appdata-process-tmp" HOME="$FAKE_HOME" run_wd --check)"
 if grep -qx "$W_DIR/measured" "$DU_LOG" 2>/dev/null; then
     ok "W22  POSITIVE PROBE: an ordinary candidate is still measured by du"
 else
@@ -1252,26 +1277,58 @@ if python3 "$SCRIPT_DIR/lib/foreign_app_data.py" check "$C_GROUP" --home "$FAKE_
 else
     ok "W22c an app-group folder is refused too"
 fi
-# THE DECLARATION ITSELF. The cause on 2026-09-25 was one word in the real
-# config; this reads that config with the real HOME and checks every entry.
-# "The real HOME" is the account's home from the password database, not $HOME:
-# since 2026-09-27 the engine's runners hand every unit a throwaway $HOME inside
-# their temp directory (lib/record-canary.sh), and judged against THAT home the
-# declared $TMPDIR entry is a folder holding the home — a verdict about the
-# runner, not about the declaration. Only a path string is read here.
-W22D_HOME="$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)' 2>/dev/null || printf '%s' "$HOME")"
-# shellcheck disable=SC2016  # expanded by the inner shell, after it sources the config
-REAL_CANDIDATES="$(env -i HOME="$W22D_HOME" TMPDIR="${TMPDIR:-/tmp}" bash -c '. "$1" >/dev/null 2>&1; printf "%s" "$DISK_CONSUMER_CANDIDATES"' _ "$SCRIPT_DIR/../orchestration.config")"
-W22D_BAD=""
-for c in $REAL_CANDIDATES; do
-    if ! python3 "$SCRIPT_DIR/lib/foreign_app_data.py" check "$c" --home "$W22D_HOME" >/dev/null; then
-        W22D_BAD="$W22D_BAD $c"
-    fi
-done
-if [ -n "$REAL_CANDIDATES" ] && [ -z "$W22D_BAD" ]; then
-    ok "W22d no entry of the real DISK_CONSUMER_CANDIDATES enters another app's data"
+# Check actual portable defaults with no private settings. This calls the same
+# candidate function as main, not a copied list or the retired config key.
+W22D_HOME="$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+REAL_CANDIDATES="$(HOME="$W22D_HOME" RICHOS_MACHINE_SETTINGS_RESOLVED=1 python3 - "$SCRIPT_DIR/lib" <<'PYDEFAULT'
+import os, runpy, sys
+sys.path.insert(0,sys.argv[1])
+import machine_settings as M
+for key in M.KEYS:
+    os.environ.pop(key,None)
+watch=runpy.run_path(sys.argv[1]+'/disk-watchdog.py')
+candidates, _volumes=watch['storage_candidates']()
+allowed, refused=watch['measurable'](candidates)
+assert candidates and not refused, refused
+print('\n'.join(allowed))
+PYDEFAULT
+)"
+if [ -n "$REAL_CANDIDATES" ]; then
+    ok "W22d actual portable candidates preserve foreign-app data boundaries"
 else
-    bad "W22d the real declaration enters another app's data:${W22D_BAD:- (it could not be read)}"
+    bad "W22d actual default candidates enter foreign app data or could not be read"
+fi
+
+# A missing optional storage volume must not suppress the primary disk reading.
+if python3 - "$SCRIPT_DIR/lib" "$SANDBOX" <<'PYABSENT'
+import contextlib, importlib.util, io, json, os, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+import machine_settings as M
+spec = importlib.util.spec_from_file_location('watchdog', Path(sys.argv[1]) / 'disk-watchdog.py')
+watch = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(watch)
+env = {'HOME': sys.argv[2], 'TMPDIR': sys.argv[2], 'MODE': 'json',
+       'DISK_PRIMARY_VOLUME': sys.argv[2], M.RESOLVED: '1',
+       'RICHOS_BULK_ROOT': '/Volumes/WatchdogAbsentDrive/storage',
+       'RICHOS_BUILD_CACHE': '/Volumes/WatchdogAbsentDrive/cache'}
+with patch.dict(os.environ, env, clear=True), patch.object(Path, 'is_mount', return_value=False), \
+        patch.object(watch, 'read_volume', return_value=(500 * watch.GB, 300 * watch.GB)) as read:
+    candidates, extras = watch.storage_candidates()
+    assert not extras and not any('/Volumes/WatchdogAbsentDrive' in p for p in candidates)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        result = watch.main()
+    assert result == 0, result
+    report = json.loads(out.getvalue())
+    assert [v['mount'] for v in report['volumes']] == [sys.argv[2]], report
+    read.assert_any_call(sys.argv[2])
+PYABSENT
+then
+    ok "W22e primary disk monitoring survives an unplugged working drive"
+else
+    bad "W22e missing working storage stopped primary disk monitoring"
 fi
 
 echo ""

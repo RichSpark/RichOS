@@ -194,6 +194,26 @@ class LocalTests(unittest.TestCase):
                          sorted(n for n in m.GATE_PASSTHROUGH
                                 if n in os.environ and n not in m.GATE_SET_BY_BUILD))
 
+    def test_private_storage_reaches_isolated_gates_with_environment_precedence(self):
+        bulk = self.root / "bulk"
+        bulk.mkdir()
+        private = self.root / "machine.env"
+        private.write_text(f"RICHOS_BULK_ROOT={bulk}\nCARGO_TARGET_DIR={bulk}/cargo\n"
+                           f"RICHOS_BUILD_CACHE={bulk}/build\n")
+        source = {"HOME": str(self.root), "RICHOS_ENV_FILE": str(private),
+                  "RICHOS_CARGO_CACHE_ROOT": str(bulk / "selected-cargo")}
+        self.assertEqual(m.settings_this_build_drops(source, "build"), [])
+        env = m.gate_environment(source, strict=False)
+        self.assertEqual(env["TMPDIR"], str(bulk / "tmp/richos-gates") + "/")
+        self.assertEqual(env["RICHOS_CARGO_CACHE_ROOT"], str(bulk / "selected-cargo"))
+        self.assertEqual(env["RICHOS_BUILD_CACHE"], str(bulk / "build"))
+        self.assertNotIn("CARGO_TARGET_DIR", env)
+        del source["RICHOS_CARGO_CACHE_ROOT"]
+        self.assertEqual(m.gate_environment(source, strict=False)["RICHOS_CARGO_CACHE_ROOT"], str(bulk / "cargo"))
+        private.write_text(f"RICHOS_BULK_ROOT={bulk}/changed\n")
+        env["HOME"] = str(self.root / "isolated-home")
+        self.assertEqual(m.M.load(env)["RICHOS_BULK_ROOT"], str(bulk))
+
     def test_every_gate_runs_whole_whatever_checkout_or_shell_it_starts_from(self):
         # A runner started from a teammate workspace narrows to the branch's cases by default
         # (engine/scripts/lib/workspace_scope.py, 2026-10-01). A nightly never does: its gates
@@ -213,13 +233,13 @@ class LocalTests(unittest.TestCase):
         # short. One folder for every launcher, regardless of its shell's TMPDIR.
         platform_root = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True,
                                        text=True, check=True).stdout.strip()
-        expected = "/Volumes/E1TB/tmp/richos-gates/" if Path("/Volumes/E1TB").is_mount() else platform_root
+        expected = platform_root
         for caller in ("/tmp/", str(self.root) + "/", None):
             with self.subTest(caller=caller):
                 planted = {"HOME": os.environ["HOME"]}
                 if caller:
                     planted["TMPDIR"] = caller
-                with patch.dict(os.environ, planted):
+                with patch.dict(os.environ, planted, clear=True):
                     if caller is None:
                         os.environ.pop("TMPDIR", None)
                     env, _credentials = m.local_environment()
@@ -228,6 +248,12 @@ class LocalTests(unittest.TestCase):
                 self.assertEqual(conditions["TMPDIR"], expected)
         with patch.object(Path, "is_mount", return_value=False):
             self.assertEqual(m.gate_tmpdir({"TMPDIR": str(self.root)}), platform_root)
+        bulk = self.root / "bulk"; bulk.mkdir()
+        self.assertEqual(m.gate_tmpdir({"HOME": str(self.root), "RICHOS_BULK_ROOT": str(bulk)}), str(bulk / "tmp/richos-gates") + "/")
+        missing = "/Volumes/RichOSMissingGateFixture/cache" # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+        with self.assertRaisesRegex(ValueError, "not mounted"), patch.object(Path, "mkdir") as mkdir:
+            m.gate_tmpdir({"HOME": str(self.root), "RICHOS_BULK_ROOT": missing})
+        mkdir.assert_not_called()
         self.assertNotIn("TMPDIR", m.GATE_PASSTHROUGH)
         self.assertIn("TMPDIR", m.GATE_SET_BY_BUILD)
 
@@ -1206,7 +1232,7 @@ while True: time.sleep(.02)
     def build_that_takes_its_vm_proof(self, proof_result):
         r = self.runner()
         r.env = {"RICHOS_NIGHTLY_RUN_ID": "fixture-run-id"}
-        r.gui_host, r.vm_settings = "richos-test-1", {"TESTVM_ROOT": "/Volumes/E1TB/testvm"}
+        r.gui_host, r.vm_settings = "richos-test-1", {"TESTVM_ROOT": "/Volumes/E1TB/testvm"} # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         calls = []
 
         def fake_command(*args, **kwargs):
@@ -1235,7 +1261,7 @@ while True: time.sleep(.02)
         self.assertEqual(args[args.index("--run") + 1], "fixture-run-id")
         self.assertEqual(args[args.index("--vm") + 1], "richos-test-1")
         self.assertEqual(kwargs["env_extra"]["RICHOS_NIGHTLY_STATE"], str(self.root / "state"))
-        self.assertEqual(kwargs["env_extra"]["TESTVM_ROOT"], "/Volumes/E1TB/testvm")
+        self.assertEqual(kwargs["env_extra"]["TESTVM_ROOT"], "/Volumes/E1TB/testvm") # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         self.assertIn("Screen suites: never on this Mac's display", buf.getvalue())
         self.assertIn("VM boot proof PASSED", buf.getvalue())
         # And publish takes it with nobody passing --gui-proof.
@@ -2401,7 +2427,7 @@ class GatesAtOnceTests(unittest.TestCase):
         self.assertEqual(seen, ["gates/release-smoke", "gates/core-tests", "gates/updater-tests"])
 
     # What a shell always has and that is no setting of this build's.
-    BASE_ENVIRON = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/Users/fixture", "LANG": "en_US.UTF-8"}
+    BASE_ENVIRON = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/Users/fixture", "LANG": "en_US.UTF-8"} # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
 
     def main_refusal(self, *argv, environ=None):
         """Run main() in this process (so a mutation of it is what runs); (exit code, stderr).
@@ -2531,13 +2557,12 @@ class GatesAtOnceTests(unittest.TestCase):
             reached.append("lock")
             return contextlib.nullcontext()
 
-        with patch.dict(os.environ, {**self.BASE_ENVIRON, "HOME": os.environ["HOME"]}, clear=True), \
+        with patch.dict(os.environ, {**self.BASE_ENVIRON, "HOME": os.environ["HOME"], "RICHOS_BULK_ROOT": str(volume)}, clear=True), \
                 patch.object(sys, "argv", ["nightly-local.py", "build", *self.NUMBERS,
                                            "--state-dir", str(self.root / "state")]), \
                 patch.object(m.platform, "system", return_value="Darwin"), \
                 patch.object(m.platform, "machine", return_value="arm64"), \
                 patch.object(Path, "is_mount", return_value=True), \
-                patch.object(m, "GATE_TMPDIR", folder, create=True), \
                 patch.object(m, "notary_environment", return_value={}), \
                 patch.object(m, "private_file", side_effect=Path), \
                 patch.object(m, "exclusive", side_effect=lock), \
@@ -2572,7 +2597,7 @@ class GatesAtOnceTests(unittest.TestCase):
 
     def test_a_gate_folder_the_updater_tests_would_refuse_stops_the_build_before_any_gate(self):
         # Nightly 49, first build (20261010T211748Z-87d4a826): gates/updater-tests failed in 3 s
-        # with "home has an unsafe ancestor" because /Volumes/E1TB was group-writable.
+        # with "home has an unsafe ancestor" because /Volumes/E1TB was group-writable. # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
         # richos-user-update root() refuses a home with a group- or world-writable ancestor
         # unless it is root's and sticky. The build now asks the same question first.
         refusal, reached, runner, folder = self.build_with_gate_parent(0o775)
@@ -2627,12 +2652,12 @@ class GatesAtOnceTests(unittest.TestCase):
 
     def test_the_guest_and_vm_settings_the_shell_gives_reach_the_vm_boot_proof(self):
         kwargs, _ = self.main_with("build", *self.NUMBERS, environ={
-            "RICHOS_GUI_HOST": "richos-test-1", "TESTVM_ROOT": "/Volumes/E1TB/testvm",
+            "RICHOS_GUI_HOST": "richos-test-1", "TESTVM_ROOT": "/Volumes/E1TB/testvm", # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
             # Not settings of this build's, and never refused: the agent harness's identity,
             # and a credential read from the shell on purpose for the signing steps.
             "RICHOS_AGENT_OWNER": "zach", "RICHOS_NOTARY_PROFILE": "fixture-profile"})
         self.assertEqual(kwargs["gui_host"], "richos-test-1")
-        self.assertEqual(kwargs["vm_settings"], {"TESTVM_ROOT": "/Volumes/E1TB/testvm"})
+        self.assertEqual(kwargs["vm_settings"], {"TESTVM_ROOT": "/Volumes/E1TB/testvm"}) # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
 
     def stand_in_gui_proof(self, result, exit_code, write_proof=True):
         """A gui-proof-in-vm.sh that writes the proof file it was given `--out` and exits."""

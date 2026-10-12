@@ -134,11 +134,10 @@ fi
 T="$SANDBOX/copies.jsonl"
 : > "$T"
 write_row "$T" Write '{"file_path":"/scratch/ray9/measure.py","content":"x"}'
-write_row "$T" Bash '{"command":"B64=$(base64 -i measure.py | tr -d '\''\\n'\'') && ./guest.sh \"echo $B64 | base64 -d > /Users/admin/measure.py; chmod +x /Users/admin/measure.py\""}'
+write_row "$T" Bash '{"command":"B64=$(base64 -i measure.py | tr -d '\''\\n'\'') && ./guest.sh \"echo $B64 | base64 -d > /Users/admin/measure.py; chmod +x /Users/admin/measure.py\""}' # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
 run "$T"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "1 helper script " \
-   && printf '%s' "$OUT" | grep -q "copied to /Users/admin/measure.py" \
-   && printf '%s' "$OUT" | grep -q "1 later copy"; then
+   && printf '%s' "$OUT" | grep -q "copied to /Users/admin/measure.py" && printf '%s' "$OUT" | grep -q "1 later copy"; then # machine-path-exempt: isolated guest or negative fixture input; no storage default
     ok "D1 a transfer into the guest is one script and a visible copy"
 else
     bad "D1 a transfer into the guest is one script and a visible copy" "rc=$RC out=$OUT"

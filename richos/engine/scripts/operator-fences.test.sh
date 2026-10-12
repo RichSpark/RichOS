@@ -656,6 +656,11 @@ ofx_in A "$(ofx_lease release --repo "$R")"
 # ---- F22: status against the declaration (e8, G12) -----------------------------------------
 out="$(bash "$FENCES" status --repo "$R" --entity "$OFX/entity" 2>&1)"; rc=$?
 expect "F22" "[git $G] status exits 0 when on, current and reachable" "$([ $rc = 0 ] && printf '%s' "$out" | grep -q "OK" && echo 0 || echo 1)" "$out"
+mv "$(dirname "$PROG")/machine_settings.py" "$OFX/settings-reader.py"
+out="$(bash "$FENCES" status --repo "$R" --entity "$OFX/entity" 2>&1)"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'machine_settings.py'
+expect "F22" "[git $G] status names a missing installed settings reader" "$?" "$out"
+mv "$OFX/settings-reader.py" "$(dirname "$PROG")/machine_settings.py"
 printf '# drift\n' >> "$PROG"
 out="$(bash "$FENCES" status --repo "$R" --entity "$OFX/entity" 2>&1)"; rc=$?
 [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "differs"

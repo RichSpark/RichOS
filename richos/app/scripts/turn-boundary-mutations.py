@@ -128,6 +128,7 @@ def run(copy, target, workspace, filt):
 EXPORT_ROOTS = [APP, "richos/web", "richos/mobile", "richos/engine/voice/models",
                 "richos/engine/scripts/lib/dialect",
                 "richos/engine/.env.example", "richos/engine/scripts/lib/machine_settings.fixtures.json",
+                "richos/engine/scripts/lib/machine_settings.py",
                 # richos-core's integration tests compile in the captured upstream failures.
                 "docs/verification/upstream-failure-2026-09-05"]
 INCLUDE_RE = re.compile(r'include_(?:str|bytes)!\s*\(\s*"([^"]+)"')

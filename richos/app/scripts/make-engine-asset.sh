@@ -363,6 +363,10 @@ VERIFY="$(mktemp -d "${TMPDIR:-/tmp}/richos-engine-verify.XXXXXX")"
 /usr/bin/tar -x -z --no-same-owner -f "$TARBALL" -C "$VERIFY" || die "the archive does not open"
 [ -d "$VERIFY/engine/scripts/hooks" ] || die "the archive has no engine/scripts/hooks"
 [ -f "$VERIFY/engine/VERSION" ] || die "the archive has no engine/VERSION"
+# Scan extracted shipped bytes. Fixture/history reasons apply only to source text;
+# native/runtime binaries cannot waive embedded host paths.
+python3 "$SELF_DIR/lib/no_host_paths.py" "$VERIFY/engine" --reviewed-text --home "$HOME" --upstream-policy "$SELF_DIR/runtime-sources.json" --upstream-runtime-root "$VERIFY/engine/runtime" \
+    || die "the engine archive contains machine-specific storage paths"
 [ "$(tr -d '[:space:]' < "$VERIFY/engine/VERSION")" = "$VERSION" ] || die "the archive's VERSION is not $VERSION"
 
 # THE LICENSE CHECK IS READ OUT OF THE ARCHIVE, not off the staging directory. `cp` having

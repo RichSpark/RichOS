@@ -7,27 +7,28 @@
 # serial that is not an emulator's before running adb. A host without node, openssl, curl, a
 # Java runtime or the ZXing jar in the Gradle cache prints NOT RUN and exits 2.
 # run-tests: no-host-screen: loopback servers and files only; no window, no device
-# run-tests: inputs richos/mobile/native-android/bin/emu-pair-front.mjs richos/mobile/native-android/bin/emu-ui.py richos/app/scripts/native-android-pair-lab.test.sh
+# run-tests: inputs richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/mobile/native-android/bin/emu-pair-front.mjs richos/mobile/native-android/bin/emu-ui.py richos/app/scripts/native-android-pair-lab.test.sh
 # run-tests: covers richos/mobile/native-android/bin/emu-pair-front.mjs richos/mobile/native-android/bin/emu-ui.py
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/../../.." && pwd)"
 BIN="$ROOT/richos/mobile/native-android/bin"
-VOLUME=/Volumes/E1TB
+MACHINE_LIB="$ROOT/richos/engine/scripts/lib"
+# shellcheck source=../../engine/scripts/lib/machine-settings.sh
+. "$MACHINE_LIB/machine-settings.sh"
+richos_machine_settings || exit 2
+CACHE_ROOT="$(python3 "$MACHINE_LIB/machine_settings.py" cache)" || exit 2
 
 for tool in node openssl curl python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "  NOT RUN  native-android-pair-lab: no $tool"; exit 2; }
 done
-if [ ! -d "$VOLUME" ] || [ "$(stat -f %d "$VOLUME")" = "$(stat -f %d /Volumes)" ]; then
-  echo "  NOT RUN  native-android-pair-lab: mount $VOLUME for scratch"; exit 2
-fi
-GRADLE_HOME="${GRADLE_USER_HOME:-$VOLUME/caches/richos-native-android/gradle}"
+GRADLE_HOME="${GRADLE_USER_HOME:-$CACHE_ROOT/richos-native-android/gradle}"
 if [ -z "$(find "$GRADLE_HOME/caches/modules-2/files-2.1/com.google.zxing/core" -name core-3.5.4.jar 2>/dev/null | head -1)" ]; then
   echo "  NOT RUN  native-android-pair-lab: no ZXing core 3.5.4 in $GRADLE_HOME (build the Android app once)"; exit 2
 fi
 
-mkdir -p "$VOLUME/tmp/codex"
-SCRATCH="$(mktemp -d "$VOLUME/tmp/codex/native-android-pair-lab.XXXXXX")" || { echo "  FAIL  native-android-pair-lab: no scratch"; exit 1; }
+mkdir -p "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}"
+SCRATCH="$(mktemp -d "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.gettempdir())')}/native-android-pair-lab.XXXXXX")" || { echo "  FAIL  native-android-pair-lab: no scratch"; exit 1; }
 UP_PID=""; FRONT_PID=""
 cleanup() {
   # Only the two processes this suite started, by the PIDs captured when it started them.

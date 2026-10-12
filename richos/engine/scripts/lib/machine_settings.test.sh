@@ -78,6 +78,20 @@ class Settings(unittest.TestCase):
    decisions.clear()
    with patch.dict(os.environ,{'TMPDIR':str(base/'scheduled')}):reaper.scan_scratch_root(Walls())
    self.assertFalse(decisions)
+ def test_scheduled_temp_scan_does_not_nominate_named_scratch(self):
+  import importlib.util
+  spec=importlib.util.spec_from_file_location('scheduled_reaper',pathlib.Path(sys.argv[1],'scratch-reaper.py'))
+  R=importlib.util.module_from_spec(spec);spec.loader.exec_module(R)
+  with tempfile.TemporaryDirectory() as directory:
+   base=pathlib.Path(directory).resolve().resolve();named=base/'richos-agents';(named/'worker').mkdir(parents=True)
+   reaper=R.Reaper.__new__(R.Reaper)
+   reaper.cfg={'legacy_tmp_patterns':[], 'legacy_age_hours':0,'scratch_root_name':'richos-scratch','tmp_patterns':['*'],'deny_by_default':True,'agent_roots':[str(named)],'claude_roots':[],'shared_tmp_roots':[str(base)]}
+   reaper.roots=[];reaper._unknown=[];reaper.floor=0;reaper.now=10000
+   with patch.dict(os.environ,{'TMPDIR':str(base)}),patch.object(R,'measure') as measure:
+    reaper.scan_tmp(None);reaper.scan_shared_tmp(None)
+   measure.assert_not_called();self.assertFalse(reaper._unknown)
+   self.assertTrue(reaper.named_scratch(named/'worker'))
+   self.assertTrue(reaper.named_scratch(base))
  def test_process_apply_has_no_global_collection_or_state_write(self):
   import contextlib, importlib.util, io
   from types import SimpleNamespace

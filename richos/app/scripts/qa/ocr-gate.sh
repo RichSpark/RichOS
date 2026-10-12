@@ -147,13 +147,13 @@ esac
 
 # --- a walk record's text files ---------------------------------------------
 # Step lists and the record itself are text, so the frame reader never sees them. A home path
-# that is not the guest's own /Users/admin, an address, or a listed name in one of them is
+# that is not the guest's own /Users/admin, an address, or a listed name in one of them is # machine-path-exempt: named account in the isolated QA guest, not a customer storage path
 # published exactly as a frame would be. A synthetic line proves the scan first.
 TEXT_HITS=0
 if [ "${#TEXTS[@]}" -gt 0 ]; then
     TSHAPES='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|/Users/[A-Za-z][A-Za-z0-9._-]+'
-    text_hits() { grep -oiE "$TSHAPES" | grep -vxE '/Users/admin' | sort -u | head -5 || true; }
-    CTLTXT="$(printf 'x /Users/qafixture/run y qa-fixture@example.invalid' | text_hits)"
+    text_hits() { grep -oiE "$TSHAPES" | grep -vxE '/Users/admin' | sort -u | head -5 || true; } # machine-path-exempt: named account in the isolated QA guest, not a customer storage path
+    CTLTXT="$(printf 'x /Users/qafixture/run y qa-fixture@example.invalid' | text_hits)" # machine-path-exempt: named account in the isolated QA guest, not a customer storage path
     if [ "$(printf '%s\n' "$CTLTXT" | grep -c .)" -lt 2 ]; then
         echo "ocr-gate.sh: TEXT POSITIVE CONTROL FAILED: the scan did not flag a synthetic home path and address." >&2
         exit 2

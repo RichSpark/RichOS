@@ -443,7 +443,7 @@ t "keychain: a path outside the guest's home is REFUSED, never sanitized"
   # that tried to normalize a host path into a guest one would be a check that
   # sometimes guesses; this one refuses and says which prefix it wanted.
   : > "$TMP/log.kcbad"
-  for bad in "$HOME/Library/Keychains" "/Users/alex/testvm/x/home" "../../../etc" ""; do
+  for bad in "$HOME/Library/Keychains" "/Users/alex/testvm/x/home" "../../../etc" ""; do # machine-path-exempt: isolated test VM account/path; never a customer default
     out="$(env STUB_LOG="$TMP/log.kcbad" "$TESTVM_DIR/keychain.sh" prepare richos-test-a "$bad" 2>&1)"
     no $? "must refuse: $bad"
   done
@@ -465,7 +465,7 @@ t_done
 
 t "keychain: every path it touches is under the guest's payload home"
   log="$(cat "$TMP/log.kc")"
-  eq "$(printf '%s\n' "$log" | grep -c "/Users/alex/")" "0" "no host path may appear in any guest command"
+  eq "$(printf '%s\n' "$log" | grep -c "/Users/alex/")" "0" "no host path may appear in any guest command" # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$log" "$GUEST_HOME_UNDER_TEST/Library/Keychains/login.keychain-db"
 t_done
 
@@ -721,10 +721,10 @@ t "app env: TESTVM_APP_ENV becomes --env pairs for the app's own RICHOS_ knobs, 
   eq "$(app_env_args "")" ""
   eq "$(app_env_args "RICHOS_PERMISSION_DEADLINE_MS=20000")" "--env RICHOS_PERMISSION_DEADLINE_MS=20000"
   eq "$(app_env_args "RICHOS_A=1 RICHOS_B_C=x.y-z")" "--env RICHOS_A=1 --env RICHOS_B_C=x.y-z"
-  eq "$(app_env_args "RICHOS_VOICE_INPUT_WAV=/Users/admin/testvm/ship-tomorrow.wav")" "--env RICHOS_VOICE_INPUT_WAV=/Users/admin/testvm/ship-tomorrow.wav"
+  eq "$(app_env_args "RICHOS_VOICE_INPUT_WAV=/Users/admin/testvm/ship-tomorrow.wav")" "--env RICHOS_VOICE_INPUT_WAV=/Users/admin/testvm/ship-tomorrow.wav" # machine-path-exempt: isolated test VM account/path; never a customer default
   # Literal $(...) and backticks are the refusal inputs under test.
   # shellcheck disable=SC2016
-  for refused in 'RICHOS_OTHER=/Users/admin/input.wav' 'RICHOS_VOICE_INPUT_WAV=/a;b' 'RICHOS_VOICE_INPUT_WAV=/a$(id)' 'RICHOS_VOICE_INPUT_WAV=/a`id`' 'RICHOS_VOICE_INPUT_WAV=/a b' 'RICHOS_VOICE_INPUT_WAV=/a*'; do
+  for refused in 'RICHOS_OTHER=/Users/admin/input.wav' 'RICHOS_VOICE_INPUT_WAV=/a;b' 'RICHOS_VOICE_INPUT_WAV=/a$(id)' 'RICHOS_VOICE_INPUT_WAV=/a`id`' 'RICHOS_VOICE_INPUT_WAV=/a b' 'RICHOS_VOICE_INPUT_WAV=/a*'; do # machine-path-exempt: isolated test VM account/path; never a customer default
     app_env_args "$refused" >/dev/null 2>&1; no $? "$refused passed"
   done
   for refused in "PATH=/tmp" "RICHOS_X=a;b" "RICHOS_X=\$(id)" "RICHOS_X='a'" "richos_x=1" "RICHOS_X="; do
@@ -913,7 +913,7 @@ t "claude login: the credential reaches the guest ON STDIN, and is in no command
   : > "$TMP/login.log"
   out="$(env $(login_env) STUB_LOG="$TMP/login.log" STUB_SECURITY_STDIN="$TMP/login.stdin" \
          STUB_CLAUDE_LOGIN=present \
-         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>/dev/null)"
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>/dev/null)" # machine-path-exempt: isolated test VM account/path; never a customer default
   ok $? "a present readback must report logged in"
   eq "$out" "claude login: guest logged in"
   GUEST_CRED='{"claudeAiOauth":{"accessToken":"not-a-real-token-0123456789","expiresAt":4102444800000}}'
@@ -955,7 +955,7 @@ t "claude login: invalid or expired snapshots never reach a guest store"
     # shellcheck disable=SC2046  # login_env prints NAME=value words; splitting them is intended, as on every other login_env line
     out="$(env $(login_env) HOST_SECURITY_CREDENTIAL_FILE="$TMP/invalid-credential.json" \
       STUB_LOG="$TMP/login-refused.log" \
-      "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>"$TMP/login-refused.err")"
+      "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>"$TMP/login-refused.err")" # machine-path-exempt: isolated test VM account/path; never a customer default
     no $? "invalid/expired credentials must refuse"
     eq "$out" "claude login: guest NOT logged in"
     eq "$(wc -c < "$TMP/login-refused.log" | tr -d ' ')" "0" "a rejected credential reached the guest"
@@ -969,19 +969,18 @@ t "claude login: the item is written under BOTH names the guest could look up"
   # hand over ssh has no such variable and asks for the bare name.
   payload="$(cat "$TMP/login.stdin")"
   has "$payload" '-s "Claude Code-credentials"'
-  scoped="Claude Code-credentials-$(printf '%s' "/Users/admin/testvm/richos-test-a/home/.claude" | shasum -a 256 | awk '{print substr($1,1,8)}')"
+  scoped="Claude Code-credentials-$(printf '%s' "/Users/admin/testvm/richos-test-a/home/.claude" | shasum -a 256 | awk '{print substr($1,1,8)}')" # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$payload" "-s \"$scoped\""
   has "$payload" '-a "admin"'
   hasnt "$payload" '-a "alex"'
 t_done
 
 t "claude login: a second sign-in (--account) crosses as its own item, access token only, Home's name untouched"
-  WORK_GUEST="/Users/admin/testvm/richos-test-a/home/claude-accounts/2"
+  WORK_GUEST="/Users/admin/testvm/richos-test-a/home/claude-accounts/2" # machine-path-exempt: isolated test VM account/path; never a customer default
   : > "$TMP/work.log"
   # shellcheck disable=SC2046  # login_env prints NAME=value words; splitting them is intended
   out="$(env $(login_env) STUB_LOG="$TMP/work.log" STUB_SECURITY_STDIN="$TMP/work.stdin" STUB_CLAUDE_LOGIN=present \
-         "$TESTVM_DIR/claude-login.sh" push --account "Claude Code-credentials-6392715e" --host-folder "/nonexistent/work" --guest-home "/Users/admin/testvm/richos-test-a/home" \
-         richos-test-a "$WORK_GUEST" 2>/dev/null)"
+         "$TESTVM_DIR/claude-login.sh" push --account "Claude Code-credentials-6392715e" --host-folder "/nonexistent/work" --guest-home "/Users/admin/testvm/richos-test-a/home"  richos-test-a "$WORK_GUEST" 2>/dev/null)" # machine-path-exempt: isolated guest or negative fixture input; no storage default
   ok $? "a second sign-in must report logged in"
   eq "$out" "claude login: guest logged in"
   work_payload="$(cat "$TMP/work.stdin")"
@@ -989,7 +988,7 @@ t "claude login: a second sign-in (--account) crosses as its own item, access to
   has   "$work_payload" "-s \"$wscoped\""
   hasnt "$work_payload" '-s "Claude Code-credentials"'
   hasnt "$work_payload" 'alex'
-  has   "$work_payload" '"/Users/admin/testvm/richos-test-a/home/Library/Keychains/login.keychain-db"'
+  has   "$work_payload" '"/Users/admin/testvm/richos-test-a/home/Library/Keychains/login.keychain-db"' # machine-path-exempt: isolated test VM account/path; never a customer default
   eq "$(printf '%s\n' "$work_payload" | grep -c '^add-generic-password')" "1" "exactly one guest item"
   hasnt "$(cat "$TMP/work.stdin" "$TMP/work.log")" "not-a-real-token"
   hasnt "$(cat "$TMP/work.stdin" "$TMP/work.log")" "also-not-real"
@@ -1002,7 +1001,7 @@ t "claude login: the keychain route alone is still enough — two stores, either
   # store holds nothing and the keychain item is there, and that is a login.
   out="$(env $(login_env) STUB_LOG=/dev/null STUB_SECURITY_STDIN="$TMP/login.stdin2" \
          STUB_CLAUDE_LOGIN=present STUB_CREDENTIAL_EMPTY=1 \
-         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>/dev/null)"
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>/dev/null)" # machine-path-exempt: isolated test VM account/path; never a customer default
   ok $? "the keychain item alone must be enough"
   eq "$out" "claude login: guest logged in"
 t_done
@@ -1015,7 +1014,7 @@ t "claude login: the credential file is the primary route, and it carries the VA
   : > "$TMP/login.log"
   out="$(env $(login_env) STUB_LOG="$TMP/login.log" STUB_SECURITY_STDIN="$TMP/login.stdin3" \
          STUB_CLAUDE_LOGIN=absent \
-         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>/dev/null)"
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>/dev/null)" # machine-path-exempt: isolated test VM account/path; never a customer default
   ok $? "the file route alone must be enough"
   eq "$out" "claude login: guest logged in"
   eq "$(cat "$STUB_GUEST_FS/credentials.json")" "$GUEST_CRED"
@@ -1028,7 +1027,7 @@ t_done
 t "claude login: a store that reports success and holds NOTHING is caught here, not at the first model turn"
   out="$(env $(login_env) STUB_LOG=/dev/null STUB_SECURITY_STDIN="$TMP/login.stdin4" \
          STUB_CLAUDE_LOGIN=absent STUB_CREDENTIAL_EMPTY=1 \
-         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>"$TMP/login.err")"
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "/Users/admin/testvm/richos-test-a/home" 2>"$TMP/login.err")" # machine-path-exempt: isolated test VM account/path; never a customer default
   no $? "an empty store must not be reported as a login"
   eq "$out" "claude login: guest NOT logged in"
   has "$(cat "$TMP/login.err")" "bytes where"
@@ -1044,7 +1043,7 @@ cred_at() {  # <file> <token> <seconds-from-now>
   printf '{"claudeAiOauth":{"accessToken":"%s","refreshToken":"also-not-real-9876543210","expiresAt":%s}}' \
     "$2" "$(( ( $(date +%s) + $3 ) * 1000 ))" > "$1"
 }
-KEEP_HOME="/Users/admin/testvm/richos-test-a/home"
+KEEP_HOME="/Users/admin/testvm/richos-test-a/home" # machine-path-exempt: isolated test VM account/path; never a customer default
 # The same words login_env prints, as an array: nothing to word-split.
 LOGIN_ENV=("TESTVM_HOST_SECURITY=$TMP/host-security.sh" "TESTVM_HOST_CLAUDE_RENEW=$TMP/host-renew.sh")
 
@@ -1579,11 +1578,11 @@ t_done
 t "guest.sh --pull: the legacy scp protocol, and the guest side is the source"
   : > "$TMP/scp.log"
   PATH="$TMP/bin:$PATH" FAKE_SCP_LOG="$TMP/scp.log" \
-    "$TESTVM_DIR/guest.sh" "$GVM" --pull /Users/admin/app.log "$TMP/app.log" >/dev/null 2>&1
+    "$TESTVM_DIR/guest.sh" "$GVM" --pull /Users/admin/app.log "$TMP/app.log" >/dev/null 2>&1 # machine-path-exempt: isolated test VM account/path; never a customer default
   ok $?
   log="$(cat "$TMP/scp.log")"
   has "$log" "-O"
-  has "$log" "admin@10.0.0.9:/Users/admin/app.log"
+  has "$log" "admin@10.0.0.9:/Users/admin/app.log" # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$log" "$TMP/app.log"
 t_done
 
@@ -1591,12 +1590,12 @@ t "guest.sh --push: the host side is the source, and it must exist here first"
   : > "$TMP/scp.log"
   echo hello > "$TMP/payload.txt"
   PATH="$TMP/bin:$PATH" FAKE_SCP_LOG="$TMP/scp.log" \
-    "$TESTVM_DIR/guest.sh" "$GVM" --push "$TMP/payload.txt" /Users/admin/payload.txt >/dev/null 2>&1
+    "$TESTVM_DIR/guest.sh" "$GVM" --push "$TMP/payload.txt" /Users/admin/payload.txt >/dev/null 2>&1 # machine-path-exempt: isolated test VM account/path; never a customer default
   ok $?
-  has "$(cat "$TMP/scp.log")" "admin@10.0.0.9:/Users/admin/payload.txt"
+  has "$(cat "$TMP/scp.log")" "admin@10.0.0.9:/Users/admin/payload.txt" # machine-path-exempt: isolated test VM account/path; never a customer default
 
   PATH="$TMP/bin:$PATH" FAKE_SCP_LOG=/dev/null \
-    "$TESTVM_DIR/guest.sh" "$GVM" --push "$TMP/not-here.txt" /Users/admin/x >/dev/null 2>"$TMP/guest.err"
+    "$TESTVM_DIR/guest.sh" "$GVM" --push "$TMP/not-here.txt" /Users/admin/x >/dev/null 2>"$TMP/guest.err" # machine-path-exempt: isolated test VM account/path; never a customer default
   no $? "pushing a file that is not on this Mac must refuse"
   has "$(cat "$TMP/guest.err")" "no such file on this Mac"
 t_done
@@ -1606,20 +1605,20 @@ t "guest.sh copies literal remote paths through legacy scp's shell parse"
   # $HOME is an intentional literal remote filename.
   # shellcheck disable=SC2016
   PATH="$TMP/bin:$PATH" FAKE_SCP_LOG="$TMP/scp.log" \
-    "$TESTVM_DIR/guest.sh" "$GVM" --pull '/Users/admin/Application Support/$HOME' "$TMP/app.log" >/dev/null 2>&1
+    "$TESTVM_DIR/guest.sh" "$GVM" --pull '/Users/admin/Application Support/$HOME' "$TMP/app.log" >/dev/null 2>&1 # machine-path-exempt: isolated test VM account/path; never a customer default
   ok $?
   # Assert the literal escaped remote filename.
   # shellcheck disable=SC2016
-  has "$(cat "$TMP/scp.log")" 'admin@10.0.0.9:/Users/admin/Application\ Support/\$HOME'
+  has "$(cat "$TMP/scp.log")" 'admin@10.0.0.9:/Users/admin/Application\ Support/\$HOME' # machine-path-exempt: isolated test VM account/path; never a customer default
   : > "$TMP/scp.log"
   # $HOME is an intentional literal remote filename.
   # shellcheck disable=SC2016
   PATH="$TMP/bin:$PATH" FAKE_SCP_LOG="$TMP/scp.log" \
-    "$TESTVM_DIR/guest.sh" "$GVM" --push "$TMP/payload.txt" '/Users/admin/Application Support/$HOME' >/dev/null 2>&1
+    "$TESTVM_DIR/guest.sh" "$GVM" --push "$TMP/payload.txt" '/Users/admin/Application Support/$HOME' >/dev/null 2>&1 # machine-path-exempt: isolated test VM account/path; never a customer default
   ok $?
   # Assert the literal escaped remote filename.
   # shellcheck disable=SC2016
-  has "$(cat "$TMP/scp.log")" 'admin@10.0.0.9:/Users/admin/Application\ Support/\$HOME'
+  has "$(cat "$TMP/scp.log")" 'admin@10.0.0.9:/Users/admin/Application\ Support/\$HOME' # machine-path-exempt: isolated test VM account/path; never a customer default
 t_done
 
 t "guest.sh: a copy with one path is refused, and names both"
@@ -1823,22 +1822,22 @@ hfrun() {  # hfrun <fixture> <args...> — run hand-file.sh against the stub gue
 
 t "hand-file: a paste goes on stdin, to the recorded pid, behind the frontmost check"
   : > "$TMP/hf.log"
-  out="$(hfrun "$TMP/hf-paste.json" paste '/Users/admin/walk/shot 1.png')"; ok $? "$(cat "$TMP/hf.err")"
+  out="$(hfrun "$TMP/hf-paste.json" paste '/Users/admin/walk/shot 1.png')"; ok $? "$(cat "$TMP/hf.err")" # machine-path-exempt: isolated test VM account/path; never a customer default
   has   "$out" '"handed":"paste"'
   has   "$(cat "$TMP/hf-sent.js")" '"pid": 718'
-  has   "$(cat "$TMP/hf-sent.js")" '"path": "/Users/admin/walk/shot 1.png"'
+  has   "$(cat "$TMP/hf-sent.js")" '"path": "/Users/admin/walk/shot 1.png"' # machine-path-exempt: isolated test VM account/path; never a customer default
   has   "$(cat "$TMP/hf-sent.js")" 'bringToFront'
   has   "$(cat "$TMP/hf-sent.js")" 'refusing: the app under test is not frontmost'
   hasnt "$(cat "$TMP/hf.log")" 'shot 1.png'
 t_done
 
 t "hand-file: the guest refusing (app not frontmost) is a failure, never a success"
-  out="$(hfrun "$TMP/hf-notfront.json" paste /Users/admin/walk/a.pdf)"; no $? "a refusal must not exit 0"
+  out="$(hfrun "$TMP/hf-notfront.json" paste /Users/admin/walk/a.pdf)"; no $? "a refusal must not exit 0" # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$out" '"error":"notfront"'
 t_done
 
 t "hand-file: a drag carries its target into the program as numbers"
-  out="$(hfrun "$TMP/hf-drag.json" drag /Users/admin/walk/a.pdf --to 900,640.5)"; ok $? "$(cat "$TMP/hf.err")"
+  out="$(hfrun "$TMP/hf-drag.json" drag /Users/admin/walk/a.pdf --to 900,640.5)"; ok $? "$(cat "$TMP/hf.err")" # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$out" '"handed":"drag"'
   has "$(cat "$TMP/hf-sent.js")" '"tox": 900.0'
   has "$(cat "$TMP/hf-sent.js")" '"toy": 640.5'
@@ -1846,11 +1845,11 @@ t_done
 
 t "hand-file: arguments that would put input in the wrong place are refused before the guest"
   : > "$TMP/hf.log"
-  hfrun "$TMP/hf-paste.json" drag /Users/admin/walk/a.pdf >/dev/null; no $?
+  hfrun "$TMP/hf-paste.json" drag /Users/admin/walk/a.pdf >/dev/null; no $? # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$(cat "$TMP/hf.err")" "drag needs --to"
-  hfrun "$TMP/hf-paste.json" drag /Users/admin/walk/a.pdf --to 1,2x >/dev/null; no $?
+  hfrun "$TMP/hf-paste.json" drag /Users/admin/walk/a.pdf --to 1,2x >/dev/null; no $? # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$(cat "$TMP/hf.err")" "takes numbers"
-  hfrun "$TMP/hf-paste.json" paste /Users/admin/walk/a.pdf --to 1,2 >/dev/null; no $?
+  hfrun "$TMP/hf-paste.json" paste /Users/admin/walk/a.pdf --to 1,2 >/dev/null; no $? # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$(cat "$TMP/hf.err")" "belongs to drag"
   hfrun "$TMP/hf-paste.json" paste walk/relative.pdf >/dev/null; no $?
   has "$(cat "$TMP/hf.err")" "absolute path"
@@ -1859,7 +1858,7 @@ t_done
 
 t "hand-file: the guest program runs under its own deadline, so a timed-out call cannot act later"
   : > "$TMP/hf.log"
-  hfrun "$TMP/hf-paste.json" paste /Users/admin/walk/a.png >/dev/null; ok $? "$(cat "$TMP/hf.err")"
+  hfrun "$TMP/hf-paste.json" paste /Users/admin/walk/a.png >/dev/null; ok $? "$(cat "$TMP/hf.err")" # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$(cat "$TMP/hf.log")" "python3 -c"
   has "$(cat "$TMP/hf.log")" "osascript -l JavaScript -"
 t_done
@@ -1869,7 +1868,7 @@ t "hand-file: the drag never scripts Finder (an Apple Event raises a consent dia
 t_done
 
 t "hand-file: no recorded pid, no input sent"
-  out="$(STUB_AX_FIXTURE="$TMP/hf-paste.json" STUB_LOG="$TMP/hf2.log" "$TESTVM_DIR/hand-file.sh" richos-test-nopid paste /Users/admin/a.png 2>&1)"; no $?
+  out="$(STUB_AX_FIXTURE="$TMP/hf-paste.json" STUB_LOG="$TMP/hf2.log" "$TESTVM_DIR/hand-file.sh" richos-test-nopid paste /Users/admin/a.png 2>&1)"; no $? # machine-path-exempt: isolated test VM account/path; never a customer default
   has "$out" "no app pid recorded"
 t_done
 

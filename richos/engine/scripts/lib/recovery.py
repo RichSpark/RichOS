@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import operator_fences as F
+import machine_settings as M
 
 THRESHOLD = 3
 REPEAT_ITERATION = 4
@@ -42,17 +43,10 @@ def storage_root(kind):
     """Host-owned durable storage. Explicit roots are portable and absolute."""
     if kind not in ("evidence", "wip"):
         raise Unavailable("unknown recovery storage kind")
-    configured = os.environ.get("RICHOS_RECOVERY_"+kind.upper()+"_ROOT")
-    if configured:
-        if not os.path.isabs(configured):
-            raise Unavailable("recovery storage root must be absolute")
-        return Path(configured)
-    if sys.platform == "darwin":
-        volume = Path("/Volumes/E1TB")
-        if not volume.is_mount():
-            raise Unavailable("configure an absolute recovery storage root or mount the external SSD")
-        return volume / "state/richos" / ("recovery-"+kind)
-    return root() / kind
+    try:
+        return M.state("recovery-" + kind, "RICHOS_RECOVERY_" + kind.upper() + "_ROOT", default=root() / kind)
+    except (ValueError, OSError) as error:
+        raise Unavailable(str(error)) from error
 
 
 def key(repo, work):

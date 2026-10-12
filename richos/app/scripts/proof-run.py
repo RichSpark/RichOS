@@ -218,6 +218,7 @@ def git_root():
 ROOT = git_root()
 # How a check is stopped: the engine's one tree-kill, not a second copy of it.
 sys.path.insert(0, os.path.join(ROOT, "richos", "engine", "scripts", "lib"))
+import machine_settings as M
 import proc_tree  # noqa: E402
 import worker_tokens  # noqa: E402
 import engine_pass  # noqa: E402
@@ -2175,12 +2176,7 @@ def attempt_cpu(attempts):
 
 
 def default_logdir():
-    default = os.path.join(os.path.expanduser("~"), ".richos-nightly", "proof-runs")
-    if sys.platform == "darwin":
-        if not os.path.ismount("/Volumes/E1TB"):
-            raise SystemExit("proof-run: connect /Volumes/E1TB before creating verification artifacts")
-        default = "/Volumes/E1TB/state/richos/proof-runs"
-    base = os.environ.get("RICHOS_PROOF_RUN_DIR", default)
+    base = str(M.state("proof-runs", "RICHOS_PROOF_RUN_DIR"))
     wid = subprocess.run(["/usr/bin/shasum", "-a", "256"], input=ROOT, capture_output=True, text=True).stdout[:12]
     return os.path.join(base, wid)
 

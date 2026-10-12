@@ -27,7 +27,7 @@ So a physical phone is touched ONLY through the two command lines, `randroid dev
     physical.py scan [--root DIR]                           the commit check (autocheck.py runs it)
 
 One user per phone (CEO 2026-10-02): see "one user per phone" below. The lock records live in
-/Volumes/E1TB/state/richos/phone-locks/<android-<sha256(serial)[:16]> | ios-iphone>.json.
+resolved phone-locks state/<android-<sha256(serial)[:16]> | ios-iphone>.json.
 
 The gate refuses: an emulator (it goes through `randroid emu`), and a phone whose installed
 RichConnect is debuggable (`dumpsys package` pkgFlags DEBUGGABLE), naming the build it found. The
@@ -51,6 +51,9 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
+import machine_storage as M
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "perf"))
@@ -549,15 +552,15 @@ def _num(v):
 # The iPhone lock is one for every spelling of the phone (hardware UDID, CoreDevice UUID): the Mac
 # has one wired iPhone, and two spellings must never be two locks.
 
-LOCK_DIR = "/Volumes/E1TB/state/richos/phone-locks"
+LOCK_DIR = "phone-locks"
 HOLD_ENV = "RICHOS_DEVICE_HOLD"
 
 
 def lock_dir():
-    d = os.environ.get("RICHOS_PHONE_LOCK_DIR") or LOCK_DIR
-    if d == LOCK_DIR and not os.path.ismount("/Volumes/E1TB"):
-        raise CannotAnswer("the phone locks live on /Volumes/E1TB, which is not mounted; nothing touches a phone without its lock")
-    return d
+    try:
+        return str(M.state(LOCK_DIR, "RICHOS_PHONE_LOCK_DIR"))
+    except (ValueError, OSError) as error:
+        raise CannotAnswer(str(error)) from error
 
 
 def lock_paths(platform, phone):

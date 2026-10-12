@@ -51,14 +51,15 @@ class Env(object):
         self.saved = {k: os.environ.get(k) for k in ("HOME", "CLAUDE_CONFIG_DIR", "RICHOS_WORKSPACES_DIR",
                                                      "RICHOS_SESSION_PID", "RICHOS_SESSIONS_DIR",
                                                      "RICHOS_SESSION_ID", "GIT_CONFIG_GLOBAL",
-                                                     "SCRATCH_BUILD_CACHE_ROOT",
-                                                     "SCRATCH_CARGO_TARGET_ROOTS")}
+                                                     "RICHOS_BULK_ROOT", "RICHOS_CARGO_CACHE_ROOT",
+                                                     "RICHOS_MACHINE_SETTINGS_RESOLVED")}
         os.environ["HOME"] = self.home
         # A land removes the workspace's build caches (build_caches.py). Here they live in the
         # sandbox, so no test ever reads or moves the operator's real cache folders.
         self.caches = os.path.join(self.root, "caches")
-        os.environ["SCRATCH_BUILD_CACHE_ROOT"] = self.caches
-        os.environ["SCRATCH_CARGO_TARGET_ROOTS"] = os.path.join(self.caches, "cargo-target")
+        os.environ["RICHOS_BULK_ROOT"] = self.root
+        os.environ["RICHOS_CARGO_CACHE_ROOT"] = os.path.join(self.caches, "cargo-target")
+        os.environ["RICHOS_MACHINE_SETTINGS_RESOLVED"] = "1"
         os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(self.home, ".claude")
         os.environ.pop("RICHOS_WORKSPACES_DIR", None)
         os.environ.pop("RICHOS_SESSION_ID", None)

@@ -103,8 +103,9 @@ trap 'rm -rf "$TMP"' EXIT
 # the lead every 10 minutes about a phone that does not exist.
 export RICHOS_ESCALATION_LEDGER="$TMP/escalations.jsonl"
 REAL_LEDGER="$HOME/.claude/state/escalations.jsonl"
-# A path that is off /Volumes/E1TB whatever TMPDIR is (agents keep TMPDIR on the SSD). The refusals under test happen before anything is written there.
-OFFSSD="/private/var/empty/qa-toolkit-off-ssd"
+# A selected missing volume refuses before writes, regardless of TMPDIR.
+# machine-path-exempt: missing-volume negative fixture; it is never created
+OFFSSD="/Volumes/RichOSMissingQaFixture-$$"
 
 PASS=0; FAIL=0; SKIP=0
 ok()   { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
@@ -298,8 +299,8 @@ echo "=== O. the OCR gate and the finder ==="
 
 # The gate also reads a walk record's text files (step lists, the record). No reader needed.
 mkdir -p "$TMP/textgate"
-printf '[{"op": "push", "src": "/Users/qafixture/wt/frame.py", "dest": "/Users/admin/qa/frame.py"}]\n' > "$TMP/textgate/leak.json"
-printf '[{"op": "push", "src": "richos/app/scripts/qa/frame.py", "dest": "/Users/admin/qa/frame.py"}]\n' > "$TMP/textgate/clean.json"
+printf '[{"op": "push", "src": "/Users/qafixture/wt/frame.py", "dest": "/Users/admin/qa/frame.py"}]\n' > "$TMP/textgate/leak.json" # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+printf '[{"op": "push", "src": "richos/app/scripts/qa/frame.py", "dest": "/Users/admin/qa/frame.py"}]\n' > "$TMP/textgate/clean.json" # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
 run "$QA/ocr-gate.sh" --text "$TMP/textgate/leak.json"
 expect "O7 the text gate refuses a step list carrying an operator home path" 1 "TEXT GATE: 1 of 1"
 if printf '%s' "$OUT" | grep -Fq "qafixture"; then
@@ -308,7 +309,7 @@ else
   ok "O8 the text gate names the hit by shape and length, never echoing it"
 fi
 run "$QA/ocr-gate.sh" --text "$TMP/textgate/clean.json"
-expect "O9 the text gate passes a portable step list (the guest's /Users/admin is not a leak)" 0 "TEXT GATE: 0 of 1"
+expect "O9 the text gate passes a portable step list (the guest's /Users/admin is not a leak)" 0 "TEXT GATE: 0 of 1" # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
 mkdir -p "$TMP/textgate-empty"
 run "$QA/ocr-gate.sh" --text "$TMP/textgate-empty"
 expect "O10 an empty text set is refused, never called clean" 2 "found NO text files"
@@ -1143,15 +1144,15 @@ expect "I34 the system UI is never launched or terminated" 2 "never launched or 
 python3 -c 'import json; print(json.dumps([{"do": "launch"}] + [{"do": "sleep", "seconds": 1}] * 200))' > "$TMP/ios-long.json"
 run python3 "$QA/phone-ios.py" check "$TMP/ios-long.json"
 expect "I35 check states a list's expected time at the measured median step times and the allowance it needs" 0 '"allowanceNeeded": 254'
-run env RICHOS_IOS_DEVICE=x RICHOS_APPLE_TEAM=y python3 "$QA/phone-ios.py" run "$TMP/ios-long.json" --out /Volumes/E1TB/nonexistent-qa-test
+run env RICHOS_IOS_DEVICE=x RICHOS_APPLE_TEAM=y python3 "$QA/phone-ios.py" run "$TMP/ios-long.json" --out "$TMP/nonexistent-qa-test"
 expect "I36 a list the default allowance cannot hold is refused before the phone is touched" 2 "Pass --allowance 254"
 
-run env RICHOS_IOS_DEVICE=x RICHOS_APPLE_TEAM=y python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out /Volumes/E1TB/nonexistent-qa-test --prebuilt
+run env RICHOS_IOS_DEVICE=x RICHOS_APPLE_TEAM=y python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out "$TMP/nonexistent-qa-test" --prebuilt
 expect "I10 reusing an earlier build without its stamp is refused" 2 "--prebuilt needs --stamp"
 
 mkdir -p "$TMP/Fake.app" && printf 'bytes' > "$TMP/Fake.app/RichOSNative"
 printf '{"artifact":"%s","sha256":"0000000000000000","commit":"abc","dirty":false}' "$TMP/Fake.app" > "$TMP/fake-stamp.json"
-run env RICHOS_IOS_DEVICE=x RICHOS_APPLE_TEAM=y python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out /Volumes/E1TB/nonexistent-qa-test --prebuilt --stamp "$TMP/fake-stamp.json"
+run env RICHOS_IOS_DEVICE=x RICHOS_APPLE_TEAM=y python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out "$TMP/nonexistent-qa-test" --prebuilt --stamp "$TMP/fake-stamp.json"
 expect "I11 a reused app whose bytes differ from its stamp is refused: identity or refuse" 2 "freshness mismatch"
 
 mkdir -p "$TMP/Store/Products/Release-iphoneos/RichOSNative.app" && printf 'bytes' > "$TMP/Store/Products/Release-iphoneos/RichOSNative.app/RichOSNative"
@@ -1176,16 +1177,16 @@ printf '%s' '[{"do":"unlock"}]' > "$TMP/ios-unlock.json"
 run python3 "$QA/phone-ios.py" check "$TMP/ios-unlock.json"
 expect "I13 there is no scripted unlock: XCTest's Home press does not open an iOS 26 lock screen" 2 "unknown step 'unlock'"
 
-run python3 "$QA/phone-ios.py" syslog --device x --seconds 0 --out /Volumes/E1TB/nonexistent-qa-test.txt
+run python3 "$QA/phone-ios.py" syslog --device x --seconds 0 --out "$TMP/nonexistent-qa-test.txt"
 expect "I14 a log capture with no interval is refused" 2 "--seconds must be 1 to 3600"
 
 run python3 "$QA/phone-ios.py" syslog --device x --seconds 5 --out "$OFFSSD/syslog.txt"
-expect "I15 a log capture off the external SSD is refused before the relay starts" 2 "--out must be on /Volumes/E1TB"
+expect "I15 a log capture off the external SSD is refused before the relay starts" 2 "not mounted"
 
-run python3 "$QA/phone-ios.py" syslog --device x --seconds 5 --out /Volumes/E1TB/nonexistent-qa-test.txt --keep IOHID
+run python3 "$QA/phone-ios.py" syslog --device x --seconds 5 --out "$TMP/nonexistent-qa-test.txt" --keep IOHID
 expect "I15b a --keep key short enough to keep the whole log is refused before the relay starts" 2 "--keep needs at least 6 characters"
 
-if [ -d /Volumes/E1TB/tmp ] && SSDTMP="$(mktemp -d /Volumes/E1TB/tmp/qa-syslog-keep.XXXXXX)"; then
+if SSDTMP="$(mktemp -d "$TMP/qa-syslog-keep.XXXXXX")"; then
   mkdir -p "$TMP/fakesyslog"
   cat > "$TMP/fakesyslog/idevicesyslog" <<'SH'
 #!/bin/sh
@@ -1201,24 +1202,19 @@ SH
     ok "I15c syslog --keep adds the named system lines and still drops every other line"
   else bad "I15c syslog --keep keeps the named lines only" "exit $CODE: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-240)"; fi
   rm -rf "$SSDTMP"
-else skip "I15c syslog --keep keeps the named lines only" "/Volumes/E1TB/tmp is not there to write the capture"; fi
+else skip "I15c syslog --keep keeps the named lines only" "the suite could not allocate capture scratch"; fi
 
 run python3 "$QA/phone-ios.py" battery --device 00000000-NOT-A-PHONE --network
 expect "I16 a battery reading from a phone that is not there is refused, never a number" 2 "did not report the battery"
 
-run env -u RICHOS_IOS_DEVICE python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out /Volumes/E1TB/nonexistent-qa-test
+run env -u RICHOS_IOS_DEVICE python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out "$TMP/nonexistent-qa-test"
 expect "I5 run refuses without a named phone" 2 "set RICHOS_IOS_DEVICE"
 
 run env RICHOS_IOS_DEVICE=x RICHOS_APPLE_TEAM=y python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out "$OFFSSD/ios-out"
-expect "I6 run refuses an output directory off the external SSD" 2 "must be on /Volumes/E1TB"
+expect "I6 run refuses an output directory off the external SSD" 2 "not mounted"
 
-case "$OFFSSD" in
-  /Volumes/E1TB/*) bad "I30 the off-SSD fixture path is off the SSD whatever TMPDIR is" "OFFSSD=$OFFSSD" ;;
-  *) case "$TMP" in
-       /Volumes/E1TB/*) ok "I30 the off-SSD fixture path stays off the SSD while TMPDIR is on it" ;;
-       *) ok "I30 the off-SSD fixture path is off the SSD" ;;
-     esac ;;
-esac
+if [ ! -e "$OFFSSD" ]; then ok "I30 missing selected volume remains absent"
+else bad "I30 missing volume fixture exists" "$OFFSSD"; fi
 
 {
   echo 'Test Case started'
@@ -1329,9 +1325,9 @@ session_log a.log 07:47:23.244 07:47:24.000 36000
 run forecast
 expect "J2 ten hours after the last session an approval is expected, and the forecast says why" 0 'iOS asks again after idle'
 
-run env RICHOS_IOS_DEVICE="$PHONE" RICHOS_APPLE_TEAM=y RICHOS_IOS_SESSION_LOGS="$SESS/*.log" python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out /Volumes/E1TB/nonexistent-qa-test
+run env RICHOS_IOS_DEVICE="$PHONE" RICHOS_APPLE_TEAM=y RICHOS_IOS_SESSION_LOGS="$SESS/*.log" python3 "$QA/phone-ios.py" run "$TMP/ios-ok.json" --out "$TMP/nonexistent-qa-test"
 expect "J3 a run expected to ask is refused BEFORE any build until the CEO was told (--approval-announced)" 2 "Tell Rich so the CEO hears it BEFORE the run"
-if [ -e /Volumes/E1TB/nonexistent-qa-test ]; then bad "J3b the refused run wrote nothing" "it created /Volumes/E1TB/nonexistent-qa-test"
+if [ -e "$TMP/nonexistent-qa-test" ]; then bad "J3b the refused run wrote nothing" "it created $TMP/nonexistent-qa-test"
 else ok "J3b the refused run wrote nothing"; fi
 if printf '%s' "$OUT" | grep -qF "placeholder device id" && [ ! -s "$RICHOS_ESCALATION_LEDGER" ]; then
   ok "J3c the all-zeros placeholder phone raises no escalation, and says so"
@@ -1374,7 +1370,7 @@ run forecast
 expect "FC3 no passcode reading and no session: unknown, not expected" 0 '"approvalExpected": "unknown"'
 expect "FC3b the unknown forecast says what would settle it" 0 'settledBy'
 # K4: a run writes its session record where `approval` reads it (fake rios; the log is shaped like xcodebuild's).
-KOUT="/Volumes/E1TB/tmp/claude/quint-forecast1-qa-$$"
+KOUT="$TMP/forecast"
 mkdir -p "$KOUT/physical"
 cat > "$TMP/fake-rios" <<SH
 #!/bin/sh
@@ -1430,12 +1426,12 @@ PY
 }
 REAL_BEFORE="$(ledger_rows "$REAL_LEDGER" Escalation)"
 phone_run() { (cd "$PWS" && env RICHOS_IOS_DEVICE="$PHONE2" RICHOS_APPLE_TEAM=y RICHOS_IOS_SESSION_LOGS="$SESS/*.log" \
-  python3 "$QA/phone-ios.py" run "$@" --out /Volumes/E1TB/nonexistent-qa-test); }
+  python3 "$QA/phone-ios.py" run "$@" --out "$TMP/nonexistent-qa-test"); }
 run phone_run "$TMP/ios-ok.json"
 P01_ID="$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("escalation") or "")' 2>/dev/null)"
 if [ "$CODE" = 2 ] && [ -n "$P01_ID" ] && [ "$(ledger_rows "$RICHOS_ESCALATION_LEDGER" Escalation ceo-hands)" = 1 ] \
    && printf '%s' "$OUT" | grep -qF "Raised $P01_ID with needs=ceo-hands" && printf '%s' "$OUT" | grep -qF "do not raise another" \
-   && [ ! -e /Volumes/E1TB/nonexistent-qa-test ]; then
+   && [ ! -e "$TMP/nonexistent-qa-test" ]; then
   ok "P01 the approval refusal still refuses, and raises exactly one needs=ceo-hands escalation for its workspace"
 else bad "P01 the refusal raises one ceo-hands escalation" "exit $CODE id='$P01_ID' rows=$(ledger_rows "$RICHOS_ESCALATION_LEDGER" Escalation ceo-hands) out: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-300)"; fi
 run phone_run "$TMP/ios-ok.json"
@@ -1466,7 +1462,7 @@ json.dump([{"do": "launch"}, {"do": "tap", "id": "pair.link"},
 PY
 run phone_run "$TMP/ios-pair.json" --approval-announced
 if [ "$CODE" = 2 ] && printf '%s' "$OUT" | grep -qF "pairing window lasts five minutes" \
-   && printf '%s' "$OUT" | grep -qF '[{\"do\": \"state\"}]' && [ ! -e /Volumes/E1TB/nonexistent-qa-test ]; then
+   && printf '%s' "$OUT" | grep -qF '[{\"do\": \"state\"}]' && [ ! -e "$TMP/nonexistent-qa-test" ]; then
   ok "P05 a pairing list while an approval is expected is refused even when announced: spend the approval first"
 else bad "P05 pairing waits for the approval" "exit $CODE out: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-300)"; fi
 

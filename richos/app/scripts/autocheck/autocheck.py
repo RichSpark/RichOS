@@ -871,12 +871,18 @@ FAST_TOTAL_SECONDS = 40.0  # the most recorded time one commit spends on them; t
 FAST_HANG_SECONDS = 120    # a fast check still running at this is a failure, as for the quick suites
 
 
+def machine_storage(repo):
+    # The installed shim extracts this file alone. Resolve its helper from the
+    # actual candidate repo, never the shim's temporary __file__ location.
+    sys.path.insert(0, str(repo.top / "richos/engine/scripts/lib"))
+    import machine_settings
+    return machine_settings
+
+
 def recorded_durations(repo):
     """{label: median seconds} from the merge gate's weights.tsv (proof-run.py history_samples:
     `label <TAB> median [<TAB> samples]`). The main checkout's file wins over the worktree's."""
-    base = os.environ.get("RICHOS_PROOF_RUN_DIR") or (
-        "/Volumes/E1TB/state/richos/proof-runs" if sys.platform == "darwin"
-        else str(Path.home() / ".richos-nightly/proof-runs"))
+    base = str(machine_storage(repo).state("proof-runs", "RICHOS_PROOF_RUN_DIR"))
     found = {}
     for root in (repo.top, repo.common.parent):   # later wins: the main checkout's
         try:
@@ -1396,10 +1402,11 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
     # the existing runner validate which individual results remain applicable.
     identity = [str(repo.top.resolve()), git("rev-parse", "HEAD", cwd=repo.top), repo.index_tree(), commands]
     key = hashlib.sha256(str(repo.top.resolve()).encode()).hexdigest()
-    root = Path(os.environ.get("RICHOS_AUTOCHECK_PROOF_ROOT", "/Volumes/E1TB/state/richos/proof-runs/autocheck"))
-    if not Path("/Volumes/E1TB").is_mount() or not root.resolve().is_relative_to("/Volumes/E1TB"):
+    try:
+        root = machine_storage(repo).state("proof-runs/autocheck", "RICHOS_AUTOCHECK_PROOF_ROOT")
+    except (ValueError, OSError) as error:
         os.unlink(plan)
-        banner(f"{what.upper()} REFUSED: proof storage unavailable", ["Proof attempts must stay on the mounted external SSD."])
+        banner(f"{what.upper()} REFUSED: proof storage unavailable", [str(error)])
         return 1
     root = root / key
     root.mkdir(parents=True, exist_ok=True)

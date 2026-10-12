@@ -3,6 +3,17 @@
 # remain shared. An existing sccache setup can share compiled dependencies safely.
 richos_cargo_enable() {
   local richos_cargo_bin
+  local machine_lib
+  machine_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../engine/scripts/lib" && pwd -P)" || return 1
+  # shellcheck source=../../../engine/scripts/lib/machine-settings.sh
+  . "$machine_lib/machine-settings.sh"
+  # Cargo permits a relative environment target. The private file stays strict.
+  case "${CARGO_TARGET_DIR:-}" in
+    ''|/*) ;;
+    *) CARGO_TARGET_DIR="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CARGO_TARGET_DIR")" || return
+       export CARGO_TARGET_DIR ;;
+  esac
+  richos_machine_settings || return
   richos_cargo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../bin" || return 1
   richos_cargo_bin="$(cd "$richos_cargo_bin" && pwd -P)" || return 1
   if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
@@ -19,11 +30,10 @@ richos_cargo_enable() {
     if command -v sccache >/dev/null 2>&1; then
       RUSTC_WRAPPER="$(command -v sccache)"
       export RUSTC_WRAPPER
-    elif [ -x /Volumes/E1TB/tools/sccache/v0.18.0/sccache ]; then
-      export RUSTC_WRAPPER=/Volumes/E1TB/tools/sccache/v0.18.0/sccache
     fi
     if [ -n "${RUSTC_WRAPPER:-}" ]; then
-      export SCCACHE_DIR="${SCCACHE_DIR:-/Volumes/E1TB/caches/sccache/richos}"
+      SCCACHE_DIR="$(python3 "$machine_lib/machine_settings.py" cache sccache/richos --key SCCACHE_DIR)" || return
+      export SCCACHE_DIR
     fi
   fi
   richos_sccache_server_start
@@ -36,7 +46,7 @@ richos_cargo_enable() {
 richos_sccache_server_start() {
   local wrapper="${RUSTC_WRAPPER:-${CARGO_BUILD_RUSTC_WRAPPER:-}}" fixed_tmp
   case "$(basename "${wrapper:-none}")" in sccache) ;; *) return 0 ;; esac
-  fixed_tmp="${RICHOS_SCCACHE_TMPDIR:-/Volumes/E1TB/tmp/sccache-server}"
+  fixed_tmp="$(python3 "$(dirname "${BASH_SOURCE[0]}")/../../../engine/scripts/lib/machine_settings.py" cache sccache-server --key RICHOS_SCCACHE_TMPDIR)" || return
   mkdir -p "$fixed_tmp" 2>/dev/null || return 0
   ( cd / && TMPDIR="$fixed_tmp" "$wrapper" --start-server </dev/null >/dev/null 2>&1 ) || true
 }

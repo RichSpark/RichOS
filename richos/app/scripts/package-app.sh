@@ -1309,7 +1309,25 @@ fi
 # check below is what catches it, on the artifact, which is the entire reason the check
 # exists on the artifact rather than on the flags.
 richos_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=/build --remap-path-prefix=$richos_cargo_home=/build/cargo --remap-path-prefix=$app_dir=/build/app"
+# Cargo's encoded form preserves spaces in selected storage paths.
+CARGO_ENCODED_RUSTFLAGS="$(python3 - "$app_dir" "$richos_cargo_home" <<'PYFLAGS'
+import os, sys
+separator = chr(31)
+flags = os.environ.get('CARGO_ENCODED_RUSTFLAGS')
+flags = flags.split(separator) if flags is not None else os.environ.get('RUSTFLAGS', '').split()
+roots = [(os.environ['HOME'], '/build'),
+         (os.environ.get('RICHOS_BULK_ROOT'), '/build/storage'),
+         (os.environ.get('RICHOS_CARGO_CACHE_ROOT') or os.environ.get('CARGO_TARGET_DIR'), '/build/cache'),
+         (os.environ.get('TMPDIR'), '/build/tmp'),
+         (sys.argv[2], '/build/cargo'), (sys.argv[1], '/build/app')]
+for root, mapped in roots:
+    if root:
+        for path in dict.fromkeys([root, os.path.realpath(root)]):
+            flags.append('--remap-path-prefix=' + path.rstrip('/') + '=' + mapped)
+print(separator.join(flags), end='')
+PYFLAGS
+)" || die "cannot prepare portable compiler paths"
+export CARGO_ENCODED_RUSTFLAGS
 
 # THE STAGED FRONTEND HAS TO EXIST BEFORE THE CLI LOOKS FOR IT, and on a tree nobody has
 # built yet it does not. `build.rs` fills `app/ui-dist` (see its `stage_frontend`), but
@@ -1445,7 +1463,7 @@ fi
 # is nothing to wait on. `RICHOS_ALLOW_HOST_PATHS=1` is the deliberate, logged override.
 say ""
 say "checking the bundle for build-machine paths..."
-if ! python3 "$here/lib/no_host_paths.py" "$app_bundle"; then
+if ! python3 "$here/lib/no_host_paths.py" "$app_bundle" --reviewed-text --upstream-policy "$here/runtime-sources.json" --upstream-runtime-root "$app_bundle/Contents/Resources/runtime"; then
   if [ "${RICHOS_ALLOW_HOST_PATHS:-}" = "1" ]; then
     warn ""
     warn "  RICHOS_ALLOW_HOST_PATHS=1 — packaging a bundle that carries the above"

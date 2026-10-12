@@ -270,13 +270,19 @@ class OutputWalkTests(unittest.TestCase):
         self.assertEqual(json.loads((self.out / "scroll-observed.json").read_text())["recorded"], 0)
 
     def test_scratch_path_is_the_apps_scratch_set(self):
-        # The same paths as richos-core's output_the_standard_scratch_set_names_every_kind.
-        for p in ["/tmp/x/a.md", "/private/tmp/rv-zip-a1/notes.zip", "/var/folders/ab/cd/T/a.md",
-                  "/Volumes/E1TB/tmp/claude/echo/a.md", "/Users/a/proj/.claude/worktrees/agent-1/a.md"]:
-            self.assertTrue(output.scratch_path(p), p)
-        for p in ["/Users/a/Documents/notes.zip", "/Users/a/proj/.claude/agents/notes.txt",
-                  "/Users/a/proj/.claude/skills/x/SKILL.md", "/tmpfoo/a.md"]:
-            self.assertFalse(output.scratch_path(p), p)
+        sys.path.insert(0, str(SCRIPTS.parents[1] / 'engine/scripts/lib'))
+        import machine_settings
+        # The app's selected named root may be anywhere, including a path with spaces.
+        named = Path('/external data/named scratch')
+        with patch.object(machine_settings, 'agent_root', return_value=named):
+            for p in ['/tmp/x/a.md', '/private/tmp/rv-zip-a1/notes.zip',
+                      '/var/folders/ab/cd/T/a.md', str(named / 'echo/a.md'),
+                      '/Users/a/proj/.claude/worktrees/agent-1/a.md']:
+                self.assertTrue(output.scratch_path(p), p)
+            for p in ['/Users/a/Documents/notes.zip', '/Users/a/proj/.claude/agents/notes.txt',
+                      '/Users/a/proj/.claude/skills/x/SKILL.md', '/tmpfoo/a.md',
+                      '/external data/other scratch/echo/a.md']:
+                self.assertFalse(output.scratch_path(p), p)
 
     def links_fixture(self, opens):
         walk = self.walk()

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { stateDir } from '../../cli/machine-settings.mjs';
 // TestFlight upload, status and publish for the RichOS native iPhone app, run locally on this Mac.
 //
 // ADOPTED AS-IS from T3 Code (https://github.com/pingdotgg/t3code) at
@@ -1017,7 +1018,7 @@ const RELEASE_DIR = import.meta.dirname;
 const SPEED_GATE = NodePath.resolve(RELEASE_DIR, "../../perf/shipgate.py");
 const WALK_GATE = NodePath.resolve(RELEASE_DIR, "../../perf/reviewwalk.py");
 // Which commit each upload was made from, so publish gates the same code. Outside every checkout.
-export const UPLOAD_RECEIPTS = "/Volumes/E1TB/state/richos/ship-gate/testflight-uploads.json";
+export const UPLOAD_RECEIPTS = stateDir("ship-gate/testflight-uploads.json");
 // The source stamp the archive carries (the keys shipgate.py's `stamp` writes).
 export const STAMP_COMMIT = "RichOSSourceCommit";
 export const STAMP_DIRTY = "RichOSSourceDirty";

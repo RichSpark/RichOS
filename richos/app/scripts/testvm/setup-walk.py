@@ -41,7 +41,7 @@ moments to ONE timeline on the guest's clock, each with how much of the two mode
               person does, turns into "Stop talking" rather than putting up the offer to download
               a model that is already installed (#voice-model-get). Then pressed again to stop.
               The press opens capture, so the app must be launched with a stand-in for the
-              microphone: TESTVM_APP_ENV=RICHOS_VOICE_INPUT_WAV=/Users/admin/voice-silence.wav in
+              microphone: TESTVM_APP_ENV=RICHOS_VOICE_INPUT_WAV=/Users/admin/voice-silence.wav in [machine-path-exempt: isolated guest fixture example; no customer default]
               run-walk.py's environment; the step writes two seconds of silence there first, and
               the microphone grant a person gives with Allow is written as voice-walk.py writes it
               (grant_microphone), so no privacy prompt comes up.
@@ -101,7 +101,7 @@ R19_STATE1_AX = 'a free & private/local replacement for Wispr Flow'
 R19_OFFER_AX = 'I can also type for you in any other app on your Mac'
 R19_NOT_NOW_AX = "Okay. It's in Settings, under Dictation, whenever you want it."
 # The microphone's stand-in for the voice step (capture.rs RICHOS_VOICE_INPUT_WAV), in the guest.
-SILENCE_WAV = '/Users/admin/voice-silence.wav'
+SILENCE_WAV = '/Users/admin/voice-silence.wav' # machine-path-exempt: isolated test VM account/path; never a customer default
 # Two seconds of 16 kHz mono silence, written in the guest: nothing is played and nothing is said.
 SILENCE = ("import sys,wave\n"
            "w=wave.open(sys.argv[1],'wb')\n"

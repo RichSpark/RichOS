@@ -46,7 +46,7 @@
 # scanner exempt from its own rule is a rule with a hole exactly where somebody clever would
 # put something.
 # run-tests: no-host-screen: its matches are its own S6 search pattern and the fake suites S1 writes under mktemp
-# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh
+# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh
 # run-tests: covers richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/gui-launch.sh
 set -uo pipefail
 
@@ -69,10 +69,16 @@ install_harness() {  # install_harness <box directory>
   cp "$DIR/lib/proof_declarations.py" "$1/lib/proof_declarations.py"
   cp "$DIR/lib/cargo-cache-env.sh" "$DIR/lib/cargo_identity.py" "$1/lib/"
   cp "$DIR/bin/cargo" "$1/bin/cargo"
+  mkdir -p "$1/../../engine/scripts/lib"
+  cp "$DIR/../../engine/scripts/lib/machine_settings.py" \
+     "$DIR/../../engine/scripts/lib/machine-settings.sh" "$1/../../engine/scripts/lib/"
 }
 
-TMP="$(mktemp -d -t run-tests-test.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+TASK_TMP="$(mktemp -d "${TMPDIR:?}/run-tests-test.XXXXXX")"
+trap 'rm -rf "$TASK_TMP"' EXIT
+# Copied runners resolve engine helpers two levels above their scripts directory.
+TMP="$TASK_TMP/fixtures"
+mkdir -p "$TMP"
 # A failed fake suite's results folder is kept in this scratch, never the operator's store; and a
 # caller's results root (a proof run around this suite) is not the fixtures' to write into.
 export RUN_TESTS_RESULTS_STATE="$TMP/kept-results"
@@ -1130,6 +1136,8 @@ else
   fi
   E1ENV=()
   E1MISSING=""
+  E1STORAGE="$TMP/e1-storage"
+  mkdir -p "$E1STORAGE/tmp/richos-gates"
   for E1N in $E1NAMES; do
     case "$E1N" in
       # PATH is the one name that must keep working: a hostile PATH does not test the
@@ -1138,7 +1146,17 @@ else
       # The values a build genuinely hands a gate. E1's property is "the environment a
       # build hands it", so these are the build's own values, not invented ones.
       # The build's own folder (nightly-local.py gate_tmpdir), never the caller's.
-      TMPDIR) E1ENV+=("TMPDIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}")") ;;
+      TMPDIR) E1ENV+=("TMPDIR=$E1STORAGE/tmp/richos-gates/") ;;
+      RICHOS_BULK_ROOT) E1ENV+=("RICHOS_BULK_ROOT=$E1STORAGE") ;;
+      RICHOS_MACHINE_SETTINGS_RESOLVED) E1ENV+=("RICHOS_MACHINE_SETTINGS_RESOLVED=1") ;;
+      RICHOS_CARGO_CACHE_ROOT|SCCACHE_DIR|RICHOS_SCCACHE_TMPDIR|RICHOS_BUILD_CACHE|\
+      RICHOS_RECOVERY_EVIDENCE_ROOT|RICHOS_RECOVERY_WIP_ROOT|RICHOS_CPU_GUARD_STATE|\
+      RICHOS_ENGINE_PASS_DIR|RICHOS_PROOF_RUN_DIR|RICHOS_AUTOCHECK_PROOF_ROOT|\
+      RICHOS_TEST_RESULTS_ROOT|RICHOS_ANDROID_CACHES_ROOT|RICHOS_NATIVE_IOS_CACHE|\
+      RANDROID_CACHE|RICHOS_GPL_SOURCE_CACHE|RICHOS_MOBILE_CACHE|RICHOS_PHONE_LOCK_DIR|\
+      RICHOS_PHONE_WATCH_HOME|RICHOS_PHYSICAL_STORE|RICHOS_PHYSICAL_PRODUCTS|\
+      GRADLE_USER_HOME|RICHOS_ENGINE_CHECK_PROOF_DIR|RICHOS_CAMPAIGN_PARENT)
+        E1ENV+=("$E1N=$E1STORAGE/$E1N") ;;
       PYTHONDONTWRITEBYTECODE) E1ENV+=("PYTHONDONTWRITEBYTECODE=1") ;;
       CARGO_PROFILE_DEV_DEBUG) E1ENV+=("CARGO_PROFILE_DEV_DEBUG=0") ;;
       CARGO_PROFILE_TEST_DEBUG) E1ENV+=("CARGO_PROFILE_TEST_DEBUG=0") ;;

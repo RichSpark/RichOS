@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { validateStorage } from '../../cli/machine-settings.mjs';
 // The review access page's "Mac side", one action per call, for a walk on a REAL phone (`rios device run`):
 // the page's half of what Apple's reviewer does, in real headless Chromium, signed in as `apple-review`.
 //
 //   node Tools/review-portal.mjs state                 is a phone on the host: none, waiting or paired
-//   node Tools/review-portal.mjs link --out FILE       a fresh pairing link into FILE (mode 600, on /Volumes/E1TB);
+//   node Tools/review-portal.mjs link --out FILE       a fresh pairing link into FILE (mode 600, in selected storage);
 //                                                      refused when a phone is already on the host (someone's)
 //   node Tools/review-portal.mjs words [--wait S]      the six words the page shows once the phone arrived
 //   node Tools/review-portal.mjs press                 "They match" on the page; the host reads back Paired
@@ -45,7 +46,8 @@ export async function act(command, values, page, creds) {
 	if (command === 'state') return { host, phone: phoneState(body) };
 	if (command === 'link') {
 		const out = resolve(String(values.out || ''));
-		if (!values.out || !out.startsWith('/Volumes/E1TB/')) throw new Error('link needs --out FILE on /Volumes/E1TB');
+		if (!values.out) throw new Error('link needs --out FILE');
+        validateStorage(out);
 		if (phoneState(body) !== 'none') throw new Error(`${host} already has a phone (${phoneState(body)}); someone may be using it. Nothing was changed`);
 		await page.getByRole('button', { name: /^(Get a pairing link|Get a new link instead)$/u }).first().click();
 		const field = page.locator('#pairing-link');

@@ -1432,13 +1432,17 @@ class ReleaseScriptTests(unittest.TestCase):
         # lib/cargo-target.sh in turn sources lib/cargo-cache-env.sh and names the bundle
         # directory through ../bin/cargo (lib/cargo_identity.py). Without them the output
         # lock resolves to "/release" and `app` refuses before packaging.
-        for rel in ('lib/cargo-cache-env.sh', 'lib/cargo_identity.py', 'bin/cargo'):
+        for rel in ('lib/cargo-cache-env.sh', 'lib/cargo_identity.py', 'lib/machine_storage.py', 'bin/cargo'):
             (self.scripts / rel).parent.mkdir(exist_ok=True)
             shutil.copy2(Path(__file__).parent / rel, self.scripts / rel)
         self.config = root / n.CONFIG
         self.config.parent.mkdir(parents=True)
         (root / 'richos/engine').mkdir()
         (root / 'richos/engine/VERSION').write_text('1.2.0\n')
+        engine_lib = root / 'richos/engine/scripts/lib'
+        engine_lib.mkdir(parents=True)
+        for name in ('machine_settings.py', 'machine-settings.sh'):
+            shutil.copy2(Path(__file__).resolve().parents[2] / 'engine/scripts/lib' / name, engine_lib / name)
         self.version = '5.1.0-nightly.20260911.10'
         (root / n.MANIFEST).write_text(f'[package]\nversion = "{self.version}"\n')
         self.config.write_text(n.json_text({'plugins': {'updater': {'endpoints': [n.ENDPOINT]}}}))
@@ -1505,7 +1509,7 @@ else:
 
     def candidate_engine_pin(self):
         checker = self.scripts.parents[1] / "engine/scripts/named-persons.sh"
-        checker.parent.mkdir(parents=True)
+        checker.parent.mkdir(parents=True, exist_ok=True)
         checker.write_text("#!/bin/sh\nexit 0\n")
         checker.chmod(0o755)
         generator = self.scripts / "make-engine-asset.sh"
@@ -1561,7 +1565,7 @@ EOF
         """Reach the real app source guard with a real Git checkout, not a Git stub."""
         root = self.scripts.parents[2]
         checker = root / 'richos/engine/scripts/named-persons.sh'
-        checker.parent.mkdir(parents=True)
+        checker.parent.mkdir(parents=True, exist_ok=True)
         checker.write_text('#!/bin/sh\nexit 0\n')
         checker.chmod(0o755)
         (self.scripts / 'package-app.sh').write_text(

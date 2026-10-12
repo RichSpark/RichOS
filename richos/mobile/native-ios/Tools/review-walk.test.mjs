@@ -122,10 +122,10 @@ test('the access page\'s phone is read as none, waiting or paired', () => {
 	assert.equal(phoneState('Review host\nPaired\nRemove this phone'), 'paired');
 });
 
-test('the portal never takes a host that already has a phone, and writes a link only on the external SSD', async () => {
+test('the portal never takes a host that already has a phone, and refuses an unavailable output volume', async () => {
 	const creds = { access: 'https://example.invalid/', username: 'apple-review', password: 'x', host: 'apple-review.example.invalid' };
 	const page = { goto: async () => {}, locator: () => ({ innerText: async () => 'Signed in as apple-review\nPaired\n' }) };
-	await assert.rejects(act('link', { out: '/Volumes/E1TB/x/link' }, page, creds), /already has a phone \(paired\)/);
-	await assert.rejects(act('link', { out: '/tmp/link' }, page, creds), /on \/Volumes\/E1TB/);
+	await assert.rejects(act('link', { out: join(os.tmpdir(), 'review-link') }, page, creds), /already has a phone \(paired\)/);
+	await assert.rejects(act('link', { out: '/Volumes/MissingReviewStorage/link' }, page, creds), /MissingReviewStorage/);
 	await assert.rejects(act('press', {}, page, creds), /no phone is waiting/);
 });

@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import time
+import machine_settings as M
 
 LEGACY_SHA256 = '83a4d90c64f6011fd788b9069aee630031bf220e22514ca6ac8eb820a5ca41bd'
 POLICY_SHA256 = 'ca04ecbd2b7640dd6443ccc5089759bdd47e51653a54cfbfc632c026ace88cce'
@@ -56,7 +57,7 @@ def read_json(path, default=None):
 
 class Live:
     def __init__(self, state=None, plist=None, candidate=None, restart=None, wait=HEARTBEAT_WAIT):
-        self.state = Path(state or os.environ.get('RICHOS_CPU_GUARD_STATE', '/Volumes/E1TB/state/richos/cpu-guard'))
+        self.state = M.validate(state) if state else M.state('cpu-guard', 'RICHOS_CPU_GUARD_STATE')
         self.plist = Path(plist or Path.home() / 'Library/LaunchAgents' / (LABEL + '.plist'))
         self.candidate = Path(candidate or Path(__file__).with_name('cpu_guard_live.py'))
         self.runtime = self.state / 'runtime'
@@ -109,7 +110,8 @@ class Live:
     def preconditions(self):
         config = plistlib.loads(self.plist.read_bytes())
         program = config.get('ProgramArguments', [])
-        if len(program) < 4 or Path(program[2]) != self.running or program[3] != 'watch':
+        if (len(program) < 4 or not Path(program[2]).is_absolute()
+                or Path(program[2]).resolve() != self.running.resolve() or program[3] != 'watch'):
             raise SystemExit('refused: %s does not run %s watch (it runs %s)' % (self.plist, self.running, program))
         # The interpreter launchd (and the Bash hook) run it with: /usr/bin/python3 is
         # 3.9 on this Mac, and a candidate that only loads under a newer Python must be
@@ -133,6 +135,7 @@ class Live:
 
     def loads(self, path):
         """The file must import and answer `status` beside the runtime's cpu_policy.py."""
+        shutil.copyfile(Path(__file__).with_name('machine_settings.py'), self.runtime / 'machine_settings.py')
         result = subprocess.run([self.interpreter, '-B', str(path), 'status'], cwd=str(self.runtime),
                                 env={**os.environ, 'RICHOS_CPU_GUARD_STATE': str(self.state)},
                                 capture_output=True, text=True, timeout=30)
@@ -245,8 +248,7 @@ def main(argv):
                'cpu_guard_live_deploy.py deploy') % ((status['running_sha256'][:12],) if current else (
                    status['running_sha256'][:12], status['running_is'], sha256(live.candidate)[:12])))
         return 0 if current else 3
-    if not os.path.ismount('/Volumes/E1TB') and live.state.is_relative_to('/Volumes/E1TB'):
-        raise SystemExit('refused: /Volumes/E1TB is not mounted')
+    M.validate(live.state)
     print(live.deploy() if argv[0] == 'deploy' else live.rollback())
     return 0
 

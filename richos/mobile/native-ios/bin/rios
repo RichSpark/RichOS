@@ -48,27 +48,21 @@
 #   bin/rios --help                   every command
 #
 # Build output never lands in the repository: SwiftPM's scratch directory, DerivedData and the
-# generated Xcode project live under the per-checkout cache on /Volumes/E1TB (Part 0 practice).
+# generated Xcode project live under the effective per-checkout cache, outside the repository.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE="$HERE/Core"
-VOLUME=/Volumes/E1TB
-
-# A real mount, not an empty directory where the volume should be.
-if [ ! -d "$VOLUME" ] || [ "$(stat -f %d "$VOLUME")" = "$(stat -f %d /Volumes)" ]; then
-  echo '{"ok":false,"error":"Mount /Volumes/E1TB before running rios"}' >&2
-  exit 2
-fi
+MACHINE_LIB="$(cd "$HERE/../../engine/scripts/lib" && pwd -P)"
+# shellcheck source=../../../engine/scripts/lib/machine-settings.sh
+. "$MACHINE_LIB/machine-settings.sh"
+richos_machine_settings || exit 2
 
 if [ -z "${RICHOS_NATIVE_IOS_CACHE:-}" ]; then
-  KEY="$(printf '%s' "$HERE" | shasum -a 256 | cut -c1-10)"
-  RICHOS_NATIVE_IOS_CACHE="$VOLUME/caches/richos-native-ios/$KEY"
+  RICHOS_NATIVE_IOS_CACHE="$(python3 "$MACHINE_LIB/machine_settings.py" cache richos-native-ios)" || exit 2
+  RICHOS_NATIVE_IOS_CACHE="$RICHOS_NATIVE_IOS_CACHE/$(printf '%s' "$HERE" | shasum -a 256 | cut -c1-10)"
 fi
-case "$RICHOS_NATIVE_IOS_CACHE" in
-  "$VOLUME"/*) ;;
-  *) echo "{\"ok\":false,\"error\":\"RICHOS_NATIVE_IOS_CACHE must be on $VOLUME\"}" >&2; exit 2 ;;
-esac
+RICHOS_NATIVE_IOS_CACHE="$(python3 "$MACHINE_LIB/machine_settings.py" validate "$RICHOS_NATIVE_IOS_CACHE")" || exit 2
 mkdir -p "$RICHOS_NATIVE_IOS_CACHE"
 export RICHOS_NATIVE_IOS_CACHE
 export RICHOS_NATIVE_IOS_ROOT="$HERE"

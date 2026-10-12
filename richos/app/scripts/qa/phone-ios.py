@@ -192,6 +192,9 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lib'))
+import machine_storage as M
+
 
 ROOT = Path(__file__).resolve().parents[4]  # the richos repository root
 RIOS = Path(os.environ.get("RICHOS_IOS_RIOS") or ROOT / "richos/mobile/native-ios/bin/rios")
@@ -466,10 +469,17 @@ def stamped_identity(stamp_path):
     return {"artifact": artifact, "sha256": actual, "commit": stamp.get("commit"), "products": products}
 
 
-SESSION_LOGS = "/Volumes/E1TB/caches/richos-native-ios/*/physical/*-test.log"
+def storage_path(path):
+    try:
+        return M.validate(path)
+    except ValueError as error:
+        raise CannotAnswer(str(error)) from error
+
+
+SESSION_LOGS = str(M.cache("richos-native-ios")) + "/*/physical/*-test.log"
 APPROVAL_TIMEOUT = "Timed out while enabling automation mode"
 ASKS_AFTER_IDLE_S = 9.3 * 3600   # measured: a phone with a passcode always asked after this much idle
-LEDGER = "/Volumes/E1TB/caches/richos-native-ios/phone-sessions.jsonl"
+LEDGER = str(M.cache("richos-native-ios/phone-sessions.jsonl"))
 HARDWARE_UDID = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$")
 
 
@@ -974,8 +984,7 @@ def require_cable(device):
 def wifi_off(args):
     """`rios device wifi-off --out DIR`: over the cable only, read the phone's Wi-Fi switch, turn it off when on."""
     out = Path(args.out).resolve()
-    if not str(out).startswith("/Volumes/E1TB/"):
-        raise CannotAnswer("--out must be on /Volumes/E1TB (the physical check refuses anything else)")
+    out = storage_path(out)
     for name in ("RICHOS_IOS_DEVICE", "RICHOS_APPLE_TEAM"):
         if not os.environ.get(name):
             raise CannotAnswer(f"set {name}")
@@ -1032,8 +1041,7 @@ def run(args):
 def wifi_restore(args):
     """`rios device wifi-restore --out DIR`: read the phone's Wi-Fi switch, turn it on when off."""
     out = Path(args.out).resolve()
-    if not str(out).startswith("/Volumes/E1TB/"):
-        raise CannotAnswer("--out must be on /Volumes/E1TB (the physical check refuses anything else)")
+    out = storage_path(out)
     for name in ("RICHOS_IOS_DEVICE", "RICHOS_APPLE_TEAM"):
         if not os.environ.get(name):
             raise CannotAnswer(f"set {name}")
@@ -1048,8 +1056,7 @@ def _run(args):
         if not os.environ.get(name):
             raise CannotAnswer(f"set {name}")
     out = Path(args.out).resolve()
-    if not str(out).startswith("/Volumes/E1TB/"):
-        raise CannotAnswer("--out must be on /Volumes/E1TB (the physical check refuses anything else)")
+    out = storage_path(out)
     if not 60 <= args.allowance <= 1800:
         raise CannotAnswer("--allowance must be 60 to 1800 seconds")
     too_short = allowance_refusal(steps, args.allowance)
@@ -1095,11 +1102,11 @@ def _run(args):
     (out / "rios.stdout").write_text(p.stdout)
     (out / "rios.stderr").write_text(p.stderr)
     text = p.stdout + p.stderr
-    found = re.search(r"(/Volumes/E1TB/\S+?/physical/script-(\d+)\.xcresult)", text)
+    found = re.search(r'''(/[^\r\n"']+?/physical/script-(\d+)\.xcresult)''', text)
     if not found:
         record_session(device, started, ran_to, error=f"no result bundle (exit {p.returncode})")
         raise CannotAnswer(f"the check produced no result bundle (exit {p.returncode}); see {out}/rios.stderr")
-    result, stamp = found.group(1), found.group(2)
+    result, stamp = str(storage_path(found.group(1))), found.group(2)
     log = Path(result).parent / f"verify-script-{stamp}-test.log"
     rows = parse_log(log.read_text(errors="replace")) if log.exists() else []
     with open(out / "steps.jsonl", "w") as f:
@@ -1307,12 +1314,11 @@ def trust(args):
     """Why iOS will or will not open RichConnect: Developer Mode, the phone's provisioning profiles,
     and one launch of the installed app with the trust, DNS and VPN log lines during it, read into
     one cause (trust_reading). Reads only: nothing is installed, removed or switched. The capture
-    stays in --out on /Volumes/E1TB; it is the phone's own log and never enters a repository."""
+    stays in --out in selected storage; it is the phone's own log and never enters a repository."""
     sys.path.insert(0, str(ROOT / "richos/mobile"))
     import phone_net
     out = Path(args.out)
-    if not str(out.resolve()).startswith("/Volumes/E1TB/"):
-        raise CannotAnswer("--out must be on /Volumes/E1TB")
+    out = storage_path(out)
     with tempfile.TemporaryDirectory() as tmp:
         listed = Path(tmp) / "d.json"
         subprocess.run(["xcrun", "devicectl", "list", "devices", "--json-output", str(listed)], capture_output=True, timeout=60)
@@ -1557,13 +1563,12 @@ def _safari_load(device, udid, url, seconds, keep_all=False):
 
 def net(args):
     """`rios device net --device ID --out FILE`: the two readings and one verdict. Exit 0 when the phone's
-    Wi-Fi carries traffic both ways, 1 otherwise. The phone's kept log lines go to FILE (on /Volumes/E1TB).
+    Wi-Fi carries traffic both ways, 1 otherwise. The phone's kept log lines go to FILE (in selected storage).
     Nothing is installed, removed or switched."""
     sys.path.insert(0, str(ROOT / "richos/mobile"))
     import phone_net
     out = Path(args.out)
-    if not str(out.resolve()).startswith("/Volumes/E1TB/"):
-        raise CannotAnswer("--out must be on /Volumes/E1TB")
+    out = storage_path(out)
     udid = hardware_udid(args.device)
     path_ok, path_detail = phone_net.wifi_path(args.device)
     opened, kept = _safari_load(args.device, udid, args.url, args.seconds, args.raw)
@@ -1675,8 +1680,7 @@ def syslog(args):
     if not 1 <= args.seconds <= 3600:
         raise CannotAnswer("--seconds must be 1 to 3600")
     out = Path(args.out)
-    if not str(out.resolve()).startswith("/Volumes/E1TB/"):
-        raise CannotAnswer("--out must be on /Volumes/E1TB")
+    out = storage_path(out)
     # --keep TEXT adds a key: a system line the phone's condition is read from (backboardd's HID
     # client lines), named explicitly, never the whole log. A key shorter than 6 characters would keep
     # nearly every line, so it is refused.

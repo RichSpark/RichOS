@@ -244,7 +244,7 @@ rm -f "$FOCUS_PROBE/running.$$"
 [ "${RULE_A:-0}" = 1 ] || { echo "      FAIL  P1.1 rule A"; exit 1; }
 EOF
 chmod +x "$FAKE_ENG/mega-lander/tests/par.test.sh"
-cp "$ENGINE_ROOT/scripts/lib/worker_tokens.py" "$ENGINE_ROOT/scripts/lib/engine_pass.py" "$FAKE_ENG/scripts/lib/"
+cp "$ENGINE_ROOT/scripts/lib/worker_tokens.py" "$ENGINE_ROOT/scripts/lib/engine_pass.py" "$ENGINE_ROOT/scripts/lib/machine_settings.py" "$FAKE_ENG/scripts/lib/"
 M4=()
 for n in 1 2 3 4 5 6; do
     M4+=("mutant par-$n P1.1 mega-lander/feature.sh \"RULE_A=1\" \"RULE_A=0\" \"rule A removed ($n)\"")

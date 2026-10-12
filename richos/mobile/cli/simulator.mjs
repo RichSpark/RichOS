@@ -1,3 +1,4 @@
+import { cacheDir, validateStorage, scratchDir, machineEnvironment } from './machine-settings.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync, readdirSync, rmSync, realpathSync, statSync } from 'node:fs';
 import { join, dirname, resolve, basename } from 'node:path';
@@ -13,14 +14,12 @@ const key = createHash('sha256').update(mobile).digest('hex').slice(0, 10);
 // A separate installed test app keeps previous phone sessions intact.
 export const bundleId = process.env.RICHOS_MOBILE_TEST_APP === 'integration' ? 'dev.richos.mobile.integration' : 'dev.richos.mobile.loop';
 export function cacheRoot() {
-  const volume = '/Volumes/E1TB';
-  if (!existsSync(volume) || statSync(volume).dev === statSync(dirname(volume)).dev) throw new Error('Mount /Volumes/E1TB before running mobile tools');
-  const base = process.env.RICHOS_MOBILE_CACHE || join(volume, 'caches', 'richos-mobile', key);
+  const base = machineEnvironment().RICHOS_MOBILE_CACHE || join(cacheDir('richos-mobile'), key);
   const path = process.env.RICHOS_MOBILE_TEST_APP === 'integration' ? join(base, 'integration') : base;
-  if (!resolve(path).startsWith(volume + '/')) throw new Error('RICHOS_MOBILE_CACHE must be on /Volumes/E1TB');
-  mkdirSync(path, { recursive: true });
-  if (!realpathSync(path).startsWith(realpathSync(volume) + '/')) throw new Error('RICHOS_MOBILE_CACHE must be on /Volumes/E1TB');
-  return path;
+  const resolved = validateStorage(resolve(path));
+  mkdirSync(resolved, { recursive: true });
+
+  return resolved;
 }
 export function run(bin, args, { log, allowFailure = false } = {}) {
   const r = spawnSync(bin, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
@@ -47,11 +46,11 @@ const simctl = (...args) => {
   return run('xcrun', ['simctl', ...(set ? ['--set', set] : []), ...args]).stdout.trim();
 };
 export function stageAssets(destination, development, allowedContainer, build = development ? 'Debug' : 'Release') {
-  const volume = realpathSync('/Volumes/E1TB');
+  const allowedRoots = [resolve(cacheRoot()), resolve(scratchDir())];
   const parent = realpathSync(dirname(destination));
   const sandboxDocuments = allowedContainer && realpathSync(join(allowedContainer, 'Documents'));
-  if (basename(destination) !== 'mobile-ui' || !(parent.startsWith(volume + '/') || parent === sandboxDocuments)) {
-    throw new Error('Asset staging requires an external mobile-ui directory or the selected simulator sandbox');
+  if (basename(destination) !== 'mobile-ui' || !(allowedRoots.some(root => parent === root || parent.startsWith(root + '/')) || parent === sandboxDocuments)) {
+    throw new Error('Asset staging requires mobile-ui under the selected cache, named scratch or simulator sandbox');
   }
   rmSync(destination, { recursive: true, force: true });
   mkdirSync(destination, { recursive: true });
@@ -119,7 +118,7 @@ export function project() {
   const testConfig = process.env.RICHOS_MOBILE_TEST_CONFIG;
   if (testConfig) {
     const source = realpathSync(testConfig);
-    if (!source.startsWith(realpathSync('/Volumes/E1TB') + '/')) throw new Error('Test configuration must be on the external SSD');
+    validateStorage(source);
     JSON.parse(readFileSync(source, 'utf8'));
     const destination = join(output, 'native-test-config.json');
     copyFileSync(source, destination);

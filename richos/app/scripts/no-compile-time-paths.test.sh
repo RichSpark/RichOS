@@ -91,7 +91,7 @@ cat > "$WORK/p4/hand.rs" <<'RS'
 fn log_path() -> &'static str { "/Users/alex/Library/Logs/RichOS/startup.log" }
 RS
 out="$(run "$WORK/p4")"; rc=$?
-if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'home directory in a string literal'; then
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'machine directory in a string literal (/Users/alex)' && printf '%s' "$out" | grep -q 'hand.rs:1'; then
     ok "P4 a hand-written home directory in a string literal is refused"
 else
     bad "P4 a hand-written home directory in a string literal is refused" "exit $rc: $out"

@@ -6,5 +6,7 @@ import sys
 
 sys.dont_write_bytecode = True
 
-runpy.run_path(str(Path(__file__).resolve().parents[1] / "lib/cargo_identity.py"),
+library = Path(__file__).resolve().parents[1] / "lib"
+sys.path.insert(0, str(library))
+runpy.run_path(str(library / "cargo_identity.py"),
                run_name="__main__")

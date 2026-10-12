@@ -32,12 +32,13 @@ class Boundaries(unittest.TestCase):
         for name in ("ci-shard.sh", "ci-units.sh", "run-all-tests.sh"):
             shutil.copy2(LIB.parent / name, self.engine / "scripts" / name)
         for name in ("ci-receipts.py", "leak-canary.sh", "record-canary.sh", "tree-witness.sh",
-                     "proc_tree.py", "operator_fences.py", "worker_tokens.py", "engine_pass.py", "stopwatch.sh"):
+                     "proc_tree.py", "operator_fences.py", "worker_tokens.py", "engine_pass.py", "machine_settings.py", "stopwatch.sh"):
             shutil.copy2(LIB / name, self.engine / "scripts/lib" / name)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("RICHOS_")}
         self.env.update(TMPDIR=str(self.root / "tmp"), PYTHONDONTWRITEBYTECODE="1",
                         CLAUDE_CONFIG_DIR=str(self.root / "config"),
                         RICHOS_MACHINE_WORKERS=str(self.root / "machine"),
+                        RICHOS_HOST_SHIELD_TOOL=str(LIB / "host_shield.py"),
                         RICHOS_ENGINE_PASS_DIR=str(self.root / "slot"),
                         RICHOS_VERIFICATION_CONTAMINATION=str(self.root / "contamination"))
         for name in ("tmp", "config/state", "bin"):

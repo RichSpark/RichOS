@@ -2,7 +2,7 @@
 # Stream I3's tests on a simulator (target RichOSPlatformTests): the Share to Rich sheet's model
 # and rendering, the platform effect handler, the notification platform.
 #
-#   Release/simulator-tests.sh <output directory on /Volumes/E1TB>
+#   Release/simulator-tests.sh <output directory in the selected storage folder>
 #
 # Leases ONE prepared simulator, boots it headlessly (no Simulator.app, nothing on the
 # Mac's screen), grants the microphone to the host app as I2's UI tests do, runs the tests, and shuts
@@ -13,7 +13,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 "$HERE/../../engine/scripts/lib/cpu_guard.py" check-ios || exit 2
 OUT="${1:?usage: simulator-tests.sh <output directory>}"
-case "$OUT" in /Volumes/E1TB/*) ;; *) echo "simulator-tests: the output directory must be on /Volumes/E1TB" >&2; exit 2 ;; esac
+OUT="$(python3 "$HERE/../../engine/scripts/lib/machine_settings.py" validate "$OUT")" || exit 2
 BUDGET="$HERE/../../app/scripts/lib/simulator_budget.py"
 if [ -z "${RICHOS_WORKER_TOKENS:-}" ]; then
   exec python3 "$HERE/../../engine/scripts/lib/worker_tokens.py" machine -- bash "${BASH_SOURCE[0]}" "$@"

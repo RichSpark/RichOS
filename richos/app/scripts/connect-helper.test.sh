@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run-tests: no-host-screen: pinned archive and cache validation only
-# run-tests: inputs richos/app/scripts/connect-helper.test.sh richos/app/scripts/prepare-connect-helper.py richos/app/third-party/cloudflared
+# run-tests: inputs richos/engine/scripts/lib/machine_settings.py richos/app/scripts/lib/machine_storage.py richos/app/scripts/connect-helper.test.sh richos/app/scripts/prepare-connect-helper.py richos/app/third-party/cloudflared
 # run-tests: covers richos/app/scripts/prepare-connect-helper.py
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,11 +8,9 @@ python3 - "$here" <<'PY'
 import importlib.util, io, os, sys, tarfile, tempfile, shutil, hashlib, json
 from pathlib import Path
 from unittest.mock import patch
-if not os.path.ismount('/Volumes/E1TB'):
-    print('  NOT RUN  connect-helper: external SSD unavailable'); raise SystemExit(2)
 spec=importlib.util.spec_from_file_location('helper',Path(sys.argv[1])/'prepare-connect-helper.py')
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-scratch=Path(tempfile.mkdtemp(prefix='connect-helper-',dir='/Volumes/E1TB/tmp/codex'))
+scratch=Path(tempfile.mkdtemp(prefix='connect-helper-'))
 try:
     binary=b'fixture executable'
     data=io.BytesIO()

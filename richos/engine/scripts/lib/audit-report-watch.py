@@ -40,6 +40,7 @@ import argparse
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -146,7 +147,7 @@ def raise_escalation(repo, path, commit, new, changed, scratch):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=os.environ.get("RICHOS_AUDIT_RECORD_REPO")
-                    or os.path.expanduser("~/ab/richos-hq"))
+                    or str(Path(subprocess.check_output(["git", "-C", ENGINE_SCRIPTS, "rev-parse", "--path-format=absolute", "--git-common-dir"], text=True).strip()).parent.parent / "richos-hq"))
     ap.add_argument("--subdir", default="docs/audits")
     ap.add_argument("--state-dir", default=os.environ.get("RICHOS_AUDIT_WATCH_STATE")
                     or os.path.expanduser("~/.claude/state/audit-report-watch"))

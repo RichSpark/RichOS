@@ -13,7 +13,7 @@ import os, signal, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 TOOL = Path(__file__).with_name("phone-ios.py")
-ROOT = "/Volumes/E1TB/tmp/claude/zach-sonnet-relay1"
+ROOT = tempfile.gettempdir()
 OUTER_LIMIT = 60
 
 

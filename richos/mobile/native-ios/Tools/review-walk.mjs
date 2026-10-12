@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { cacheDir, stateDir } from '../../cli/machine-settings.mjs';
 // rios review-walk --commit SHA — the automated walk of exactly what Apple's reviewer does, on the
 // RELEASE app built from exactly that commit, against the live review service.
 //
@@ -45,8 +46,8 @@ const ENGINE_LIB = join(RICHOS, 'engine/scripts/lib');
 const TESTDEVICES = join(ENGINE_LIB, 'testdevices.py');
 const NATIVE_WORK = join(ENGINE_LIB, 'native-work.py');
 const REVIEWWALK = join(MOBILE, 'perf/reviewwalk.py');
-const CREDENTIALS = '/Volumes/E1TB/state/richos/review-mock/secrets/review-credentials.json';
-const WORK = '/Volumes/E1TB/caches/richos-review-walk/ios';
+const CREDENTIALS = stateDir('review-mock/secrets/review-credentials.json');
+const WORK = cacheDir('richos-review-walk/ios');
 const DEVICE_TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro';
 const STEPS = {
 	build: 'build the Release app',
@@ -375,7 +376,7 @@ async function resetHost(page, creds) {
 async function main() {
 	const { values } = parseArgs({ options: { commit: { type: 'string' }, help: { type: 'boolean' } } });
 	if (values.help || !values.commit) {
-		process.stdout.write('Usage: rios review-walk --commit <sha>\n  Walks what Apple\'s reviewer does, on the Release app of that commit, against the live review service;\n  writes /Volumes/E1TB/state/richos/review-walk/ios/<sha>.json (testflight.ts upload requires its pass).\n');
+		process.stdout.write('Usage: rios review-walk --commit <sha>\n  Walks what Apple\'s reviewer does, on the Release app of that commit, against the live review service;\n  writes resolved review-walk state/ios/<sha>.json (testflight.ts upload requires its pass).\n');
 		process.exitCode = values.help ? 0 : 2;
 		return;
 	}

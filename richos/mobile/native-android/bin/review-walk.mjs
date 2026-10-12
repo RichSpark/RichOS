@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { stateDir } from '../../cli/machine-settings.mjs';
 // review-walk.mjs — what Google Play's reviewer does with RichConnect, done by a machine first
 // (CEO 2026-10-04, richos-hq/wiki/ceo-decisions.md §107: the CEO is never the first tester).
 //
@@ -33,7 +34,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resetReviewHost } from './review-reset.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const CREDENTIALS = '/Volumes/E1TB/state/richos/review-mock/secrets/review-credentials.json';
+const CREDENTIALS = stateDir('review-mock/secrets/review-credentials.json');
 
 function args(list) {
 	const out = {};

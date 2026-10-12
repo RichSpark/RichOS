@@ -78,7 +78,7 @@ build_engine() {
        "$ENGINE_ROOT/scripts/lib/record-canary.sh" \
        "$ENGINE_ROOT/scripts/lib/worker_tokens.py" \
        "$ENGINE_ROOT/scripts/lib/operator_fences.py" "$ENGINE_ROOT/scripts/lib/proc_tree.py" \
-       "$ENGINE_ROOT/scripts/lib/engine_pass.py" \
+       "$ENGINE_ROOT/scripts/lib/engine_pass.py" "$ENGINE_ROOT/scripts/lib/machine_settings.py" \
        "$ENGINE_ROOT/scripts/lib/stopwatch.sh" "$d/engine/scripts/lib/"
     chmod +x "$d/engine/scripts/run-all-tests.sh"
     printf 'PROTECTED_PATHS="app"\n' > "$d/engine/orchestration.config"

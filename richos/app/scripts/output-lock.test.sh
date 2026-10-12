@@ -133,6 +133,8 @@ fi
 F="$WORK/engine-fixture"
 mkdir -p "$F/richos/app/scripts/lib" "$F/docs/legal" "$F/richos/engine/scripts/hooks"
 cp "$DIR/make-engine-asset.sh" "$DIR/verify-engine-asset-members.sh" "$F/richos/app/scripts/"
+cp "$DIR/lib/no_host_paths.py" "$F/richos/app/scripts/lib/"
+cp "$DIR/runtime-sources.json" "$F/richos/app/scripts/"
 [ -f "$LOCK_LIB" ] && cp "$LOCK_LIB" "$F/richos/app/scripts/lib/"
 cp "$ROOT/LICENSE" "$F/LICENSE"
 printf 'notices for the fixture\n' > "$F/docs/legal/THIRD-PARTY-NOTICES.md"

@@ -989,6 +989,17 @@ class Reaper(object):
         self.scope = None
         self.unattributed = 0
 
+    def named_scratch(self, path):
+        """Scheduled collection never owns named scratch or a containing tree."""
+        resolved = os.path.realpath(path)
+        for root in self.cfg.get("agent_roots", []):
+            if not root:
+                continue
+            root = os.path.realpath(root)
+            if resolved == root or resolved.startswith(root + "/") or root.startswith(resolved + "/"):
+                return True
+        return False
+
     def add(self, path, klass, size, action, why, standing=False):
         self.entries.append(Entry(path, klass, size, action, why, standing))
 
@@ -1464,7 +1475,7 @@ class Reaper(object):
         for name in sorted(os.listdir(tmp)):
             check_deadline()
             # Never twice. scan_scratch_root owns this one.
-            if name == scratch_root_name:
+            if name == scratch_root_name or self.named_scratch(os.path.join(tmp, name)):
                 continue
             is_legacy = any(fnmatch.fnmatch(name, pat) for pat in legacy)
             if is_legacy:
@@ -1807,8 +1818,8 @@ class Reaper(object):
                 continue
             for name in names:
                 path = os.path.join(root, name)
-                if os.path.realpath(path) in skip:
-                    continue            # scan_claude_roots owns this one
+                if os.path.realpath(path) in skip or self.named_scratch(path):
+                    continue            # separate scoped/Claude-root collection owns it
                 self._unknown.append((path, root))
 
     def scan_deferred_unknown(self, walls):
@@ -2393,7 +2404,7 @@ class Reaper(object):
                              under Cargo's lock in apply()
         """
         root = self.cfg.get("build_cache_root") or ""
-        if not root or not os.path.isdir(root) or self.skip_build_caches:
+        if self.skip_build_caches:
             return
         bc = build_caches()
         self.roots.append(root)
@@ -2495,7 +2506,8 @@ class Reaper(object):
         shared = [r for r in self.cfg["shared_tmp_roots"] if os.path.isdir(r)]
         kept = [self.cfg["kept_dir"]] if self.cfg.get("kept_dir") else []
         caches = [self.cfg["build_cache_root"]] if self.cfg.get("build_cache_root") else []
-        walls = Walls(roots + [tmp] + nightly + shared + kept + caches)
+        cargo = [r for r in self.cfg.get("cargo_target_roots", []) if os.path.isdir(r)]
+        walls = Walls(roots + [tmp] + nightly + shared + kept + caches + cargo)
         # FIRST, so the other arms can skip what it has already claimed. A path
         # decided twice would be counted twice in the verdict, and a standing
         # failure is precisely a path another arm would otherwise report as KEEP.
@@ -3112,6 +3124,11 @@ class Reaper(object):
         # plan; removing the husk first would leave every child reported as a
         # FAILED deletion that had in fact just succeeded, which is the one
         # kind of log line nobody can act on.
+        if self.scope is None:
+            for entry in self.entries:
+                if entry.action == DELETE and self.named_scratch(entry.path):
+                    entry.action = KEEP
+                    entry.why = "named scratch is collected only by its successful landing"
         order = sorted((e for e in self.entries if e.action == DELETE),
                        key=lambda e: (-e.path.count(os.sep), e.path))
         # §54 ADDENDUM 4, AND IT RUNS BEFORE THE FIRST rmtree. Any test instance
@@ -3719,7 +3736,7 @@ def config_from_env(process_only=False):
         # D3. Empty fallbacks: a campaign root is nominated BY DECLARATION and
         # never by inference, so an engine whose config predates these keys
         # nominates nothing.
-        "campaign_parent": opt("SCRATCH_CAMPAIGN_PARENT", ""),
+        "campaign_parent": os.environ.get("RICHOS_CAMPAIGN_PARENT") or opt("SCRATCH_CAMPAIGN_PARENT", ""),
         "campaign_roots": opt("SCRATCH_CAMPAIGN_ROOTS", "").split(),
         "campaign_retention_days":
             opt_number("SCRATCH_CAMPAIGN_RETENTION_DAYS", 7),
@@ -3747,12 +3764,9 @@ def config_from_env(process_only=False):
         "kept_retention_days": opt_number("SCRATCH_KEPT_RETENTION_DAYS", 7),
         # Build caches on the external drive (2026-10-08, lib/build_caches.py). Empty
         # fallbacks: an engine whose config predates these keys deletes no build cache.
-        "build_cache_root": os.path.realpath(opt("SCRATCH_BUILD_CACHE_ROOT", ""))
-                            if opt("SCRATCH_BUILD_CACHE_ROOT", "") else "",
-        "cargo_target_roots": [os.path.realpath(p) for p in
-                               opt("SCRATCH_CARGO_TARGET_ROOTS", "").split()],
-        "checkout_parents": [os.path.expanduser(p) for p in
-                             opt("SCRATCH_BUILD_CACHE_CHECKOUT_PARENTS", "").split()],
+        "build_cache_root": str(machine_settings.cache()) if not process_only else "",
+        "cargo_target_roots": [str(machine_settings.cache("cargo-target", "CARGO_TARGET_DIR"))] if not process_only else [],
+        "checkout_parents": [],  # build_caches discovers actual registered Git parents
         "build_cache_orphan_hours": opt_number("SCRATCH_BUILD_CACHE_ORPHAN_HOURS", 6),
         "build_cache_idle_hours": opt_number("SCRATCH_BUILD_CACHE_IDLE_HOURS", 72),
     }

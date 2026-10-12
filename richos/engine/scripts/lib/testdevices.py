@@ -102,6 +102,8 @@ CLI_REGISTRY_LOCK_SECONDS = 90
 COLLECTOR_BUSY_ALERT_SECONDS = 180
 
 
+import machine_settings as M
+
 def _timeout(maximum):
     deadline = _DEADLINE.get()
     remaining = maximum if deadline is None else min(maximum, deadline - time.time())
@@ -258,7 +260,7 @@ def android_caches_root():
     v = (os.environ.get("RICHOS_ANDROID_CACHES_ROOT") or "").strip()
     if v:
         return v
-    return "/Volumes/E1TB/caches/richos-native-android" if machine_devices_allowed() else ""
+    return str(M.cache("richos-native-android", "RICHOS_ANDROID_CACHES_ROOT")) if machine_devices_allowed() else ""
 
 
 def sim_devices_dir():
@@ -1471,7 +1473,7 @@ def prepared_dir():
     # on the external SSD. Device storage keeps the approved Apple default.
     if not machine_devices_allowed():
         return os.path.join(registry_dir(), "prepared")
-    return "/Volumes/E1TB/caches/richos-ios-prepared"
+    return str(M.cache("richos-ios-prepared"))
 
 
 def same_owner(a, b):

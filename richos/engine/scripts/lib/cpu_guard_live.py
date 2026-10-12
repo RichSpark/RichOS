@@ -30,7 +30,8 @@ import sys
 import time
 from cpu_policy import DEFAULT_MAX_CPU, admission_open
 
-STATE = Path(os.environ.get('RICHOS_CPU_GUARD_STATE', '/Volumes/E1TB/state/richos/cpu-guard'))
+import machine_settings as M
+STATE = M.state('cpu-guard', 'RICHOS_CPU_GUARD_STATE')
 INTERVAL = 2.0
 WINDOW = 10.0
 JOB_CORES = 3.0
@@ -553,11 +554,11 @@ def watch(engine):
 
 
 def install(engine):
-    if not os.path.ismount('/Volumes/E1TB'):
-        raise RuntimeError('Mount /Volumes/E1TB first')
+    M.validate(STATE)
     runtime = STATE / 'runtime'
     runtime.mkdir(parents=True, exist_ok=True)
     shutil.copy2(Path(__file__).with_name('cpu_policy.py'), runtime / 'cpu_policy.py')
+    shutil.copy2(Path(__file__).with_name('machine_settings.py'), runtime / 'machine_settings.py')
     target = runtime / 'cpu_guard.py'
     shutil.copy2(__file__, target)
     domain = 'gui/%s' % os.getuid()

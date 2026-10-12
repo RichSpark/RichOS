@@ -97,12 +97,20 @@
 # attached (a physical phone included).
 #
 # Everything built or cached lives on the external SSD (richos/mobile/AGENTS.md):
-#   $RANDROID_CACHE, default /Volumes/E1TB/caches/richos-native-android/<checkout hash>/
-# Gradle's own cache: $GRADLE_USER_HOME, default /Volumes/E1TB/caches/richos-native-android/gradle.
+#   $RANDROID_CACHE, or the effective richos-native-android/<checkout hash> cache.
+# Gradle uses $GRADLE_USER_HOME, or the effective richos-native-android/gradle cache.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VOLUME="/Volumes/E1TB"
+MACHINE_LIB="$(cd "$HERE/../../engine/scripts/lib" && pwd -P)"
+# shellcheck source=../../../engine/scripts/lib/machine-settings.sh
+. "$MACHINE_LIB/machine-settings.sh"
+richos_machine_settings || exit 2
+private_wrapper() {
+  local common
+  common="$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)" || return
+  printf '%s/richos-hq/scripts/%s\n' "$(dirname "$(dirname "$common")")" "$1"
+}
 PACKAGE="dev.richos.connect"
 ACTIVITY="$PACKAGE/dev.richos.android.app.MainActivity"
 RECEIVER="$PACKAGE/dev.richos.android.app.debug.DevBridgeReceiver"
@@ -117,15 +125,15 @@ now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
 # --- environment ---------------------------------------------------------------------------
 if [ -z "${RANDROID_CACHE:-}" ]; then
-  if [ ! -d "$VOLUME" ] || [ "$(stat -f %d "$VOLUME")" = "$(stat -f %d /Volumes)" ]; then
-    fail "NOT RUN: mount $VOLUME (build output and caches never go into the source tree)" 2
-  fi
-  RANDROID_CACHE="$VOLUME/caches/richos-native-android/$(printf '%s' "$HERE" | shasum | cut -c1-10)"
+  RANDROID_CACHE="$(python3 "$MACHINE_LIB/machine_settings.py" cache richos-native-android)" || exit 2
+  RANDROID_CACHE="$RANDROID_CACHE/$(printf '%s' "$HERE" | shasum | cut -c1-10)"
 fi
+RANDROID_CACHE="$(python3 "$MACHINE_LIB/machine_settings.py" validate "$RANDROID_CACHE")" || exit 2
 CACHE="$RANDROID_CACHE"
 OUT="$CACHE/out"
 mkdir -p "$CACHE"
-export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$VOLUME/caches/richos-native-android/gradle}"
+GRADLE_USER_HOME="$(python3 "$MACHINE_LIB/machine_settings.py" cache richos-native-android/gradle --key GRADLE_USER_HOME)" || exit 2
+export GRADLE_USER_HOME
 # Java 21 or newer: Robolectric's Android 36 sandbox refuses anything older. The first of
 # $RANDROID_JAVA_HOME, $JAVA_HOME and Android Studio's bundled runtime that is 21+ wins; a shell
 # whose JAVA_HOME is an older JDK (Homebrew's openjdk@17 on this Mac) is passed over, not used.
@@ -613,7 +621,7 @@ sys.exit(0 if all(os.environ.get(prefix + k, "").strip() for k in keys) else 1)
 PY
 }
 upload_key_present() { env_has ORG_GRADLE_PROJECT_richos.upload. storeFile storePassword keyAlias keyPassword; }
-FIREBASE_WRAPPER="${RANDROID_FIREBASE_WRAPPER:-/Users/alex/ab/richos-hq/scripts/with-android-firebase.py}"
+FIREBASE_WRAPPER="${RANDROID_FIREBASE_WRAPPER:-$(private_wrapper with-android-firebase.py)}"
 firebase_present() { env_has ORG_GRADLE_PROJECT_richos.firebase. projectId appId apiKey senderId; }
 
 # The upload certificate's SHA-256, committed (it is public: Play Console shows it). A test may
@@ -820,7 +828,7 @@ PY
 # bin/review-walk.mjs exactly as the Google Play review notes tell the reviewer
 # (richos/mobile/review-mock/README.md). The record is written whether the walk passes or fails.
 # An emulator this verb booted is stopped when it ends; one that was already running is left.
-SIGNING_WRAPPER="${RANDROID_SIGNING_WRAPPER:-/Users/alex/ab/richos-hq/scripts/with-android-signing.py}"
+SIGNING_WRAPPER="${RANDROID_SIGNING_WRAPPER:-$(private_wrapper with-android-signing.py)}"
 review_walk() {
   local commit=""
   while [ "$#" -gt 0 ]; do

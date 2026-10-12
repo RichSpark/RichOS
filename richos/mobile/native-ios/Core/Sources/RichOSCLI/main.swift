@@ -44,7 +44,7 @@ RichOS native iPhone development loop (JSON output; nonzero exit on failure)
   bin/rios screen-text PNG            the text on a screenshot (Vision), one line per entry
 Headless commands share one session under the external cache. `sim` uses only the simulator this
 command created (recorded in the cache); it never addresses "booted".
-RICHOS_NATIVE_IOS_CACHE overrides the per-checkout cache, on /Volumes/E1TB only.
+RICHOS_NATIVE_IOS_CACHE overrides the per-checkout cache directory.
 """
 
 struct Output<Result: Encodable>: Encodable {
@@ -101,13 +101,17 @@ func cacheDirectory() throws -> URL {
     guard let path = ProcessInfo.processInfo.environment["RICHOS_NATIVE_IOS_CACHE"], !path.isEmpty else {
         throw CoreError("RICHOS_NATIVE_IOS_CACHE is not set; run through bin/rios")
     }
-    let url = URL(fileURLWithPath: path).standardizedFileURL
-    let volume = "/Volumes/E1TB/"
-    guard url.path.hasPrefix(volume) else { throw CoreError("the cache must be on /Volumes/E1TB, not \(url.path)") }
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    guard url.resolvingSymlinksInPath().path.hasPrefix(volume) else {
-        throw CoreError("the cache must resolve to /Volumes/E1TB")
+    guard path.hasPrefix("/") else { throw CoreError("the cache needs an absolute path") }
+    let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+    let parts = url.pathComponents
+    if parts.count >= 3 && parts[1] == "Volumes" {
+        let volume = "/Volumes/" + parts[2]
+        var mounted = stat(), parent = stat()
+        guard stat(volume, &mounted) == 0 && stat("/Volumes", &parent) == 0 && mounted.st_dev != parent.st_dev else {
+            throw CoreError("the selected cache volume is not mounted: \(volume)")
+        }
     }
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
 }
 

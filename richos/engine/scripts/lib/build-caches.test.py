@@ -22,6 +22,7 @@ every "it kept X" test:
 Everything lives in a temporary directory; nothing outside it is read or written except
 `git`, run against checkouts created here.
 """
+import ast
 import importlib.util
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 
@@ -179,6 +181,33 @@ class BuildCaches(unittest.TestCase):
             self.assertFalse(os.path.exists(f), f)
         self.assertTrue(os.path.isdir(self.cargo))
 
+    def test_selected_cargo_root_is_inside_the_real_sweep_boundary(self):
+        for cargo in (self.cargo, os.path.join(self.tmp, "separate-cargo")):
+            with self.subTest(cargo=cargo):
+                orphan = os.path.join(cargo, "workspaces", "a" * 24)
+                self.make([orphan], 2 * DAY)
+                r = object.__new__(reaper.Reaper)
+                r.cfg = {"claude_roots": [], "nightly_dir": self.tmp + "/nightly",
+                         "shared_tmp_roots": [], "kept_dir": "",
+                         "build_cache_root": self.cache, "cargo_target_roots": [cargo],
+                         "checkout_parents": [self.parents], "age_floor_minutes": 60,
+                         "build_cache_orphan_hours": 6, "build_cache_idle_hours": 72}
+                r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
+                r.skip_build_caches = False
+                for name in ("scan_claude_roots", "scan_scratch_root", "scan_tmp",
+                             "scan_shared_tmp", "scan_nightly", "scan_kept",
+                             "scan_campaign_roots", "scan_docker_containers",
+                             "scan_deferred_unknown"):
+                    setattr(r, name, lambda *_: None)
+                walls = []
+                r.scan_standing_failures = walls.append
+                with patch.dict(os.environ, {"TMPDIR": self.tmp + "/process-tmp"}), \
+                        patch.object(reaper, "registered_workspaces", return_value=[]), \
+                        patch.object(reaper, "never_touch", return_value=[]):
+                    entries = {e.path: e for e in r.scan()}
+                self.assertEqual(entries[orphan].action, reaper.DELETE, entries[orphan].why)
+                self.assertIn("wall 1:", walls[0].check(self.tmp + "/unselected/artifact", False))
+
     def test_B2_an_orphan_used_recently_is_kept(self):
         dead = self.folders_for(os.path.join(self.parents, "copy-outside-git"))
         self.make(dead, 2 * DAY)
@@ -270,6 +299,44 @@ class BuildCaches(unittest.TestCase):
         plan, _r = self.plan()
         for f in dead:
             self.assertEqual(plan[f].action, reaper.INDETERMINATE, (f, plan[f].why))
+
+    def test_installed_engine_has_no_git_but_registered_owners_remain_checked(self):
+        library = Path(self.tmp) / 'installed-engine/scripts/lib'
+        library.mkdir(parents=True)
+        with patch.object(bc, '__file__', str(library / 'build_caches.py')):
+            found, unreadable = bc.live_checkouts([], extra=[self.live])
+            self.assertIn(self.live, found)
+            self.assertEqual(unreadable, [])
+            broken = Path(self.parents) / 'broken-owner'
+            (broken / '.git').mkdir(parents=True)
+            _, unreadable = bc.live_checkouts([], extra=[str(broken)])
+            self.assertTrue(unreadable)
+
+    def test_explicit_cargo_is_found_and_reaped_without_a_general_cache(self):
+        checkout = self.checkout('leaving')
+        cargo = self.folders_for(checkout)[0]
+        self.make([cargo], 2 * DAY)
+        missing = str(Path(self.tmp) / 'missing-general-cache')
+        with patch.object(bc, 'roots', return_value=(missing, [self.cargo])):
+            self.assertEqual(bc.checkout_caches(checkout), [cargo])
+        self.cache = missing
+        shutil.rmtree(checkout)
+        plan, _ = self.plan()
+        self.assertEqual(plan[cargo].action, reaper.DELETE)
+
+    def test_lander_calls_the_current_discard_api(self):
+        source = HERE.parents[1] / 'mega-lander/workspaces.py'
+        node = next(n for n in ast.parse(source.read_text()).body
+                    if isinstance(n, ast.FunctionDef) and n.name == 'discard_build_caches')
+        event = Mock()
+        namespace = {'_build_caches': lambda: bc, 'event': event}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), namespace)
+        paths = [str(Path(self.cargo) / 'owned-cache')]
+        with patch.object(bc, 'roots', return_value=(self.cache, [self.cargo])), \
+                patch.object(bc, 'discard', return_value=(paths, [])) as discard:
+            namespace['discard_build_caches']('worker', self.live, paths)
+            discard.assert_called_once_with(paths, self.cache)
+        self.assertIsNone(event.call_args.kwargs['failures'])
 
 
 if __name__ == "__main__":

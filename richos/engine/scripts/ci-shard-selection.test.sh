@@ -36,7 +36,7 @@ E="$SANDBOX/engine"
 mkdir -p "$E/scripts/lib"
 printf '1.0.0-test\n' > "$E/VERSION"
 for f in ci-shard.sh ci-units.sh; do cp "$SRC_DIR/$f" "$E/scripts/$f"; chmod +x "$E/scripts/$f"; done
-for f in ci-receipts.py leak-canary.sh record-canary.sh tree-witness.sh proc_tree.py operator_fences.py worker_tokens.py engine_pass.py; do
+for f in ci-receipts.py leak-canary.sh record-canary.sh tree-witness.sh proc_tree.py operator_fences.py worker_tokens.py engine_pass.py machine_settings.py; do
     cp "$SCRIPT_DIR/lib/$f" "$E/scripts/lib/$f"
 done
 printf '#!/usr/bin/env bash\nexit 0\n' > "$E/scripts/lib/green.test.sh"; chmod +x "$E/scripts/lib/green.test.sh"

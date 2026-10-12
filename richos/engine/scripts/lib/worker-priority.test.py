@@ -308,11 +308,12 @@ class Priority(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.budget(self.linked).held(), 0)
 
-    def test_mac_slot_refuses_missing_ssd_without_creating_fallback(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(engine_pass.sys, "platform", "darwin"), \
-                patch.object(engine_pass.os.path, "ismount", return_value=False), \
+    def test_mac_slot_refuses_missing_configured_drive_without_creating_fallback(self):
+        with patch.dict(os.environ, {"RICHOS_BULK_ROOT": "/Volumes/AbsentConfiguredDrive",
+                                     "RICHOS_MACHINE_SETTINGS_RESOLVED": "1"}, clear=True), \
+                patch.object(Path, "is_mount", return_value=False), \
                 patch.object(engine_pass.os, "makedirs") as create:
-            with self.assertRaisesRegex(RuntimeError, "/Volumes/E1TB"):
+            with self.assertRaisesRegex(ValueError, "storage volume is not mounted: /Volumes/AbsentConfiguredDrive"):
                 engine_pass.directory()
             create.assert_not_called()
 

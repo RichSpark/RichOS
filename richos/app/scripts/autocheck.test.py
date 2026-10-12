@@ -822,6 +822,8 @@ class Commit(Fixture):
     def test_engine_timing_growth_refuses_commit_and_merge_without_application_lint(self):
         self.make(install=False)
         (self.repo / "richos/engine").unlink()
+        self.write("richos/engine/scripts/lib/machine_settings.py",
+                   (ENGINE / "scripts/lib/machine_settings.py").read_text())
         (self.repo / ".git/info/exclude").write_text("")
         self.write("richos/engine/scripts/growth.test.py", "assert ready\n")
         self.finish_fast_setup()
@@ -1208,10 +1210,13 @@ class Land(Fixture):
         self.make()
         self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
         (self.repo / "richos/engine").unlink()
+        self.write("richos/engine/scripts/lib/machine_settings.py",
+                   (ENGINE / "scripts/lib/machine_settings.py").read_text())
         before = self.head("main")
         out = self.git("merge", "--no-ff", "-m", "land plain", "feature")
         self.assertNotIn("REFUSED", out.stdout + out.stderr)
         self.git("reset", "-q", "--hard", before)
+        shutil.rmtree(self.repo / "richos/engine")
         (self.repo / "richos/engine").symlink_to(ENGINE)
         self.write(".publication-boundary", 'PRIVATE_RECORD="the private record"\nPRIVATE_SOURCES=""\n')
         self.publication_fixture_baseline()
@@ -1221,6 +1226,8 @@ class Land(Fixture):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "publication-bound")
         (self.repo / "richos/engine").unlink()
+        self.write("richos/engine/scripts/lib/machine_settings.py",
+                   (ENGINE / "scripts/lib/machine_settings.py").read_text())
         before = self.head("main")
         out = self.git("merge", "--no-ff", "-m", "land bound", "feature", expect=1)
         text = out.stdout + out.stderr

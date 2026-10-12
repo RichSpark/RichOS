@@ -12,6 +12,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import machine_storage as M
 import re
 import shutil
 import subprocess
@@ -968,7 +971,7 @@ def stage_candidate_engine(archive, name, url):
 #
 # The list is read from INSIDE the engine archive being published, never from the tree,
 # so what is attached is the source of what shipped. Each archive is downloaded once into
-# a cache on /Volumes/E1TB (304,272,357 bytes for the 34 of FFmpeg 9.0.2, measured
+# a cache on /Volumes/E1TB (304,272,357 bytes for the 34 of FFmpeg 9.0.2, measured # machine-path-exempt: retained historical measurement or design record; never a storage default
 # 2026-10-07) and checked against its SHA-256 on every use. It is uploaded only if the
 # release lacks it, every copy is then checked against GitHub's digest, and an asset that
 # holds other bytes is refused, never clobbered. `finish` runs this before verify-assets,
@@ -976,7 +979,7 @@ def stage_candidate_engine(archive, name, url):
 # same function for a release that was published before this existed.
 ENGINE_GPL_PROGRAMS = ("engine/runtime/bin/ffmpeg", "engine/runtime/bin/ffprobe")
 ENGINE_RUNTIME_RECIPE = "engine/runtime/runtime-sources.json"
-GPL_SOURCE_CACHE = "/Volumes/E1TB/caches/richos-gpl-sources"
+GPL_SOURCE_CACHE = "richos-gpl-sources"
 SOURCE_ARCHIVE_SUFFIX = re.compile(r"\.tar\.(gz|xz|bz2)(?=/|$)")
 
 
@@ -1087,12 +1090,12 @@ def attach_gpl_sources(tag, engine):
     release = get_release(tag)
     if not release or release.get("draft"):
         raise ValueError(f"{tag} is not a published release; nothing was attached")
-    cache = Path(os.environ.get("RICHOS_GPL_SOURCE_CACHE") or GPL_SOURCE_CACHE)
+    cache = M.cache(GPL_SOURCE_CACHE, "RICHOS_GPL_SOURCE_CACHE")
     try:
         cache.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise ValueError(f"cannot create the GPL source cache {cache} ({error}); "
-                         "is /Volumes/E1TB mounted?") from None
+                         "is the configured cache volume mounted?") from None
     # Every archive is verified before the first upload, so a bad pin attaches nothing,
     # and every one is tried, so one run names every archive that could not be had.
     files, failed, mirrors = [], [], source_mirrors()

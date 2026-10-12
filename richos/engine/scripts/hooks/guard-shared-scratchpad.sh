@@ -13,7 +13,7 @@
 # Refused: a call made inside a subagent (its payload carries agent_id) whose rm,
 # rmdir, unlink, trash, srm or find -delete/-exec rm reaches inside a session directory
 # under a Claude scratch root, that directory, or a directory above it. The lead's own
-# calls pass. A teammate's own /Volumes/E1TB/tmp/claude/<name>/ is not this rule's
+# calls pass. A teammate's own named agent scratch is not this rule's
 # business and passes.
 #
 # There is no exemption marker, deliberately: no delete in the shared scratchpad is ever
