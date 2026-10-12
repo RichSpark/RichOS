@@ -66,10 +66,18 @@ GATE_BUDGETS = {
     # 300 s this replaces sat INSIDE the lock-wait guard and would have refused a Clippy
     # queued behind another build for two minutes before it compiled a line.
     "gates/lint-tauri": 2100,
-    # Re-derived 2026-09-25: the unit took 1291 s alone (run 20260925T201442Z-f9f0f9b9), and it ran
-    # past 1800 s twice beside the simulator suites once gates ran at once (runs 20260925T222652Z-723fee53
-    # and 20260925T225819Z-2a11fdd0). 792 s (2026-09-23) is stale; this is about 2x the contended envelope.
-    "gates/workspace-mutants": 3600,
+    # The deadline is per COMMAND: the fourteen-point unit is one command, the four workspace
+    # units' passes the second (each gets the whole deadline). Re-derived 2026-10-11, when the
+    # 3600 s below killed a passing build: in run 20261011T213131Z-6a01bbe6 the fourteen-point
+    # unit alone was still running at 3600 s of execution with nothing failed, beside a
+    # script-suites gate that took 2818 s and a UI suite that took 1985 s. Its passing runs from
+    # gate-evidence/*/gates-workspace-mutants.log rose from 1443 s and 2068 s (2026-10-07) to
+    # 2198-2620 s (2026-10-08) and 2347-2974 s (2026-10-10); the 2974 s one ran beside a
+    # 2193 s script-suites gate, the 2121 s one (2026-10-11) beside a 361 s one. The contended
+    # envelope is therefore at least 3600 s; 2x is 7200 s. The workspace half took 475-488 s.
+    # Earlier derivation (2026-09-25, 1291 s alone in run 20260925T201442Z-f9f0f9b9) is stale.
+    # A gate that passes past half its deadline says so in the run log (command()).
+    "gates/workspace-mutants": 7200,
     # Re-derived 2026-09-29, when each UI shard started holding a machine worker token of its own
     # (ui/tests/run.js): beside a mutation pool the shards now wait for tokens instead of running
     # uncounted, and the progress guarantee is ONE shard at a time on the gate's own token, i.e.
@@ -79,6 +87,9 @@ GATE_BUDGETS = {
     "gates/ui-suite": 3300,
     "gates/privacy-sweep": 120, # At least 4x a full scan; no receipt-reuse assumption.
 }
+# How long a mutation batch's proof-run may wait for a proof-run slot, as admission and outside
+# the gate's deadline: proof_slots.DEFAULT_WAIT_SECONDS, the line behind two full runs.
+MUTATION_SLOT_WAIT = 3 * 3600
 CLEANUP_TIMEOUT = 30
 TERM_GRACE = 15
 KILL_GRACE = 2
@@ -808,6 +819,9 @@ GATE_SET_PER_STEP = (
     "RICHOS_FOURTEEN_MUTANTS",
     # ...and the other workspace suites' passes (MUTATION_PASS_UNITS), at the same gate.
     "RICHOS_MUTATION_PASSES",
+    # The workspace-mutants gate's deadline, handed to ci-shard.sh for each unit it runs
+    # (mutation_units), so the unit is never stopped at ci-shard's own 3600 s cap first.
+    "CI_SHARD_UNIT_TIMEOUT",
     # How many prepared-simulator leases the pool hands out at once (testdevices.py
     # pool_leases): the operator's `--simulated-phones`, set at the script-suites call site.
     SIMULATED_PHONES_ENV,
@@ -1269,7 +1283,7 @@ class Runner:
         self.announce(f"  {'total'.ljust(width)} : {time.time() - self.started:7.1f}s")
 
     def command(self, *args, cwd=None, capture=False, timeout=None, credentials=False,
-                env_extra=None, cleanup=False, release_build=False):
+                env_extra=None, cleanup=False, release_build=False, nested_wait=None):
         if self.groups.stopping and not cleanup:
             raise GateStopped(f"{self.active_phase or Path(str(args[0])).name} was stopped: "
                               "another gate already refused this build")
@@ -1284,7 +1298,8 @@ class Runner:
                                stdout=subprocess.PIPE if capture else self.log,
                                stderr=self.log, timeout=timeout,
                                groups=self.groups, cleanup=cleanup,
-                               **({"release_build": True} if release_build else {}))
+                               **({"release_build": True} if release_build else {}),
+                               **({"nested_wait": nested_wait} if nested_wait is not None else {}))
         except CommandCleanupError as error:
             label = self.active_phase or Path(str(args[0])).name
             raise CommandCleanupError(f"{label} cleanup failed (command budget {timeout}s): {error}") from None
@@ -1307,6 +1322,14 @@ class Runner:
         if result.returncode:
             # Do not echo argv: signing commands can carry a password.
             raise RuntimeError(f"{Path(str(args[0])).name} failed (exit {result.returncode}); see the run log")
+        # A gate that passes past half its deadline is the next timeout on a busier Mac
+        # (workspace-mutants passed at 2980 s of 3600 s in run 20261010T211905Z-62031055 and
+        # timed out in run 20261011T213131Z-6a01bbe6). Say so in the run log; nothing is refused.
+        execution = getattr(result, "execution_seconds", None)
+        if (timeout and execution is not None and execution > timeout / 2
+                and self.active_phase in GATE_BUDGETS):
+            self.announce(f"  NEAR DEADLINE {self.active_phase}: passed after {execution:.1f}s "
+                          f"of execution, more than half of its {timeout}s deadline")
         return result.stdout.strip() if capture else None
 
     def checkout(self, sha=None):
@@ -1839,12 +1862,22 @@ class Runner:
         evidence = self.state / "mutation-proof"
         evidence.mkdir(parents=True, exist_ok=True)
         logdir = Path(tempfile.mkdtemp(prefix=label + "-", dir=evidence))
+        budget = GATE_BUDGETS[WORKSPACE_MUTANTS_GATE]
+        # proof-run waits for a proof-run slot after the machine token; that wait is bounded by
+        # its own --slot-wait and never counts toward the deadline (nested_wait, owned_command;
+        # review rv-20261011T232800Z-6d2774ef-374f P1).
         self.command(sys.executable, self.source / SCRIPTS / "proof-run.py",
                      "--commands", selection, "--log-dir", logdir,
+                     "--slot-wait", str(MUTATION_SLOT_WAIT),
                      # The engine never reads this output-only nightly generation id.
                      # Keep the actual id on the coordinator, normalize only this batch.
-                     env_extra={**environment, "RICHOS_NIGHTLY_RUN_ID": CONDITIONS_RUN_ID},
-                     timeout=GATE_BUDGETS[WORKSPACE_MUTANTS_GATE])
+                     # ci-shard.sh stops a unit at min(3600, max(900, 3 x weight)) unless
+                     # CI_SHARD_UNIT_TIMEOUT says otherwise, and proof-run sets no deadline
+                     # of its own on an --only-units check; so the gate's deadline is handed
+                     # to the unit too, here only (review rv-20261011T224950Z-e0dcac9e-f4e7).
+                     env_extra={**environment, "RICHOS_NIGHTLY_RUN_ID": CONDITIONS_RUN_ID,
+                                "CI_SHARD_UNIT_TIMEOUT": str(budget)},
+                     timeout=budget, nested_wait=MUTATION_SLOT_WAIT)
 
     def retry_red_ui_suites_alone(self, error, receipts, tests, tree, first):
         """Give each suite the sharded run left red ONE attempt alone; True when the build goes on.
@@ -1987,11 +2020,9 @@ class Runner:
         # The other workspace suites' mutation passes, the same ruling applied to them (hunt
         # part 4 finding 19, 2026-09-30): OFF at every land, ON here with
         # RICHOS_MUTATION_PASSES=1, one unit after another, a failed pass failing the gate
-        # (MUTATION_PASS_UNITS says why app.test.sh is not among them yet). Their own budget is
-        # UNVERIFIED: the dated CI-era weights put the three units, mutation passes included,
-        # near 700 s (workspaces 580 s, workspace-probes 114 s, create-teammate-worktree 4 s;
-        # their behavioral halves took 89, 25 and 9 s here on 2026-09-30), so they get the
-        # fourteen-point pass's own 3600 s until the first nightly measures them.
+        # (MUTATION_PASS_UNITS says why app.test.sh is not among them yet). They share the
+        # fourteen-point pass's deadline, one command each; measured here the four took
+        # 475-488 s together (runs 20261010T211905Z-62031055 and 20261011T010111Z-abdbc9e8).
         def workspace_mutants():
             with self.phase(WORKSPACE_MUTANTS_GATE):
                 self.mutation_units(["mega-lander/tests/workspace-spec-fourteen.test.sh"],

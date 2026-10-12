@@ -548,6 +548,151 @@ Path(sys.argv[1]).write_text(str(p.pid))
                 self.assertRaisesRegex(RuntimeError, "never admitted: waited 1800s .* nothing ran"):
             m.Runner(self.root, self.root, {}, io.StringIO()).command("true", timeout=10)
 
+    def test_a_gate_passing_past_half_its_deadline_says_so_and_still_passes(self):
+        # workspace-mutants passed at 2980 s of its 3600 s in run 20261010T211905Z-62031055 and
+        # timed out a passing build in run 20261011T213131Z-6a01bbe6, unannounced. Past half of
+        # the deadline is said, never refused.
+        gate = m.WORKSPACE_MUTANTS_GATE
+        deadline = m.GATE_BUDGETS[gate]
+        for execution, said in ((deadline / 2 + 1, True), (deadline / 2, False)):
+            with self.subTest(execution=execution):
+                log = io.StringIO()
+                r = m.Runner(self.root, self.root, {}, log)
+
+                def run(args, **kwargs):
+                    result = subprocess.CompletedProcess(args, 0, "", "")
+                    result.admitted, result.admission_seconds = True, 0.0
+                    result.execution_seconds = execution
+                    return result
+
+                with patch.object(m, "owned_run", side_effect=run), \
+                        contextlib.redirect_stdout(io.StringIO()) as out:
+                    with r.phase(gate):
+                        r.command("true", timeout=deadline)
+                lines = [l for l in out.getvalue().splitlines() if "NEAR DEADLINE" in l]
+                if said:
+                    self.assertEqual(lines, [f"  NEAR DEADLINE {gate}: passed after {execution:.1f}s "
+                                             f"of execution, more than half of its {deadline}s deadline"])
+                    self.assertIn(lines[0], log.getvalue(), "the run log carries the line too")
+                    self.assertFalse(m.Runner.GATE_VERDICT.match(lines[0]),
+                                     "--gates-passed-in never reads it as a verdict")
+                else:
+                    self.assertEqual(lines, [])
+
+    def test_a_mutation_unit_is_never_stopped_before_its_gate_deadline(self):
+        # Review rv-20261011T224950Z-e0dcac9e-f4e7 P1: the gate's 7200 s reached proof-run only;
+        # ci-shard.sh still stopped the fourteen-point unit at min(3600, max(900, 3 x weight)).
+        # Each mutation command's environment is applied to ci-shard.sh's own deadline line,
+        # in an environment holding nothing else, for the unit's committed weight and a huge one.
+        gate = m.GATE_BUDGETS[m.WORKSPACE_MUTANTS_GATE]
+        engine = Path(__file__).resolve().parents[2] / "engine"
+        shard = (engine / "scripts/ci-shard.sh").read_text()
+        rule = shard[shard.index("UNIT_TIMEOUT_FACTOR="):shard.index("# Run argv with")]
+        line = next(l.strip() for l in shard.splitlines() if l.strip().startswith('DEADLINE="'))
+        weights = dict(row.split("\t")[:2] for row in
+                       (engine / "scripts/lib/ci-unit-weights.tsv").read_text().splitlines()
+                       if row and not row.startswith("#"))
+        sys.path.insert(0, str(Path(__file__).with_name("lib")))
+        try:
+            import proof_evidence
+        finally:
+            sys.path.pop(0)
+        repo = Path(__file__).resolve().parents[3]
+        r = m.Runner(self.root, self.root, {}, io.StringIO())
+        calls = []
+        with patch.object(r, "command", side_effect=lambda *a, **kw: calls.append(kw)):
+            r.mutation_units(["mega-lander/tests/workspace-spec-fourteen.test.sh"],
+                             {"RICHOS_FOURTEEN_MUTANTS": "1"}, "fourteen")
+            r.mutation_units(m.MUTATION_PASS_UNITS, {"RICHOS_MUTATION_PASSES": "1"}, "workspace")
+        units = [["mega-lander/tests/workspace-spec-fourteen.test.sh"], list(m.MUTATION_PASS_UNITS)]
+        for kw, batch in zip(calls, units):
+            self.assertEqual(kw["timeout"], gate)
+            for unit in batch:
+                # proof-run hands an isolated check only its recipe's named variables.
+                recipe = proof_evidence.contract_for(repo, "engine " + unit)
+                if recipe.get("isolation"):
+                    self.assertIn("CI_SHARD_UNIT_TIMEOUT",
+                                  set(recipe["environment"]) | set(recipe["external"]))
+                for weight in (weights[unit], "1000000"):
+                    with self.subTest(unit=unit, weight=weight):
+                        env = {"PATH": os.environ["PATH"], **kw["env_extra"], "WEIGHT": weight}
+                        inner = subprocess.run(["bash", "-c", rule + line + '\necho "$DEADLINE"'],
+                                               env=env, capture_output=True, text=True, check=True)
+                        self.assertGreaterEqual(int(inner.stdout), gate,
+                                                "ci-shard.sh would stop the unit before the gate's deadline")
+
+    def test_a_long_proof_slot_wait_never_spends_the_mutation_gates_deadline(self):
+        # Review rv-20261011T232800Z-6d2774ef-374f P1: the deadline's clock started at the
+        # machine token, before proof-run.py waited for its proof-run slot, so a long wait in
+        # that line killed a gate whose work fit. Here the REAL proof-run.py waits behind a slot
+        # this test holds for longer than the whole (shortened) deadline, then runs one check of
+        # one second. The gate must pass and count the wait as admission, not execution.
+        budget = 6
+        env, _workers = self.private_budget()
+        slots = self.root / "slots"
+        slots.mkdir()
+        (slots / "limit").write_text("1\n")
+        env.update(RICHOS_PROOF_RUN_SLOTS_DIR=str(slots), RICHOS_WAITS_DIR=str(self.root / "waits"),
+                   RICHOS_PROOF_RUN_DIR=str(self.root / "proof-runs"),
+                   RICHOS_RUNTIME_DIR=str(self.root / "no-runtime"), RICHOS_WAITER="slot-wait-fixture")
+        env.pop("RICHOS_PROOF_RUN_SLOT_HELD", None)  # this suite may itself run inside a proof run
+        # The source tree's proof-run.py starts the real one with an idle CPU sample, as
+        # proof-run.test.py does, so the check's own CPU admission never stands in for the slot.
+        here = Path(__file__).resolve().parent
+        engine_lib = here.parents[1] / "engine/scripts/lib"
+        idle = {"cpu_user_percent": 5.0, "cpu_system_percent": 2.0, "cpu_idle_percent": 93.0,
+                "swapout_mb_per_s": 0.0, "memory_pressure": "normal", "memory_free_percent": 80,
+                "swap_used_mb": 0.0}
+        state = self.root / "state"
+        shim = state / "source" / m.SCRIPTS / "proof-run.py"
+        shim.parent.mkdir(parents=True)
+        shim.write_text("import runpy, sys\n"
+                        f"sys.path.insert(0, {str(here / 'testvm')!r})\n"
+                        f"import reserve\nreserve.host_sample = lambda: {idle!r}\n"
+                        f"sys.path.insert(0, {str(engine_lib)!r})\n"
+                        "import engine_pass\nengine_pass.is_main_checkout = lambda *a: False\n"
+                        f"sys.argv = [{str(here / 'proof-run.py')!r}] + sys.argv[1:]\n"
+                        "runpy.run_path(sys.argv[0], run_name='__main__')\n")
+        held = os.open(slots / "slot-000", os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        waited = []
+
+        def release_once_waited_past_the_deadline():
+            try:
+                guard = time.monotonic() + 120            # a hang guard only
+                while not list(slots.glob("wait-*.json")) and time.monotonic() < guard:
+                    time.sleep(0.05)
+                waited.append(bool(list(slots.glob("wait-*.json"))))
+                time.sleep(budget + 2)                     # in line for longer than the deadline
+            finally:
+                os.close(held)
+
+        releaser = threading.Thread(target=release_once_waited_past_the_deadline)
+        with (self.root / "run.log").open("w") as log:
+            r = m.Runner(self.root, state, env, log)
+            command = r.command
+
+            def one_second_check(*args, **kwargs):
+                # The batch's selection becomes one check of one second; nothing else changes.
+                Path(args[list(args).index("--commands") + 1]).write_text("cd richos/app && sleep 1\n")
+                return command(*args, **kwargs)
+
+            releaser.start()
+            try:
+                with patch.dict(m.GATE_BUDGETS, {m.WORKSPACE_MUTANTS_GATE: budget}), \
+                        patch.object(r, "command", side_effect=one_second_check), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    with r.phase(m.WORKSPACE_MUTANTS_GATE):
+                        r.mutation_units(["fixture.test.sh"], {}, "fixture")
+            finally:
+                releaser.join()
+        self.assertEqual(waited, [True], "proof-run waited in line for the held slot")
+        text = (self.root / "run.log").read_text()
+        self.assertRegex(text, r"proof-run slot 0 on this Mac \(1 run\(s\) at once\), waited \d+ s for it")
+        admission, execution = r.clocks[m.WORKSPACE_MUTANTS_GATE]
+        self.assertGreaterEqual(admission, budget + 2, "the slot wait is reported as admission")
+        self.assertLess(execution, budget, "the slot wait is not reported as execution")
+
     def test_every_gate_has_a_named_deadline(self):
         for (phase, budget), at_once in [(item, n) for item in m.GATE_BUDGETS.items()
                                          for n in (1, "all")]:
@@ -2008,8 +2153,12 @@ while True: time.sleep(.02)
         mut = [c for c in r.command.call_args_list
                if "fourteen.txt" in " ".join(str(a) for a in c.args)]
         self.assertEqual(len(mut), 1, argvs)
-        self.assertEqual(mut[0].kwargs.get("env_extra"), {"RICHOS_FOURTEEN_MUTANTS": "1",
-                                                          "RICHOS_NIGHTLY_RUN_ID": m.CONDITIONS_RUN_ID})
+        # The batch's units run under the gate's own deadline, not ci-shard's 3600 s cap
+        # (review rv-20261011T224950Z-e0dcac9e-f4e7).
+        self.assertEqual(mut[0].kwargs.get("env_extra"), {
+            "RICHOS_FOURTEEN_MUTANTS": "1",
+            "RICHOS_NIGHTLY_RUN_ID": m.CONDITIONS_RUN_ID,
+            "CI_SHARD_UNIT_TIMEOUT": str(m.GATE_BUDGETS[m.WORKSPACE_MUTANTS_GATE])})
         self.assertEqual(mut[0].kwargs.get("timeout"), m.GATE_BUDGETS[m.WORKSPACE_MUTANTS_GATE])
         # ...and, at the same gate, the other workspace suites' mutation passes, which no land
         # runs any more (hunt part 4 finding 19).
@@ -2022,8 +2171,10 @@ while True: time.sleep(.02)
                                                 "mega-lander/tests/create-teammate-worktree.test.sh",
                                                 "mega-lander/tests/workspace-probes.test.sh",
                                                 "mega-lander/tests/app.test.sh"]))
-        self.assertEqual(others[0].kwargs.get("env_extra"), {"RICHOS_MUTATION_PASSES": "1",
-                                                             "RICHOS_NIGHTLY_RUN_ID": m.CONDITIONS_RUN_ID})
+        self.assertEqual(others[0].kwargs.get("env_extra"), {
+            "RICHOS_MUTATION_PASSES": "1",
+            "RICHOS_NIGHTLY_RUN_ID": m.CONDITIONS_RUN_ID,
+            "CI_SHARD_UNIT_TIMEOUT": str(m.GATE_BUDGETS[m.WORKSPACE_MUTANTS_GATE])})
 
     def test_release_never_skips_a_suite_over_unchanged_inputs(self):
         """A proof file on this host may excuse a suite for a CANDIDATE. It may never

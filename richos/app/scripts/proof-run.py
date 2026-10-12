@@ -238,6 +238,10 @@ import proof_slots  # noqa: E402  (how many proof runs share the Mac at once)
 # The run's host-wide slot (main); every check's supervisor holds it too, so a killed runner keeps it
 # only until its checks are stopped. Empty when run() is driven directly (the tests).
 SLOT = None
+# A caller whose deadline must not count the wait for that slot (the nightly's workspace-mutants
+# gate, lib/owned_command.py EXECUTION_MARKER_ENV) names a file this run creates once it has the
+# slot. Taken out of the environment here, so no check of this run inherits it or its identity.
+EXECUTION_MARKER = os.environ.pop("RICHOS_EXECUTION_STARTS_MARKER", "")
 
 
 class Item:
@@ -2354,6 +2358,11 @@ def run_main(argv, run_state):
         if args.summary_out:
             shutil.copyfile(os.path.join(logdir, "summary.json"), args.summary_out)
         return 1
+    if EXECUTION_MARKER:
+        try:
+            open(EXECUTION_MARKER, "w").close()
+        except OSError as exc:  # the caller then starts its clock at its own bound
+            print("proof-run: could not tell the caller its clock starts now: %s" % exc, flush=True)
     try:
         slot_line = ("inside its caller's proof-run slot (a proof run started by a check of one)" if SLOT.borrowed
                      else "proof-run slot %d on this Mac (%d run(s) at once), waited %.0f s for it" % (
