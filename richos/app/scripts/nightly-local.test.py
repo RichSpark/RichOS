@@ -194,6 +194,26 @@ class LocalTests(unittest.TestCase):
                          sorted(n for n in m.GATE_PASSTHROUGH
                                 if n in os.environ and n not in m.GATE_SET_BY_BUILD))
 
+    def test_private_storage_reaches_isolated_gates_with_environment_precedence(self):
+        bulk = self.root / "bulk"
+        bulk.mkdir()
+        private = self.root / "machine.env"
+        private.write_text(f"RICHOS_BULK_ROOT={bulk}\nCARGO_TARGET_DIR={bulk}/cargo\n"
+                           f"RICHOS_BUILD_CACHE={bulk}/build\n")
+        source = {"HOME": str(self.root), "RICHOS_ENV_FILE": str(private),
+                  "RICHOS_CARGO_CACHE_ROOT": str(bulk / "selected-cargo")}
+        self.assertEqual(m.settings_this_build_drops(source, "build"), [])
+        env = m.gate_environment(source, strict=False)
+        self.assertEqual(env["TMPDIR"], str(bulk / "tmp/richos-gates") + "/")
+        self.assertEqual(env["RICHOS_CARGO_CACHE_ROOT"], str(bulk / "selected-cargo"))
+        self.assertEqual(env["RICHOS_BUILD_CACHE"], str(bulk / "build"))
+        self.assertNotIn("CARGO_TARGET_DIR", env)
+        del source["RICHOS_CARGO_CACHE_ROOT"]
+        self.assertEqual(m.gate_environment(source, strict=False)["RICHOS_CARGO_CACHE_ROOT"], str(bulk / "cargo"))
+        private.write_text(f"RICHOS_BULK_ROOT={bulk}/changed\n")
+        env["HOME"] = str(self.root / "isolated-home")
+        self.assertEqual(m.M.load(env)["RICHOS_BULK_ROOT"], str(bulk))
+
     def test_every_gate_runs_whole_whatever_checkout_or_shell_it_starts_from(self):
         # A runner started from a teammate workspace narrows to the branch's cases by default
         # (engine/scripts/lib/workspace_scope.py, 2026-10-01). A nightly never does: its gates
@@ -2537,13 +2557,12 @@ class GatesAtOnceTests(unittest.TestCase):
             reached.append("lock")
             return contextlib.nullcontext()
 
-        with patch.dict(os.environ, {**self.BASE_ENVIRON, "HOME": os.environ["HOME"]}, clear=True), \
+        with patch.dict(os.environ, {**self.BASE_ENVIRON, "HOME": os.environ["HOME"], "RICHOS_BULK_ROOT": str(volume)}, clear=True), \
                 patch.object(sys, "argv", ["nightly-local.py", "build", *self.NUMBERS,
                                            "--state-dir", str(self.root / "state")]), \
                 patch.object(m.platform, "system", return_value="Darwin"), \
                 patch.object(m.platform, "machine", return_value="arm64"), \
                 patch.object(Path, "is_mount", return_value=True), \
-                patch.object(m, "gate_tmpdir", return_value=folder), \
                 patch.object(m, "notary_environment", return_value={}), \
                 patch.object(m, "private_file", side_effect=Path), \
                 patch.object(m, "exclusive", side_effect=lock), \
