@@ -81,10 +81,16 @@ wait_text() {
   done
   return 1
 }
-theme() { # dark | light, through the Settings button's own theme row
+theme() { # dark | light, through the Settings button's own theme row, then the menu closed
+  # Each press stops at the first match and is tried up to three times, and Escape closes the menu
+  # after (feature-request-walk.sh's theme): with the report in the Rich panel, walk-28517e6e980a's
+  # 5-canceled-in-flight-light capture was dark, with the Settings menu left open over the card.
+  local name="Dark theme"; [ "$1" = light ] && name="Light theme"
   "$T/ax.sh" "$VM" click --title "Settings" --first >/dev/null 2>&1 || true
   sleep 1
-  if [ "$1" = light ]; then "$T/ax.sh" "$VM" click --title "Light theme" >/dev/null 2>&1; else "$T/ax.sh" "$VM" click --title "Dark theme" >/dev/null 2>&1; fi
+  for _ in 1 2 3; do "$T/ax.sh" "$VM" click --title "$name" --first >/dev/null 2>&1 && break; sleep 2; done
+  sleep 1
+  "$T/ax.sh" "$VM" --key 53 >/dev/null 2>&1 || true
   sleep 2
 }
 both() { # $1 name: one capture in each theme, dark first, and back to dark
