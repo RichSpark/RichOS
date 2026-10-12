@@ -63,6 +63,19 @@ check("busy: could not tell", "could not tell: the phone was busy" in out["diagn
 check("busy: never a code regression", len(esc) == 1 and "code regression" not in esc[0] and not good)
 check("busy: no second measurement made", "-again" not in calls)
 
+# A last measurement that FAILED, with no app code changed since, is measured again, not re-judged.
+out, esc, good, meas, calls = run("good")  # installs the stand-ins
+for failed_last, expect_measure in (("slower", True), ("good", False)):
+    calls.clear()
+    judges = iter([judged("good", "x")])
+    watch.last_measurement = lambda *a, v=failed_last: {"commit": "c" * 40, "record": "/old.json", "verdict": v}
+    watch.app_changed = lambda *a: False
+    watch.judge_record = lambda *a: next(judges)
+    watch.wait_until_free = lambda *a: (True, 0)
+    with tempfile.TemporaryDirectory() as d:
+        watch.run_platform("repo", "r2", "a" * 40, "android", d, "checkout")
+    check(f"last {failed_last}, no app change: phone measured={expect_measure}", bool(calls) == expect_measure)
+
 if fails:
     sys.exit(1)
 print("ok")
