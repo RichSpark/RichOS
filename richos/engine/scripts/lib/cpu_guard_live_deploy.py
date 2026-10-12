@@ -134,6 +134,7 @@ class Live:
 
     def loads(self, path):
         """The file must import and answer `status` beside the runtime's cpu_policy.py."""
+        shutil.copyfile(Path(__file__).with_name('machine_settings.py'), self.runtime / 'machine_settings.py')
         result = subprocess.run([self.interpreter, '-B', str(path), 'status'], cwd=str(self.runtime),
                                 env={**os.environ, 'RICHOS_CPU_GUARD_STATE': str(self.state)},
                                 capture_output=True, text=True, timeout=30)

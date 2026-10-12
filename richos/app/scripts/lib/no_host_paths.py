@@ -167,8 +167,8 @@ def operational_text(text, path):
         return ''
     if any(p.lower() in {'docs', 'test', 'tests', 'testvm', 'operator-probes', 'fixtures', 'examples', 'validation'} for p in parts):
         return ''
-    if '.test.' in name or '.mutation.' in name or name.endswith(('.md', '.patch')):
-        if '/skills/' not in path and '/agents/' not in path:
+    if '.test.' in name or '.mutation.' in name or name.endswith(('.md', '.patch', '-fixture.sh', '_fixture.py')):
+        if 'skills' not in parts and 'agents' not in parts:
             return ''
     if name == "runtime-sources.json":
         try:
@@ -220,7 +220,7 @@ def scan(target: str, allowed, home: str | None, reviewed_text=False, upstream_p
         text = None
         if reviewed_text and os.path.splitext(path)[1] in TEXT_SUFFIXES and b"\x00" not in data:
             try:
-                text = operational_text(data.decode("utf-8"), path)
+                text = operational_text(data.decode("utf-8"), os.path.relpath(path, target) if os.path.isdir(target) else os.path.basename(path))
             except UnicodeDecodeError:
                 pass
         if text is None:

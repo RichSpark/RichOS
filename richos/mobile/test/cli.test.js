@@ -45,13 +45,13 @@ test('separate CLI processes persist the selected conversation, draft and queued
   assert.equal(online.environment.receipts[0].clientId, sent.outbox[0].clientId);
 });
 
-test('suite storage ignores an ordinary shell TMPDIR and preserves incompatible saved policies', (t) => {
+test('suite storage honors the selected TMPDIR and preserves incompatible saved policies', (t) => {
   const { dir } = session(t);
   const result = spawnSync(process.execPath, ['-e',
     'const fs=require("node:fs"); const {createScratch}=require(process.argv[1]); const p=createScratch("ordinary-shell"); console.log(p); fs.rmdirSync(p);',
-    join(__dirname, 'storage.cjs')], { env: { ...process.env, TMPDIR: '/var/empty' }, encoding: 'utf8' });
+    join(__dirname, 'storage.cjs')], { env: { ...process.env, TMPDIR: dir }, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^\/Volumes\/E1TB\/tmp\/codex\//);
+  assert(result.stdout.trim().startsWith(dir + '/'));
   assert(!existsSync(result.stdout.trim()));
   const legacy = join(dir, 'legacy');
   mkdirSync(legacy);
@@ -65,20 +65,26 @@ test('suite storage ignores an ordinary shell TMPDIR and preserves incompatible 
   assert.equal(proofCache(legacy, 'system'), legacy);
 });
 
-test('suite launcher gives descendants SSD scratch and removes it for unset or unsuitable TMPDIR', (t) => {
+test('suite launcher forwards and removes its selected scratch and refuses an unusable allocator', (t) => {
   const { dir, env } = session(t);
   const bin = join(dir, 'bin');
   mkdirSync(bin);
   writeFileSync(join(bin, 'npm'), '#!/bin/sh\nprintf \'%s\\n\' "$TMPDIR"\n', { mode: 0o755 });
-  for (const value of [undefined, '/var/empty']) {
+  const suite = join(__dirname, 'run-suite.cjs');
+  for (const value of [undefined, dir]) {
     const childEnv = { ...env, PATH: `${bin}:${env.PATH}` };
     if (value) childEnv.TMPDIR = value;
     else delete childEnv.TMPDIR;
-    const result = spawnSync(process.execPath, [join(__dirname, 'run-suite.cjs'), 'headless'], { env: childEnv, encoding: 'utf8' });
+    // A controlled platform temp directory keeps the unset-TMPDIR case in our sandbox.
+    const code = `require('node:os').tmpdir=()=>${JSON.stringify(dir)};process.argv=[process.execPath,${JSON.stringify(suite)},'headless'];require(${JSON.stringify(suite)});`;
+    const result = spawnSync(process.execPath, ['-e',code], { env: childEnv, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /^\/Volumes\/E1TB\/tmp\/codex\//);
+    assert(result.stdout.trim().startsWith(dir + '/'));
     assert(!existsSync(result.stdout.trim()), 'Suite scratch must be removed after child exit');
   }
+  const refused = spawnSync(process.execPath, [suite,'headless'], {env:{...env,TMPDIR:'/var/empty'},encoding:'utf8'});
+  assert.equal(refused.status,2,refused.stderr);
+  assert.match(refused.stdout,/NOT RUN.*Cannot allocate mobile scratch/);
 });
 
 test('CLI scenarios expose their real traces and durable results', (t) => {
@@ -121,9 +127,9 @@ test('invalid JSON, actions and modes fail without poisoning the CLI lock', (t) 
 });
 
 test('CLI packaging selects exact shared assets and excludes Debug fixtures from Release and devices', (t) => {
-  const { dir, raw, env } = session(t);
+  const { cache, raw, env } = session(t);
   delete env.RICHOS_MOBILE_RELEASE_CONFIG;
-  const destination = join(dir, 'mobile-ui');
+  const destination = join(cache, 'mobile-ui');
   for (const [configuration, platform, development] of [['Debug', 'iphonesimulator', true], ['Release', 'iphonesimulator', false], ['Debug', 'iphoneos', false], ['Release', 'iphoneos', false]]) {
     const result = raw('bundle', destination, configuration, platform);
     assert.equal(result.status, 0, result.stderr);
@@ -216,4 +222,21 @@ test('storage transport keeps a private-file snapshot across later child work', 
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env, encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), ['first', 'second', 'child'].map(name => join(bulk, 'caches', name)));
+});
+
+
+test('simulator cache uses the private setting on its first and later calls', (t) => {
+  const dir = createScratch('simulator-settings');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const selected = join(dir, 'selected cache');
+  const settings = join(dir, 'settings');
+  writeFileSync(settings, 'RICHOS_MOBILE_CACHE=' + selected + '\n');
+  const env = { ...process.env, HOME: dir, TMPDIR: dir, RICHOS_ENV_FILE: settings };
+  delete env.RICHOS_MACHINE_SETTINGS_RESOLVED;
+  delete env.RICHOS_MOBILE_CACHE;
+  const module = 'file://' + join(mobile, 'cli/simulator.mjs');
+  const code = `const {cacheRoot} = await import(${JSON.stringify(module)}); console.log(JSON.stringify([cacheRoot(),cacheRoot()]));`;
+  const result = spawnSync(process.execPath, ['--input-type=module','-e',code], { env, encoding:'utf8', timeout:15000 });
+  assert.equal(result.status,0,result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout),[selected,selected]);
 });

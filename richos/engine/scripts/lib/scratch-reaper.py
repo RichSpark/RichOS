@@ -2404,7 +2404,7 @@ class Reaper(object):
                              under Cargo's lock in apply()
         """
         root = self.cfg.get("build_cache_root") or ""
-        if not root or not os.path.isdir(root) or self.skip_build_caches:
+        if self.skip_build_caches:
             return
         bc = build_caches()
         self.roots.append(root)

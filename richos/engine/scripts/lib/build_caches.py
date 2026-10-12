@@ -191,10 +191,12 @@ def live_checkouts(parents, extra=()):
                 continue
             try:
                 result = subprocess.run(["git", "-C", candidate, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                                        capture_output=True, text=True, timeout=30)
+                                        capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
             except (OSError, subprocess.TimeoutExpired) as exc:
                 unreadable.append("%s: %s" % (candidate, exc))
                 continue
+            if candidate == os.path.dirname(__file__) and result.returncode and "not a git repository" in result.stderr:
+                continue  # extracted engine code has no project Git ownership
             common = result.stdout.strip()
             if result.returncode == 0 and os.path.basename(common) == ".git":
                 parents.add(os.path.dirname(os.path.dirname(common)))
@@ -464,7 +466,7 @@ def checkout_caches(checkout):
     """The cache folders keyed to one checkout, from the declared roots. Read BEFORE the
     checkout is deleted: its Cargo.toml files are listed from the tree."""
     root, cargo_roots = roots()
-    if not root or not checkout or not os.path.isdir(root) or not os.path.isdir(checkout):
+    if not checkout or not os.path.isdir(checkout):
         return []
     cargo_roots = [r for r in cargo_roots if os.path.isdir(r)]
     return [p for _f, p in owned_paths(checkout, root, cargo_roots)]

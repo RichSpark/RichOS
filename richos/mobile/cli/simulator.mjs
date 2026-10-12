@@ -1,4 +1,4 @@
-import { cacheDir, validateStorage, scratchDir } from './machine-settings.mjs';
+import { cacheDir, validateStorage, scratchDir, machineEnvironment } from './machine-settings.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync, readdirSync, rmSync, realpathSync, statSync } from 'node:fs';
 import { join, dirname, resolve, basename } from 'node:path';
@@ -14,7 +14,7 @@ const key = createHash('sha256').update(mobile).digest('hex').slice(0, 10);
 // A separate installed test app keeps previous phone sessions intact.
 export const bundleId = process.env.RICHOS_MOBILE_TEST_APP === 'integration' ? 'dev.richos.mobile.integration' : 'dev.richos.mobile.loop';
 export function cacheRoot() {
-  const base = process.env.RICHOS_MOBILE_CACHE || join(cacheDir('richos-mobile'), key);
+  const base = machineEnvironment().RICHOS_MOBILE_CACHE || join(cacheDir('richos-mobile'), key);
   const path = process.env.RICHOS_MOBILE_TEST_APP === 'integration' ? join(base, 'integration') : base;
   const resolved = validateStorage(resolve(path));
   mkdirSync(resolved, { recursive: true });
@@ -50,7 +50,7 @@ export function stageAssets(destination, development, allowedContainer, build = 
   const parent = realpathSync(dirname(destination));
   const sandboxDocuments = allowedContainer && realpathSync(join(allowedContainer, 'Documents'));
   if (basename(destination) !== 'mobile-ui' || !(allowedRoots.some(root => parent === root || parent.startsWith(root + '/')) || parent === sandboxDocuments)) {
-    throw new Error('Asset staging requires an external mobile-ui directory or the selected simulator sandbox');
+    throw new Error('Asset staging requires mobile-ui under the selected cache, named scratch or simulator sandbox');
   }
   rmSync(destination, { recursive: true, force: true });
   mkdirSync(destination, { recursive: true });

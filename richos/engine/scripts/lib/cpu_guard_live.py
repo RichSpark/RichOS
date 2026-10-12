@@ -558,6 +558,7 @@ def install(engine):
     runtime = STATE / 'runtime'
     runtime.mkdir(parents=True, exist_ok=True)
     shutil.copy2(Path(__file__).with_name('cpu_policy.py'), runtime / 'cpu_policy.py')
+    shutil.copy2(Path(__file__).with_name('machine_settings.py'), runtime / 'machine_settings.py')
     target = runtime / 'cpu_guard.py'
     shutil.copy2(__file__, target)
     domain = 'gui/%s' % os.getuid()

@@ -1,4 +1,4 @@
-// Suite-owned storage. Never depend on the operator's shell TMPDIR.
+// Suite-owned storage under the selected process allocator.
 const fs = require('node:fs');
 const { join, dirname, resolve } = require('node:path');
 const { execFileSync } = require('node:child_process');
@@ -10,8 +10,10 @@ function createScratch(label) {
   let base;
   try { base = execFileSync('python3', [reader, 'validate', configured], { encoding: 'utf8' }).trimEnd(); }
   catch (error) { throw new StorageUnavailable(String(error.stderr || error.message)); }
-  fs.mkdirSync(base, { recursive: true });
-  return fs.mkdtempSync(join(base, `richos-mobile-${label}-`));
+  try {
+    fs.mkdirSync(base, { recursive: true });
+    return fs.mkdtempSync(join(base, `richos-mobile-${label}-`));
+  } catch (error) { throw new StorageUnavailable(`Cannot allocate mobile scratch in ${base}: ${error.message}`); }
 }
 function proofCache(base, storage, override) {
   if (!['system', 'external'].includes(storage)) throw new Error('Simulator storage must be system or external');

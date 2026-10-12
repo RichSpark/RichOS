@@ -6147,7 +6147,7 @@ def discard_build_caches(key, path, caches):
         return
     try:
         bc = _build_caches()
-        moved, bad = bc.discard(caches, bc.declared("SCRATCH_BUILD_CACHE_ROOT"))
+        moved, bad = bc.discard(caches, bc.roots()[0])
     except Exception as exc:                               # noqa: BLE001
         moved, bad = [], [str(exc)]
     event("build-caches-discarded", key=key, path=path, moved=len(moved),

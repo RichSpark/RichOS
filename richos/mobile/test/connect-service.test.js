@@ -174,7 +174,7 @@ test('isolated host CLI signs control requests and keeps scoped credentials out 
   assert.equal(fs.statSync(join(dir,'tunnel-token')).mode & 0o777,0o600);
   await lab('lab-disable',dir,transport);
   assert(!fs.existsSync(join(dir,'tunnel-token')));
-  await assert.rejects(lab('lab-identity','/not-external'),/external SSD/);
+  await assert.rejects(lab('lab-identity','relative-lab-directory'),/storage path must be absolute/);
 });
 
 
