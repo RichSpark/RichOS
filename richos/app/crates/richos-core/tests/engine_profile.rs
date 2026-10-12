@@ -505,11 +505,11 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
         assert_eq!(std::fs::read(roster.join(format!("{stock}.md"))).unwrap(), shipped);
     }
     for user in ["mark", "dean"] {
-        // As written, plus the media skills' standing instruction these fixtures lack (see
+        // As written, plus the media-skills sentence these fixtures lack (see
         // a_teammate_saved_before_the_media_skills_gets_..._on_its_next_start).
         let own = std::fs::read_to_string(team.join(format!("{user}.md"))).unwrap();
         let want = richos_core::engine_profile::with_media_skills(&own);
-        assert_eq!(want.replace(&format!("{}\n\n", richos_core::engine_profile::MEDIA_STANDING_INSTRUCTION), ""), own);
+        assert_eq!(want.replace(&format!("\n\n{}\n", richos_core::engine_profile::MEDIA_SKILLS_SENTENCE), "\n"), own);
         assert_eq!(std::fs::read_to_string(first.plugin.join(format!("agents/{user}.md"))).unwrap(), want,
             "the user's {user} is registered as written");
         assert_eq!(std::fs::read_to_string(roster.join(format!("{user}.md"))).unwrap(), want);
@@ -543,34 +543,37 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
 /// **A teammate the user saved before the media skills gets both on its next start** (CEO
 /// 2026-10-10: every RichOS teammate uses `watch-video` and `audio-transcription`). A saved
 /// copy is the user's and an engine update never rewrites it (plan §10 point 3), so a Ray
-/// activated from the shelf before 2026-10-10 kept a `tools:` list without `Skill` and no
-/// standing instruction, and every lease registered it so. The lease now registers it with
-/// both, byte for byte the shelf's current Ray, and the user's file stays as written. A
-/// definition with no `tools:` line already has every tool and gets no list; one that has the
-/// instruction is registered unchanged.
+/// activated from the shelf before 2026-10-10 kept a `tools:` list without `Skill` and no word
+/// about either skill, and every lease registered it so. The lease now registers it with
+/// `Skill` back in its list and the media-skills sentence as its last paragraph, and the
+/// user's file stays as written. A definition with no `tools:` line already has every tool and
+/// gets no list; one that already mentions `watch-video` is registered unchanged.
 #[test]
-fn a_teammate_saved_before_the_media_skills_gets_the_skill_tool_and_the_instruction_on_its_next_start() {
+fn a_teammate_saved_before_the_media_skills_gets_the_skill_tool_and_the_sentence_on_its_next_start() {
+    use richos_core::engine_profile::MEDIA_SKILLS_SENTENCE;
     let f = Scratch::new();
     let team = f.0.join("team");
     std::fs::create_dir_all(&team).unwrap();
     let shelf = std::fs::read_to_string(engine().join("team/shelf/ray.md")).unwrap();
-    let instruction = shelf.lines().find(|l| l.starts_with("**Standing instruction:**")).expect("the shelf Ray carries it");
-    // Ray as the shelf shipped him before 2026-10-10 (a6cf87db8^): no Skill, no instruction.
-    let saved = shelf.replace(", Skill\n", "\n").replace(&format!("{instruction}\n\n"), "");
-    assert!(!saved.contains("Skill\n") && !saved.contains("Standing instruction"), "the fixture is the old Ray");
+    let in_place = format!("{MEDIA_SKILLS_SENTENCE}\n\n");
+    assert_eq!(shelf.matches(&in_place).count(), 1, "the shelf Ray carries the sentence once, in his own section");
+    // Ray as the shelf shipped him before 2026-10-10 (a6cf87db8^): no Skill, no sentence.
+    let saved = shelf.replace(", Skill\n", "\n").replace(&in_place, "");
+    assert!(!saved.contains("Skill\n") && !saved.contains("watch-video"), "the fixture is the old Ray");
     std::fs::write(team.join("ray.md"), &saved).unwrap();
     let open = "---\nname: scout\nmodel: sonnet\n---\nFictional teammate with every tool.\n";
     std::fs::write(team.join("scout.md"), open).unwrap();
 
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let roster = profile.coordination.join(".claude/agents");
+    let refreshed = format!("{}\n{MEDIA_SKILLS_SENTENCE}\n", shelf.replace(&in_place, ""));
     for registered in [profile.plugin.join("agents/ray.md"), roster.join("ray.md")] {
-        assert_eq!(std::fs::read_to_string(&registered).unwrap(), shelf,
-            "{} must be the saved Ray with the Skill tool and the standing instruction", registered.display());
+        assert_eq!(std::fs::read_to_string(&registered).unwrap(), refreshed,
+            "{} must be the saved Ray with the Skill tool and the sentence as his last paragraph", registered.display());
     }
     let scout = std::fs::read_to_string(profile.plugin.join("agents/scout.md")).unwrap();
-    assert_eq!(scout, format!("---\nname: scout\nmodel: sonnet\n---\n{instruction}\n\nFictional teammate with every tool.\n"),
-        "a definition with no tools line gets the instruction and no tools list");
+    assert_eq!(scout, format!("{open}\n{MEDIA_SKILLS_SENTENCE}\n"),
+        "a definition with no tools line gets the sentence and no tools list");
     assert_eq!(std::fs::read_to_string(team.join("ray.md")).unwrap(), saved, "the user's own file is never rewritten");
     assert_eq!(std::fs::read_to_string(team.join("scout.md")).unwrap(), open, "the user's own file is never rewritten");
 
@@ -580,24 +583,27 @@ fn a_teammate_saved_before_the_media_skills_gets_the_skill_tool_and_the_instruct
     assert_eq!(std::fs::read_to_string(again.plugin.join("agents/ray.md")).unwrap(), shelf);
 }
 
-/// The instruction a lease adds to a user's older teammate is the line every shipped
-/// definition carries, so a refreshed teammate reads exactly what a new one does; and the
-/// other `tools:` spellings get `Skill` too.
+/// The sentence a lease adds to a user's older teammate is the one every shipped definition
+/// carries in its own working rules, never in a banner above who the teammate is, so a
+/// refreshed teammate reads what a new one does; and the other `tools:` spellings get `Skill`
+/// too.
 #[test]
-fn the_instruction_a_lease_adds_is_the_shipped_one_and_every_tools_spelling_gets_skill() {
-    use richos_core::engine_profile::{with_media_skills, MEDIA_STANDING_INSTRUCTION};
+fn the_sentence_a_lease_adds_is_the_shipped_one_and_every_tools_spelling_gets_skill() {
+    use richos_core::engine_profile::{with_media_skills, MEDIA_SKILLS_SENTENCE};
     for folder in ["agents", "team/shelf"] {
         for entry in std::fs::read_dir(engine().join(folder)).unwrap() {
             let path = entry.unwrap().path();
             let body = std::fs::read_to_string(&path).unwrap();
-            assert!(body.lines().any(|l| l == MEDIA_STANDING_INSTRUCTION), "{} carries another instruction", path.display());
+            let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(flat.contains(MEDIA_SKILLS_SENTENCE), "{} must carry the sentence", path.display());
+            assert!(!body.contains("Standing instruction"), "{} still carries the banner", path.display());
             assert_eq!(with_media_skills(&body), body, "{} is current and must be registered unchanged", path.display());
         }
     }
     let flow = with_media_skills("---\nname: a\ntools: [Read, Bash]\n---\n# A\n\nText.\n");
-    assert_eq!(flow, format!("---\nname: a\ntools: [Read, Bash, Skill]\n---\n# A\n\n{MEDIA_STANDING_INSTRUCTION}\n\nText.\n"));
+    assert_eq!(flow, format!("---\nname: a\ntools: [Read, Bash, Skill]\n---\n# A\n\nText.\n\n{MEDIA_SKILLS_SENTENCE}\n"));
     let block = with_media_skills("---\nname: a\ntools:\n  - Read\n  - Bash\nmodel: opus\n---\n# A\n\nText.\n");
-    assert_eq!(block, format!("---\nname: a\ntools:\n  - Read\n  - Bash\n  - Skill\nmodel: opus\n---\n# A\n\n{MEDIA_STANDING_INSTRUCTION}\n\nText.\n"));
+    assert_eq!(block, format!("---\nname: a\ntools:\n  - Read\n  - Bash\n  - Skill\nmodel: opus\n---\n# A\n\nText.\n\n{MEDIA_SKILLS_SENTENCE}\n"));
     let scoped = "---\nname: a\ntools: Read, Skill(watch-video)\n---\n";
     assert!(with_media_skills(scoped).starts_with(scoped), "a Skill(...) entry is the user's own choice and is kept");
 }

@@ -6041,7 +6041,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
             "the work lease sets nothing, and its reader must not claim otherwise");
     }
 
-    /// **A teammate in the app can reach every skill its standing instruction names** (CEO,
+    /// **A teammate in the app can reach every skill its definition tells it to use** (CEO,
     /// 2026-10-10: the audio and video skill use must be part of all the teammate and
     /// proto-teammate profiles in RichOS, "otherwise a RichOS user wouldn't take advantage of
     /// that").
@@ -6051,12 +6051,13 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     /// This spawns a real Work-role lease, reads the argument vector the child actually got,
     /// and builds the session's `system/init.skills` list from it the way the binary does:
     /// every `--plugin-dir`'s manifest name, then `:<skill directory>` for each skill in it
-    /// (measured cell K2, `skills.rs`; re-measured on 2.1.295 for this change). Every skill
-    /// named in backticks on the standing-instruction line of every definition that reaches an
-    /// app teammate (the stock `engine/agents/`, the shelf `engine/team/shelf/`, the three
-    /// duty texts) must be on that list.
+    /// (measured cell K2, `skills.rs`; re-measured on 2.1.295 for this change). Every
+    /// definition that reaches an app teammate (the stock `engine/agents/`, the shelf
+    /// `engine/team/shelf/`, the three duty texts) carries the media-skills sentence
+    /// (`engine_profile::MEDIA_SKILLS_SENTENCE`), and every skill it names in backticks must be
+    /// on that list.
     #[test]
-    fn a_teammate_s_session_lists_every_skill_its_standing_instruction_names() {
+    fn a_teammate_s_session_lists_every_skill_its_definition_names() {
         let argv = fixture_root().join(format!("argv-{}", uuid::Uuid::new_v4().simple()));
         let script = format!(
             "printf '%s\\n' \"$@\" > '{}'\n\
@@ -6086,6 +6087,14 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         }
         assert!(!init_skills.is_empty(), "the work lease was given no skills at all: {args:?}");
 
+        let sentence = crate::engine_profile::MEDIA_SKILLS_SENTENCE;
+        let named: Vec<&str> = sentence.split('`').skip(1).step_by(2).collect();
+        assert!(!named.is_empty(), "the media-skills sentence names no skill: {sentence}");
+        for name in named {
+            let want = format!("{}:{name}", crate::skills::PLUGIN_NAME);
+            assert!(init_skills.contains(&want),
+                "every teammate is told to use `{name}`, and the teammate's session lists only {init_skills:?}");
+        }
         let engine = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
         let mut checked = 0;
         for folder in ["agents", "team/shelf", "mega-lander/duties"] {
@@ -6093,16 +6102,8 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
                 let path = entry.unwrap().path();
                 if path.extension().is_none_or(|e| e != "md") { continue; }
                 let body = std::fs::read_to_string(&path).unwrap();
-                let line = body.lines().find(|l| l.starts_with("**Standing instruction:**") && l.contains("skill"))
-                    .unwrap_or_else(|| panic!("{} carries no standing instruction naming a skill", path.display()));
-                let named: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
-                assert!(!named.is_empty(), "{} names no skill: {line}", path.display());
-                for name in named {
-                    let want = format!("{}:{name}", crate::skills::PLUGIN_NAME);
-                    assert!(init_skills.contains(&want),
-                        "{} tells its teammate to use `{name}`, and the teammate's session lists only {init_skills:?}",
-                        path.display());
-                }
+                assert!(body.split_whitespace().collect::<Vec<_>>().join(" ").contains(sentence),
+                    "{} does not carry the media-skills sentence", path.display());
                 checked += 1;
             }
         }

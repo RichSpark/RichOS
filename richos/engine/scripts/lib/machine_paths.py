@@ -3,7 +3,8 @@ import re
 from collections import Counter
 
 PLACEHOLDERS = frozenset({'you', 'example', 'x', 'jordan', 'user', 'someone'})
-PATTERN = re.compile(r'/Users/([A-Za-z0-9_.-]+)(?=/)|/Volumes/([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])|(?<![\w])~/ab(?=/)|\$HOME/ab(?![\w.-])|\$\{HOME\}/ab(?![\w.-])')
+# machine-path-exempt: the checker must declare the literal path patterns it rejects
+PATTERN = re.compile(r'/Users/([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])|/Volumes/([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])|(?<![\w])~/ab(?![A-Za-z0-9_.-])|\$HOME/ab(?![\w.-])|\$\{HOME\}/ab(?![\w.-])')
 MARKER = re.compile(r'machine-path-exempt:\s*(\S[^\r\n]*)')
 CODE = ('.py', '.sh', '.rs', '.js', '.mjs', '.ts', '.swift', '.kt', '.css', '.toml', '.config')
 
@@ -14,7 +15,7 @@ def matches(text, path=''):
     previous = ''
     for line in text.splitlines():
         exempt = MARKER.search(line) or MARKER.search(previous)
-        comment = path.endswith(CODE) and line.lstrip().startswith(('#', '//', '/*', '*'))
+        comment = path.endswith(CODE) and line.lstrip().startswith(('#', '//', '/*'))
         for match in PATTERN.finditer(line):
             if match.group(1) in PLACEHOLDERS:
                 continue
