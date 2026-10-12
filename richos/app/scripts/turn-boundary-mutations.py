@@ -127,6 +127,7 @@ def run(copy, target, workspace, filt):
 # so its directory is a root too; `unexported_includes` keeps this list honest.
 EXPORT_ROOTS = [APP, "richos/web", "richos/mobile", "richos/engine/voice/models",
                 "richos/engine/scripts/lib/dialect",
+                "richos/engine/.env.example", "richos/engine/scripts/lib/machine_settings.fixtures.json",
                 # richos-core's integration tests compile in the captured upstream failures.
                 "docs/verification/upstream-failure-2026-09-05"]
 INCLUDE_RE = re.compile(r'include_(?:str|bytes)!\s*\(\s*"([^"]+)"')

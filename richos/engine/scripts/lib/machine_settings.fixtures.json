@@ -1,0 +1,93 @@
+{
+  "keys": [
+    "RICHOS_BULK_ROOT",
+    "CARGO_TARGET_DIR",
+    "RICHOS_CARGO_CACHE_ROOT",
+    "SCCACHE_DIR",
+    "RICHOS_SCCACHE_TMPDIR",
+    "RICHOS_BUILD_CACHE",
+    "RICHOS_RECOVERY_EVIDENCE_ROOT",
+    "RICHOS_RECOVERY_WIP_ROOT",
+    "RICHOS_CPU_GUARD_STATE",
+    "RICHOS_ENGINE_PASS_DIR",
+    "RICHOS_PROOF_RUN_DIR",
+    "RICHOS_AUTOCHECK_PROOF_ROOT",
+    "RICHOS_TEST_RESULTS_ROOT",
+    "RICHOS_ANDROID_CACHES_ROOT",
+    "RICHOS_NATIVE_IOS_CACHE",
+    "RICHOS_NATIVE_ANDROID_CACHE",
+    "RICHOS_GPL_SOURCE_CACHE"
+  ],
+  "cases": [
+    {
+      "name": "defaults",
+      "text": "# No configuration\n",
+      "values": {}
+    },
+    {
+      "name": "literal spaces unicode",
+      "text": " RICHOS_BULK_ROOT = /work data/clé \n",
+      "values": {
+        "RICHOS_BULK_ROOT": "/work data/clé"
+      }
+    },
+    {
+      "name": "all keys",
+      "text": "RICHOS_BULK_ROOT=/work data/clé\nCARGO_TARGET_DIR=/work data/clé\nRICHOS_CARGO_CACHE_ROOT=/work data/clé\nSCCACHE_DIR=/work data/clé\nRICHOS_SCCACHE_TMPDIR=/work data/clé\nRICHOS_BUILD_CACHE=/work data/clé\nRICHOS_RECOVERY_EVIDENCE_ROOT=/work data/clé\nRICHOS_RECOVERY_WIP_ROOT=/work data/clé\nRICHOS_CPU_GUARD_STATE=/work data/clé\nRICHOS_ENGINE_PASS_DIR=/work data/clé\nRICHOS_PROOF_RUN_DIR=/work data/clé\nRICHOS_AUTOCHECK_PROOF_ROOT=/work data/clé\nRICHOS_TEST_RESULTS_ROOT=/work data/clé\nRICHOS_ANDROID_CACHES_ROOT=/work data/clé\nRICHOS_NATIVE_IOS_CACHE=/work data/clé\nRICHOS_NATIVE_ANDROID_CACHE=/work data/clé\nRICHOS_GPL_SOURCE_CACHE=/work data/clé",
+      "values": {
+        "RICHOS_BULK_ROOT": "/work data/clé",
+        "CARGO_TARGET_DIR": "/work data/clé",
+        "RICHOS_CARGO_CACHE_ROOT": "/work data/clé",
+        "SCCACHE_DIR": "/work data/clé",
+        "RICHOS_SCCACHE_TMPDIR": "/work data/clé",
+        "RICHOS_BUILD_CACHE": "/work data/clé",
+        "RICHOS_RECOVERY_EVIDENCE_ROOT": "/work data/clé",
+        "RICHOS_RECOVERY_WIP_ROOT": "/work data/clé",
+        "RICHOS_CPU_GUARD_STATE": "/work data/clé",
+        "RICHOS_ENGINE_PASS_DIR": "/work data/clé",
+        "RICHOS_PROOF_RUN_DIR": "/work data/clé",
+        "RICHOS_AUTOCHECK_PROOF_ROOT": "/work data/clé",
+        "RICHOS_TEST_RESULTS_ROOT": "/work data/clé",
+        "RICHOS_ANDROID_CACHES_ROOT": "/work data/clé",
+        "RICHOS_NATIVE_IOS_CACHE": "/work data/clé",
+        "RICHOS_NATIVE_ANDROID_CACHE": "/work data/clé",
+        "RICHOS_GPL_SOURCE_CACHE": "/work data/clé"
+      }
+    },
+    {
+      "name": "unknown",
+      "text": "TYPO=/path",
+      "error": true
+    },
+    {
+      "name": "duplicate",
+      "text": "RICHOS_BULK_ROOT=/a\nRICHOS_BULK_ROOT=/b",
+      "error": true
+    },
+    {
+      "name": "empty",
+      "text": "RICHOS_BULK_ROOT=",
+      "error": true
+    },
+    {
+      "name": "relative",
+      "text": "RICHOS_BULK_ROOT=relative",
+      "error": true
+    },
+    {
+      "name": "quoted",
+      "text": "RICHOS_BULK_ROOT=\"/path\"",
+      "error": true
+    },
+    {
+      "name": "expansion",
+      "text": "RICHOS_BULK_ROOT=$HOME/path",
+      "error": true
+    },
+    {
+      "name": "malformed",
+      "text": "RICHOS_BULK_ROOT /path",
+      "error": true
+    }
+  ]
+}

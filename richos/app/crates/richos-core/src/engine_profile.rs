@@ -127,6 +127,7 @@ pub struct EngineProfile {
     /// setting as it is at that moment. `native.rs` gives the conversation lease (Rich) `rich`
     /// and the work lease (Stu) `stu`.
     pub lease_models: crate::config::LeaseModels,
+    pub machine_settings: crate::machine_settings::Settings,
 }
 
 /// **Which speech model the video skill transcribes with**, the value of
@@ -296,6 +297,10 @@ pub fn team_digest(engine: &Path, data: &Path) -> Result<String, RuntimeError> {
 
 impl EngineProfile {
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
+        Self::prepare_with_settings(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?)
+    }
+
+    pub fn prepare_with_settings(engine: &Path, data: &Path, runtime: EngineRuntime, machine_settings: crate::machine_settings::Settings) -> Result<Self, RuntimeError> {
         if !engine.is_absolute() || !data.is_absolute() { return Err(RuntimeError("desktop roots must be absolute".into())); }
         for name in ["scripts/app-engine-hook.py", "scripts/provider-supervisor.py", "mega-lander/app.py", "mega-lander/DESKTOP.md"] {
             if !engine.join(name).is_file() { return Err(RuntimeError(format!("missing desktop engine entry point: {name}"))); }
@@ -410,7 +415,7 @@ impl EngineProfile {
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         Ok(Self { engine, coordination, plugin, state, runtime, work_scope: None, permissions: Default::default(),
                   operator_desk: None, claude_account: None, token_sink: None, speech_model: None,
-                  lease_models: crate::config::lease_models_from_config(&data) })
+                  lease_models: crate::config::lease_models_from_config(&data), machine_settings })
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.
@@ -549,6 +554,8 @@ impl EngineProfile {
                 command.env_remove(key);
             }
         }
+        for key in crate::machine_settings::KEYS { command.env_remove(key); }
+        command.envs(self.machine_settings.environment());
         command.env_remove("RICHOS_APP_ENTITY").env_remove("RICHOS_APP_THREAD");
         if let Some(folder) = self.claude_account.as_ref().and_then(|a| a.folder.as_ref()) {
             command.env("CLAUDE_CONFIG_DIR", folder);

@@ -388,10 +388,31 @@ def operator_main(parent, argv):
             # The last word in the state file is what is left, usually nothing: a host that
             # still holds this lease must not read its final snapshot's commands as running.
             _write_state(record, _process_table(), parent, ended=True)
+            _sweep_process_scratch()
         except Exception as error:   # noqa: BLE001  said, then the group kill below still runs
             _log("reap failed: %s: %s" % (type(error).__name__, error))
     finally:
         os.killpg(os.getpid(), signal.SIGKILL)
+
+
+def _sweep_process_scratch():
+    # Only RichOS jobs that carry a resolved settings snapshot. The subprocess
+    # inherits the exact allocating TMPDIR and stays in our teardown group.
+    if os.environ.get("RICHOS_MACHINE_SETTINGS_RESOLVED") != "1":
+        return
+    from pathlib import Path
+    import subprocess
+    sweep = Path(__file__).with_name("scratch-reaper.sh")
+    if not sweep.is_file():
+        return
+    budget = max(0.1, _grace())
+    try:
+        result = subprocess.run(["bash", str(sweep), "--process-only", "--apply", "--deadline", str(budget * 0.8)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=budget)
+        if result.returncode:
+            _log("process scratch sweep incomplete (exit %s): %s" % (result.returncode, result.stderr.decode(errors="replace")[-500:]))
+    except (OSError, subprocess.TimeoutExpired) as error:
+        _log("process scratch sweep incomplete: %s" % error)
 
 
 def _options(args):

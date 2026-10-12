@@ -3809,6 +3809,14 @@ fn main() {
             // alert raised by a background thread that panicked would be an interruption
             // rather than a rescue. The log keeps taking everything either way.
             startup_alert::disarm();
+            // The first window is up. Optional private starter I/O stays off startup.
+            if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                std::thread::spawn(move || {
+                    if let Err(error) = richos_core::machine_settings::create_starter(&home) {
+                        eprintln!("[richos] machine settings starter could not be created: {error}");
+                    }
+                });
+            }
             Ok(())
         })
         .plugin(tauri_plugin_updater::Builder::new().build())

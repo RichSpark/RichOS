@@ -5026,7 +5026,7 @@ done
             },
             work_scope: None,
             permissions: std::sync::Arc::new(crate::permissions::PermissionDesk::default()),
-            operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(),
+            operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
     }
 
@@ -7285,7 +7285,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default()
+                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

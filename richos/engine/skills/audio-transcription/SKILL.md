@@ -17,7 +17,7 @@ RichOS's own transcription pipeline. Run this:
 It prints the transcript's path on stdout. Then `Read` `<output-dir>/transcript.md`.
 
 - `<output-dir>`: a new or empty directory **outside every repository**, in your
-  own scratch, e.g. `/Volumes/E1TB/tmp/claude/<your-name>/transcript-1`. The
+  own scratch, returned by `scripts/lib/machine_settings.py scratch <your-name>`, with a `transcript-1` child. The
   pipeline refuses a directory inside a product repository.
 - Any format ffmpeg reads works: mp3, m4a, wav, aiff, ogg, webm, mov, mp4, mkv.
 - Non-English audio: add `--lang <code>` (e.g. `--lang de`) or `--lang auto`.

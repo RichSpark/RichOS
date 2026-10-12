@@ -103,6 +103,7 @@ import stat
 import subprocess
 import sys
 import time
+import machine_settings
 
 RUNNING = "RUNNING"
 ENDED = "ENDED"
@@ -3611,7 +3612,13 @@ def write_log(path, lines):
 # configuration — declared, never defaulted
 # ---------------------------------------------------------------------------
 
-def config_from_env():
+def config_from_env(process_only=False):
+    try:
+        if not process_only:
+            machine_settings.apply()
+        named_root = str(machine_settings.agent_root()) if not process_only else ""
+    except (ValueError, OSError) as exc:
+        raise Fatal(str(exc)) from exc
     def need(name):
         v = (os.environ.get(name) or "").strip()
         if not v:
@@ -3732,8 +3739,7 @@ def config_from_env():
         # ONLY by a land's scoped sweep (--agent), which deletes <root>/<name>
         # for the agent being landed. Empty fallback: an engine whose config
         # predates the key deletes no named directory there.
-        "agent_roots": [os.path.realpath(p) for p in
-                        opt("SCRATCH_AGENT_ROOTS", "").split()],
+        "agent_roots": [named_root],
         # What an automatic land kept (2026-10-04). Empty fallback: an engine
         # whose config predates the key deletes nothing there.
         "kept_dir": os.path.realpath(os.path.expanduser(opt("SCRATCH_KEPT_DIR", "")))
@@ -3799,6 +3805,8 @@ def main(argv=None):
                          "says so. For --notice only.")
     # A LAND'S SCOPED SWEEP (scan_agent). With --agent, nothing but what
     # provably belongs to that agent is planned.
+    ap.add_argument("--process-only", action="store_true",
+                    help="sweep only PID-owned allocations under this job's TMPDIR")
     ap.add_argument("--agent", default=None,
                     help="sweep ONLY the scratch of this landed agent")
     ap.add_argument("--session", default="",
@@ -3813,14 +3821,17 @@ def main(argv=None):
     if args.deadline:
         _DEADLINE[0] = time.time() + args.deadline
     try:
-        cfg = config_from_env()
+        cfg = config_from_env(args.process_only)
         ws = load_workspaces()
         reaper = Reaper(cfg, ws)
         # The banner never pays for the expensive arm. Its garbage numbers come
         # from the last full pass, which the scheduled job publishes.
         reaper.skip_unknown_arm = bool(args.notice)
         reaper.skip_build_caches = bool(args.notice)
-        if args.agent is not None:
+        if args.process_only:
+            reaper.scope = {"kind": "process", "name": "process"}
+            reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))
+        elif args.agent is not None:
             reaper.scan_agent({"name": args.agent, "session": args.session,
                                "workspaces": args.workspace,
                                "hold_named": bool(args.hold_named)})

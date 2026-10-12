@@ -422,6 +422,20 @@ OUT="$(env -u RICHOS_NIGHTLY_TEST_REAL_HOME HOME="$SBOX/not-a-home" RICHOS_NIGHT
   bash "$LAUNCH" a "$ZIPS/v1.zip" 2>&1)"; RC=$?
 expect_refusal "L13 a HOME that is not the account's home is refused before anything is written" "Run this from your own shell"
 
+# L14: select the operator's file before HOME becomes the nightly home.
+H="$(new_home h14)"
+SETTINGS="$H/Library/Application Support/RichOS/.env"
+mkdir -p "$(dirname "$SETTINGS")"; printf '# private fixture\n' > "$SETTINGS"
+run "$H" a "$ZIPS/v1.zip"
+if [ "$RC" -eq 0 ] && grep -qx "RICHOS_ENV_FILE=$SETTINGS" "$H.state/open.env"; then
+  ok "L14 the operator selector survives env-i before isolated HOME"
+else bad "L14 the operator selector survives env-i" "$OUT"; fi
+quit_app "$H"
+RICHOS_ENV_FILE="$H/missing selected file" run "$H" a --again
+if grep -qx "RICHOS_ENV_FILE=$H/missing selected file" "$H.state/open.env"; then
+  ok "L14 an explicit missing selector is forwarded for the reader's refusal"
+else bad "L14 explicit selector forwarded" "$OUT"; fi
+
 echo ""
 echo "nightly-launch.test.sh: $PASSES passed, $FAILS failed"
 [ "$FAILS" -eq 0 ]

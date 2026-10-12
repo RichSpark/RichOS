@@ -30,7 +30,7 @@ It prints the index's path on stdout. Then:
    moment, beside the words spoken around it. The Read tool shows images.
 
 - `<output-dir>`: a new or empty directory **outside every repository**, in your
-  own scratch, e.g. `/Volumes/E1TB/tmp/claude/<your-name>/watch-1`.
+  own scratch, returned by `scripts/lib/machine_settings.py scratch <your-name>`, with a `watch-1` child.
 - Speed: about 28 s for a 2.4-minute 1080p screen recording on this Mac, giving
   42 frames and a 270-word transcript (measured 2026-10-07).
 - Non-English speech: add `--lang <code>` or `--lang auto`.

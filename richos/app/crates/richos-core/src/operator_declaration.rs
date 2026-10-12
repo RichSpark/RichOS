@@ -461,7 +461,7 @@ fn validate(raw: RawDeclaration) -> Result<Declaration, Refusal> {
             return Err(Refusal::new(format!(
                 "its stored environment holds {name}, which may never be passed to your team")));
         }
-        if REDERIVED_NAMES.contains(&name.as_str()) || name.starts_with("RICHOS_") {
+        if REDERIVED_NAMES.contains(&name.as_str()) || (name.starts_with("RICHOS_") && !crate::machine_settings::KEYS.contains(&name.as_str())) {
             return Err(Refusal::new(format!(
                 "its stored environment holds {name}, which the app sets itself at every start")));
         }
