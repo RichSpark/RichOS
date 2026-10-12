@@ -159,3 +159,6 @@ CITATION_EXEMPT="richos/engine/reference/ richos/engine/skills/ richos/engine/.c
 # still accepts is a function of `git ls-files` and the tracked bytes, so its
 # verdict is the same in every clone. INSTANCE_MECHANISMS is refused by name
 # with the migration if it reappears; it is not quietly ignored.
+
+# Temporary active machine-path debt, exact prefix/count; shrink during migration.
+MACHINE_PATH_BASELINE="richos/engine/scripts/publication-machine-path-baseline.json"

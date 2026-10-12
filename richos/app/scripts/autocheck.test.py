@@ -1112,6 +1112,20 @@ class BatteryTrailer(Fixture):
 
 
 class Land(Fixture):
+    def publication_fixture_baseline(self):
+        # Borrowed checker/shim retain their reviewed migration debt. Scope this
+        # to those two fixture tools so a new literal elsewhere still refuses.
+        spec = importlib.util.spec_from_file_location("fixture_machine_paths", ENGINE / "scripts/lib/machine_paths.py")
+        matcher = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(matcher)
+        debt = {}
+        for relative in ("richos/app/scripts/autocheck/autocheck.py", "richos/app/scripts/autocheck/shim.sh"):
+            counts = matcher.matches((self.repo / relative).read_text(), relative)
+            if counts:
+                debt[relative] = dict(counts)
+        self.write("fixture-machine-debt.json", json.dumps(debt))
+        self.write(".publication-completeness", 'MACHINE_PATH_BASELINE="fixture-machine-debt.json"\n')
+
     def test_a_merge_that_breaks_its_owning_suite_is_refused_before_main_moves(self):
         self.make()
         self.branch_with("feature", "richos/app/src/thing.txt", "BROKEN\n")
@@ -1155,6 +1169,7 @@ class Land(Fixture):
         # runs (richos/engine is the real engine).
         self.make()
         self.write(".publication-boundary", 'PRIVATE_RECORD="the private record"\nPRIVATE_SOURCES=""\n')
+        self.publication_fixture_baseline()
         # The checker refuses a published tree that ships no declaration-gated mechanism (it reads
         # that as its own derivation broken), so the tree ships one, with its template and its word.
         self.write("scripts/hooks/guard-widget.sh", ': "${WIDGET_DECLARATION:=.widget}"\n')
@@ -1199,6 +1214,7 @@ class Land(Fixture):
         self.git("reset", "-q", "--hard", before)
         (self.repo / "richos/engine").symlink_to(ENGINE)
         self.write(".publication-boundary", 'PRIVATE_RECORD="the private record"\nPRIVATE_SOURCES=""\n')
+        self.publication_fixture_baseline()
         self.write("scripts/hooks/guard-widget.sh", ': "${WIDGET_DECLARATION:=.widget}"\n')
         self.write(".widget.example", 'WIDGET_RECORD="wherever"\n')
         self.write("README.md", "# Sample\n\nCreate `.widget` from `.widget.example` to switch the widget guard on.\n")

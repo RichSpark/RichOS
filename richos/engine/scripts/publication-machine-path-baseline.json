@@ -1,0 +1,757 @@
+{
+  "docs/development/verification-input-qualifications.json": {
+    "/Users/alex": 1
+  },
+  "richos/app/MERGE-VALIDATION-2026-09-06.md": {
+    "/Users/alex": 1
+  },
+  "richos/app/README.md": {
+    "/Users/alex": 1
+  },
+  "richos/app/crates/richos-core/src/bug_report.rs": {
+    "/Users/a": 2
+  },
+  "richos/app/crates/richos-core/src/live.rs": {
+    "/Users/ceo": 3
+  },
+  "richos/app/crates/richos-core/src/operator_desk_tools.rs": {
+    "/Users/alex": 1
+  },
+  "richos/app/crates/richos-core/src/operator_profile.rs": {
+    "/Users/admin": 4,
+    "/Users/alex": 4
+  },
+  "richos/app/crates/richos-core/src/operator_runtime.rs": {
+    "~/ab": 2
+  },
+  "richos/app/crates/richos-core/src/output.rs": {
+    "/Users/alex": 5,
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/crates/richos-core/tests/bug_report_tests.rs": {
+    "/Users/alex": 39,
+    "/Users/jane": 1,
+    "/Users/mac": 1,
+    "/Volumes/Backup": 1,
+    "/Volumes/Work": 1
+  },
+  "richos/app/crates/richos-core/tests/timeline_tests.rs": {
+    "/Users/alex": 5
+  },
+  "richos/app/scripts/autocheck.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/autocheck/README.md": {
+    "/Volumes/E1TB": 1,
+    "~/ab": 2
+  },
+  "richos/app/scripts/autocheck/autocheck.py": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/app/scripts/autocheck/shim.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/cargo-cache-env.test.sh": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/connect-helper.test.sh": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/extension-windows-host.test.sh": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/lib/cargo-cache-env.sh": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/app/scripts/lib/cargo_identity.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/app/scripts/lib/no_compile_time_paths.py": {
+    "/Users/alex": 9
+  },
+  "richos/app/scripts/lib/no_host_paths.py": {
+    "/Users/alex": 12,
+    "/Users/alexandra": 3,
+    "/Users/ci-runner": 1
+  },
+  "richos/app/scripts/lib/proof_slots.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/lib/ship_gate_fixture.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/make-engine-asset.test.sh": {
+    "/Users/somebody": 1
+  },
+  "richos/app/scripts/mobile-perf.test.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/native-android-app.test.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/native-android-core.test.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/native-android-pair-lab.test.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/native-android-ui.test.sh": {
+    "$HOME/ab": 1,
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/native-ios-app.test.sh": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/native-ios-core.test.sh": {
+    "/Volumes/E1TB": 7
+  },
+  "richos/app/scripts/native-ios-lab-phone.test.sh": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/app/scripts/native-ios-share.test.sh": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/native-ios-ui.test.sh": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/nightly-engine.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/app/scripts/nightly-engine.test.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/nightly-local.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/nightly-local.test.py": {
+    "/Users/fixture": 1,
+    "/Volumes/E1TB": 7
+  },
+  "richos/app/scripts/nightly.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/app/scripts/no-compile-time-paths.test.sh": {
+    "/Users/alex": 2
+  },
+  "richos/app/scripts/operator-probes/guest_probes.py": {
+    "/Users/admin": 3
+  },
+  "richos/app/scripts/operator-probes/test/test_guest_probes.py": {
+    "/Users/admin": 2
+  },
+  "richos/app/scripts/output-walk.test.py": {
+    "/Users/a": 4,
+    "/Users/admin": 2,
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/package-app.test.sh": {
+    "/Users/fixture-builder": 1
+  },
+  "richos/app/scripts/prepare-connect-helper.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/app/scripts/proof-inputs.json": {
+    "/Users/alex": 1
+  },
+  "richos/app/scripts/proof-run.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/app/scripts/qa.test.sh": {
+    "/Users/admin": 3,
+    "/Users/qafixture": 1,
+    "/Volumes/E1TB": 21
+  },
+  "richos/app/scripts/qa/README.md": {
+    "/Users/admin": 1,
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/qa/child-lifetime.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/qa/fixtures/make-fixtures.py": {
+    "/Users/qafixture": 2
+  },
+  "richos/app/scripts/qa/ocr-gate.sh": {
+    "/Users/admin": 1,
+    "/Users/qafixture": 1
+  },
+  "richos/app/scripts/qa/phone-ios-run.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/qa/phone-ios.py": {
+    "/Volumes/E1TB": 17
+  },
+  "richos/app/scripts/qa/redact.py": {
+    "/Users/admin": 1
+  },
+  "richos/app/scripts/qa/trust-reading.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/qa/usage-shape.sh": {
+    "/Users/admin": 1
+  },
+  "richos/app/scripts/replay.test.py": {
+    "/Volumes/X": 2
+  },
+  "richos/app/scripts/rerun-scrub.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/app/scripts/review-walk-gate.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/run-tests.sh": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/app/scripts/runner-reliability.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/shared-build-cache.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/test-results.test.sh": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/app/scripts/testvm/accounts-walk.sh": {
+    "/Users/admin": 15
+  },
+  "richos/app/scripts/testvm/bug-report-walk.sh": {
+    "/Users/admin": 4
+  },
+  "richos/app/scripts/testvm/claude-usage-probe.py": {
+    "/Users/admin": 1
+  },
+  "richos/app/scripts/testvm/dictation-sheet-walk.py": {
+    "/Users/admin": 1
+  },
+  "richos/app/scripts/testvm/fake-claude-fill-first.pl": {
+    "/Users/admin": 9
+  },
+  "richos/app/scripts/testvm/fbcopy-walk.sh": {
+    "/Users/admin": 5
+  },
+  "richos/app/scripts/testvm/feature-request-walk.sh": {
+    "/Users/admin": 3
+  },
+  "richos/app/scripts/testvm/fill-first-walk.sh": {
+    "/Users/admin": 8
+  },
+  "richos/app/scripts/testvm/handoff-walk.sh": {
+    "/Users/admin": 3
+  },
+  "richos/app/scripts/testvm/held-queue-walk.sh": {
+    "/Users/admin": 3
+  },
+  "richos/app/scripts/testvm/nightly-launch-walk.py": {
+    "/Users/Shared": 1
+  },
+  "richos/app/scripts/testvm/output-walk.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/testvm/permission-provider.py": {
+    "/Users/admin": 1
+  },
+  "richos/app/scripts/testvm/relaunch.py": {
+    "/Users/admin": 1
+  },
+  "richos/app/scripts/testvm/round16-panel-walk.sh": {
+    "/Users/admin": 19
+  },
+  "richos/app/scripts/testvm/setup-walk.py": {
+    "/Users/admin": 2
+  },
+  "richos/app/scripts/testvm/test/command-walk.test.py": {
+    "/Users/admin": 8
+  },
+  "richos/app/scripts/testvm/test/dictation-walk.test.py": {
+    "/Users/admin": 3
+  },
+  "richos/app/scripts/testvm/test/fill-first-walk.test.py": {
+    "/Users/admin": 1
+  },
+  "richos/app/scripts/testvm/test/mem-walk.test.py": {
+    "/Users/admin": 2
+  },
+  "richos/app/scripts/testvm/test/run-tests.sh": {
+    "/Users/admin": 31,
+    "/Users/alex": 2
+  },
+  "richos/app/scripts/testvm/test/walk.test.py": {
+    "/Users/admin": 4
+  },
+  "richos/app/scripts/testvm/use-first-walk.sh": {
+    "/Users/admin": 9
+  },
+  "richos/app/scripts/updater-setup-a3.test.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/scripts/workspace-scope.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/app/src-tauri/examples/machinery_payload.rs": {
+    "/Users/alex": 3
+  },
+  "richos/app/src-tauri/src/activation.rs": {
+    "/Users/alex": 11
+  },
+  "richos/app/src-tauri/src/dictation_app.rs": {
+    "/Users/a": 1
+  },
+  "richos/app/src-tauri/src/phone/attachments.rs": {
+    "/Users/alex": 1
+  },
+  "richos/app/src-tauri/src/phone/secrets.rs": {
+    "/Users/alex": 1
+  },
+  "richos/app/src-tauri/tests/paired_startup.py": {
+    "/Users/admin": 1
+  },
+  "richos/app/style.css": {
+    "~/ab": 1
+  },
+  "richos/app/ui/tests/fixtures/machinery-payload.json": {
+    "/Users/alex": 1
+  },
+  "richos/app/ui/tests/memory.js": {
+    "/Volumes/Archive": 1
+  },
+  "richos/app/ui/tests/tracked-tree.js": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/CHANGELOG.md": {
+    "/Users/alex": 1
+  },
+  "richos/engine/ass-kicker/brief-done.py": {
+    "/Users/alex": 2
+  },
+  "richos/engine/ass-kicker/fixtures/brief-scope/README.md": {
+    "/Users/alex": 1
+  },
+  "richos/engine/ass-kicker/fixtures/brief-scope/round9-brief-2026-09-13.md": {
+    "/Users/alex": 3
+  },
+  "richos/engine/ass-kicker/tests/brief-provenance.test.sh": {
+    "/Users/alex": 1
+  },
+  "richos/engine/ass-kicker/tests/brief-scope.test.sh": {
+    "/Users/alex": 1
+  },
+  "richos/engine/docs/audits/seat-vs-inspection-divergence-2026-08-30.md": {
+    "/Users/alex": 14
+  },
+  "richos/engine/docs/host-cpu-enforcement.md": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/engine/docs/recovery-supervision.md": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/engine/docs/verification/automatic-cleanup-installed-final-2026-09-07.json": {
+    "/Users/alex": 3
+  },
+  "richos/engine/docs/verification/claude-native-cleanup-canary-finding-2026-09-07.json": {
+    "/Users/alex": 20
+  },
+  "richos/engine/docs/verification/claude-native-cleanup-event-assumption-2026-09-07.json": {
+    "/Users/alex": 14
+  },
+  "richos/engine/docs/verification/legacy-workspace-uuid-installed-postboot-2026-09-07.json": {
+    "/Users/alex": 2
+  },
+  "richos/engine/docs/verification/legacy-workspace-uuid-installed-preboot-2026-09-07.json": {
+    "/Users/alex": 2
+  },
+  "richos/engine/docs/verification/legacy-workspace-uuid-installed-preparation-2026-09-07.json": {
+    "/Users/alex": 2
+  },
+  "richos/engine/docs/worktree-ownership-ledger.md": {
+    "/Users/alex": 1
+  },
+  "richos/engine/docs/worktree-reclaim-round-10-2026-09-10.md": {
+    "/Users/alex": 10,
+    "/Volumes/Data": 2
+  },
+  "richos/engine/docs/worktree-reclaim-round-11-2026-09-10.md": {
+    "/Users/alex": 1
+  },
+  "richos/engine/mega-lander/tests/workspace-spec-fourteen.mutation.sh": {
+    "/Users/alex": 2
+  },
+  "richos/engine/mega-lander/workspaces.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/orchestration.config": {
+    "$HOME/ab": 3,
+    "/Volumes/Data": 1,
+    "/Volumes/E1TB": 13
+  },
+  "richos/engine/recovery-profiles/axel.md": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/recovery-profiles/wes.md": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/disk-watchdog-install.test.sh": {
+    "/Users/Shared": 1,
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/disk-watchdog.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/disk-watchdog.test.sh": {
+    "/Volumes/Data": 2,
+    "/Volumes/DefinitelyNotMounted": 1,
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/hooks/ceo-todos.test.sh": {
+    "/Users/somebody": 1
+  },
+  "richos/engine/scripts/hooks/commit-ceo-inputs.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/hooks/data-contract.corpus.md": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/hooks/fixtures/stop-live-work/pretooluse-payload-probe.json": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/hooks/guard-ci-turn-gate.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/hooks/guard-foreign-app-data.test.sh": {
+    "/Users/tester": 8
+  },
+  "richos/engine/scripts/hooks/guard-host-display-power.test.sh": {
+    "/Users/alex": 5
+  },
+  "richos/engine/scripts/hooks/guard-interactive-prompt.test.sh": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/hooks/guard-no-shell-c.test.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/hooks/guard-shared-scratchpad.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/hooks/guard-shared-scratchpad.test.sh": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/engine/scripts/hooks/guard-unguarded-rm.test.sh": {
+    "/Users/tester": 7,
+    "/Volumes/E1TB": 3
+  },
+  "richos/engine/scripts/hooks/guard-unresolved-claims.py": {
+    "~/ab": 1
+  },
+  "richos/engine/scripts/hooks/guard-worktree-removal.sh": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/hooks/notice-claim-capability.test.sh": {
+    "/Users/alex": 2
+  },
+  "richos/engine/scripts/hooks/notice-disk-alert.test.sh": {
+    "/Volumes/Data": 2
+  },
+  "richos/engine/scripts/hooks/state-claims.corpus.md": {
+    "~/ab": 1
+  },
+  "richos/engine/scripts/ledger-prune-sandbox.test.sh": {
+    "/Users/alex": 2
+  },
+  "richos/engine/scripts/lib/agent-liveness.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/lib/appinstances.py": {
+    "/Users/alex": 3
+  },
+  "richos/engine/scripts/lib/audit-report-watch.py": {
+    "~/ab": 1
+  },
+  "richos/engine/scripts/lib/build_caches.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/lib/containers.py": {
+    "/Users/alex": 3
+  },
+  "richos/engine/scripts/lib/containers.test.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/lib/cpu_guard.py": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/engine/scripts/lib/cpu_guard_live.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/engine/scripts/lib/cpu_guard_live_deploy.py": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/engine/scripts/lib/disk-watchdog.py": {
+    "/Volumes/Data": 2
+  },
+  "richos/engine/scripts/lib/durable-filesystem-identity.test.py": {
+    "/Volumes/VM": 1
+  },
+  "richos/engine/scripts/lib/engine_pass.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/engine/scripts/lib/foreign_app_data.py": {
+    "$HOME/ab": 4,
+    "/Volumes/E1TB": 1,
+    "~/ab": 3
+  },
+  "richos/engine/scripts/lib/hunt-part5-v3.test.py": {
+    "/Users/fixture": 1
+  },
+  "richos/engine/scripts/lib/inflight.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/lib/land-completeness.py": {
+    "/Users/alex": 5
+  },
+  "richos/engine/scripts/lib/land-residue-gate.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/lib/left-off.py": {
+    "/Users/alex": 2
+  },
+  "richos/engine/scripts/lib/pierce.test.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/lib/protected-ref-moves.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/lib/qa-throwaways.py": {
+    "/Users/admin": 1
+  },
+  "richos/engine/scripts/lib/recovery.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/lib/scratch-reaper.py": {
+    "/Volumes/E1TB": 1,
+    "~/ab": 4
+  },
+  "richos/engine/scripts/lib/shared_scratchpad.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/engine/scripts/lib/testdevices.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/engine/scripts/lib/unlanded-branches.py": {
+    "~/ab": 1
+  },
+  "richos/engine/scripts/lib/verification-dependencies.json": {
+    "/Users/alex": 1,
+    "/Users/tester": 1
+  },
+  "richos/engine/scripts/lib/worker-priority.test.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/lib/worktree-ledger.py": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/no-foreign-app-data.test.sh": {
+    "$HOME/ab": 2,
+    "/Volumes/E1TB": 1,
+    "~/ab": 2
+  },
+  "richos/engine/scripts/pause-acceptance-agent-task.txt": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/scripts/qa-throwaways.test.sh": {
+    "/Users/admin": 3
+  },
+  "richos/engine/scripts/scratch-reaper.mutation.sh": {
+    "~/ab": 1
+  },
+  "richos/engine/scripts/spawn.test.sh": {
+    "/Users/alex": 1
+  },
+  "richos/engine/scripts/verification-inputs.test.py": {
+    "/Users/fallback": 1
+  },
+  "richos/engine/skills/audio-transcription/SKILL.md": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/engine/skills/watch-video/SKILL.md": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/DEVELOPMENT.md": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/cli/connect.mjs": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/cli/mobile.mjs": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/cli/simulator.mjs": {
+    "/Volumes/E1TB": 6
+  },
+  "richos/mobile/dev/connect-lab.mjs": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/mobile/dev/mac-server.rs": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-android/README.md": {
+    "/Users/alex": 2,
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-android/app/src/test/kotlin/dev/richos/android/ui/AttachWiringTest.kt": {
+    "/Users/a": 2
+  },
+  "richos/mobile/native-android/bin/build-timing.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/native-android/bin/emu-pair-front.mjs": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/native-android/bin/randroid": {
+    "/Users/alex": 2,
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-android/bin/review-walk.mjs": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/native-android/core/src/test/kotlin/dev/richos/android/core/AttachTest.kt": {
+    "/Users/a": 2
+  },
+  "richos/mobile/native-ios/Core/Sources/RichOSCLI/main.swift": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/mobile/native-ios/Core/Tests/RichOSCoreTests/AttachmentTests.swift": {
+    "/Users/a": 2
+  },
+  "richos/mobile/native-ios/README.md": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-ios/Release/README.md": {
+    "/Volumes/E1TB": 6
+  },
+  "richos/mobile/native-ios/Release/check-release.sh": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-ios/Release/check_device_family.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/native-ios/Release/generate.sh": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-ios/Release/platform-tests.sh": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-ios/Release/simulator-tests.sh": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-ios/Release/testflight.ts": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/native-ios/Tools/adhoc-signing.test.ts": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/mobile/native-ios/Tools/adhoc-signing.ts": {
+    "/Volumes/E1TB": 2,
+    "/Volumes/E1TB.": 1
+  },
+  "richos/mobile/native-ios/Tools/physical-device.mjs": {
+    "/Volumes/E1TB": 7
+  },
+  "richos/mobile/native-ios/Tools/review-portal.mjs": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-ios/Tools/review-walk.mjs": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/native-ios/Tools/review-walk.test.mjs": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/native-ios/bin/rios": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/perf/README.md": {
+    "/Volumes/E1TB": 5,
+    "~/ab": 1
+  },
+  "richos/mobile/perf/android.py": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/perf/bench/bench.py": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/perf/benchmark.py": {
+    "~/ab": 1
+  },
+  "richos/mobile/perf/ios.py": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/mobile/perf/reviewwalk.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/mobile/perf/watch.py": {
+    "/Users/alex": 1,
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/phone_net.py": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/mobile/physical.py": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/mobile/review-mock/README.md": {
+    "/Volumes/E1TB": 12
+  },
+  "richos/mobile/service/README.md": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/mobile/test/mac-server.test.mjs": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/mobile/test/policy-service.test.js": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/mobile/test/proof-driver.mjs": {
+    "/Volumes/E1TB": 4
+  },
+  "richos/mobile/test/storage.cjs": {
+    "/Volumes/E1TB": 3
+  },
+  "richos/tools/myrichos/README.md": {
+    "~/ab": 1
+  },
+  "richos/tools/myrichos/build-myrichos.sh": {
+    "$HOME/ab": 3
+  },
+  "richos/tools/native-claude-stdio/README.md": {
+    "/Users/alex": 1
+  },
+  "richos/tools/phone-probe/test/desktop-verify.js": {
+    "/Users/alex": 1
+  },
+  "richos/tools/richos-extension/modules/gpt-exporter/INTEGRATION.md": {
+    "/Users/alex": 1
+  },
+  "richos/tools/richos-extension/tests/native-host-privacy.mjs": {
+    "/Volumes/E1TB": 1
+  },
+  "richos/tools/richos-extension/tests/native-host-privacy.test.mjs": {
+    "/Volumes/E1TB": 2
+  },
+  "richos/tools/richos-hud/README.md": {
+    "~/ab": 1
+  },
+  "richos/tools/richos-hud/dictation-flywheel.patch": {
+    "~/ab": 2
+  },
+  "richos/tools/richos-hud/dictation-two-model.patch": {
+    "/Users/devhome": 1,
+    "/Users/somebodyelse": 1,
+    "/Users/testuser": 1
+  },
+  "richos/tools/richos-service/companion-macos/Tests/RichOSCompanionCoreTests/DropZoneTests.swift": {
+    "/Users/tester": 6
+  },
+  "richos/web/web-app/README.md": {
+    "/Users/alex": 1
+  },
+  "richos/web/web-app/test/desktop-verify.js": {
+    "/Users/alex": 2
+  }
+}

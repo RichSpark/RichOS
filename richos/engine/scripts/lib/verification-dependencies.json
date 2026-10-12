@@ -6160,14 +6160,18 @@
     },
     "scripts/publication-completeness.py#fixture-trees": {
       "source": "scripts/publication-completeness.py",
-      "sha256": "07c4ebf9a49fd05aabf905583bfff5fd3ef63f7e0afd420ee8172021de779a6c",
-      "evidence": "AST import/call inventory and all I/O boundaries reviewed: only stdlib, stdin JSON, supplied tree files/private roots, fixed Git ls-files and check-ignore. Scans source and workflow text as data, never executes extracted commands or imports scanned modules. These callers generate all public/private trees. For a private root that is the top of its own repository, Check 4 runs only fixed Git rev-parse, ls-tree, grep and cat-file over that repository's HEAD, with the caller's GIT_* environment removed; its working tree is not read.",
+      "sha256": "98f9a5f50bc82127f19d43bcc430b04569d902dcd84a2244a5c5035b75a47845",
+      "evidence": "AST import/call inventory and all I/O boundaries reviewed: only stdlib, stdin JSON, supplied tree files/private roots, fixed Git ls-files and check-ignore. Scans source and workflow text as data, never executes extracted commands or imports scanned modules. These callers generate all public/private trees. For a private root that is the top of its own repository, Check 4 runs only fixed Git rev-parse, ls-tree, grep and cat-file over that repository's HEAD, with the caller's GIT_* environment removed; its working tree is not read. Also reads the fixture-supplied tracked machine baseline and uses the pure machine_paths matcher; no private settings are read.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_paths.py"
+        }
+      ]
     },
     "scripts/publication-completeness.sh#fixture-trees": {
       "source": "scripts/publication-completeness.sh",
-      "sha256": "afd2e3ef5aa62a520b37f671bdec428d81a082db4364da42efe6f0a21c5b17ce",
+      "sha256": "49a7df0809304e4e62de627d04fdcd1cb5840760df4b490057895a9ba2feaf99",
       "evidence": "Full wrapper reviewed: resolves explicit fixture root and publication declaration, parses literal completeness exemptions, resolves fixture private roots and runs the fixed JSON analyzer. No orchestration config is sourced; no scanned hook or workflow is executed. --skip-private-trees (the commit arm's mode) leaves the private roots unresolved and Check 4 unrun.",
       "keys": [
         "PUBLICATION_DECLARATION"
@@ -6228,7 +6232,7 @@
     },
     "scripts/publication-completeness.test.sh": {
       "source": "scripts/publication-completeness.test.sh",
-      "sha256": "a3d97f03789be5a94244d64f0b4cf7b97bbe4d09bba9785bb3ae476cd6d428ca",
+      "sha256": "97d68697deac301b779d6d7dbb4c79a2a8703c17061e7b648ad758e98bba67f3",
       "evidence": "Creates all public/private trees, declarations, fake hooks, workflows and histories. Only the fixed checker runs; source/workflow text is input data. Broken-install copy invokes the same wrapper without its resolver. One raw hooks.json assertion forbids the publication-completeness text; no nested runtime suite.",
       "keys": [],
       "edges": [
@@ -16265,6 +16269,13 @@
       "literal_keys": {
         "ALLOWED_MODELS": "Unreached spawn/creation validation; this snapshot does not register an assignment."
       }
+    },
+    "scripts/lib/machine_paths.py": {
+      "source": "scripts/lib/machine_paths.py",
+      "sha256": "cbc039b4a23525ce3bb35dcd4f52e19b6f965476a3081fedac2e83a9741f697d",
+      "evidence": "Reviewed bounded literal matching, whole archive-tree exclusions and local reasons; pure tracked text only, no environment or process execution.",
+      "keys": [],
+      "edges": []
     }
   },
   "units": {
@@ -17061,9 +17072,10 @@
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
-        "scripts/publication-completeness.sh": "afd2e3ef5aa62a520b37f671bdec428d81a082db4364da42efe6f0a21c5b17ce",
-        "scripts/publication-completeness.py": "07c4ebf9a49fd05aabf905583bfff5fd3ef63f7e0afd420ee8172021de779a6c",
-        "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc"
+        "scripts/publication-completeness.sh": "49a7df0809304e4e62de627d04fdcd1cb5840760df4b490057895a9ba2feaf99",
+        "scripts/publication-completeness.py": "98f9a5f50bc82127f19d43bcc430b04569d902dcd84a2244a5c5035b75a47845",
+        "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc",
+        "scripts/lib/machine_paths.py": "cbc039b4a23525ce3bb35dcd4f52e19b6f965476a3081fedac2e83a9741f697d"
       },
       "evidence": "Only the fixed guard registration is resolved through both real surfaces. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -17080,12 +17092,13 @@
     "scripts/publication-completeness.test.sh": {
       "commands": [],
       "sources": {
-        "scripts/publication-completeness.test.sh": "a3d97f03789be5a94244d64f0b4cf7b97bbe4d09bba9785bb3ae476cd6d428ca",
-        "scripts/publication-completeness.sh": "afd2e3ef5aa62a520b37f671bdec428d81a082db4364da42efe6f0a21c5b17ce",
+        "scripts/publication-completeness.test.sh": "97d68697deac301b779d6d7dbb4c79a2a8703c17061e7b648ad758e98bba67f3",
+        "scripts/publication-completeness.sh": "49a7df0809304e4e62de627d04fdcd1cb5840760df4b490057895a9ba2feaf99",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
-        "scripts/publication-completeness.py": "07c4ebf9a49fd05aabf905583bfff5fd3ef63f7e0afd420ee8172021de779a6c"
+        "scripts/publication-completeness.py": "98f9a5f50bc82127f19d43bcc430b04569d902dcd84a2244a5c5035b75a47845",
+        "scripts/lib/machine_paths.py": "cbc039b4a23525ce3bb35dcd4f52e19b6f965476a3081fedac2e83a9741f697d"
       },
       "evidence": "The only real-manifest assertion forbids a raw publication-completeness substring. Fixture workflow and hook contents are never executed.",
       "text_needles": [
