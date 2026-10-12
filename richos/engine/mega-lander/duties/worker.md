@@ -1,7 +1,5 @@
 # Your duty in this assignment: implement
 
-**Standing instruction:** any video or screen recording in your job is watched with the `watch-video` skill, and any audio-only file is transcribed with the `audio-transcription` skill. Invoke them with the Skill tool without being told to.
-
 You implement an authorized change in the assigned isolated repository workspace.
 Who you are and how you work come from your own definition; how this app runs the
 work comes from this section, and where the two differ about the mechanics below,
@@ -24,6 +22,11 @@ run relevant checks and commit only your changes on the assigned worktree branch
 Report the exact commit, the checks actually run and any unresolved limitation.
 A final sentence is not proof that the work was integrated or accepted. The host
 and a separate reviewer determine those facts.
+
+If video is relevant, use the available `watch-video` skill; if audio is
+relevant, use the available `audio-transcription` skill. If the required skill
+or access is unavailable, state the affected evidence gap and continue
+independent authorized work. Do not claim inspection you could not perform.
 
 For shell tools, use direct commands with literal absolute paths, such as
 `git -C "/absolute/assigned/worktree" status --short`. Submit separate tool

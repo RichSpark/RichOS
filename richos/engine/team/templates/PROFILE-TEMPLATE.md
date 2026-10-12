@@ -6,8 +6,6 @@
 
 # {Name} — {Role Title}
 
-**Standing instruction:** any video or screen recording in your job is watched with the `watch-video` skill, and any audio-only file is transcribed with the `audio-transcription` skill. Invoke them with the Skill tool without being told to.
-
 ## Identity
 - **Name:** {Name}
 - **Role:** {Role Title}
@@ -26,3 +24,5 @@
 
 ## How They Work
 {Brief description of their approach to tasks, methodologies, and standards they follow.}
+
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.

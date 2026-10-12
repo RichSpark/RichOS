@@ -211,32 +211,32 @@ pub fn active_team(engine: &Path, data: &Path) -> Result<std::collections::BTree
     Ok(team)
 }
 
-/// **The standing instruction every RichOS teammate carries** (CEO 2026-10-10: every teammate,
-/// in femcboost and in the RichOS app, uses the watch-video skill for video and the
-/// audio-transcription skill for audio). The same line the stock definitions, the shelf and the
-/// three duty texts carry; `tests/engine_profile.rs` holds this copy to theirs.
-pub const MEDIA_STANDING_INSTRUCTION: &str = "**Standing instruction:** any video or screen recording in your job is watched with the `watch-video` skill, and any audio-only file is transcribed with the `audio-transcription` skill. Invoke them with the Skill tool without being told to.";
+/// **The sentence every RichOS teammate's definition carries about video and audio** (CEO
+/// 2026-10-10: every teammate, in femcboost and in the RichOS app, uses the watch-video skill
+/// for video and the audio-transcription skill for audio; 2026-10-12: in the first Axel's
+/// words, inside the definition's own working rules, never above who the teammate is). The
+/// stock definitions, the shelf and the three duty texts carry it; `tests/engine_profile.rs`
+/// holds this copy to theirs.
+pub const MEDIA_SKILLS_SENTENCE: &str = "If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.";
 
-/// **A user's teammate as a lease registers it: with the Skill tool and the standing
-/// instruction, whenever it was saved** (second review of `79ba6eb7e`, finding 1). The user's
+/// **A user's teammate as a lease registers it: with the Skill tool and the media-skills
+/// sentence, whenever it was saved** (second review of `79ba6eb7e`, finding 1). The user's
 /// file is never rewritten (plan §10 point 3), so a teammate activated from the shelf or hired
-/// before 2026-10-10 kept a `tools:` list without `Skill` and no instruction, and could not
-/// use either skill however often the engine updated. Here, and only in what is registered:
+/// before 2026-10-10 kept a `tools:` list without `Skill` and no word about either skill, and
+/// could not use them however often the engine updated. Here, and only in what is registered:
 /// - a frontmatter `tools:` list without `Skill` gets it (a comma list, a `[...]` list or a
 ///   `- item` list); a definition with no `tools:` line already has every tool and is left so;
-/// - a definition with no standing-instruction line naming both skills gets
-///   [`MEDIA_STANDING_INSTRUCTION`] under its first `# ` heading, where the shelf has it (or
-///   straight after the frontmatter when there is no heading).
+/// - a definition that does not mention `watch-video` gets [`MEDIA_SKILLS_SENTENCE`] as its
+///   last paragraph.
 ///
 /// A definition that already has both is returned unchanged, byte for byte.
 pub fn with_media_skills(body: &str) -> String {
     let mut lines: Vec<String> = body.split_inclusive('\n').map(String::from).collect();
     let is_fence = |l: &str| l.trim_end() == "---";
-    let mut close = if lines.first().is_some_and(|l| is_fence(l)) {
+    let close = if lines.first().is_some_and(|l| is_fence(l)) {
         lines.iter().skip(1).position(|l| is_fence(l)).map(|i| i + 1)
     } else { None };
-    if let Some(close) = close.as_mut() {
-        let close_at = *close;
+    if let Some(close_at) = close {
         let tools = (1..close_at).find(|&i| !lines[i].starts_with(char::is_whitespace)
             && lines[i].split_once(':').is_some_and(|(k, _)| k.trim() == "tools"));
         if let Some(i) = tools {
@@ -252,7 +252,6 @@ pub fn with_media_skills(body: &str) -> String {
                         let end = if lines[last].ends_with('\n') { "" } else { "\n" };
                         lines[last].push_str(end);
                         lines.insert(last + 1, format!("{indent}- Skill{ending}"));
-                        *close += 1;
                     }
                 }
             } else if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
@@ -264,24 +263,14 @@ pub fn with_media_skills(body: &str) -> String {
             }
         }
     }
-    let has_instruction = lines.iter().any(|l| l.starts_with("**Standing instruction:**")
-        && l.contains("`watch-video`") && l.contains("`audio-transcription`"));
-    if !has_instruction {
-        let start = close.map_or(0, |c| c + 1);
-        let heading = (start..lines.len()).find(|&j| !lines[j].trim().is_empty())
-            .filter(|&j| lines[j].starts_with("# "));
-        match heading {
-            Some(h) => {
-                if !lines[h].ends_with('\n') { lines[h].push('\n'); }
-                let blank = lines.get(h + 1).is_some_and(|l| l.trim().is_empty());
-                lines.splice(h + 1..h + 1, [String::from("\n"), format!("{MEDIA_STANDING_INSTRUCTION}\n")]
-                    .into_iter().chain((!blank).then(|| String::from("\n"))));
-            }
-            None => {
-                if start > 0 && !lines[start - 1].ends_with('\n') { lines[start - 1].push('\n'); }
-                lines.splice(start..start, [format!("{MEDIA_STANDING_INSTRUCTION}\n"), String::from("\n")]);
-            }
+    if !body.contains("watch-video") {
+        let nl = if body.contains("\r\n") { "\r\n" } else { "\n" };
+        while lines.last().is_some_and(|l| l.trim().is_empty()) { lines.pop(); }
+        if let Some(last) = lines.last_mut() {
+            if !last.ends_with('\n') { last.push_str(nl); }
+            lines.push(nl.to_string());
         }
+        lines.push(format!("{MEDIA_SKILLS_SENTENCE}{nl}"));
     }
     lines.concat()
 }
