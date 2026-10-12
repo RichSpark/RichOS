@@ -90,6 +90,8 @@ class Fixture(unittest.TestCase):
         # the commit check runs the verifier from the commit; a tree without it refuses
         self.write("richos/engine/scripts/lib/verification_inputs.py",
                    (ENGINE_LIB / "verification_inputs.py").read_text())
+        self.write("richos/engine/scripts/lib/machine_settings.py",
+                   (ENGINE_LIB / "machine_settings.py").read_text())
         self.write(DECLARATION, json.dumps({
             "schema": 1, "status": "fixture", "config_keys": [],
             "nodes": {"scripts/reader.sh": {

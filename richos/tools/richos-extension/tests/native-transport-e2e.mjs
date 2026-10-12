@@ -37,7 +37,7 @@ import { createServer } from 'node:https';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = path.resolve(HERE, '..');
@@ -175,9 +175,9 @@ function makeCert(dir) {
 // --------------------------------------------------------------------------------------- host
 /** Write a launcher that runs the REAL native host with a scratch drop zone + toolchain on PATH. */
 function writeLauncher(dir, zone) {
-  const launcher = path.join(dir, 'richos-e2e-launcher.sh');
-  const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
-  const model = MODEL ? `export RICHOS_WHISPER_MODEL=${quote(MODEL)}\n` : '';
+  const launcher = path.join(dir, 'richos-e2e-launcher.mjs');
+  const environment = { PATH: `${process.env.PATH || ''}:${HOMEBREW}:/usr/local/bin:/usr/bin:/bin`,
+    RICHOS_DROP_ZONE: zone, RICHOS_LOG_LEVEL: 'error', RICHOS_TOOLCHAIN_LOCK: path.join(dir, 'toolchain-lock.json'), ...(MODEL ? { RICHOS_WHISPER_MODEL: MODEL } : {}) };
   // macOS treats native helpers as separate privacy subjects. A permitted Python
   // interpreter can launch this fixture without granting a system shell full disk access.
   const python = process.env.RICHOS_NATIVE_LAUNCHER_PYTHON;
@@ -185,8 +185,6 @@ function writeLauncher(dir, zone) {
     if (!path.isAbsolute(python) || !fs.existsSync(python) || /[\r\n]/.test(python)) {
       throw new Error('RICHOS_NATIVE_LAUNCHER_PYTHON must name an existing absolute interpreter');
     }
-    const environment = { PATH: `${process.env.PATH || ''}:${HOMEBREW}:/usr/local/bin:/usr/bin:/bin`,
-      RICHOS_DROP_ZONE: zone, RICHOS_LOG_LEVEL: 'error', RICHOS_TOOLCHAIN_LOCK: path.join(dir, 'toolchain-lock.json'), ...(MODEL ? { RICHOS_WHISPER_MODEL: MODEL } : {}) };
     fs.writeFileSync(launcher, `#!${python}\nimport os\n` +
       Object.entries(environment).map(([key, value]) => `os.environ[${JSON.stringify(key)}] = ${JSON.stringify(value)}\n`).join('') +
       `fd = os.open(${JSON.stringify(path.join(dir, 'native-host-stderr.log'))}, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)\nos.dup2(fd, 2)\nos.close(fd)\n` +
@@ -194,14 +192,11 @@ function writeLauncher(dir, zone) {
     fs.chmodSync(launcher, 0o755);
     return launcher;
   }
-  fs.writeFileSync(launcher,
-    `#!/bin/sh\n` +
-    `export PATH=${quote(`${process.env.PATH || ''}:${HOMEBREW}:/usr/local/bin:/usr/bin:/bin`)}\n` +
-    `export RICHOS_DROP_ZONE=${quote(zone)}\n` +
-    `export RICHOS_LOG_LEVEL=error\n` +
-    `export RICHOS_TOOLCHAIN_LOCK=${quote(path.join(dir, 'toolchain-lock.json'))}\n` +
-    model +
-    `exec ${quote(process.execPath)} ${quote(HOST_JS)} 2>>${quote(path.join(dir, 'native-host-stderr.log'))}\n`);
+  // Run under the same Node privacy subject checked before Chrome starts. A shell
+  // would need its own removable-volume grant just to read this fixture launcher.
+  fs.writeFileSync(launcher, `#!${process.execPath}\n` +
+    `Object.assign(process.env, ${JSON.stringify(environment)});\n` +
+    `await import(${JSON.stringify(pathToFileURL(HOST_JS).href)});\n`);
   fs.chmodSync(launcher, 0o755);
   return launcher;
 }

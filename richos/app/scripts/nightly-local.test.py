@@ -234,9 +234,16 @@ class LocalTests(unittest.TestCase):
         platform_root = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True,
                                        text=True, check=True).stdout.strip()
         expected = platform_root
+        for name, value in ((".richos-signing/notary.env", "RICHOS_NOTARY_PROFILE=fixture\n"),
+                            (".richos-signing/richos-updater.key", "fixture"),
+                            (".richos-privacy/named-persons", "Fixture Person\n")):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(value)
+            path.chmod(0o600)
         for caller in ("/tmp/", str(self.root) + "/", None):
             with self.subTest(caller=caller):
-                planted = {"HOME": os.environ["HOME"]}
+                planted = {"HOME": str(self.root)}
                 if caller:
                     planted["TMPDIR"] = caller
                 with patch.dict(os.environ, planted, clear=True):
@@ -247,7 +254,7 @@ class LocalTests(unittest.TestCase):
                 conditions, _ = m.gate_conditions(m.UI_SUITE_GATE, planted)
                 self.assertEqual(conditions["TMPDIR"], expected)
         with patch.object(Path, "is_mount", return_value=False):
-            self.assertEqual(m.gate_tmpdir({"TMPDIR": str(self.root)}), platform_root)
+            self.assertEqual(m.gate_tmpdir({"HOME": str(self.root), "TMPDIR": str(self.root)}), platform_root)
         bulk = self.root / "bulk"; bulk.mkdir()
         self.assertEqual(m.gate_tmpdir({"HOME": str(self.root), "RICHOS_BULK_ROOT": str(bulk)}), str(bulk / "tmp/richos-gates") + "/")
         missing = "/Volumes/RichOSMissingGateFixture/cache" # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
