@@ -38,6 +38,7 @@ class Boundaries(unittest.TestCase):
         self.env.update(TMPDIR=str(self.root / "tmp"), PYTHONDONTWRITEBYTECODE="1",
                         CLAUDE_CONFIG_DIR=str(self.root / "config"),
                         RICHOS_MACHINE_WORKERS=str(self.root / "machine"),
+                        RICHOS_HOST_SHIELD_TOOL=str(LIB / "host_shield.py"),
                         RICHOS_ENGINE_PASS_DIR=str(self.root / "slot"),
                         RICHOS_VERIFICATION_CONTAMINATION=str(self.root / "contamination"))
         for name in ("tmp", "config/state", "bin"):

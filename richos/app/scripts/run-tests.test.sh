@@ -46,7 +46,7 @@
 # scanner exempt from its own rule is a rule with a hole exactly where somebody clever would
 # put something.
 # run-tests: no-host-screen: its matches are its own S6 search pattern and the fake suites S1 writes under mktemp
-# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh
+# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh
 # run-tests: covers richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/gui-launch.sh
 set -uo pipefail
 
@@ -69,10 +69,16 @@ install_harness() {  # install_harness <box directory>
   cp "$DIR/lib/proof_declarations.py" "$1/lib/proof_declarations.py"
   cp "$DIR/lib/cargo-cache-env.sh" "$DIR/lib/cargo_identity.py" "$1/lib/"
   cp "$DIR/bin/cargo" "$1/bin/cargo"
+  mkdir -p "$1/../../engine/scripts/lib"
+  cp "$DIR/../../engine/scripts/lib/machine_settings.py" \
+     "$DIR/../../engine/scripts/lib/machine-settings.sh" "$1/../../engine/scripts/lib/"
 }
 
-TMP="$(mktemp -d -t run-tests-test.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+TASK_TMP="$(mktemp -d "${TMPDIR:?}/run-tests-test.XXXXXX")"
+trap 'rm -rf "$TASK_TMP"' EXIT
+# Copied runners resolve engine helpers two levels above their scripts directory.
+TMP="$TASK_TMP/fixtures"
+mkdir -p "$TMP"
 # A failed fake suite's results folder is kept in this scratch, never the operator's store; and a
 # caller's results root (a proof run around this suite) is not the fixtures' to write into.
 export RUN_TESTS_RESULTS_STATE="$TMP/kept-results"
