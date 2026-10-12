@@ -122,12 +122,12 @@ pub const SKILLS: &[(&str, &str)] = &[
     // **Named `watch-video`, and `audio-transcription` below, because every RichOS teammate's
     // definition says so** (CEO, 2026-10-10: the audio and video skill use is part of all the
     // teammate and proto-teammate profiles in RichOS, "otherwise a RichOS user wouldn't take
-    // advantage of that"). The standing instruction in `engine/agents/`, `engine/team/shelf/`
-    // and the duty texts names these two skills, and the engine's own skills of the same names
-    // serve the operator's team. A teammate runs inside the work lease, which is given this
-    // plugin, so it reaches them as `rich-skills:watch-video` and
-    // `rich-skills:audio-transcription` (`native.rs`,
-    // `a_teammate_s_session_lists_every_skill_its_standing_instruction_names`).
+    // advantage of that"). The media-skills sentence every definition in `engine/agents/`,
+    // `engine/team/shelf/` and the duty texts carries (`engine_profile::MEDIA_SKILLS_SENTENCE`)
+    // names these two skills, and the engine's own skills of the same names serve the
+    // operator's team. A teammate runs inside the work lease, which is given this plugin, so it
+    // reaches them as `rich-skills:watch-video` and `rich-skills:audio-transcription`
+    // (`native.rs`, `a_teammate_s_session_lists_every_skill_its_definition_names`).
     ("watch-video", include_str!("../skills/watch-video/SKILL.md")),
     // Getting the words out of an audio-only file, with the same two tools and the same pinned
     // decode flags as `watch-video`'s transcription step.
