@@ -280,6 +280,16 @@ class Declarations(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn("--only lint-regressions.test.sh", result.stdout)
 
+    def test_machine_settings_and_autocheck_select_private_settings_consumers(self):
+        for gate in (False, True):
+            for path in ("richos/engine/scripts/lib/machine_settings.py",
+                         "richos/app/scripts/autocheck/autocheck.py"):
+                with self.subTest(path=path, gate=gate):
+                    result = self.select(path, gate=gate)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    for suite in ("dependency-pins", "nightly-local", "extension-native-browser"):
+                        self.assertIn("--only " + suite + ".test.sh", result.stdout)
+
     def test_output_walk_has_direct_proof_and_shared_vm_changes_keep_the_harness(self):
         nested = "bash scripts/testvm/test/run-tests.sh"
         helper = "richos/app/scripts/testvm/output-walk.py"

@@ -5,7 +5,7 @@
 # autocheck hooks; nothing builds, boots or opens a window, and this repository's hooks are
 # never touched.
 # run-tests: no-host-screen: throwaway Git repositories only; nothing is launched on any screen
-# run-tests: inputs richos/app/scripts/dependency-pins.test.sh richos/app/scripts/dependency-pins.test.py richos/app/scripts/autocheck richos/engine/scripts/lib/verification_inputs.py
+# run-tests: inputs richos/app/scripts/dependency-pins.test.sh richos/app/scripts/dependency-pins.test.py richos/app/scripts/autocheck richos/app/scripts/autocheck/autocheck.py richos/engine/scripts/lib/verification_inputs.py richos/engine/scripts/lib/machine_settings.py
 # run-tests: covers richos/app/scripts/autocheck/dependency-pins.py
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
