@@ -28,6 +28,16 @@ count="$(find "$WORK/alpha" "$WORK/beta" -type l -name target -exec readlink '{}
 echo 'PASS two checkouts and detached workspaces have four private outputs'
 echo 'PASS legacy shared link migrated without deleting its cache'
 
+# A different spelling of the same private output is still the same cache.
+ln -s "$WORK/cache" "$WORK/cache-alias"
+DEST="$(readlink "$WORK/alpha/richos/app/target")"
+ALIAS_DEST="$WORK/cache-alias/${DEST#"$WORK/cache/"}"
+rm "$WORK/alpha/richos/app/target"
+ln -s "$ALIAS_DEST" "$WORK/alpha/richos/app/target"
+RICHOS_BUILD_CACHE="$WORK/cache-alias" bash "$HERE/shared-build-cache.sh" --check "$WORK/alpha"
+[ "$(readlink "$WORK/alpha/richos/app/target")" = "$ALIAS_DEST" ]
+echo 'PASS an equivalent cache alias is accepted without replacing its link'
+
 # A private component override is read on the first invocation; environment wins.
 printf 'RICHOS_BUILD_CACHE=%s\n' "$WORK/private-cache" > "$WORK/private.env"
 for selected in private-cache environment-cache; do

@@ -293,6 +293,21 @@ class DeployTests(unittest.TestCase):
         self.assertEqual((self.state / 'runtime/cpu_guard.py').read_bytes(), self.legacy)
         self.assertFalse((self.state / 'live-runtime.json').exists())
 
+    def test_controller_path_alias_is_accepted_but_relative_path_is_refused(self):
+        alias = Path(self.tmp.name) / 'state-alias'
+        alias.symlink_to(self.state.resolve(), target_is_directory=True)
+        config = plistlib.loads(self.plist.read_bytes())
+        config['ProgramArguments'][2] = str(alias / 'runtime/cpu_guard.py')
+        self.plist.write_bytes(plistlib.dumps(config))
+        live = self.live()
+        self.assertIn('deployed', live.deploy())
+        self.assertEqual(self.restarts, [D.sha256(self.candidate)])
+        config['ProgramArguments'][2] = os.path.relpath(self.state / 'runtime/cpu_guard.py')
+        self.assertEqual(Path(config['ProgramArguments'][2]).resolve(), live.running.resolve())
+        self.plist.write_bytes(plistlib.dumps(config))
+        with self.assertRaisesRegex(SystemExit, 'does not run'):
+            live.preconditions()
+
     def test_an_unknown_running_controller_or_plist_is_refused_untouched(self):
         (self.state / 'runtime/cpu_guard.py').write_bytes(b'# somebody else\n')
         with self.assertRaisesRegex(SystemExit, 'neither the legacy controller'):

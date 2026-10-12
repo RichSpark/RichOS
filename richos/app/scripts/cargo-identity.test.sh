@@ -28,15 +28,18 @@ try:
     settings_file.parent.mkdir(parents=True)
     workspace = scratch / "settings workspace"; workspace.mkdir()
     (workspace / "Cargo.toml").write_text('[workspace]\nmembers=[]\n')
-    file_cache = scratch / "file cache"; alias_cache = scratch / "alias cache"
+    physical_cache = scratch / "physical caches"; physical_cache.mkdir()
+    linked_cache = scratch / "linked caches"
+    linked_cache.symlink_to(physical_cache.resolve(), target_is_directory=True)
+    file_cache = linked_cache / "file cache"; alias_cache = linked_cache / "alias cache"
     settings_file.write_text('CARGO_TARGET_DIR=' + str(file_cache) + '\n')
     supplied = {'HOME': str(settings_home), 'TMPDIR': str(scratch)}
-    assert cargo_identity.target_dir(workspace, supplied)[0] == file_cache
-    assert cargo_identity.target_dir(workspace, {**supplied, 'RICHOS_CARGO_CACHE_ROOT': str(alias_cache)})[0] == alias_cache
+    assert cargo_identity.target_dir(workspace, supplied)[0] == file_cache.resolve()
+    assert cargo_identity.target_dir(workspace, {**supplied, 'RICHOS_CARGO_CACHE_ROOT': str(alias_cache)})[0] == alias_cache.resolve()
     snapshot = cargo_identity.M.environment(supplied)
     settings_file.write_text('UNKNOWN=/invalid\n')
-    assert cargo_identity.target_dir(workspace, snapshot)[0] == file_cache
-    assert cargo_identity.target_dir(workspace, snapshot, base=str(alias_cache))[0] == alias_cache
+    assert cargo_identity.target_dir(workspace, snapshot)[0] == file_cache.resolve()
+    assert cargo_identity.target_dir(workspace, snapshot, base=str(alias_cache))[0] == alias_cache.resolve()
     print("PASS private Cargo settings, alias precedence, spaces and job snapshot")
     missing = dict(HOME=str(scratch / "no-cargo-home"), PATH="/usr/bin:/bin")
     assert shutil.which("cargo", path=cargo_identity.enable_environment(missing)["PATH"]) is None
@@ -157,7 +160,7 @@ try:
     for flag in (("--target-dir", str(scratch / "explicit")), ("--target-dir=" + str(scratch / "explicit"),)):
         targets = [json.loads(cargo(root, "metadata", "--offline", "--no-deps", "--format-version=1", *flag).stdout)["target_directory"] for root in roots]
         assert targets[0] != targets[1], targets
-        assert all(str(scratch / "explicit") in p for p in targets)
+        assert all(Path(p).is_relative_to((scratch / "explicit").resolve()) for p in targets)
     print("PASS inherited and explicit target roots retain separate workspace namespaces")
 
     # A relocated fixture in the same process needs a new namespace too.

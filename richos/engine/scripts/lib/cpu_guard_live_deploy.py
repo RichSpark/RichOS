@@ -110,7 +110,8 @@ class Live:
     def preconditions(self):
         config = plistlib.loads(self.plist.read_bytes())
         program = config.get('ProgramArguments', [])
-        if len(program) < 4 or Path(program[2]) != self.running or program[3] != 'watch':
+        if (len(program) < 4 or not Path(program[2]).is_absolute()
+                or Path(program[2]).resolve() != self.running.resolve() or program[3] != 'watch'):
             raise SystemExit('refused: %s does not run %s watch (it runs %s)' % (self.plist, self.running, program))
         # The interpreter launchd (and the Bash hook) run it with: /usr/bin/python3 is
         # 3.9 on this Mac, and a candidate that only loads under a newer Python must be

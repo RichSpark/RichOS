@@ -29,7 +29,7 @@ for REL in richos/app richos/app/src-tauri; do
   DEST="$(CARGO_TARGET_DIR="$CACHE_ROOT" RICHOS_CARGO_CACHE_ROOT="$CACHE_ROOT" "$HERE/bin/cargo" --richos-target-dir "$CHECKOUT/$REL")"
   if [ -L "$LINK" ]; then
     CUR="$(readlink "$LINK")"
-    if [ "$CUR" = "$DEST" ] && [ -d "$DEST" ]; then
+    if [ -d "$DEST" ] && [ -d "$LINK" ] && [ "$(cd "$LINK" && pwd -P)" = "$(cd "$DEST" && pwd -P)" ]; then
       echo "ok $REL/target -> $DEST"; continue
     fi
     if [ "$MODE" = check ]; then echo "unisolated $LINK -> $CUR" >&2; RC=1; continue; fi
