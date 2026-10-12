@@ -10088,7 +10088,8 @@ body.panel-full .op-body {
 .bug-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   padding: 14px 18px 12px;
 }
 .bug-glyph {
@@ -10098,6 +10099,7 @@ body.panel-full .op-body {
   color: var(--gold-text);
 }
 .bug-kind {
+  white-space: nowrap;
   font-weight: 600;
   font-size: 1rem;
   color: var(--ink);
