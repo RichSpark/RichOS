@@ -1136,6 +1136,8 @@ else
   fi
   E1ENV=()
   E1MISSING=""
+  E1STORAGE="$TMP/e1-storage"
+  mkdir -p "$E1STORAGE/tmp/richos-gates"
   for E1N in $E1NAMES; do
     case "$E1N" in
       # PATH is the one name that must keep working: a hostile PATH does not test the
@@ -1144,7 +1146,17 @@ else
       # The values a build genuinely hands a gate. E1's property is "the environment a
       # build hands it", so these are the build's own values, not invented ones.
       # The build's own folder (nightly-local.py gate_tmpdir), never the caller's.
-      TMPDIR) E1ENV+=("TMPDIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}")") ;;
+      TMPDIR) E1ENV+=("TMPDIR=$E1STORAGE/tmp/richos-gates/") ;;
+      RICHOS_BULK_ROOT) E1ENV+=("RICHOS_BULK_ROOT=$E1STORAGE") ;;
+      RICHOS_MACHINE_SETTINGS_RESOLVED) E1ENV+=("RICHOS_MACHINE_SETTINGS_RESOLVED=1") ;;
+      RICHOS_CARGO_CACHE_ROOT|SCCACHE_DIR|RICHOS_SCCACHE_TMPDIR|RICHOS_BUILD_CACHE|\
+      RICHOS_RECOVERY_EVIDENCE_ROOT|RICHOS_RECOVERY_WIP_ROOT|RICHOS_CPU_GUARD_STATE|\
+      RICHOS_ENGINE_PASS_DIR|RICHOS_PROOF_RUN_DIR|RICHOS_AUTOCHECK_PROOF_ROOT|\
+      RICHOS_TEST_RESULTS_ROOT|RICHOS_ANDROID_CACHES_ROOT|RICHOS_NATIVE_IOS_CACHE|\
+      RANDROID_CACHE|RICHOS_GPL_SOURCE_CACHE|RICHOS_MOBILE_CACHE|RICHOS_PHONE_LOCK_DIR|\
+      RICHOS_PHONE_WATCH_HOME|RICHOS_PHYSICAL_STORE|RICHOS_PHYSICAL_PRODUCTS|\
+      GRADLE_USER_HOME|RICHOS_ENGINE_CHECK_PROOF_DIR|RICHOS_CAMPAIGN_PARENT)
+        E1ENV+=("$E1N=$E1STORAGE/$E1N") ;;
       PYTHONDONTWRITEBYTECODE) E1ENV+=("PYTHONDONTWRITEBYTECODE=1") ;;
       CARGO_PROFILE_DEV_DEBUG) E1ENV+=("CARGO_PROFILE_DEV_DEBUG=0") ;;
       CARGO_PROFILE_TEST_DEBUG) E1ENV+=("CARGO_PROFILE_TEST_DEBUG=0") ;;
