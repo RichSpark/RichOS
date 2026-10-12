@@ -1228,8 +1228,8 @@ class Runner:
             if clock[2]:
                 self.clocks[name] = (clock[0], clock[1])
                 # Inside the section, so `--gates-passed-in` never reads it as the coordinator's.
-                self.log.write(f"  {name}: admission {clock[0]:.1f}s waiting for machine worker "
-                               f"tokens, execution {clock[1]:.1f}s over {clock[2]} command(s); "
+                self.log.write(f"  {name}: admission {clock[0]:.1f}s waiting for admission, "
+                               f"execution {clock[1]:.1f}s over {clock[2]} command(s); "
                                "a deadline counts execution only\n")
             self.log.write(f"=== phase {name} ends: {end - start:.1f}s ===\n")
 
@@ -1319,7 +1319,7 @@ class Runner:
             label = self.active_phase or Path(str(args[0])).name
             queued = getattr(expired, "admission_seconds", None)
             self._count_clock(queued, getattr(expired, "execution_seconds", None))
-            after = (f" of execution, admitted after {queued:.1f}s in the worker queue"
+            after = (f" of execution, admitted after {queued:.1f}s waiting for admission"
                      if queued is not None else "")
             raise GateTimedOut(f"{label} timed out after {timeout}s{after}; owned group stopped; "
                                "see the run log") from None

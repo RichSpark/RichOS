@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# run-tests: no-host-screen: runs one Python import check; nothing is built, downloaded or launched
-# run-tests: inputs richos/app/scripts/runtime-sources.json richos/app/scripts/lib/no_host_paths.py richos/app/scripts/build-runtimes.test.sh richos/app/scripts/build-runtimes.py
-# run-tests: covers richos/app/scripts/build-runtimes.py
+# run-tests: no-host-screen: Python closure and isolated shell launchers; no screen or downloads
+# run-tests: inputs richos/app/scripts/runtime-launchers.test.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/runtime-sources.json richos/app/scripts/lib/no_host_paths.py richos/app/scripts/build-runtimes.test.sh richos/app/scripts/build-runtimes.py
+# run-tests: covers richos/app/scripts/build-runtimes.py richos/app/scripts/runtime-launchers.test.py
 #
 # build-runtimes.test.sh — the delivered Python's dependency closure, as build-runtimes.py
 # checks it inside every fresh runtime build.
@@ -80,4 +80,5 @@ else
   echo "  FAIL  B4 the zipped-executable install: $out"; fail=1
 fi
 
+python3 -B "$HERE/runtime-launchers.test.py" || fail=1
 exit "$fail"

@@ -655,13 +655,27 @@ Path(sys.argv[1]).write_text(str(p.pid))
                                                 "ci-shard.sh would stop the unit before the gate's deadline")
 
     def test_a_long_proof_slot_wait_never_spends_the_mutation_gates_deadline(self):
+        self.mutation_admission_wait()
+
+    def test_a_worker_wait_after_the_proof_slot_never_spends_the_mutation_deadline(self):
+        self.mutation_admission_wait(inner_worker=True)
+
+    def mutation_admission_wait(self, inner_worker=False):
         # Review rv-20261011T232800Z-6d2774ef-374f P1: the deadline's clock started at the
         # machine token, before proof-run.py waited for its proof-run slot, so a long wait in
         # that line killed a gate whose work fit. Here the REAL proof-run.py waits behind a slot
         # this test holds for longer than the whole (shortened) deadline, then runs one check of
         # one second. The gate must pass and count the wait as admission, not execution.
         budget = 20
-        env, _workers = self.private_budget()
+        env, workers = self.private_budget()
+        # Leave one token for the outer command. After its proof slot opens the
+        # inner scheduler needs another token, which this fixture keeps occupied.
+        held_workers = []
+        if inner_worker:
+            for token in sorted(workers.glob("token-*"))[1:]:
+                fd = os.open(token, os.O_RDWR)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held_workers.append(fd)
         slots = self.root / "slots"
         slots.mkdir()
         (slots / "limit").write_text("1\n")
@@ -699,6 +713,16 @@ Path(sys.argv[1]).write_text(str(p.pid))
                 time.sleep(budget + 2)                     # in line for longer than the deadline
             finally:
                 os.close(held)
+            if inner_worker:
+                try:
+                    guard = time.monotonic() + 120
+                    while not list((workers / "admission").glob("wait-*.json")) and time.monotonic() < guard:
+                        time.sleep(0.05)
+                    waited.append(bool(list((workers / "admission").glob("wait-*.json"))))
+                    time.sleep(budget + 2)
+                finally:
+                    for fd in held_workers:
+                        os.close(fd)
 
         releaser = threading.Thread(target=release_once_waited_past_the_deadline)
         with (self.root / "run.log").open("w") as log:
@@ -719,11 +743,13 @@ Path(sys.argv[1]).write_text(str(p.pid))
                         r.mutation_units(["fixture.test.sh"], {}, "fixture")
             finally:
                 releaser.join()
-        self.assertEqual(waited, [True], "proof-run waited in line for the held slot")
+        self.assertEqual(waited, [True, True] if inner_worker else [True],
+                         "proof-run waited at every held admission boundary")
         text = (self.root / "run.log").read_text()
         self.assertRegex(text, r"proof-run slot 0 on this Mac \(1 run\(s\) at once\), waited \d+ s for it")
         admission, execution = r.clocks[m.WORKSPACE_MUTANTS_GATE]
-        self.assertGreaterEqual(admission, budget + 2, "the slot wait is reported as admission")
+        self.assertGreaterEqual(admission, (budget + 2) * (2 if inner_worker else 1),
+                                "both the proof-slot and inner worker waits are admission")
         self.assertLess(execution, budget, "the slot wait is not reported as execution")
 
     def test_every_gate_has_a_named_deadline(self):

@@ -55,7 +55,7 @@ def finish_group(process, *, term_grace=15, kill_grace=2, error_type=RuntimeErro
 ADMITTED_SHIM = ': > "$0" && exec "$@"'
 ADMISSION_POLL = 0.1
 # A command that waits for a second, nested admission of its own (proof-run.py waiting for a
-# proof-run slot) is told this file's path and creates it once admitted there; the deadline's
+# proof-run slot and first check's admission) creates this file once admitted; the deadline's
 # clock starts then. Review rv-20261011T232800Z-6d2774ef-374f P1: the workspace-mutants gate's
 # clock started at the machine token, so a long proof-slot wait could kill a healthy gate.
 EXECUTION_MARKER_ENV = "RICHOS_EXECUTION_STARTS_MARKER"
@@ -85,7 +85,7 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
     TimeoutExpired raised when execution runs past `timeout`.
 
     `nested_wait`, when given, says the command waits for a nested admission of its own after
-    the token (proof-run.py's proof-run slot) and bounds that wait in seconds: the clock starts
+    the token (proof-run.py's slot and first check) and bounds that wait in seconds: the clock starts
     when the command creates the file named in EXECUTION_MARKER_ENV, and that wait counts as
     admission. A command that never creates it gets its clock started `nested_wait` seconds
     after the token, so the deadline is never lost."""
