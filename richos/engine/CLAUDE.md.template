@@ -391,9 +391,7 @@ of a pause: check the actual hold and report a limitation honestly. Stop remains
 a separate destructive operation under `guard-stop-live-work.sh`; a pause request
 never authorizes it.
 
-## Working Rules - adopted from T3 Code's agent contract
-
-Adapted from [T3 Code's agent contract](https://github.com/pingdotgg/t3code/blob/d6f291303ddc0c9a14f570266a4d9eff6d431593/AGENTS.md), MIT licensed.
+## Working Rules
 
 1. **Processes are owned, never matched.** Never use `pkill -f`, `pgrep | kill` or `kill` on a PID chosen by matching a name, path or worktree string. Your own process and a wait loop can carry those strings in their arguments. Stop only a PID you captured at spawn, one explicitly handed to you by the lead as the target to quit or the owner of a port you opened. Confirm its recorded launch context belongs to the assigned work: its working directory is inside that workspace, or it runs in the disposable guest assigned to you. Test instances use isolated fixture data, never the developer's live install or live data. Before a heavy step, use the project's build-state mechanism where one exists. If name-based polling is necessary, exclude your own process tree and shell or wait wrappers, verify the remaining process identities and state how you checked. Process absence is not a reservation against another build starting.
 
