@@ -2091,6 +2091,35 @@ async function main() {
     return waiting + " / " + honest;
   });
 
+  // D30 (nightly 51 walk): a queued card's long pill ("Waiting to post · saved on this Mac") took the
+  // head's width, broke the title onto two lines and ran past the card's edge. The pill drops under
+  // the title when both do not fit; the title stays on one line and the pill stays inside the card.
+  await run.check("a queued idea or bug card keeps its title on one line and its pill inside the card, in light and dark", async () => {
+    const seen = [];
+    for (const theme of ["light", "dark"]) {
+      for (const kind of ["idea", "bug"]) {
+        const page = await open(theme, { bugNet: "offline" });
+        if (kind === "idea") { await requestAFeature(page); await answerIdea(page); }
+        else { await bustABug(page); await answer(page, ANSWER); }
+        await page.click("#bug-send");
+        await page.waitForSelector(".bugcard.is-queued .bug-pill");
+        const m = await page.evaluate(() => {
+          const card = document.querySelector(".bugcard.is-queued");
+          const c = card.getBoundingClientRect();
+          const k = card.querySelector(".bug-kind");
+          const pill = card.querySelector(".bug-pill").getBoundingClientRect();
+          const lh = parseFloat(getComputedStyle(k).lineHeight) || parseFloat(getComputedStyle(k).fontSize) * 1.4;
+          return { cardRight: c.right, pillRight: pill.right, pillLeft: pill.left, cardLeft: c.left, kindH: k.getBoundingClientRect().height, lh, cardW: c.width, pillW: pill.width };
+        });
+        assert(m.kindH < m.lh * 1.5, `${theme} ${kind}: the title breaks onto two lines (height ${m.kindH}px, line ${m.lh}px)`);
+        assert(m.pillRight <= m.cardRight - 1 && m.pillLeft >= m.cardLeft, `${theme} ${kind}: the pill runs outside the card (pill ${m.pillLeft}..${m.pillRight}, card ${m.cardLeft}..${m.cardRight})`);
+        seen.push(`${theme} ${kind} card ${Math.round(m.cardW)}px pill ${Math.round(m.pillW)}px title ${Math.round(m.kindH)}px`);
+        await page.close();
+      }
+    }
+    return seen.join("; ");
+  });
+
   // Review rv-20261011T131221Z-ba6a6a47-c22a, P2: Try now that fails again for ANOTHER reason said
   // "It still didn't go out…" and hid the new reason (offline, then an account GitHub refuses).
   await run.check("Try now that fails for a different reason says the new reason, for an idea and a bug report", async () => {
