@@ -54,9 +54,15 @@ def finish_group(process, *, term_grace=15, kill_grace=2, error_type=RuntimeErro
 # it execs the real command (same pid, so the owned group is unchanged).
 ADMITTED_SHIM = ': > "$0" && exec "$@"'
 ADMISSION_POLL = 0.1
+# A command that waits for a second, nested admission of its own (proof-run.py waiting for a
+# proof-run slot) is told this file's path and creates it once admitted there; the deadline's
+# clock starts then. Review rv-20261011T232800Z-6d2774ef-374f P1: the workspace-mutants gate's
+# clock started at the machine token, so a long proof-slot wait could kill a healthy gate.
+EXECUTION_MARKER_ENV = "RICHOS_EXECUTION_STARTS_MARKER"
 
 
-def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False, release_build=False, **kwargs):
+def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False, release_build=False,
+              nested_wait=None, **kwargs):
     """subprocess.run's result shape with bounded, owned-group cleanup on all exits.
 
     `groups`, when given, is the run's OwnedGroups: the command is registered there for as
@@ -76,7 +82,13 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
     writes a marker as its first act under the token), as ci-shard.sh does per unit. The wait
     for a token keeps its own bound: worker_tokens.py gives up after 1800 s and exits 75.
     The result carries `admission_seconds`, `execution_seconds` and `admitted`; so does the
-    TimeoutExpired raised when execution runs past `timeout`."""
+    TimeoutExpired raised when execution runs past `timeout`.
+
+    `nested_wait`, when given, says the command waits for a nested admission of its own after
+    the token (proof-run.py's proof-run slot) and bounds that wait in seconds: the clock starts
+    when the command creates the file named in EXECUTION_MARKER_ENV, and that wait counts as
+    admission. A command that never creates it gets its clock started `nested_wait` seconds
+    after the token, so the deadline is never lost."""
     worker = library / "worker_tokens.py"
     # The worker wrapper owns its command, but does not watch this coordinator.
     # Keep an independent supervisor tied to our identity around the entire
@@ -85,13 +97,23 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
     role = ["--guard-role", "release-build"] if release_build else []
     scratch = Path(tempfile.mkdtemp(prefix="richos-nightly-admission-"))
     marker, timing = scratch / "admitted", scratch / "timing.json"
+    execution_marker = scratch / "execution-starts"
+    if nested_wait is not None:
+        kwargs["env"] = {**(kwargs.get("env") or os.environ), EXECUTION_MARKER_ENV: str(execution_marker)}
     started = time.monotonic()
-    admitted_at = None
+    token_at = admitted_at = None
 
     def admitted():
-        nonlocal admitted_at
-        if admitted_at is None and marker.exists():
-            admitted_at = time.monotonic()
+        nonlocal token_at, admitted_at
+        if token_at is None and marker.exists():
+            token_at = time.monotonic()
+        if admitted_at is None and token_at is not None:
+            if nested_wait is None:
+                admitted_at = token_at
+            elif execution_marker.exists():
+                admitted_at = time.monotonic()
+            elif time.monotonic() >= token_at + nested_wait:
+                admitted_at = token_at + nested_wait
         return admitted_at is not None
 
     process = None
@@ -135,6 +157,12 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
             result.admitted = admitted_at is not None
             result.admission_seconds = (admitted_at or ended) - started
             result.execution_seconds = ended - admitted_at if admitted_at is not None else 0.0
+        else:
+            if token_at is not None and admitted_at is not None and admitted_at > token_at:
+                # The token's timing row counts the nested wait as execution; it was admission.
+                nested = admitted_at - token_at
+                result.admission_seconds += nested
+                result.execution_seconds = max(0.0, result.execution_seconds - nested)
         return result
     finally:
         try:

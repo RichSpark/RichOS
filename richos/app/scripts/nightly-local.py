@@ -87,6 +87,9 @@ GATE_BUDGETS = {
     "gates/ui-suite": 3300,
     "gates/privacy-sweep": 120, # At least 4x a full scan; no receipt-reuse assumption.
 }
+# How long a mutation batch's proof-run may wait for a proof-run slot, as admission and outside
+# the gate's deadline: proof_slots.DEFAULT_WAIT_SECONDS, the line behind two full runs.
+MUTATION_SLOT_WAIT = 3 * 3600
 CLEANUP_TIMEOUT = 30
 TERM_GRACE = 15
 KILL_GRACE = 2
@@ -1280,7 +1283,7 @@ class Runner:
         self.announce(f"  {'total'.ljust(width)} : {time.time() - self.started:7.1f}s")
 
     def command(self, *args, cwd=None, capture=False, timeout=None, credentials=False,
-                env_extra=None, cleanup=False, release_build=False):
+                env_extra=None, cleanup=False, release_build=False, nested_wait=None):
         if self.groups.stopping and not cleanup:
             raise GateStopped(f"{self.active_phase or Path(str(args[0])).name} was stopped: "
                               "another gate already refused this build")
@@ -1295,7 +1298,8 @@ class Runner:
                                stdout=subprocess.PIPE if capture else self.log,
                                stderr=self.log, timeout=timeout,
                                groups=self.groups, cleanup=cleanup,
-                               **({"release_build": True} if release_build else {}))
+                               **({"release_build": True} if release_build else {}),
+                               **({"nested_wait": nested_wait} if nested_wait is not None else {}))
         except CommandCleanupError as error:
             label = self.active_phase or Path(str(args[0])).name
             raise CommandCleanupError(f"{label} cleanup failed (command budget {timeout}s): {error}") from None
@@ -1859,8 +1863,12 @@ class Runner:
         evidence.mkdir(parents=True, exist_ok=True)
         logdir = Path(tempfile.mkdtemp(prefix=label + "-", dir=evidence))
         budget = GATE_BUDGETS[WORKSPACE_MUTANTS_GATE]
+        # proof-run waits for a proof-run slot after the machine token; that wait is bounded by
+        # its own --slot-wait and never counts toward the deadline (nested_wait, owned_command;
+        # review rv-20261011T232800Z-6d2774ef-374f P1).
         self.command(sys.executable, self.source / SCRIPTS / "proof-run.py",
                      "--commands", selection, "--log-dir", logdir,
+                     "--slot-wait", str(MUTATION_SLOT_WAIT),
                      # The engine never reads this output-only nightly generation id.
                      # Keep the actual id on the coordinator, normalize only this batch.
                      # ci-shard.sh stops a unit at min(3600, max(900, 3 x weight)) unless
@@ -1869,7 +1877,7 @@ class Runner:
                      # to the unit too, here only (review rv-20261011T224950Z-e0dcac9e-f4e7).
                      env_extra={**environment, "RICHOS_NIGHTLY_RUN_ID": CONDITIONS_RUN_ID,
                                 "CI_SHARD_UNIT_TIMEOUT": str(budget)},
-                     timeout=budget)
+                     timeout=budget, nested_wait=MUTATION_SLOT_WAIT)
 
     def retry_red_ui_suites_alone(self, error, receipts, tests, tree, first):
         """Give each suite the sharded run left red ONE attempt alone; True when the build goes on.

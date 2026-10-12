@@ -621,6 +621,78 @@ Path(sys.argv[1]).write_text(str(p.pid))
                         self.assertGreaterEqual(int(inner.stdout), gate,
                                                 "ci-shard.sh would stop the unit before the gate's deadline")
 
+    def test_a_long_proof_slot_wait_never_spends_the_mutation_gates_deadline(self):
+        # Review rv-20261011T232800Z-6d2774ef-374f P1: the deadline's clock started at the
+        # machine token, before proof-run.py waited for its proof-run slot, so a long wait in
+        # that line killed a gate whose work fit. Here the REAL proof-run.py waits behind a slot
+        # this test holds for longer than the whole (shortened) deadline, then runs one check of
+        # one second. The gate must pass and count the wait as admission, not execution.
+        budget = 6
+        env, _workers = self.private_budget()
+        slots = self.root / "slots"
+        slots.mkdir()
+        (slots / "limit").write_text("1\n")
+        env.update(RICHOS_PROOF_RUN_SLOTS_DIR=str(slots), RICHOS_WAITS_DIR=str(self.root / "waits"),
+                   RICHOS_PROOF_RUN_DIR=str(self.root / "proof-runs"),
+                   RICHOS_RUNTIME_DIR=str(self.root / "no-runtime"), RICHOS_WAITER="slot-wait-fixture")
+        env.pop("RICHOS_PROOF_RUN_SLOT_HELD", None)  # this suite may itself run inside a proof run
+        # The source tree's proof-run.py starts the real one with an idle CPU sample, as
+        # proof-run.test.py does, so the check's own CPU admission never stands in for the slot.
+        here = Path(__file__).resolve().parent
+        engine_lib = here.parents[1] / "engine/scripts/lib"
+        idle = {"cpu_user_percent": 5.0, "cpu_system_percent": 2.0, "cpu_idle_percent": 93.0,
+                "swapout_mb_per_s": 0.0, "memory_pressure": "normal", "memory_free_percent": 80,
+                "swap_used_mb": 0.0}
+        state = self.root / "state"
+        shim = state / "source" / m.SCRIPTS / "proof-run.py"
+        shim.parent.mkdir(parents=True)
+        shim.write_text("import runpy, sys\n"
+                        f"sys.path.insert(0, {str(here / 'testvm')!r})\n"
+                        f"import reserve\nreserve.host_sample = lambda: {idle!r}\n"
+                        f"sys.path.insert(0, {str(engine_lib)!r})\n"
+                        "import engine_pass\nengine_pass.is_main_checkout = lambda *a: False\n"
+                        f"sys.argv = [{str(here / 'proof-run.py')!r}] + sys.argv[1:]\n"
+                        "runpy.run_path(sys.argv[0], run_name='__main__')\n")
+        held = os.open(slots / "slot-000", os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        waited = []
+
+        def release_once_waited_past_the_deadline():
+            try:
+                guard = time.monotonic() + 120            # a hang guard only
+                while not list(slots.glob("wait-*.json")) and time.monotonic() < guard:
+                    time.sleep(0.05)
+                waited.append(bool(list(slots.glob("wait-*.json"))))
+                time.sleep(budget + 2)                     # in line for longer than the deadline
+            finally:
+                os.close(held)
+
+        releaser = threading.Thread(target=release_once_waited_past_the_deadline)
+        with (self.root / "run.log").open("w") as log:
+            r = m.Runner(self.root, state, env, log)
+            command = r.command
+
+            def one_second_check(*args, **kwargs):
+                # The batch's selection becomes one check of one second; nothing else changes.
+                Path(args[list(args).index("--commands") + 1]).write_text("cd richos/app && sleep 1\n")
+                return command(*args, **kwargs)
+
+            releaser.start()
+            try:
+                with patch.dict(m.GATE_BUDGETS, {m.WORKSPACE_MUTANTS_GATE: budget}), \
+                        patch.object(r, "command", side_effect=one_second_check), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    with r.phase(m.WORKSPACE_MUTANTS_GATE):
+                        r.mutation_units(["fixture.test.sh"], {}, "fixture")
+            finally:
+                releaser.join()
+        self.assertEqual(waited, [True], "proof-run waited in line for the held slot")
+        text = (self.root / "run.log").read_text()
+        self.assertRegex(text, r"proof-run slot 0 on this Mac \(1 run\(s\) at once\), waited \d+ s for it")
+        admission, execution = r.clocks[m.WORKSPACE_MUTANTS_GATE]
+        self.assertGreaterEqual(admission, budget + 2, "the slot wait is reported as admission")
+        self.assertLess(execution, budget, "the slot wait is not reported as execution")
+
     def test_every_gate_has_a_named_deadline(self):
         for (phase, budget), at_once in [(item, n) for item in m.GATE_BUDGETS.items()
                                          for n in (1, "all")]:
