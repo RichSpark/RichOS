@@ -20,6 +20,8 @@ NIGHTLY="$HOME/.richos-nightly/source"
 if [ -d "$NIGHTLY" ] && [ "$(cd "$NIGHTLY" && pwd -P)" = "$CHECKOUT" ]; then
   echo "nightly release checkout manages its own build output" >&2; exit 2
 fi
+. "$HERE/../../engine/scripts/lib/machine-settings.sh"
+richos_machine_settings
 CACHE_ROOT="${RICHOS_BUILD_CACHE:-$(python3 "$HERE/../../engine/scripts/lib/machine_settings.py" cache cargo-target --key CARGO_TARGET_DIR)}"
 RC=0
 for REL in richos/app richos/app/src-tauri; do

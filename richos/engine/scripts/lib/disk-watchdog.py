@@ -355,8 +355,22 @@ def collect_devices_for_scheduled_check():
 
 def storage_candidates():
     """Effective working directories and their volumes, not the entire bulk disk."""
-    effective = list(dict.fromkeys([M.agent_root(), M.cache(), M.state(),
-                      *[M.validate(path) for path in (v for k, v in M.load().items() if k != "RICHOS_BULK_ROOT")]]))
+    settings = M.environment()  # Malformed settings still fail before monitoring.
+    effective = []
+    # An unplugged working drive must not stop monitoring the primary disk.
+    for resolver in (M.agent_root, M.cache, M.state):
+        try:
+            effective.append(resolver(environment=settings))
+        except ValueError:
+            continue
+    for key, path in M.load(settings).items():
+        if key == "RICHOS_BULK_ROOT":
+            continue
+        try:
+            effective.append(M.validate(path))
+        except ValueError:
+            continue
+    effective = list(dict.fromkeys(effective))
     extras = sorted({str(Path(*path.parts[:3])) for path in effective
                      if path.parts[:2] == ('/', 'Volumes') and len(path.parts) >= 3})
     candidates = [str(path) for path in effective] + [os.environ.get("TMPDIR") or "/tmp",

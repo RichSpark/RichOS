@@ -181,6 +181,33 @@ class BuildCaches(unittest.TestCase):
             self.assertFalse(os.path.exists(f), f)
         self.assertTrue(os.path.isdir(self.cargo))
 
+    def test_selected_cargo_root_is_inside_the_real_sweep_boundary(self):
+        for cargo in (self.cargo, os.path.join(self.tmp, "separate-cargo")):
+            with self.subTest(cargo=cargo):
+                orphan = os.path.join(cargo, "workspaces", "a" * 24)
+                self.make([orphan], 2 * DAY)
+                r = object.__new__(reaper.Reaper)
+                r.cfg = {"claude_roots": [], "nightly_dir": self.tmp + "/nightly",
+                         "shared_tmp_roots": [], "kept_dir": "",
+                         "build_cache_root": self.cache, "cargo_target_roots": [cargo],
+                         "checkout_parents": [self.parents], "age_floor_minutes": 60,
+                         "build_cache_orphan_hours": 6, "build_cache_idle_hours": 72}
+                r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
+                r.skip_build_caches = False
+                for name in ("scan_claude_roots", "scan_scratch_root", "scan_tmp",
+                             "scan_shared_tmp", "scan_nightly", "scan_kept",
+                             "scan_campaign_roots", "scan_docker_containers",
+                             "scan_deferred_unknown"):
+                    setattr(r, name, lambda *_: None)
+                walls = []
+                r.scan_standing_failures = walls.append
+                with patch.dict(os.environ, {"TMPDIR": self.tmp + "/process-tmp"}), \
+                        patch.object(reaper, "registered_workspaces", return_value=[]), \
+                        patch.object(reaper, "never_touch", return_value=[]):
+                    entries = {e.path: e for e in r.scan()}
+                self.assertEqual(entries[orphan].action, reaper.DELETE, entries[orphan].why)
+                self.assertIn("wall 1:", walls[0].check(self.tmp + "/unselected/artifact", False))
+
     def test_B2_an_orphan_used_recently_is_kept(self):
         dead = self.folders_for(os.path.join(self.parents, "copy-outside-git"))
         self.make(dead, 2 * DAY)

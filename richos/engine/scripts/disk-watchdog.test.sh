@@ -1299,6 +1299,38 @@ else
     bad "W22d actual default candidates enter foreign app data or could not be read"
 fi
 
+# A missing optional storage volume must not suppress the primary disk reading.
+if python3 - "$SCRIPT_DIR/lib" "$SANDBOX" <<'PYABSENT'
+import contextlib, importlib.util, io, json, os, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+import machine_settings as M
+spec = importlib.util.spec_from_file_location('watchdog', Path(sys.argv[1]) / 'disk-watchdog.py')
+watch = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(watch)
+env = {'HOME': sys.argv[2], 'TMPDIR': sys.argv[2], 'MODE': 'json',
+       'DISK_PRIMARY_VOLUME': sys.argv[2], M.RESOLVED: '1',
+       'RICHOS_BULK_ROOT': '/Volumes/WatchdogAbsentDrive/storage',
+       'RICHOS_BUILD_CACHE': '/Volumes/WatchdogAbsentDrive/cache'}
+with patch.dict(os.environ, env, clear=True), patch.object(Path, 'is_mount', return_value=False), \
+        patch.object(watch, 'read_volume', return_value=(500 * watch.GB, 300 * watch.GB)) as read:
+    candidates, extras = watch.storage_candidates()
+    assert not extras and not any('/Volumes/WatchdogAbsentDrive' in p for p in candidates)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        result = watch.main()
+    assert result == 0, result
+    report = json.loads(out.getvalue())
+    assert [v['mount'] for v in report['volumes']] == [sys.argv[2]], report
+    read.assert_any_call(sys.argv[2])
+PYABSENT
+then
+    ok "W22e primary disk monitoring survives an unplugged working drive"
+else
+    bad "W22e missing working storage stopped primary disk monitoring"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

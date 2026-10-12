@@ -2506,7 +2506,8 @@ class Reaper(object):
         shared = [r for r in self.cfg["shared_tmp_roots"] if os.path.isdir(r)]
         kept = [self.cfg["kept_dir"]] if self.cfg.get("kept_dir") else []
         caches = [self.cfg["build_cache_root"]] if self.cfg.get("build_cache_root") else []
-        walls = Walls(roots + [tmp] + nightly + shared + kept + caches)
+        cargo = [r for r in self.cfg.get("cargo_target_roots", []) if os.path.isdir(r)]
+        walls = Walls(roots + [tmp] + nightly + shared + kept + caches + cargo)
         # FIRST, so the other arms can skip what it has already claimed. A path
         # decided twice would be counted twice in the verdict, and a standing
         # failure is precisely a path another arm would otherwise report as KEEP.
