@@ -5085,6 +5085,7 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
     fin, _pz, why = finished_state(rec)
     if not fin:
         raise SpecError("%s is not finished (%s); only finished work is landed" % (rec["name"], why))
+    sweep_scopes = land_sweep_scopes(ref, me)
     if rec.get("disposition") and rec["disposition"].get("kind") != "continued":
         kind = rec["disposition"]["kind"]
         if kind == "landed":
@@ -5103,6 +5104,7 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
             # the first land refuses the same change below.
             if (fresh.get("disposition") or {}).get("kind") != "landed":
                 raise SpecError("landing eligibility changed during cleanup; the work was preserved")
+            sweep_scratch_after_land(sweep_scopes)
             return {"landed": True, "already": kind, "cleanup_pending": not clean}
         return {"landed": True, "already": kind}
     chain = _chain(rec)
@@ -5158,6 +5160,7 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
     if not clean:
         if not (load_agent(rec["key"]) or {}).get("disposition"):
             raise SpecError("landing eligibility changed during cleanup; the work was preserved")
+    sweep_scratch_after_land(sweep_scopes)
     return {"landed": True, **({"cleanup_pending": True} if not clean else {}),
             **({"kept_ignored": kept} if kept else {})}
 
@@ -7639,9 +7642,6 @@ def main(argv):
             # cost the count. The transcript itself lives in the platform's
             # projects directory and no workspace deletion touches it.
             qa_lines = qa_throwaway_lines(a.agent, me)
-            # Read BEFORE the land, which deletes the workspaces the sweep
-            # attributes this agent's scratch by.
-            sweep_scopes = land_sweep_scopes(a.agent, me)
             if a.cmd == "merge":
                 merged, res = merge_and_land(a.agent, me, a.message)
                 for repo, b in merged:
@@ -7657,7 +7657,6 @@ def main(argv):
                 print("landed: %s — every workspace and branch deleted" % a.agent)
             for _l in qa_lines:
                 print(_l)
-            sweep_scratch_after_land(sweep_scopes)
         elif a.cmd == "discard":
             r = discard(a.agent, a.reason, a.ceo_word, a.not_ceo_ordered, me)
             print("discarded: %s — tips recorded: %s" % (a.agent, json.dumps(r["tips"])))

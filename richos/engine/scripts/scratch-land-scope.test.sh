@@ -187,6 +187,7 @@ if ! grep -q '^L1 PASS' "$SANDBOX/plan.verdict"; then
 else
     python3 - "$WS_PY" "$SID" "$LANDED" "$RICHOS_WORKSPACES_DIR/agents" >"$SANDBOX/land.out" 2>"$SANDBOX/land.err" <<'PY'
 import contextlib, importlib.util, io, json, os, sys
+from unittest.mock import Mock, patch
 ws_py, sid, landed, agents = sys.argv[1:5]
 spec = importlib.util.spec_from_file_location("ws", ws_py)
 ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
@@ -194,11 +195,42 @@ print("HAS", hasattr(ws, "land_sweep_scopes"))
 scopes = ws.land_sweep_scopes(landed, sid)
 print("SCOPES", json.dumps(scopes))
 out, err = io.StringIO(), io.StringIO()
-with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-    ws.sweep_scratch_after_land(scopes)
+rec = ws._resolve_record(landed, sid)
+# Exercise the shared landing entry point called by the app, CLI and automatic
+# landing. Isolate Git deletion and process shutdown, not scratch cleanup.
+stubs = {
+    '_resolve': Mock(return_value=rec),
+    'finished_state': Mock(return_value=(True, False, 'finished')),
+    '_not_in_integration': Mock(return_value=[]),
+    'live_workspaces': Mock(return_value=[]),
+    'stop_processes': Mock(return_value={}),
+    '_within': Mock(return_value=(True, {})),
+    '_require_landed': Mock(), 'Lock': contextlib.nullcontext,
+    'load_agent': Mock(return_value=rec), 'save_agent': Mock(),
+    'event': Mock(), '_release_carried_waits': Mock(),
+    '_delete_chain': Mock(return_value=True),
+}
+rec.pop('disposition', None)
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), patch.multiple(ws, **stubs):
+    assert ws.land(landed, me=sid) == {'landed': True}
 print("PRINTED", out.getvalue().strip().replace("\n", " | "))
 print("STDERR", err.getvalue().strip().replace("\n", " | "))
 print("NOSCOPE", json.dumps(ws.land_sweep_scopes("nobody-opus-x9", sid)))
+# A successful retry uses the same cleanup; a refused land never sweeps.
+rec['disposition'] = {'kind': 'landed'}
+with patch.multiple(ws, **stubs), patch.object(ws, 'sweep_scratch_after_land') as sweep:
+    assert ws.land(landed, me=sid)['landed']
+    sweep.assert_called_once_with(scopes)
+rec.pop('disposition')
+with patch.multiple(ws, **stubs), patch.object(ws, '_not_in_integration', return_value=['unmerged']), patch.object(ws, '_not_landed_message', return_value='unmerged'), patch.object(ws, 'sweep_scratch_after_land') as sweep:
+    try:
+        ws.land(landed, me=sid)
+    except ws.SpecError:
+        pass
+    else:
+        raise AssertionError('unmerged work landed')
+    sweep.assert_not_called()
+
 PY
     GONE=1
     for p in "$PAD/$LANDED" "$AROOT/$LANDED" "$A_LANDED"; do [ -e "$p" ] && GONE=0; done

@@ -78,6 +78,16 @@ class Settings(unittest.TestCase):
    decisions.clear()
    with patch.dict(os.environ,{'TMPDIR':str(base/'scheduled')}):reaper.scan_scratch_root(Walls())
    self.assertFalse(decisions)
+ def test_process_apply_has_no_global_collection_or_state_write(self):
+  import contextlib, importlib.util, io
+  from types import SimpleNamespace
+  spec=importlib.util.spec_from_file_location('apply_reaper',pathlib.Path(sys.argv[1],'scratch-reaper.py'))
+  R=importlib.util.module_from_spec(spec);spec.loader.exec_module(R)
+  with patch.object(R,'Liveness',return_value=SimpleNamespace(notes=[],running={})):
+   reaper=R.Reaper({'age_floor_minutes':60},[])
+  with patch.object(R,'config_from_env',return_value={}), patch.object(R,'load_workspaces',return_value=[]), patch.object(R,'Reaper',return_value=reaper), patch.object(R,'Walls'), patch.object(reaper,'scan_scratch_root'), patch.object(reaper,'collect_test_instances',return_value=[]), patch.object(reaper,'collect_test_devices',return_value=[]) as devices, patch.object(reaper,'prune_docker',return_value=[]) as docker, patch.object(reaper,'_record_failures'), patch.object(R,'write_log'), patch.object(R,'write_state') as state, contextlib.redirect_stdout(io.StringIO()):
+   self.assertEqual(R.main(['--process-only','--apply','--json']),0)
+  devices.assert_not_called();docker.assert_not_called();state.assert_not_called()
  def test_shell_quotes_literal_values_and_forward_array(self):
   with tempfile.TemporaryDirectory() as root:
    base=pathlib.Path(root);source=base/'settings';marker=base/'executed'

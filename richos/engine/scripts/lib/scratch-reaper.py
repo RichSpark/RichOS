@@ -3829,6 +3829,7 @@ def main(argv=None):
         reaper.skip_unknown_arm = bool(args.notice)
         reaper.skip_build_caches = bool(args.notice)
         if args.process_only:
+            reaper.scope = {"kind": "process", "name": "process"}
             reaper.scan_scratch_root(Walls([os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]))
         elif args.agent is not None:
             reaper.scan_agent({"name": args.agent, "session": args.session,
