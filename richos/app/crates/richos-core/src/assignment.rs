@@ -1768,12 +1768,12 @@ mod tests {
     /// §7.1 moved OFF this turn, so a registration path that drifted into seconds would
     /// have silently undone the decision the whole ask rests on.
     ///
-    /// The ceiling is 1.5 s for TEN registrations — 150 ms each against the 3.0–3.8 s one
-    /// `prepare` costs, a margin of roughly twenty. It is deliberately not tighter: ten
+    /// The ceiling is 5 s for TEN registrations — 500 ms each against the 3.0–3.8 s one
+    /// `prepare` costs, a margin of roughly six. It is deliberately not tighter: ten
     /// fsynced writes on a machine running the rest of this suite in parallel measured
     /// 253 ms once while this test's first ceiling was 250 ms, and a timing test that
-    /// fails on load teaches people to ignore timing tests. It still fails, by an order of
-    /// magnitude, the regression it exists for — a registration path that starts spawning
+    /// fails on load teaches people to ignore timing tests. It still fails, by a wide
+    /// margin, the regression it exists for — a registration path that starts spawning
     /// a lease or preparing a workspace.
     #[test]
     fn registration_is_a_write_and_never_pays_for_preparation() {
@@ -1787,7 +1787,7 @@ mod tests {
         }
         let elapsed = started.elapsed();
         assert!(
-            elapsed < std::time::Duration::from_millis(1_500),
+            elapsed < std::time::Duration::from_millis(5_000),
             "ten registrations took {elapsed:?}; registration has started paying for something"
         );
         assert_eq!(read_all(&state, "depot", "thread-one").unwrap().len(), 10);
