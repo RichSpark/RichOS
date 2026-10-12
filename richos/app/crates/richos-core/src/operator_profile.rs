@@ -129,6 +129,7 @@ pub struct OperatorProfile {
     claude: PathBuf,
     /// The supervisor's operator log and descendant snapshot, when the host has given them.
     supervisor_files: Option<(PathBuf, PathBuf)>,
+    machine_settings: crate::machine_settings::Settings,
 }
 
 /// The per-user temporary folder, straight from the OS: `confstr(_CS_DARWIN_USER_TEMP_DIR)`,
@@ -233,8 +234,10 @@ impl OperatorProfile {
         else {
             return refuse("no claude is on the PATH stored for your team");
         };
+        let machine_settings = crate::machine_settings::Settings::load(&declaration.home, &declaration.environment)
+            .map_err(|what| Refusal { what })?;
         Ok(OperatorProfile { declaration, session, lead_claim: lead_claim.to_string(), python, claude,
-                             supervisor_files: None })
+                             supervisor_files: None, machine_settings })
     }
 
     /// Give the supervisor its operator log and its descendant snapshot file (r3 (q) item 2,
@@ -251,6 +254,7 @@ impl OperatorProfile {
     /// The whole environment the supervisor is started with. Exactly this set of names.
     pub fn environment(&self) -> BTreeMap<String, String> {
         let mut environment = self.declaration.environment.clone();
+        environment.extend(self.machine_settings.environment());
         environment.insert("HOME".into(), self.declaration.home.display().to_string());
         environment.insert("SSH_AUTH_SOCK".into(), self.session.ssh_auth_sock.clone());
         environment.insert("TMPDIR".into(), self.session.tmpdir.clone());
@@ -531,7 +535,7 @@ mod tests {
         let f = fixture();
         let env = profile(&f).environment();
         let names: Vec<&str> = env.keys().map(String::as_str).collect();
-        assert_eq!(names, ["CLAUDE_CODE_ARTIFACT", "GIT_EDITOR", "HOME", "LANG", "PATH", "RICHOS_OPERATOR_LEAD", "SSH_AUTH_SOCK",
+        assert_eq!(names, ["CLAUDE_CODE_ARTIFACT", "GIT_EDITOR", "HOME", "LANG", "PATH", "RICHOS_MACHINE_SETTINGS_RESOLVED", "RICHOS_OPERATOR_LEAD", "SSH_AUTH_SOCK",
                            "TMPDIR", "USER"]);
         assert_eq!(env["CLAUDE_CODE_ARTIFACT"], "1", "r4 §2.3, P17");
         assert_eq!(env["HOME"], f.declaration.home.display().to_string());
@@ -567,7 +571,7 @@ mod tests {
             .filter(|n| !["PWD", "OLDPWD", "SHLVL", "_"].contains(n) && !INTERPRETER_ADDED_NAMES.contains(n))
             .collect();
         names.sort();
-        assert_eq!(names, ["CLAUDE_CODE_ARTIFACT", "GIT_EDITOR", "HOME", "LANG", "PATH", "RICHOS_OPERATOR_LEAD",
+        assert_eq!(names, ["CLAUDE_CODE_ARTIFACT", "GIT_EDITOR", "HOME", "LANG", "PATH", "RICHOS_MACHINE_SETTINGS_RESOLVED", "RICHOS_OPERATOR_LEAD",
                            "RICHOS_SESSION_PID", "SSH_AUTH_SOCK", "TMPDIR", "USER"], "{text}");
         // The fixture's PATH offers only the xcrun shim; the profile must have gone around it.
         for shim_name in ["SDKROOT", "CPATH", "LIBRARY_PATH", "MANPATH"] {
@@ -582,7 +586,7 @@ mod tests {
         let state = f.root.join("operator/t/reap-state.json");
         let env = profile(&f).with_supervisor_files(&log, &state).environment();
         let names: Vec<&str> = env.keys().map(String::as_str).collect();
-        assert_eq!(names, ["CLAUDE_CODE_ARTIFACT", "GIT_EDITOR", "HOME", "LANG", "PATH", "RICHOS_OPERATOR_LEAD",
+        assert_eq!(names, ["CLAUDE_CODE_ARTIFACT", "GIT_EDITOR", "HOME", "LANG", "PATH", "RICHOS_MACHINE_SETTINGS_RESOLVED", "RICHOS_OPERATOR_LEAD",
                            REAP_LOG_ENV, REAP_STATE_ENV, "SSH_AUTH_SOCK", "TMPDIR", "USER"]);
         assert_eq!(env[REAP_LOG_ENV], log.display().to_string());
         assert_eq!(env[REAP_STATE_ENV], state.display().to_string());
@@ -819,4 +823,17 @@ mod tests {
         assert_eq!(b.governing, PathBuf::from("/Users/admin/testvm/probes-412d7918db8e/home/ab/femcboost"));
         assert_eq!((b.guard_count, b.guard_expected), (77, 77));
     }
+    #[test]
+    fn storage_comes_from_the_declared_home_and_preserves_env_clear() {
+        let f = fixture();
+        let source = crate::machine_settings::file(&f.declaration.home);
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "RICHOS_BULK_ROOT=/operator storage\n").unwrap();
+        let p = profile(&f);
+        assert_eq!(p.environment()["RICHOS_BULK_ROOT"], "/operator storage");
+        std::fs::write(&source, "UNKNOWN=/edited\n").unwrap();
+        assert_eq!(p.environment()["RICHOS_BULK_ROOT"], "/operator storage");
+        assert!(OperatorProfile::new(f.declaration.clone(), session(), "claim").is_err());
+    }
+
 }

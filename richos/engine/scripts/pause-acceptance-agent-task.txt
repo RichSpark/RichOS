@@ -1,6 +1,6 @@
 The task for the ONE test agent of the pause acceptance test (pause-acceptance.py).
 Give it everything below the line, with <scratch> replaced by
-/Volumes/E1TB/tmp/claude/<the agent's name>/pause-acceptance
+a pause-acceptance child inside the directory returned by scripts/lib/machine_settings.py scratch <the agent's name>
 ----------------------------------------------------------------------
 
 You are a test agent. Your work is small and harmless: a counter that writes only

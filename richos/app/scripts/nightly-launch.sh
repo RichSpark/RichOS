@@ -166,6 +166,13 @@ else
 fi
 [ -d "$REAL_HOME" ] || die "your home '$REAL_HOME' is not a directory."
 REAL_HOME="$(cd "$REAL_HOME" && pwd -P)"
+# Pick the operator file before the app replaces HOME. An absent default means
+# portable defaults; an explicit selector is always forwarded for reader refusal.
+REAL_SETTINGS="${RICHOS_ENV_FILE-$REAL_HOME/Library/Application Support/RichOS/.env}"
+SETTINGS_ENV=()
+if [ "${RICHOS_ENV_FILE+x}" = x ] || [ -e "$REAL_SETTINGS" ]; then
+  SETTINGS_ENV=("RICHOS_ENV_FILE=$REAL_SETTINGS")
+fi
 DAILY="$REAL_HOME/myrichos"
 
 # ---------------------------------------------------------------------------------------
@@ -495,6 +502,7 @@ BEFORE="$WORK/before"
 # TMPDIR, which is the folder's own so the app's temporary files stay inside it.
 LAUNCH_ENV=("PATH=/usr/bin:/bin:/usr/sbin:/sbin" "HOME=$REAL_HOME" "USER=$(id -un)" "LOGNAME=$(id -un)"
             "SHELL=${SHELL:-/bin/zsh}" "TMPDIR=$NHOME/tmp/")
+LAUNCH_ENV+=("${SETTINGS_ENV[@]+"${SETTINGS_ENV[@]}"}")
 [ -n "${SSH_AUTH_SOCK:-}" ] && LAUNCH_ENV+=("SSH_AUTH_SOCK=$SSH_AUTH_SOCK")
 [ -n "${__CF_USER_TEXT_ENCODING:-}" ] && LAUNCH_ENV+=("__CF_USER_TEXT_ENCODING=$__CF_USER_TEXT_ENCODING")
 

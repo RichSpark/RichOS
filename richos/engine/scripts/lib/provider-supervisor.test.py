@@ -292,6 +292,26 @@ class ReapDescendants(unittest.TestCase):
         self.assertLessEqual(largest, 2, "one snapshot's work grew with the number of commands ever run")
 
 
+    def test_R13_process_sweep_inherits_job_tmpdir_and_is_bounded(self):
+        import importlib.util
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location("provider_supervisor_cleanup", str(SUPERVISOR))
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory(prefix="nightly process cleanup ") as root:
+            job = Path(root) / "home.noindex/tmp"
+            job.mkdir(parents=True)
+            with patch.dict(os.environ, {"TMPDIR": str(job), "RICHOS_MACHINE_SETTINGS_RESOLVED": "1"}), \
+                    patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stderr=b"")) as run:
+                mod._sweep_process_scratch()
+                args, kwargs = run.call_args
+                self.assertIn("--process-only", args[0])
+                self.assertIn("--apply", args[0])
+                self.assertNotIn("env", kwargs)  # inherit the allocating job, never host defaults
+                self.assertEqual(os.environ["TMPDIR"], str(job))
+                self.assertGreater(kwargs["timeout"], 0)
+                self.assertFalse(kwargs.get("start_new_session", False))
+
+
 class _Named(unittest.TextTestResult):
     """Prints `  PASS  <id>` / `  FAIL  <id>` per test, where <id> is the method's
     second word (R1, R2, ...; S1 for the product case), so a mutation harness can

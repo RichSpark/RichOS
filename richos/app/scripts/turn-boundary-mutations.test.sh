@@ -10,7 +10,7 @@
 # the mutants live in: each mutant still applies exactly once and names tests that exist. A
 # mutant whose site has moved proves nothing, and this is where that is noticed.
 #
-# run-tests: inputs richos/app/scripts/turn-boundary-mutations.test.sh richos/app/scripts/turn-boundary-mutations.py richos/app/crates/richos-core/src/spine.rs richos/app/crates/richos-core/tests/ended_turn_tests.rs richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/phone/bridge.rs richos/app/src-tauri/src/turn_boundary_tests.rs
+# run-tests: inputs richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/scripts/turn-boundary-mutations.test.sh richos/app/scripts/turn-boundary-mutations.py richos/app/crates/richos-core/src/spine.rs richos/app/crates/richos-core/tests/ended_turn_tests.rs richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/phone/bridge.rs richos/app/src-tauri/src/turn_boundary_tests.rs
 # run-tests: covers richos/app/scripts/turn-boundary-mutations.py
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

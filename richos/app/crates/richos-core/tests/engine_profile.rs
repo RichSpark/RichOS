@@ -20,9 +20,13 @@ impl Scratch {
 impl Drop for Scratch { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
 fn engine() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine") }
 
+fn prepare_fixture(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<EngineProfile, richos_core::runtime::RuntimeError> {
+    EngineProfile::prepare_with_settings(engine, data, runtime, richos_core::machine_settings::Settings::default())
+}
+
 #[test]
 fn app_profile_creates_neutral_coordination_and_one_hook_per_event() {
-    let f = Scratch::new(); let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     let hooks = manifest["hooks"].as_object().unwrap();
     assert_eq!(hooks.len(), 9);
@@ -46,7 +50,7 @@ fn app_profile_creates_neutral_coordination_and_one_hook_per_event() {
     assert!(profile.coordination.join(".git").is_dir());
     assert!(!profile.coordination.join("ceo-wiki").exists());
     assert!(!profile.coordination.starts_with(profile.engine));
-    let next = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let next = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_ne!(profile.plugin, next.plugin);
     assert_eq!(profile.coordination, next.coordination);
 }
@@ -54,7 +58,7 @@ fn app_profile_creates_neutral_coordination_and_one_hook_per_event() {
 #[test]
 fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() {
     let f = Scratch::new();
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     profile.install_quota_gate(Path::new("/Applications/RichOS Test.app/Contents/MacOS/richos")).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     let group = &manifest["hooks"]["PreToolUse"][0];
@@ -70,14 +74,14 @@ fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() 
 fn an_unrelated_or_redirected_directory_is_never_adopted() {
     let f = Scratch::new(); std::fs::create_dir(f.0.join("coordination")).unwrap();
     std::fs::write(f.0.join("coordination/keep.txt"), "fictional user file").unwrap();
-    assert!(EngineProfile::prepare(&engine(), &f.0, f.runtime()).is_err());
+    assert!(prepare_fixture(&engine(), &f.0, f.runtime()).is_err());
     assert_eq!(std::fs::read_to_string(f.0.join("coordination/keep.txt")).unwrap(), "fictional user file");
     assert!(!f.0.join("coordination/.git").exists());
 }
 
 #[test]
 fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child() {
-    let f = Scratch::new(); let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut command = std::process::Command::new("/fictional/provider");
     command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
         .env("RICHOS_APP_READ_ROOTS", "[\"/fictional/other-company\"]");
@@ -107,7 +111,7 @@ fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child(
 fn the_provider_is_told_which_claude_account_it_spends() {
     use richos_core::claude_accounts::Account;
     let f = Scratch::new();
-    let mut profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let mut profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let environment = |profile: &EngineProfile| {
         let mut command = std::process::Command::new("/fictional/provider");
         command.env("RICHOS_CLAUDE_ACCOUNT", "9");
@@ -133,7 +137,7 @@ fn the_provider_is_told_which_claude_account_it_spends() {
 #[test]
 fn the_provider_is_told_where_the_speech_model_is() {
     let f = Scratch::new();
-    let mut profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let mut profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let environment = |profile: &EngineProfile| {
         let mut command = std::process::Command::new("/fictional/provider");
         command.env("RICHOS_SPEECH_MODEL", "/fictional/inherited.bin");
@@ -170,8 +174,8 @@ fn interrupted_initialization_recovers_without_a_second_initial_commit() {
     let root = f.0.join("coordination"); std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("app-owned-coordination.json"), "{\"schema\":1,\"owner\":\"richos-app\"}\n").unwrap();
     assert!(std::process::Command::new("/usr/bin/git").args(["init", "-q", "-b", "main"]).current_dir(&root).status().unwrap().success());
-    EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
-    EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let count = std::process::Command::new("/usr/bin/git").args(["rev-list", "--count", "HEAD"]).current_dir(root).output().unwrap();
     assert_eq!(String::from_utf8(count.stdout).unwrap().trim(), "1");
 }
@@ -181,7 +185,7 @@ fn private_paths_and_generated_files_cannot_redirect_writes() {
     let f = Scratch::new();
     let elsewhere = f.0.join("elsewhere"); std::fs::create_dir(&elsewhere).unwrap();
     std::os::unix::fs::symlink(&elsewhere, f.0.join("engine-state")).unwrap();
-    assert!(EngineProfile::prepare(&engine(), &f.0, f.runtime()).is_err());
+    assert!(prepare_fixture(&engine(), &f.0, f.runtime()).is_err());
     assert_eq!(std::fs::read_dir(elsewhere).unwrap().count(), 0);
 }
 
@@ -193,8 +197,8 @@ fn workspace_partitions_are_stable_per_company_thread_and_distinct_across_thread
     spine.set_entity_registry(EntityRegistry::from_existing_ids(&[entity.clone()]));
     let first=spine.create_thread("First", &entity).unwrap();
     let second=spine.create_thread("Second", &entity).unwrap();
-    let mut a=EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
-    let mut b=EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let mut a=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let mut b=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_ne!(a.workspace_state(),b.workspace_state());
     a.scope_to(&spine.ledger().thread_binding(&first).unwrap()).unwrap();
     b.scope_to(&spine.ledger().thread_binding(&first).unwrap()).unwrap();
@@ -207,7 +211,7 @@ fn workspace_partitions_are_stable_per_company_thread_and_distinct_across_thread
 
 #[test]
 fn standing_instruction_combines_app_identity_with_delivered_execution_contract() {
-    let f=Scratch::new(); let profile=EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let app=f.0.join("app-doctrine.md");
     assert!(profile.standing_doctrine(&app, LeaseRole::Work).is_err());
     std::fs::write(&app,"Fictional app identity").unwrap();
@@ -233,7 +237,7 @@ fn standing_instruction_combines_app_identity_with_delivered_execution_contract(
 /// end given the front desk's would satisfy nothing at all while the app stopped working.
 #[test]
 fn the_front_desk_is_told_its_own_job_and_never_the_back_ends_execution_contract() {
-    let f=Scratch::new(); let profile=EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let app=f.0.join("app-doctrine.md");
     std::fs::write(&app,"Fictional app identity").unwrap();
 
@@ -272,7 +276,7 @@ fn the_front_desk_is_told_its_own_job_and_never_the_back_ends_execution_contract
 /// "How you talk to him" section, though it never talks to him.
 #[test]
 fn the_back_end_is_told_it_is_stu_and_the_front_desk_that_it_is_rich() {
-    let f=Scratch::new(); let profile=EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let app=richos_core::doctrine::ensure_rendered(&f.0.join("config"),
         &richos_core::doctrine::DoctrineIdentity::new(Some("Nadia Kessler"))).unwrap();
 
@@ -301,7 +305,7 @@ fn the_back_end_is_told_it_is_stu_and_the_front_desk_that_it_is_rich() {
 
 #[test]
 fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_override_it() {
-    let f=Scratch::new(); let profile=EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut configured=std::process::Command::new("/fictional/provider");
     profile.configure(&mut configured,"fixture-session",&f.0.join("scope.json"));
     for (extra, expected) in [(vec![],"RichOS"), (vec!["-c","user.name=Fixture"],"Fixture")] {
@@ -327,7 +331,7 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     registry.save(&f.0.join("entities.json")).unwrap();
     let mut spine=Spine::new(Ledger::open(&f.0.join("ledger.jsonl")).unwrap());spine.set_entity_registry(registry);
     let thread=spine.create_thread("Alpha",&alpha).unwrap();
-    let mut profile=EngineProfile::prepare(&engine(),&f.0,f.runtime()).unwrap();
+    let mut profile=prepare_fixture(&engine(),&f.0,f.runtime()).unwrap();
     profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
     let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,"session",&f.0.join("scope"));
     let args:Vec<_>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
@@ -378,7 +382,7 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
 #[test]
 fn the_app_preflight_is_the_declared_user_work_list_and_nothing_else() {
     let f = Scratch::new();
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(profile.plugin.join("spawn-preflight.json")).unwrap()).unwrap();
     let groups = manifest["hooks"]["PreToolUse"].as_array().unwrap();
@@ -413,7 +417,7 @@ fn the_app_preflight_is_the_declared_user_work_list_and_nothing_else() {
 #[test]
 fn the_provider_child_is_pinned_to_that_preflight_and_to_nothing_else() {
     let f = Scratch::new();
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut command = std::process::Command::new("/fictional/provider");
     // A machine whose own sessions register the engine's nine guards: the variable must be
     // REPLACED, never inherited, or the app is judged by whatever that machine installed.
@@ -491,7 +495,7 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
         names
     };
 
-    let first = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let first = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let expected = ["clark", "dean", "frank", "mark", "pierce", "reed"];
     assert_eq!(registered(&first), expected);
     assert_eq!(on_roster(), expected);
@@ -524,7 +528,7 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
     std::fs::write(roster.join("retired.md"), "---\nname: retired\n---\n").unwrap();
     // The generic worker an install registered before slice 2 leaves the roster the same way.
     std::fs::write(roster.join("worker.md"), "---\nname: worker\n---\n").unwrap();
-    let next = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let next = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let stock = ["clark", "dean", "frank", "pierce", "reed"];
     assert_eq!(registered(&next), stock);
     assert_eq!(on_roster(), stock);
@@ -532,7 +536,7 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
 
     // A fresh install has no team folder at all and gets the stock five.
     let fresh = Scratch::new();
-    let profile = EngineProfile::prepare(&engine(), &fresh.0, fresh.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &fresh.0, fresh.runtime()).unwrap();
     assert_eq!(registered(&profile), stock);
 }
 
@@ -558,7 +562,7 @@ fn a_teammate_saved_before_the_media_skills_gets_the_skill_tool_and_the_instruct
     let open = "---\nname: scout\nmodel: sonnet\n---\nFictional teammate with every tool.\n";
     std::fs::write(team.join("scout.md"), open).unwrap();
 
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let roster = profile.coordination.join(".claude/agents");
     for registered in [profile.plugin.join("agents/ray.md"), roster.join("ray.md")] {
         assert_eq!(std::fs::read_to_string(&registered).unwrap(), shelf,
@@ -572,7 +576,7 @@ fn a_teammate_saved_before_the_media_skills_gets_the_skill_tool_and_the_instruct
 
     // Already current: registered exactly as written, so the digest does not move for nothing.
     std::fs::write(team.join("ray.md"), &shelf).unwrap();
-    let again = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let again = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(std::fs::read_to_string(again.plugin.join("agents/ray.md")).unwrap(), shelf);
 }
 
@@ -639,25 +643,40 @@ fn each_role_starts_on_opus_at_high_effort_unless_its_setting_says_fable() {
     let f = Scratch::new();
 
     // No setting written: both on Opus at high effort.
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), opus, "Rich's default");
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), opus, "Stu's default");
 
     // Rich switched to Fable; Stu stays on Opus. Read at the next spawn's `prepare`.
     ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Fable).unwrap();
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), fable, "Rich set to Fable");
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), opus, "Stu was not switched");
 
     // Both on Fable.
     ConfigStore::open(f.0.join("config.json")).unwrap().set_stu_model(ModelChoice::Fable).unwrap();
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), fable);
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), fable, "Stu set to Fable");
 
     // And back: Rich returned to Opus, Stu keeps Fable.
     ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Opus).unwrap();
-    let profile = EngineProfile::prepare(&engine(), &f.0, f.runtime()).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), opus, "Rich switched back");
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), fable);
+}
+
+#[test]
+fn machine_settings_survive_filtering_and_hold_a_job_snapshot() {
+    let f = Scratch::new();
+    let settings = richos_core::machine_settings::parse("RICHOS_BULK_ROOT=/external data\nCARGO_TARGET_DIR=/component cache").unwrap();
+    let profile = EngineProfile::prepare_with_settings(&engine(), &f.0, f.runtime(), settings).unwrap();
+    let mut command = std::process::Command::new("claude");
+    command.env("RICHOS_UNSUPPORTED", "private").env("RICHOS_BULK_ROOT", "/old");
+    profile.configure(&mut command, "session", &f.0);
+    let values: BTreeMap<_,_> = command.get_envs().map(|(key,value)|(key.to_string_lossy().to_string(),value.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert_eq!(values["RICHOS_BULK_ROOT"].as_deref(), Some("/external data"));
+    assert_eq!(values["CARGO_TARGET_DIR"].as_deref(), Some("/component cache"));
+    assert_eq!(values["RICHOS_MACHINE_SETTINGS_RESOLVED"].as_deref(), Some("1"));
+    assert_eq!(values["RICHOS_UNSUPPORTED"], None);
 }

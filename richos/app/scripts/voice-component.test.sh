@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Source and consumer integration for engine/voice, including Rust's compiled metadata.
-# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/app/crates/richos-voice richos/app/crates/richos-core richos/app/crates/richos-command richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh
+# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/crates/richos-voice richos/app/crates/richos-core richos/app/crates/richos-command richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh
 # run-tests: covers richos/app/crates/richos-voice/build.rs
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +25,10 @@ cp -R "$VOICE/models" "$PRODUCT/engine/voice/"
 DICT="engine/scripts/lib/dialect/dialect-en-US.generated.dict"
 mkdir -p "$PRODUCT/$(dirname "$DICT")"
 cp "$HERE/../../$DICT" "$PRODUCT/$DICT"
+for SETTINGS_INPUT in engine/.env.example engine/scripts/lib/machine_settings.fixtures.json; do
+  mkdir -p "$PRODUCT/$(dirname "$SETTINGS_INPUT")"
+  cp "$HERE/../../$SETTINGS_INPUT" "$PRODUCT/$SETTINGS_INPUT"
+done
 CARGO_BIN="$HERE/bin/cargo"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$APP/target}"
 "$CARGO_BIN" run --quiet --locked --manifest-path "$APP/Cargo.toml" -p richos-voice --example model_metadata > "$SCRATCH/original.json"

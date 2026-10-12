@@ -25,8 +25,7 @@
     "~/ab": 2
   },
   "richos/app/crates/richos-core/src/output.rs": {
-    "/Users/alex": 5,
-    "/Volumes/E1TB": 2
+    "/Users/alex": 5
   },
   "richos/app/crates/richos-core/tests/bug_report_tests.rs": {
     "/Users/alex": 38,
@@ -365,12 +364,6 @@
     "/Volumes/Data": 1,
     "/Volumes/E1TB": 13
   },
-  "richos/engine/recovery-profiles/axel.md": {
-    "/Volumes/E1TB": 1
-  },
-  "richos/engine/recovery-profiles/wes.md": {
-    "/Volumes/E1TB": 1
-  },
   "richos/engine/scripts/disk-watchdog-install.test.sh": {
     "/Volumes/E1TB": 1
   },
@@ -502,9 +495,6 @@
   "richos/engine/scripts/lib/scratch-reaper.py": {
     "/Volumes/E1TB": 1
   },
-  "richos/engine/scripts/lib/shared_scratchpad.py": {
-    "/Volumes/E1TB": 2
-  },
   "richos/engine/scripts/lib/testdevices.py": {
     "/Volumes/E1TB": 2
   },
@@ -521,20 +511,11 @@
     "$HOME/ab": 2,
     "/Volumes/E1TB": 1
   },
-  "richos/engine/scripts/pause-acceptance-agent-task.txt": {
-    "/Volumes/E1TB": 1
-  },
   "richos/engine/scripts/qa-throwaways.test.sh": {
     "/Users/admin": 3
   },
   "richos/engine/scripts/spawn.test.sh": {
     "/Users/alex": 1
-  },
-  "richos/engine/skills/audio-transcription/SKILL.md": {
-    "/Volumes/E1TB": 1
-  },
-  "richos/engine/skills/watch-video/SKILL.md": {
-    "/Volumes/E1TB": 1
   },
   "richos/mobile/DEVELOPMENT.md": {
     "/Volumes/E1TB": 3

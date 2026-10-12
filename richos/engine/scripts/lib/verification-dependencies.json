@@ -2855,10 +2855,9 @@
     },
     "scripts/lib/scratch-reaper.py": {
       "source": "scripts/lib/scratch-reaper.py",
-      "sha256": "bfad2b52ebdce5528a0fafd33daa01c2456878571357302f5b33532de417a721",
+      "sha256": "a1e020979af488c9b593ef77881fa96f3fd3c4641e5008411362b2d7b11905f2",
       "evidence": "config_from_env uses finite literal need/number/opt/opt_number callers; process names, system flags and state paths are the other environment reads. The shell exports these values from its selected config. Reviewed local scan/apply closure imports only fixed workspace liveness, appinstances and testdevices/alert modules. Docker/ps/lsof are external executables, not engine readers. All imported settings readers honor the same SCRATCH_REAPER_CONFIG fixture path. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): --agent runs scan_agent instead of scan: it reads the ledger's new cwd field, the declared SCRATCH_AGENT_ROOTS and, by glob, the agent's own session scratchpad under SCRATCH_CLAUDE_ROOTS, and checks holders with the existing per-path lsof. In that mode apply() skips test devices and Docker and the state file is not written. No new execution edge. Renewed 2026-10-04 (what an automatic land kept): scan() adds scan_kept, which lists the declared SCRATCH_KEPT_DIR and deletes each child older than SCRATCH_KEPT_RETENTION_DAYS by its own mtime, through the same walls; it reads no other file. No new execution edge. Renewed 2026-10-08 (build caches on the external drive): scan() adds scan_build_caches, which reads the five declared SCRATCH_BUILD_CACHE_*/SCRATCH_CARGO_TARGET_ROOTS keys through config_from_env and plans through the fixed-path module lib/build_caches.py; apply() deletes cargo-units rows through that module under Cargo's lock. No other new reader.",
       "keys": [
-        "SCRATCH_AGENT_ROOTS",
         "SCRATCH_AGE_FLOOR_MINUTES",
         "SCRATCH_APP_REGISTRY_RELPATH",
         "SCRATCH_BUILD_CACHE_CHECKOUT_PARENTS",
@@ -2914,6 +2913,9 @@
         },
         {
           "to": "scripts/lib/build_caches.py"
+        },
+        {
+          "to": "scripts/lib/machine_settings.py"
         }
       ]
     },
@@ -4900,10 +4902,14 @@
     },
     "scripts/lib/scratch-reaper.py#required-setting-names": {
       "source": "scripts/lib/scratch-reaper.py",
-      "sha256": "bfad2b52ebdce5528a0fafd33daa01c2456878571357302f5b33532de417a721",
+      "sha256": "a1e020979af488c9b593ef77881fa96f3fd3c4641e5008411362b2d7b11905f2",
       "evidence": "SCR2 scans source text for literal need/number calls and the session process key. It never imports or executes this Python module; changes to this source invalidate the declaration of required names.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "scripts/lib/machine_settings.py"
+        }
+      ]
     },
     "scripts/hooks/contract-integrity.test.sh#CL": {
       "source": "scripts/hooks/contract-integrity.test.sh",
@@ -12563,14 +12569,14 @@
     },
     "scripts/provider-supervisor.py#fixture-providers": {
       "source": "scripts/provider-supervisor.py",
-      "sha256": "8bfa72ada9dd8047f8cd3334d7318f871da83be688c16d811a679708257473ce",
+      "sha256": "633f1fb02ae47e408f208f5d91230f94a5fb86484f80d465049dfdb2bd3ad640",
       "evidence": "Called by provider-supervisor.test.py with generated Python provider/launcher scripts and fixed sleep commands. Supervisor imports stdlib and native libproc only, observes process tables and executes only caller fixture argv. No engine helper or orchestration config.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/provider-supervisor.test.py": {
       "source": "scripts/lib/provider-supervisor.test.py",
-      "sha256": "a6b9f4e3d52161cbe03777579472f26d568577101384d1fd00880472e14a5971",
+      "sha256": "cbf975eaa998dad51e0e11a212a4a80a272f69bd39ea50d5560fa4885aa8321b",
       "evidence": "Loads/calls supervisor with private generated provider/desktop scripts and native sleep/ps. Tests process identity, signals and private JSON logs, no config or live provider command.",
       "keys": [],
       "edges": [
@@ -12581,7 +12587,7 @@
     },
     "scripts/lib/provider-supervisor.test.sh": {
       "source": "scripts/lib/provider-supervisor.test.sh",
-      "sha256": "f06e1572d0bef12a65b1f758d74e04679bdf7d31bc3fab434a4c5a36d496a14a",
+      "sha256": "69f826c3fb4a7ef05601e3c9e4420620d4245e5ca51ae9b85ae4770d24495819",
       "evidence": "Fixed Python owning suite followed by its shared-harness mutation driver.",
       "keys": [],
       "edges": [
@@ -15859,7 +15865,7 @@
     },
     "scripts/lib/shared_scratchpad.py": {
       "source": "scripts/lib/shared_scratchpad.py",
-      "sha256": "641b443534b55e8c6e7c94dc349b36c52bdc15acd9ab7ea5ed1102920d7fea4d",
+      "sha256": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
       "keys": [
         "SCRATCH_CLAUDE_ROOTS"
       ],
@@ -15924,7 +15930,7 @@
     },
     "scripts/scratch-land-scope.test.sh": {
       "source": "scripts/scratch-land-scope.test.sh",
-      "sha256": "5af641ebd295110524f09bc09ec290ef467d8df4696f9686a7bcbf5d82b3e73b",
+      "sha256": "efd820af9c12d2390edd239fccdeb3d2595eefa90975ccc21e427b6c7903dc9f",
       "keys": [],
       "edges": [
         {
@@ -16274,6 +16280,13 @@
       "source": "scripts/lib/machine_paths.py",
       "sha256": "ca70746611f565e657237d1986afe0cecb2c2528180c7c0df3f76a7ae6b0f510",
       "evidence": "Reviewed bounded literal matching, whole archive-tree exclusions and local reasons; pure tracked text only, no environment or process execution.",
+      "keys": [],
+      "edges": []
+    },
+    "scripts/lib/machine_settings.py": {
+      "source": "scripts/lib/machine_settings.py",
+      "sha256": "1d08edc8037feb17d1436ab77913eea4bb131b9c36b01d1ab21b51e283a3f36f",
+      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority.",
       "keys": [],
       "edges": []
     }
@@ -16636,7 +16649,7 @@
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
         "scripts/hooks/session-start-scratch.sh": "f78039d4b89732e00fdfec13abd6622f4c9c8f4badb9bca26c4b0a758068d485",
         "scripts/scratch-reaper.sh": "1cdefb018a15be05c60b6dd257678573d2135230ceb58cfaef0fcd9c835975b1",
-        "scripts/lib/scratch-reaper.py": "bfad2b52ebdce5528a0fafd33daa01c2456878571357302f5b33532de417a721",
+        "scripts/lib/scratch-reaper.py": "a1e020979af488c9b593ef77881fa96f3fd3c4641e5008411362b2d7b11905f2",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
@@ -16712,7 +16725,7 @@
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
         "scripts/hooks/session-start-scratch.sh": "f78039d4b89732e00fdfec13abd6622f4c9c8f4badb9bca26c4b0a758068d485",
         "scripts/scratch-reaper.sh": "1cdefb018a15be05c60b6dd257678573d2135230ceb58cfaef0fcd9c835975b1",
-        "scripts/lib/scratch-reaper.py": "bfad2b52ebdce5528a0fafd33daa01c2456878571357302f5b33532de417a721",
+        "scripts/lib/scratch-reaper.py": "a1e020979af488c9b593ef77881fa96f3fd3c4641e5008411362b2d7b11905f2",
         "scripts/hooks/operator-claim.sh": "e157c7c28b11bb7a1d9965e5207bf9b52d521ff04f38a207d0ff8211136bb03f",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
@@ -16834,7 +16847,7 @@
         "scripts/lib/row-currency.py": "484404c6143d1a5b94182321e6fa0f6250b298b27a7d3b59ba26d5ed648db677",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "scripts/lib/sandbox-completeness.sh": "2d141da4f87eb59130459ce74fa1c3067e43c4e7b39ad03cb43f17cfb7973131",
-        "scripts/lib/scratch-reaper.py": "bfad2b52ebdce5528a0fafd33daa01c2456878571357302f5b33532de417a721",
+        "scripts/lib/scratch-reaper.py": "a1e020979af488c9b593ef77881fa96f3fd3c4641e5008411362b2d7b11905f2",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
@@ -16980,7 +16993,7 @@
         "scripts/hooks/guard-shared-scratchpad.sh": "6306fff7f371d1555edc6fcf70248131ae296a29eda84405797cbe17c5183c88",
         "scripts/hooks/guard-unguarded-rm.sh": "0398206a9a1a3743193799819373aadb07142c52d5224581d9c6137baccdba79",
         "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838",
-        "scripts/lib/shared_scratchpad.py": "641b443534b55e8c6e7c94dc349b36c52bdc15acd9ab7ea5ed1102920d7fea4d",
+        "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "ass-kicker/tests/record-claims.replay.py": "094a016f81b059134abe4293ceef446032f0ddafe433042a49f53ac4d6f5b0cd",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e"
       }
@@ -17210,7 +17223,7 @@
         "scripts/hooks/guard-shared-scratchpad.sh": "6306fff7f371d1555edc6fcf70248131ae296a29eda84405797cbe17c5183c88",
         "scripts/hooks/guard-unguarded-rm.sh": "0398206a9a1a3743193799819373aadb07142c52d5224581d9c6137baccdba79",
         "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838",
-        "scripts/lib/shared_scratchpad.py": "641b443534b55e8c6e7c94dc349b36c52bdc15acd9ab7ea5ed1102920d7fea4d",
+        "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e"
       }
     },
@@ -17444,7 +17457,7 @@
         "scripts/hooks/guard-shared-scratchpad.sh": "6306fff7f371d1555edc6fcf70248131ae296a29eda84405797cbe17c5183c88",
         "scripts/hooks/guard-unguarded-rm.sh": "0398206a9a1a3743193799819373aadb07142c52d5224581d9c6137baccdba79",
         "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838",
-        "scripts/lib/shared_scratchpad.py": "641b443534b55e8c6e7c94dc349b36c52bdc15acd9ab7ea5ed1102920d7fea4d"
+        "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3"
       },
       "evidence": "R1 checks event/matcher registrations of these five hooks. Dispatcher manifest is independently bound; no other hook registration runs."
     },
@@ -17657,7 +17670,7 @@
         "scripts/hooks/guard-shared-scratchpad.sh": "6306fff7f371d1555edc6fcf70248131ae296a29eda84405797cbe17c5183c88",
         "scripts/hooks/guard-unguarded-rm.sh": "0398206a9a1a3743193799819373aadb07142c52d5224581d9c6137baccdba79",
         "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838",
-        "scripts/lib/shared_scratchpad.py": "641b443534b55e8c6e7c94dc349b36c52bdc15acd9ab7ea5ed1102920d7fea4d",
+        "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "scripts/hooks/guard-no-shell-c.sh": "dbd0dfb97e292c47b04cfce97b09e3fb18c642b7fd88de21850a4d255069094e"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
@@ -17790,7 +17803,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
-        "scripts/lib/scratch-reaper.py": "bfad2b52ebdce5528a0fafd33daa01c2456878571357302f5b33532de417a721",
+        "scripts/lib/scratch-reaper.py": "a1e020979af488c9b593ef77881fa96f3fd3c4641e5008411362b2d7b11905f2",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
@@ -17829,7 +17842,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
-        "scripts/lib/scratch-reaper.py": "bfad2b52ebdce5528a0fafd33daa01c2456878571357302f5b33532de417a721",
+        "scripts/lib/scratch-reaper.py": "a1e020979af488c9b593ef77881fa96f3fd3c4641e5008411362b2d7b11905f2",
         "scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",

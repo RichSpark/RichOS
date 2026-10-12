@@ -24,7 +24,7 @@ directory, nor any directory above it. Not "anything it did not create": in a
 folder every teammate writes into, nothing on disk proves which teammate wrote a
 file, so no delete there can be shown to be the deleter's own. Nothing is lost by
 refusing: the scratch reaper removes the whole session directory once the session
-has ended. A teammate's own scratch is /Volumes/E1TB/tmp/claude/<its-name>/, and
+has ended. A teammate's own scratch is the directory returned by machine_settings.py scratch <its-name>, and
 deleting there is not this rule's business. The lead's own calls are not refused.
 
 WHAT IT SEES: rm, rmdir, unlink, trash, srm, and find with -delete or an
@@ -218,8 +218,8 @@ REFUSAL = """REFUSED (guard-shared-scratchpad): %s
   (2026-10-01: two teammates' cleanups took the lead's briefs and a live teammate's
   backup copy of a file it was mutating). Do not delete there at all: the scratch
   reaper removes the whole session directory after the session ends.
-  Your own scratch is /Volumes/E1TB/tmp/claude/<your-name>/ (create it, use it,
-  delete it); only that directory is yours to clean up.
+  Your own scratch is the directory returned by the engine's
+  scripts/lib/machine_settings.py scratch <your-name> command (use it, delete it); only that directory is yours to clean up.
 """
 
 

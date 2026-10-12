@@ -459,7 +459,7 @@ pub struct OutputStore {
 /// §13 Q3: "the panel lists only files written into your projects and folders"). The record keeps
 /// every row; only the list, its counts and the "Wrote N files" links leave these out.
 pub const SCRATCH_PREFIXES: &[&str] =
-    &["/tmp", "/private/tmp", "/var/folders", "/private/var/folders", "/Volumes/E1TB/tmp/claude"];
+    &["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"];
 /// A path containing any of these folder sequences (slash-separated, consecutive) is scratch:
 /// agents' worktree folders. A project's own `.claude/agents/` or `.claude/skills/` is not.
 pub const SCRATCH_DIR_NAMES: &[&str] = &[".claude/worktrees"];
@@ -474,11 +474,16 @@ pub struct ScratchRoots {
 
 impl ScratchRoots {
     pub fn standard() -> Self {
+        Self::with_machine_settings(&crate::machine_settings::Settings::current().unwrap_or_default())
+    }
+
+    pub fn with_machine_settings(settings: &crate::machine_settings::Settings) -> Self {
         let mut prefixes: Vec<PathBuf> = SCRATCH_PREFIXES.iter().map(PathBuf::from).collect();
         if let Some(t) = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()) {
             prefixes.push(PathBuf::from(t));
         }
         prefixes.push(std::env::temp_dir());
+        prefixes.push(settings.agent_root());
         let resolved: Vec<PathBuf> = prefixes.iter().filter_map(|p| std::fs::canonicalize(p).ok()).collect();
         prefixes.extend(resolved);
         prefixes.retain(|p| p.is_absolute() && p.components().count() > 1);
@@ -1303,12 +1308,13 @@ mod tests {
 
     #[test]
     fn output_the_standard_scratch_set_names_every_kind() {
-        let roots = ScratchRoots::standard();
+        let settings = crate::machine_settings::parse("RICHOS_BULK_ROOT=/external data").unwrap();
+        let roots = ScratchRoots::with_machine_settings(&settings);
         for p in [
             "/tmp/x/a.md",
             "/private/tmp/rv-zip-a1/notes.zip",
             "/var/folders/ab/cd/T/a.md",
-            "/Volumes/E1TB/tmp/claude/echo/a.md",
+            "/external data/tmp/claude/echo/a.md",
             "/Users/alex/ab/richos-wt/x/.claude/worktrees/agent-1/a.md",
         ] {
             assert!(roots.is_scratch(p), "{p}");

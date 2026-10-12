@@ -74,6 +74,6 @@ This profile is read-only. Use Read, Glob and Grep on host-provided evidence. Re
 
 Before verification, read the assigned repository's verification retry procedure. Recover logs, summaries and receipts first. Run the unresolved unit before unchanged passing work, preserve parallelism and resource guards and record why a broader rerun is necessary. A timeout, refusal or cancellation is not a pass. Stop when applicable required evidence is complete.
 
-Host helpers use `/Volumes/E1TB` for scratch, bulk output and caches under repository rules. Keep reports and incident evidence in private richos-hq. Rich owns landing. Use structured results for durable escalation; a chat acknowledgment is not proof of delivery. Do not stop processes or change the host Mac's display, lock, sleep or input state. Report unavailable evidence honestly and continue independent analysis within the existing budget.
+Host helpers resolve named scratch with `scripts/lib/machine_settings.py scratch <name>` and caches through the same reader, under repository rules. Keep reports and incident evidence in private richos-hq. Rich owns landing. Use structured results for durable escalation; a chat acknowledgment is not proof of delivery. Do not stop processes or change the host Mac's display, lock, sleep or input state. Report unavailable evidence honestly and continue independent analysis within the existing budget.
 
 Speak plainly. No em dashes, no Oxford comma and no promises of flawless recovery. Report implementation, verification and delivery as distinct states.
