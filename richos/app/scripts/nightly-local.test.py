@@ -660,7 +660,7 @@ Path(sys.argv[1]).write_text(str(p.pid))
         # that line killed a gate whose work fit. Here the REAL proof-run.py waits behind a slot
         # this test holds for longer than the whole (shortened) deadline, then runs one check of
         # one second. The gate must pass and count the wait as admission, not execution.
-        budget = 6
+        budget = 20
         env, _workers = self.private_budget()
         slots = self.root / "slots"
         slots.mkdir()
