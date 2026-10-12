@@ -141,6 +141,16 @@ def ffmpeg_source_directions(source):
     return "\n".join(lines) + "\n"
 
 
+def write_launcher(runtime, name, target, setup="", flags=""):
+    # The packaged probe allows exec but forbids fork. Shell parameter expansion
+    # locates the sibling runtime without spawning dirname or a subshell.
+    wrapper = runtime / "bin" / name
+    wrapper.write_text('#!/bin/sh\ncase "$0" in\n  */*) runtime_bin=${0%/*} ;;\n'
+                       '  *) runtime_bin=. ;;\nesac\n' + setup +
+                       'exec "$runtime_bin/../' + target + '" ' + flags + '"$@"\n')
+    wrapper.chmod(0o755)
+
+
 def prepare_portable_node(runtime, recipe):
     """Standard debug stripping and portable OpenSSL module lookup; no byte edits."""
     binary = runtime / "node/bin/node"
@@ -149,9 +159,17 @@ def prepare_portable_node(runtime, recipe):
         subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(binary)], check=True)
         subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(binary)], check=True)
     (runtime / "node/lib/ossl-modules").mkdir()
-    wrapper = runtime / "bin/node"
-    wrapper.write_text('#!/bin/sh\n: "${OPENSSL_MODULES:=$(dirname "$0")/../node/lib/ossl-modules}"\nexport OPENSSL_MODULES\nexec "$(dirname "$0")/../node/bin/node" "$@"\n')
-    wrapper.chmod(0o755)
+    write_launcher(runtime, "node", "node/bin/node",
+                   ': "${OPENSSL_MODULES:=$runtime_bin/../node/lib/ossl-modules}"\nexport OPENSSL_MODULES\n')
+
+
+def prepare_runtime_launchers(runtime, recipe):
+    prepare_portable_node(runtime, recipe)
+    # Relocation can invalidate upstream bytecode. Do not rewrite the delivery.
+    write_launcher(runtime, "python3", "python/bin/python3",
+                   'export PYTHONDONTWRITEBYTECODE=1\n', flags="-B ")
+    # Git resolves its helper prefix from the real installed entry point.
+    write_launcher(runtime, "git", "git/bin/git")
 
 
 def build(destination):
@@ -238,15 +256,7 @@ def build(destination):
                 print((scratch / "git-build.log").read_text()[-10000:], flush=True)
                 raise
             shutil.copyfile(git_source / "COPYING", runtime / "sources/GIT-COPYING")
-        prepare_portable_node(runtime, manifest)
-        # Relocation can invalidate upstream bytecode. Never rewrite signed/runtime
-        # inventory files during normal execution, including direct CLI invocation.
-        (runtime / "bin/python3").write_text('#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\nexec "$(dirname "$0")/../python/bin/python3" -B "$@"\n')
-        (runtime / "bin/python3").chmod(0o755)
-        # Git resolves its relative helper prefix from argv[0], so invoke the real
-        # installed entry point rather than a symlink in the combined bin directory.
-        (runtime / "bin/git").write_text('#!/bin/sh\nexec "$(dirname "$0")/../git/bin/git" "$@"\n')
-        (runtime / "bin/git").chmod(0o755)
+        prepare_runtime_launchers(runtime, manifest)
         # License files from binary upstream distributions are retained in full.
         (runtime / "sources/README.txt").write_text("Pinned upstream distributions are listed in runtime-sources.json. Git's exact corresponding source and COPYING are included. Python and Node license notices remain in their distributions. jq is distributed under the MIT license; see https://github.com/jqlang/jq/blob/jq-1.8.2/COPYING. whisper-cli is built from the pinned whisper.cpp source and is distributed under the MIT license in WHISPER-CPP-LICENSE. ffmpeg and ffprobe are an unmodified upstream static build distributed under GPLv3 or later in FFMPEG-COPYING.GPLv3; FFMPEG-SOURCE.txt says where their exact corresponding source is. macOS supplies bash and system libraries.\n")
         shutil.copyfile(__file__, runtime / "sources/RICHOS-RUNTIME-BUILDER.py")
