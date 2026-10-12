@@ -467,7 +467,7 @@ cat > "$P/scripts/render-widget.mjs" <<'EOF'
 import fs from "node:fs";
 console.log(fs.readFileSync(".widget", "utf8"));
 EOF
-printf 'PRIVATE_RECORD="hq"\nPRIVATE_SOURCES="%s"\n' "$P" > "$T/.publication-boundary"
+printf 'PRIVATE_RECORD="hq"\n# machine-path-exempt: isolated publication fixture, not an operational default\nPRIVATE_SOURCES="%s"\n' "$P" > "$T/.publication-boundary"
 commit_all "$T"
 assert_finding "an executable in the private tree reading a public contract → MISPLACED" \
     "$T" MISPLACED "render-widget.mjs"
@@ -478,7 +478,7 @@ P2="$(mkprivate hq_data)"
 printf 'WIDGET_RECORD="one company"\n' > "$P2/.widget"
 printf '# The Widget Queue\n\nOur own `.widget` items.\n' > "$P2/WIDGET.md"
 T="$(mktree instance_data)"
-printf 'PRIVATE_RECORD="hq"\nPRIVATE_SOURCES="%s"\n' "$P2" > "$T/.publication-boundary"
+printf 'PRIVATE_RECORD="hq"\n# machine-path-exempt: isolated publication fixture, not an operational default\nPRIVATE_SOURCES="%s"\n' "$P2" > "$T/.publication-boundary"
 commit_all "$T"
 assert_clean "private INSTANCE DATA naming the same contract is NOT misplaced" "$T"
 
@@ -491,7 +491,7 @@ cat > "$P3/scripts/normalize-exports.mjs" <<'EOF'
 console.log("normalizing");
 EOF
 T="$(mktree uncoupled)"
-printf 'PRIVATE_RECORD="hq"\nPRIVATE_SOURCES="%s"\n' "$P3" > "$T/.publication-boundary"
+printf 'PRIVATE_RECORD="hq"\n# machine-path-exempt: isolated publication fixture, not an operational default\nPRIVATE_SOURCES="%s"\n' "$P3" > "$T/.publication-boundary"
 commit_all "$T"
 assert_clean "a private mechanism coupled to nothing public is NOT misplaced" "$T"
 
@@ -509,7 +509,7 @@ git -C "$P6" init -q 2>/dev/null || git init -q "$P6"
 printf '# HQ\n' > "$P6/README.md"
 git -C "$P6" add -A >/dev/null 2>&1
 git -C "$P6" commit -qm "hq" >/dev/null 2>&1
-printf 'PRIVATE_RECORD="hq"\nPRIVATE_SOURCES="%s"\n' "$P6" > "$T/.publication-boundary"
+printf 'PRIVATE_RECORD="hq"\n# machine-path-exempt: isolated publication fixture, not an operational default\nPRIVATE_SOURCES="%s"\n' "$P6" > "$T/.publication-boundary"
 commit_all "$T"
 cat > "$P6/scripts/probes-v2.py" <<'EOF'
 #!/usr/bin/env python3
@@ -576,7 +576,7 @@ cat > "$P4/scripts/one-off.sh" <<'EOF'
 # A one-off run against .widget, hardcoded to one operator's paths.
 echo .widget
 EOF
-printf 'PRIVATE_RECORD="hq"\nPRIVATE_SOURCES="%s"\n' "$P4" > "$T/.publication-boundary"
+printf 'PRIVATE_RECORD="hq"\n# machine-path-exempt: isolated publication fixture, not an operational default\nPRIVATE_SOURCES="%s"\n' "$P4" > "$T/.publication-boundary"
 commit_all "$T"
 assert_finding "an unexcused private mechanism is MISPLACED, and the refusal names the marker" \
     "$T" MISPLACED "instance-mechanism: <reason>"
@@ -614,7 +614,7 @@ cat > "$P5/scripts/unrelated.sh" <<'EOF'
 # instance-mechanism: excuses a coupling this file no longer has.
 echo "one company's own thing, coupled to nothing public"
 EOF
-printf 'PRIVATE_RECORD="hq"\nPRIVATE_SOURCES="%s"\n' "$P5" > "$T2/.publication-boundary"
+printf 'PRIVATE_RECORD="hq"\n# machine-path-exempt: isolated publication fixture, not an operational default\nPRIVATE_SOURCES="%s"\n' "$P5" > "$T2/.publication-boundary"
 commit_all "$T2"
 assert_finding "a marker on a mechanism coupled to nothing public FAILS as a stale exemption" \
     "$T2" STALE-EXEMPTION "suppresses nothing"
@@ -783,6 +783,7 @@ FE="$SCRATCH/fake-engine"
 mkdir -p "$FE/scripts/lib"
 cp "$ENGINE_ROOT/scripts/publication-completeness.sh" "$FE/scripts/"
 cp "$ENGINE_ROOT/scripts/publication-completeness.py" "$FE/scripts/"
+cp "$ENGINE_ROOT/scripts/lib/machine_paths.py" "$FE/scripts/lib/"
 cp "$ENGINE_ROOT/scripts/lib/publication-boundary.sh" "$FE/scripts/lib/"
 cp "$ENGINE_ROOT/scripts/lib/publication-boundary.py" "$FE/scripts/lib/"
 cp "$ENGINE_ROOT/scripts/lib/resolve-main-checkout.sh" "$FE/scripts/lib/" 2>/dev/null || true

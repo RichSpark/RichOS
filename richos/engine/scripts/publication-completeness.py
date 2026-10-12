@@ -29,6 +29,10 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
+from machine_paths import matches as machine_matches, in_scope as machine_scope
 
 # ---------------------------------------------------------------------------
 # Bounds. Exceeding one is BROKEN, never "checked what we could" — a checker
@@ -929,6 +933,45 @@ def _match_prefix(path, prefixes):
     return None
 
 
+
+# CHECK 5: literal machine assumptions. Baseline is temporary tracked debt,
+# not a host-local override. Archived records stay out as whole trees.
+def check_machine_paths(tree, baseline_path):
+    baseline = {}
+    if baseline_path:
+        if baseline_path not in tree.files:
+            raise Broken("machine path baseline must name a tracked file")
+        body = tree.read(baseline_path)
+        try:
+            baseline = json.loads(body)
+            if not isinstance(baseline, dict):
+                raise ValueError("expected an object")
+            for path, counts in baseline.items():
+                if not isinstance(counts, dict) or any(
+                        not isinstance(prefix, str) or type(count) is not int or count < 1
+                        for prefix, count in counts.items()):
+                    raise ValueError("expected prefix counts for " + path)
+        except (TypeError, ValueError) as exc:
+            raise Broken("invalid machine path baseline: " + str(exc))
+    actual = {}
+    for path in sorted(tree.files):
+        if path == baseline_path or not machine_scope(path):
+            continue
+        text = tree.read(path, MAX_SOURCE_BYTES)
+        if text is None or "\x00" in text:
+            continue
+        counts = machine_matches(text, path)
+        if counts:
+            actual[path] = dict(counts)
+    for path in sorted(set(actual) | set(baseline)):
+        got, old = actual.get(path, {}), baseline.get(path, {})
+        for prefix in sorted(set(got) | set(old)):
+            if got.get(prefix, 0) != old.get(prefix, 0):
+                finding("MACHINE-PATH" if got.get(prefix, 0) else "STALE-MACHINE-PATH",
+                        path, "%s: %s occurrence(s), baseline %s; resolve the path or remove stale debt" %
+                        (prefix, got.get(prefix, 0), old.get(prefix, 0)))
+
+
 # ---------------------------------------------------------------------------
 def main():
     cfg = json.loads(sys.stdin.read())
@@ -945,6 +988,7 @@ def main():
                            cfg.get("declaration_dir", ""))
         check_workflows(tree, set(exempt.get("WORKFLOW_EXEMPT", [])), used, explain)
         check_misplacement(tree, cfg.get("private_roots", []), set(decls), explain)
+        check_machine_paths(tree, cfg.get("machine_baseline", ""))
         tree.require_all_read()
     except Broken as e:
         sys.stderr.write("BROKEN: %s\n" % e)

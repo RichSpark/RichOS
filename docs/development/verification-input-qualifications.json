@@ -1659,7 +1659,7 @@
       }
     },
     "engine scripts/hooks/completeness-commits.test.sh": {
-      "review": "All publication targets, artifact requirements and Git histories are private literal fixtures. Actual registration/probe text is read as source data. No nested driver or external publication command runs. Completeness predicates inspect private tree contents, not host/network state.",
+      "review": "All publication targets, artifact requirements and Git histories are private literal fixtures. Actual registration/probe text is read as source data. No nested driver or external publication command runs. Completeness predicates inspect private tree contents, not host/network state. Machine-path matching is pure tracked text with local reasons and a fixture baseline; its helper is a required source.",
       "sources": {
         "richos/engine/scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "richos/engine/scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
@@ -1667,14 +1667,15 @@
         "richos/engine/scripts/hooks/completeness-commits.test.sh": "a3224852ed2a5f6e74a6c85ce7813771aac758a343bb5f86810da33e1bbfc8af",
         "richos/engine/scripts/hooks/guard-completeness-commits.sh": "fb36f214fcc59dd4bbbcdecae56368169d536327a6350afd864922df8ed2f395",
         "richos/engine/scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
-        "richos/engine/scripts/publication-completeness.sh": "afd2e3ef5aa62a520b37f671bdec428d81a082db4364da42efe6f0a21c5b17ce",
+        "richos/engine/scripts/publication-completeness.sh": "49a7df0809304e4e62de627d04fdcd1cb5840760df4b490057895a9ba2feaf99",
         "richos/engine/scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
-        "richos/engine/scripts/publication-completeness.py": "07c4ebf9a49fd05aabf905583bfff5fd3ef63f7e0afd420ee8172021de779a6c",
+        "richos/engine/scripts/publication-completeness.py": "35cca461538f6014116027e35ce150d4ef17c9f8014ec9f0c88a21035f4e99f6",
         "richos/engine/scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "richos/engine/scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "richos/engine/scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
         "richos/engine/hooks/hooks.json": "f2e457b12355f280c840669baf68919d3a70e98afb35a10762c53b075534f2ea",
-        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc"
+        "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc",
+        "richos/engine/scripts/lib/machine_paths.py": "ca70746611f565e657237d1986afe0cecb2c2528180c7c0df3f76a7ae6b0f510"
       },
       "requires": {
         "paths": [],

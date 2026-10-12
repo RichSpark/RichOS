@@ -307,7 +307,7 @@ fi
 # host.
 # ---------------------------------------------------------------------------
 COMPLETENESS_DECLARATION=".publication-completeness"
-KNOWN_KEYS="CITATION_EXEMPT DECLARATION_EXEMPT WORKFLOW_EXEMPT"
+KNOWN_KEYS="CITATION_EXEMPT DECLARATION_EXEMPT WORKFLOW_EXEMPT MACHINE_PATH_BASELINE"
 # A key this file once accepted and no longer reads. Refused BY NAME, with the
 # migration, and never folded into the generic "unknown key" message: whoever
 # wrote that line did nothing wrong at the time, and a refusal that cannot tell
@@ -315,7 +315,7 @@ KNOWN_KEYS="CITATION_EXEMPT DECLARATION_EXEMPT WORKFLOW_EXEMPT"
 # quietly would be worse still — the exemption would stop exempting and nothing
 # would say so.
 RETIRED_KEYS="INSTANCE_MECHANISMS"
-EX_CITATION=""; EX_DECLARATION=""; EX_WORKFLOW=""
+EX_CITATION=""; EX_DECLARATION=""; EX_WORKFLOW=""; MACHINE_BASELINE=""
 # Resolved the same way as the boundary declaration beside it: the grouped form
 # first, the root form second, both at once refused. An exemption file the
 # checker cannot find is an exemption file that silently stops exempting, and
@@ -355,6 +355,7 @@ if [ -n "$CFILE" ] && [ -f "$CFILE" ]; then
             CITATION_EXEMPT)     EX_CITATION="$val" ;;
             DECLARATION_EXEMPT)  EX_DECLARATION="$val" ;;
             WORKFLOW_EXEMPT)     EX_WORKFLOW="$val" ;;
+            MACHINE_PATH_BASELINE) MACHINE_BASELINE="$val" ;;
         esac
     done < "$CFILE"
 fi
@@ -362,12 +363,17 @@ fi
 ANALYSER="$SCRIPT_DIR/publication-completeness.py"
 [ -f "$ANALYSER" ] || { echo "ERROR: publication-completeness.sh: $ANALYSER is missing." >&2; exit 2; }
 
+if [ ! -f "$SCRIPT_DIR/lib/machine_paths.py" ]; then
+    echo "ERROR: publication-completeness.sh: lib/machine_paths.py is missing." >&2
+    exit 2
+fi
+
 printf '%s=== publication completeness: %s ===%s\n' "$C_BOLD" "$DECL_ROOT" "$C_RESET"
 
 OUT="$(
     ROOT="$DECL_ROOT" EXPLAIN="$EXPLAIN" DECLDIR="$DECLARATION_DIR" \
     EXC="$EX_CITATION" EXD="$EX_DECLARATION" EXW="$EX_WORKFLOW" \
-    PRIV="$PRIVATE_JSON" python3 -c '
+    PRIV="$PRIVATE_JSON" MB="$MACHINE_BASELINE" python3 -c '
 import json, os, sys
 cfg = {
     "root": os.environ["ROOT"],
@@ -376,6 +382,7 @@ cfg = {
     # scripts/lib/declaration-path.sh is the one place that name is written.
     "declaration_dir": os.environ["DECLDIR"],
     "private_roots": json.loads(os.environ["PRIV"]),
+    "machine_baseline": os.environ["MB"],
     "exempt": {k: os.environ[v].split() for k, v in
                (("CITATION_EXEMPT","EXC"),("DECLARATION_EXEMPT","EXD"),
                 ("WORKFLOW_EXEMPT","EXW"))
