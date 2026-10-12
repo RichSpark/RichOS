@@ -14,8 +14,10 @@
 # keychain under the app's own name (com.richos.app.bug-reports / github-reporting-token).
 #
 # PASS when:
-#   1  Bust a bug (Settings) starts the exchange in the conversation: Rich asks what went wrong;
-#   2  the answer typed in the composer comes back as the report card, "Not sent yet", with the
+#   1  Bust a bug (Settings) starts the exchange in the Rich panel (`#bugdock`, where every press
+#      opens it since fe4cd6b14 and 8e454cff1, 2026-10-10): Rich asks what went wrong;
+#   2  the answer typed in the panel's own answer box (`#bugdock-input`, never the conversation's
+#      composer) comes back as the report card, "Not sent yet", with the
 #      company, the person and A FILE PATH WITH SPACES IN IT (~/Library/Application Support/
 #      Client Plans/budget.xlsx) replaced by stand-ins, and nothing has reached the endpoint;
 #      Rich was given what was on the screen: its visible words (the conversation's "Noted.")
@@ -157,7 +159,10 @@ check "Rich asks what went wrong" "Rich did not ask" wait_text 'What went wrong?
 "$T/shot.sh" "$VM" "$S/1-ask-dark.png" || fail "capture 1-ask-dark"
 
 # ---- 2. the answer, Rich's write-up, the card ----
-"$T/ax.sh" "$VM" type "In the $COMPANY chat the names on the left get cut off when I make the text bigger. My notes in $SPACED_PATH are gone too." --role AXTextArea --first --replace || fail "typing the answer"
+# Into the Rich panel's own answer box, named by its id: the first text area on screen is the
+# conversation's composer, and an answer typed there is a message to Rich (walk-a00bc5100694, on
+# nightly 51: the answer went to the conversation, Rich said "Noted." and no card ever came).
+"$T/ax.sh" "$VM" type "In the $COMPANY chat the names on the left get cut off when I make the text bigger. My notes in $SPACED_PATH are gone too." --role AXTextArea --id bugdock-input --replace || fail "typing the answer"
 "$T/ax.sh" "$VM" --key 36 || fail "Return"
 check "the report card, not sent yet" "no report card" wait_text 'Not sent yet' 40
 # Asked node by node: a whole-tree read of the conversation outlasts ax.sh's 20 s deadline on a
@@ -218,7 +223,7 @@ both 4-sent
 sleep 1
 "$T/ax.sh" "$VM" click --title 'Bust a bug!' --contains || fail "the Bust a bug button (second report)"
 sleep 2
-"$T/ax.sh" "$VM" type "The Send button flickers when I press it." --role AXTextArea --first --replace || fail "typing the second answer"
+"$T/ax.sh" "$VM" type "The Send button flickers when I press it." --role AXTextArea --id bugdock-input --replace || fail "typing the second answer"
 "$T/ax.sh" "$VM" --key 36 || fail "Return (second report)"
 check "the second report card" "no second report card" wait_text 'Not sent yet' 40
 # With two cards on screen a search of the whole tree can outlast ax.sh's deadline on a busy host
