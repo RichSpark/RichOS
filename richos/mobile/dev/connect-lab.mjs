@@ -1,12 +1,14 @@
+import { validateStorage } from '../cli/machine-settings.mjs';
 // Operator-only isolated test host. Private keys and scoped tokens stay in SSD scratch.
 import { webcrypto, createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 const origin = 'https://connect.richos.ceo';
 export async function lab(action, directory, transport = fetch) {
-  if (!directory?.startsWith('/Volumes/E1TB/')) throw Error('Connect lab requires an external SSD directory');
+  if (!directory) throw Error('Connect lab requires an explicit directory');
+  directory = validateStorage(directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (!realpathSync(directory).startsWith('/Volumes/E1TB/')) throw Error('Connect lab cannot follow a path off the SSD');
+
   const file = join(directory, 'host-identity.json');
   if (action === 'lab-identity' && !existsSync(file)) {
     const pair = await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign','verify']);

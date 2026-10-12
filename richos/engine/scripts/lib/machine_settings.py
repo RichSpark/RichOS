@@ -16,8 +16,16 @@ KEYS = (
     'RICHOS_CPU_GUARD_STATE', 'RICHOS_ENGINE_PASS_DIR',
     'RICHOS_PROOF_RUN_DIR', 'RICHOS_AUTOCHECK_PROOF_ROOT',
     'RICHOS_TEST_RESULTS_ROOT', 'RICHOS_ANDROID_CACHES_ROOT',
-    'RICHOS_NATIVE_IOS_CACHE', 'RICHOS_NATIVE_ANDROID_CACHE',
+    'RICHOS_NATIVE_IOS_CACHE', 'RANDROID_CACHE',
     'RICHOS_GPL_SOURCE_CACHE',
+    'RICHOS_MOBILE_CACHE',
+    'RICHOS_PHONE_LOCK_DIR',
+    'RICHOS_PHONE_WATCH_HOME',
+    'RICHOS_PHYSICAL_STORE',
+    'RICHOS_PHYSICAL_PRODUCTS',
+    'GRADLE_USER_HOME',
+    'RICHOS_ENGINE_CHECK_PROOF_DIR',
+    'RICHOS_CAMPAIGN_PARENT',
 )
 RESOLVED = 'RICHOS_MACHINE_SETTINGS_RESOLVED'
 
@@ -91,8 +99,10 @@ def validate(path, require_directory=False):
 def storage(kind, name='', key=None, default=None, environment=None):
     env = os.environ if environment is None else environment
     values = load(env)
-    if key and key in values:
-        return validate(values[key])
+    aliases = ('RICHOS_CARGO_CACHE_ROOT', 'CARGO_TARGET_DIR') if key == 'CARGO_TARGET_DIR' else (key,)
+    for alias in aliases:
+        if alias and alias in values:
+            return validate(values[alias])
     bulk = values.get('RICHOS_BULK_ROOT')
     if bulk:
         root = validate(bulk, require_directory=True)
@@ -140,13 +150,15 @@ def scratch(name, environment=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['show', 'env', 'scratch', 'cache', 'state', 'agents', 'validate'])
+    parser.add_argument('command', choices=['show', 'values', 'env', 'scratch', 'cache', 'state', 'agents', 'validate'])
     parser.add_argument('name', nargs='?', default='')
     parser.add_argument('--key')
     parser.add_argument('--array', action='store_true')
     args = parser.parse_args()
     try:
-        if args.command == 'env':
+        if args.command == 'values':
+            print(json.dumps({**load(), RESOLVED: '1'}))
+        elif args.command == 'env':
             values = load()
             for key, value in {**values, RESOLVED: '1'}.items():
                 print(f'export {key}={shlex.quote(value)}')

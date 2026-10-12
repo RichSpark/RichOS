@@ -72,7 +72,7 @@
 # The line lives here, not in run-tests.sh, because a suite is the only thing that knows
 # what it reads, and a second place to edit is the defect run-tests.sh counts five of.
 # run-tests: inputs richos/app/scripts richos/engine LICENSE docs/legal
-# run-tests: covers richos/app/scripts/make-engine-asset.sh richos/app/scripts/verify-engine-asset-members.sh
+# run-tests: covers richos/app/scripts/lib/no_host_paths.py richos/app/scripts/make-engine-asset.sh richos/app/scripts/verify-engine-asset-members.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -137,6 +137,8 @@ make_fixture() {
              "$r/richos/engine/scripts/hooks" "$r/richos/engine/skills/demo-skill" "$r/richos/engine/tools/demo-tool"
     cp "$SCRIPT" "$r/richos/app/scripts/make-engine-asset.sh"
     cp "$MEMBERS" "$r/richos/app/scripts/verify-engine-asset-members.sh"
+    cp "$DIR/lib/no_host_paths.py" "$r/richos/app/scripts/lib/no_host_paths.py"
+    cp "$DIR/runtime-sources.json" "$r/richos/app/scripts/runtime-sources.json"
     # The lock the script holds on its output directory (output-lock.test.sh is its suite).
     cp "$DIR/lib/output-lock.sh" "$r/richos/app/scripts/lib/output-lock.sh"
     cp "$ROOT/LICENSE" "$r/LICENSE"
@@ -252,7 +254,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------
-# L9–L12 — the REAL tree. A fixture proving a refusal works says nothing about this one.
+# Extracted source and binary bytes are checked, independently of app waivers.
+F="$WORK/host-volume"; make_fixture "$F"
+# machine-path-exempt: negative control that must refuse a shipped machine volume
+printf 'ROOT="/Volumes/Fixture/cache"\n' > "$F/richos/engine/active.py"; fixture_commit "$F"
+OUT="$(RICHOS_ALLOW_HOST_PATHS=1 run_fixture "$F")"; CODE=$?
+if [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'machine-specific storage paths'; then
+    ok "L24 extracted engine machine path refuses even with app waiver"
+else
+    bad "L24 extracted engine path refusal" "exit $CODE: $(printf '%s' "$OUT" | tail -2)"
+fi
+F="$WORK/reviewed-history"; make_fixture "$F"
+# machine-path-exempt: reviewed history fixture preserves its original path as text
+printf '# machine-path-exempt: archived verification location\n/Volumes/Fixture/cache\n' > "$F/richos/engine/history.txt"; fixture_commit "$F"
+OUT="$(run_fixture "$F")"; CODE=$?
+if [ "$CODE" = 0 ]; then ok "L25 reviewed history source text remains publishable"
+else bad "L25 reviewed history allowance" "exit $CODE: $(printf '%s' "$OUT" | tail -2)"; fi
+F="$WORK/binary-host-volume"; make_fixture "$F"
+# machine-path-exempt: negative binary control proves a text marker cannot waive binary bytes
+printf 'machine-path-exempt: fixture\0/Volumes/Fixture/cache\0' > "$F/richos/engine/native.bin"; fixture_commit "$F"
+OUT="$(run_fixture "$F")"; CODE=$?
+if [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'machine-specific storage paths'; then
+    ok "L26 binary host path refuses despite text marker"
+else bad "L26 binary marker cannot waive host path" "exit $CODE: $(printf '%s' "$OUT" | tail -2)"; fi
+
+# # L9–L12 — the REAL tree. A fixture proving a refusal works says nothing about this one.
 # ---------------------------------------------------------------------------------------
 REAL_SHA="$(/usr/bin/shasum -a 256 "$ROOT/LICENSE" 2>/dev/null | awk '{print $1}')"
 if [ "$REAL_SHA" = "$CANON_SHA" ]; then
@@ -373,8 +399,7 @@ POISON="$WORK/poison"; mkdir -p "$POISON"
 if [ -f "$F_COMPLETE_TARBALL" ]; then
     /usr/bin/tar -x -z --no-same-owner -f "$F_COMPLETE_TARBALL" -C "$POISON" 2>/dev/null
     mkdir -p "$POISON/engine/.claude/state"
-    printf '# session=deadbeef-8e71-46f3-92d9-925de910870e root=/Users/somebody/ab/richos/engine\n' \
-        > "$POISON/engine/.claude/state/agent-definitions-deadbeef.snapshot"
+    printf '# session=deadbeef-8e71-46f3-92d9-925de910870e root=/Users/somebody/ab/richos/engine\n'  > "$POISON/engine/.claude/state/agent-definitions-deadbeef.snapshot" # machine-path-exempt: isolated guest or negative fixture input; no storage default
     ( cd "$POISON" && /usr/bin/tar -c -z -f "$WORK/poisoned.tar.gz" engine ) 2>/dev/null
 fi
 OUT="$(RICHOS_RUNTIME_DIR= bash "$MEMBERS" "$WORK/poisoned.tar.gz" "$F_COMPLETE_ROOT" \

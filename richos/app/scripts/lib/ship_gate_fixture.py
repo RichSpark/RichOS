@@ -26,8 +26,9 @@ import sys
 # Start series that pass §104 on each platform with room to spare (the iPhone's record has no start 1).
 PASSING = {"android": {"cold": [900] + [500] * 19, "warm": [100] * 20},
            "ios": {"cold": [400] * 19, "warm": [None] + [400] * 19}}
-WATCH_STATE = "/Volumes/E1TB/state/richos/phone-speed-watch"
-WALK_STATE = "/Volumes/E1TB/state/richos/review-walk"
+import machine_storage as M
+WATCH_STATE = str(M.state("phone-speed-watch", "RICHOS_PHONE_WATCH_HOME"))
+WALK_STATE = str(M.state("review-walk"))
 
 
 def write(directory, platform, commit, repo=None):

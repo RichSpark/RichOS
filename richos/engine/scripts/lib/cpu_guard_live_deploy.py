@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import time
+import machine_settings as M
 
 LEGACY_SHA256 = '83a4d90c64f6011fd788b9069aee630031bf220e22514ca6ac8eb820a5ca41bd'
 POLICY_SHA256 = 'ca04ecbd2b7640dd6443ccc5089759bdd47e51653a54cfbfc632c026ace88cce'
@@ -56,7 +57,7 @@ def read_json(path, default=None):
 
 class Live:
     def __init__(self, state=None, plist=None, candidate=None, restart=None, wait=HEARTBEAT_WAIT):
-        self.state = Path(state or os.environ.get('RICHOS_CPU_GUARD_STATE', '/Volumes/E1TB/state/richos/cpu-guard'))
+        self.state = M.validate(state) if state else M.state('cpu-guard', 'RICHOS_CPU_GUARD_STATE')
         self.plist = Path(plist or Path.home() / 'Library/LaunchAgents' / (LABEL + '.plist'))
         self.candidate = Path(candidate or Path(__file__).with_name('cpu_guard_live.py'))
         self.runtime = self.state / 'runtime'
@@ -245,8 +246,7 @@ def main(argv):
                'cpu_guard_live_deploy.py deploy') % ((status['running_sha256'][:12],) if current else (
                    status['running_sha256'][:12], status['running_is'], sha256(live.candidate)[:12])))
         return 0 if current else 3
-    if not os.path.ismount('/Volumes/E1TB') and live.state.is_relative_to('/Volumes/E1TB'):
-        raise SystemExit('refused: /Volumes/E1TB is not mounted')
+    M.validate(live.state)
     print(live.deploy() if argv[0] == 'deploy' else live.rollback())
     return 0
 

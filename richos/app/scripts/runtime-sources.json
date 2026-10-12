@@ -295,5 +295,27 @@
       "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip",
       "sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6"
     }
-  }
+  },
+  "strip_node_debug_symbols": true,
+  "portable_git_link_paths": true,
+  "upstream_path_exemptions": [
+    {
+      "member": "node/bin/node",
+      "sha256": "56b1e32581092d03ce0e01f54b6822496153acadfca8ce3d5bc160ed4c37d3d0",
+      "reason": "machine-path-exempt: Pinned Node OpenSSL MODULESDIR metadata. The bin/node wrapper sets a portable OPENSSL_MODULES default.",
+      "prefixes": ["/Users/admin"]
+    },
+    {
+      "member": "bin/ffmpeg",
+      "sha256": "2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384",
+      "reason": "machine-path-exempt: Pinned unmodified upstream FFmpeg compiler/diagnostic metadata, never this operator storage.",
+      "prefixes": ["/Users/buildserver", "/Volumes/ffmpeg_arm64"]
+    },
+    {
+      "member": "bin/ffprobe",
+      "sha256": "2738aa46a7f9acbc8ab09a6715554c90f7de603171ac403726765685df6a0059",
+      "reason": "machine-path-exempt: Pinned unmodified upstream FFprobe compiler/diagnostic metadata, never this operator storage.",
+      "prefixes": ["/Users/buildserver", "/Volumes/ffmpeg_arm64"]
+    }
+  ]
 }

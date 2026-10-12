@@ -434,8 +434,7 @@ def _unreadable_operand(t):
 # separated) replaces the list, for tests.
 CODEX_WORKTREE_ROOTS = [os.path.realpath(os.path.expanduser(r)) for r in (
     os.environ.get("WTR_CODEX_WORKTREE_ROOTS") or
-    ":".join(["~/.codex/worktrees", os.path.join(os.environ.get("CODEX_HOME") or "~/.codex", "worktrees"),
-              "/Volumes/E1TB/state/codex/home/worktrees"])).split(":") if r]
+    ":".join(["~/.codex/worktrees", os.path.join(os.environ.get("CODEX_HOME") or "~/.codex", "worktrees")])).split(":") if r]
 
 
 def _is_recorded(t):

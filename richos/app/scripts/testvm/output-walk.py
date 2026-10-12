@@ -365,11 +365,14 @@ end tell
 # SCRATCH_DIR_NAMES; the CEO's answer to PRD §13 Q3, 2026-10-06: "the panel lists only files
 # written into your projects and folders"). The guest's TMPDIR is under /var/folders. A path here is
 # kept in the record and left out of every list, count and link the walk expects.
-SCRATCH_PREFIXES = ('/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/', '/Volumes/E1TB/tmp/claude/')
+SCRATCH_PREFIXES = ('/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/')
 
 
 def scratch_path(path):
-    return path.startswith(SCRATCH_PREFIXES) or '/.claude/worktrees/' in path
+    sys.path.insert(0, str(HERE.parents[2] / 'engine/scripts/lib'))
+    import machine_settings
+    named = str(machine_settings.agent_root()).rstrip('/') + '/'
+    return path.startswith((*SCRATCH_PREFIXES, named)) or '/.claude/worktrees/' in path
 
 
 def project(rows):

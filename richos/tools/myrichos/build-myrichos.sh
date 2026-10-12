@@ -27,7 +27,10 @@ MYRICHOS_ROOT="${MYRICHOS_ROOT:-$HOME/myrichos}"
 # worktree that gets removed at land time, and a pointer into a removed worktree is precisely the
 # dangling-symlink failure §1.3 exists to prevent. It defaults to the checkout the entity registry
 # already names as a `richos` root.
-RICHOS_ROOT="${RICHOS_ROOT:-$HOME/ab/richos}"
+if [ -z "${RICHOS_ROOT:-}" ]; then
+    RICHOS_COMMON="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --path-format=absolute --git-common-dir)" || exit 2
+    RICHOS_ROOT="$(dirname "$RICHOS_COMMON")"
+fi
 
 # WHY IT NEVER OVERWRITES. `myrichos` is the CEO's folder and §1.3 rules that it holds the ONLY
 # copy of anything it holds. A seed that clobbered his edits would make this repository the real
@@ -139,8 +142,8 @@ for c in femcboost deeply prospects richos gpt-exporter webinar-booster; do
     rm -f "$MYRICHOS_ROOT/companies/$c/guards/SOURCES.tmp"
 done
 
-FEMCBOOST_HOOKS="$HOME/ab/femcboost/scripts/hooks"
-DEEPLY_HOOKS="$HOME/ab/deeply/scripts/hooks"
+FEMCBOOST_HOOKS="${FEMCBOOST_ROOT:-$(dirname "$RICHOS_ROOT")/femcboost}/scripts/hooks"
+DEEPLY_HOOKS="${DEEPLY_ROOT:-$(dirname "$RICHOS_ROOT")/deeply}/scripts/hooks"
 
 copy_guard femcboost "$FEMCBOOST_HOOKS/ecs-session-start.sh"
 copy_guard femcboost "$FEMCBOOST_HOOKS/ecs-user-prompt-submit.sh"

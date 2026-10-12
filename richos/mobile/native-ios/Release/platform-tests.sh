@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The iPhone platform code's own tests, on this Mac with no simulator (stream I3's loop L1).
 #
-#   Release/platform-tests.sh <output directory on /Volumes/E1TB>
+#   Release/platform-tests.sh <output directory in the selected storage folder>
 #
 # Compiles the core (RichOSCore) as a module, then two test programs with swiftc:
 #   notification  NotificationService/Tests/main.swift — preview decryption against the Mac's own
@@ -15,7 +15,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:?usage: platform-tests.sh <output directory>}"
-case "$OUT" in /Volumes/E1TB/*) ;; *) echo "platform-tests: the output directory must be on /Volumes/E1TB" >&2; exit 2 ;; esac
+OUT="$(python3 "$HERE/../../engine/scripts/lib/machine_settings.py" validate "$OUT")" || exit 2
 mkdir -p "$OUT/module-cache" "$OUT/work"
 export CLANG_MODULE_CACHE_PATH="$OUT/module-cache"
 SWIFTC=(xcrun swiftc -swift-version 5 -module-cache-path "$OUT/module-cache")

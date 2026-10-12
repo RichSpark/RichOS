@@ -27,11 +27,25 @@ import time
 import uuid
 import operator_fences
 from cpu_policy import DEFAULT_MAX_CPU, admission_open, VerificationPressure
+import machine_settings as M
 
-CANONICAL_STATE = Path('/Volumes/E1TB/state/richos/cpu-guard')
+def canonical_state():
+    # The installed controller's actual-user anchor stays authoritative during
+    # migration. A test HOME/selector must never hide active verification policy.
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    agent = home / 'Library/LaunchAgents/com.richos.cpu-guard.plist'
+    if agent.is_file():
+        with agent.open('rb') as source:
+            installed = plistlib.load(source).get('EnvironmentVariables', {}).get('RICHOS_CPU_GUARD_STATE')
+        if installed:
+            return M.validate(installed)
+    return M.state('cpu-guard', 'RICHOS_CPU_GUARD_STATE', environment={'HOME': str(home)})
+
+
+CANONICAL_STATE = canonical_state()
 # Preserve the existing kernel lock inodes across rollout and older worktrees.
 CANONICAL_WORKERS = Path(pwd.getpwuid(os.getuid()).pw_dir) / '.richos-nightly/worker-budget-v1'
-CANONICAL_ENGINE_PASS = Path('/Volumes/E1TB/state/richos/engine-pass-v1')
+CANONICAL_ENGINE_PASS = CANONICAL_STATE.parent / 'engine-pass-v1'
 
 
 def installed_verification_policy():
@@ -70,7 +84,7 @@ def governed_directory(path, canonical):
     return target
 
 
-STATE = governed_directory(os.environ.get('RICHOS_CPU_GUARD_STATE', str(CANONICAL_STATE)), CANONICAL_STATE)
+STATE = governed_directory(M.state('cpu-guard', 'RICHOS_CPU_GUARD_STATE', default=CANONICAL_STATE), CANONICAL_STATE)
 INTERVAL = 2.0
 VERIFICATION_PROTOCOL = 1
 CALIBRATION_SECONDS = 120
@@ -1375,7 +1389,7 @@ def stage_runtime(engine, runtime):
     """Copy every native observation/recovery dependency into the installed runtime."""
     runtime = Path(runtime)
     runtime.mkdir(parents=True, exist_ok=True)
-    for name in ('cpu_policy.py', 'operator_fences.py', 'proc_tree.py'):
+    for name in ('cpu_policy.py', 'operator_fences.py', 'proc_tree.py', 'machine_settings.py'):
         shutil.copy2(Path(__file__).with_name(name), runtime / name)
     shutil.copy2(Path(engine).resolve().parent / 'app/scripts/testvm/reserve.py', runtime / 'reserve.py')
     target = runtime / 'cpu_guard.py'
@@ -1384,8 +1398,7 @@ def stage_runtime(engine, runtime):
 
 
 def install(engine):
-    if not os.path.ismount('/Volumes/E1TB'):
-        raise RuntimeError('Mount /Volumes/E1TB first')
+    M.validate(STATE)
     engine = Path(engine).resolve()
     root = engine.parents[1]
     inventory = launcher_inventory(root)

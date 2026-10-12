@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, statSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { mobile, cacheRoot } from '../cli/simulator.mjs';
+import { cacheDir } from '../cli/machine-settings.mjs';
 
 const require = createRequire(import.meta.url);
 const { createScratch, proofCache } = require('./storage.cjs');
@@ -40,7 +41,7 @@ if (target === 'ios') {
   }
   for(const engine of ['chromium','webkit'])if(!existsSync(playwright[engine].executablePath()))notRun(`Playwright ${engine==='chromium'?'Chromium':'WebKit'} is not installed`);
 }
-if (!existsSync('/Volumes/E1TB') || statSync('/Volumes/E1TB').dev === statSync('/Volumes').dev) notRun('mount /Volumes/E1TB for test storage');
+cacheDir(); // Validate selected bulk storage before any build or scratch write.
 
 const key = createHash('sha256').update(mobile).digest('hex').slice(0, 10);
 // Browser proofs are disposable. Native builds use an isolated reusable cache and
@@ -50,7 +51,7 @@ const key = createHash('sha256').update(mobile).digest('hex').slice(0, 10);
 const storage = process.env.RICHOS_MOBILE_SIMULATOR_STORAGE || 'system';
 if (target === 'ios') process.env.RICHOS_MOBILE_SIMULATOR_STORAGE = storage;
 const cache = target === 'ios'
-  ? proofCache(`/Volumes/E1TB/caches/richos-mobile-ios-proof/${key}`, storage, process.env.RICHOS_MOBILE_IOS_TEST_CACHE)
+  ? proofCache(`${cacheDir("richos-mobile-ios-proof")}/${key}`, storage, process.env.RICHOS_MOBILE_IOS_TEST_CACHE)
   : createScratch('pwa-proof');
 process.env.RICHOS_MOBILE_CACHE = cache;
 cacheRoot(); // Enforce the CLI's external path and symlink checks.

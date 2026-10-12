@@ -176,7 +176,7 @@ fn serve() {
         std::env::var_os("RICHOS_MOBILE_MAC_DIR").expect("CLI must supply isolated scratch"),
     );
     let dir = dir.canonicalize().unwrap();
-    assert!(dir.starts_with("/Volumes/E1TB/"));
+    richos_core::machine_settings::validate_existing_storage(&dir).unwrap();
     let restarting = std::env::var("RICHOS_MOBILE_MAC_RESTART").as_deref() == Ok("1");
     if restarting {
         assert_eq!(std::fs::read_to_string(dir.join("lab-owner")).unwrap(), "richos-mobile-isolated-v1");
@@ -215,7 +215,7 @@ fn serve() {
     let devices = Arc::new(DeviceDesk::open(&dir).unwrap());
     let push_client=std::env::var_os("RICHOS_MOBILE_CONNECT_IDENTITY_FILE").map(|file| {
         use phone::secrets::SecretStore;
-        let file=PathBuf::from(file).canonicalize().unwrap();assert!(file.starts_with("/Volumes/E1TB/"));
+        let file=PathBuf::from(file).canonicalize().unwrap();richos_core::machine_settings::validate_existing_storage(&file).unwrap();
         let secrets=LabSecrets{directory:dir.clone()};secrets.put("connect-host-identity-v1",&std::fs::read(file).unwrap()).unwrap();
         Arc::new(phone::connect::client::Client::new(phone::connect::client::Identity::open(&secrets).unwrap()))
     });
@@ -254,7 +254,7 @@ fn serve() {
     };
     let _connector = connect_token_file.map(|file| {
         let path = PathBuf::from(file).canonicalize().unwrap();
-        assert!(path.starts_with("/Volumes/E1TB/"));
+        richos_core::machine_settings::validate_existing_storage(&path).unwrap();
         let token = std::fs::read_to_string(path).unwrap();
         let helper = std::env::var_os("RICHOS_CONNECT_HELPER").expect("explicit test helper");
         phone::connect::supervisor::Supervisor::start(&PathBuf::from(helper),token).unwrap()

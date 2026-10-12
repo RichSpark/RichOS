@@ -8,7 +8,7 @@ that sets a credential becomes ${NAME+"NAME=$NAME"}, exactly what proof-run writ
 file still reruns the check and takes the credential only from the shell that runs it. Every
 other line, the file itself, its mode and its run are left as they are. Values are never printed.
 
-    rerun-scrub.py [--check] [ROOT ...]     (default ROOT: /Volumes/E1TB/state/richos/proof-runs)
+    rerun-scrub.py [--check] [ROOT ...]     (default ROOT: resolved proof-runs state)
 
 --check changes nothing and exits 1 while any rerun file under ROOT still sets a credential.
 """
@@ -20,7 +20,9 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_ROOT = "/Volumes/E1TB/state/richos/proof-runs"
+sys.path.insert(0, os.path.join(HERE, "lib"))
+import machine_storage as M
+DEFAULT_ROOT = os.path.join(os.path.expanduser("~"), ".richos-nightly", "proof-runs")
 NOTE = ("# Credentials the gate had, never written here: %s. Each is passed on only when the shell\n"
         "# that runs this file has it.\n")
 
@@ -89,10 +91,11 @@ def rerun_files(root):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--check", action="store_true", help="change nothing; exit 1 while a credential is left")
-    parser.add_argument("roots", nargs="*", default=[DEFAULT_ROOT])
+    parser.add_argument("roots", nargs="*", default=[])
     args = parser.parse_args(argv)
     pr = proof_run()
     scanned, holding, counts = 0, 0, {}
+    args.roots = args.roots or [str(M.state("proof-runs", "RICHOS_PROOF_RUN_DIR"))]
     for root in args.roots:
         for path in rerun_files(root):
             scanned += 1

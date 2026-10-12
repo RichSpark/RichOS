@@ -196,3 +196,24 @@ test('integration profile preserves the ordinary CLI session and uses a separate
   assert.equal(run('headless', 'state').state.draft, 'Ordinary session');
   assert(existsSync(join(cache, 'integration/headless.json')));
 });
+
+test('storage transport keeps a private-file snapshot across later child work', (t) => {
+  const dir = createScratch('settings');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bulk = join(dir, 'bulk with spaces'); mkdirSync(bulk);
+  const source = join(dir, 'settings'); writeFileSync(source, 'RICHOS_BULK_ROOT=' + bulk + '\n');
+  const env = { ...process.env, HOME: dir, TMPDIR: dir, RICHOS_ENV_FILE: source };
+  delete env.RICHOS_MACHINE_SETTINGS_RESOLVED; delete env.RICHOS_BULK_ROOT;
+  const transport = join(mobile, 'cli/machine-settings.mjs');
+  const code = `import { cacheDir, machineEnvironment } from ${JSON.stringify('file://' + transport)};
+    import { writeFileSync } from 'node:fs';
+    import { execFileSync } from 'node:child_process';
+    const first = cacheDir('first');
+    writeFileSync(process.env.RICHOS_ENV_FILE, 'UNKNOWN=/invalid\\n');
+    const second = cacheDir('second');
+    const child = execFileSync('python3', [${JSON.stringify(join(mobile, '../engine/scripts/lib/machine_settings.py'))}, 'cache', 'child'], { env: machineEnvironment(), encoding: 'utf8' }).trim();
+    console.log(JSON.stringify([first, second, child]));`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env, encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), ['first', 'second', 'child'].map(name => join(bulk, 'caches', name)));
+});

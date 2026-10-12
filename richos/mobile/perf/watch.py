@@ -79,7 +79,7 @@ reported as MISSED by the next trigger, which is every later move of main, mobil
 that cannot start a runner reports it at once. `watch.py status` prints all of it.
 
 State (private: records name the phones) lives in RICHOS_PHONE_WATCH_HOME, default
-/Volumes/E1TB/state/richos/phone-speed-watch: ledger.jsonl, good.json, run.lock, runner.log,
+The effective phone-speed-watch state directory contains ledger.jsonl, good.json, run.lock, runner.log,
 runs/<round>/<platform>/ (record, log, guard; the newest 20 rounds and every round a good run
 points at are kept), checkout/ (the build clone).
 
@@ -96,6 +96,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import machine_storage as M
 import shlex
 import shutil
 import subprocess
@@ -113,11 +116,16 @@ HERE = Path(__file__).resolve().parent
 MOBILE = "richos/mobile/"
 PLATFORMS = ("android", "ios")
 METRICS = ("coldLaunch", "warmResume")
-DEFAULT_HOME = "/Volumes/E1TB/state/richos/phone-speed-watch"
+DEFAULT_HOME = str(M.state("phone-speed-watch", "RICHOS_PHONE_WATCH_HOME"))
 # richos-hq's signing wrapper (scripts/with-android-signing.py): the one signing path, shared with a person's
 # `randroid device install`. It reads the upload key from protected storage outside every repository.
-DEFAULT_SIGNING = f"{sys.executable} /Users/alex/ab/richos-hq/scripts/with-android-signing.py"
-IOS_STORE = Path("/Volumes/E1TB/caches/richos-native-ios/physical-store")
+def default_signing(repo):
+    # A linked worktree shares its primary checkout's Git common directory.
+    common = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            capture_output=True, text=True, check=True, timeout=30).stdout.strip()
+    wrapper = Path(common).parent.parent / "richos-hq/scripts/with-android-signing.py"
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(wrapper))}"
+IOS_STORE = M.cache("richos-native-ios/physical-store", "RICHOS_PHYSICAL_STORE")
 SPAWN_GRACE_S = 120          # a request younger than this may still be starting its runner
 # What a phone's app is built from, worked out from the build files (native-android/settings.gradle.kts
 # includes :core, :cli, :app; its core tests read ../conformance/vectors only at test time; native-ios/
@@ -729,7 +737,7 @@ def verb(platform, name, checkout, phone, extra, guard, log_path, record_out=Non
         # and the debuggable twin the measurement builds (perf, "must carry the upload key, the key of the
         # release build on the phone") must carry the upload key, which richos-hq's wrapper puts in the child's environment (never in this
         # public repository, never on a command line).
-        wrapper = shlex.split(setting("SIGNING", DEFAULT_SIGNING))
+        wrapper = shlex.split(setting("SIGNING", "") or default_signing(operator_checkout() or HERE))
         if not Path(wrapper[-1]).is_file():
             raise Unmeasured(f"the Android signing wrapper {wrapper[-1]} is missing: the Release build would be "
                              "unsigned and the phone refuses it")

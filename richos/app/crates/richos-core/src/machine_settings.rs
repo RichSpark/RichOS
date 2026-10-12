@@ -9,8 +9,15 @@ pub const KEYS: &[&str] = &[
     "RICHOS_CPU_GUARD_STATE", "RICHOS_ENGINE_PASS_DIR",
     "RICHOS_PROOF_RUN_DIR", "RICHOS_AUTOCHECK_PROOF_ROOT",
     "RICHOS_TEST_RESULTS_ROOT", "RICHOS_ANDROID_CACHES_ROOT",
-    "RICHOS_NATIVE_IOS_CACHE", "RICHOS_NATIVE_ANDROID_CACHE",
+    "RICHOS_NATIVE_IOS_CACHE", "RANDROID_CACHE",
     "RICHOS_GPL_SOURCE_CACHE",
+    "RICHOS_MOBILE_CACHE",
+    "RICHOS_PHONE_LOCK_DIR",
+    "RICHOS_PHONE_WATCH_HOME",
+    "RICHOS_PHYSICAL_STORE",
+    "RICHOS_PHYSICAL_PRODUCTS",
+    "GRADLE_USER_HOME",
+    "RICHOS_ENGINE_CHECK_PROOF_DIR", "RICHOS_CAMPAIGN_PARENT",
 ];
 pub const RESOLVED: &str = "RICHOS_MACHINE_SETTINGS_RESOLVED";
 const EXAMPLE: &str = include_str!("../../../../engine/.env.example");
@@ -91,6 +98,23 @@ impl Settings {
         })
             .unwrap_or_else(|| std::env::temp_dir().join("richos-agents"))
     }
+}
+
+/// Validate an existing storage input before an isolated tool writes beneath it.
+pub fn validate_existing_storage(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() { return Err("storage path must be absolute".into()); }
+    let resolved = path.canonicalize().map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    if let Ok(tail) = resolved.strip_prefix("/Volumes") {
+        if let Some(name) = tail.components().next() {
+            use std::os::unix::fs::MetadataExt;
+            let volume = Path::new("/Volumes").join(name.as_os_str());
+            let mounted = std::fs::metadata(&volume).map_err(|error| error.to_string())?;
+            let parent = std::fs::metadata("/Volumes").map_err(|error| error.to_string())?;
+            if mounted.dev() == parent.dev() { return Err(format!("selected storage volume is not mounted: {}", volume.display())); }
+        }
+    }
+    Ok(resolved)
 }
 
 /// Exclusive creation preserves all existing private settings, including a symlink.

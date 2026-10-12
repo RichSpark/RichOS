@@ -772,10 +772,9 @@ if [ -z "$RESULTS_ROOT" ]; then
   RESULTS_ROOT="$WORK/results"
   if [ -n "${RUN_TESTS_RESULTS_STATE:-}" ]; then
     RESULTS_KEEP="$RUN_TESTS_RESULTS_STATE"
-  elif [ -d /Volumes/E1TB ] && [ "$(stat -f %d /Volumes/E1TB)" != "$(stat -f %d /Volumes)" ]; then
-    RESULTS_KEEP="$(worktree_dir "$(worktree_root "$DIR")" /Volumes/E1TB/state/richos/test-results)"
   else
-    RESULTS_KEEP="$(worktree_dir "$(worktree_root "$DIR")" "$HOME/.richos-nightly/test-results")"
+    resolved_results="$(python3 "$DIR/../../engine/scripts/lib/machine_settings.py" state test-results --key RICHOS_TEST_RESULTS_ROOT)" || exit 2
+    RESULTS_KEEP="$(worktree_dir "$(worktree_root "$DIR")" "$resolved_results")"
   fi
 fi
 FAILING=()

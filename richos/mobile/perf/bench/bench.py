@@ -28,6 +28,9 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import machine_storage as M
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
@@ -137,7 +140,7 @@ def battery_temp(a):
 
 def find_ndk(a):
     candidates = [a.ndk] if a.ndk else []
-    candidates += [os.environ.get("ANDROID_NDK_HOME")] + sorted(glob.glob("/Volumes/E1TB/tools/android-ndk-sdk/ndk/*"), reverse=True)
+    candidates += [os.environ.get("ANDROID_NDK_HOME")] + sorted(glob.glob(os.path.join(os.environ.get("ANDROID_SDK_ROOT", os.path.expanduser("~/Library/Android/sdk")), "ndk/*")), reverse=True)
     for c in candidates:
         if c and glob.glob(f"{c}/toolchains/llvm/prebuilt/*/bin/aarch64-linux-android29-clang"):
             return c
@@ -194,7 +197,7 @@ def build_empty(work):
     home = os.environ.get("ANDROID_HOME", "/opt/homebrew/share/android-commandlinetools")
     bt = sorted(glob.glob(f"{home}/build-tools/*"))[-1]
     jar = sorted(glob.glob(f"{home}/platforms/android-34/android.jar") or glob.glob(f"{home}/platforms/android-*/android.jar"))[-1]
-    keystore = os.environ.get("RICHOS_BENCH_KEYSTORE", "/Volumes/E1TB/caches/android/debug.keystore")
+    keystore = os.environ.get("RICHOS_BENCH_KEYSTORE") or str(M.cache("android/debug.keystore"))
     w, src = Path(work), HERE / "empty-app"
     classes = w / "classes"
     classes.mkdir()
@@ -264,7 +267,7 @@ def run_empty_start(a, work):
 
 def main(argv):
     a = parse_args(argv)
-    work = tempfile.mkdtemp(prefix="richos-bench-", dir=os.environ.get("TMPDIR") or "/Volumes/E1TB/tmp")
+    work = tempfile.mkdtemp(prefix="richos-bench-", dir=os.environ.get("TMPDIR") or None)
     try:
         physical.require_verb("randroid")
         build = physical.gate(a.adb, a.serial)

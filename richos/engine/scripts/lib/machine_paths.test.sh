@@ -3,7 +3,9 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHONDONTWRITEBYTECODE=1 python3 - "$DIR" <<'PY'
-import importlib.util, json, sys, unittest
+import importlib.util, json, sys, unittest, tempfile, subprocess
+from pathlib import Path
+from unittest.mock import patch
 from collections import Counter
 sys.path.insert(0, sys.argv[1])
 from machine_paths import matches, in_scope
@@ -18,17 +20,23 @@ class Tree:
  def __init__(self, files): self.bodies=files;self.files=set(files)
  def read(self,path,*args): return self.bodies[path]
 class MachinePaths(unittest.TestCase):
+ def test_real_published_source_obeys_current_debt(self):
+  root=Path(sys.argv[1]).resolve().parents[3]
+  C.FINDINGS.clear()
+  C.check_machine_paths(C.Tree(str(root)), 'richos/engine/scripts/publication-machine-path-baseline.json')
+  self.assertFalse(C.FINDINGS, C.FINDINGS)
  def test_scope(self):
-  for p in ['docs/plans/run.py','docs/verification/probe.sh','richos/app/validation/output.json']:
+  for p in ['docs/plans/run.py','docs/verification/probe.sh','richos/app/validation/output.json','richos/app/crates/a.rs','docs/development/verification-input-qualifications.json','richos/mobile/test/fixture.js','richos/engine/scripts/x.test.py']:
    self.assertFalse(in_scope(p))
-  for p in ['docs/development/verification-input-qualifications.json','richos/engine/skills/tool/SKILL.md','richos/app/crates/a.rs']:
+  for p in ['richos/engine/skills/tool/SKILL.md','richos/app/scripts/tool.py','richos/engine/orchestration.config']:
    self.assertTrue(in_scope(p))
  def test_patterns_comments_and_strings(self):
   self.assertEqual(matches(V+'/x '+H+' '+T+'/x '+D+'/x '+B+'/x'),Counter({V:1,H.rsplit('/',1)[0]:1,T:1,D:1,B:1}))
   self.assertFalse(matches('/Users/'+'you/repo'))
   self.assertFalse(matches('# '+H,'a.py'))
-  self.assertEqual(matches('# '+V,'a.py'),{V:1})
-  self.assertEqual(matches('"""'+H+'"""','a.py'),{H.rsplit('/',1)[0]:1})
+  self.assertFalse(matches('# '+V,'a.py'))
+  self.assertFalse(matches('"""'+H+'"""','a.py'))
+  self.assertEqual(matches('"""historical prose"""; ROOT="'+V+'"','a.py'),{V:1})
   self.assertTrue(matches(H,'SKILL.md'))
   self.assertFalse(matches(D+'c/x'))
  def test_bare_roots_and_rust_assignment(self):
@@ -36,6 +44,32 @@ class MachinePaths(unittest.TestCase):
   self.assertEqual(matches('ROOT=Path("'+home+'") / "ab"'),{home:1})
   self.assertEqual(matches('cd '+T),{T:1})
   self.assertEqual(matches('*root = PathBuf::from("'+H+'");','a.rs'),{home:1})
+ def test_inline_block_comment_keeps_following_code(self):
+  home=H.rsplit('/',1)[0]
+  self.assertEqual(matches('/* explanation */ const ROOT: &str = "'+H+'";','a.rs'),{home:1})
+  self.assertFalse(matches('/* '+H+' */ const ROOT: &str = "/portable";','a.rs'))
+ def test_committed_predecessor_and_zero_adoption(self):
+  with tempfile.TemporaryDirectory() as root:
+   root=Path(root)
+   def git(*args):
+    subprocess.run(['git','-C',str(root),'-c','core.hooksPath=/dev/null','-c','user.name=Fixture','-c','user.email=fixture@localhost',*args],check=True,capture_output=True)
+   git('init','-b','main')
+   (root/'checker.py').write_text('def check_machine_paths(): pass\n')
+   (root/'.publication-completeness').write_text('MACHINE_PATH_BASELINE="debt.json"\n')
+   (root/'debt.json').write_text(json.dumps({'a.py':{V:1}}))
+   git('add','.');git('commit','-m','initial debt')
+   git('checkout','-b','migration')
+   (root/'debt.json').write_text('{}')
+   git('commit','-am','completed debt')
+   tree=type('FixtureTree',(),{'root':str(root)})()
+   with patch.object(C,'__file__',str(root/'checker.py')):
+    self.assertEqual(C.committed_machine_baseline(tree)['a.py'][V],0)
+    # Delete the declaration after completion: adoption still means zero debt.
+    (root/'.publication-completeness').write_text('# no debt\n')
+    git('commit','-am','remove completed declaration')
+    self.assertEqual(C.committed_machine_baseline(tree)['a.py'][V],0)
+    git('checkout','main');git('merge','--ff-only','migration')
+    self.assertEqual(C.committed_machine_baseline(tree),{})
  def test_local_reason(self):
   marker='machine-path-exempt: '
   self.assertFalse(matches(marker+'historical measurement\n'+V))
@@ -50,7 +84,7 @@ class MachinePaths(unittest.TestCase):
   self.assertTrue(self.check({'debt.json':debt,'a.py':''}))
  def test_scope_does_not_hide_live_config(self):
   self.assertFalse(self.check({'debt.json':'{}','docs/verification/run.py':V}))
-  self.assertTrue(self.check({'debt.json':'{}','docs/development/live.json':V}))
+  self.assertTrue(self.check({'debt.json':'{}','richos/engine/live.config':V}))
  def test_new_skill_fails(self):
   self.assertTrue(self.check({'debt.json':'{}','richos/engine/skills/new/SKILL.md':V}))
  def test_baseline_cannot_grow(self):

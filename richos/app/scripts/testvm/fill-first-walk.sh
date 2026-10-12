@@ -39,15 +39,14 @@ wait_for() {
   return 1
 }
 
-"$T/guest.sh" "$VM" 'mkdir -p /Users/admin/fill-first' || setup_failed "the fixture folder"
-"$T/guest.sh" "$VM" --push "$T/fake-claude-fill-first.pl" /Users/admin/fill-first/claude || setup_failed "pushing the fake claude"
-"$T/guest.sh" "$VM" 'chmod 755 /Users/admin/fill-first/claude; printf "{\"five\":40,\"weekly\":30}" > /Users/admin/fill-first/usage-1.json' \
-  || setup_failed "the first usage fixture"
+"$T/guest.sh" "$VM" 'mkdir -p /Users/admin/fill-first' || setup_failed "the fixture folder" # machine-path-exempt: isolated test VM account/path; never a customer default
+"$T/guest.sh" "$VM" --push "$T/fake-claude-fill-first.pl" /Users/admin/fill-first/claude || setup_failed "pushing the fake claude" # machine-path-exempt: isolated test VM account/path; never a customer default
+"$T/guest.sh" "$VM" 'chmod 755 /Users/admin/fill-first/claude; printf "{\"five\":40,\"weekly\":30}" > /Users/admin/fill-first/usage-1.json'  || setup_failed "the first usage fixture" # machine-path-exempt: isolated guest or negative fixture input; no customer default
 python3 - "$VM" "$T" <<'PY' || setup_failed "relaunching the app with the fake claude"
 import sys
 sys.path.insert(0, sys.argv[2])
 from relaunch import relaunch
-print(relaunch(sys.argv[1], environment={'RICHOS_CLAUDE_BIN': '/Users/admin/fill-first/claude'}))
+print(relaunch(sys.argv[1], environment={'RICHOS_CLAUDE_BIN': '/Users/admin/fill-first/claude'})) # machine-path-exempt: isolated test VM account/path; never a customer default
 PY
 
 wait_for 'Not now' || true
@@ -85,7 +84,7 @@ sleep 1
 "$T/ax.sh" "$VM" click --title 'Add and sign in' || true
 sleep 4
 # shellcheck disable=SC2016  # the $(...) is meant to expand in the guest's shell, not here
-DATA=$("$T/guest.sh" "$VM" 'dirname "$(find /Users/admin/testvm -type d -name claude-accounts 2>/dev/null | head -1)"')
+DATA=$("$T/guest.sh" "$VM" 'dirname "$(find /Users/admin/testvm -type d -name claude-accounts 2>/dev/null | head -1)"') # machine-path-exempt: isolated test VM account/path; never a customer default
 note "app data: $DATA"
 "$T/guest.sh" "$VM" "ls -la \"$DATA/claude-accounts\" \"$DATA/claude-accounts/2\"; cat \"$DATA/claude-accounts.json\"" > "$S/2b-folder-created.txt" 2>&1 \
   || fail "2b the account folder listing"
@@ -100,8 +99,7 @@ sleep 3
 "$T/shot.sh" "$VM" "$S/3-setting-switch.png" || fail "capture 3-setting-switch"
 
 note "fixture: Account 1 five-hour window at 95%"
-"$T/guest.sh" "$VM" 'printf "{\"five\":95,\"weekly\":30}" > /Users/admin/fill-first/usage-1.json' \
-  || fail "the 95% usage fixture (a switch below would not be caused by it)"
+"$T/guest.sh" "$VM" 'printf "{\"five\":95,\"weekly\":30}" > /Users/admin/fill-first/usage-1.json'  || fail "the 95% usage fixture (a switch below would not be caused by it)" # machine-path-exempt: isolated guest or negative fixture input; no customer default
 sleep 6
 "$T/ax.sh" "$VM" click --title 'Refresh' --first || true
 sleep 8
@@ -119,7 +117,7 @@ note "a turn after the switch"
 "$T/ax.sh" "$VM" click --title 'Send' --first || true
 sleep 15
 "$T/shot.sh" "$VM" "$S/6-turn-after-switch.png" || fail "capture 6-turn-after-switch"
-"$T/guest.sh" "$VM" 'cat /Users/admin/fill-first/calls.log' > "$S/calls.log" 2>&1 || fail "calls.log"
+"$T/guest.sh" "$VM" 'cat /Users/admin/fill-first/calls.log' > "$S/calls.log" 2>&1 || fail "calls.log" # machine-path-exempt: isolated test VM account/path; never a customer default
 if [ "${#FAILS[@]}" -gt 0 ]; then
   note "done, with ${#FAILS[@]} failed step(s): $(printf '%s; ' "${FAILS[@]}")"
   exit 1

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { cacheDir } from '../../cli/machine-settings.mjs';
 // Pair the emulator's app with an ISOLATED test Mac over real HTTPS, with the app unchanged.
 //
 // The app reaches the Mac by host name, on the platform's default trust store, with nothing
@@ -126,7 +127,7 @@ function trust(o) {
 
 function qr(o) {
   if (!o['text-file'] || !o.out) fail('qr needs --text-file <file> --out <png>');
-  const gradleHome = process.env.GRADLE_USER_HOME || '/Volumes/E1TB/caches/richos-native-android/gradle';
+  const gradleHome = process.env.GRADLE_USER_HOME || cacheDir('richos-native-android/gradle', 'GRADLE_USER_HOME');
   const found = execFileSync('find', [join(gradleHome, 'caches/modules-2/files-2.1/com.google.zxing/core'), '-name', 'core-3.5.4.jar'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split('\n')[0];
   if (!found) fail(`no ZXing core 3.5.4 in ${gradleHome}; build the app once first`);
   const javaHome = [process.env.RANDROID_JAVA_HOME, process.env.JAVA_HOME, '/Applications/Android Studio.app/Contents/jbr/Contents/Home'].find(h => h && existsSync(join(h, 'bin/java')));

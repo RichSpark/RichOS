@@ -12,7 +12,7 @@
   --homes       find `/Users/<name>`-shaped home paths by OCR and cover them: ocr-gate.sh's
                 second SHAPE, verbatim, matched the same way as --phones. Added with the
                 candidate 38 walk, whose frames carry the guest's own home path
-                (/Users/admin/testvm/...) in attachment lines and work receipts
+                (/Users/admin/testvm/...) in attachment lines and work receipts [machine-path-exempt: isolated guest fixture example; no customer default]
   --box         cover an exact rectangle, as many times as you like
   --pad N       grow every OCR-derived box by N pixels (default 3)
   --no-verify   skip the re-scan (and say so in the output)

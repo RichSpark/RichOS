@@ -17,6 +17,9 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import machine_storage as M
 import platform
 import pwd
 import re
@@ -842,13 +845,12 @@ def gate_tmpdir(environ=None):
     disposable subdirectories there. proof-run.py gets the same root via gate_conditions.
     """
     environ = os.environ if environ is None else environ
-    if GATE_TMPDIR_VOLUME.is_mount():
-        # The folders that already exist above it are checked before it is created, so a parent
-        # this account cannot write into is named with its fix, not a bare PermissionError
-        # (review rv-20261011T040921Z-7ac03392-1fbf).
-        refuse_unsafe_gate_folder(str(GATE_TMPDIR))
-        GATE_TMPDIR.mkdir(parents=True, exist_ok=True)
-        return refuse_unsafe_gate_folder(str(GATE_TMPDIR) + "/")
+    values = M.load(environ)
+    if values.get("RICHOS_BULK_ROOT"):
+        gate_tmp = M.validate(values["RICHOS_BULK_ROOT"], require_directory=True) / "tmp/richos-gates"
+        refuse_unsafe_gate_folder(str(gate_tmp))
+        gate_tmp.mkdir(parents=True, exist_ok=True)
+        return refuse_unsafe_gate_folder(str(gate_tmp) + "/")
     try:
         out = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True,
                              text=True, timeout=10, stdin=subprocess.DEVNULL)
@@ -860,8 +862,6 @@ def gate_tmpdir(environ=None):
     return refuse_unsafe_gate_folder(environ.get("TMPDIR") or tempfile.gettempdir())
 
 
-GATE_TMPDIR_VOLUME = Path("/Volumes/E1TB")
-GATE_TMPDIR = GATE_TMPDIR_VOLUME / "tmp" / "richos-gates"
 
 # The rights an ACL "allow" entry can grant that richos-user-update's no_write_acl() refuses
 # (its write_bits), as `ls -le` spells them on macOS.

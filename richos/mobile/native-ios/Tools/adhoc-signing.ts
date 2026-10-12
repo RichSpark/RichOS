@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { validateStorage } from '../../cli/machine-settings.mjs';
 // Ad hoc signing for a phone build with PRODUCTION push, through the App Store Connect API only.
 //
 //   node Tools/adhoc-signing.ts --bundle dev.richos.connect.perf --device <hardware UDID> --team <TEAM> \
-//     --out <dir on /Volumes/E1TB> [--env-file <testflight env>]
+//     --out <output directory> [--env-file <testflight env>]
 //
 // A development-signed build registers a SANDBOX push token, so it never tests the push path the store
 // build uses (Quint's App Review rehearsal, 2026-10-04: reply notifications had never been seen working
@@ -268,7 +269,7 @@ async function main() {
   if (!bundle || !udid || !team || !out) throw new Error("Usage: adhoc-signing.ts --bundle ID --device UDID --team TEAM --out DIR [--env-file FILE]");
   if (!/^[A-Za-z0-9.-]+$/u.test(bundle)) throw new Error("--bundle must be a bundle identifier.");
   if (!/^[A-Z0-9]{10}$/u.test(team)) throw new Error("--team must be the 10-character Apple team ID.");
-  if (!NodePath.resolve(out).startsWith("/Volumes/E1TB/")) throw new Error("--out must be on /Volumes/E1TB.");
+  validateStorage(NodePath.resolve(out));
   const envFile = values["env-file"] ?? process.env.RICHOS_IOS_TESTFLIGHT_ENV_FILE ?? NodePath.join(NodeOS.homedir(), ".config/richos/testflight.env");
   const { config, privateKey } = await readTestFlightEnv(envFile);
   const result = await ensureAdHoc({ bundle, udid, team, out: NodePath.resolve(out) }, {

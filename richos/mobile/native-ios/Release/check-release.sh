@@ -4,7 +4,7 @@
 # from the binary. Stream I3's release check; it extends `bin/rios sim check-release` (stream I1)
 # from the app's own binary to the whole product: the app and both extensions.
 #
-#   Release/check-release.sh <output directory on /Volumes/E1TB>
+#   Release/check-release.sh <output directory in the selected storage folder>
 #
 # Prints one line per check ("ok …" / "FAIL …") and exits 0 only when every check passed.
 #
@@ -25,7 +25,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:?usage: check-release.sh <output directory>}"
-case "$OUT" in /Volumes/E1TB/*) ;; *) echo "check-release: the output directory must be on /Volumes/E1TB" >&2; exit 2 ;; esac
+OUT="$(python3 "$HERE/../../engine/scripts/lib/machine_settings.py" validate "$OUT")" || exit 2
 mkdir -p "$OUT/logs"
 
 PROJECT="$("$HERE/Release/generate.sh" "$OUT/project")" || { echo "FAIL generate: see xcodegen output above"; exit 1; }

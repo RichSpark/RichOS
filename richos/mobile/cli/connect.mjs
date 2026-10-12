@@ -1,3 +1,4 @@
+import { validateStorage } from './machine-settings.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
@@ -67,7 +68,8 @@ export function managedArtifact(profile) {
 
 export async function command(action, file) {
   if (action === 'lab-check') {
-    if (!file?.startsWith('/Volumes/E1TB/')) throw Error('Live proof state must be on the external SSD');
+    if (!file) throw Error('Live proof state requires an explicit file');
+    file = validateStorage(file);
     const { spawnSync } = await import('node:child_process');
     const { fileURLToPath } = await import('node:url');
     const run = spawnSync(process.execPath, ['--test', fileURLToPath(new URL('../test/mac-server.test.mjs', import.meta.url))],

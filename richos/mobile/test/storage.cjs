@@ -1,16 +1,16 @@
 // Suite-owned storage. Never depend on the operator's shell TMPDIR.
 const fs = require('node:fs');
 const { join, dirname, resolve } = require('node:path');
-const volume = '/Volumes/E1TB';
+const { execFileSync } = require('node:child_process');
+const { tmpdir } = require('node:os');
+const reader = resolve(__dirname, '../../engine/scripts/lib/machine_settings.py');
 class StorageUnavailable extends Error {}
 function createScratch(label) {
-  if (!fs.existsSync(volume) || fs.statSync(volume).dev === fs.statSync(dirname(volume)).dev) {
-    throw new StorageUnavailable('mount /Volumes/E1TB for test storage');
-  }
-  const configured = process.env.TMPDIR && resolve(process.env.TMPDIR);
-  const base = configured?.startsWith(volume + '/') ? configured : join(volume, 'tmp/codex');
+  const configured = process.env.TMPDIR || tmpdir();
+  let base;
+  try { base = execFileSync('python3', [reader, 'validate', configured], { encoding: 'utf8' }).trimEnd(); }
+  catch (error) { throw new StorageUnavailable(String(error.stderr || error.message)); }
   fs.mkdirSync(base, { recursive: true });
-  if (!fs.realpathSync(base).startsWith(fs.realpathSync(volume) + '/')) throw new Error('Suite scratch must resolve onto /Volumes/E1TB');
   return fs.mkdtempSync(join(base, `richos-mobile-${label}-`));
 }
 function proofCache(base, storage, override) {

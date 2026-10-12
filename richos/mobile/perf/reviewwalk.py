@@ -8,7 +8,7 @@ exact build, and the command checks it itself.
 
 One record per walk, shared by both platforms' walks and both platforms' gates:
 
-  /Volumes/E1TB/state/richos/review-walk/<platform>/<full commit sha>.json
+  resolved review-walk state/<platform>/<full commit sha>.json
   {"platform": "ios" | "android", "commit": "<full sha>", "passed": true | false,
    "at": "<ISO UTC>", "host": "<review host name>",
    "steps": [{"name": "...", "ok": true | false, "detail": "..."}, ...]}
@@ -31,10 +31,13 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import machine_storage as M
 import re
 import sys
 
-ROOT = "/Volumes/E1TB/state/richos/review-walk"
+ROOT = str(M.state("review-walk"))
 LABEL = {"android": "Android", "ios": "iPhone"}
 WALK = {"ios": "richos/mobile/native-ios/bin/rios review-walk --commit {sha}",
         "android": "richos/mobile/native-android/bin/randroid review-walk --commit {sha}"}

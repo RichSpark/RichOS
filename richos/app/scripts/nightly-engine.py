@@ -50,6 +50,9 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import machine_storage as M
 import shutil
 import signal
 import subprocess
@@ -58,7 +61,7 @@ import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_STATE = Path("/Volumes/E1TB/state/richos/nightly-engine")
+DEFAULT_STATE = Path.home() / ".richos-nightly/nightly-engine"
 DEFAULT_APP_STATE = Path.home() / ".richos-nightly"
 KEEP_RUNS = 3
 # Every mutation pass on: the engine suites' own harnesses run unless told 0 (the merge gate's
@@ -213,10 +216,8 @@ def main(argv=None):
     repo = Path(git(HERE, "rev-parse", "--show-toplevel"))
     state = args.state_dir
     if state is None:
-        if not os.path.ismount("/Volumes/E1TB"):
-            say("REFUSED: /Volumes/E1TB is not mounted; run folders live on the external SSD")
-            return 2
-        state = DEFAULT_STATE
+        state = M.state("nightly-engine", default=DEFAULT_STATE)
+    state = M.validate(state)
     try:
         if app_nightly_running(args.app_state_dir):
             say("NOT STARTED: an app nightly holds %s; run this after it ends" % (args.app_state_dir / "release.lock"))

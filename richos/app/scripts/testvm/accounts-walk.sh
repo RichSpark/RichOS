@@ -134,12 +134,12 @@ relaunch_app() {
 import sys
 sys.path.insert(0, sys.argv[2])
 from relaunch import relaunch
-print(relaunch(sys.argv[1], environment={'RICHOS_CLAUDE_BIN': '/Users/admin/fill-first/claude'}))
+print(relaunch(sys.argv[1], environment={'RICHOS_CLAUDE_BIN': '/Users/admin/fill-first/claude'})) # machine-path-exempt: isolated test VM account/path; never a customer default
 PY
 }
 # usage <file> <five %> <weekly %>
 usage() { "$T/guest.sh" "$VM" "printf '{\"five\":$2,\"weekly\":$3}' > \"$1\""; }
-login_as() { "$T/guest.sh" "$VM" "printf '%s' '$1' > /Users/admin/fill-first/login-as"; }
+login_as() { "$T/guest.sh" "$VM" "printf '%s' '$1' > /Users/admin/fill-first/login-as"; } # machine-path-exempt: isolated test VM account/path; never a customer default
 send_turn() {  # one plain turn; the turn has ended once Send is back
   ax type "$1" --role AXTextArea --first --replace || note "no composer"
   ax click --title 'Send' --first || note "no Send"
@@ -156,10 +156,10 @@ field() {  # field <label> <text>: type into the input a label names
   return 1
 }
 
-"$T/guest.sh" "$VM" 'mkdir -p /Users/admin/fill-first' || setup_failed "the fixture folder"
-"$T/guest.sh" "$VM" --push "$T/fake-claude-fill-first.pl" /Users/admin/fill-first/claude || setup_failed "pushing the fake claude"
-"$T/guest.sh" "$VM" 'chmod 755 /Users/admin/fill-first/claude' || setup_failed "the fake claude's mode"
-usage /Users/admin/fill-first/usage-1.json 20 86 || setup_failed "the one account's usage fixture"
+"$T/guest.sh" "$VM" 'mkdir -p /Users/admin/fill-first' || setup_failed "the fixture folder" # machine-path-exempt: isolated test VM account/path; never a customer default
+"$T/guest.sh" "$VM" --push "$T/fake-claude-fill-first.pl" /Users/admin/fill-first/claude || setup_failed "pushing the fake claude" # machine-path-exempt: isolated test VM account/path; never a customer default
+"$T/guest.sh" "$VM" 'chmod 755 /Users/admin/fill-first/claude' || setup_failed "the fake claude's mode" # machine-path-exempt: isolated test VM account/path; never a customer default
+usage /Users/admin/fill-first/usage-1.json 20 86 || setup_failed "the one account's usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
 relaunch_app || setup_failed "relaunching the app with the fake claude"
 
 wait_for 'Not now' || true
@@ -218,13 +218,13 @@ shot 3-add-step2
 
 note "4 the same account signed in again"
 login_as 'account-1@fixture.invalid' || fail "4 the login-as fixture"
-: > "$S/.empty"; "$T/guest.sh" "$VM" --push "$S/.empty" /Users/admin/fill-first/calls.log || true; rm -f "$S/.empty"
+: > "$S/.empty"; "$T/guest.sh" "$VM" --push "$S/.empty" /Users/admin/fill-first/calls.log || true; rm -f "$S/.empty" # machine-path-exempt: isolated test VM account/path; never a customer default
 press 'Open sign-in' "4 Open sign-in"
 wait_for 'That is the account you already use' || true
 has 'You signed in as' "4 the same-account screen"
 has 'Try again' "4 Try again"
 shot 4-same-account
-"$T/guest.sh" "$VM" 'cat /Users/admin/fill-first/calls.log' > "$S/4-calls.log" 2>&1 || fail "4 calls.log"
+"$T/guest.sh" "$VM" 'cat /Users/admin/fill-first/calls.log' > "$S/4-calls.log" 2>&1 || fail "4 calls.log" # machine-path-exempt: isolated test VM account/path; never a customer default
 grep -q 'claude-accounts/2 auth logout' "$S/4-calls.log" || fail "4 the same account was not signed out of the new folder"
 
 note "5 the right account: Work is ready"
@@ -233,7 +233,7 @@ login_as 'work@fixture.invalid' || fail "5 the login-as fixture"
 # The app's own data folder: the claude-accounts under com.richos.app. The bare name matched a
 # folder directly in the guest home on candidate 43, so every record read missed (walk
 # walk-cb80366dad73: "app data: <guest-home>").
-DATA=$("$T/guest.sh" "$VM" 'dirname "$(find /Users/admin/testvm -type d -path "*/com.richos.app/claude-accounts" 2>/dev/null | head -1)"')
+DATA=$("$T/guest.sh" "$VM" 'dirname "$(find /Users/admin/testvm -type d -path "*/com.richos.app/claude-accounts" 2>/dev/null | head -1)"') # machine-path-exempt: isolated test VM account/path; never a customer default
 note "app data: $DATA"
 usage "$DATA/claude-accounts/2/usage.json" 0 12 || fail "Work's usage fixture"
 press 'Try again' "5 Try again"
@@ -314,7 +314,7 @@ ax find --title 'Automatic' --contains --json > "$S/5b-auto-switch.json" 2>&1 ||
 is_on "$auto_v" || fail "5b the quota sheet's Automatic pause is not on (AXValue $auto_v)"
 has 'On. Nothing is waiting.' "5b the status card says the pause is on"
 shot 5b-d13-quota-on
-usage /Users/admin/fill-first/usage-1.json 95 86 || fail "5b Home's five-hour 95% fixture"
+usage /Users/admin/fill-first/usage-1.json 95 86 || fail "5b Home's five-hour 95% fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
 quota_refresh "5b Refresh"
 sleep 6
 has 'Ready to pause' "5b at 95% the card says the team will pause"
@@ -322,7 +322,7 @@ has 'The five-hour allowance has reached 93%' "5b the card's reason"
 shot 5b-d13-quota-held
 "$T/guest.sh" "$VM" "cat \"$DATA/claude-accounts.json\"" > "$S/5b-accounts-held.txt" 2>&1 || fail "5b the accounts record"
 grep -q '"inUse": *"1"' "$S/5b-accounts-held.txt" || fail "5b Rich switched to Work at the five-hour line, though Pause is chosen"
-usage /Users/admin/fill-first/usage-1.json 20 86 || fail "5b Home's usage put back"
+usage /Users/admin/fill-first/usage-1.json 20 86 || fail "5b Home's usage put back" # machine-path-exempt: isolated test VM account/path; never a customer default
 quota_refresh "5b Refresh after"
 sleep 4
 ax click --title 'Close Claude Code quota' >/dev/null 2>&1 || ax --key 53 >/dev/null 2>&1 || true
@@ -363,8 +363,7 @@ if [ "${ACCOUNTS_WALK_UNTIL:-}" = age ]; then
   note "5c fresh: $n lane(s) say 'read N min ago'"
   [ "$n" = 0 ] || fail "5c a current reading is shown with an age ($n)"
   ax tree > "$S/5c-age-fresh-dark.tree" 2>&1 || true
-  "$T/guest.sh" "$VM" "printf '{\"null\":true}' > /Users/admin/fill-first/usage-1.json; printf '{\"null\":true}' > \"$DATA/claude-accounts/2/usage.json\"" \
-    || fail "5c the null-answer fixtures"
+  "$T/guest.sh" "$VM" "printf '{\"null\":true}' > /Users/admin/fill-first/usage-1.json; printf '{\"null\":true}' > \"$DATA/claude-accounts/2/usage.json\""  || fail "5c the null-answer fixtures" # machine-path-exempt: isolated guest or negative fixture input; no storage default
   quota_refresh "5c Refresh, both answer null"
   sleep 6
   quota_close
@@ -406,7 +405,7 @@ if ax find --title 'Turn it off' --first >/dev/null 2>&1; then press 'Turn it of
 menu closed
 
 note "6 Home's week reaches 99%: Rich switches, and says why"
-usage /Users/admin/fill-first/usage-1.json 20 99 || fail "Home's 99% usage fixture"
+usage /Users/admin/fill-first/usage-1.json 20 99 || fail "Home's 99% usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
 send_turn 'How is the client report going?'
 send_turn 'And the pairing screens?'
 "$T/guest.sh" "$VM" "cat \"$DATA/claude-accounts.json\"" > "$S/6-accounts.txt" 2>&1 || fail "6 the accounts record"
@@ -432,7 +431,7 @@ shot 8-menu-two
 menu closed
 
 note "9 item 8: he chooses the account at 97% of its week, and Rich switches again at 99%"
-usage /Users/admin/fill-first/usage-1.json 20 97 || fail "Home's 97% usage fixture"
+usage /Users/admin/fill-first/usage-1.json 20 97 || fail "Home's 97% usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
 # Home was resting at 99%; a fresh reading at 97% gives it room again. A turn reads the quota, so
 # the sheet is opened after one, and again after up to two more, until Home's card offers the choice.
 chosen=0
@@ -455,7 +454,7 @@ if [ "$chosen" = 1 ]; then
   has 'You chose' "9 Recent changes says You chose Home"
   shot 9-home-in-use
   close_sheet
-  usage /Users/admin/fill-first/usage-1.json 20 99 || fail "Home's second 99% usage fixture"
+  usage /Users/admin/fill-first/usage-1.json 20 99 || fail "Home's second 99% usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
   switched=0
   for try in 1 2 3; do
     send_turn "Status update $try on the client report?"

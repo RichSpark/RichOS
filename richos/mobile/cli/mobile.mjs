@@ -39,7 +39,7 @@ const usage = `Mobile development loop (JSON output; nonzero exit on failure)
   node richos/mobile/cli/mobile.mjs check-release
 Stateful headless commands share a session under the external cache.
 Sim prepare builds/installs/boots a dedicated simulator; refresh copies JS/CSS without a native build.
-RICHOS_MOBILE_CACHE overrides the per-checkout cache, on /Volumes/E1TB only.
+RICHOS_MOBILE_CACHE overrides the per-checkout cache. A selected external volume must be mounted.
 RICHOS_MOBILE_TEST_APP=integration selects a separate installed app and cache namespace.
 Simulator device data defaults to an external set. Where permitted, set
 RICHOS_MOBILE_SIMULATOR_STORAGE=system before its first creation to use Apple's default system device storage. The choice persists per cache.`;

@@ -24,6 +24,10 @@ import contextlib
 import datetime
 import json
 import os
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import machine_storage as M
 import re
 import shutil
 import subprocess
@@ -600,7 +604,13 @@ class Simctl:
 
 
 def evidence_root_ok(path):
-    return bool(path) and os.path.realpath(path).startswith("/Volumes/E1TB/") and os.path.ismount("/Volumes/E1TB")
+    if not path:
+        return False
+    try:
+        M.validate(path)
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def _capture(command, prefix, runner, timeout):
@@ -694,7 +704,7 @@ def trace_series(cls, driver, trials, evidence, runner=subprocess.run, popen=sub
     if cls == "warm" and seconds < away + 5:
         raise Refused(f"--trace-seconds {seconds} cannot hold {away} s away plus the return; use at least {away + 5:g}")
     if not evidence_root_ok(evidence):
-        raise Refused("traces require --evidence-dir on mounted /Volumes/E1TB")
+        raise Refused("traces require --evidence-dir on a validated storage path")
     os.makedirs(evidence, exist_ok=True)
     evidence = tempfile.mkdtemp(prefix=f"ios-{cls}-", dir=evidence)
     samples, rejected = [], []
@@ -1860,7 +1870,7 @@ def _device_refusals(args, stamp):
         raise Refused("set RICHOS_APPLE_TEAM: the on-screen check runs the phone's UI-test runner, which needs the "
                       "signing team")
     if not evidence_root_ok(getattr(args, "evidence_dir", None)):
-        raise Refused("an iPhone run needs --evidence-dir on mounted /Volumes/E1TB: the traces, and the phone's own "
+        raise Refused("an iPhone run needs --evidence-dir on a validated storage path: the traces, and the phone's own "
                       "saved state until it is back, are kept there")
     runner_app = os.path.join(os.path.dirname(stamp["artifact"]), RUNNER_APP)
     if not os.path.isdir(runner_app):

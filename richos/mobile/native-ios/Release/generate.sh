@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generates the RichOS native iPhone Xcode project WITH the release and extension additions
-# (Release/platform.yml) into a directory on /Volumes/E1TB, and prints the .xcodeproj path.
+# (Release/platform.yml) into a directory in the selected storage folder, and prints the .xcodeproj path.
 #
 #   Release/generate.sh <output directory>
 #
@@ -11,7 +11,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:?usage: generate.sh <output directory>}"
-case "$OUT" in /Volumes/E1TB/*) ;; *) echo "generate: the output directory must be on /Volumes/E1TB" >&2; exit 2 ;; esac
+OUT="$(python3 "$HERE/../../engine/scripts/lib/machine_settings.py" validate "$OUT")"
 mkdir -p "$OUT"
 # platform.yml names its plist and entitlements files from this (see its header).
 export RICHOS_NATIVE_IOS_ROOT="$HERE"

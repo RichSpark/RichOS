@@ -25,6 +25,9 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import machine_storage as M
 import re
 import subprocess
 import sys
@@ -34,7 +37,7 @@ import uuid
 HERE = Path(__file__).resolve().parent
 RANDROID = Path(os.environ.get('BUILD_TIMING_RANDROID') or HERE / 'randroid')   # override: its test only
 DEFAULT_EDIT = HERE.parent / 'app/src/main/kotlin/dev/richos/android/app/PerformanceMarks.kt'
-HEARTBEAT = Path(os.environ.get('RICHOS_CPU_GUARD_STATE', '/Volumes/E1TB/state/richos/cpu-guard')) / 'heartbeat.json'
+HEARTBEAT = M.state('cpu-guard', 'RICHOS_CPU_GUARD_STATE') / 'heartbeat.json'
 
 
 def host_busy():

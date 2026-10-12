@@ -393,8 +393,6 @@ class Reliability(unittest.TestCase):
     @unittest.skipUnless(sys.platform == 'darwin', 'the iOS suite requires macOS')
     def test_ios_cache_wrapper_preserves_headless_arguments(self):
         # Stub only compilation. Losing --headless attempts simctl and fails this fixture.
-        if not str(self.path).startswith('/Volumes/E1TB/'):
-            self.skipTest('the iOS fixture requires SSD-backed TMPDIR')
         bindir = self.path / 'bin'
         bindir.mkdir()
         xcrun = bindir / 'xcrun'

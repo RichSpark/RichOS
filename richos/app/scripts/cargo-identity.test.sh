@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-tests: no-host-screen: builds and runs tiny Rust fixtures with no UI or network
-# run-tests: inputs richos/app/scripts/cargo-identity.test.sh richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/testvm/reserve.py
-# run-tests: covers richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/testvm/reserve.py
+# run-tests: inputs richos/app/scripts/lib/machine_storage.py richos/engine/scripts/lib/machine_settings.py richos/app/scripts/cargo-identity.test.sh richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/testvm/reserve.py
+# run-tests: covers richos/app/scripts/lib/machine_storage.py richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/testvm/reserve.py
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/cargo-cache-env.sh"
@@ -23,6 +23,21 @@ import cargo_identity
 wrapper = here / "bin/cargo"
 scratch = Path(tempfile.mkdtemp(prefix="cargo-identity.", dir=os.environ["TMPDIR"]))
 try:
+    settings_home = scratch / "home with spaces"
+    settings_file = settings_home / "Library/Application Support/RichOS/.env"
+    settings_file.parent.mkdir(parents=True)
+    workspace = scratch / "settings workspace"; workspace.mkdir()
+    (workspace / "Cargo.toml").write_text('[workspace]\nmembers=[]\n')
+    file_cache = scratch / "file cache"; alias_cache = scratch / "alias cache"
+    settings_file.write_text('CARGO_TARGET_DIR=' + str(file_cache) + '\n')
+    supplied = {'HOME': str(settings_home), 'TMPDIR': str(scratch)}
+    assert cargo_identity.target_dir(workspace, supplied)[0] == file_cache
+    assert cargo_identity.target_dir(workspace, {**supplied, 'RICHOS_CARGO_CACHE_ROOT': str(alias_cache)})[0] == alias_cache
+    snapshot = cargo_identity.M.environment(supplied)
+    settings_file.write_text('UNKNOWN=/invalid\n')
+    assert cargo_identity.target_dir(workspace, snapshot)[0] == file_cache
+    assert cargo_identity.target_dir(workspace, snapshot, base=str(alias_cache))[0] == alias_cache
+    print("PASS private Cargo settings, alias precedence, spaces and job snapshot")
     missing = dict(HOME=str(scratch / "no-cargo-home"), PATH="/usr/bin:/bin")
     assert shutil.which("cargo", path=cargo_identity.enable_environment(missing)["PATH"]) is None
     missing_shell = subprocess.run(["/bin/bash", "-c", '. "$1"; command -v cargo', "fixture",

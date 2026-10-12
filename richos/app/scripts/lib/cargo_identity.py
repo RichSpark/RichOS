@@ -9,6 +9,7 @@ import sys
 import subprocess
 import tempfile
 import tomllib
+import machine_storage as M
 
 
 def cargo_executable(environment):
@@ -21,8 +22,18 @@ def cargo_executable(environment):
     return cargo
 
 
-def enable_environment(environment):
+def cargo_environment(environment, cwd=None):
+    # Cargo already supports a relative environment target directory. Normalize
+    # that tool input before the strict private-settings reader sees it.
     env = dict(environment)
+    target = env.get('CARGO_TARGET_DIR')
+    if target and not Path(target).is_absolute():
+        env['CARGO_TARGET_DIR'] = str((Path(cwd or Path.cwd()) / target).resolve())
+    return env
+
+
+def enable_environment(environment):
+    env = M.environment(cargo_environment(environment))
     cargo = cargo_executable(env)
     if not cargo:
         return env
@@ -32,12 +43,9 @@ def enable_environment(environment):
     env["PATH"] = wrapper + os.pathsep + env.get("PATH", "")
     if not env.get("RUSTC_WRAPPER") and not env.get("CARGO_BUILD_RUSTC_WRAPPER"):
         cache = shutil.which("sccache", path=env["PATH"])
-        installed = Path("/Volumes/E1TB/tools/sccache/v0.18.0/sccache")
-        if not cache and installed.is_file() and os.access(installed, os.X_OK):
-            cache = str(installed)
         if cache:
             env["RUSTC_WRAPPER"] = cache
-            env.setdefault("SCCACHE_DIR", "/Volumes/E1TB/caches/sccache/richos")
+            env.setdefault("SCCACHE_DIR", str(M.cache("sccache/richos", "SCCACHE_DIR", env)))
     return env
 
 
@@ -69,9 +77,11 @@ def workspace_root(directory):
 
 def target_dir(directory, environment, base=None, cwd=None):
     root = workspace_root(directory)
-    configured = base or environment.get("RICHOS_CARGO_CACHE_ROOT") or environment.get("CARGO_TARGET_DIR")
+    environment = cargo_environment(environment, cwd)
+    values = M.load(environment)
+    configured = base or values.get("RICHOS_CARGO_CACHE_ROOT") or values.get("CARGO_TARGET_DIR")
     if not configured:
-        configured = "/Volumes/E1TB/caches/cargo-target"
+        configured = str(M.cache("cargo-target", environment=environment))
     cache = Path(configured).expanduser()
     if not cache.is_absolute():
         cache = Path(cwd or Path.cwd()) / cache

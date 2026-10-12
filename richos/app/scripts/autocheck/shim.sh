@@ -32,7 +32,8 @@ case "$HOOK" in
     post-*) REFUSE=0 ;;
     *) REFUSE=1 ;;
 esac
-TMP=$(mktemp -d "${TMPDIR:-/Volumes/E1TB/tmp/codex}/richos-autocheck.XXXXXX") || {
+mkdir -p "${TMPDIR:-${HOME}/.cache/richos/tmp}" || exit "$REFUSE"
+TMP=$(mktemp -d "${TMPDIR:-${HOME}/.cache/richos/tmp}/richos-autocheck.XXXXXX") || {
     echo "autocheck: $HOOK could not make a scratch file; the check did not run" >&2
     exit "$REFUSE"
 }

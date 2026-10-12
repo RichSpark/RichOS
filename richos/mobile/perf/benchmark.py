@@ -34,6 +34,8 @@ import math
 import os
 import random
 import statistics
+import subprocess
+from pathlib import Path
 
 import condition
 import perfcore
@@ -43,7 +45,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 ENV_VAR = "RICHOS_MOBILE_PERF_BENCHMARKS"
 # Where the benchmark file lives by default on this Mac: the private record repository, never this one.
-DEFAULT = os.path.expanduser("~/ab/richos-hq/docs/mobile-perf/benchmarks.json")
+_common = subprocess.run(["git", "-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, timeout=30)
+DEFAULT = str((Path(_common.stdout.strip()).parent if _common.returncode == 0 else Path(REPO)).parent / "richos-hq/docs/mobile-perf/benchmarks.json")
 NO_FILE = "no private benchmark file"
 SCHEMA = "richos-mobile-perf-benchmarks/2"
 METRICS = ("coldLaunch", "warmResume")

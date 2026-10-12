@@ -2,13 +2,13 @@
 # A fake `claude` for the fill-first VM check. It answers what RichOS asks of the binary:
 # `auth status/login/logout`, `--version`, the control-only quota probe (`get_usage`) and
 # plain turns, reading each account's figures from a file the walk writes:
-#   Account 1 (no CLAUDE_CONFIG_DIR of RichOS's own): /Users/admin/fill-first/usage-1.json
+#   Account 1 (no CLAUDE_CONFIG_DIR of RichOS's own): /Users/admin/fill-first/usage-1.json # machine-path-exempt: isolated guest fixture documentation; no customer default
 #   an added account: <its CLAUDE_CONFIG_DIR>/usage.json
 # A usage file is {"five": N, "weekly": N}, optionally with "five_at" and "week_at" (epoch
 # seconds) for when each window resets; without them a window resets 3 h / 4 d after this
 # process started. A usage file {"null": true} answers get_usage as Claude Code 2.1.289 does
 # some of the time: rate_limits_available true and rate_limits null (walk of nightly 36, D1,
-# qa/usage-shape.sh), and a turn then streams no rate_limit_event. While /Users/admin/fill-first/slow exists, a turn is held open before it
+# qa/usage-shape.sh), and a turn then streams no rate_limit_event. While /Users/admin/fill-first/slow exists, a turn is held open before it # machine-path-exempt: isolated guest fixture documentation; no customer default
 # answers (at most 10 minutes), so a walk can photograph a turn in progress. Only the user's
 # own turns are held: the app's internal turns (the handoff summary and the re-prime of a new
 # lease, both "[INTERNAL ...") answer at once, because a lease is installed only after its
@@ -20,9 +20,9 @@
 # for the working agents and refuses a turn end it cannot read (native.rs worker settlement:
 # "Stopped ... I don't recognize what came back"). This fake runs no hooks, so it writes that
 # journal itself, with the same row shape, when it starts as a lease (--session-id), and, while
-# /Users/admin/fill-first/agents exists, the provider's rows for one background agent per line
+# /Users/admin/fill-first/agents exists, the provider's rows for one background agent per line # machine-path-exempt: isolated guest fixture documentation; no customer default
 # of that file on the first user turn (SubagentStart and PostToolUse[Agent] "async_launched",
-# the rows app_workers.rs reads). /Users/admin/fill-first/reply.txt, when present, is the answer.
+# the rows app_workers.rs reads). /Users/admin/fill-first/reply.txt, when present, is the answer. # machine-path-exempt: isolated guest fixture documentation; no customer default
 #
 # HELPER STEPS (weekly-switch handoff plan 2026-10-07, slice 6). While the agents file lists
 # helpers, each user turn (and each second of a held turn) is one step of every helper that has
@@ -47,12 +47,12 @@
 #                 the first line); a one-line file is exactly the single job above.
 #
 # NOBODY SIGNED IN (the held queue, richos-hq plan 2026-10-09 §4 row 5). While
-# /Users/admin/fill-first/signed-out exists, `auth status --json` answers loggedIn false with exit
+# /Users/admin/fill-first/signed-out exists, `auth status --json` answers loggedIn false with exit # machine-path-exempt: isolated guest fixture documentation; no customer default
 # 1, and every BACK-END user turn is refused the way Claude Code 2.1.295 refuses one with no login
 # (measured with a scratch HOME): system/init, a <synthetic> assistant text "Not logged in ·
 # Please run /login", then a result with is_error true and no errors key. The front desk's turns
 # are answered as usual: the walk writes its jobs down in a turn that ran just before the sign-in
-# ran out. While /Users/admin/fill-first/log-work-turns exists, each back-end user turn is a line
+# ran out. While /Users/admin/fill-first/log-work-turns exists, each back-end user turn is a line # machine-path-exempt: isolated guest fixture documentation; no customer default
 # in calls.log: "work-turn refused <text>" or "work-turn answered <text>", and each front-desk user
 # turn "desk-turn <text>" (first 400 chars), so a walk can tell which lease took which turn.
 #   work-agents   one helper per line, launched on the FIRST back-end lease's first user turn (a
@@ -66,7 +66,7 @@ use strict; use warnings; use JSON::PP; use Fcntl qw(:flock O_CREAT O_EXCL O_WRO
 use IPC::Open2 qw(open2); use POSIX qw(WNOHANG);
 $| = 1;
 # The walk's folder in the guest; RICHOS_FILL_FIRST_DIR moves it for a check off the guest.
-my $dir = $ENV{RICHOS_FILL_FIRST_DIR} // '/Users/admin/fill-first';
+my $dir = $ENV{RICHOS_FILL_FIRST_DIR} // ((getpwuid($<))[7] . '/fill-first');
 my $json = JSON::PP->new->canonical;
 my $folder = $ENV{CLAUDE_CONFIG_DIR} // '';
 my $file = $folder =~ /claude-accounts/ ? "$folder/usage.json" : "$dir/usage-1.json";
@@ -84,7 +84,7 @@ if (grep { $_ eq '--version' } @ARGV) { print "2.1.288 (Claude Code)\n"; exit 0;
 # WHO EACH FOLDER IS SIGNED IN AS (round 18's "That is the account you already use"): `auth
 # status` names an email, as Claude Code's does. Account 1 is account-1@fixture.invalid; an
 # added folder is added-<n>@fixture.invalid unless its sign-in wrote another. While
-# /Users/admin/fill-first/login-as exists, `auth login` under a folder signs that folder in as
+# /Users/admin/fill-first/login-as exists, `auth login` under a folder signs that folder in as # machine-path-exempt: isolated guest fixture documentation; no customer default
 # the address it holds, so a walk can sign in with the account already in use. No network.
 if (@ARGV && $ARGV[0] eq 'auth') {
   my ($id) = $folder =~ /claude-accounts\/(\d+)/;
@@ -266,7 +266,7 @@ while (my $line = <STDIN>) {
         'mcp__richos_continuity__checkpoint', 'mcp__richos_continuity__inspect',
         'mcp__richos_assignments__record', 'mcp__richos_status__background_work', @work ] }), "\n";
     my $internal =index($json->encode($msg->{message} // {}), '[INTERNAL') >= 0;
-    # While /Users/admin/fill-first/log-turns exists, each user turn's text (first 400 chars, one
+    # While /Users/admin/fill-first/log-turns exists, each user turn's text (first 400 chars, one # machine-path-exempt: isolated guest fixture documentation
     # line) goes to calls.log as "turn <text>", so a walk can read what the app sent to the back end.
     my $c = $msg->{message}{content};
     my $sent = ref $c eq 'ARRAY' ? join(' ', map { ref $_ eq 'HASH' ? ($_->{text} // '') : '' } @$c) : ($c // '');

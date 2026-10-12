@@ -5104,7 +5104,7 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
             # the first land refuses the same change below.
             if (fresh.get("disposition") or {}).get("kind") != "landed":
                 raise SpecError("landing eligibility changed during cleanup; the work was preserved")
-            sweep_scratch_after_land(sweep_scopes)
+            sweep_scratch_after_land(sweep_scopes, deadline=deadline)
             return {"landed": True, "already": kind, "cleanup_pending": not clean}
         return {"landed": True, "already": kind}
     chain = _chain(rec)
@@ -5160,7 +5160,7 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
     if not clean:
         if not (load_agent(rec["key"]) or {}).get("disposition"):
             raise SpecError("landing eligibility changed during cleanup; the work was preserved")
-    sweep_scratch_after_land(sweep_scopes)
+    sweep_scratch_after_land(sweep_scopes, deadline=deadline)
     return {"landed": True, **({"cleanup_pending": True} if not clean else {}),
             **({"kept_ignored": kept} if kept else {})}
 
@@ -7400,7 +7400,7 @@ def land_sweep_scopes(ref, me=""):
     return scopes
 
 
-def sweep_scratch_after_land(scopes=None):
+def sweep_scratch_after_land(scopes=None, deadline=None):
     """Reclaim the landed agent's scratch, right here, while somebody is looking.
 
     ONLY THE LANDED AGENT'S (2026-10-01). This used to run the whole machine's
@@ -7436,6 +7436,9 @@ def sweep_scratch_after_land(scopes=None):
     if not scopes or not os.access(sweep, os.X_OK):
         return
     for scope in scopes:
+        if _past(deadline):
+            print("scratch sweep after land deferred: landing deadline reached", file=sys.stderr)
+            return
         args = ["bash", sweep, "--agent", scope["name"]]
         if scope.get("session"):
             args += ["--session", scope["session"]]
@@ -7444,7 +7447,7 @@ def sweep_scratch_after_land(scopes=None):
         if scope.get("hold_named"):
             args.append("--hold-named")
         try:
-            r = subprocess.run(args, capture_output=True, text=True, timeout=600)
+            r = subprocess.run(args, capture_output=True, text=True, timeout=_bounded(deadline, 600))
         except (OSError, subprocess.TimeoutExpired) as exc:
             print("scratch sweep after land could not run: %s" % exc, file=sys.stderr)
             continue
@@ -7456,7 +7459,7 @@ def sweep_scratch_after_land(scopes=None):
         except ValueError:
             continue
         for out in _land_sweep_lines(scope["name"], rep):
-            print(out[1], file=sys.stderr if out[0] else sys.stdout)
+            print(out[1], file=sys.stderr)
 
 
 def _land_sweep_lines(name, rep):

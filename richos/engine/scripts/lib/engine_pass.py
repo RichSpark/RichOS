@@ -16,6 +16,7 @@ import sys
 import time
 import uuid
 import hashlib
+import machine_settings as M
 
 FULL_PASS_UNITS = 20
 MAIN_WAIT = 3600
@@ -135,14 +136,7 @@ class IntegrationPlan:
 
 def directory():
     """The machine's one slot. RICHOS_ENGINE_PASS_DIR is for suites, never for a real run."""
-    path = os.environ.get("RICHOS_ENGINE_PASS_DIR")
-    if not path:
-        if sys.platform == "darwin":
-            if not os.path.ismount("/Volumes/E1TB"):
-                raise RuntimeError("connect /Volumes/E1TB before starting a large verification plan")
-            path = "/Volumes/E1TB/state/richos/engine-pass-v1"
-        else:
-            path = os.path.join(os.path.expanduser("~"), ".richos-nightly", "engine-pass-v1")
+    path = str(M.state("engine-pass-v1", "RICHOS_ENGINE_PASS_DIR"))
     if os.path.isfile(os.path.join(os.path.dirname(__file__), 'cpu_guard.py')):
         import cpu_guard
         path = str(cpu_guard.governed_directory(path, cpu_guard.CANONICAL_ENGINE_PASS))

@@ -57,7 +57,6 @@ def icon_widths(app):
 
 
 MIN_SDK = 26
-XCODE_26 = "/Volumes/E1TB/Applications/Xcode-26.3.app"
 
 
 def sdk_major(info):
@@ -73,7 +72,7 @@ def check_sdk(info):
     found = sdk_major(info)
     detail = (f"built with {info.get('DTSDKName') or 'no SDK recorded'} "
               f"(DTPlatformVersion {info.get('DTPlatformVersion')!r}); App Store Connect needs the iOS "
-              f"{MIN_SDK} SDK or later. Archive with Xcode 26: DEVELOPER_DIR={XCODE_26}/Contents/Developer")
+              f"{MIN_SDK} SDK or later. Select an Xcode installation with that SDK using xcode-select or DEVELOPER_DIR.")
     return (found is not None and found >= MIN_SDK, f"built with the iOS {MIN_SDK} SDK or later", detail)
 
 

@@ -244,7 +244,7 @@ class AndroidSelection(unittest.TestCase):
                                'richos/engine/scripts/lib/workspace_scope.py',
                                ANDROID_TESTS + 'ui/conversation/QuestionCardTest.kt'], {'README.md': 'fixture\n'})
             text = (HERE / 'native-android-ui.test.sh').read_text()
-            block = text[text.index('PURE=('):text.index('VOLUME=/Volumes/E1TB')]
+            block = text[text.index('PURE=('):text.index('MACHINE_LIB=')]
             harness = Path(tmp) / 'h' / 'native-android-ui.test.sh'
             harness.parent.mkdir()
             harness.write_text('set -uo pipefail\nDIR=%s\nROOT=%s\n%s\nprintf "NARROW=%%s\\n" "${NARROW[*]-}"\n'

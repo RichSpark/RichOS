@@ -74,8 +74,12 @@ Exit: 0 clean, 1 findings, 2 bad usage.
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
+import json
+import hashlib
+from pathlib import Path
 import sys
 
 # Home-directory shapes on the platforms this project builds for. `/home/` is here even
@@ -95,6 +99,10 @@ RUN = re.compile(rb"[\x20-\x7e]{6,}")
 # the child component that makes this a home-directory path rather than a file that merely
 # lives under `/home`, and it stays OUT of group(0) so the reported prefix is still the
 # thing an operator greps for.
+VOLUME = re.compile(r"(?<!/System)/Volumes/[A-Za-z0-9_.-]+(?![A-Za-z0-9_.-])")
+REVIEWED_REASON = re.compile(r"machine-path-exempt:\s*\S[^\r\n]*")
+TEXT_SUFFIXES = {'.py', '.sh', '.rs', '.js', '.mjs', '.ts', '.swift', '.kt', '.json', '.md', '.txt', '.toml', '.config', '.yml', '.yaml'}
+
 PATH = re.compile(
     r"(?:" + "|".join(re.escape(r) for r in HOME_ROOTS) + r")([A-Za-z0-9_.-]+)(?=/)"
 )
@@ -122,6 +130,8 @@ def scan_bytes(data: bytes, allowed, home: str | None = None):
     exact = _exact_home(home)
     for text in runs(data):
         reported: set[int] = set()
+        for m in VOLUME.finditer(text):
+            hits[m.group(0)] = hits.get(m.group(0), 0) + 1
         for m in PATH.finditer(text):
             if m.group(1) in allowed:
                 continue
@@ -149,9 +159,55 @@ def files_under(target: str):
                 yield path
 
 
-def scan(target: str, allowed, home: str | None):
+def operational_text(text, path):
+    """Only source that can prescribe runtime paths, not docs or test examples."""
+    parts = Path(path).parts
+    name = Path(path).name
+    if name in {'proof-inputs.json', 'verification-dependencies.json', 'verification-input-qualifications.json'}:
+        return ''
+    if any(p.lower() in {'docs', 'test', 'tests', 'testvm', 'operator-probes', 'fixtures', 'examples', 'validation'} for p in parts):
+        return ''
+    if '.test.' in name or '.mutation.' in name or name.endswith(('.md', '.patch')):
+        if '/skills/' not in path and '/agents/' not in path:
+            return ''
+    if name == "runtime-sources.json":
+        try:
+            recipe = json.loads(text)
+        except ValueError:
+            return text
+        recipe.pop("upstream_path_exemptions", None)  # diagnostic prefixes, not storage instructions
+        return json.dumps(recipe)
+    if path.endswith('.py'):
+        try:
+            nodes = list(ast.walk(ast.parse(text)))
+        except SyntaxError:
+            return text
+        lines = text.splitlines(keepends=True)
+        for node in reversed(nodes):
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                for row in range(node.lineno - 1, node.end_lineno):
+                    raw = lines[row].encode('utf-8')
+                    start = node.col_offset if row == node.lineno - 1 else 0
+                    end = node.end_col_offset if row == node.end_lineno - 1 else len(raw.rstrip(b'\r\n'))
+                    lines[row] = (raw[:start] + b' ' * (end - start) + raw[end:]).decode('utf-8')
+        text = ''.join(lines)
+    return text
+
+
+def scan(target: str, allowed, home: str | None, reviewed_text=False, upstream_policy=None, runtime_root=None):
     """Return a list of (file, prefix, count, is_this_machine)."""
     findings = []
+    upstream = {}
+    if upstream_policy is not None:
+        if runtime_root is None or not Path(runtime_root).resolve().is_relative_to(Path(target).resolve()):
+            raise ValueError("upstream runtime root must be inside the scanned artifact")
+        for row in upstream_policy.get("upstream_path_exemptions", []):
+            member = Path(row["member"])
+            if member.is_absolute() or ".." in member.parts or not row.get("reason") or not re.fullmatch(r"[0-9a-f]{64}", row.get("sha256", "")):
+                raise ValueError("invalid upstream artifact exception")
+            if not isinstance(row.get("prefixes"), list) or not all(isinstance(v, str) and v.startswith(("/Users/", "/Volumes/", "/home/")) for v in row["prefixes"]):
+                raise ValueError("invalid upstream metadata prefixes")
+            upstream[str((Path(runtime_root) / member).resolve())] = row
     home = home.rstrip("/") if home else None
     for path in files_under(target):
         try:
@@ -160,7 +216,33 @@ def scan(target: str, allowed, home: str | None):
         except OSError as exc:  # unreadable member is a finding about the check, not the app
             findings.append((path, f"<unreadable: {exc}>", 1, False))
             continue
-        for prefix, count in sorted(scan_bytes(data, allowed, home).items()):
+        counts = {}
+        text = None
+        if reviewed_text and os.path.splitext(path)[1] in TEXT_SUFFIXES and b"\x00" not in data:
+            try:
+                text = operational_text(data.decode("utf-8"), path)
+            except UnicodeDecodeError:
+                pass
+        if text is None:
+            counts = scan_bytes(data, allowed, home)
+        else:
+            previous = ""
+            for line in text.splitlines():
+                exempt = REVIEWED_REASON.search(line) or REVIEWED_REASON.search(previous)
+                previous = line
+                if exempt:
+                    continue
+                row = scan_bytes(line.encode("utf-8"), allowed, home)
+                if line.lstrip().startswith(("#", "//")) and os.path.splitext(path)[1] not in {'.md', '.txt'}:
+                    row = {}
+                for key, count in row.items():
+                    counts[key] = counts.get(key, 0) + count
+        exception = upstream.get(str(Path(path).resolve()))
+        if exception and hashlib.sha256(data).hexdigest() == exception["sha256"]:
+            accepted = {prefix: counts.pop(prefix) for prefix in exception["prefixes"] if prefix in counts}
+            if accepted:
+                print("no-host-paths: pinned upstream metadata exception: " + str(exception["member"]) + ": " + exception["reason"], file=sys.stderr)
+        for prefix, count in sorted(counts.items()):
             findings.append((path, prefix, count, bool(home) and prefix == home))
     return findings
 
@@ -201,16 +283,20 @@ def report(findings, target, quiet=False):
 SELF_TEST_CASES = [
     # (blob, allowed, home, expect_findings)
     (b"nothing to see here at all", DEFAULT_ALLOWED, None, False),
+    (b"/System/Volumes/Data", DEFAULT_ALLOWED, None, False),
+    (b"/Volumes/Fixture/cache", DEFAULT_ALLOWED, None, True), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    (b"/Volumes/Fixture", DEFAULT_ALLOWED, None, True), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    (b"machine-path-exempt: fixture\x00/Volumes/Fixture/cache", DEFAULT_ALLOWED, None, True),
     (b"/Users/you/Projects/northwind is a fixture", DEFAULT_ALLOWED, None, False),
     (b"/Users/example/Projects/harbor is a fixture", DEFAULT_ALLOWED, None, False),
-    (b"/Users/alex/.cargo/registry/src/anyhow/src/error.rs", DEFAULT_ALLOWED, None, True),
+    (b"/Users/alex/.cargo/registry/src/anyhow/src/error.rs", DEFAULT_ALLOWED, None, True), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     (b"/home/builder/src/richos/app/crates/richos-core/src/loro.rs", DEFAULT_ALLOWED, None, True),
     (b"/var/root/secret/thing.rs", DEFAULT_ALLOWED, None, True),
     # Short runs are invisible to `strings` and must be invisible here too, so the
     # check describes the same surface an attacker actually reads.
     (b"\x00\x01/Us\x00", DEFAULT_ALLOWED, None, False),
     # A real name added to --allow is not a finding; that is what the flag is for.
-    (b"/Users/ci-runner/work/x.rs", DEFAULT_ALLOWED | {"ci-runner"}, None, False),
+    (b"/Users/ci-runner/work/x.rs", DEFAULT_ALLOWED | {"ci-runner"}, None, False), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     # THE PRODUCT'S OWN ASSET KEYS. All four files in app/ui/home/ are embedded in the
     # binary under these keys. This check refused a correct release build over them until
     # the child component became a requirement; if these cases ever fail again, the
@@ -224,13 +310,13 @@ SELF_TEST_CASES = [
     (b"/home/field/data.js", DEFAULT_ALLOWED, None, True),
     # THE HOLE THE NARROWING WOULD OTHERWISE OPEN. A bare home directory has no child
     # component, so only the exact `--home` rule catches it.
-    (b"built by someone at /Users/alex", DEFAULT_ALLOWED, "/Users/alex", True),
-    (b"built by someone at /Users/alex", DEFAULT_ALLOWED, None, False),
+    (b"built by someone at /Users/alex", DEFAULT_ALLOWED, "/Users/alex", True), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    (b"built by someone at /Users/alex", DEFAULT_ALLOWED, None, False), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     # A longer name that merely starts with the home directory is a different account,
     # and it is a finding on its own terms rather than as this machine's home.
-    (b"/Users/alexandra/work/x.rs", DEFAULT_ALLOWED, "/Users/alex", True),
+    (b"/Users/alexandra/work/x.rs", DEFAULT_ALLOWED, "/Users/alex", True), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     # The two rules overlap on every ordinary leak; the count must not double.
-    (b"/Users/alex/.cargo/x.rs", DEFAULT_ALLOWED, "/Users/alex", True),
+    (b"/Users/alex/.cargo/x.rs", DEFAULT_ALLOWED, "/Users/alex", True), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
 ]
 
 
@@ -243,15 +329,15 @@ def self_test() -> int:
         print(f"{'ok  ' if ok else 'FAIL'} case {i}: expected findings={expect}, got={got}")
 
     # Counted ONCE, not once by each rule. An inflated number is a number nobody can check.
-    counts = scan_bytes(b"/Users/alex/.cargo/x.rs", DEFAULT_ALLOWED, "/Users/alex")
-    ok = counts == {"/Users/alex": 1}
+    counts = scan_bytes(b"/Users/alex/.cargo/x.rs", DEFAULT_ALLOWED, "/Users/alex") # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    ok = counts == {"/Users/alex": 1} # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     bad += not ok
     print(f"{'ok  ' if ok else 'FAIL'} an overlapping finding is counted once: {counts}")
 
     # The bare-home rule must not fire on a DIFFERENT account whose name merely starts
     # with this one; that finding belongs to the heuristic and names the longer prefix.
-    counts = scan_bytes(b"/Users/alexandra/work/x.rs", DEFAULT_ALLOWED, "/Users/alex")
-    ok = counts == {"/Users/alexandra": 1}
+    counts = scan_bytes(b"/Users/alexandra/work/x.rs", DEFAULT_ALLOWED, "/Users/alex") # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    ok = counts == {"/Users/alexandra": 1} # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     bad += not ok
     print(f"{'ok  ' if ok else 'FAIL'} a longer account name is reported as itself: {counts}")
 
@@ -272,6 +358,9 @@ def main(argv=None) -> int:
                     help="an additional user name to treat as a placeholder")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--upstream-policy", help="pinned upstream metadata exceptions in the runtime recipe")
+    ap.add_argument("--upstream-runtime-root", help="runtime subdirectory inside this artifact")
+    ap.add_argument("--reviewed-text", action="store_true", help="allow line-local reviewed fixture/history reasons in UTF-8 source text only")
     args = ap.parse_args(argv)
 
     if args.self_test:
@@ -284,7 +373,8 @@ def main(argv=None) -> int:
         return 2
 
     allowed = DEFAULT_ALLOWED | set(args.allow)
-    return report(scan(args.target, allowed, args.home), args.target, args.quiet)
+    policy = json.loads(Path(args.upstream_policy).read_text()) if args.upstream_policy else None
+    return report(scan(args.target, allowed, args.home, args.reviewed_text, policy, args.upstream_runtime_root), args.target, args.quiet)
 
 
 if __name__ == "__main__":

@@ -220,7 +220,11 @@ print("NOSCOPE", json.dumps(ws.land_sweep_scopes("nobody-opus-x9", sid)))
 rec['disposition'] = {'kind': 'landed'}
 with patch.multiple(ws, **stubs), patch.object(ws, 'sweep_scratch_after_land') as sweep:
     assert ws.land(landed, me=sid)['landed']
-    sweep.assert_called_once_with(scopes)
+    sweep.assert_called_once_with(scopes, deadline=None)
+with patch.object(ws.subprocess, 'run') as run:
+    ws.sweep_scratch_after_land(scopes, deadline=ws.now()-1)
+    run.assert_not_called()
+assert not out.getvalue(), 'landing diagnostics leaked to protocol stdout'
 rec.pop('disposition')
 with patch.multiple(ws, **stubs), patch.object(ws, '_not_in_integration', return_value=['unmerged']), patch.object(ws, '_not_landed_message', return_value='unmerged'), patch.object(ws, 'sweep_scratch_after_land') as sweep:
     try:
@@ -239,7 +243,7 @@ PY
              "$AROOT/$LIVE/run.log" "$A_LANDED_LIVE/f" "$A_LIVE/f" "$A_NOROW/f"; do
         [ -e "$p" ] || { KEPT=0; echo "    missing: $p"; }
     done
-    PRINTED="$(sed -n 's/^PRINTED //p' "$SANDBOX/land.out")"
+    PRINTED="$(sed -n 's/^STDERR //p' "$SANDBOX/land.out")"
     if [ "$GONE" = 1 ] && [ "$KEPT" = 1 ] \
        && printf '%s' "$PRINTED" | grep -q "scratch swept for $LANDED" \
        && printf '%s' "$PRINTED" | grep -q "6 entries not provably its own, left alone"; then

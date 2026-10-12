@@ -31,7 +31,7 @@
 # answer it refused, so the shape had to be read from the outside, the same way
 # the app asks. A check that cannot print what it was given is a guess.
 set -u
-CLAUDE="/Users/admin/.local/bin/claude"
+CLAUDE="${RICHOS_CLAUDE_BIN:-$HOME/.local/bin/claude}"
 HOME_DIR=""
 CONFIG_DIR=""
 WAIT=20
