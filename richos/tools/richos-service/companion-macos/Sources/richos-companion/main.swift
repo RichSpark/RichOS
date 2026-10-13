@@ -220,6 +220,10 @@ func usage() {
       richos-companion watch [--exclude-pid N]... [--exclude-bundle ID]... [--poll S] [--trace]
           Report other processes' microphone use as JSON lines (no permission needed). Exits when
           stdin closes. The app's meeting prompts and end-of-call detection read it.
+      richos-companion level [--exclude-pid N]...
+          The call's sound level from the system tap only (no microphone, nothing kept), as JSON
+          lines about 20 a second, for the meeting prompt's voice bar. Exits when stdin closes.
+          Needs the System Audio Recording grant already given; the app checks that first.
 
     The drop zone defaults to $RICHOS_DROP_ZONE, else <checkout>/wiki/raw/meetings.
     """)
@@ -236,6 +240,7 @@ do {
     case "ingest": try cmdIngest(rest)
     case "capture": cmdCapture(rest)
     case "watch": cmdWatch(rest)
+    case "level": cmdLevel(rest)
     case "-h", "--help", "help": usage()
     default:
         FileErr.write("unknown command: \(cmd)\n")

@@ -17,6 +17,9 @@ import RichOSCompanionCore
 ///   {"type":"closed","at":ms,"dir":..}
 ///   {"type":"failed","at":ms,"message":..,"dir":..|null}
 ///   {"type":"stand-down","at":ms,"reason":..}
+///   {"type":"channel","at":ms,"channel":"microphone"|"system-audio","stalled":bool,"message":..}
+///     once when a side stops delivering audio (silence-filled from then) and once when it resumes
+///   {"type":"system-audio","at":ms,"flowing":true}   once, when sound first arrives through the tap
 enum Notifier {
     /// Set by `capture --json`.
     static var appMode = false

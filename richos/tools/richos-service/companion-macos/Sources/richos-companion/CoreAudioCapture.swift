@@ -85,6 +85,16 @@ final class CoreAudioCapture {
         try startMic()
     }
 
+    /// LEVELS ONLY (`richos-companion level`): the system tap's IO and nothing else. No microphone,
+    /// no writer, nothing kept: each block goes to `onBlock` and is gone. The meeting prompt's voice
+    /// bar moves with the call's sound this way (CEO, 2026-10-13: "move with the call's sound as
+    /// designed"); the app starts it only once a capture has shown the system-audio grant exists.
+    func runLevels(onBlock: @escaping ([Float]) -> Void) throws {
+        levelSink = onBlock
+        try startTapIO()
+    }
+    private var levelSink: (([Float]) -> Void)?
+
     /// The tap's sample rate, known after `prepare()`.
     var sampleRate: Int { Int(tapSampleRate) }
 
@@ -187,6 +197,7 @@ final class CoreAudioCapture {
         let mono = ChannelMixer.downmixToMono(interleaved: interleaved, channelCount: ch)
         meter(mono, mic: false)
         writer?.pushSystem(mono)
+        levelSink?(mono)
     }
 
     private func tapFormat() -> AudioStreamBasicDescription? {

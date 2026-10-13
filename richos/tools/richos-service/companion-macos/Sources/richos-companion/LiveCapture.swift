@@ -67,6 +67,8 @@ func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32]) {
     // 1 Hz health tick + fsync + watchdog escalation + RichOS's own speech kept out of the tap.
     var lastBytes = 0
     var stalledSeconds = 0
+    var systemAudioSeen = false
+    var channels = ChannelWatch()
     let health = DispatchSource.makeTimerSource(queue: timerQueue)
     health.schedule(deadline: .now() + 1.0, repeating: 1.0)
     health.setEventHandler {
@@ -76,6 +78,22 @@ func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32]) {
             tapRunning: capture.tapRunning, micRunning: capture.micRunning)
         try? writer.flush() // durable to disk each second (§6.5)
         if let change = capture.refreshExclusions() { Notifier.info(change) }
+        // A side that stalls (or comes back) is said once, to stderr and to the app: the byte
+        // watchdog below cannot see it, because the live side keeps the recording growing.
+        let decision = writer.lastDecision
+        for change in channels.update(micDown: (decision?.micStarved ?? false) || !capture.micRunning,
+                                      systemDown: (decision?.systemStarved ?? false) || !capture.tapRunning) {
+            if change.stalled { Notifier.alarm(change.message) } else { Notifier.info(change.message) }
+            Notifier.event("channel", [("channel", .string(change.channel.rawValue)),
+                                       ("stalled", .bool(change.stalled)),
+                                       ("message", .string(change.message))])
+        }
+        // Sound arrived through the system tap: the System Audio Recording grant exists (macOS
+        // has no API to ask). Said once; the app may now show the voice bar's live level.
+        if !systemAudioSeen && sp > 0 {
+            systemAudioSeen = true
+            Notifier.event("system-audio", [("flowing", .bool(true))])
+        }
 
         // Watchdog: byte growth is the ground-truth liveness signal (§6.2 "no growth > 15 s").
         let bytes = writer.pumpedBytesTotal
