@@ -29,6 +29,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               and no Approve card put in front of him along the way. Evidence: go-observed.json.
   relaunch    command-walk.py's relaunch: the app stopped by pid and started again
   roster      after the relaunch, the lease's roster holds the five and every hired teammate
+  approvals   last: the Approve cards the hiring put in front of him after his go, counted during
+              go and judged here so they do not hide the steps after it. Any fails.
   delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs a back-end
               dispatch receipt for THIS task's obligation naming that teammate, whose run handed back
               an answer (consult_answer, set from the run's own hand-back or stop), and the task
@@ -55,7 +57,7 @@ command_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(command_walk)
 StepFailed = command_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'stock', 'interview', 'go', 'relaunch', 'roster', 'delegate']
+STEPS = ['identity', 'first-run', 'stock', 'interview', 'go', 'relaunch', 'roster', 'delegate', 'approvals']
 # The five every install registers (engine_profile.rs ALWAYS_ACTIVE), as the CEO's sentence names them.
 STOCK = {'clark': 'Senior Researcher', 'dean': 'HR Director', 'frank': 'Expert Advisor',
          'pierce': 'Brief Checker', 'reed': 'Source-Reading'}
@@ -364,8 +366,10 @@ class HireWalk(command_walk.CommandWalk):
         if still:
             raise StepFailed(f"the hiring was still {still} after {self.a.hire_within:g} s")
         failures = hired_verdict(proposed, saved, '\n'.join(told))
-        if pressed[0]:
-            failures.append(f'he was asked to approve {pressed[0]} step(s) of the hiring after his go')
+        # Counted here and judged in `approvals`, the last step, so one card does not hide whether
+        # relaunch, roster and delegation work.
+        self.facts['approvals_go'] = pressed[0]
+        self.save()
         if failures:
             raise StepFailed('; '.join(failures))
         self.facts['hired'] = saved
@@ -380,6 +384,17 @@ class HireWalk(command_walk.CommandWalk):
         if missing:
             raise StepFailed('after the relaunch the roster lacks: ' + ', '.join(missing))
         return {'roster': roster}
+
+    def approvals(self):
+        """The CEO says go and the team is hired: an Approve card put in front of him by the
+        hiring after his go fails. A card during the delegated task is reported, not judged here."""
+        go, delegate = self.facts.get('approvals_go'), self.facts.get('approvals_delegate')
+        if go is None:
+            raise StepFailed('go must have run (no approval count on record)')
+        if go:
+            raise StepFailed(f'he was asked to approve {go} step(s) of the hiring after his go '
+                             f'(and {delegate} during the delegated task); see callbacks.txt for the commands')
+        return {'approvals_during_hiring': go, 'approvals_during_delegated_task': delegate}
 
     def receipts(self):
         """The back end's dispatch receipts, read-only: request (teammate, role, obligation_id),
@@ -407,7 +422,9 @@ class HireWalk(command_walk.CommandWalk):
         pressed = [0]
         record = self.settled_read(self.until_closed(lambda: self.ours(sent), self.a.within, pressed))
         receipts = self.receipts()
-        evidence = {'teammate': name, 'assignment': record, 'receipts': receipts}
+        self.facts['approvals_delegate'] = pressed[0]
+        self.save()
+        evidence = {'teammate': name, 'assignment': record, 'receipts': receipts, 'approvals_pressed': pressed[0]}
         (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         failures = delegate_verdict(record, receipts, name)
         if failures:
