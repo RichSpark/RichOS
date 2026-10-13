@@ -486,6 +486,10 @@ pub struct CaptureBrain {
     /// An utterance has ended and [`CapMsg::TurnQuiet`] has not yet been sent for the silence
     /// after it, so it is sent exactly once per silence.
     turn_quiet_armed: bool,
+    /// A fragment of his current turn has been admitted and [`CapMsg::TurnQuiet`] has not been
+    /// sent since: a short fragment now continues his turn and is not thrown away as a cough
+    /// (review rv-20261013T204600Z). Mirrored into the recorder, which applies the minimum.
+    turn_open: bool,
 }
 
 impl Default for CaptureBrain {
@@ -512,6 +516,7 @@ impl CaptureBrain {
             quiet_frames: u32::MAX,
             since_speech: 0,
             turn_quiet_armed: false,
+            turn_open: false,
         }
     }
 
@@ -622,7 +627,13 @@ impl CaptureBrain {
         self.barged = false;
         self.rich_audible = false;
         self.turn_quiet_armed = false;
+        self.set_turn_open(false);
         out
+    }
+
+    fn set_turn_open(&mut self, open: bool) {
+        self.turn_open = open;
+        self.recorder.set_turn_open(open);
     }
 
     /// Consecutive speech frames counted toward an interruption — the diagnostic that makes
@@ -823,6 +834,7 @@ impl CaptureBrain {
                     utterance: Box::new(utterance),
                     rich_audible: self.rich_audible,
                 })));
+                self.set_turn_open(true);
             }
             self.tainted = false;
             self.barged = false;
@@ -859,6 +871,7 @@ impl CaptureBrain {
             && self.since_speech >= crate::turn::END_OF_TURN_FRAMES
         {
             self.turn_quiet_armed = false;
+            self.set_turn_open(false);
             out.push(CapMsg::TurnQuiet);
         }
     }
@@ -3527,6 +3540,98 @@ mod tests {
             vec!["the first thirty seconds".to_string(), "today.".to_string()],
             "the last word after the cut never reached whisper"
         );
+    }
+
+    /// INVARIANT — review rv-20261013T204600Z. "Send the draft ... now": after an ordinary
+    /// 1.408 s pause (88 x 256 / 16000) his last word is 14 or 18 speech frames (0.224 s or
+    /// 0.288 s), under the 19-frame (0.304 s) minimum. It continues a turn whose first fragment
+    /// was admitted, so it is admitted too and the turn is the whole sentence, whether the turn
+    /// ends in 2.000 s of silence or voice goes off right after the word. The word still has to
+    /// prove its own voice at the recognizer.
+    #[test]
+    fn a_short_last_word_after_a_natural_pause_joins_his_turn() {
+        use crate::endpoint::MIN_SPEECH_FRAMES;
+        use crate::turn::TurnAssembler;
+        use crate::vad::{SAMPLE_RATE, VAD_FRAME_SAMPLES};
+        let secs = |frames: usize| (frames * VAD_FRAME_SAMPLES) as f32 / SAMPLE_RATE as f32;
+        let silent = |frames: usize| vec![0.0f32; frames * VAD_FRAME_SAMPLES];
+
+        struct Run {
+            brain: CaptureBrain,
+            desk: RecognizerDesk,
+            turns: TurnAssembler,
+            discards: usize,
+            requests: Vec<String>,
+        }
+        impl Run {
+            fn handle(&mut self, msgs: Vec<CapMsg>, words: &str) {
+                for m in msgs {
+                    match m {
+                        CapMsg::Started { tainted: false, .. } => self.turns.his_utterance_started(),
+                        CapMsg::Started { .. } => panic!("his own words were marked as Rich's echo"),
+                        CapMsg::Utterance(u) => {
+                            self.turns.utterance_admitted(0);
+                            let mut heard = None;
+                            self.desk.handle(
+                                &u,
+                                &Recorder::default(),
+                                |_| Ok((words.to_string(), 300)),
+                                |t, a| heard = Some((t, a)),
+                            );
+                            self.turns.recognized(heard);
+                        }
+                        CapMsg::Discarded { .. } => {
+                            self.discards += 1;
+                            self.turns.utterance_discarded();
+                        }
+                        CapMsg::TurnQuiet => self.turns.quiet(),
+                        _ => {}
+                    }
+                }
+                if let Some(t) = self.turns.take_turn() {
+                    self.requests.push(t.text);
+                }
+            }
+            fn feed(&mut self, audio: &[f32], words: &str) {
+                for f in audio.chunks_exact(VAD_FRAME_SAMPLES) {
+                    let msgs = self.brain.push_frame(f, false, false);
+                    self.handle(msgs, words);
+                }
+            }
+        }
+
+        for word_frames in [14usize, 18] {
+            assert!(word_frames < MIN_SPEECH_FRAMES as usize);
+            for voice_off in [false, true] {
+                let mut run = Run {
+                    brain: CaptureBrain::new(),
+                    desk: RecognizerDesk::new(),
+                    turns: TurnAssembler::new(),
+                    discards: 0,
+                    requests: Vec::new(),
+                };
+                run.feed(&silent(64), "");
+                run.feed(&synthetic_voice(secs(64), 190.0, 130.0, -18.1), "Send the draft");
+                // His first fragment closes 0.800 s into this pause and is recognized here.
+                run.feed(&silent(88), "Send the draft");
+                run.feed(&synthetic_voice(secs(word_frames), 190.0, 130.0, -18.1), "now");
+                if voice_off {
+                    let msgs = run.brain.finish();
+                    run.handle(msgs, "now");
+                    if let Some(t) = run.turns.flush() {
+                        run.requests.push(t.text);
+                    }
+                } else {
+                    run.feed(&silent(180), "now");
+                }
+                assert_eq!(
+                    (run.requests, run.discards),
+                    (vec!["Send the draft now".to_string()], 0),
+                    "{word_frames} frames ({:.3} s), voice off = {voice_off}: his last word was lost",
+                    secs(word_frames)
+                );
+            }
+        }
     }
 
     /// INVARIANT: a ONE-WORD decision still gets through. `stt.rs` keeps its noise list

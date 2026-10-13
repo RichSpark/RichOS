@@ -208,6 +208,10 @@ pub struct UtteranceRecorder {
     /// The utterance being recorded continues a cut one. Its speech is the end of his sentence,
     /// not a cough, so the 0.304 s minimum does not apply: one frame of speech is enough.
     continuation: bool,
+    /// A fragment of his current turn has already been admitted, so the next one continues a
+    /// turn that is already his: the 0.304 s minimum does not apply to it either. Set by the
+    /// owner of the turn ([`crate::controller::CaptureBrain`]); [`Self::reset`] leaves it alone.
+    turn_open: bool,
 }
 
 impl Default for UtteranceRecorder {
@@ -225,6 +229,7 @@ impl UtteranceRecorder {
             recording: false,
             continue_next: false,
             continuation: false,
+            turn_open: false,
         }
     }
 
@@ -246,11 +251,21 @@ impl UtteranceRecorder {
         self.continuation = false;
     }
 
+    /// **Is a fragment of his current turn already admitted?** While it is, a short fragment
+    /// after a natural pause ("Send the draft ... now") is the rest of his turn, not a cough:
+    /// it is admitted however short, and the recognizer still asks it for a voice of its own
+    /// (review rv-20261013T204600Z).
+    pub fn set_turn_open(&mut self, open: bool) {
+        self.turn_open = open;
+    }
+
     /// Below this many speech frames the utterance being recorded is dropped unheard:
     /// [`MIN_SPEECH_FRAMES`], except for the continuation of a cut utterance, whose speech is the
-    /// end of a sentence already admitted (review rv-20261013T184256Z, finding 3).
+    /// end of a sentence already admitted (review rv-20261013T184256Z, finding 3), and for any
+    /// fragment of a turn that already has one admitted (review rv-20261013T204600Z). Neither
+    /// starts below the 7-frame (0.112 s) onset unless it continues a cut.
     fn min_speech_frames(&self) -> u32 {
-        if self.continuation {
+        if self.continuation || self.turn_open {
             1
         } else {
             MIN_SPEECH_FRAMES
