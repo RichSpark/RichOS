@@ -1637,11 +1637,24 @@ impl Spine {
         }
     }
 
-    /// The onboarding contribution to a priming turn: the company's material, the offer of an
-    /// interview, or the honest note that says why there is neither (`onboarding.rs`).
+    /// The company contribution to a priming turn: its name exactly as he typed it, then the
+    /// company's material, the offer of an interview, or the honest note that says why there
+    /// is neither (`onboarding.rs`).
+    ///
+    /// **The name, because the id is not the name** (the CEO, 2026-10-13: he typed a name with
+    /// a word in capitals and Rich wrote it back re-capitalized). Every other line names the
+    /// company by its id, which is lower case, so Rich rebuilt a name from it.
     fn company_block(&self, binding: &ThreadBinding) -> Option<String> {
         let layer = self.company_layer(binding);
-        crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding))
+        let onboarding =
+            crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding));
+        match self.registry.get(binding.entity_id()) {
+            Some(entity) => Some(
+                crate::onboarding::company_name_block(binding.entity_id(), &entity.display_name)
+                    + &onboarding.unwrap_or_default(),
+            ),
+            None => onboarding,
+        }
     }
 
     /// One line per company for the boot log — what this launch will actually do about
