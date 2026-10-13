@@ -313,6 +313,11 @@ mod tests {
         // span = 9).
         let meeting = "# Pricing meeting\n\n## Agenda\n\nAnnual plan pricing, support cost, and the annual plan pricing review.\n\n\
                        ## Decision\n\nWe decided on refunds within 30 days of the first charge.\n";
+        // The same agenda, with the quoted text in the heading of the decision rather than in
+        // its body (the fifth review's fixture: the decision's body shares nothing with the
+        // query, so a choice that reads bodies only picks the agenda).
+        let heading_meeting = "# Pricing review\n\n## Agenda\n\nAnnual plan pricing, support cost, and the annual plan pricing review.\n\n\
+                               ## Refunds within 30 days\n\nThis is the final decision for every new customer.\n";
         // A plural of the query's word at the end of a paragraph longer than Rich's bound:
         // text search matches it (text.rs: `refund` matches `refunds`), so the excerpt must too.
         let plural = long_paragraph(879, "Customers get refunds when they cancel early.");
@@ -331,6 +336,7 @@ mod tests {
         let refund_tail = long_paragraph(1000, "A customer asked for a refund after the money left her account.");
         let (service, base) = standin_with("passages", true, 0, &[
             ("2024/pricing-meeting.md", meeting.to_string()),
+            ("2024/pricing-review.md", heading_meeting.to_string()),
             ("2024/club-notes.md", club.to_string()),
             ("2024/weekly-log.md", log),
             ("2024/onboarding-decision.md", onboarding),
@@ -345,6 +351,7 @@ mod tests {
             ("quoted, strict on, Super Finder on", quoted, true, true, "2024/pricing-meeting.md", "refunds within 30 days"),
             ("quoted, strict off, Super Finder off", quoted, false, false, "2024/pricing-meeting.md", "refunds within 30 days"),
             ("quoted, strict off, Super Finder on", quoted, true, false, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted text in the heading above the passage", quoted, false, true, "2024/pricing-review.md", "the final decision for every new customer"),
             ("meaning only, not the first passage", "chargeback", true, false, "2024/club-notes.md", "asked for a refund"),
             ("long file, words in the last passage", "vendor invoice approved", false, false, "2024/weekly-log.md", "vendor invoice was approved"),
             ("long file, quoted text in the last passage", "\"invoice was approved\"", true, true, "2024/weekly-log.md", "vendor invoice was approved"),

@@ -51,7 +51,11 @@ pub struct Document {
     pub folded_title: String,
     pub folded_text: String,
     pub passages: Vec<Passage>,
-    /// [`fold`] of each passage, for choosing the excerpt.
+    /// [`fold`] of each passage under its heading, for choosing the excerpt. The heading is
+    /// part of what a passage is matched on because it is part of what a result shows (above
+    /// the passage, to the palette and to Rich) and of the document text eligibility reads: a
+    /// quote found only in `## Refunds within 30 days` picks the passage under it, never an
+    /// unrelated agenda with more of the other words (fifth review).
     pub folded_passages: Vec<String>,
 }
 
@@ -60,7 +64,7 @@ impl Document {
         let stem = Path::new(rel_path).file_stem().and_then(|s| s.to_str()).unwrap_or(rel_path);
         let title = chunk::title(&text, stem);
         let passages = chunk::passages(&text);
-        let folded_passages = passages.iter().map(|p| fold(p.text(&text))).collect();
+        let folded_passages = passages.iter().map(|p| fold(&format!("{}\n{}", p.heading, p.text(&text)))).collect();
         Document {
             id: source_id(rel_path),
             rel_path: rel_path.to_string(),
