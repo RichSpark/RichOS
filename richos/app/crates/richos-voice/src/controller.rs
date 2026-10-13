@@ -1752,6 +1752,7 @@ impl VoiceController {
         // Finding 4: turns withdrawn before the submit thread reached them, the count of turns
         // started, and the shell's way to stop the one that is running.
         let withdrawn: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
+        let his_floor_hold: FloorHold = Default::default();
         let submits_done = Arc::new(AtomicU64::new(0));
         let turns_started = Arc::new(AtomicU64::new(0));
         let withdraw: WithdrawHook = Arc::new(Mutex::new(None));
@@ -1894,8 +1895,9 @@ impl VoiceController {
         // ---- submit thread (one turn at a time, in order) --------------------------------
         {
             let withdrawn = withdrawn.clone();
+            let hold = his_floor_hold.clone();
             let done = submits_done.clone();
-            threads.push(std::thread::spawn(move || submit_turns(submit_rx, withdrawn, done, submit)));
+            threads.push(std::thread::spawn(move || submit_turns(submit_rx, withdrawn, hold, done, submit)));
         }
 
         // ---- speaker thread --------------------------------------------------------------
@@ -1973,6 +1975,7 @@ impl VoiceController {
                 turns_started: turns_started.clone(),
                 submits_done: submits_done.clone(),
                 hook: withdraw.clone(),
+                floor: his_floor_hold.clone(),
             };
             threads.push(std::thread::spawn(move || {
                 supervise(
@@ -2527,6 +2530,8 @@ struct TurnDesk {
     submits_done: Arc<AtomicU64>,
     /// The shell's stop for the running turn, for the withdrawal the voice-off flush makes.
     stop: WithdrawHook,
+    /// The floor as the submit thread sees it ([`spoken_turn_withdrawn`]).
+    floor: FloorHold,
 }
 
 /// A turn handed over that Rich has not yet begun to answer aloud.
@@ -2584,6 +2589,16 @@ impl TurnDesk {
         } else {
             None
         }
+    }
+
+    /// Whether he has the floor, also published to the submit thread, where a spoken turn
+    /// waiting to start waits for it ([`spoken_turn_withdrawn`]). The supervisor calls this
+    /// wherever it publishes the floor: as his utterance starts, and at the end of each tick,
+    /// after a continuation has withdrawn the turn it joins.
+    fn publish_floor(&self) -> bool {
+        let his = self.assembler.has_floor();
+        self.floor.set(his);
+        his
     }
 
     /// Hand over the turn if he is finished. Called once per supervisor tick, after `collect`.
@@ -2675,6 +2690,8 @@ impl Drop for TurnDesk {
         if let Some(turn) = self.assembler.flush() {
             self.send(turn, "voice is going off");
         }
+        // Voice is off: nothing is his floor any more, and a turn waiting on it goes ahead.
+        self.floor.set(false);
     }
 }
 
@@ -2682,8 +2699,74 @@ impl Drop for TurnDesk {
 type SubmitFn = Arc<dyn Fn(String, bool) + Send + Sync>;
 /// Turn numbers withdrawn before they ran, shared by [`TurnDesk`] and the submit thread.
 type WithdrawnTurns = Arc<Mutex<HashSet<u64>>>;
-/// The turn the submit thread is inside `submit` with, and where withdrawals are recorded.
-type Submitting = std::cell::RefCell<Option<(u64, WithdrawnTurns)>>;
+/// The turn the submit thread is inside `submit` with, where withdrawals are recorded, and
+/// whether he has the floor.
+type Submitting = std::cell::RefCell<Option<(u64, WithdrawnTurns, FloorHold)>>;
+
+/// **He has the floor, as the submit thread sees it** (review rv-20261013T214648Z). Set by
+/// [`TurnDesk::publish_floor`] whenever the supervisor publishes the floor, and cleared for good
+/// when the desk is dropped, so nothing waiting on it outlives voice.
+#[derive(Default)]
+struct HisFloor {
+    /// He has the floor, and how many spoken turns are waiting for it.
+    held: Mutex<(bool, usize)>,
+    changed: std::sync::Condvar,
+}
+
+type FloorHold = Arc<HisFloor>;
+
+impl HisFloor {
+    fn set(&self, his: bool) {
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        if held.0 != his {
+            held.0 = his;
+            self.changed.notify_all();
+        }
+    }
+
+    /// Returns once he does not have the floor. `true` when it had to wait.
+    fn wait_until_free(&self) -> bool {
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let waited = held.0;
+        held.1 += 1;
+        self.changed.notify_all();
+        while held.0 {
+            held = self.changed.wait(held).unwrap_or_else(|p| p.into_inner());
+        }
+        held.1 -= 1;
+        waited
+    }
+
+    /// Blocks until a spoken turn is waiting for him (`Ok`), or `ran` says one started instead
+    /// (`Err` with its words). The fact a test waits on, rather than a clock: a test callback
+    /// that runs a turn calls [`Self::nudge`] after sending on `ran`, so neither fact is missed.
+    #[cfg(test)]
+    fn turn_waits_or_ran(&self, ran: &Receiver<String>) -> Result<(), String> {
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        loop {
+            if let Ok(text) = ran.try_recv() {
+                return Err(text);
+            }
+            if held.1 > 0 {
+                return Ok(());
+            }
+            held = self.changed.wait(held).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    /// Wakes [`Self::turn_waits_or_ran`]. Takes the lock, so the wakeup cannot fall between its
+    /// look at `ran` and its wait.
+    #[cfg(test)]
+    fn nudge(&self) {
+        let _held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        self.changed.notify_all();
+    }
+
+    #[cfg(test)]
+    fn turns_waiting(&self) -> usize {
+        self.held.lock().unwrap_or_else(|p| p.into_inner()).1
+    }
+}
 
 thread_local! {
     static SUBMITTING: Submitting = const { std::cell::RefCell::new(None) };
@@ -2696,6 +2779,7 @@ thread_local! {
 fn submit_turns(
     submit_rx: Receiver<(String, bool)>,
     withdrawn: WithdrawnTurns,
+    floor: FloorHold,
     done: Arc<AtomicU64>,
     submit: SubmitFn,
 ) {
@@ -2706,7 +2790,7 @@ fn submit_turns(
             // He went on before it started: his whole thought follows as one turn.
             eprintln!("[richos-voice] {} turn {seq} withdrawn before it started: his next turn carries its words", wall_clock_utc());
         } else {
-            SUBMITTING.with(|s| *s.borrow_mut() = Some((seq, withdrawn.clone())));
+            SUBMITTING.with(|s| *s.borrow_mut() = Some((seq, withdrawn.clone(), floor.clone())));
             submit(text, rich_audible);
             SUBMITTING.with(|s| *s.borrow_mut() = None);
         }
@@ -2720,11 +2804,24 @@ fn submit_turns(
 /// work runs leaves a spoken turn waiting there for the whole of that work; if he goes on in the
 /// meantime his whole thought is the next turn, and this one must not run as well (review
 /// rv-20261013T210558Z, finding 2). `false` on any other thread.
+///
+/// **AND IT WAITS WHILE HE HAS THE FLOOR** (review rv-20261013T214648Z). His resumed speech
+/// claims the floor the moment it starts, but it withdraws the waiting turn only once its words
+/// are recognized, seconds later. Earlier work that ends in between would otherwise let the
+/// partial request run on its own. So the answer waits until his open fragment is resolved: its
+/// words withdrew this turn (`true`), or it was a cough or refused and the floor is back (`false`,
+/// and the turn runs unchanged). Voice going off clears the floor ([`TurnDesk`]'s drop).
 pub fn spoken_turn_withdrawn() -> bool {
     SUBMITTING.with(|s| {
-        s.borrow()
-            .as_ref()
-            .is_some_and(|(seq, w)| w.lock().map(|w| w.contains(seq)).unwrap_or(false))
+        let s = s.borrow();
+        let Some((seq, w, floor)) = s.as_ref() else { return false };
+        if floor.wait_until_free() {
+            eprintln!(
+                "[richos-voice] {} turn {seq} waited before it started: he was speaking again",
+                wall_clock_utc()
+            );
+        }
+        w.lock().map(|w| w.contains(seq)).unwrap_or(false)
     })
 }
 
@@ -2737,6 +2834,7 @@ struct Withdrawal {
     turns_started: Arc<AtomicU64>,
     submits_done: Arc<AtomicU64>,
     hook: WithdrawHook,
+    floor: FloorHold,
 }
 
 /// **The supervisor's half of the floor rule** (`turn.rs`): the shared [`AnswerGate`] and the
@@ -2846,6 +2944,7 @@ fn supervise(
         turns_started: withdrawal.turns_started.clone(),
         submits_done: withdrawal.submits_done.clone(),
         stop: withdrawal.hook.clone(),
+        floor: withdrawal.floor.clone(),
     };
     // Rich's first sound for an answer: from then on, what he says is a new turn, not the rest of
     // the one Rich is answering.
@@ -2885,7 +2984,7 @@ fn supervise(
                     } else {
                         turns.assembler.utterance_started();
                     }
-                    floor.publish(&shared, turns.assembler.has_floor());
+                    floor.publish(&shared, turns.publish_floor());
                 }
                 Ok(CapMsg::Utterance(u)) => {
                     eprintln!(
@@ -3091,7 +3190,7 @@ fn supervise(
         turns.release();
         // 1c. The floor. While he has it Rich's sentences wait; when he gives it back they go to
         //     the speaker in order (unless the answer was superseded, which dropped them).
-        let his_floor = turns.assembler.has_floor();
+        let his_floor = turns.publish_floor();
         floor.publish(&shared, his_floor);
         floor.release(&shared, his_floor);
 
@@ -3349,6 +3448,7 @@ mod tests {
             turns_started: Default::default(),
             submits_done: Default::default(),
             stop: Default::default(),
+            floor: Default::default(),
         };
         desk.assembler.utterance_started();
         desk.assembler.utterance_admitted(2512);
@@ -3423,6 +3523,7 @@ mod tests {
                 turns_started: Default::default(),
                 submits_done: Default::default(),
                 stop: Default::default(),
+                floor: Default::default(),
             };
             desk.assembler.his_utterance_started();
             desk.assembler.utterance_admitted(1200);
@@ -3466,6 +3567,7 @@ mod tests {
             turns_started: Default::default(),
             submits_done: Default::default(),
             stop: Default::default(),
+            floor: Default::default(),
         };
         desk.assembler.his_utterance_started();
         desk.assembler.utterance_admitted(1500);
@@ -3519,6 +3621,7 @@ mod tests {
             turns_started: Default::default(),
             submits_done: done.clone(),
             stop: Default::default(),
+            floor: Default::default(),
         };
         // The shell's spine, already held by the earlier work.
         let spine = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -3533,7 +3636,8 @@ mod tests {
             }
             ran.push(text);
         });
-        let worker = std::thread::spawn(move || submit_turns(submit_rx, withdrawn, done, submit));
+        let worker =
+            std::thread::spawn(move || submit_turns(submit_rx, withdrawn, Default::default(), done, submit));
 
         desk.assembler.his_utterance_started();
         desk.assembler.utterance_admitted(1500);
@@ -3580,6 +3684,7 @@ mod tests {
             turns_started: Default::default(),
             submits_done: Arc::new(AtomicU64::new(1)),
             stop: Default::default(),
+            floor: Default::default(),
         };
         desk.assembler.his_utterance_started();
         desk.assembler.utterance_admitted(1500);
@@ -3592,6 +3697,114 @@ mod tests {
         words_tx.send(Some(("Send the draft".to_string(), false))).unwrap();
         assert!(desk.collect());
         assert_eq!(desk.continue_thought(false, false), None, "words the shell already handled were carried");
+    }
+
+    /// INVARIANT — review rv-20261013T214648Z. "Send the draft" waits for the spine behind
+    /// earlier work; he starts speaking again, and the earlier work lets go of the spine while
+    /// that speech is still being recorded and recognized. The partial request does not start on
+    /// its own in those seconds: it waits for his fragment, and his words then withdraw it, so
+    /// the only request that runs is his whole thought. The way out: when that fragment turns out
+    /// to be nothing (a cough, refused by the recognizer) the partial request runs unchanged.
+    #[test]
+    fn a_waiting_partial_turn_does_not_start_while_his_resumed_speech_is_open() {
+        // The fixture's run, up to the moment the spine is let go during his resumed speech.
+        // Returns the desk, the recognizer's channel, what ran, and the worker.
+        type Resumed = (TurnDesk, Sender<Option<(String, bool)>>, Receiver<String>, std::thread::JoinHandle<()>);
+        fn resumed_while_waiting() -> Resumed {
+            let (words_tx, words_rx) = channel();
+            let (submit_tx, submit_rx) = channel();
+            let mut desk = TurnDesk {
+                assembler: TurnAssembler::new(),
+                words_rx,
+                submit_tx,
+                observer: Arc::new(Recorder::default()),
+                last_end: None,
+                sent: 0,
+                unanswered: None,
+                withdrawn: Default::default(),
+                turns_started: Default::default(),
+                submits_done: Default::default(),
+                stop: Default::default(),
+                floor: Default::default(),
+            };
+            let spine = Arc::new(Mutex::new(()));
+            let earlier_work = spine.lock().unwrap();
+            let (entered_tx, entered_rx) = channel();
+            let (ran_tx, ran_rx) = channel();
+            let callback_spine = spine.clone();
+            let callback_floor = desk.floor.clone();
+            let submit: SubmitFn = Arc::new(move |text: String, _| {
+                if entered_tx.send(text.clone()).is_err() {
+                    // Only the first turn is watched for; nobody listens for the joined one.
+                }
+                let _spine = callback_spine.lock().unwrap();
+                if spoken_turn_withdrawn() {
+                    return;
+                }
+                ran_tx.send(text).unwrap();
+                callback_floor.nudge();
+            });
+            let (withdrawn, hold, done) =
+                (desk.withdrawn.clone(), desk.floor.clone(), desk.submits_done.clone());
+            let worker = std::thread::spawn(move || submit_turns(submit_rx, withdrawn, hold, done, submit));
+
+            desk.assembler.his_utterance_started();
+            desk.publish_floor();
+            desk.assembler.utterance_admitted(1500);
+            words_tx.send(Some(("Send the draft".to_string(), false))).unwrap();
+            assert!(desk.collect());
+            desk.assembler.quiet();
+            desk.release();
+            desk.publish_floor();
+            assert_eq!(entered_rx.recv().unwrap(), "Send the draft", "the partial turn never reached the spine");
+
+            // He resumes (supervise's `CapMsg::Started` arm), and while that fragment is still
+            // being recorded the earlier work finishes.
+            desk.assembler.his_utterance_started();
+            assert!(desk.publish_floor(), "his resumed speech did not take the floor");
+            drop(earlier_work);
+            if let Err(ran) = desk.floor.turn_waits_or_ran(&ran_rx) {
+                panic!("the partial request {ran:?} started on its own while he was still speaking");
+            }
+            // His fragment ends and goes to the recognizer: the turn is still waiting for it.
+            desk.assembler.utterance_admitted(2000);
+            assert!(desk.publish_floor(), "his fragment at the recognizer gave up the floor");
+            assert_eq!(desk.floor.turns_waiting(), 1, "the partial turn stopped waiting while his words were at the recognizer");
+            assert!(ran_rx.try_recv().is_err(), "the partial request started while his words were at the recognizer");
+            (desk, words_tx, ran_rx, worker)
+        }
+
+        // His words come back and go on from the waiting turn: it is withdrawn, never run.
+        let (mut desk, words_tx, ran, worker) = resumed_while_waiting();
+        words_tx.send(Some(("after I approve it.".to_string(), false))).unwrap();
+        assert!(desk.collect());
+        assert_eq!(desk.continue_thought(false, false), Some(false), "the waiting turn was not withdrawn");
+        desk.assembler.quiet();
+        desk.release();
+        desk.publish_floor();
+        assert_eq!(
+            ran.recv().unwrap(),
+            "Send the draft after I approve it.",
+            "the request that ran is not his whole thought"
+        );
+        drop(desk);
+        worker.join().unwrap();
+        assert!(ran.try_recv().is_err(), "a second request ran beside his whole thought");
+
+        // His fragment was nothing (refused by the recognizer): the floor is back, and the
+        // waiting turn runs, unchanged.
+        let (mut desk, words_tx, ran, worker) = resumed_while_waiting();
+        words_tx.send(None).unwrap();
+        assert!(!desk.collect());
+        desk.release();
+        assert!(!desk.publish_floor(), "a refused fragment kept the floor");
+        assert_eq!(
+            ran.recv().unwrap(),
+            "Send the draft",
+            "the waiting turn never ran after his fragment came to nothing"
+        );
+        drop(desk);
+        worker.join().unwrap();
     }
 
     /// INVARIANT: switching voice off within the end-of-turn window still delivers what he said,
@@ -3614,6 +3827,7 @@ mod tests {
                 turns_started: Default::default(),
                 submits_done: Default::default(),
                 stop: Default::default(),
+                floor: Default::default(),
             };
             desk.assembler.utterance_started();
             desk.assembler.utterance_admitted(1800);
@@ -3653,6 +3867,7 @@ mod tests {
                 turns_started: Default::default(),
                 submits_done: Default::default(),
                 stop,
+                floor: Default::default(),
             };
             desk.assembler.his_utterance_started();
             desk.assembler.utterance_admitted(1500);
@@ -3903,6 +4118,7 @@ mod tests {
                     turns_started: Default::default(),
                     submits_done: Default::default(),
                     stop: Default::default(),
+                    floor: Default::default(),
                 },
                 words_tx,
                 discards: 0,
