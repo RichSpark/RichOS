@@ -36,7 +36,8 @@ pub const SERVER_NAME: &str = "richos_search";
 pub const TOOL_NAME: &str = "search_documents";
 pub const QUALIFIED_TOOL: &str = "mcp__richos_search__search_documents";
 /// At most this many results per call, and this many characters of each excerpt (the evidence
-/// ruling's 600-character bound for one item).
+/// ruling's 600-character bound for one item), plus a "…" at each end where text was left out.
+/// The shell places the bound around the part that matched (`richos_search::excerpt`).
 pub const MAX_RESULTS: usize = 8;
 pub const MAX_EXCERPT_CHARS: usize = 600;
 
@@ -271,15 +272,6 @@ fn answer_stream(service: &dyn SearchAnswer, token: &str, stream: UnixStream) {
     }
 }
 
-/// Bound one excerpt to [`MAX_EXCERPT_CHARS`] characters.
-pub fn bounded(text: &str) -> String {
-    if text.chars().count() <= MAX_EXCERPT_CHARS {
-        text.to_string()
-    } else {
-        text.chars().take(MAX_EXCERPT_CHARS).collect::<String>() + "…"
-    }
-}
-
 // =============================================================================================
 // the tool's half: MCP over stdio, one socket call per tool call
 // =============================================================================================
@@ -484,11 +476,5 @@ mod tests {
         assert_eq!(lines[2]["result"]["isError"], true);
         assert!(lines[2]["result"]["content"][0]["text"].as_str().unwrap().contains("not running"));
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn excerpts_are_bounded() {
-        assert_eq!(bounded("short"), "short");
-        assert_eq!(bounded(&"x".repeat(700)).chars().count(), MAX_EXCERPT_CHARS + 1);
     }
 }

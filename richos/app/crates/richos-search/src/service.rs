@@ -554,6 +554,21 @@ impl SearchService {
         finish(response, started)
     }
 
+    /// Which of `texts` is closest in meaning to `query`, by the same model the index uses:
+    /// for a passage matched by meaning alone, which stretch of it to show when only part fits.
+    /// `None` when meaning search is not available or the model fails; the caller then keeps
+    /// the passage's beginning.
+    pub fn closest_in_meaning(&self, query: &str, texts: &[&str]) -> Option<usize> {
+        let meaning = self.meaning_for_query()?;
+        let mut all = Vec::with_capacity(texts.len() + 1);
+        all.push(query.trim());
+        all.extend_from_slice(texts);
+        let vectors = meaning.embedder.embed(&all).ok()?;
+        let (q, rest) = vectors.split_first()?;
+        let dot = |v: &Vec<f32>| v.iter().zip(q).map(|(a, b)| a * b).sum::<f32>();
+        rest.iter().enumerate().max_by(|a, b| dot(a.1).total_cmp(&dot(b.1)).then(b.0.cmp(&a.0))).map(|(i, _)| i)
+    }
+
     /// The file behind a result, for Open original: found by its source ID, resolved inside the
     /// folder, and refused unless it is still the version that was searched.
     pub fn resolve_for_open(&self, source_id: &str) -> Result<PathBuf, String> {

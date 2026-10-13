@@ -1197,7 +1197,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2022 tests + 5 doc-tests (2018 direct, 4 ignored)
+cargo test -p richos-core                       # 2021 tests + 5 doc-tests (2017 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1236,7 +1236,7 @@ RICHOS_VOICE_LIVE_AUDIO=1 cargo test -p richos-voice   # all 359 run, incl. the 
 cargo run -p richos-voice --example device_probe       # what the audio hardware really is
 
 # Document search (Super Finder) — Qdrant Edge in process; its tests need no model:
-cargo test -p richos-search                     # 34 tests
+cargo test -p richos-search                     # 40 tests
 #     `tests/search_service.rs` drives the whole service over the synthetic stand-in folder
 #     (`tests/fixtures/standin/`) with the stand-in embedder: the four checkbox combinations,
 #     the truthful fallback, current-source checks, restart reconciliation and Open original.

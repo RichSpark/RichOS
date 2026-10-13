@@ -11,9 +11,11 @@
 //! - [`rank`]: the one text list both modes share, reciprocal rank fusion, the literal boost.
 //! - [`embed`], [`vector`] and [`manifest`]: the meaning half, on Qdrant Edge.
 //! - [`service`]: what the palette and Rich's tool call, with truthful status and fallback.
+//! - [`excerpt`]: a passage bounded for Rich's tool around the part that matched.
 pub mod chunk;
 pub mod corpus;
 pub mod embed;
+pub mod excerpt;
 pub mod manifest;
 pub mod query;
 pub mod rank;
