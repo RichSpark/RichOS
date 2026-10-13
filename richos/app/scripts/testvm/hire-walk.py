@@ -25,8 +25,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               and list, as bullets, a teammate for each role he asked for. Evidence: interview.json.
   go          "Go." typed; the assignment it registers is followed until it closes (--hire-within).
               PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
-              one named in what he was told, and nobody named to him as a teammate who was not
-              saved. Evidence: go-observed.json.
+              one named in what he was told, nobody named to him as a teammate who was not saved,
+              and no Approve card put in front of him along the way. Evidence: go-observed.json.
   relaunch    command-walk.py's relaunch: the app stopped by pid and started again
   roster      after the relaunch, the lease's roster holds the five and every hired teammate
   delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs, in the hook
@@ -203,6 +203,29 @@ class HireWalk(command_walk.CommandWalk):
             time.sleep(5)
             return super().type_into(text, *selector, app=app)
 
+    def present(self, title, role='AXButton', app=None):
+        """A read-only presence check whose accessibility read hit its own deadline counts as "not
+        seen yet" (walk 3 of 2026-10-13: `find --title Start the questions` exited 124 after 16.3 s
+        in the guest, host at 100% CPU), so the caller's own wait polls again until its limit."""
+        try:
+            return super().present(title, role, app)
+        except StepFailed as exc:
+            if '(124)' not in str(exc) and 'guest_deadline' not in str(exc):
+                raise
+            return False
+
+    def approve_if_asked(self, title):
+        """command-walk.py's one Approve press, searched by the start of the title, and a poll the
+        accessibility read could not answer in time counts as "not asked this time" (walk 2 of
+        2026-10-13: the search for a 150-character hiring title hit the read's 20 s deadline on a
+        host at 100% CPU and ended the step). The next poll asks again."""
+        try:
+            return super().approve_if_asked(title[:40])
+        except StepFailed as exc:
+            if '(124)' not in str(exc) and 'guest_deadline' not in str(exc):
+                raise
+            return False
+
     def ledger(self):
         text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
         rows = []
@@ -303,6 +326,8 @@ class HireWalk(command_walk.CommandWalk):
         if record.get('state') in command_walk.OPEN:
             raise StepFailed(f"the hiring was still {record.get('state')} after {self.a.hire_within:g} s")
         failures = hired_verdict(proposed, saved, '\n'.join(told))
+        if pressed[0]:
+            failures.append(f'he was asked to approve {pressed[0]} step(s) of the hiring after his go')
         if failures:
             raise StepFailed('; '.join(failures))
         self.facts['hired'] = saved
