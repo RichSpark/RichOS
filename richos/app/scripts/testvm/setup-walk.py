@@ -62,6 +62,13 @@ built with one: a nightly's engine-pin.env).
   r19-offer   Start pressed, first setup answered (the memory question "Not now", the company
               added); Rich's offer appears once, its "Not now" says the drawn line, and
               dictation.json says offered
+  r19-set-up  instead of r19-offer, the CEO's 2026-10-13 test of nightly 54: Start pressed, the
+              company added as --company-name, "Start the questions" pressed; the rail paints the
+              name as typed (OCR, case kept), the first conversation is "Onboarding", the offer says
+              his copy; Turn on dictation with both grants written as a person gives them, F2 picked
+              in the sheet and the sheet closed: a "Dictation feature" conversation naming F2,
+              recorded in dictation.json, the dictation text gone from the onboarding conversation,
+              no dictation line under the message box, and Rich's reply naming the company exactly
   r19-again   the app relaunched: no setup sheet and no offer
 
 CEO §53: no sound is played. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
@@ -88,7 +95,7 @@ StepFailed = adopt_walk.StepFailed
 
 STEPS = ['identity', 'meanwhile', 'arrived', 'voice', 'relaunch']
 # Round 19's states 1 to 4 (dictation plan slice 4); never in the default run.
-R19_STEPS = ['r19-sheet', 'r19-offer', 'r19-again']
+R19_STEPS = ['r19-sheet', 'r19-offer', 'r19-set-up', 'r19-again']
 QA = HERE.parent / 'qa'
 # What OCR must read in each state: fragments of his two lines short enough to sit on one line
 # of the sheet (setup.rs MEDIA_TOOLS_WHY, setup_view.rs SETUP_DOWNLOAD_LINE).
@@ -98,8 +105,13 @@ R19_STATE1_OCR = ('Wispr Flow', 'voice and video tools')
 R19_STATE2_OCR = ('Sit tight', 'Wispr Flow')
 # The accessibility tree carries the exact words.
 R19_STATE1_AX = 'a free & private/local replacement for Wispr Flow'
-R19_OFFER_AX = 'I can also type for you in any other app on your Mac'
+# The CEO's copy in the offer, 2026-10-13 (main.js DICTATION_OFFER_WHAT and _HOW_BEFORE).
+R19_OFFER_AX = 'a free & private/local replacement for Wispr Flow. (saves you $140+/year)'
+R19_OFFER_COPY_AX = (R19_OFFER_AX, 'Just click into any other app (Mail, Slack, Chrome/Safari, anything), press')
 R19_NOT_NOW_AX = "Okay. It's in Settings, under Dictation, whenever you want it."
+# The sheet's On line (dictation.js) and the "Dictation feature" message with F2 (dictation_offer.rs).
+R19_ON_AX = 'On. Tap F'
+R19_FEATURE_AX = 'Click into where you want your words to appear, tap F2, say what you want written'
 # The microphone's stand-in for the voice step (capture.rs RICHOS_VOICE_INPUT_WAV), in the guest.
 SILENCE_WAV = '/Users/admin/voice-silence.wav' # machine-path-exempt: isolated test VM account/path; never a customer default
 # Two seconds of 16 kHz mono silence, written in the guest: nothing is played and nothing is said.
@@ -663,6 +675,104 @@ class SetupWalk(adopt_walk.Walk):
             raise StepFailed('; '.join(why) + ' — ' + json.dumps(facts))
         return facts
 
+    def r19_set_up(self):
+        """The CEO's test of nightly 54 (richos-hq docs/ceo-input/2026-10-13_1), on this fresh
+        install: the company he adds keeps its capitals in the rail and in Rich's words, the first
+        conversation is "Onboarding", the offer says his copy, and once dictation is set up with
+        the key he picks (F2) its text is in a new "Dictation feature" conversation naming F2, with
+        no dictation line under the message box."""
+        name = self.a.company_name
+        self.ax('click', '--id', 'setup-start')
+        self.mark('round 19: "Start" pressed', pressed=True)
+        guest(self.vm, 'mkdir -p {c} && cd {c} && if [ ! -d .git ]; then printf "notes\\n" > README.md '
+                       '&& git init -q && git add README.md && git -c user.name=QA -c user.email=qa@example.invalid '
+                       'commit -q -m init; fi'.format(c=shlex.quote(self.company)))
+        end = time.monotonic() + 240
+        added = asked = False
+        while time.monotonic() < end:
+            if self.shown('memory-setup-later', 'Not now'):
+                self.ax('click', '--id', 'memory-setup-later')
+            elif not added and self.present('Add this company'):
+                self.type_into(name, '--role', 'AXTextField', '--title', "What's the company called?")
+                self.type_into(self.company, '--role', 'AXTextField', '--title', 'Its folder on this Mac')
+                self.click('Add this company', '"Add this company" pressed')
+                added = True
+            elif not asked and self.present('Start the questions'):
+                self.click('Start the questions', 'business questions: "Start the questions"')
+                asked = True
+            elif added and asked and self.shown('dictation-offer-yes', 'Turn on dictation'):
+                break
+            time.sleep(2)
+        if not self.shown('dictation-offer-yes', 'Turn on dictation'):
+            self.shot('set-up-no-offer.png')
+            raise StepFailed('Rich never offered dictation after Start')
+        facts = {'company_name': name}
+        facts['onboarding_title'] = self.present('Onboarding', role='AXButton')
+        facts['offer_copy'] = all(self.shows_text(t) for t in R19_OFFER_COPY_AX)
+        self.shot('set-up-offer.png')
+        # The two grants a person gives when he turns dictation on (dictation-walk.py `stage`).
+        user_db = '"$HOME/Library/Application Support/com.apple.TCC/TCC.db"'
+        sys_db = '"/Library/Application Support/com.apple.TCC/TCC.db"'
+        row = ("INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, "
+               "indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) "
+               "VALUES ('{svc}', 'com.richos.app', 0, 2, 2, 1, 0, 'UNUSED', 0, strftime('%s','now'));")
+        guest(self.vm, f'sqlite3 {user_db} ' + shlex.quote(row.format(svc='kTCCServiceMicrophone')))
+        guest(self.vm, f'sudo -n sqlite3 {sys_db} ' + shlex.quote(row.format(svc='kTCCServiceAccessibility')))
+        self.ax('click', '--id', 'dictation-offer-yes')
+        self.mark('"Turn on dictation" pressed', pressed=True)
+        end = time.monotonic() + 120
+        while time.monotonic() < end and not self.shows_text(R19_ON_AX):
+            time.sleep(2)
+        facts['sheet_on'] = self.shows_text(R19_ON_AX)
+        self.ax('click', '--title', 'F2', '--role', 'AXRadioButton')
+        time.sleep(2)
+        self.ax('click', '--id', 'dict-close')
+        self.mark('key F2 picked, the sheet closed', pressed=True)
+        end = time.monotonic() + 60
+        while time.monotonic() < end and not self.present('Dictation feature'):
+            time.sleep(2)
+        facts['feature_listed'] = self.present('Dictation feature')
+        facts['moved_out'] = not any(self.shows_text(t) for t in R19_OFFER_COPY_AX)
+        facts['no_composer_line'] = not self.shows_text('here or in any app')
+        self.shot('set-up-onboarding.png')
+        ocr = adopt_walk.command([HERE / 'shot.sh', self.vm, self.out / 'set-up-rail.png', '--ocr'], 120)
+        facts['rail_ocr_exact'] = name in ocr
+        facts['rail_ocr_upper'] = name.upper() in ocr
+        if facts['feature_listed']:
+            self.press('Dictation feature')
+            time.sleep(3)
+        facts['feature_text'] = self.shows_text(R19_FEATURE_AX)
+        facts['feature_wrong_key'] = self.shows_text('tap F1,')
+        self.shot('set-up-feature.png')
+        record = guest(self.vm, 'cat ' + shlex.quote(self.data + '/dictation.json') + ' 2>/dev/null || true')
+        try:
+            facts['feature_thread_recorded'] = bool(json.loads(record).get('featureThread'))
+        except ValueError:
+            facts['feature_thread_recorded'] = False
+        # Rich's words in the onboarding conversation: the name as typed, never re-capitalized.
+        end = time.monotonic() + 180
+        said = ''
+        while time.monotonic() < end:
+            rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true')
+            said = ''.join(json.loads(r).get('text', '') for r in rows.splitlines() if '"AssistantDelta"' in r)
+            if name in said or name.title() in said or name.upper() in said:
+                break
+            time.sleep(5)
+        facts['rich_exact'] = said.count(name)
+        facts['rich_recapitalized'] = said.count(name.title()) + (said.count(name.upper()) if name.upper() != name else 0)
+        (self.out / 'rich-said.txt').write_text(said)
+        self.facts['r19_set_up'] = facts
+        self.save()
+        why = [k for k in ('onboarding_title', 'offer_copy', 'sheet_on', 'feature_listed', 'moved_out',
+                           'no_composer_line', 'rail_ocr_exact', 'feature_text', 'feature_thread_recorded')
+               if not facts[k]]
+        why += [k for k in ('rail_ocr_upper', 'feature_wrong_key', 'rich_recapitalized') if facts[k]]
+        if not facts['rich_exact']:
+            why.append('rich_exact (Rich never wrote the name)')
+        if why:
+            raise StepFailed('failed: ' + ', '.join(why) + ' — ' + json.dumps(facts))
+        return facts
+
     def r19_again(self):
         launched = relaunch(self.vm, environment=self.r19_env())
         self.log = launched['log']
@@ -691,6 +801,8 @@ def main():
                         "guest's network fetches the 1 GB in about 63 s (run of 2026-10-07 18:38Z), so not-now "
                         'reaches the company question while the models are still arriving')
     p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--company-name', default='Brightwave LABS',
+                   help='the name r19-set-up types for the company, with the capitals it must keep')
     a = p.parse_args()
     steps = a.steps.split(',')
     unknown = [s for s in steps if s not in STEPS + R19_STEPS]
