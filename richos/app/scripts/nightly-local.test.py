@@ -214,6 +214,28 @@ class LocalTests(unittest.TestCase):
         env["HOME"] = str(self.root / "isolated-home")
         self.assertEqual(m.M.load(env)["RICHOS_BULK_ROOT"], str(bulk))
 
+    def test_relative_cargo_environment_is_resolved_before_private_settings(self):
+        private = self.root / "machine.env"
+        private.write_text(f"CARGO_TARGET_DIR={self.root}/file-target\n")
+        source = {"HOME": str(self.root), "RICHOS_ENV_FILE": str(private),
+                  "CARGO_TARGET_DIR": "build output"}
+        original = dict(source)
+        cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            env = m.gate_environment(source, strict=False)
+            self.assertEqual(env["RICHOS_CARGO_CACHE_ROOT"], str(self.root / "build output"))
+            self.assertNotIn("CARGO_TARGET_DIR", env)
+            self.assertEqual(source, original)
+            source["RICHOS_CARGO_CACHE_ROOT"] = str(self.root / "explicit-cache")
+            self.assertEqual(m.gate_environment(source, strict=False)["RICHOS_CARGO_CACHE_ROOT"],
+                             str(self.root / "explicit-cache"))
+            private.write_text("CARGO_TARGET_DIR=relative-file-target\n")
+            with self.assertRaisesRegex(ValueError, "literal absolute path"):
+                m.gate_environment(source, strict=False)
+        finally:
+            os.chdir(cwd)
+
     def test_every_gate_runs_whole_whatever_checkout_or_shell_it_starts_from(self):
         # A runner started from a teammate workspace narrows to the branch's cases by default
         # (engine/scripts/lib/workspace_scope.py, 2026-10-01). A nightly never does: its gates

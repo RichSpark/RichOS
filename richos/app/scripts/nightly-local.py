@@ -955,6 +955,11 @@ def gate_environment(environ, run_id=None, strict=True):
     privacy list is not an owner-private file here, instead of refusing; the build itself
     always refuses.
     """
+    environ = dict(environ)
+    cargo = environ.get("CARGO_TARGET_DIR")
+    if cargo and not Path(cargo).is_absolute():
+        # Cargo accepts relative shell targets; private file values stay absolute.
+        environ["CARGO_TARGET_DIR"] = str(Path(cargo).resolve())
     env = {name: environ[name] for name in GATE_PASSTHROUGH if name in environ}
     settings = M.load(environ)
     cargo = settings.pop("CARGO_TARGET_DIR", None)
