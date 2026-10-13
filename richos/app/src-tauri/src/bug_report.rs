@@ -304,6 +304,13 @@ impl GitHub {
 /// [`WRITE_DEADLINE`]; the child is killed when it outlasts it (CEO §54: whatever this app
 /// starts, it ends).
 fn ask_rich(bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str) -> Result<String, String> {
+    ask_rich_within(bin, folder, cwd, input, WRITE_DEADLINE)
+}
+
+/// [`ask_rich`] with its own deadline: meeting notes' one call per transcript
+/// (`meetings.rs`, Granola PRD V4) reuses this execution, account handling included, and needs
+/// longer than a bug report for an hour of transcript.
+pub(crate) fn ask_rich_within(bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str, deadline: Duration) -> Result<String, String> {
     let mut command = std::process::Command::new(bin);
     command
         .args(bug::writer_args())
@@ -333,7 +340,7 @@ fn ask_rich(bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str) -> Resul
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < WRITE_DEADLINE => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) if started.elapsed() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
                 best_effort("stopping it", child.kill());
                 best_effort("reaping it", child.wait());
@@ -348,7 +355,7 @@ fn ask_rich(bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str) -> Resul
     bug::result_text(&out)
 }
 
-fn claude_for(state: &crate::AppState) -> (PathBuf, Option<PathBuf>) {
+pub(crate) fn claude_for(state: &crate::AppState) -> (PathBuf, Option<PathBuf>) {
     let bin = state.claude_bin.lock().map(|b| b.clone()).unwrap_or_else(|_| richos_core::native::resolve_claude_bin());
     (bin, state.quota.lease_account().folder)
 }

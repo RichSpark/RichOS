@@ -21,7 +21,9 @@
 //! [`Meetings::recording_closed`]'s job.
 
 use crate::dictation::appkit::{self, Win};
+use richos_core::ledger::AttentionTier;
 use richos_core::meeting::{parse_watch_line, Action, EndReason, Input, MeetingMonitor, PromptKind, WatchLine};
+use richos_core::meeting_notes::{self, meeting_zone, MeetingFacts, NextStep};
 use richos_core::util::now_millis;
 use richos_voice::dictation_bar::Rect;
 use serde::Serialize;
@@ -38,6 +40,14 @@ pub const EVENT_PANEL: &str = "meeting-panel";
 pub const EVENT_STATE: &str = "meeting-state";
 /// The voice bar's level, about 20 a second while the bar is up: `{"rms": .., "peak": ..}`.
 pub const EVENT_LEVEL: &str = "meeting-level";
+
+/// A meeting's transcription is bounded (whisper on Apple silicon measured 249 s for a 92-minute
+/// channel, `config.js`; two channels of an hour stay well inside this).
+const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
+/// One brief attempt (a bug report's is 90 s; an hour of transcript needs longer).
+const BRIEF_DEADLINE: Duration = Duration::from_secs(5 * 60);
+/// Between failed brief attempts (PRD V4: up to three attempts per session).
+const RETRY_AFTER: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
 
 /// The panel's place on the display (round 25.1: `top:35px;right:14px` under a 25px menu bar):
 /// its right edge 14 points in from the display's visible right, its top 10 below the menu bar.
@@ -449,6 +459,7 @@ impl Meetings {
         if let Some(e) = &entity {
             command.env("RICHOS_ACTIVE_COMPANY", e);
         }
+        installed_paths(&mut command);
         let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -611,19 +622,185 @@ impl Meetings {
         });
     }
 
-    /// A recording is closed on disk. Turning it into notes is the next step's (transcript, the
-    /// one brief, Rich's message); for now the session is where the pipeline expects it.
+    /// A recording is closed on disk: write down what the app knows about it (`meeting.json`),
+    /// say "Preparing your meeting notes…", and turn it into notes on a thread of its own.
     fn recording_closed(&self, run: CaptureRun) {
+        let Some(dir) = run.dir.clone() else {
+            eprintln!("[richos] meeting notes: the recorder closed without naming its session");
+            return;
+        };
+        let facts = MeetingFacts {
+            title: run.title.clone(),
+            event_id: run.event_id.clone(),
+            date_line: date_line(run.started_at),
+            started_at: run.started_at,
+            ended_at: now_millis(),
+            stopped_early: run.stop == Some(EndReason::StoppedEarly),
+            manual: run.manual,
+            entity: run.entity.clone(),
+            thread: run.thread.clone(),
+            warnings: run.warnings.clone(),
+        };
         eprintln!(
-            "[richos] meeting notes: recorded {} ({}{}, company {}, conversation {}, partial: {}) into {}",
-            run.title.as_deref().unwrap_or("a call"),
-            if run.manual { "manual" } else { "prompted" },
-            if run.event_id.is_some() { ", calendar" } else { "" },
-            run.entity.as_deref().unwrap_or("none"),
-            run.thread.as_deref().unwrap_or("none"),
-            if run.warnings.is_empty() { "no".to_string() } else { run.warnings.join(" / ") },
-            run.dir.as_deref().unwrap_or(run.zone.as_path()).display()
+            "[richos] meeting notes: recorded {} ({}, company {}, partial: {}) into {}",
+            facts.title.as_deref().unwrap_or("a call"),
+            if facts.manual { "manual" } else { "prompted" },
+            facts.entity.as_deref().unwrap_or("none"),
+            if facts.warnings.is_empty() { "no".to_string() } else { facts.warnings.join(" / ") },
+            dir.display()
         );
+        logged("writing meeting.json", meeting_notes::write_facts(&dir, &facts));
+        let zone = run.zone.clone();
+        let me = self.app.state::<Arc<Meetings>>().inner().clone();
+        std::thread::Builder::new()
+            .name("meeting-notes".into())
+            .spawn(move || me.prepare_notes(&dir, &zone, facts))
+            .ok();
+    }
+
+    fn set_processing(&self, what: Option<&str>) {
+        self.inner.lock().unwrap().processing = what.map(str::to_string);
+        self.publish_state();
+    }
+
+    /// Transcript, then the one brief, then Rich's message. Each failure is said through Rich in
+    /// the design's own words; the recording and the transcript are never lost.
+    fn prepare_notes(&self, dir: &Path, zone: &Path, facts: MeetingFacts) {
+        self.set_processing(Some("preparing"));
+        if !dir.join(meeting_notes::TRANSCRIPT_FILE).is_file() {
+            if let Err(why) = self.transcribe(dir, zone, &facts) {
+                eprintln!("[richos] meeting notes: transcription failed: {why}");
+                logged("saying the transcript failed", self.say(&facts, &meeting_notes::transcript_failed_text(&why), &[]));
+                self.set_processing(Some("transcript-failed"));
+                return;
+            }
+        }
+        let transcript = match std::fs::read_to_string(dir.join(meeting_notes::TRANSCRIPT_FILE)) {
+            Ok(t) => t,
+            Err(e) => {
+                logged("saying the transcript failed", self.say(&facts, &meeting_notes::transcript_failed_text(&format!("the transcript could not be read: {e}")), &[]));
+                self.set_processing(Some("transcript-failed"));
+                return;
+            }
+        };
+        loop {
+            let mut state = meeting_notes::read_state(dir);
+            match meeting_notes::next_step(dir, &state) {
+                NextStep::Write(n) => {
+                    match self.write_brief_once(dir, &facts, &transcript) {
+                        Ok(()) => eprintln!("[richos] meeting notes: brief written on attempt {n}"),
+                        Err(why) => {
+                            eprintln!("[richos] meeting notes: brief attempt {n} failed: {why}");
+                            state.attempts = n;
+                            state.last_error = Some(why);
+                            logged("recording the attempt", meeting_notes::write_state(dir, &state));
+                            if n < meeting_notes::MAX_ATTEMPTS {
+                                std::thread::sleep(RETRY_AFTER[(n as usize - 1).min(RETRY_AFTER.len() - 1)]);
+                            }
+                        }
+                    }
+                }
+                NextStep::Deliver => {
+                    let brief = std::fs::read_to_string(dir.join(meeting_notes::BRIEF_FILE)).unwrap_or_default();
+                    let files = [dir.join(meeting_notes::BRIEF_FILE), dir.join(meeting_notes::TRANSCRIPT_FILE)];
+                    match self.say(&facts, &meeting_notes::message_text(&brief, &facts), &files) {
+                        Ok(()) => {
+                            state.delivered = true;
+                            logged("recording the delivery", meeting_notes::write_state(dir, &state));
+                            self.set_processing(None);
+                        }
+                        Err(why) => {
+                            eprintln!("[richos] meeting notes: the brief is written but Rich could not say it: {why}");
+                            self.set_processing(Some("notes-failed"));
+                        }
+                    }
+                    return;
+                }
+                NextStep::Done => {
+                    self.set_processing(None);
+                    return;
+                }
+                NextStep::GiveUp => {
+                    let why = state.last_error.clone().unwrap_or_default();
+                    logged("saying the notes failed", self.say(&facts, &meeting_notes::notes_failed_text(&why), &[]));
+                    self.set_processing(Some("notes-failed"));
+                    return;
+                }
+            }
+        }
+    }
+
+    /// The pipeline (`richos-service run <session>`): the runtime's own node, ffmpeg and
+    /// whisper-cli, the corpus and company of the meeting, bounded. Its output goes to
+    /// `pipeline.log` in the session.
+    fn transcribe(&self, dir: &Path, zone: &Path, facts: &MeetingFacts) -> Result<(), String> {
+        let service = service_cli().ok_or("this build has no transcription service installed")?;
+        let log = std::fs::File::create(dir.join("pipeline.log")).map_err(|e| e.to_string())?;
+        let mut command = Command::new(node_bin());
+        command
+            .arg(&service)
+            .arg("run")
+            .arg(dir)
+            .env("RICHOS_DROP_ZONE", zone)
+            .env("LORO_CORPUS", self.corpus_root())
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log);
+        installed_paths(&mut command);
+        if let Ok(whisper) = richos_voice::stt::resolve_whisper_bin() {
+            command.env("RICHOS_WHISPER_BIN", whisper);
+        }
+        // The selected call model, named outright: setup fetches it into RichOS's own model
+        // folder (`setup_view.rs`, both models), which the service's own search does not visit.
+        let model = richos_voice::stt::resolve_model(CALL_MODEL)
+            .map_err(|e| format!("the call transcription model is not installed yet ({e})"))?;
+        command.env("RICHOS_WHISPER_MODEL", model);
+        match &facts.entity {
+            Some(e) => command.env("RICHOS_ACTIVE_COMPANY", e),
+            None => command.env_remove("RICHOS_ACTIVE_COMPANY"),
+        };
+        let mut child = command.spawn().map_err(|e| format!("the transcription service did not start: {e}"))?;
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) => {
+                    let tail = std::fs::read_to_string(dir.join("pipeline.log")).unwrap_or_default();
+                    let last = tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+                    return Err(format!("the transcription ended with {status}: {last}"));
+                }
+                Ok(None) if started.elapsed() < TRANSCRIBE_DEADLINE => std::thread::sleep(Duration::from_millis(500)),
+                _ => {
+                    logged("stopping the transcription", child.kill());
+                    logged("reaping the transcription", child.wait());
+                    return Err("the transcription took longer than an hour".into());
+                }
+            }
+        }
+    }
+
+    /// One attempt at the brief: one tool-free call under the conversation's account (Bust a
+    /// bug's execution), the answer checked, `brief.md` written atomically.
+    fn write_brief_once(&self, dir: &Path, facts: &MeetingFacts, transcript: &str) -> Result<(), String> {
+        let state = self.app.state::<crate::AppState>();
+        let (bin, folder) = crate::bug_report::claude_for(&state);
+        let input = richos_core::bug_report::writer_input(&meeting_notes::writer_prompt(facts, transcript), None);
+        let answer = crate::bug_report::ask_rich_within(&bin, folder.as_deref(), dir, &input, BRIEF_DEADLINE)?;
+        let brief = meeting_notes::accept_brief(&answer)?;
+        meeting_notes::write_brief(dir, &brief).map(|_| ()).map_err(|e| format!("brief.md could not be written: {e}"))
+    }
+
+    /// Rich says it, in the conversation and company captured at meeting start, as a visible
+    /// (Digest) proactive message; `files` become the Output record's entries of that turn.
+    fn say(&self, facts: &MeetingFacts, text: &str, files: &[PathBuf]) -> Result<(), String> {
+        let state = self.app.state::<crate::AppState>();
+        let mut spine = state.spine.lock().map_err(|_| "the conversation is unavailable".to_string())?;
+        let turn = spine.raise_proactive(facts.thread.as_deref(), AttentionTier::Digest, text).map_err(|e| e.to_string())?;
+        if !files.is_empty() {
+            let thread = facts.thread.clone().or_else(|| spine.active_thread().map(str::to_string)).ok_or("no conversation")?;
+            spine.witness_app_files(&thread, &turn, files).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     // ---- scope: which company this meeting belongs to ----------------------------------------
@@ -647,21 +824,68 @@ impl Meetings {
     /// service's own default (`tools/richos-service/lib/config.js` `DEFAULT_CORPUS_ROOT`).
     fn corpus_root(&self) -> PathBuf {
         let state = self.app.state::<crate::AppState>();
-        if let Some(install) = state.loro_install.lock().unwrap().as_ref() {
-            return install.root().path().to_path_buf();
-        }
-        std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("RichOS/corpus")
+        let install = state.loro_install.lock().unwrap();
+        crate::meetings_corpus_root(install.as_ref())
     }
 }
 
-/// The capture destination, by the service's own rule (`config.js` `evidenceRoot` + `dropZone`):
-/// a company's `companies/<id>/evidence/meetings`, or `ceo/evidence/unfiled/meetings` when the
-/// conversation has no company.
-pub fn meeting_zone(corpus: &Path, entity: Option<&str>) -> PathBuf {
-    match entity {
-        Some(e) => corpus.join("companies").join(e).join("evidence").join("meetings"),
-        None => corpus.join("ceo").join("evidence").join("unfiled").join("meetings"),
+/// The transcription service this launch carries: `RICHOS_SERVICE_BIN` (the pointer the app
+/// already honors for the vocabulary service), else the copy the engine archive carries in the
+/// voice delivery contract's product layout, `<engine>/service/tools/richos-service/...`, whose
+/// relative imports reach `<engine>/service/engine/voice` and the extension module beside it
+/// (`make-engine-asset.sh`). Never a checkout found by walking up.
+pub fn service_cli() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("RICHOS_SERVICE_BIN").map(PathBuf::from).filter(|p| p.is_file()) {
+        return Some(p);
     }
+    let engine = richos_voice::stt::delivered_runtime_bin_dir()?.parent()?.parent()?.to_path_buf();
+    let p = engine.join(SERVICE_ENTRY);
+    p.is_file().then_some(p)
+}
+
+/// The call-transcription model: the service's default tier ("quantized"), the batch ladder's
+/// top (`engine/voice/models`), and one of the two models setup already fetches.
+pub const CALL_MODEL: &str = "large-v3-turbo-q5_0";
+
+/// Where the engine archive puts the service's entry point (`make-engine-asset.sh`).
+pub const SERVICE_ENTRY: &str = "service/tools/richos-service/bin/richos-service.js";
+
+/// The runtime's Node, else `RICHOS_NODE_BIN`, else the first on PATH (a development launch).
+fn node_bin() -> PathBuf {
+    richos_voice::stt::delivered_runtime_bin_dir()
+        .map(|b| b.join("node"))
+        .filter(|n| n.is_file())
+        .or_else(|| std::env::var_os("RICHOS_NODE_BIN").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("node"))
+}
+
+/// Explicit installed paths for a child: the runtime's `bin` first on PATH (so the companion's
+/// coordinator, which runs `/usr/bin/env node`, gets the runtime's Node), its ffmpeg named, and
+/// the service CLI for the coordinator (`RICHOS_SERVICE_CLI`). Nothing is found by walking up a
+/// checkout; a launch with no delivered runtime keeps its own PATH.
+fn installed_paths(command: &mut Command) {
+    if let Some(bin) = richos_voice::stt::delivered_runtime_bin_dir() {
+        command.env("PATH", format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()));
+        if bin.join("ffmpeg").is_file() {
+            command.env("RICHOS_FFMPEG_BIN", bin.join("ffmpeg"));
+        }
+    }
+    if let Some(cli) = service_cli() {
+        command.env("RICHOS_SERVICE_CLI", cli);
+    }
+}
+
+/// "12 October 2026" for the meeting's local day (the design's example brief).
+pub fn date_line(at_ms: u64) -> String {
+    const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let secs = (at_ms / 1000) as libc::time_t;
+    // SAFETY: localtime_r writes into the tm we own; a zeroed tm is a valid initial value.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { !libc::localtime_r(&secs, &mut tm).is_null() };
+    if !ok {
+        return String::new();
+    }
+    format!("{} {} {}", tm.tm_mday, MONTHS[(tm.tm_mon.clamp(0, 11)) as usize], tm.tm_year + 1900)
 }
 
 /// The name a person calls the app. macOS names Zoom's process "zoom.us"; the design says "Call
@@ -794,10 +1018,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_zone_is_the_services_rule() {
-        let corpus = Path::new("/c");
-        assert_eq!(meeting_zone(corpus, Some("acme")), PathBuf::from("/c/companies/acme/evidence/meetings"));
-        assert_eq!(meeting_zone(corpus, None), PathBuf::from("/c/ceo/evidence/unfiled/meetings"));
+    fn the_brief_dates_the_meeting_by_its_local_day() {
+        // 2026-10-12T12:00:00Z: the same calendar day in every zone within eleven hours of UTC.
+        assert_eq!(date_line(1_791_806_400_000), "12 October 2026");
     }
 
     #[test]
