@@ -351,6 +351,11 @@ impl Meetings {
                 eprintln!("[richos] meeting notes: watcher: {message}");
                 continue;
             }
+            match &parsed {
+                WatchLine::Started { pid, family, .. } => eprintln!("[richos] meeting notes: microphone in use: {family} (pid {pid})"),
+                WatchLine::Stopped { pid, family, .. } => eprintln!("[richos] meeting notes: microphone released: {family} (pid {pid})"),
+                _ => {}
+            }
             let actions = self.inner.lock().unwrap().monitor.watch(&parsed, now_millis());
             self.apply(actions);
         }
@@ -366,6 +371,8 @@ impl Meetings {
 
     fn apply(&self, actions: Vec<Action>) {
         for action in actions {
+            // One line per decision, so a walk's app log says what the monitor did and when.
+            eprintln!("[richos] meeting notes: {action:?}");
             match action {
                 Action::ShowPrompt(kind) => {
                     let view = match kind {
@@ -441,6 +448,7 @@ impl Meetings {
             .build();
         match built {
             Ok(w) => {
+                eprintln!("[richos] meeting notes: the panel window is built");
                 if let Ok(ns) = w.ns_window() {
                     let win = Win(ns as *mut _);
                     logged("the panel's setup", self.app.run_on_main_thread(move || {
@@ -464,6 +472,7 @@ impl Meetings {
         let Ok(ns) = window.ns_window() else { return };
         let win = Win(ns as *mut _);
         let hidden = w <= 0.0 || h <= 0.0 || self.inner.lock().unwrap().view == PanelView::Hidden;
+        eprintln!("[richos] meeting notes: the panel laid out {w:.0} x {h:.0}{}", if hidden { " (hidden)" } else { "" });
         logged("placing the panel", self.app.run_on_main_thread(move || {
             if hidden {
                 win.hide();
@@ -830,6 +839,7 @@ impl Meetings {
                     match self.say(&facts, &meeting_notes::message_text(&brief, &facts), &files) {
                         Ok(()) => {
                             state.delivered = true;
+                            eprintln!("[richos] meeting notes: Rich said the notes in the conversation ({})", dir.display());
                             logged("recording the delivery", meeting_notes::write_state(dir, &state));
                             self.set_processing(None);
                         }
