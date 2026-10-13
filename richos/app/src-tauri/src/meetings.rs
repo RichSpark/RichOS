@@ -592,6 +592,14 @@ impl Meetings {
 
     fn capture_failed(&self, why: &str, partly_recorded: bool) {
         eprintln!("[richos] meeting notes: {why}");
+        {
+            // A start that failed before a recorder ran has no process whose exit would tell the
+            // monitor; without this it stays "recording" and Try again does nothing.
+            let mut inner = self.inner.lock().unwrap();
+            if inner.capture.is_none() {
+                inner.monitor.input(Input::CaptureEnded);
+            }
+        }
         let title = if partly_recorded { "Only part of this meeting was recorded." } else { "Nothing was recorded." };
         self.show(PanelView::Problem {
             title: title.into(),
@@ -718,31 +726,37 @@ pub fn meeting_panel_drag(app: AppHandle) {
 #[richos_command::command]
 pub fn meeting_answer(app: AppHandle, answer: String) -> Result<(), String> {
     let m = meetings(&app)?;
-    let input = match answer.as_str() {
-        "take" | "retry" => Input::TakeNotes,
-        "not-this-one" => Input::NotThisOne,
-        "stop" => Input::Stop,
-        other => return Err(format!("unknown answer {other}")),
-    };
-    // Try again on a failed start: the monitor is no longer prompting, so it is a manual start
-    // of the same recording.
-    let actions = {
+    let input = answer_input(&answer)?;
+    let (actions, view) = {
         let mut inner = m.inner.lock().unwrap();
-        let mut out = inner.monitor.input(input.clone());
-        if out.is_empty() && answer == "retry" {
-            out = inner.monitor.input(Input::ManualStart);
-        }
-        if out.is_empty() && answer == "not-this-one" && matches!(inner.view, PanelView::Problem { .. }) {
-            inner.view = PanelView::Hidden;
-            out.push(Action::HidePrompt);
-        }
-        out
+        (inner.monitor.input(input), inner.view.clone())
     };
-    if actions.is_empty() && answer == "not-this-one" {
+    // The panel is closed by `show`, the one place that emits the page's transition, and never
+    // by writing the view behind its back (second review rv-20261013T100322Z-8bfcf4fe-37ac #2).
+    if hides_panel(&answer, &view, &actions) {
         m.show(PanelView::Hidden);
     }
     m.apply(actions);
     Ok(())
+}
+
+/// The panel's buttons, as the monitor's inputs. "Try again" is its own input: the monitor
+/// repeats the failed recording, a detected call still armed (second review #1).
+fn answer_input(answer: &str) -> Result<Input, String> {
+    match answer {
+        "take" => Ok(Input::TakeNotes),
+        "retry" => Ok(Input::Retry),
+        "not-this-one" => Ok(Input::NotThisOne),
+        "stop" => Ok(Input::Stop),
+        other => Err(format!("unknown answer {other}")),
+    }
+}
+
+/// Does this answer close the panel here, rather than through the monitor's `HidePrompt`? The
+/// x / "Not this one" always closes it: on a problem card (the monitor may hold nothing to hide)
+/// and when the monitor answered nothing at all. A prompt the monitor hides is left to `apply`.
+fn hides_panel(answer: &str, view: &PanelView, actions: &[Action]) -> bool {
+    answer == "not-this-one" && (actions.is_empty() || matches!(view, PanelView::Problem { .. }))
 }
 
 /// Settings: "Start meeting notes" (or, while recording, "Stop meeting notes").
@@ -810,5 +824,23 @@ mod tests {
         assert_eq!(v, serde_json::json!({"view": "recording", "startedAt": 5, "note": null}));
         let p = serde_json::to_value(PanelView::Prompt { title: "Call detected in zoom.us.".into(), sub: None }).unwrap();
         assert_eq!(p["view"], "prompt");
+    }
+
+    #[test]
+    fn closing_a_failed_captures_bar_goes_through_show_and_try_again_is_a_retry() {
+        // Second review rv-20261013T100322Z-8bfcf4fe-37ac #2: the x on a put-aside problem card
+        // set the view to Hidden without emitting, so the page kept the bar on screen. The rule
+        // now: on a problem card the x closes through `show` (which emits) whatever the monitor
+        // answers; `apply`'s HidePrompt then finds it hidden and emits nothing twice.
+        let problem = PanelView::Problem { title: "Nothing was recorded.".into(), sub: None, actions: vec![] };
+        let prompt = PanelView::Prompt { title: "Call detected in Zoom.".into(), sub: None };
+        assert!(hides_panel("not-this-one", &problem, &[Action::HidePrompt]));
+        assert!(hides_panel("not-this-one", &problem, &[]));
+        assert!(hides_panel("not-this-one", &PanelView::Hidden, &[]));
+        assert!(!hides_panel("not-this-one", &prompt, &[Action::HidePrompt]), "apply hides a prompt the monitor hides");
+        assert!(!hides_panel("retry", &problem, &[]));
+        assert_eq!(answer_input("retry"), Ok(Input::Retry));
+        assert_eq!(answer_input("take"), Ok(Input::TakeNotes));
+        assert!(answer_input("aside").is_err());
     }
 }

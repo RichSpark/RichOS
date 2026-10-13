@@ -127,6 +127,23 @@ pub enum Input {
     /// The capture process ended by itself (failed, or its permission was revoked). The
     /// recording is over; the app reports what was saved.
     CaptureEnded,
+    /// "Try again" on the problem card after a capture ended by itself: the SAME recording again,
+    /// still ending when its call does. With no failed recording to repeat, a manual start.
+    Retry,
+}
+
+/// What a recording was started as, kept so "Try again" repeats it exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct Start {
+    title: Option<String>,
+    event_id: Option<String>,
+    manual: bool,
+}
+
+impl Start {
+    fn action(&self) -> Action {
+        Action::StartCapture { title: self.title.clone(), event_id: self.event_id.clone(), manual: self.manual }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,16 +173,29 @@ enum Phase {
     /// window's, not this state's). `call` is None for a calendar prompt nobody has joined yet.
     Prompting { call: Option<Call>, scheduled: Option<Scheduled> },
     /// Recording. `call` None = unarmed (calendar start before the call, or manual).
-    Recording { call: Option<Call>, manual: bool },
-    /// Declined or stopped early: this call does not prompt again until it ends.
-    Done { call: Option<Call> },
+    Recording { call: Option<Call>, start: Start },
+    /// The recording ended by itself and the problem card is up. The call is still followed, so
+    /// "Try again" records it as before and still stops when it ends.
+    Failed { call: Option<Call>, start: Start },
+    /// Declined or stopped early: this call does not prompt again until it ends. Always holds a
+    /// call; with none to wait for, the state is Idle.
+    Done { call: Call },
 }
 
 impl Phase {
     fn call_mut(&mut self) -> Option<&mut Call> {
         match self {
-            Phase::Prompting { call, .. } | Phase::Recording { call, .. } | Phase::Done { call } => call.as_mut(),
+            Phase::Prompting { call, .. } | Phase::Recording { call, .. } | Phase::Failed { call, .. } => call.as_mut(),
+            Phase::Done { call } => Some(call),
             Phase::Idle => None,
+        }
+    }
+
+    /// Declined or stopped: wait for this call to end, or Idle when there is none.
+    fn done(call: &Option<Call>) -> Phase {
+        match call {
+            Some(c) => Phase::Done { call: c.clone() },
+            None => Phase::Idle,
         }
     }
 }
@@ -211,7 +241,7 @@ impl MeetingMonitor {
         self.paused = paused;
         if paused {
             if let Phase::Prompting { call, .. } = &self.phase {
-                self.phase = Phase::Done { call: call.clone() };
+                self.phase = Phase::done(call);
                 return vec![Action::HidePrompt];
             }
         }
@@ -243,7 +273,7 @@ impl MeetingMonitor {
                 if self.paused {
                     // Nothing prompts while paused; remember the call so it does not prompt the
                     // moment prompts resume halfway through it.
-                    self.phase = Phase::Done { call: Some(call) };
+                    self.phase = Phase::Done { call };
                     return vec![];
                 }
                 let kind = PromptKind::Unscheduled { app: call.app.clone().unwrap_or_else(|| call.family.clone()) };
@@ -256,7 +286,7 @@ impl MeetingMonitor {
                 vec![]
             }
             // An unarmed calendar recording arms on the first call to start; a manual one never does.
-            Phase::Recording { call, manual: false } => {
+            Phase::Recording { call, start } if !start.manual => {
                 *call = Some(Call::new(family, app, pid));
                 vec![]
             }
@@ -279,10 +309,17 @@ impl MeetingMonitor {
         if !ended {
             return vec![];
         }
-        let out = match &self.phase {
+        let out = match &mut self.phase {
             // The call went before anybody answered: the prompt goes with it.
             Phase::Prompting { .. } => vec![Action::HidePrompt],
+            // A manual recording only followed a declined call; it ends with Stop alone.
+            Phase::Recording { call, start } if start.manual => {
+                *call = None;
+                return vec![];
+            }
             Phase::Recording { .. } => vec![Action::StopCapture(EndReason::CallEnded)],
+            // A failed recording's call ended: nothing is left to retry against. The problem card
+            // stays until answered; "Try again" is then a manual start.
             _ => vec![],
         };
         self.phase = Phase::Idle;
@@ -296,10 +333,9 @@ impl MeetingMonitor {
         }
         let kind = PromptKind::Scheduled { event_id: meeting.event_id.clone(), title: meeting.title.clone(), starts_at: meeting.starts_at };
         match &mut self.phase {
-            Phase::Idle if self.paused => {
-                self.phase = Phase::Done { call: None };
-                vec![]
-            }
+            // Paused: no prompt. The event is remembered above, so it does not prompt on resume,
+            // and nothing else is held: a call that starts later is free to prompt.
+            Phase::Idle if self.paused => vec![],
             Phase::Idle => {
                 self.phase = Phase::Prompting { call: None, scheduled: Some(meeting) };
                 vec![Action::ShowPrompt(kind)]
@@ -336,26 +372,41 @@ impl MeetingMonitor {
                     Some(s) => (Some(s.title.clone()), Some(s.event_id.clone())),
                     None => (None, None),
                 };
-                self.phase = Phase::Recording { call: call.clone(), manual: false };
-                vec![Action::HidePrompt, Action::StartCapture { title, event_id, manual: false }]
+                let start = Start { title, event_id, manual: false };
+                let action = start.action();
+                self.phase = Phase::Recording { call: call.clone(), start };
+                vec![Action::HidePrompt, action]
             }
-            (Input::NotThisOne, Phase::Prompting { call, .. }) => {
-                self.phase = Phase::Done { call: call.clone() };
+            (Input::NotThisOne, Phase::Prompting { call, .. } | Phase::Failed { call, .. }) => {
+                self.phase = Phase::done(call);
                 vec![Action::HidePrompt]
             }
-            (Input::ManualStart, Phase::Idle | Phase::Done { .. }) => {
+            (Input::Retry, Phase::Failed { call, start }) => {
+                // The same recording again: a detected call stays armed and still ends it.
+                let action = start.action();
+                self.phase = Phase::Recording { call: call.clone(), start: start.clone() };
+                vec![Action::HidePrompt, action]
+            }
+            (Input::ManualStart | Input::Retry, Phase::Idle | Phase::Done { .. }) => {
                 // A manual start never arms on a call: an in-person conversation has no app. A
-                // declined call stays declined: it still does not prompt after this recording.
-                self.phase = Phase::Recording { call: None, manual: true };
-                vec![Action::StartCapture { title: None, event_id: None, manual: true }]
+                // declined call is still followed (it never ends this recording, `tick`), so it
+                // does not prompt again after this recording either.
+                let declined = match &self.phase {
+                    Phase::Done { call } => Some(call.clone()),
+                    _ => None,
+                };
+                let start = Start { manual: true, ..Start::default() };
+                let action = start.action();
+                self.phase = Phase::Recording { call: declined, start };
+                vec![action]
             }
             (Input::Stop, Phase::Recording { call, .. }) => {
                 // Stopped early: this call does not prompt again until it ends.
-                self.phase = Phase::Done { call: call.clone() };
+                self.phase = Phase::done(call);
                 vec![Action::StopCapture(EndReason::StoppedEarly)]
             }
-            (Input::CaptureEnded, Phase::Recording { call, .. }) => {
-                self.phase = Phase::Done { call: call.clone() };
+            (Input::CaptureEnded, Phase::Recording { call, start }) => {
+                self.phase = Phase::Failed { call: call.clone(), start: start.clone() };
                 vec![]
             }
             _ => vec![],
@@ -515,6 +566,65 @@ mod tests {
         assert_eq!(p.input(Input::ManualStart), vec![Action::HidePrompt, Action::StartCapture { title: None, event_id: None, manual: false }]);
         p.watch(&stopped(10, ZOOM), 1_000);
         assert_eq!(p.tick(1_000 + END_GRACE_MS), vec![Action::StopCapture(EndReason::CallEnded)]);
+    }
+
+    #[test]
+    fn try_again_after_a_failed_capture_records_the_same_call_and_hang_up_still_ends_it() {
+        // Second review rv-20261013T100322Z-8bfcf4fe-37ac #1: Try again used to become an unarmed
+        // manual recording that hang-up could not stop.
+        let mut m = MeetingMonitor::new();
+        m.watch(&started(10, ZOOM, "zoom.us"), 0);
+        m.input(Input::TakeNotes);
+        assert_eq!(m.input(Input::CaptureEnded), vec![]);
+        assert!(!m.is_recording());
+        assert_eq!(m.input(Input::Retry), vec![Action::HidePrompt, Action::StartCapture { title: None, event_id: None, manual: false }]);
+        assert!(m.is_recording());
+        m.watch(&stopped(10, ZOOM), 60_000);
+        assert_eq!(m.tick(60_000 + END_GRACE_MS), vec![Action::StopCapture(EndReason::CallEnded)]);
+        // A calendar recording keeps its title and event on the retry.
+        let mut c = MeetingMonitor::new();
+        c.scheduled(Scheduled { event_id: "e1".into(), title: "Acme pricing review".into(), starts_at: 0 });
+        c.input(Input::TakeNotes);
+        c.input(Input::CaptureEnded);
+        assert_eq!(
+            c.input(Input::Retry),
+            vec![Action::HidePrompt, Action::StartCapture { title: Some("Acme pricing review".into()), event_id: Some("e1".into()), manual: false }]
+        );
+    }
+
+    #[test]
+    fn nothing_without_a_call_ever_blocks_the_next_prompt() {
+        // Second review #1, its second half: a stopped recording with no call left a state that
+        // never cleared, and no later call prompted.
+        let mut m = MeetingMonitor::new();
+        m.input(Input::ManualStart);
+        m.input(Input::CaptureEnded);
+        assert_eq!(m.input(Input::Retry), vec![Action::HidePrompt, Action::StartCapture { title: None, event_id: None, manual: true }]);
+        assert_eq!(m.input(Input::Stop), vec![Action::StopCapture(EndReason::StoppedEarly)]);
+        assert_eq!(m.watch(&started(10, ZOOM, "zoom.us"), 1_000), zoom_prompt());
+        // A failed capture declined from its card, with no call: the next call prompts.
+        let mut f = MeetingMonitor::new();
+        f.input(Input::ManualStart);
+        f.input(Input::CaptureEnded);
+        assert_eq!(f.input(Input::NotThisOne), vec![Action::HidePrompt]);
+        assert_eq!(f.watch(&started(10, ZOOM, "zoom.us"), 1_000), zoom_prompt());
+        // A calendar prompt that came while paused holds nothing after resuming.
+        let mut p = MeetingMonitor::new();
+        p.set_paused(true);
+        assert_eq!(p.scheduled(Scheduled { event_id: "e1".into(), title: "Standup".into(), starts_at: 0 }), vec![]);
+        p.set_paused(false);
+        assert_eq!(p.watch(&started(10, ZOOM, "zoom.us"), 1_000), zoom_prompt());
+        // Declining a failed capture's call: it does not prompt again until it has ended.
+        let mut d = MeetingMonitor::new();
+        d.watch(&started(10, ZOOM, "zoom.us"), 0);
+        d.input(Input::TakeNotes);
+        d.input(Input::CaptureEnded);
+        assert_eq!(d.input(Input::NotThisOne), vec![Action::HidePrompt]);
+        assert_eq!(d.watch(&started(11, ZOOM, "zoom.us"), 1_000), vec![]);
+        d.watch(&stopped(10, ZOOM), 2_000);
+        d.watch(&stopped(11, ZOOM), 2_000);
+        d.tick(2_000 + END_GRACE_MS);
+        assert_eq!(d.watch(&started(12, ZOOM, "zoom.us"), 20_000), zoom_prompt());
     }
 
     #[test]
