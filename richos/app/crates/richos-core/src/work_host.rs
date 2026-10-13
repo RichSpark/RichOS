@@ -6827,7 +6827,7 @@ mod tests {
     /// reason: a build that called every unfinished job `failed` would satisfy 3 and destroy
     /// the approval queue, and a build that called every unfinished job `blocked` would
     /// satisfy 2 and be the old behavior §52 overruled. They differ in one input — whether a
-    /// request of his is on the desk — and in nothing else.
+    /// question of his is waiting — and in nothing else.
     #[test]
     fn a_job_that_did_not_land_is_failed_and_only_a_question_of_his_makes_it_blocked() {
         use crate::cognition::ObligationState;
@@ -6861,7 +6861,7 @@ mod tests {
         // 1b. THE SAME OBLIGATION STATE, THE SAME WORKER EVIDENCE, one question of his on the
         //     desk — and it is `blocked` instead. This is the control that keeps case 1 from
         //     passing because everything unfinished is called failed.
-        let grant = a_question_for_him(&h, "obligation-q");
+        a_question_for_him(&h, "obligation-q");
         let asked = h
             .host
             .register(&h.binding, &Registration { obligation_id: "obligation-q".into(), ..registration(&h) })
@@ -6869,13 +6869,7 @@ mod tests {
         assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(10)));
         let row = assignment::read(&h.state, "depot", "thread-one", &asked.id).unwrap();
         assert_eq!(row.state, AssignmentState::Blocked, "a real question of his did not leave the job waiting on him");
-        let notice = h.notices.0.lock().unwrap().last().unwrap().1.clone();
-        assert_eq!(notice.kind, NoticeKind::ReadyToApprove);
-        assert!(notice.text.contains("waiting on a decision from you"), "{}", notice.text);
-        for forbidden in ["done", "finished", "complete", "landed"] {
-            assert!(!notice.text.to_lowercase().contains(forbidden), "{}", notice.text);
-        }
-        std::fs::remove_file(grant).unwrap();
+        assert!(row.detail.contains("Waiting for your answer"), "{}", row.detail);
 
         // 2. The obligation is CLOSED: settled, with the same worker evidence — and what he
         //    hears is the OUTCOME (§52). There are no receipts in this harness, so the honest
@@ -9318,51 +9312,50 @@ mod tests {
         assert_eq!(of(&["one", "two", "three"]), "one, two and three");
     }
 
-    /// **A genuine permission request of his, left on the shared desk for this assignment.**
-    ///
-    /// Since the CEO's ruling §52 this is the ONLY thing that produces `blocked`: a land no
-    /// longer asks him anything, so a test that wants a blocked assignment has to put a real
-    /// question there. `Bash` is that question — a command on his Mac, which no standing grant
-    /// covers.
-    ///
-    /// **It is raised BEFORE the work turn settles, and that ordering is the real one rather
-    /// than a convenience.** A step asks while he is away, the provider call gives up at its
-    /// own deadline (§5.7), the REQUEST stays in the queue, and the turn ends around it —
-    /// which is precisely the state `settle` reads. Several tests here used to raise the
-    /// question AFTER `wait_for_completed` and still saw `blocked`, because an open obligation
-    /// was enough on its own; it is not enough any more, and it never described a real
-    /// sequence.
-    ///
-    /// Returns the grant file to clean up. The request deliberately outlives the call.
-    fn a_question_for_him(h: &Harness, obligation: &str) -> PathBuf {
-        let (grant, lease) = work_lease_desk(h, obligation);
-        let call = lease.decide_within(
-            &serde_json::json!({"tool_name":"Bash","input":{"command":"one fictional command"}}),
-            std::time::Duration::from_millis(20),
-        );
-        assert_eq!(call.behavior(), "deny", "the desk approved something on his behalf");
-        assert!(
-            h.desk.background_queue().iter().any(|r| r.binding.turn_id == obligation),
-            "the question never reached his queue, so nothing below is about a blocked assignment"
-        );
-        grant
+    /// **A real question of his for this obligation, saved and unanswered.** Since 2026-10-13
+    /// it is the one thing that leaves background work waiting on him: a STEP of the work never
+    /// does (`permissions::BACKGROUND_STEP_REFUSED`). Raised before the work turn settles,
+    /// which is the real order: the job asks, then its turn ends around the question.
+    fn a_question_for_him(h: &Harness, obligation: &str) {
+        use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
+        Store::new(&h.state).ask(&AskScope {
+            root: h.state.clone(), entity_id: "depot".into(), thread_id: "thread-one".into(),
+            turn_id: "turn-7".into(), asker: obligation.into(), session_id: "work-session-one".into(),
+            engine: None, entity_root: None, app_run: None,
+        }, vec![QuestionInput {
+            text: "Which client should this go to first?".into(),
+            options: vec![
+                OptionInput { label: "Acme first".into(), description: "The larger account.".into() },
+                OptionInput { label: "Birch first".into(), description: "The earlier deadline.".into() },
+            ],
+            multiple: false, free_answer: true, recommended: None,
+        }]).unwrap();
     }
 
-    /// **A WORKER's request, raised between the lease's turns, is an Approve on its job's row**
-    /// (esc-20261005T150541Z-ee581ad7, test VM walks walk-d20296d51c3d and walk-0c7e08bf738c).
+    /// He answers it some other way (or it is no longer needed): the question is withdrawn,
+    /// so the next run of the job is not held on it again.
+    fn the_question_is_settled(h: &Harness, obligation: &str) {
+        let store = crate::questions::Store::new(&h.state);
+        for question in store.list("depot", "thread-one").unwrap().into_iter().filter(|q| q.asker == obligation) {
+            store.withdraw("depot", "thread-one", obligation, &question.id, "answered in the fixture").unwrap();
+        }
+    }
+
+    /// **A WORKER's step, raised between the lease's turns, is refused and never waits on him**
+    /// (the CEO, 2026-10-13: *"Is the CEO user supposed to keep babysitting Rich like this all
+    /// the time OR WHAT???"*, over nightly 54's "Approve this" on a job of reading his website).
     ///
     /// The back end's `prepare` launches its worker in the background and the lead's turn ends
     /// at once, so the worker's `Bash` arrives with the scope as an ordinary turn end leaves
-    /// it: `actions_allowed: false`, `background_work_allowed: true` (`ecs::set_actions_allowed`).
-    /// The desk used to read only the turn flag and denied it on the spot, so the request never
-    /// reached the queue, `pending_decision` (the row's `awaitingYou`, `main.rs`) stayed `None`
-    /// and the walk found no Approve button in 900 s. The lead's own command, raised inside its
-    /// turn, always worked. Pressing Approve must let the worker's waiting call run.
+    /// it: `actions_allowed: false`, `background_work_allowed: true`. It used to wait on the
+    /// job's row as an Approve (esc-20261005T150541Z-ee581ad7); now it is refused at once with
+    /// the sentence that tells the model to find another way or report, the row has nothing
+    /// awaiting him, and the update gate counts the job as running, not as waiting on him.
     ///
-    /// The control: once the work is STOPPED (`ecs::revoke` clears both flags), a worker's
-    /// request is refused at once and never put in front of him.
+    /// The control: once the work is STOPPED (`ecs::revoke` clears both flags), the step is
+    /// refused too, by the closed grant, and still nothing reaches his screen.
     #[test]
-    fn a_workers_request_between_the_leases_turns_waits_on_its_assignments_row() {
+    fn a_workers_step_between_the_leases_turns_is_refused_and_never_waits_on_him() {
         let h = harness(5);
         let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
         let row = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
@@ -9375,227 +9368,36 @@ mod tests {
         let path = h.root.join("work-grant-between-turns.json");
         std::fs::write(&path, scope(false, true)).unwrap();
         let lease = crate::permissions::ScopedPermissions { desk: Arc::clone(&h.desk), scope: path.clone() };
-        let pandoc = serde_json::json!({"tool_name":"Bash","input":{"command":"/opt/homebrew/bin/pandoc notes.md -o notes.pdf"}});
+        let dismissal = serde_json::json!({"tool_name":"Bash","input":{
+            "command":"'/fictional/runtime/python3' '/fictional/engine/scripts/lib/pierce.py' --dismiss 0f --reason broken"}});
+        // A hang guard, never a verdict: a desk that queued this would hold the call for the
+        // whole minute and then fail every assertion below.
         let worker = {
-            let (lease, pandoc) = (lease.clone(), pandoc.clone());
-            std::thread::spawn(move || lease.decide_within(&pandoc, std::time::Duration::from_secs(30)))
+            let (lease, dismissal) = (lease.clone(), dismissal.clone());
+            std::thread::spawn(move || lease.decide_within(&dismissal, std::time::Duration::from_secs(60)))
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let waiting = loop {
-            if let Some(request) = h.host.pending_decision(&row) {
-                break Some(request);
-            }
-            if worker.is_finished() || std::time::Instant::now() > deadline {
-                break None;
-            }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !worker.is_finished() && std::time::Instant::now() < deadline {
+            assert!(h.host.pending_decision(&row).is_none(), "a worker's step was put on its job's row for his approval");
             std::thread::sleep(std::time::Duration::from_millis(5));
-        };
-        let Some(waiting) = waiting else {
-            let refused = worker.join().unwrap();
-            panic!(
-                "a worker's request between turns never reached its assignment's row, so there is no \
-                 Approve button (awaitingYou is None); the call ended {:?}",
-                refused
-            );
-        };
-        assert_eq!(
-            crate::permissions::assignment_key(&waiting.binding),
-            ("depot".to_string(), "thread-one".to_string(), row.obligation_id.clone()),
-            "the worker's request is keyed to another assignment"
-        );
-        assert_eq!(waiting.tool, "Bash");
-        assert_eq!(h.host.background_work().awaiting_you, 1, "the job is not counted as waiting on him");
+        }
+        match worker.join().unwrap() {
+            crate::native::PermissionDecision::Deny { message } => {
+                assert_eq!(message, crate::permissions::BACKGROUND_STEP_REFUSED, "the step was not refused as background work")
+            }
+            other => panic!("a worker's step was approved on his behalf: {other:?}"),
+        }
+        assert!(h.host.pending_decision(&row).is_none(), "a worker's step is waiting on him");
+        assert!(h.desk.background_queue().is_empty(), "a worker's step is in his queue");
+        assert_eq!(h.host.background_work().awaiting_you, 0, "the job is counted as waiting on him");
 
-        // He presses Approve while the worker's call is still waiting: it takes the decision.
-        assert_eq!(h.desk.resolve(&waiting.id, true).unwrap(), crate::permissions::Answered::Delivered);
-        assert_eq!(worker.join().unwrap().behavior(), "allow", "his Approve did not let the worker's command run");
-        assert!(h.host.pending_decision(&row).is_none(), "the answered request is still on the row");
-
-        // The control: a stopped job's worker gets nothing, and nothing reaches his screen.
+        // The control: a stopped job's worker gets nothing either, and nothing reaches him.
         std::fs::write(&path, scope(false, false)).unwrap();
-        assert_eq!(lease.decide_within(&pandoc, std::time::Duration::from_secs(5)).behavior(), "deny");
+        assert_eq!(lease.decide_within(&dismissal, std::time::Duration::from_secs(5)).behavior(), "deny");
         assert!(h.desk.background_queue().is_empty(), "a stopped job's worker put a question in front of him");
 
         h.host.shutdown();
         std::fs::remove_file(path).unwrap();
-        std::fs::remove_dir_all(h.root).unwrap();
-    }
-
-    /// **Spec §5.7, end to end through the host.** The step asked while he was away; the
-    /// call ended at its deadline in *not approved*; he answered afterwards; and the
-    /// assignment went back on the lease to carry out the step he approved.
-    ///
-    /// The positive control is in the same test: before his answer the assignment had
-    /// reached the lease exactly ONCE and stayed there, so "it resumed" is a fact about his
-    /// answer rather than about a runner that re-runs things by itself (§6.3).
-    #[test]
-    fn an_approval_given_after_the_call_ended_puts_the_assignment_back_on_the_lease() {
-        let h = harness(5);
-        every_worker_observed_ending(&h);
-        *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Open);
-        let _runner = h.host.start();
-        // The step it stopped at, raised against the shared desk and left at its deadline —
-        // BEFORE the work turn ends, which is the real order (§5.7) and, since §52, the only
-        // thing that makes an assignment `blocked` at all.
-        let (grant, lease) = work_lease_desk(&h, "obligation-7");
-        let call = lease.decide_within(
-            &serde_json::json!({"tool_name":"Bash","input":{"command":"one"}}),
-            std::time::Duration::from_millis(30),
-        );
-        assert_eq!(call.behavior(), "deny", "the deadline approved something on his behalf");
-        let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
-        let row = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(row.state, AssignmentState::Blocked, "the work did not stop at his decision");
-        assert_eq!(h.bound.lock().unwrap().len(), 1, "the assignment reached the lease twice on its own");
-        let waiting = h.desk.background_queue();
-        assert_eq!(waiting.len(), 1, "the request did not survive its call");
-        assert_eq!(
-            h.host.pending_decision(&row).map(|r| r.tool),
-            Some("Bash".to_string()),
-            "the host cannot see what its own assignment is waiting on"
-        );
-
-        // He answers. There is no call left to take it, so it goes to the assignment.
-        let answer = h.desk.resolve(&waiting[0].id, true).unwrap();
-        let crate::permissions::Answered::ToAssignment { binding, allow } = answer else {
-            panic!("his answer went to a call that had already ended");
-        };
-        assert!(allow);
-        h.host.apply_decision(&binding, true).unwrap();
-        assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(10)));
-        assert_eq!(h.bound.lock().unwrap().len(), 2, "his approval did not put the work back on the lease");
-
-        // **AND HIS APPROVAL DOES NOT OUTLIVE THE ASSIGNMENT** (§5.4), which is a consequence
-        // of §52 rather than of this test: the resumed turn is the LAST one, because a job that
-        // lands on its own either closes the assignment or does not, and either way the
-        // assignment is over and the desk forgets it. An approval still spendable afterwards
-        // would be an approval attached to nothing.
-        //
-        // That his approval reaches the resumed RUN is measured where the window is
-        // deterministic — `permissions.rs`'s `the_deadline_ends_the_call_and_never_the_request`,
-        // on the desk itself. Asserting it here would be asserting a race.
-        let again = || {
-            lease
-                .decide_within(
-                    &serde_json::json!({"tool_name":"Bash","input":{"command":"one"}}),
-                    std::time::Duration::from_millis(20),
-                )
-                .behavior()
-        };
-        assert_eq!(again(), "deny", "his approval outlived the assignment it belonged to");
-        h.host.shutdown();
-        std::fs::remove_file(grant).unwrap();
-        std::fs::remove_dir_all(h.root).unwrap();
-    }
-
-    /// He DECLINES the step. The work stops where it is, everything it produced is kept, and
-    /// no sentence anywhere reads as a finish — spec §0 row 7's inversion is what this
-    /// refuses.
-    #[test]
-    fn a_declined_step_stops_the_assignment_and_never_reads_as_finished() {
-        let h = harness(5);
-        every_worker_observed_ending(&h);
-        *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Open);
-        let _runner = h.host.start();
-        let grant = a_question_for_him(&h, "obligation-7");
-        let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
-        assert_eq!(
-            assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap().state,
-            AssignmentState::Blocked,
-            "the assignment was not waiting on him, so there is no decline to test"
-        );
-        let waiting = h.desk.background_queue();
-        let crate::permissions::Answered::ToAssignment { binding, .. } =
-            h.desk.resolve(&waiting[0].id, false).unwrap()
-        else {
-            panic!("the declined request still had a call waiting on it");
-        };
-        h.host.apply_decision(&binding, false).unwrap();
-        let row = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(row.state, AssignmentState::Interrupted);
-        assert!(row.detail.contains("You declined"), "{}", row.detail);
-        let notice = h.notices.0.lock().unwrap().last().unwrap().1.clone();
-        let text = notice.text.to_lowercase();
-        for word in ["done", "finished", "complete", "landed"] {
-            assert!(!text.contains(word), "the decline notice said that word: {text}");
-        }
-        // POSITIVE CONTROL for that scan: the settled sentence, which does speak of
-        // finishing, fires on the same words — so a clean result above is a fact about this
-        // sentence rather than about a scan that cannot match.
-        let settled = assignment::says::settled(&row.title, "").to_lowercase();
-        assert!(["done", "finished", "complete", "landed"].iter().any(|w| settled.contains(w)));
-        assert!(text.contains("declined"));
-        assert_eq!(h.bound.lock().unwrap().len(), 1, "a decline put the work back on the lease");
-        h.host.shutdown();
-        std::fs::remove_file(grant).unwrap();
-        std::fs::remove_dir_all(h.root).unwrap();
-    }
-
-    /// **§5.4's unit of revocation, through the host.** Stopping an assignment takes its
-    /// question off his screen and releases the worker waiting on it — a question he could
-    /// answer into nothing is worse than no question.
-    #[test]
-    fn stopping_an_assignment_takes_its_question_off_his_screen() {
-        let h = harness(3000);
-        let _runner = h.host.start();
-        let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
-        until_live(&h.host);
-        let (grant, lease) = work_lease_desk(&h, "obligation-7");
-        let waiter = std::thread::spawn(move || {
-            lease.decide_within(
-                &serde_json::json!({"tool_name":"Bash","input":{}}),
-                std::time::Duration::from_secs(5),
-            )
-        });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while h.desk.background_queue().is_empty() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(h.desk.background_queue().len(), 1);
-        h.host.stop_assignment("depot", "thread-one", &receipt.id).unwrap();
-        assert!(h.desk.background_queue().is_empty(), "his question outlived the work it was about");
-        assert_eq!(waiter.join().unwrap().behavior(), "deny", "the stopped worker was left waiting");
-        h.host.shutdown();
-        std::fs::remove_file(grant).unwrap();
-        std::fs::remove_dir_all(h.root).unwrap();
-    }
-
-    /// §5.7: *"the worker's receipt goes to `blocked` naming what it waits on"* — in his
-    /// words, never the provider's wire name for the tool.
-    #[test]
-    fn a_blocked_receipt_names_the_step_it_is_waiting_on_in_his_words() {
-        let h = harness(60);
-        every_worker_observed_ending(&h);
-        *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Open);
-        let (grant, lease) = work_lease_desk(&h, "obligation-7");
-        // The question is on the desk while the work turn is still running, which is the
-        // real order of events: the step asks, the call waits, the turn ends around it.
-        let waiter = std::thread::spawn(move || {
-            lease.decide_within(
-                &serde_json::json!({"tool_name":"Bash","input":{}}),
-                std::time::Duration::from_millis(600),
-            )
-        });
-        let _runner = h.host.start();
-        let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
-        let row = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(row.state, AssignmentState::Blocked);
-        assert!(
-            row.detail.contains("running a command on your Mac"),
-            "the receipt does not say what it is waiting on: {}",
-            row.detail
-        );
-        // **AND IT MAKES NO CLAIM ABOUT HIS REPOSITORY.** The `None` arm of `waiting_on` used
-        // to say the work "stopped at the step that would change your repository", which a job
-        // that lands on its own can no longer promise (CEO ruling §52).
-        assert!(!row.detail.contains("repository"), "the receipt still claims his repository is untouched: {}", row.detail);
-        assert!(!row.detail.contains("mcp__"), "the receipt shows a wire tool name: {}", row.detail);
-        waiter.join().unwrap();
-        h.host.shutdown();
-        std::fs::remove_file(grant).unwrap();
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
@@ -9641,28 +9443,15 @@ mod tests {
         assert!(verdict.busy, "an update could have installed over live background work");
         assert_eq!(verdict.reason.as_deref(), Some("1 assignment is still running in the background."));
 
-        // And an assignment holding a question for him is a DIFFERENT sentence (§6.5), on the
-        // same records, with the same conversation idle.
+        // A step of that work which the provider would not approve on its own is refused
+        // (2026-10-13) and changes nothing the gate reads: still running, nothing awaiting him.
         let (grant, lease) = work_lease_desk(&h, "obligation-7");
-        lease.decide_within(
-            &serde_json::json!({"tool_name":"Bash","input":{}}),
-            std::time::Duration::from_millis(20),
-        );
-        let waiting = work_gate::background(&h.host.background_work(), &[]);
-        assert_eq!(waiting.0, Liveness::Busy);
         assert_eq!(
-            work_gate::decide(&WorkSources {
-                background: waiting.0,
-                background_gap: waiting.1,
-                ..WorkSources::all_clear()
-            })
-            .reason
-            .as_deref(),
-            Some("An assignment is waiting for you to approve it."),
-            "an assignment waiting for him was reported as running"
+            lease.decide_within(&serde_json::json!({"tool_name":"Bash","input":{}}), std::time::Duration::from_secs(60)).behavior(),
+            "deny"
         );
-        assert_eq!(h.host.background_work().awaiting_you, 1);
-        assert_eq!(h.host.background_work().running, 0);
+        assert_eq!(h.host.background_work().awaiting_you, 0, "a refused step left the job waiting on him");
+        assert_eq!(h.host.background_work().running, 1);
 
         h.host.stop_assignment("depot", "thread-one", &receipt.id).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -9706,7 +9495,7 @@ mod tests {
         // A question of his on the FIRST assignment, raised before its turn ends, so it is
         // `blocked` and there is something to resume below (§52: a land asks him nothing, so
         // an open obligation on its own no longer leaves an assignment resumable).
-        let grant = a_question_for_him(&h, "obligation-7");
+        a_question_for_him(&h, "obligation-7");
         let first = h.host.register(&h.binding, &registration(&h)).unwrap();
         h.host
             .register(&h.binding, &Registration { obligation_id: "obligation-8".into(), ..registration(&h) })
@@ -9716,13 +9505,21 @@ mod tests {
 
         // ...and a resume, which is the third time work goes onto the lease, does not open
         // one either.
-        let waiting = h.desk.background_queue();
-        let crate::permissions::Answered::ToAssignment { binding, .. } =
-            h.desk.resolve(&waiting[0].id, true).unwrap()
-        else {
-            panic!("the request still had a call waiting on it");
-        };
-        h.host.apply_decision(&binding, true).unwrap();
+        the_question_is_settled(&h, "obligation-7");
+        let record = assignment::read(&h.state, "depot", "thread-one", &first.id).unwrap();
+        h.host
+            .apply_decision(
+                &crate::ecs::Binding {
+                    entity_id: "depot".into(),
+                    thread_id: "thread-one".into(),
+                    session_id: "work-session-one".into(),
+                    turn_id: record.obligation_id.clone(),
+                    audience: "worker".into(),
+                    revision: 1,
+                },
+                true,
+            )
+            .unwrap();
         assert!(h.host.wait_for_completed(3, std::time::Duration::from_secs(10)));
         assert_eq!(h.spawns.load(Ordering::SeqCst), 1, "a resume opened a second back end");
 
@@ -9753,7 +9550,6 @@ mod tests {
         assert_eq!(h.spawns.load(Ordering::SeqCst), 2, "the second conversation shared the first's back end");
         assert_eq!(first.id.is_empty(), false);
         h.host.shutdown();
-        std::fs::remove_file(grant).unwrap();
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
@@ -9899,9 +9695,9 @@ mod tests {
         witnessed(&h.state, "work-session-one");
         witnessed(&h.state, "work-session-rotated-1");
         // A question of his, raised before the turn ends: since §52 a land asks him nothing,
-        // so this is what makes the assignment stop at a step of his and stay open across the
-        // renewal — which is the whole subject of this test.
-        let grant = a_question_for_him(&h, "obligation-7");
+        // so this is what makes the assignment wait on him and stay open across the renewal —
+        // which is the whole subject of this test.
+        a_question_for_him(&h, "obligation-7");
         let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
         // Its state was written before the rotation and is untouched by it.
@@ -9945,9 +9741,10 @@ mod tests {
         assert!(priming.contains("the brief it comes with"), "{priming}");
         assert_eq!(h.handoffs.lock().unwrap().len(), 1, "the outgoing back end was not asked for a handoff");
 
-        // HIS APPROVAL, AFTER THE ROTATION. The same assignment goes back on the NEW back
+        // HIS ANSWER, AFTER THE ROTATION. The same assignment goes back on the NEW back
         // end and binds the same seat again — the grant and the seat are per assignment and
         // are rebuilt by the same call its first run used.
+        the_question_is_settled(&h, "obligation-7");
         let bound_before = h.bound.lock().unwrap().len();
         let record = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
         *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Settled);
@@ -9976,7 +9773,6 @@ mod tests {
             AssignmentState::Settled
         );
         h.host.shutdown();
-        std::fs::remove_file(grant).unwrap();
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
@@ -10361,16 +10157,16 @@ mod tests {
         );
         host.start();
 
-        // 1. It stops at a step of his: still registered, so the app must stay up. Since §52
-        // a land asks him nothing, so the thing that stops it has to be a real question of
-        // his — raised before the turn ends, on the desk this host shares.
+        // 1. It waits on a question of his: still registered, so the app must stay up. Since
+        // §52 a land asks him nothing, so the thing that stops it has to be a real question of
+        // his — raised before the turn ends.
         witnessed(&h.state, "work-session-one");
         *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Open);
-        let grant = a_question_for_him(&h, "obligation-7");
+        a_question_for_him(&h, "obligation-7");
         host.register(&h.binding, &registration(&h)).unwrap();
         assert!(host.wait_for_completed(1, std::time::Duration::from_secs(10)));
         assert_eq!(counter.idle.load(Ordering::SeqCst), 0, "the app would have quit on work waiting for him");
-        std::fs::remove_file(grant).unwrap();
+        the_question_is_settled(&h, "obligation-7");
 
         // 2. It settles, and nothing is left open anywhere.
         *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Settled);
