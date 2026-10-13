@@ -2350,9 +2350,36 @@ impl TurnDesk {
     }
 }
 
+/// How long the toggle-off waits for ONE fragment still at the recognizer. A guard against a hung
+/// decoder, not an estimate: recognition measured 0.672-0.805 s per utterance on the CEO's Mac
+/// (nightly 54 log), and the longest fragment is 30.000 s of audio.
+const LAST_WORDS_WAIT: Duration = Duration::from_secs(30);
+
 impl Drop for TurnDesk {
     fn drop(&mut self) {
         self.collect();
+        // **HIS LAST WORDS ARE PART OF THE TURN, even when he switches voice off before they are
+        // recognized** (review rv-20261013T163358Z, finding 1). Without this wait the words already
+        // recognized went out as one turn and the fragment still at the recognizer went out after
+        // it as another — the instruction without its condition. The recognizer is still running
+        // here (`supervise` still holds `utt_tx`; parameters outlive this local), so every
+        // admitted fragment comes back, and the turn goes out once, whole. The shutdown join
+        // already waits on recognition, so this adds no new wait to switching voice off.
+        while self.assembler.awaiting_recognition() > 0 {
+            match self.words_rx.recv_timeout(LAST_WORDS_WAIT) {
+                Ok(words) => {
+                    self.assembler.recognized(words);
+                }
+                Err(_) => {
+                    eprintln!(
+                        "[richos-voice] {} fragment(s) did not come back from the recognizer within {:.0} s of voice going off; the turn goes out without them",
+                        self.assembler.awaiting_recognition(),
+                        LAST_WORDS_WAIT.as_secs_f32()
+                    );
+                    break;
+                }
+            }
+        }
         if let Some(turn) = self.assembler.flush() {
             self.send(turn, "voice is going off");
         }
@@ -2937,6 +2964,44 @@ mod tests {
         assert_eq!(transcripts(&rec), vec![whole.clone()]);
         assert_eq!(submit_rx.try_recv().unwrap(), (whole, false));
         assert!(submit_rx.try_recv().is_err(), "one thought became more than one turn");
+    }
+
+    /// INVARIANT — review rv-20261013T163358Z finding 1. Voice switched off while his LAST fragment
+    /// is still at the recognizer: the turn waits for it and goes out ONCE, whole. Before the fix
+    /// the first fragment went out alone and the second followed as a turn of its own.
+    #[test]
+    fn voice_off_while_his_last_fragment_is_at_the_recognizer_still_sends_one_turn() {
+        let rec = Arc::new(Recorder::default());
+        let (words_tx, words_rx) = channel();
+        let (submit_tx, submit_rx) = channel();
+        let late = words_tx.clone();
+        {
+            let mut desk = TurnDesk {
+                assembler: TurnAssembler::new(),
+                words_rx,
+                submit_tx,
+                observer: rec.clone(),
+                last_end: None,
+            };
+            desk.assembler.his_utterance_started();
+            desk.assembler.utterance_admitted(1200);
+            words_tx.send(Some(("Send the draft".to_string(), false))).unwrap();
+            desk.assembler.his_utterance_started();
+            desk.assembler.utterance_admitted(1400);
+            // The recognizer finishes the second fragment only after voice has gone off.
+            std::thread::spawn(move || {
+                // load-bound: the pass verdict waits for the words themselves (up to LAST_WORDS_WAIT, 30 s); this delay only puts them after the desk's own collect, so it is what makes the old code fail, and a slow host can only make the pass slower.
+                std::thread::sleep(Duration::from_millis(150));
+                late.send(Some(("after I approve it.".to_string(), false))).unwrap();
+            });
+        }
+        assert_eq!(
+            submit_rx.try_recv().unwrap(),
+            ("Send the draft after I approve it.".to_string(), false),
+            "his last words were split off his turn"
+        );
+        assert!(submit_rx.try_recv().is_err(), "one thought became more than one turn");
+        assert_eq!(transcripts(&rec).len(), 1);
     }
 
     /// INVARIANT: switching voice off within the end-of-turn window still delivers what he said,
