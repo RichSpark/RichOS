@@ -13,6 +13,7 @@ import RichOSCompanionCore
 @available(macOS 14.4, *)
 func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32]) {
     let capture = CoreAudioCapture(excludePids: excludePids)
+    capture.onInfo = { Notifier.info($0) }
     do {
         try capture.prepare()
     } catch {
