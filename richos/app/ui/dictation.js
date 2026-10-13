@@ -119,6 +119,9 @@
       if (!nudged) { nudged = true; call("dictation_permissions_changed", { forward: false }); }
     } else nudged = false;
     paint();
+    // A turn-on that settled short of ready, finished later with the sheet closed (allowed in
+    // System Settings, then back here): set up now (second review rv-20261013T183104Z, finding 1).
+    if (sheet.hidden) announceSetUp();
     return view;
   }
 
@@ -392,6 +395,9 @@
   // denied line, with Open System Settings.
   addEventListener("blur", () => { if (axWait) axWait.blurred = true; if (micWait) micWait.blurred = true; });
   addEventListener("focus", () => {
+    // Back from System Settings with a turn-on still pending and the sheet closed: read once, so
+    // a permission allowed there finishes setting dictation up.
+    if (setUpPending && sheet.hidden && !axWait && !micWait) { read(); return; }
     if (!(axWait && axWait.blurred) && !(micWait && micWait.blurred)) return;
     setTimeout(async () => {
       await read();

@@ -228,6 +228,27 @@ async function main() {
   });
 
   // ---- 5. the refusals ------------------------------------------------------------------------
+  // Second review rv-20261013T183104Z, finding 1: Accessibility refused, the sheet closed, then
+  // allowed in System Settings. Coming back to RichOS finishes setting it up: the "Dictation
+  // feature" conversation is asked for without the sheet being opened again.
+  await run.check("set up with the sheet closed: allowed later in System Settings, the Dictation feature conversation still comes", async () => {
+    const page = await open("dark", { mic: "allowed" }, { axAsked: true });
+    await sheet(page);
+    await page.click("#dict-switch");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_ask_accessibility"));
+    await page.click("#dict-close");
+    await page.waitForFunction(() => document.getElementById("dictation-sheet").hidden);
+    assert(
+      !(await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_feature_thread"))),
+      "not set up yet, so no conversation"
+    );
+    await set(page, { ax: "allowed", keyTap: true });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_feature_thread"));
+    await page.close();
+    return "refused, closed, allowed in System Settings: back in RichOS, dictation_feature_thread was called";
+  });
+
   await run.check("state 12: a refusal is said plainly, with Open System Settings on the right pane; back without allowing, it is said again", async () => {
     let page = await open("dark", { on: true, mic: "allowed", ax: "denied", owner: "self" }, { axAsked: true });
     await sheet(page);
