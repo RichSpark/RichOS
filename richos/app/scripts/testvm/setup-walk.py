@@ -721,19 +721,30 @@ class SetupWalk(adopt_walk.Walk):
 
     def grant(self, service):
         """The row a person's Allow writes for `service` (the microphone in the user's database,
-        Accessibility in the system's); answers every service com.richos.app now has."""
-        user_db = '"$HOME/Library/Application Support/com.apple.TCC/TCC.db"'
-        sys_db = '"/Library/Application Support/com.apple.TCC/TCC.db"'
+        Accessibility in the system's); answers every service com.richos.app is allowed now."""
         row = ("INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, "
                "indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) "
                "VALUES ('{svc}', 'com.richos.app', 0, 2, 2, 1, 0, 'UNUSED', 0, strftime('%s','now'));")
-        if service == 'kTCCServiceAccessibility':
-            guest(self.vm, f'sudo -n sqlite3 {sys_db} ' + shlex.quote(row.format(svc=service)))
-        else:
-            guest(self.vm, f'sqlite3 {user_db} ' + shlex.quote(row.format(svc=service)))
-        query = "SELECT service FROM access WHERE client='com.richos.app' ORDER BY service;"
-        return sorted(guest(self.vm, f'sqlite3 {user_db} ' + shlex.quote(query)).splitlines()
-                      + guest(self.vm, f'sudo -n sqlite3 {sys_db} ' + shlex.quote(query)).splitlines())
+        self.tcc(service, row.format(svc=service))
+        return sorted(r.split('|')[0] for r in self.tcc_rows() if r.endswith('|2'))
+
+    def revoke(self, service):
+        """No row for `service`: what macOS has when RichOS was never allowed it."""
+        self.tcc(service, f"DELETE FROM access WHERE client='com.richos.app' AND service='{service}';")
+
+    def tcc(self, service, sql):
+        db = ('sudo -n sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" '
+              if service == 'kTCCServiceAccessibility' else
+              'sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" ')
+        guest(self.vm, db + shlex.quote(sql))
+
+    def tcc_rows(self):
+        """com.richos.app's rows in both databases, as service|auth_value (2 is allowed)."""
+        query = "SELECT service || '|' || auth_value FROM access WHERE client='com.richos.app' ORDER BY service;"
+        return sorted(guest(self.vm, 'sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" '
+                            + shlex.quote(query)).splitlines()
+                      + guest(self.vm, 'sudo -n sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" '
+                              + shlex.quote(query)).splitlines())
 
     def dictation_record(self):
         """`<data dir>/dictation.json`, or {} when it is not there or not JSON."""
@@ -750,6 +761,21 @@ class SetupWalk(adopt_walk.Walk):
         `present`, whose read stops at the first match."""
         rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
         return sum(1 for r in rows.splitlines() if '"ThreadCreated"' in r and '"Dictation feature"' in r)
+
+    def enter_desk(self):
+        """A relaunch opens on the home screen; its "Talk to Rich" opens the conversations and the
+        rail (walk of 62ba08da2, restart-refused.png). The memory question, asked again on a
+        relaunch after "Not now", is answered "Not now" again: while it is up the rail is outside
+        the accessibility tree (walk of 62ba08da2, 20:56Z, restart-allowed.png)."""
+        end = time.monotonic() + 60
+        while time.monotonic() < end and not self.present('Talk to Rich'):
+            time.sleep(2)
+        if self.present('Talk to Rich'):
+            self.press('Talk to Rich')
+            time.sleep(3)
+        if self.shown('memory-setup-later', 'Not now'):
+            self.ax('click', '--id', 'memory-setup-later')
+            time.sleep(2)
 
     def r19_restart(self):
         """Second review rv-20261013T193550Z, finding 1: dictation turned on while Accessibility
@@ -769,6 +795,8 @@ class SetupWalk(adopt_walk.Walk):
         record.update({'on': True, 'key': 2, 'micAsked': True, 'axAsked': True})
         guest(self.vm, 'printf "%s\\n" ' + shlex.quote(json.dumps(record)) + ' > '
               + shlex.quote(self.data + '/dictation.json'))
+        facts['tcc_before'] = self.tcc_rows()
+        self.revoke('kTCCServiceAccessibility')
         facts['grants_refused'] = self.grant('kTCCServiceMicrophone')
         launched = relaunch(self.vm, environment=self.r19_env())
         self.log = launched['log']
@@ -782,31 +810,39 @@ class SetupWalk(adopt_walk.Walk):
         self.log = launched['log']
         self.wait_boot_setup(self.log)
         end = time.monotonic() + 60
-        while time.monotonic() < end and not self.present('Dictation feature'):
+        while time.monotonic() < end and not self.feature_threads():
             time.sleep(2)
-        facts['allowed_listed'] = self.present('Dictation feature')
         facts['allowed_threads'] = self.feature_threads()
+        self.enter_desk()
+        facts['allowed_listed'] = self.present('Dictation feature')
         facts['feature_thread'] = self.dictation_record().get('featureThread')
         if facts['allowed_listed']:
             self.press('Dictation feature')
             time.sleep(3)
         facts['feature_text'] = self.shows_text(R19_FEATURE_AX)
+        # The business-questions card belongs to onboarding, never this conversation (Ray,
+        # esc-20261013T210016Z-20625b89).
+        facts['card_in_feature'] = (self.shows_text("I don't know your business yet.")
+                                    or self.shows_text('Your business notes are started.'))
         self.shot('restart-allowed.png')
         launched = relaunch(self.vm, environment=self.r19_env())
         self.log = launched['log']
         self.wait_boot_setup(self.log)
         time.sleep(20)
+        self.enter_desk()
         facts['again_listed'] = self.present('Dictation feature')
         facts['again_threads'] = self.feature_threads()
         facts['again_thread'] = self.dictation_record().get('featureThread')
         self.shot('restart-again.png')
         self.facts['r19_restart'] = facts
         self.save()
-        why = [w for ok, w in ((facts['refused_threads'] == 0, 'a conversation before dictation worked'),
+        why = [w for ok, w in ((facts['grants_refused'] == ['kTCCServiceMicrophone'], 'the first launch was not refused Accessibility'),
+                               (facts['refused_threads'] == 0, 'a conversation before dictation worked'),
                                (facts['allowed_listed'], 'the rail does not list it once allowed'),
                                (facts['allowed_threads'] == 1, 'not exactly one conversation once allowed'),
                                (bool(facts['feature_thread']), 'dictation.json does not record it'),
                                (facts['feature_text'], 'its message does not name F2'),
+                               (not facts['card_in_feature'], 'the business-questions card is in it'),
                                (facts['again_listed'], 'the rail does not list it after opening again'),
                                (facts['again_threads'] == 1, 'not exactly one after opening again'),
                                (facts['again_thread'] == facts['feature_thread'], 'its record changed')) if not ok]
