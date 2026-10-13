@@ -571,13 +571,7 @@ fn time_decode(
     };
     for rep in taken..CALIBRATION_REJECT_REPS {
         let started = Instant::now();
-        let out = Command::new(bin)
-            .arg("-m")
-            .arg(model)
-            .arg("-f")
-            .arg(wav)
-            .args(decode_args(None))
-            .output()
+        let out = tethered_output(decoder_command(bin).arg("-m").arg(model).arg("-f").arg(wav).args(decode_args(None)))
             .ok()?;
         if !out.status.success() {
             return None;
@@ -901,12 +895,12 @@ impl Recognizer {
         wav::write_pcm16_mono(&wav_path, samples, SAMPLE_RATE).map_err(|e| SttError::Io(e.to_string()))?;
 
         let started = Instant::now();
-        let mut cmd = Command::new(&self.bin);
+        let mut cmd = decoder_command(&self.bin);
         cmd.arg("-m").arg(&self.model).arg("-f").arg(&wav_path);
         cmd.args(decode_args(self.prompt.as_deref()));
         let out = match timeout {
             Some(timeout)=>bounded_decoder_until(&mut cmd,scratch_dir,timeout,stop),
-            None=>cmd.output(),
+            None=>tethered_output(&mut cmd),
         };
         // The recording is removed whatever the decoder did: a timeout, a stop or a failure
         // leaves no voice on disk here (the caller's scratch folder removes the rest).
@@ -924,8 +918,58 @@ impl Recognizer {
     }
 }
 
+/// **`whisper-cli` TIED TO THIS PROCESS'S LIFE**: `bin` and the arguments added after this, run
+/// so that it ends when this process ends, however it ends.
+///
+/// THE DEFECT (Ray, test55, nightly 54 and 55): a measurement decode kept running at full CPU
+/// after the app that started it had been quit. The app is quit by a signal more often than by
+/// its own exit path (the test VM's relaunch sends SIGTERM, a crash or a Force Quit sends none
+/// of it), no code of the app's runs then, and macOS has no "end my children when I end".
+///
+/// So the tie is made by the kernel. A small `/bin/sh` starts the decoder and a watcher; the
+/// watcher reads a pipe whose only writing end this process holds and never writes, so the read
+/// returns exactly when this process closes it: when the decode is over, or when this process
+/// is gone, because the kernel closes every descriptor of a process that ends. The watcher then
+/// ends the decoder. When the decoder ends first, the shell ends the watcher and exits with the
+/// decoder's own status. No polling and no clock.
+///
+/// The writing end is this command's stdin: a caller runs it through [`tethered_output`] or
+/// [`bounded_decoder_until`], which hold it until the decode is over.
+pub fn decoder_command(bin: &Path) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(DECODER_TETHER).arg("richos-decoder").arg(bin);
+    command.stdin(std::process::Stdio::piped());
+    command
+}
+
+/// The shell of [`decoder_command`]. The decoder gets an empty stdin and not the tether, and the
+/// watcher keeps the tether as descriptor 3 (a background job's own stdin is `/dev/null`).
+const DECODER_TETHER: &str = "exec 3<&0 0</dev/null
+\"$@\" 3<&- &
+decoder=$!
+(read -r _ <&3; kill -KILL \"$decoder\" 2>/dev/null) &
+watcher=$!
+exec 3<&-
+wait \"$decoder\"
+status=$?
+kill -KILL \"$watcher\" 2>/dev/null
+exit \"$status\"";
+
+/// Run a [`decoder_command`] to the end and collect what it printed, holding its tether until
+/// then. `Command::output` would close the tether at once (it drops a piped stdin before
+/// waiting), which ends the decoder before it starts.
+pub fn tethered_output(command: &mut Command) -> std::io::Result<std::process::Output> {
+    use std::process::Stdio;
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let tether = child.stdin.take();
+    let out = child.wait_with_output();
+    drop(tether);
+    out
+}
+
 // Spool bounded decoder output to owned scratch rather than blocking on full pipes.
-// Drop always kills/reaps only this child. No process-name or USB resets are involved.
+// Drop always kills/reaps only this child. No process-name or USB resets are involved. A
+// [`decoder_command`]'s tether is closed first, so its decoder ends with it.
 // `pub` since dictation: its scratch-folder tests run the real decoder handling twice in a row and
 // past its deadline (`src-tauri/src/dictation/scratch.rs`).
 pub fn bounded_decoder(command:&mut Command,dir:&Path,timeout:std::time::Duration)->std::io::Result<std::process::Output> {
@@ -939,6 +983,7 @@ pub fn bounded_decoder_until(command:&mut Command,dir:&Path,timeout:std::time::D
     struct Owned(Child);
     impl Drop for Owned {
         fn drop(&mut self) {
+            drop(self.0.stdin.take());
             match self.0.try_wait() {
                 Ok(Some(_)) => return,
                 Ok(None) => {},
@@ -954,7 +999,9 @@ pub fn bounded_decoder_until(command:&mut Command,dir:&Path,timeout:std::time::D
     }
     let output=dir.join("decoder.stdout");let errors=dir.join("decoder.stderr");
     let file=|path:&Path|std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path);
-    let mut child=Owned(command.stdin(Stdio::null()).stdout(file(&output)?).stderr(file(&errors)?).spawn()?);
+    // A pipe never written rather than `/dev/null`: it is a [`decoder_command`]'s tether, held
+    // here until the guard drops, and an empty input to any other command.
+    let mut child=Owned(command.stdin(Stdio::piped()).stdout(file(&output)?).stderr(file(&errors)?).spawn()?);
     let started=Instant::now();
     loop {
         if stop.is_some_and(|s|s.load(std::sync::atomic::Ordering::SeqCst)) {return Err(io::Error::new(io::ErrorKind::Interrupted,"decoder stopped by its owner"))}
@@ -1442,6 +1489,27 @@ mod bounded_tests {
         assert_ne!(unsafe{libc::kill(pid,0)},0,"the stopped decoder (pid {pid}) is gone");
         std::fs::remove_dir_all(directory).unwrap();
     }
+
+    /// INVARIANT: a [`decoder_command`] passed its deadline ends its DECODER, not only the shell
+    /// that holds it, and a finished one hands back the decoder's own words and status.
+    #[test] fn a_tethered_decoder_ends_at_its_deadline_and_reports_like_the_bare_one() {
+        let directory=std::env::temp_dir().join(format!("bounded-decoder-tether-{}",std::process::id()));
+        std::fs::remove_dir_all(&directory).ok();
+        std::fs::create_dir_all(&directory).unwrap();
+        let pid_file=directory.join("decoder.pid");
+        let result=bounded_decoder(decoder_command(Path::new("/bin/sh")).args(["-c","echo $$ > \"$1\"; exec /bin/sleep 10","x"]).arg(&pid_file),&directory,std::time::Duration::from_millis(300));
+        assert_eq!(result.unwrap_err().kind(),std::io::ErrorKind::TimedOut);
+        let pid:i32=std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        // SAFETY: signal 0 only checks that the decoder this test started still exists.
+        let alive=||unsafe{libc::kill(pid,0)}==0;
+        let by=Instant::now()+std::time::Duration::from_secs(2);
+        while alive()&&Instant::now()<by {std::thread::sleep(std::time::Duration::from_millis(10));}
+        assert!(!alive(),"the decoder (pid {pid}) outlived its deadline");
+        let out=tethered_output(decoder_command(Path::new("/bin/sh")).args(["-c","echo words; exit 3"])).unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(),"words");
+        assert_eq!(out.status.code(),Some(3));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 /// **A LAUNCH IS A PROCESS**, so these tests launch processes. Each "launch" re-runs this test
@@ -1588,5 +1656,44 @@ mod launch_tests {
         assert!(second.status.success(), "second launch: {}", String::from_utf8_lossy(&second.stdout));
         let resumed = machine.decodes().len() - interrupted.len();
         assert_eq!(resumed, 2, "the second launch took {resumed} reps; one was kept, so two were owed");
+    }
+
+    /// INVARIANT (Ray, test55): no `whisper-cli` outlives the app that started it. The app is
+    /// quit the way the test VM's relaunch quits it (SIGTERM, which runs none of the app's own
+    /// exit code) in the middle of a measurement run, and the run must end with it.
+    #[test]
+    fn a_quit_leaves_no_whisper_cli() {
+        if std::env::var(ROLE).as_deref() == Ok("quit") {
+            return act_as_a_launch(1);
+        }
+        let name = "stt::launch_tests::a_quit_leaves_no_whisper_cli";
+        let machine = Machine::new("quit");
+        let mut app = machine
+            .launch(name, "quit", "30")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(20);
+        while machine.decodes().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let decoder = *machine.decodes().first().expect("the app started its measurement run");
+        // SAFETY: SIGTERM to the child this test spawned and has not yet reaped.
+        unsafe { libc::kill(app.id() as i32, libc::SIGTERM) };
+        app.wait().unwrap();
+        // SAFETY: signal 0 only checks that the stand-in this test's app started still exists.
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        let gone_by = Instant::now() + std::time::Duration::from_secs(3);
+        while alive(decoder) && Instant::now() < gone_by {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let survived = alive(decoder);
+        if survived {
+            // Never leave the stand-in running past the test, whatever the verdict.
+            // SAFETY: the pid this test's own stand-in wrote, checked alive just above.
+            unsafe { libc::kill(decoder, libc::SIGKILL) };
+        }
+        assert!(!survived, "whisper-cli (pid {decoder}) kept running after the app that started it quit");
     }
 }
