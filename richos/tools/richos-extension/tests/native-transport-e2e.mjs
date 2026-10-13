@@ -174,7 +174,7 @@ function makeCert(dir) {
 
 // --------------------------------------------------------------------------------------- host
 /** Write a launcher that runs the REAL native host with a scratch drop zone + toolchain on PATH. */
-function writeLauncher(dir, zone) {
+function writeLauncher(dir, zone, host = HOST_JS) {
   const launcher = path.join(dir, 'richos-e2e-launcher.mjs');
   const environment = { PATH: `${process.env.PATH || ''}:${HOMEBREW}:/usr/local/bin:/usr/bin:/bin`,
     RICHOS_DROP_ZONE: zone, RICHOS_LOG_LEVEL: 'error', RICHOS_TOOLCHAIN_LOCK: path.join(dir, 'toolchain-lock.json'), ...(MODEL ? { RICHOS_WHISPER_MODEL: MODEL } : {}) };
@@ -188,17 +188,42 @@ function writeLauncher(dir, zone) {
     fs.writeFileSync(launcher, `#!${python}\nimport os\n` +
       Object.entries(environment).map(([key, value]) => `os.environ[${JSON.stringify(key)}] = ${JSON.stringify(value)}\n`).join('') +
       `fd = os.open(${JSON.stringify(path.join(dir, 'native-host-stderr.log'))}, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)\nos.dup2(fd, 2)\nos.close(fd)\n` +
-      `os.execv(${JSON.stringify(process.execPath)}, [${JSON.stringify(process.execPath)}, ${JSON.stringify(HOST_JS)}])\n`);
+      `os.execv(${JSON.stringify(process.execPath)}, [${JSON.stringify(process.execPath)}, ${JSON.stringify(host)}])\n`);
     fs.chmodSync(launcher, 0o755);
     return launcher;
   }
   // Run under the same Node privacy subject checked before Chrome starts. A shell
   // would need its own removable-volume grant just to read this fixture launcher.
   fs.writeFileSync(launcher, `#!${process.execPath}\n` +
+    `import fs from 'node:fs';\n` +
+    // Native messaging owns descriptors 0 and 1. Reopening the lowest free
+    // descriptor captures raw stderr, including startup errors and inherited writes.
+    `fs.fstatSync(0); fs.fstatSync(1);\n` +
+    `fs.closeSync(2);\n` +
+    `if (fs.openSync(${JSON.stringify(path.join(dir, 'native-host-stderr.log'))}, 'a', 0o600) !== 2) throw new Error('stderr descriptor was not reserved');\n` +
     `Object.assign(process.env, ${JSON.stringify(environment)});\n` +
-    `await import(${JSON.stringify(pathToFileURL(HOST_JS).href)});\n`);
+    `await import(${JSON.stringify(pathToFileURL(host).href)});\n`);
   fs.chmodSync(launcher, 0o755);
   return launcher;
+}
+
+function checkLauncherStderr(workDir) {
+  const dir = path.join(workDir, 'launcher-stderr');
+  fs.mkdirSync(dir);
+  const host = path.join(dir, 'failing-host.mjs');
+  fs.writeFileSync(host, `import fs from 'node:fs';\nimport { spawnSync } from 'node:child_process';\n` +
+    `process.stdout.write('protocol-output\\n');\nconsole.error('console-diagnostic');\n` +
+    `fs.writeSync(2, 'raw-descriptor-diagnostic\\n');\n` +
+    `spawnSync(process.execPath, ['-e', "process.stderr.write('child-diagnostic\\\\n')"], { stdio: ['ignore', 'ignore', 2] });\n` +
+    `throw new Error('uncaught-startup-diagnostic');\n`);
+  const launcher = writeLauncher(dir, path.join(dir, 'zone'), host);
+  const child = spawnSync(launcher, [], { encoding: 'utf8', timeout: 10000 });
+  const log = path.join(dir, 'native-host-stderr.log');
+  const text = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+  check('setup: launcher preserves stderr diagnostics and native protocol stdout',
+    child.status === 1 && child.stdout === 'protocol-output\n' && child.stderr === '' &&
+    ['console-diagnostic', 'raw-descriptor-diagnostic', 'child-diagnostic', 'uncaught-startup-diagnostic'].every((part) => text.includes(part)) &&
+    (fs.statSync(log).mode & 0o777) === 0o600, text.slice(-800));
 }
 function installHostManifest(profileDir, extId, launcher) {
   const dir = path.join(profileDir, 'NativeMessagingHosts');
@@ -551,6 +576,7 @@ async function main() {
   }
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'richos-nat-'));
   console.log(`\nRichOS native-transport E2E\n  chrome:  ${CHROME}\n  host:    ${HOST_JS}\n  model:   ${MODEL}\n  workdir: ${workDir}\n`);
+  checkLauncherStderr(workDir);
 
   // Build the spoken WAV the recorder will emit (real speech, 48 kHz PCM the offscreen ctx decodes).
   const aiff = path.join(workDir, 'say.aiff'); const wav = path.join(workDir, 'voice.wav');
