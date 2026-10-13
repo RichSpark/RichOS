@@ -64,6 +64,9 @@ pub struct Endpointer {
     silence_run: u32,
     total_frames: u32,
     speech_frames: u32,
+    /// The silence already counted when the last utterance was cut at the 30.000 s window, so
+    /// its continuation ends after the SAME 0.800 s of silence rather than a fresh one.
+    cut_silence_run: u32,
 }
 
 impl Default for Endpointer {
@@ -74,7 +77,14 @@ impl Default for Endpointer {
 
 impl Endpointer {
     pub fn new() -> Self {
-        Endpointer { in_speech: false, speech_run: 0, silence_run: 0, total_frames: 0, speech_frames: 0 }
+        Endpointer {
+            in_speech: false,
+            speech_run: 0,
+            silence_run: 0,
+            total_frames: 0,
+            speech_frames: 0,
+            cut_silence_run: 0,
+        }
     }
 
     pub fn is_in_speech(&self) -> bool {
@@ -134,10 +144,22 @@ impl Endpointer {
             return EndpointEvent::Ended(EndReason::Silence);
         }
         if self.total_frames >= MAX_UTTERANCE_FRAMES {
+            self.cut_silence_run = self.silence_run;
             self.finish();
             return EndpointEvent::Ended(EndReason::MaxLength);
         }
         EndpointEvent::None
+    }
+
+    /// **The utterance just cut at the 30.000 s window goes on.** He was still talking when it
+    /// was cut, so what follows is the rest of the same speech, not a new start: it is in speech
+    /// from the next frame with no onset to earn, and the silence already counted at the cut
+    /// still counts toward its end.
+    pub fn continue_after_cut(&mut self) {
+        let silence_run = self.cut_silence_run;
+        *self = Endpointer::new();
+        self.in_speech = true;
+        self.silence_run = silence_run;
     }
 
     fn finish(&mut self) {
@@ -178,6 +200,11 @@ pub struct UtteranceRecorder {
     pre_roll: VecDeque<Vec<f32>>,
     buffer: Vec<f32>,
     recording: bool,
+    /// The last utterance was cut at the 30.000 s window: the next frame continues it.
+    continue_next: bool,
+    /// The utterance being recorded continues a cut one. Its speech is the end of his sentence,
+    /// not a cough, so the 0.304 s minimum does not apply: one frame of speech is enough.
+    continuation: bool,
 }
 
 impl Default for UtteranceRecorder {
@@ -193,6 +220,8 @@ impl UtteranceRecorder {
             pre_roll: VecDeque::with_capacity(PRE_ROLL_FRAMES + 1),
             buffer: Vec::new(),
             recording: false,
+            continue_next: false,
+            continuation: false,
         }
     }
 
@@ -210,6 +239,19 @@ impl UtteranceRecorder {
         self.pre_roll.clear();
         self.buffer.clear();
         self.recording = false;
+        self.continue_next = false;
+        self.continuation = false;
+    }
+
+    /// Below this many speech frames the utterance being recorded is dropped unheard:
+    /// [`MIN_SPEECH_FRAMES`], except for the continuation of a cut utterance, whose speech is the
+    /// end of a sentence already admitted (review rv-20261013T184256Z, finding 3).
+    fn min_speech_frames(&self) -> u32 {
+        if self.continuation {
+            1
+        } else {
+            MIN_SPEECH_FRAMES
+        }
     }
 
     /// Steal the audio captured so far WITHOUT ending the utterance cleanly — used when the
@@ -242,8 +284,9 @@ impl UtteranceRecorder {
         let samples = std::mem::take(&mut self.buffer);
         let speech_frames = self.endpointer.speech_frames();
         let total_frames = self.endpointer.total_frames();
+        let min_speech = self.min_speech_frames();
         self.reset();
-        if speech_frames < MIN_SPEECH_FRAMES {
+        if speech_frames < min_speech {
             return None;
         }
         Some(Utterance { samples, reason: EndReason::Stopped, speech_frames, total_frames })
@@ -251,6 +294,15 @@ impl UtteranceRecorder {
 
     /// Feed one exact VAD frame plus its speech verdict.
     pub fn push_frame(&mut self, frame: &[f32], is_speech: bool) -> Option<Utterance> {
+        if self.continue_next {
+            // The rest of the sentence that was cut on the last frame: recording from THIS frame.
+            self.continue_next = false;
+            self.continuation = true;
+            self.endpointer.continue_after_cut();
+            self.recording = true;
+            self.buffer.clear();
+            self.pre_roll.clear();
+        }
         let event = self.endpointer.push(is_speech);
 
         match event {
@@ -281,7 +333,11 @@ impl UtteranceRecorder {
                 let total_frames = self.endpointer.total_frames();
                 self.recording = false;
                 self.pre_roll.clear();
-                if speech_frames < MIN_SPEECH_FRAMES {
+                let min_speech = self.min_speech_frames();
+                self.continuation = false;
+                // Cut at the window while he was still talking: the next frame continues it.
+                self.continue_next = reason == EndReason::MaxLength;
+                if speech_frames < min_speech {
                     // A cough, a door, a chair. Never sent to whisper, never shown.
                     return None;
                 }
@@ -493,6 +549,46 @@ mod tests {
         }
         assert!(cough.finish_now().is_none(), "a cough became an utterance because voice went off");
         assert!(UtteranceRecorder::new().finish_now().is_none());
+    }
+
+    /// INVARIANT — review rv-20261013T184256Z finding 3. He is still finishing a word when the
+    /// 30.000 s window cuts his utterance; the 14 speech frames (0.224 s) after the cut are the
+    /// end of his sentence and are KEPT, though under the 19-frame cough minimum. And the
+    /// continuation ends after the same 0.800 s of silence as any utterance.
+    #[test]
+    fn the_end_of_a_word_cut_at_the_window_is_kept() {
+        let (sp, sil) = (speech_frame(), silent_frame());
+        let mut rec = UtteranceRecorder::new();
+        let mut done = Vec::new();
+        for _ in 0..MAX_UTTERANCE_FRAMES {
+            done.extend(rec.push_frame(&sp, true));
+        }
+        assert_eq!(done.len(), 1, "the 30.000 s window did not cut the utterance");
+        assert_eq!(done[0].reason, EndReason::MaxLength);
+        for _ in 0..14 {
+            assert!(rec.push_frame(&sp, true).is_none());
+        }
+        let mut tail = None;
+        for i in 0..SILENCE_HANGOVER_FRAMES {
+            if let Some(u) = rec.push_frame(&sil, false) {
+                assert_eq!(i + 1, SILENCE_HANGOVER_FRAMES, "the continuation ended before 0.800 s of silence");
+                tail = Some(u);
+            }
+        }
+        let tail = tail.expect("the last 0.224 s of his sentence was thrown away as a cough");
+        assert_eq!(tail.speech_frames, 14);
+        assert_eq!(tail.reason, EndReason::Silence);
+
+        // An ordinary short sound is still a cough: the waiver is only for a continuation.
+        let mut cough = UtteranceRecorder::new();
+        let mut kept = 0;
+        for _ in 0..14 {
+            kept += cough.push_frame(&sp, true).is_some() as u32;
+        }
+        for _ in 0..SILENCE_HANGOVER_FRAMES + 2 {
+            kept += cough.push_frame(&sil, false).is_some() as u32;
+        }
+        assert_eq!(kept, 0, "the cough rule was waived for a sound that continued nothing");
     }
 
     /// INVARIANT: promoting an interrupted capture keeps the audio — barge-in must not eat

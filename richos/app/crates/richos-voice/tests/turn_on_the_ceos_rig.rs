@@ -162,14 +162,15 @@ fn replay(mic: &[f32]) -> Replay {
     r
 }
 
-/// The verdict both tests share. `last_speech_end` is the sample at which his voice stops.
-fn assert_one_turn_after_he_is_done(r: &Replay, last_speech_end: usize, what: &str) {
+/// The verdict these tests share. `last_speech_end` is the sample at which his voice stops;
+/// `fragments` is how many utterances the recording must be split into.
+fn assert_one_turn_after_he_is_done(r: &Replay, last_speech_end: usize, fragments: usize, what: &str) {
     println!("[replay] {what}: {r:?}");
     // POSITIVE CONTROL. His pause is longer than the endpointer's 0.800 s, so it DOES split the
-    // recording into two utterances — which is exactly what made two turns before the fix. If this
+    // recording into utterances — which is exactly what made several turns before the fix. If this
     // fails the fixture no longer contains the defect and the verdict below proves nothing.
     assert_eq!(
-        r.admitted, 2,
+        r.admitted, fragments,
         "{what}: the {HIS_PAUSE_SECS:.3} s pause should split the speech into two utterances (the \
          endpointer closes one at {:.3} s); it did not, so this replay cannot show the defect",
         frames_to_secs(SILENCE_HANGOVER_FRAMES)
@@ -177,8 +178,9 @@ fn assert_one_turn_after_he_is_done(r: &Replay, last_speech_end: usize, what: &s
     // THE DEFECT: one thought, one turn.
     assert_eq!(r.turns.len(), 1, "{what}: one thought with a pause in it became {} turns", r.turns.len());
     let (frame, turn) = &r.turns[0];
-    assert_eq!(turn.text, "fragment 1 fragment 2", "{what}: the turn lost or reordered a fragment");
-    assert_eq!(turn.fragments, 2);
+    let all: Vec<String> = (1..=fragments).map(|n| format!("fragment {n}")).collect();
+    assert_eq!(turn.text, all.join(" "), "{what}: the turn lost or reordered a fragment");
+    assert_eq!(turn.fragments as usize, fragments);
     // NOTHING DURING THE PAUSE: no end-of-turn quiet while he was thinking.
     assert_eq!(r.quiet_frames.len(), 1, "{what}: the quiet fired during his pause: {:?}", r.quiet_frames);
     // RICH SILENT UNTIL HE IS DONE: the turn — the only thing that can start an answer — is handed
@@ -217,7 +219,7 @@ fn a_pause_in_the_middle_of_a_sentence_is_one_turn_on_his_room() {
         dbfs(&room(LEAD_SECS))
     );
     let r = replay(&mic);
-    assert_one_turn_after_he_is_done(&r, b + second.len(), "synthetic voice on his room");
+    assert_one_turn_after_he_is_done(&r, b + second.len(), 2, "synthetic voice on his room");
 }
 
 /// THE PRIVATE REPLAY: his OWN recorded voice — his first two intervals from the near-end
@@ -257,7 +259,7 @@ fn a_pause_in_the_middle_of_his_own_sentence_is_one_turn() {
         mic[b + i] += s;
     }
     let r = replay(&mic);
-    assert_one_turn_after_he_is_done(&r, b + second.len(), "his own voice on his room");
+    assert_one_turn_after_he_is_done(&r, b + second.len(), 2, "his own voice on his room");
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -437,7 +439,10 @@ fn a_cut_at_the_thirty_second_window_is_not_his_turn_ending() {
     println!("[replay] the 30 s cut: {r:?}");
     // POSITIVE CONTROL: the long stretch really was cut at the window, not ended by silence.
     assert_eq!(r.cuts, 1, "the long stretch was not cut at the 30.000 s window; this replay shows nothing");
-    assert_one_turn_after_he_is_done(&r, b + after.len(), "a 30 s stretch cut at the window");
+    // THREE fragments: the 30.000 s cut, the 2 frames of his word that ran past it (kept since
+    // review rv-20261013T184256Z finding 3, under the cough minimum), and what he said after
+    // his pause. All of them are in the one turn.
+    assert_one_turn_after_he_is_done(&r, b + after.len(), 3, "a 30 s stretch cut at the window");
 }
 
 // ------------------------------------------------------------------------------------------------
