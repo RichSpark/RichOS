@@ -168,17 +168,20 @@ pub fn start(app: &AppHandle) {
     };
     eprintln!("[richos] meeting notes: companion {}", companion.display());
     let marker = app.state::<crate::AppState>().data_dir.join("meeting-notes.json");
-    let system_audio_seen = std::fs::read(&marker)
+    let remembered = std::fs::read(&marker)
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["systemAudioSeen"].as_bool())
-        .unwrap_or(false);
+        .unwrap_or_default();
+    let system_audio_seen = remembered["systemAudioSeen"].as_bool().unwrap_or(false);
+    let mut monitor = MeetingMonitor::new();
+    // Paused stays paused across a relaunch, "until Resume or the switch" (round 25).
+    let _nothing_to_hide = monitor.set_paused(remembered["paused"].as_bool().unwrap_or(false));
     let meetings = Arc::new(Meetings {
         app: app.clone(),
         companion,
         marker,
         inner: Mutex::new(Inner {
-            monitor: MeetingMonitor::new(),
+            monitor,
             view: PanelView::Hidden,
             capture: None,
             processing: None,
@@ -226,6 +229,13 @@ pub fn start(app: &AppHandle) {
 }
 
 impl Meetings {
+    /// What survives a relaunch (`meeting-notes.json` in the data folder): whether the
+    /// system-audio grant has been seen, and whether prompts are paused.
+    fn remember(&self, inner: &Inner) -> std::io::Result<()> {
+        let body = serde_json::json!({ "systemAudioSeen": inner.system_audio_seen, "paused": inner.monitor.paused() });
+        std::fs::write(&self.marker, format!("{body}\n"))
+    }
+
     // ---- the calendar ------------------------------------------------------------------------
 
     /// One calendar pass: `workspace sync <vendor> --once --source calendar` for each connected
@@ -630,7 +640,7 @@ impl Meetings {
             // follow the call's sound from now on (CEO, 2026-10-13).
             "system-audio" if !grant_known => {
                 inner.system_audio_seen = true;
-                logged("remembering the system-audio grant", std::fs::write(&self.marker, b"{\"systemAudioSeen\": true}\n"));
+                logged("remembering the system-audio grant", self.remember(&inner));
             }
             "alarm" => eprintln!("[richos] meeting notes: capture alarm: {}", v["message"].as_str().unwrap_or("")),
             "failed" | "stand-down" => {
@@ -1096,7 +1106,12 @@ pub fn meeting_start_or_stop(app: AppHandle) -> Result<MeetingState, String> {
 #[richos_command::command]
 pub fn meeting_set_paused(app: AppHandle, paused: bool) -> Result<MeetingState, String> {
     let m = meetings(&app)?;
-    let actions = m.inner.lock().unwrap().monitor.set_paused(paused);
+    let actions = {
+        let mut inner = m.inner.lock().unwrap();
+        let actions = inner.monitor.set_paused(paused);
+        logged("remembering the pause", m.remember(&inner));
+        actions
+    };
     m.apply(actions);
     Ok(m.state())
 }

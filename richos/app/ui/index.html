@@ -427,6 +427,11 @@
           <button id="techy-chip" type="button" hidden aria-pressed="true" title="Technical view">
             <span aria-hidden="true">&#9673;</span><span id="techy-chip-label">Technical view</span>
           </button>
+          <!-- MEETING PROMPTS PAUSED (round 25): wherever the user is, with the way back in it.
+               `meeting-notes.js` shows it while prompts are paused. -->
+          <button id="mn-paused-chip" type="button" class="mn-paused" hidden>
+            <span class="dot" aria-hidden="true"></span><span>Meeting prompts paused &middot; <u>Resume</u></span>
+          </button>
 
           <!-- OUTPUT, AT THE TOP (output side-panel PRD §6.2, round 17's `#out-top`). The CEO:
                "a button here … at the top and at the bottom, so that the user can easily just
@@ -523,6 +528,11 @@
                one for the other. Empty unless techy mode is on AND there is nothing. -->
           <div id="techy-state" hidden></div>
           <div id="messages"></div>
+          <!-- PREPARING YOUR MEETING NOTES (round 25): the quiet status at the foot of the
+               conversation while a recording becomes notes; the notes arrive as Rich's message. -->
+          <div id="mn-status" class="mn-status" role="status" hidden>
+            <span class="working-dot" aria-hidden="true"></span><span>Preparing your meeting notes…</span>
+          </div>
           <!-- BETWEEN TURNS (techy-mode design §1.5). What the session said while NO turn
                was in flight: its start-up traffic, and whatever arrived after a turn's
                answer had already been returned. It is a SEPARATE section because those
@@ -1475,6 +1485,8 @@
     <!-- "Let Codex review your team's work" (round 20.2): its Settings row below Technical view,
          registered once the app answers `codex_reviews_status`. -->
     <script src="codex-reviews.js"></script>
+    <!-- Meeting notes (round 25): the Settings rows, the paused chip and the quiet status. -->
+    <script src="meeting-notes.js"></script>
     <!-- API-equivalent token spend (round 22.1): its own screen, and its row in quick settings
          directly under Technical view. -->
     <script src="spend.js"></script>
