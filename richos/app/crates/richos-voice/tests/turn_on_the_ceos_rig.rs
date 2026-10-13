@@ -526,7 +526,7 @@ fn replay_with_synthesis(mic: &[f32], first_offer: usize) -> SynthReplay {
         // The speaker: drop what was superseded, wait while the floor is his, else play.
         synthesis.retain(|(_, g, _)| *g == generation);
         if let Some(pos) = synthesis.iter().position(|(ready, _, _)| *ready <= b) {
-            if may_sound(floor) && b >= playing_until {
+            if may_sound(floor, brain.his_onset_building()) && b >= playing_until {
                 let (_, _, s) = synthesis.remove(pos);
                 r.sounded.push((b, s));
                 sounded = true;
@@ -579,4 +579,29 @@ fn speech_that_resumes_during_synthesis_is_his_and_rich_waits() {
     let after = first_sound - last_word_end as f32 / SAMPLE_RATE as f32;
     println!("[measured] Rich's first sound {after:.3} s after the CEO's last word");
     assert!(after >= end_of_turn_secs(), "Rich sounded {after:.3} s after his last word");
+}
+
+/// The same, but he resumes 20 frames into the 21-frame synthesis (review rv-20261013T184256Z,
+/// finding 2): the sentence is ready while his first word is still building toward its 7-frame
+/// (0.112 s) onset, before the floor is his. The speaker must wait on the onset too.
+#[test]
+fn speech_that_resumes_as_synthesis_ends_is_his_and_rich_waits() {
+    let lead = 1.0;
+    let first = synthetic_voice(1.904, 1);
+    let word = synthetic_voice(0.224, 7);
+    let total = lead + 1.904 + LONG_PAUSE_SECS + 1.120 + 6.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    superimpose(&mut mic, a, &first);
+    let resume = a + first.len() + secs_to_samples(LONG_PAUSE_SECS);
+    for i in 0..3 {
+        superimpose(&mut mic, resume + i * secs_to_samples(0.448), &word);
+    }
+    let r = replay_with_synthesis(&mic, resume / VAD_FRAME_SAMPLES - 20);
+    println!("[replay] resumed as synthesis ends: {r:?}");
+    assert_eq!(r.tainted_starts, 0, "his resumed word was taken for Rich's echo");
+    let texts: Vec<&str> = r.turns.iter().map(|(_, t)| t.text.as_str()).collect();
+    assert_eq!(texts, vec!["fragment 1", "fragment 2"], "his resumed words did not become his turn");
+    let said: Vec<&str> = r.sounded.iter().map(|(_, s)| s.as_str()).collect();
+    assert_eq!(said, vec!["answer 2 sentence 1"], "Rich said: {said:?}");
 }

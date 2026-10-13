@@ -576,6 +576,16 @@ impl CaptureBrain {
         }
     }
 
+    /// **He has started to make a sound that may be his next word**: speech frames are building
+    /// toward the 7-frame onset while Rich is not audible. The floor ([`crate::turn::TurnAssembler::has_floor`])
+    /// only becomes his at the onset, 0.112 s in; a sentence that finishes synthesis inside that
+    /// 0.112 s would otherwise play over the start of his word, make it Rich's, and lose it. The
+    /// speaker waits on this too ([`crate::turn::may_sound`]); a sound that never becomes an onset
+    /// releases it a few frames later.
+    pub fn his_onset_building(&self) -> bool {
+        self.quiet_frames > 0 && self.onset_run_frames() > 0
+    }
+
     /// **Voice is going off: close the open recording and say what became of it** (review
     /// rv-20261013T183507Z). The capture stream is about to be destroyed, and with it whatever he
     /// said in the last 0.800 s, which the endpointer had not yet closed. It is closed here by the
@@ -920,6 +930,9 @@ struct Shared {
     /// queue, cleared by the supervisor when the answer's window closes. Until it is set nothing of
     /// Rich is in the room, so [`crate::turn::rich_audible`] is false however much is owed.
     answer_sounded: AtomicBool,
+    /// His next word is building toward its onset (`CaptureBrain::his_onset_building`). Written
+    /// per frame by the capture callback; the speaker waits on it as on the floor.
+    his_onset: AtomicBool,
     /// Voice is going off: the capture callback closes the open recording on its next frame.
     finish_capture: AtomicBool,
     /// The capture callback has closed it and sent what became of it.
@@ -1655,6 +1668,7 @@ impl VoiceController {
             speaking: AtomicBool::new(false),
             his_floor: AtomicBool::new(false),
             answer_sounded: AtomicBool::new(false),
+            his_onset: AtomicBool::new(false),
             finish_capture: AtomicBool::new(false),
             capture_finished: AtomicBool::new(false),
             drained_after_finish: AtomicBool::new(false),
@@ -1716,6 +1730,7 @@ impl VoiceController {
             for msg in brain.push_frame(frame, speaking, forced) {
                 let _ = cap_tx.send(msg);
             }
+            cb_shared.his_onset.store(brain.his_onset_building(), Ordering::Relaxed);
             cb_shared.set_level(brain.level());
             // Publish the canceller's live state for the supervisor and the UI without ever
             // touching the audio thread from outside it. Signed and unclamped: a negative ERLE
@@ -1844,7 +1859,10 @@ impl VoiceController {
                             // the generation moves and the check below drops it; if he gives the
                             // floor back without words, it plays unchanged.
                             let mut held = false;
-                            while !may_sound(shared.his_floor.load(Ordering::Relaxed))
+                            while !may_sound(
+                                shared.his_floor.load(Ordering::Relaxed),
+                                shared.his_onset.load(Ordering::Relaxed),
+                            )
                                 && msg.generation == shared.generation.load(Ordering::Relaxed)
                                 && shared.running.load(Ordering::Relaxed)
                             {
