@@ -571,6 +571,67 @@ Path(sys.argv[1]).write_text(str(p.pid))
         self.assertIn("gates/fixture: admission", text)
         self.assertIn("a deadline counts execution only", text)
 
+    def test_missing_nested_marker_refuses_admission_without_charging_execution(self):
+        import owned_command as owned
+        clock = [0.0]
+        process = Mock(returncode=None, stdout=None, stderr=None)
+        finish = Mock()
+
+        def start(_args, **kw):
+            Path(kw['env'][owned.EXECUTION_MARKER_ENV]).with_name('admitted').touch()
+            return process
+
+        def wait(timeout):
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired(['fixture'], timeout)
+
+        process.communicate.side_effect = wait
+        with patch.object(owned.subprocess, 'Popen', side_effect=start), \
+                patch.object(owned.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                owned.owned_run(['fixture'], library=self.root, finish=finish,
+                                timeout=5, nested_wait=3, env={})
+        self.assertFalse(caught.exception.admitted)
+        self.assertEqual(caught.exception.execution_seconds, 0)
+        self.assertAlmostEqual(caught.exception.admission_seconds, 3, delta=owned.ADMISSION_POLL)
+        finish.assert_called_once_with(process)
+        runner = m.Runner(self.root, self.root, {}, io.StringIO())
+        with patch.object(m, 'owned_run', side_effect=caught.exception), \
+                self.assertRaisesRegex(m.GateNotAdmitted, 'nested execution admission was not confirmed'):
+            # load-bound: owned_run is mocked with the controlled-clock refusal above; no wall time is measured.
+            runner.command('fixture', timeout=5, nested_wait=3)
+
+    def test_nested_success_without_a_marker_is_not_a_pass(self):
+        import owned_command as owned
+        for status in (0, 1, 75):
+            with self.subTest(status=status):
+                process = Mock(returncode=status, stdout=None, stderr=None)
+                process.communicate.return_value = ('captured output', '')
+                finish = Mock()
+
+                def start(_args, **kw):
+                    scratch = Path(kw['env'][owned.EXECUTION_MARKER_ENV]).parent
+                    (scratch / 'admitted').touch()
+                    (scratch / 'timing.json').write_text(json.dumps({
+                        'admitted': True, 'admission_seconds': 1, 'execution_seconds': 50}))
+                    return process
+
+                with patch.object(owned.subprocess, 'Popen', side_effect=start):
+                    result = owned.owned_run(['fixture'], library=self.root, finish=finish,
+                                             timeout=5, nested_wait=3, env={})
+                self.assertEqual(result.returncode, status if status else 75)
+                self.assertEqual(result.stdout, 'captured output')
+                self.assertFalse(result.admitted)
+                self.assertEqual(result.execution_seconds, 0)
+                self.assertIn('marker was not received', result.admission_reason)
+                finish.assert_called_once_with(process)
+                if status == 0:
+                    runner = m.Runner(self.root, self.root, {}, io.StringIO())
+                    with patch.object(m, 'owned_run', return_value=result), \
+                            self.assertRaisesRegex(m.GateNotAdmitted, 'marker was not received'):
+                        # load-bound: owned_run returns the mocked result immediately; no wall time is measured.
+                        runner.command('fixture', timeout=5, nested_wait=3)
+
     def test_the_gate_line_says_admission_and_execution_and_a_refusal_says_nothing_ran(self):
         r = m.Runner(self.root, self.root / "state", {"PATH": "/usr/bin"}, io.StringIO(),
                      gates_at_once="all")

@@ -1323,6 +1323,9 @@ class Runner:
             label = self.active_phase or Path(str(args[0])).name
             queued = getattr(expired, "admission_seconds", None)
             self._count_clock(queued, getattr(expired, "execution_seconds", None))
+            if getattr(expired, "admitted", True) is False:
+                raise GateNotAdmitted(f"{label}: nested execution admission was not confirmed "
+                                      f"after {queued:.1f}s; owned group stopped; see the run log") from None
             after = (f" of execution, admitted after {queued:.1f}s waiting for admission"
                      if queued is not None else "")
             raise GateTimedOut(f"{label} timed out after {timeout}s{after}; owned group stopped; "
@@ -1330,8 +1333,11 @@ class Runner:
         self._count_clock(getattr(result, "admission_seconds", None),
                           getattr(result, "execution_seconds", None))
         if result.returncode == 75 and getattr(result, "admitted", None) is False:
-            # worker_tokens.py gave up waiting for a machine token: nothing ran.
             label = self.active_phase or Path(str(args[0])).name
+            if getattr(result, "admission_reason", None):
+                raise GateNotAdmitted(f"{label}: {result.admission_reason}; "
+                                     f"waited {result.admission_seconds:.1f}s; see the run log")
+            # worker_tokens.py gave up waiting for a machine token: nothing ran.
             raise GateNotAdmitted(f"{label} was never admitted: waited {result.admission_seconds:.0f}s "
                                "for a machine worker token and nothing ran; see the run log")
         if result.returncode:

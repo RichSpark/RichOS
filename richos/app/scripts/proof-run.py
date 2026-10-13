@@ -250,7 +250,7 @@ def begin_execution():
     if EXECUTION_MARKER:
         try:
             open(EXECUTION_MARKER, "w").close()
-        except OSError as exc:  # the caller retains its bounded admission fallback
+        except OSError as exc:  # the caller refuses unconfirmed execution after bounded admission
             print("proof-run: could not tell the caller its clock starts now: %s" % exc, flush=True)
         EXECUTION_MARKER = ""  # later checks must never reset the same gate deadline
 
