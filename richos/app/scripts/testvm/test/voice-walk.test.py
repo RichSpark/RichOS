@@ -37,7 +37,7 @@ class OneTurn(unittest.TestCase):
 
     def test_one_turn_missing_the_second_half_is_refused(self):
         problem = walk.one_turn_problem(['Let me think about the onboarding'], ['onboarding', 'questions'])
-        self.assertIn("'every app'", problem)
+        self.assertIn("['questions']", problem)
 
     def test_one_turn_with_both_halves_passes(self):
         self.assertIsNone(walk.one_turn_problem(
