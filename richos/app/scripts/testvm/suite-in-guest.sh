@@ -52,7 +52,7 @@ SUITE_FILE="$ROOT/tree/richos/app/scripts/$SUITE"
 HOME="$(dirname "$ROOT")"
 USER="$(id -un)"
 TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)"
-PATH="$ROOT/engine/runtime/bin:$ROOT/runtime/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH="$ROOT/bin:$ROOT/engine/runtime/bin:$ROOT/runtime/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 RICHOS_GUI_PREBUILT="$ROOT/prebuilt"
 RICHOS_GUI_ENGINE_SOURCE="$ROOT/engine"
 RICHOS_TEST_RESULTS_DIR="$ROOT/results"
@@ -69,10 +69,24 @@ for model in "$ROOT"/speech-model/ggml-*.bin; do
     export RICHOS_GUI_SPEECH_MODELS
   fi
 done
-mkdir -p "$RICHOS_TEST_RESULTS_DIR"
+mkdir -p "$RICHOS_TEST_RESULTS_DIR" || exit 2
 
 echo "  [guest $(hostname -s) as $USER, GUI session] $SUITE in prebuilt mode"
-bash "$SUITE_FILE"
-rc=$?
-echo "$rc" > "$ROOT/suite.rc"
+front_rc=0
+if [ -d "$ROOT/release" ]; then
+  bash "$ROOT/tree/richos/app/scripts/front-door.test.sh" --release "$ROOT/release" \
+    --evidence "$ROOT/results/front-door" 2>&1 | tee "$ROOT/results/front-door.log"
+  statuses=("${PIPESTATUS[@]}")
+  front_rc=${statuses[0]}
+  [ "$front_rc" != 0 ] || [ "${statuses[1]}" = 0 ] || front_rc=2
+  echo "$front_rc" > "$ROOT/results/front-door.rc" || front_rc=2
+fi
+bash "$SUITE_FILE" 2>&1 | tee "$ROOT/results/$SUITE.log"
+statuses=("${PIPESTATUS[@]}")
+rc=${statuses[0]}
+[ "$rc" != 0 ] || [ "${statuses[1]}" = 0 ] || rc=2
+echo "$rc" > "$ROOT/results/$SUITE.rc" || rc=2
+# Keep both verdicts, including refusals. Neither screen suite may turn the other's red green.
+[ "$front_rc" -eq 0 ] || rc="$front_rc"
+echo "$rc" > "$ROOT/suite.rc" || exit 2
 exit "$rc"

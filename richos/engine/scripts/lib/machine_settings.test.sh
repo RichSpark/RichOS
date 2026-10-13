@@ -39,6 +39,25 @@ class Settings(unittest.TestCase):
    mkdir.assert_not_called()
   with patch.object(pathlib.Path,'is_mount',autospec=True,side_effect=lambda p:p==volume),patch.object(pathlib.Path,'is_dir',return_value=True):
    self.assertEqual(M.agent_root(env),volume/'nested/tmp/claude')
+ def test_legacy_android_key_forwarding_and_current_name_priority(self):
+  with tempfile.TemporaryDirectory() as root:
+   home=pathlib.Path(root).resolve();source=home/'settings'
+   source.write_text('RICHOS_NATIVE_ANDROID_CACHE=/old cache\n')
+   env={'HOME':str(home),'RICHOS_ENV_FILE':str(source)}
+   frozen=M.environment(env)
+   self.assertEqual(frozen['RANDROID_CACHE'],'/old cache')
+   legacy={**env,'RICHOS_NATIVE_ANDROID_CACHE':'/legacy environment'}
+   self.assertEqual(M.load(legacy)['RANDROID_CACHE'],'/legacy environment')
+   source.write_text('RICHOS_NATIVE_ANDROID_CACHE=/old cache\nRANDROID_CACHE=/current cache\n')
+   self.assertEqual(M.load(legacy)['RANDROID_CACHE'],'/current cache')
+   self.assertEqual(M.load(frozen)['RANDROID_CACHE'],'/old cache')
+   child_env={k:v for k,v in os.environ.items() if k not in M.KEYS and k!=M.RESOLVED}
+   child_env.update(env)
+   source.write_text('RICHOS_NATIVE_ANDROID_CACHE=/old cache\n')
+   command='source "$1/machine-settings.sh"; richos_machine_settings || exit; printf "%s\\n" "$RANDROID_CACHE" "${RICHOS_MACHINE_ENV[@]}"'
+   result=subprocess.run(['bash','-c',command,'fixture',sys.argv[1]],env=child_env,capture_output=True,text=True,check=True)
+   self.assertEqual(result.stdout.splitlines()[0],'/old cache')
+   self.assertIn('RANDROID_CACHE=/old cache',result.stdout.splitlines())
  def test_named_lifetime_symlink_and_containment(self):
   with tempfile.TemporaryDirectory() as root:
    base=pathlib.Path(root).resolve();bulk=base/'bulk';bulk.mkdir();alias=base/'alias';alias.symlink_to(bulk,target_is_directory=True)

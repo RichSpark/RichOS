@@ -23,7 +23,9 @@ Everything lives in a temporary directory; nothing outside it is read or written
 `git`, run against checkouts created here.
 """
 import ast
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -323,6 +325,77 @@ class BuildCaches(unittest.TestCase):
         shutil.rmtree(checkout)
         plan, _ = self.plan()
         self.assertEqual(plan[cargo].action, reaper.DELETE)
+
+    def test_unmounted_cargo_settings_refuse_before_any_cleanup(self):
+        missing = Path('/Volumes') / ('unmounted-' + Path(self.tmp).name)
+        self.assertFalse(missing.exists())
+        private = Path(self.tmp) / 'machine.env'
+        for key in ('CARGO_TARGET_DIR', 'RICHOS_CARGO_CACHE_ROOT'):
+            with self.subTest(key=key):
+                private.write_text(f'RICHOS_BULK_ROOT={self.tmp}\n{key}={missing}/cargo\n')
+                error = io.StringIO()
+                with patch.dict(os.environ, {'HOME': self.tmp, 'TMPDIR': self.tmp,
+                                             'RICHOS_ENV_FILE': str(private)}, clear=True), \
+                        patch.object(reaper, 'load_workspaces') as load, \
+                        patch.object(reaper, 'Reaper') as sweep, \
+                        contextlib.redirect_stderr(error):
+                    self.assertEqual(reaper.main([]), 2)
+                    load.assert_not_called()
+                    sweep.assert_not_called()
+                self.assertIn('storage volume is not mounted', error.getvalue())
+                self.assertNotIn('Traceback', error.getvalue())
+                self.assertFalse(missing.exists())
+
+    def test_custom_build_cache_is_selected_by_lander_and_scheduled_cleanup(self):
+        custom = str(Path(self.tmp) / 'custom-builds')
+        private = Path(self.tmp) / 'machine.env'
+        private.write_text(f'RICHOS_BULK_ROOT={self.tmp}\nRICHOS_BUILD_CACHE={custom}\n')
+        original = self.cargo
+        self.cargo = custom
+        dead = self.folders_for(str(Path(self.parents) / 'gone'))[0]
+        alive = self.folders_for(self.live)[0]
+        unselected = str(Path(self.tmp) / 'unselected' / 'workspaces' / ('a' * 24))
+        self.make([dead, alive, unselected], 2 * DAY)
+        env = {'HOME': self.tmp, 'TMPDIR': self.tmp, 'RICHOS_ENV_FILE': str(private),
+               'SCRATCH_CLAUDE_ROOTS': str(Path(self.tmp) / 'sessions'),
+               'SCRATCH_TMP_PATTERNS': 'fixture-*', 'SCRATCH_AGE_FLOOR_MINUTES': '60',
+               'SCRATCH_NIGHTLY_DIR': str(Path(self.tmp) / 'nightly'),
+               'SCRATCH_NIGHTLY_KEEP': '1', 'SCRATCH_NOTICE_BYTES': '1',
+               'SCRATCH_SESSION_PROCESS_NAMES': 'fixture-agent'}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(bc.roots(), (self.cache, [original, custom]))
+            self.assertEqual(bc.checkout_caches(self.live), [alive])
+            cfg = reaper.config_from_env()
+            self.assertEqual(cfg['cargo_target_roots'], [original, custom])
+            cfg['checkout_parents'] = [self.parents]
+            walls = reaper.Walls([cfg['build_cache_root'], *cfg['cargo_target_roots']])
+            self.assertIn('wall 1:', walls.check(unselected, False))
+            r = object.__new__(reaper.Reaper)
+            r.cfg = cfg
+            r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
+            r.skip_build_caches = False
+            r.scan_build_caches(walls)
+        plan = {e.path: e for e in r.entries}
+        self.assertEqual(plan[dead].action, reaper.DELETE, plan[dead].why)
+        self.assertEqual(plan[alive].action, reaper.KEEP)
+        self.assertNotIn(unselected, plan)
+        _, _, failures = self.apply(r)
+        self.assertEqual(failures, [])
+        self.assertFalse(Path(dead).exists())
+        self.assertTrue(Path(alive).exists())
+        self.assertTrue(Path(unselected).exists())
+
+    def test_overlapping_build_roots_do_not_double_count(self):
+        private = Path(self.tmp) / 'machine.env'
+        private.write_text(f'RICHOS_BULK_ROOT={self.tmp}\nRICHOS_BUILD_CACHE={self.cargo}\n')
+        with patch.dict(os.environ, {'HOME': self.tmp, 'RICHOS_ENV_FILE': str(private)}, clear=True):
+            self.assertEqual(bc.roots(), (self.cache, [self.cargo]))
+        nested = str(Path(self.cargo) / 'custom')
+        workspaces = Path(nested) / 'workspaces'
+        profile = workspaces / ('a' * 24) / 'debug'
+        (profile / '.fingerprint').mkdir(parents=True)
+        self.assertEqual(bc.cargo_workspace_dirs([self.cargo, nested]), [str(workspaces)])
+        self.assertEqual(bc.profile_dirs([self.cargo, nested]), [str(profile)])
 
     def test_lander_calls_the_current_discard_api(self):
         source = HERE.parents[1] / 'mega-lander/workspaces.py'

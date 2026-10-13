@@ -139,7 +139,7 @@ def cargo_workspace_dirs(cargo_roots):
                 elif depth + 1 < CARGO_SEARCH_DEPTH and e.name not in PROFILE_SKIP \
                         and not CARGO_KEY.match(e.name):
                     stack.append((e.path, depth + 1))
-    return sorted(found)
+    return sorted(set(found))
 
 
 def keyed_folders(cache_root, cargo_roots):
@@ -354,7 +354,7 @@ def profile_dirs(roots, depth=6, skip=()):
         for e in entries:
             if e.is_dir(follow_symlinks=False) and e.name not in PROFILE_SKIP:
                 stack.append((e.path, d + 1))
-    return sorted(found)
+    return sorted(set(found))
 
 
 def _unit_key(name):
@@ -458,8 +458,10 @@ def delete_units(profile, keys, idle_seconds, now=None):
 def roots():
     values = M.load()
     base = str(M.cache())
-    cargo = str(M.cache("cargo-target", "CARGO_TARGET_DIR"))
-    return base, [cargo]
+    cargo = [str(M.cache("cargo-target", "CARGO_TARGET_DIR"))]
+    if values.get("RICHOS_BUILD_CACHE"):
+        cargo.append(str(M.cache(key="RICHOS_BUILD_CACHE")))
+    return base, list(dict.fromkeys(cargo))
 
 
 def checkout_caches(checkout):

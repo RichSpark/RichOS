@@ -87,8 +87,8 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
     `nested_wait`, when given, says the command waits for a nested admission of its own after
     the token (proof-run.py's slot and first check) and bounds that wait in seconds: the clock starts
     when the command creates the file named in EXECUTION_MARKER_ENV, and that wait counts as
-    admission. A command that never creates it gets its clock started `nested_wait` seconds
-    after the token, so the deadline is never lost."""
+    admission. A command that never creates it is refused after `nested_wait` seconds;
+    an absent marker never invents an execution start or a successful verdict."""
     worker = library / "worker_tokens.py"
     # The worker wrapper owns its command, but does not watch this coordinator.
     # Keep an independent supervisor tied to our identity around the entire
@@ -112,8 +112,6 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
                 admitted_at = token_at
             elif execution_marker.exists():
                 admitted_at = time.monotonic()
-            elif time.monotonic() >= token_at + nested_wait:
-                admitted_at = token_at + nested_wait
         return admitted_at is not None
 
     process = None
@@ -128,6 +126,13 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
             # Queued: look for the admission marker every ADMISSION_POLL seconds (communicate()
             # keeps draining the pipes meanwhile). Admitted: the rest of the budget, once.
             if not admitted():
+                if token_at is not None and nested_wait is not None and \
+                        time.monotonic() >= token_at + nested_wait:
+                    expired = subprocess.TimeoutExpired(args, nested_wait)
+                    expired.admitted = False
+                    expired.admission_seconds = time.monotonic() - started
+                    expired.execution_seconds = 0.0
+                    raise expired from None
                 wait = ADMISSION_POLL
             elif timeout is None:
                 wait = None
@@ -163,6 +168,14 @@ def owned_run(args, *, library, finish, timeout=None, groups=None, cleanup=False
                 nested = admitted_at - token_at
                 result.admission_seconds += nested
                 result.execution_seconds = max(0.0, result.execution_seconds - nested)
+        if nested_wait is not None and admitted_at is None:
+            # The worker's timing only proves its outer token. No nested execution
+            # start was confirmed, even if that wrapper returned successfully.
+            result.admitted = False
+            result.admission_seconds, result.execution_seconds = ended - started, 0.0
+            result.admission_reason = "nested execution-start marker was not received"
+            if result.returncode == 0:
+                result.returncode = 75
         return result
     finally:
         try:

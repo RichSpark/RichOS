@@ -50,6 +50,37 @@ def prepare(cache, machine):
     receipt.write_text(json.dumps({'version': VERSION, 'archive': expected, 'binary': hashlib.sha256(binary).hexdigest()}))
     return cache / 'cloudflared'
 
+
+def owned_cache(directory):
+    """Recognize an earlier storage root using the prepared helper's pinned receipt."""
+    if directory.parts[-3:] != ('richos-connect', 'helper', VERSION):
+        return False
+    for triple, expected in PINS.values():
+        try:
+            saved = json.loads((directory / ('verified-' + triple + '.json')).read_text())
+            binary = directory / ('cloudflared-' + triple)
+            if (isinstance(saved, dict) and saved.get('version') == VERSION and saved.get('archive') == expected
+                    and saved.get('binary') == hashlib.sha256(binary.read_bytes()).hexdigest()):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def link_helper(link, directory, helper_root):
+    if link.is_symlink():
+        previous = link.resolve()
+        if not previous.is_relative_to(helper_root) and not owned_cache(previous):
+            raise SystemExit('Refusing to replace an unrelated helper link')
+        if previous != directory:
+            link.unlink()
+            link.symlink_to(directory, target_is_directory=True)
+    elif link.exists():
+        raise SystemExit('Refusing to replace an existing helper directory')
+    else:
+        link.symlink_to(directory, target_is_directory=True)
+
+
 if __name__ == '__main__':
     if platform.system() != 'Darwin' or platform.machine() not in PINS:
         raise SystemExit('The Connect helper currently supports macOS arm64 and x86_64')
@@ -61,15 +92,7 @@ if __name__ == '__main__':
         base = prepare(directory, platform.machine())
     app = Path(__file__).resolve().parent.parent
     link = app / 'src-tauri/connect-helper'
-    if link.is_symlink():
-        if not link.resolve().is_relative_to(helper_root):
-            raise SystemExit('Refusing to replace an unrelated helper link')
-        if link.resolve() != directory:
-            link.unlink(); link.symlink_to(directory, target_is_directory=True)
-    elif link.exists():
-        raise SystemExit('Refusing to replace an existing helper directory')
-    else:
-        link.symlink_to(directory, target_is_directory=True)
+    link_helper(link, directory, helper_root)
     license_file = app / 'third-party/cloudflared/LICENSE'
     # Tauri retains externalBin in generated application code. A relative source link
     # keeps build-machine paths out of the executable while bulk bytes stay on SSD.

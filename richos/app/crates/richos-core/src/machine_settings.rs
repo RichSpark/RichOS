@@ -9,7 +9,7 @@ pub const KEYS: &[&str] = &[
     "RICHOS_CPU_GUARD_STATE", "RICHOS_ENGINE_PASS_DIR",
     "RICHOS_PROOF_RUN_DIR", "RICHOS_AUTOCHECK_PROOF_ROOT",
     "RICHOS_TEST_RESULTS_ROOT", "RICHOS_ANDROID_CACHES_ROOT",
-    "RICHOS_NATIVE_IOS_CACHE", "RANDROID_CACHE",
+    "RICHOS_NATIVE_IOS_CACHE", "RICHOS_NATIVE_ANDROID_CACHE", "RANDROID_CACHE",
     "RICHOS_GPL_SOURCE_CACHE",
     "RICHOS_MOBILE_CACHE",
     "RICHOS_PHONE_LOCK_DIR",
@@ -70,6 +70,10 @@ impl Settings {
                 valid_path(key, value)?;
                 settings.0.insert((*key).into(), value.clone());
             }
+        }
+        // Preserve old private files; the current consumer name wins if both exist.
+        if let Some(legacy) = settings.0.get("RICHOS_NATIVE_ANDROID_CACHE").cloned() {
+            settings.0.entry("RANDROID_CACHE".into()).or_insert(legacy);
         }
         Ok(settings)
     }
@@ -156,6 +160,20 @@ mod tests {
         let forwarded = settings.environment();
         for key in KEYS { assert_eq!(forwarded.get(*key).unwrap(), "/work data/clé"); }
         assert_eq!(forwarded.len(), KEYS.len() + 1);
+    }
+    #[test]
+    fn legacy_android_key_is_forwarded_with_explicit_current_name_priority() {
+        let home = std::env::temp_dir().join(format!("legacy-android-settings-{}", uuid::Uuid::new_v4()));
+        create_starter(&home).unwrap();
+        std::fs::write(file(&home), "RICHOS_NATIVE_ANDROID_CACHE=/old cache\n").unwrap();
+        let loaded = Settings::load(&home, &BTreeMap::new()).unwrap();
+        assert_eq!(loaded.environment()["RANDROID_CACHE"], "/old cache");
+        let override_env = BTreeMap::from([("RICHOS_NATIVE_ANDROID_CACHE".into(), "/legacy environment".into())]);
+        assert_eq!(Settings::load(&home, &override_env).unwrap().0["RANDROID_CACHE"], "/legacy environment");
+        std::fs::write(file(&home), "RICHOS_NATIVE_ANDROID_CACHE=/old cache\nRANDROID_CACHE=/current cache\n").unwrap();
+        assert_eq!(Settings::load(&home, &override_env).unwrap().0["RANDROID_CACHE"], "/current cache");
+        assert_eq!(Settings::load(&home, &loaded.environment()).unwrap().0, loaded.0);
+        std::fs::remove_dir_all(home).unwrap();
     }
     #[test]
     fn file_selection_precedence_snapshot_and_starter_preservation() {

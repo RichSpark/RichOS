@@ -15,6 +15,7 @@
     "RICHOS_TEST_RESULTS_ROOT",
     "RICHOS_ANDROID_CACHES_ROOT",
     "RICHOS_NATIVE_IOS_CACHE",
+    "RICHOS_NATIVE_ANDROID_CACHE",
     "RANDROID_CACHE",
     "RICHOS_GPL_SOURCE_CACHE",
     "RICHOS_MOBILE_CACHE",
@@ -41,7 +42,7 @@
     },
     {
       "name": "all keys",
-      "text": "RICHOS_BULK_ROOT=/work data/cl\u00e9\nCARGO_TARGET_DIR=/work data/cl\u00e9\nRICHOS_CARGO_CACHE_ROOT=/work data/cl\u00e9\nSCCACHE_DIR=/work data/cl\u00e9\nRICHOS_SCCACHE_TMPDIR=/work data/cl\u00e9\nRICHOS_BUILD_CACHE=/work data/cl\u00e9\nRICHOS_RECOVERY_EVIDENCE_ROOT=/work data/cl\u00e9\nRICHOS_RECOVERY_WIP_ROOT=/work data/cl\u00e9\nRICHOS_CPU_GUARD_STATE=/work data/cl\u00e9\nRICHOS_ENGINE_PASS_DIR=/work data/cl\u00e9\nRICHOS_PROOF_RUN_DIR=/work data/cl\u00e9\nRICHOS_AUTOCHECK_PROOF_ROOT=/work data/cl\u00e9\nRICHOS_TEST_RESULTS_ROOT=/work data/cl\u00e9\nRICHOS_ANDROID_CACHES_ROOT=/work data/cl\u00e9\nRICHOS_NATIVE_IOS_CACHE=/work data/cl\u00e9\nRANDROID_CACHE=/work data/cl\u00e9\nRICHOS_GPL_SOURCE_CACHE=/work data/cl\u00e9\nRICHOS_MOBILE_CACHE=/work data/cl\u00e9\nRICHOS_PHONE_LOCK_DIR=/work data/cl\u00e9\nRICHOS_PHONE_WATCH_HOME=/work data/cl\u00e9\nRICHOS_PHYSICAL_STORE=/work data/cl\u00e9\nRICHOS_PHYSICAL_PRODUCTS=/work data/cl\u00e9\nGRADLE_USER_HOME=/work data/cl\u00e9\nRICHOS_ENGINE_CHECK_PROOF_DIR=/work data/cl\u00e9",
+      "text": "RICHOS_BULK_ROOT=/work data/cl\u00e9\nCARGO_TARGET_DIR=/work data/cl\u00e9\nRICHOS_CARGO_CACHE_ROOT=/work data/cl\u00e9\nSCCACHE_DIR=/work data/cl\u00e9\nRICHOS_SCCACHE_TMPDIR=/work data/cl\u00e9\nRICHOS_BUILD_CACHE=/work data/cl\u00e9\nRICHOS_RECOVERY_EVIDENCE_ROOT=/work data/cl\u00e9\nRICHOS_RECOVERY_WIP_ROOT=/work data/cl\u00e9\nRICHOS_CPU_GUARD_STATE=/work data/cl\u00e9\nRICHOS_ENGINE_PASS_DIR=/work data/cl\u00e9\nRICHOS_PROOF_RUN_DIR=/work data/cl\u00e9\nRICHOS_AUTOCHECK_PROOF_ROOT=/work data/cl\u00e9\nRICHOS_TEST_RESULTS_ROOT=/work data/cl\u00e9\nRICHOS_ANDROID_CACHES_ROOT=/work data/cl\u00e9\nRICHOS_NATIVE_IOS_CACHE=/work data/cl\u00e9\nRICHOS_NATIVE_ANDROID_CACHE=/work data/cl\u00e9\nRANDROID_CACHE=/work data/cl\u00e9\nRICHOS_GPL_SOURCE_CACHE=/work data/cl\u00e9\nRICHOS_MOBILE_CACHE=/work data/cl\u00e9\nRICHOS_PHONE_LOCK_DIR=/work data/cl\u00e9\nRICHOS_PHONE_WATCH_HOME=/work data/cl\u00e9\nRICHOS_PHYSICAL_STORE=/work data/cl\u00e9\nRICHOS_PHYSICAL_PRODUCTS=/work data/cl\u00e9\nGRADLE_USER_HOME=/work data/cl\u00e9\nRICHOS_ENGINE_CHECK_PROOF_DIR=/work data/cl\u00e9",
       "values": {
         "RICHOS_BULK_ROOT": "/work data/cl\u00e9",
         "CARGO_TARGET_DIR": "/work data/cl\u00e9",
@@ -66,7 +67,8 @@
         "RICHOS_PHYSICAL_STORE": "/work data/cl\u00e9",
         "RICHOS_PHYSICAL_PRODUCTS": "/work data/cl\u00e9",
         "GRADLE_USER_HOME": "/work data/cl\u00e9",
-        "RICHOS_ENGINE_CHECK_PROOF_DIR": "/work data/cl\u00e9"
+        "RICHOS_ENGINE_CHECK_PROOF_DIR": "/work data/cl\u00e9",
+        "RICHOS_NATIVE_ANDROID_CACHE": "/work data/cl\u00e9"
       }
     },
     {
@@ -102,6 +104,18 @@
     {
       "name": "malformed",
       "text": "RICHOS_BULK_ROOT /path",
+      "error": true
+    },
+    {
+      "name": "legacy Android cache",
+      "text": "RICHOS_NATIVE_ANDROID_CACHE=/legacy cache\n",
+      "values": {
+        "RICHOS_NATIVE_ANDROID_CACHE": "/legacy cache"
+      }
+    },
+    {
+      "name": "legacy Android relative refuses",
+      "text": "RICHOS_NATIVE_ANDROID_CACHE=relative\n",
       "error": true
     }
   ]

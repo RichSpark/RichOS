@@ -16,7 +16,7 @@ KEYS = (
     'RICHOS_CPU_GUARD_STATE', 'RICHOS_ENGINE_PASS_DIR',
     'RICHOS_PROOF_RUN_DIR', 'RICHOS_AUTOCHECK_PROOF_ROOT',
     'RICHOS_TEST_RESULTS_ROOT', 'RICHOS_ANDROID_CACHES_ROOT',
-    'RICHOS_NATIVE_IOS_CACHE', 'RANDROID_CACHE',
+    'RICHOS_NATIVE_IOS_CACHE', 'RICHOS_NATIVE_ANDROID_CACHE', 'RANDROID_CACHE',
     'RICHOS_GPL_SOURCE_CACHE',
     'RICHOS_MOBILE_CACHE',
     'RICHOS_PHONE_LOCK_DIR',
@@ -68,6 +68,10 @@ def load(environment=None, home=None):
             if not value or '\x00' in value or not Path(value).is_absolute():
                 raise ValueError(f'{key} requires a nonempty literal absolute path')
             result[key] = value
+    # Keep existing private files valid. The current consumer name wins when both
+    # spellings are present, as with the explicit Cargo alias priority below.
+    if 'RICHOS_NATIVE_ANDROID_CACHE' in result:
+        result.setdefault('RANDROID_CACHE', result['RICHOS_NATIVE_ANDROID_CACHE'])
     return result
 
 

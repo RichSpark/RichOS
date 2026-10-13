@@ -3,7 +3,9 @@
 # run-suite.sh — run ONE host-screen suite in a test-VM guest, from executables this Mac
 #                built, and answer with that suite's own result.
 #
-#   testvm/run-suite.sh <gui-host> <path to the suite>
+#   testvm/run-suite.sh <gui-host> <path to the suite> [--existing-guest <vm>] [--release <dir>]
+# --existing-guest attaches to a guest the caller owns and cleans up, under its held slot.
+# --release additionally runs front-door against that archive before the named suite.
 #
 # `run-tests.sh` calls this for a suite that sources lib/gui-launch.sh when RICHOS_GUI_HOST
 # names the test VM; <gui-host> is that value. Nothing appears on this Mac's screen: the
@@ -30,8 +32,8 @@
 #      runs the suite in the guest's GUI session in PREBUILT MODE, and brings back its exit
 #      code and its results folder.
 #
-# <gui-host> says that the caller wants a guest; the guest itself is always a fresh clone of
-# TESTVM_BASE_VM (testvm/lib.sh), as every guest has been since slots.py (2026-09-27).
+# <gui-host> requests a guest. By default this runner owns a fresh clone of TESTVM_BASE_VM.
+# --existing-guest uses the caller's already booted clone and leaves its cleanup to that caller.
 #
 # =========================================================================================
 # EXIT
@@ -62,10 +64,28 @@ REPO_DIR="$(cd "$APP_DIR/.." && pwd)"
 
 say() { echo "run-suite.sh: $*"; }
 no_guest() { echo "run-suite.sh: $*" >&2; exit 2; }
-usage() { echo "run-suite.sh: usage: run-suite.sh <gui-host> <path to a suite in $SCRIPTS>" >&2; exit 64; }
+usage() { echo "run-suite.sh: usage: run-suite.sh <gui-host> <path to a suite in $SCRIPTS> [--existing-guest <vm>] [--release <dir>]" >&2; exit 64; }
 
 GUI_HOST="${1:-}"; SUITE_PATH="${2:-}"
 [ -n "$GUI_HOST" ] && [ -n "$SUITE_PATH" ] || usage
+shift 2
+EXISTING_GUEST=""; RELEASE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --existing-guest) [ -n "${2:-}" ] || usage; EXISTING_GUEST="$2"; shift 2 ;;
+    --release) [ -n "${2:-}" ] || usage; RELEASE="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+if [ -n "$EXISTING_GUEST" ]; then
+  [ -n "${TESTVM_SLOT:-}" ] || no_guest "--existing-guest requires the caller's held guest slot"
+  [ -n "${RICHOS_GUI_PREBUILT:-}" ] || no_guest "build the executables before booting the existing guest (RICHOS_GUI_PREBUILT)"
+fi
+if [ -n "$RELEASE" ]; then
+  [ -f "$RELEASE/RichOS.app.tar.gz" ] || no_guest "--release has no RichOS.app.tar.gz: $RELEASE"
+  CLICLICK="$(command -v cliclick || true)"
+  [ -n "$CLICLICK" ] || no_guest "front-door requires cliclick on PATH for transfer to the guest"
+fi
 [ -f "$SUITE_PATH" ] || { echo "run-suite.sh: no suite at $SUITE_PATH" >&2; exit 64; }
 NAME="$(basename "$SUITE_PATH")"
 [ "$(cd "$(dirname "$SUITE_PATH")" && pwd)" = "$SCRIPTS" ] \
@@ -115,9 +135,17 @@ cp -R "$SCRIPTS" "$T/scripts" || no_guest "could not stage $SCRIPTS"
 [ -d "$APP_DIR/src-tauri/src" ] && cp -R "$APP_DIR/src-tauri/src" "$T/src-tauri/src"
 [ -f "$APP_DIR/src-tauri/tauri.conf.json" ] && cp "$APP_DIR/src-tauri/tauri.conf.json" "$T/src-tauri/"
 [ -d "$APP_DIR/crates/richos-user-update/src" ] && cp -R "$APP_DIR/crates/richos-user-update/src" "$T/crates/richos-user-update/src"
+if [ -n "$RELEASE" ]; then
+  mkdir -p "$PAYLOAD/release" "$PAYLOAD/bin" || no_guest "cannot stage release inputs"
+  cp "$RELEASE/RichOS.app.tar.gz" "$PAYLOAD/release/" || no_guest "could not stage the release archive"
+  cp -p "$CLICLICK" "$PAYLOAD/bin/cliclick" || no_guest "could not stage cliclick"
+fi
 
 ENGINE="${RICHOS_GUI_ENGINE_SOURCE:-$REPO_DIR/engine}"
 [ -d "$ENGINE" ] || { echo "run-suite.sh: no engine at $ENGINE for the suite to provision from" >&2; exit 1; }
+# App launchers resolve shared libraries beside the app tree. Keep that source
+# layout while suite-walk transfers just one engine copy at the payload root.
+ln -s ../../engine "$PAYLOAD/tree/richos/engine" || no_guest "could not stage the engine library link"
 RUNTIME=""
 if [ ! -f "$ENGINE/runtime/delivery.json" ] && [ -n "${RICHOS_RUNTIME_DIR:-}" ]; then
   [ -d "$RICHOS_RUNTIME_DIR" ] || no_guest "RICHOS_RUNTIME_DIR names $RICHOS_RUNTIME_DIR, which is not a directory"
@@ -135,7 +163,6 @@ WAIT="${TESTVM_SUITE_WAIT:-1800}"
 # tailnet unless it asks to (run-walk.py --tailnet).
 WALK=(--no-app --home "$WORK/home" --engine "" --report "$WORK/walk.json" --wait "$WAIT")
 
-say "running $NAME in a guest for RICHOS_GUI_HOST=$GUI_HOST (a fresh clone, held for this run only)"
 STEP=(--stage "$PAYLOAD" --suite "$NAME" --engine "$ENGINE" --rc "$WORK/suite.rc")
 [ -n "$RUNTIME" ] && STEP+=(--runtime "$RUNTIME")
 # The pinned speech models gui-boot's healthy machine needs (the video tools are a setup
@@ -149,8 +176,17 @@ if [ -n "${RICHOS_GUI_SPEECH_MODELS:-}" ]; then
   done
 fi
 [ -n "${RICHOS_TEST_RESULTS_DIR:-}" ] && STEP+=(--results "$RICHOS_TEST_RESULTS_DIR")
-"$RUN_WALK" "${WALK[@]}" -- "$HERE/suite-walk.sh" "${STEP[@]}"
-WALK_RC=$?
+if [ -n "$EXISTING_GUEST" ]; then
+  say "using caller-owned guest $EXISTING_GUEST; the caller retains cleanup ownership"
+  "$HERE/suite-walk.sh" "$EXISTING_GUEST" "${STEP[@]}"
+  WALK_RC=$?
+  W_VM="$EXISTING_GUEST"; W_CLEAN=yes; W_TIMES="existing guest; cleanup belongs to caller"
+  CLEANUP_STATE="the caller retains guest cleanup ownership"
+else
+  say "running $NAME in a fresh guest for RICHOS_GUI_HOST=$GUI_HOST"
+  CLEANUP_STATE="the guest was deleted"
+  "$RUN_WALK" "${WALK[@]}" -- "$HERE/suite-walk.sh" "${STEP[@]}"
+  WALK_RC=$?
 
 if [ ! -f "$WORK/walk.json" ]; then
   # run-walk.py writes its report inside the slot, so no report means no guest was booted.
@@ -171,6 +207,7 @@ print("W_CLEAN_WHY=%s" % shlex.quote(str(r.get("cleanup_error", ""))))
 print("W_TIMES=%s" % shlex.quote("boot %ss, suite %ss, cleanup %ss" % (num("boot_seconds"), num("scenario_seconds"), num("cleanup_seconds"))))
 PY
 )" || no_guest "run-walk.py's report $WORK/walk.json could not be read"
+fi
 
 if [ "$W_CLEAN" != yes ]; then
   echo "" >&2
@@ -182,7 +219,7 @@ if [ "$W_CLEAN" != yes ]; then
   exit 1
 fi
 if [ ! -s "$WORK/suite.rc" ]; then
-  no_guest "$NAME did not run to its end in guest $W_VM (suite-walk.sh exit $WALK_RC; $W_TIMES); the guest was deleted"
+  no_guest "$NAME did not run to its end in guest $W_VM (suite-walk.sh exit $WALK_RC; $W_TIMES); $CLEANUP_STATE"
 fi
 SUITE_RC="$(cat "$WORK/suite.rc")"
 if [ "$WALK_RC" = 4 ]; then
@@ -190,10 +227,14 @@ if [ "$WALK_RC" = 4 ]; then
   # come back, and the guest is deleted: a failing verdict still stands as itself, a passing one
   # cannot stand with its evidence missing.
   if [ "$SUITE_RC" != 0 ]; then
-    echo "run-suite.sh: $NAME exited $SUITE_RC in guest $W_VM and its results folder was lost (not brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}); the guest was deleted" >&2
+    echo "run-suite.sh: $NAME exited $SUITE_RC in guest $W_VM and its results folder was lost (not brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}); $CLEANUP_STATE" >&2
     exit "$SUITE_RC"
   fi
-  no_guest "$NAME passed in guest $W_VM but its results folder could not be brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}; the guest was deleted, so the results are lost"
+  no_guest "$NAME passed in guest $W_VM but its results folder could not be brought back to ${RICHOS_TEST_RESULTS_DIR:-the results folder}; $CLEANUP_STATE"
 fi
-say "$NAME exited $SUITE_RC in guest $W_VM; built here in ${BUILD_S}s, $W_TIMES; the guest was stopped and deleted"
+if [ -n "$EXISTING_GUEST" ]; then
+  say "$NAME exited $SUITE_RC in guest $W_VM; caller must stop and delete the guest"
+else
+  say "$NAME exited $SUITE_RC in guest $W_VM; built here in ${BUILD_S}s, $W_TIMES; the guest was stopped and deleted"
+fi
 exit "$SUITE_RC"

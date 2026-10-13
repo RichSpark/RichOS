@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, statSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { mobile, cacheRoot } from '../cli/simulator.mjs';
-import { cacheDir } from '../cli/machine-settings.mjs';
+import { cacheDir, machineEnvironment } from '../cli/machine-settings.mjs';
 
 const require = createRequire(import.meta.url);
 const { createScratch, proofCache } = require('./storage.cjs');
@@ -54,9 +54,14 @@ const cache = target === 'ios'
   ? proofCache(`${cacheDir("richos-mobile-ios-proof")}/${key}`, storage, process.env.RICHOS_MOBILE_IOS_TEST_CACHE)
   : createScratch('pwa-proof');
 process.env.RICHOS_MOBILE_CACHE = cache;
+// cacheDir already captured the private settings. Apply this suite's explicit
+// cache choice to in-process consumers as well as the child CLI environment.
+machineEnvironment().RICHOS_MOBILE_CACHE = cache;
 cacheRoot(); // Enforce the CLI's external path and symlink checks.
 const lock = join(cache, 'suite.lock');
 mkdirSync(lock); // Concurrent proofs may not reset one another's fixture.
+// This proof, rather than its long-lived editor session, owns the test simulator.
+process.env.RICHOS_TEST_DEVICE_OWNER_PID = String(process.pid);
 const env = { ...process.env, RICHOS_PWA_HEADED: '0' };
 let browserStarted = false;
 let passed = 0;

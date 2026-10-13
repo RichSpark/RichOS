@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-tests: no-host-screen: drives gui-proof-in-vm.sh only to its refusals; no guest is booted and nothing is launched
+# run-tests: no-host-screen: drives gui-proof-in-vm.sh through refusals and stand-in guest controls; no guest is booted and nothing is launched
 # run-tests: inputs richos/app/scripts/gui-proof-in-vm.test.sh richos/app/scripts/gui-proof-in-vm.sh richos/app/scripts/testvm/slots.py richos/app/scripts/testvm/reserve.py
 # run-tests: covers richos/app/scripts/gui-proof-in-vm.sh
 #
@@ -114,6 +114,75 @@ chmod +x "$SB/testvm/run.sh"
 out="$(TESTVM_SLOT=1 STUB_STOP_RC=1 "$SB/gui-proof-in-vm.sh" --bundle "$TMP/bundle.zip" --commit abc123 --out "$TMP/proof4" 2>&1)"; rc=$?
 [ "$rc" -eq 1 ] && has "$out" "CLEANUP FAILED" "fail:run.sh"; ok=$?
 check "a failed proof whose guest stop also failed keeps its own exit status (1)" "$ok" "rc=$rc $out"
+
+# The shipped boot and both screen suites use one guest. Failure/refusal in either suite
+# must survive a healthy window and a successful cleanup, including missing result copies.
+mkdir -p "$SB/lib" "$TMP/bin"
+: > "$TMP/RichOS.app.tar.gz"
+cat > "$SB/lib/gui-launch.sh" <<'EOF'
+gui_prebuild() { echo prebuild >> "$STUB_LOG"; mkdir -p "$1"; }
+EOF
+cat > "$TMP/bin/cliclick" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+cat > "$TMP/bin/git" <<'EOF'
+#!/bin/bash
+echo abc123abc123abc123abc123abc123abc123abcd
+EOF
+cat > "$SB/testvm/run.sh" <<'EOF'
+#!/bin/bash
+echo boot >> "$STUB_LOG"
+echo "vm=proof-vm ip=guest pid=123 ssh=admin@guest windows=1"
+EOF
+cat > "$SB/testvm/guest.sh" <<'EOF'
+#!/bin/bash
+echo "guest $1" >> "$STUB_LOG"
+[ "$1" = proof-vm ]
+EOF
+cat > "$SB/testvm/run-suite.sh" <<'EOF'
+#!/bin/bash
+echo "suites $*" >> "$STUB_LOG"
+[ "$1" = proof-vm ] || exit 64
+[ "$3" = --existing-guest ] && [ "$4" = proof-vm ] || exit 64
+[ "$5" = --release ] && [ -f "$6/RichOS.app.tar.gz" ] || exit 64
+echo "${STUB_FRONT_RC:-0}" > "$RICHOS_TEST_RESULTS_DIR/front-door.rc"
+[ "${STUB_LOST_RESULT:-0}" = 1 ] || echo "${STUB_GUI_RC:-0}" > "$RICHOS_TEST_RESULTS_DIR/gui-boot.test.sh.rc"
+echo "front=${STUB_FRONT_RC:-0} gui=${STUB_GUI_RC:-0}"
+exit 0
+EOF
+cat > "$SB/testvm/stop.sh" <<'EOF'
+#!/bin/bash
+echo "stop $1" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$TMP/bin/"* "$SB/testvm/"*.sh
+screen_proof() {
+  TESTVM_SLOT=1 PATH="$TMP/bin:$PATH" "$SB/gui-proof-in-vm.sh" --bundle "$TMP/bundle.zip" \
+    --commit abc123 --screen-suites --vm proof-vm --out "$TMP/screen.proof"
+}
+: > "$STUB_LOG"
+out="$(screen_proof 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q '^result=pass$' "$TMP/screen.proof" \
+  && grep -q '^front-door_exit=0$' "$TMP/screen.proof" \
+  && grep -q '^gui-boot_exit=0$' "$TMP/screen.proof" \
+  && [ "$(head -1 "$STUB_LOG")" = prebuild ] \
+  && [ "$(grep -c '^boot$' "$STUB_LOG")" = 1 ] \
+  && [ "$(grep -c '^stop proof-vm$' "$STUB_LOG")" = 1 ]; ok=$?
+check "screen suites run in the boot guest, after prebuild, with one cleanup and two green verdicts" "$ok" "rc=$rc $out"
+for refused in 1 2; do
+  out="$(STUB_FRONT_RC=$refused screen_proof 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && grep -q '^result=fail:screen-suites$' "$TMP/screen.proof" \
+    && grep -q "^front-door_exit=$refused$" "$TMP/screen.proof"; ok=$?
+  check "front-door exit $refused fails a healthy boot" "$ok" "rc=$rc $out"
+  out="$(STUB_GUI_RC=$refused screen_proof 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && grep -q '^result=fail:screen-suites$' "$TMP/screen.proof" \
+    && grep -q "^gui-boot_exit=$refused$" "$TMP/screen.proof"; ok=$?
+  check "gui-boot exit $refused fails a healthy boot" "$ok" "rc=$rc $out"
+done
+out="$(STUB_LOST_RESULT=1 screen_proof 2>&1)"; rc=$?
+[ "$rc" = 1 ] && grep -q '^gui-boot_exit=not-run$' "$TMP/screen.proof"; ok=$?
+check "a missing result cannot inherit the preceding run's pass" "$ok" "rc=$rc $out"
 
 if [ "$fail" -eq 0 ]; then echo "gui-proof-in-vm.test.sh: all passed"; else echo "gui-proof-in-vm.test.sh: FAILED"; fi
 cleanup; HOLDER=""; trap - EXIT

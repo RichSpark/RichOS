@@ -29,6 +29,53 @@ git -C "$REPO" commit -q -m "report v1"
 export RICHOS_ESCALATION_LEDGER="$SANDBOX/ledger.jsonl"
 export RICHOS_AUDIT_RECORD_REPO="$REPO"
 export RICHOS_AUDIT_WATCH_STATE="$SANDBOX/state"
+# A shipped engine has no Git metadata. Explicit CLI/environment selections still
+# work there, and the absent implicit repository must not create watcher state.
+ROOT_OUT="$(python3 -B - "$ENGINE_ROOT" "$SANDBOX" "$REPO" <<'PY'
+from pathlib import Path
+import json, os, shutil, subprocess, sys
+engine, sandbox, record = map(Path, sys.argv[1:])
+source = sandbox / 'extracted engine/scripts/lib/audit-report-watch.py'
+source.parent.mkdir(parents=True)
+shutil.copy2(engine / 'scripts/lib/audit-report-watch.py', source)
+env = dict(os.environ)
+env.pop('RICHOS_AUDIT_RECORD_REPO', None)
+def run(script, state, args=(), environment=env):
+    # Finite hang guard only; correctness is the exit, state and recorded finding.
+    return subprocess.run([sys.executable, '-B', str(script), '--state-dir', str(state), *args],
+                          env=environment, capture_output=True, text=True, timeout=30)
+state = sandbox / 'extracted-no-record'
+r = run(source, state)
+assert r.returncode == 0 and not r.stdout and not r.stderr and not state.exists(), r
+for mode, args, selected in (
+        ('cli', ('--repo', str(record)), env),
+        ('environment', (), {**env, 'RICHOS_AUDIT_RECORD_REPO': str(record)})):
+    state = sandbox / ('extracted-' + mode)
+    r = run(source, state, args, selected)
+    assert r.returncode == 0, r.stderr
+    assert set(json.loads((state / 'seen.json').read_text())['docs/audits/part-1.md']['findings']) == {'01', '02'}
+checkout = sandbox / 'checkouts/richos'
+checkout.mkdir(parents=True)
+subprocess.run(['git', '-C', str(checkout), 'init', '-q'], check=True, env=env)
+(checkout.parent / 'richos-hq').symlink_to(record, target_is_directory=True)
+tracked = checkout / 'richos/engine/scripts/lib/audit-report-watch.py'
+tracked.parent.mkdir(parents=True)
+shutil.copy2(source, tracked)
+state = sandbox / 'checkout-default'
+r = run(tracked, state)
+assert r.returncode == 0 and (state / 'seen.json').is_file(), r.stderr
+shutil.rmtree(checkout / '.git')
+(checkout / '.git').write_text('gitdir: missing-git-directory\n')
+state = sandbox / 'broken-checkout'
+r = run(tracked, state)
+assert r.returncode == 2 and 'cannot resolve record repository' in r.stderr and not state.exists(), r
+PY
+)"; ROOT_RC=$?
+if [ "$ROOT_RC" = 0 ]; then
+    ok "extracted engines honor explicit repositories or stay quiet; checkout discovery still works and refuses broken Git"
+else
+    bad "record repository discovery works outside a checkout" "$ROOT_OUT"
+fi
 # THE HOOK GOVERNS A SANDBOX ENTITY, NEVER THE CHECKOUT IT RUNS FROM. Run with
 # its cwd in the engine and no entity of its own, notice-escalations.sh wrote
 # its per-session notice state (and escalations_deliver its delivered record)

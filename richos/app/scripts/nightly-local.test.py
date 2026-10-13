@@ -214,6 +214,28 @@ class LocalTests(unittest.TestCase):
         env["HOME"] = str(self.root / "isolated-home")
         self.assertEqual(m.M.load(env)["RICHOS_BULK_ROOT"], str(bulk))
 
+    def test_relative_cargo_environment_is_resolved_before_private_settings(self):
+        private = self.root / "machine.env"
+        private.write_text(f"CARGO_TARGET_DIR={self.root}/file-target\n")
+        source = {"HOME": str(self.root), "RICHOS_ENV_FILE": str(private),
+                  "CARGO_TARGET_DIR": "build output"}
+        original = dict(source)
+        cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            env = m.gate_environment(source, strict=False)
+            self.assertEqual(env["RICHOS_CARGO_CACHE_ROOT"], str(self.root / "build output"))
+            self.assertNotIn("CARGO_TARGET_DIR", env)
+            self.assertEqual(source, original)
+            source["RICHOS_CARGO_CACHE_ROOT"] = str(self.root / "explicit-cache")
+            self.assertEqual(m.gate_environment(source, strict=False)["RICHOS_CARGO_CACHE_ROOT"],
+                             str(self.root / "explicit-cache"))
+            private.write_text("CARGO_TARGET_DIR=relative-file-target\n")
+            with self.assertRaisesRegex(ValueError, "literal absolute path"):
+                m.gate_environment(source, strict=False)
+        finally:
+            os.chdir(cwd)
+
     def test_every_gate_runs_whole_whatever_checkout_or_shell_it_starts_from(self):
         # A runner started from a teammate workspace narrows to the branch's cases by default
         # (engine/scripts/lib/workspace_scope.py, 2026-10-01). A nightly never does: its gates
@@ -548,6 +570,67 @@ Path(sys.argv[1]).write_text(str(p.pid))
         text = (self.root / "run.log").read_text()
         self.assertIn("gates/fixture: admission", text)
         self.assertIn("a deadline counts execution only", text)
+
+    def test_missing_nested_marker_refuses_admission_without_charging_execution(self):
+        import owned_command as owned
+        clock = [0.0]
+        process = Mock(returncode=None, stdout=None, stderr=None)
+        finish = Mock()
+
+        def start(_args, **kw):
+            Path(kw['env'][owned.EXECUTION_MARKER_ENV]).with_name('admitted').touch()
+            return process
+
+        def wait(timeout):
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired(['fixture'], timeout)
+
+        process.communicate.side_effect = wait
+        with patch.object(owned.subprocess, 'Popen', side_effect=start), \
+                patch.object(owned.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                owned.owned_run(['fixture'], library=self.root, finish=finish,
+                                timeout=5, nested_wait=3, env={})
+        self.assertFalse(caught.exception.admitted)
+        self.assertEqual(caught.exception.execution_seconds, 0)
+        self.assertAlmostEqual(caught.exception.admission_seconds, 3, delta=owned.ADMISSION_POLL)
+        finish.assert_called_once_with(process)
+        runner = m.Runner(self.root, self.root, {}, io.StringIO())
+        with patch.object(m, 'owned_run', side_effect=caught.exception), \
+                self.assertRaisesRegex(m.GateNotAdmitted, 'nested execution admission was not confirmed'):
+            # load-bound: owned_run is mocked with the controlled-clock refusal above; no wall time is measured.
+            runner.command('fixture', timeout=5, nested_wait=3)
+
+    def test_nested_success_without_a_marker_is_not_a_pass(self):
+        import owned_command as owned
+        for status in (0, 1, 75):
+            with self.subTest(status=status):
+                process = Mock(returncode=status, stdout=None, stderr=None)
+                process.communicate.return_value = ('captured output', '')
+                finish = Mock()
+
+                def start(_args, **kw):
+                    scratch = Path(kw['env'][owned.EXECUTION_MARKER_ENV]).parent
+                    (scratch / 'admitted').touch()
+                    (scratch / 'timing.json').write_text(json.dumps({
+                        'admitted': True, 'admission_seconds': 1, 'execution_seconds': 50}))
+                    return process
+
+                with patch.object(owned.subprocess, 'Popen', side_effect=start):
+                    result = owned.owned_run(['fixture'], library=self.root, finish=finish,
+                                             timeout=5, nested_wait=3, env={})
+                self.assertEqual(result.returncode, status if status else 75)
+                self.assertEqual(result.stdout, 'captured output')
+                self.assertFalse(result.admitted)
+                self.assertEqual(result.execution_seconds, 0)
+                self.assertIn('marker was not received', result.admission_reason)
+                finish.assert_called_once_with(process)
+                if status == 0:
+                    runner = m.Runner(self.root, self.root, {}, io.StringIO())
+                    with patch.object(m, 'owned_run', return_value=result), \
+                            self.assertRaisesRegex(m.GateNotAdmitted, 'marker was not received'):
+                        # load-bound: owned_run returns the mocked result immediately; no wall time is measured.
+                        runner.command('fixture', timeout=5, nested_wait=3)
 
     def test_the_gate_line_says_admission_and_execution_and_a_refusal_says_nothing_ran(self):
         r = m.Runner(self.root, self.root / "state", {"PATH": "/usr/bin"}, io.StringIO(),
@@ -1257,7 +1340,7 @@ while True: time.sleep(.02)
 
     # ---- 2026-09-29: the build boots its own candidate in the test VM ----------------------
     def screenless_candidate(self, out):
-        info = {**self.CANDIDATE_INFO, "no_host_screen": True, "script_suites": {"suites": [
+        info = {**self.CANDIDATE_INFO, "no_host_screen": True, "screen_suites_required": True, "script_suites": {"suites": [
             {"name": "gui-boot.test.sh", "state": "not-run", "reason": "no screen"}]}}
         out.mkdir(parents=True, exist_ok=True)
         (out / "candidate.json").write_text(json.dumps({"info": info, "files": {}}))
@@ -1271,13 +1354,18 @@ while True: time.sleep(.02)
         def fake_command(*args, **kwargs):
             calls.append((args, kwargs))
             if args[2] == "build":
+                plan = json.loads(Path(args[args.index("--plan") + 1]).read_text())
+                self.assertIs(plan.get("screen_suites_required"), True,
+                              "the built candidate must retain the two-suite publication requirement")
                 self.screenless_candidate(Path(args[args.index("--out") + 1]))
             elif str(args[1]).endswith("gui-proof-in-vm.sh"):
                 proof = Path(args[args.index("--out") + 1])
                 proof.parent.mkdir(parents=True, exist_ok=True)
                 proof.write_text(f"richos-gui-proof 1\nsuite=shipped-bundle-boot\n"
                                  f"commit={self.CANDIDATE_INFO['source_commit']}\nwhere=vm:richos-test-1\n"
-                                 f"result={proof_result}\nat=2026-09-29T12:00:00Z\n--- output ---\n")
+                                 f"result={proof_result}\nfront-door_exit=0\ngui-boot_exit=0\n"
+                                 f"gui-boot_commit={self.CANDIDATE_INFO['source_commit']}\n"
+                                 "at=2026-09-29T12:00:00Z\n--- output ---\n")
                 if proof_result != "pass":
                     raise RuntimeError("bash failed (exit 1); see the run log")
         r.command = Mock(side_effect=fake_command)
@@ -2041,6 +2129,40 @@ while True: time.sleep(.02)
                         f"where={where}\nresult={result}\nat=2026-09-19T20:00:00Z\n"
                         "--- output ---\n  PASS  B1 the app booted\n")
         return path
+
+    def test_new_candidate_requires_both_screen_verdicts_even_after_a_gate_gui_pass(self):
+        for gate_state in ("passed", "not-run", None):
+            with self.subTest(gate_state=gate_state):
+                r, info = self.gui_candidate(gui_state=gate_state, no_host_screen=True)
+                info["screen_suites_required"] = True
+                self.assertTrue(r.needs_gui_proof(info))
+                with self.assertRaisesRegex(ValueError, "front-door exit 0"):
+                    r.require_gui_proof(info, self.proof(suite="shipped-bundle-boot"))
+
+    def test_screen_proof_keeps_failure_refusal_missing_result_and_source_mismatch_red(self):
+        r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
+        info["screen_suites_required"] = True
+        good = {"front-door_exit": "0", "gui-boot_exit": "0",
+                "gui-boot_commit": info["source_commit"]}
+        for key, value in (("front-door_exit", "1"), ("front-door_exit", "2"),
+                           ("gui-boot_exit", "1"), ("gui-boot_exit", "2"),
+                           ("gui-boot_exit", None), ("gui-boot_commit", "a" * 40)):
+            with self.subTest(key=key, value=value):
+                fields = {**good, key: value}
+                proof = self.proof(suite="shipped-bundle-boot")
+                proof.write_text(proof.read_text().replace("--- output ---",
+                    "".join(f"{k}={v}\n" for k, v in fields.items() if v is not None) + "--- output ---"))
+                with self.assertRaises(ValueError):
+                    r.require_gui_proof(info, proof)
+
+    def test_matching_two_suite_proof_is_accepted_for_new_candidate(self):
+        r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
+        info["screen_suites_required"] = True
+        proof = self.proof(suite="shipped-bundle-boot")
+        proof.write_text(proof.read_text().replace("--- output ---",
+            "front-door_exit=0\ngui-boot_exit=0\n"
+            f"gui-boot_commit={info['source_commit']}\n--- output ---"))
+        self.assertEqual(r.require_gui_proof(info, proof)["gui-boot_exit"], "0")
 
     def test_a_candidate_whose_gui_boot_did_not_run_is_refused_without_a_proof(self):
         """THE CASE THE WHOLE MODE TURNS ON.
