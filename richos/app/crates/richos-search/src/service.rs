@@ -178,7 +178,8 @@ pub struct SearchResponse {
     pub total: usize,
     pub offset: usize,
     pub hits: Vec<DocHit>,
-    /// Results on this page dropped because their file changed or left the folder.
+    /// Ranked results passed over while filling this page because their file changed or left
+    /// the folder. The page holds `limit` current results unless the list ran out first.
     pub dropped: usize,
     pub empty: Option<Empty>,
     /// The quoted spans and words the query was read as, for marking the excerpts.
@@ -542,8 +543,16 @@ impl SearchService {
             response.empty = Some(if request.strict && !parsed.spans.is_empty() { Empty::NoExact } else { Empty::NoMatch });
             return finish(response, started);
         }
+        // The page is filled from the rows after a dropped one, so an empty page means no
+        // current document is left from `offset` on, never that the first rows looked at had
+        // left the folder (fifth review: the first twelve deleted gave an empty first page and
+        // "No documents match." while two still matched). `offset + hits + dropped` is where
+        // this page stopped looking, the next page's offset.
         let limit = request.limit.clamp(1, MAX_PAGE);
-        for row in ranked.iter().skip(request.offset).take(limit) {
+        for row in ranked.iter().skip(request.offset) {
+            if response.hits.len() == limit {
+                break;
+            }
             let doc = &corpus.docs[row.doc];
             if !still_current(&corpus.root, doc) {
                 response.dropped += 1;

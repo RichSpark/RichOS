@@ -1236,10 +1236,11 @@ RICHOS_VOICE_LIVE_AUDIO=1 cargo test -p richos-voice   # all 359 run, incl. the 
 cargo run -p richos-voice --example device_probe       # what the audio hardware really is
 
 # Document search (Super Finder) — Qdrant Edge in process; its tests need no model:
-cargo test -p richos-search                     # 40 tests
+cargo test -p richos-search                     # 41 tests
 #     `tests/search_service.rs` drives the whole service over the synthetic stand-in folder
 #     (`tests/fixtures/standin/`) with the stand-in embedder: the four checkbox combinations,
-#     the truthful fallback, current-source checks, restart reconciliation and Open original.
+#     the truthful fallback, current-source checks, a page filled past results whose files
+#     left the folder, restart reconciliation and Open original.
 #     One unit test loads Apple's sentence embedding and says NOT RUN on a Mac without it.
 cargo run -p richos-search --bin richos-search-harness -- inventory --root <folder>
 #     The archive-search harness (search PRD v3.1, "Delivery and acceptance"): `inventory`,

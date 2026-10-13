@@ -7322,7 +7322,10 @@ function renderSearchResults(before) {
   group.appendChild(searchNode("span", null, "Documents"));
   group.appendChild(searchNode("span", "srch-group-mode", searchModeLabel(resp)));
   frag.appendChild(group);
-  if (!resp || resp.empty || !searchState.docs.length) {
+  // A page with no documents whose list goes on (every result on it had left the folder) is not
+  // "no documents": the tail loads the rest. Only an empty list that has ended says so.
+  const more = !!resp && !resp.empty && searchState.nextOffset < searchState.total;
+  if (!resp || resp.empty || (!searchState.docs.length && !more)) {
     frag.appendChild(searchDocumentsNote(resp));
   } else {
     for (const hit of searchState.docs) frag.appendChild(searchDocRow(hit, resp));
@@ -7493,6 +7496,11 @@ function watchSearchTail() {
       // A page whose results all left the folder still moves on; an empty page ends the list.
       searchState.nextOffset = next.hits.length || next.dropped ? request.offset + next.hits.length + next.dropped : searchState.total;
       searchState.resp = next;
+      if (!searchState.docs.length && !next.hits.length && searchState.nextOffset >= searchState.total) {
+        // Every result had left the folder: the list is empty after all, and says so.
+        renderSearchResults(null);
+        return;
+      }
       const old = el("srch-tail");
       const frag = document.createDocumentFragment();
       next.hits.forEach((hit, i) => {

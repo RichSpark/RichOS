@@ -266,6 +266,45 @@ async function main() {
       return keys.length + " documents, none repeated";
     });
 
+    await run.check("results whose files left the folder never hide the ones after them", async () => {
+      // The service fills a page past results whose files changed or left the folder
+      // (`crates/richos-search`'s own test); this is the palette's half. The stand-in answers
+      // as an unfilled page would: results ranked before `__goneBefore` have left the folder.
+      // A page with none left whose list goes on loads on, and "No documents match." is said
+      // only when nothing is left at all (fifth review: it was said with two matches behind it).
+      const p = await openApp(browser);
+      await p.evaluate(() => {
+        const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+        window.__goneBefore = 12;
+        window.RichBridge.invoke = async (cmd, args) => {
+          if (cmd !== "search_documents") return invoke(cmd, args);
+          const reply = await invoke(cmd, args);
+          const gone = Math.max(0, Math.min(reply.hits.length, window.__goneBefore - args.request.offset));
+          return { ...reply, hits: reply.hits.slice(gone), dropped: reply.dropped + gone };
+        };
+      });
+      await p.fill("#search-input", "subscription pricing");
+      await waitFor(p, "the documents after a gone first page never arrived", () => document.querySelectorAll("#search-results .srch-doc").length > 0
+        || /No documents match/.test((document.querySelector("#search-results .srch-note") || {}).textContent || ""));
+      const shown = await p.evaluate(() => ({
+        rows: document.querySelectorAll("#search-results .srch-doc").length,
+        note: (document.querySelector("#search-results .srch-note") || {}).textContent || "",
+      }));
+      assertEqual(shown.note, "", "no empty-list note while documents remain");
+      assertEqual(shown.rows, 12, "the second page's twelve documents");
+
+      // Every result gone: the empty pages are passed through and the list then says so,
+      // never a blank list or "That's all N documents." over no rows.
+      await p.evaluate(() => { window.__goneBefore = Infinity; });
+      await p.fill("#search-input", "subscription pricing notes");
+      await waitFor(p, "the empty list was never said", () => /No documents match/.test((document.querySelector("#search-results .srch-note") || {}).textContent || ""));
+      assertEqual(await p.evaluate(() => document.querySelectorAll("#search-results .srch-doc").length), 0, "no rows");
+      assertEqual(await p.evaluate(() => !!document.getElementById("srch-tail")), false, "no tail under the note");
+      assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
+      await p.close();
+      return "12 documents after a gone first page; an all-gone list says No documents match.";
+    });
+
     for (const [preset, line, mode] of [
       ["unavailable", "Super Finder unavailable; showing text matches", "words only, Super Finder unavailable"],
       ["none", "No search folder configured", ""],

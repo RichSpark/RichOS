@@ -190,6 +190,47 @@ fn changed_and_deleted_files_are_dropped_before_return_and_open() {
 }
 
 #[test]
+fn a_page_is_filled_past_dropped_results_so_later_matches_are_never_hidden() {
+    // The fifth review's fixture: more matches than a page, the whole first page deleted. A page
+    // taken before the dropped rows are removed came back empty ("No documents match." in the
+    // palette, nothing for Rich) while later matches were still in the folder.
+    let (folder, cache) = fixture_copy("dropped-page");
+    for i in 0..14 {
+        std::fs::write(folder.join(format!("refund-policy-{i:02}.md")), "# Refund policy\n\nRefund policy for the annual plan.\n").unwrap();
+    }
+    let service = start(&folder, &cache, Arc::new(AtomicUsize::new(0)));
+    let first = ask(&service, "refund policy", false, false);
+    assert_eq!(first.hits.len(), 12);
+    for h in &first.hits {
+        std::fs::remove_file(folder.join(&h.rel_path)).unwrap();
+    }
+    let page = ask(&service, "refund policy", false, false);
+    let surviving = page.total - 12;
+    assert!(surviving > 0, "the folder must still hold matches: total {}", page.total);
+    assert_eq!(page.dropped, 12);
+    assert_eq!(page.hits.len(), surviving.min(12), "the page is filled from the matches after the dropped ones");
+    assert!(page.hits.iter().all(|h| folder.join(&h.rel_path).is_file()));
+    // The next page starts where this one stopped looking (the palette's own sum) and holds the
+    // rest: every surviving match exactly once.
+    let next = service.search(&SearchRequest {
+        query: "refund policy".into(),
+        super_finder: false,
+        strict: false,
+        offset: page.offset + page.hits.len() + page.dropped,
+        limit: 12,
+    });
+    let mut all = files(&page);
+    all.extend(files(&next));
+    let mut once = all.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(once.len(), all.len(), "a match repeated across pages: {all:?}");
+    assert_eq!(all.len(), surviving, "every surviving match across the two pages");
+    service.shutdown();
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn restart_redoes_an_interrupted_file_and_keeps_completed_work() {
     let (folder, cache) = fixture_copy("restart");
     let calls = Arc::new(AtomicUsize::new(0));
