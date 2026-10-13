@@ -3634,8 +3634,7 @@ def config_from_env(process_only=False):
         if not process_only:
             machine_settings.apply()
         named_root = str(machine_settings.agent_root()) if not process_only else ""
-        cache_root = str(machine_settings.cache()) if not process_only else ""
-        cargo_roots = [str(machine_settings.cache("cargo-target", "CARGO_TARGET_DIR"))] if not process_only else []
+        cache_root, cargo_roots = build_caches().roots() if not process_only else ("", [])
     except (ValueError, OSError) as exc:
         raise Fatal(str(exc)) from exc
     def need(name):
