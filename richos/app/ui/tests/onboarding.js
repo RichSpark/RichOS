@@ -497,6 +497,44 @@ async function main() {
   });
 
   // -------------------------------------------------------------------------------------
+  // 9b. The company's name is shown exactly as he typed it (CEO, 2026-10-13: "I must be able
+  //     to spell something like "RchOS" and the capitalization must be preserved correctly").
+  // -------------------------------------------------------------------------------------
+
+  await run.check("9b  the company he adds is named exactly as he typed it, in the rail and in search", async () => {
+    // `innerText`, not `textContent`: it is the text AS PAINTED, so a CSS `text-transform`
+    // that re-capitalizes the name shows up here and not only on screen. A synthetic name
+    // with a mixed-case word, the shape of the one he typed.
+    const NAME = "Brightwave LABS";
+    const page = await openApp(browser, { onboarding: "not-yet", chosenEntity: null, memory: "none" });
+    await page.waitForSelector("#memory-setup:not([hidden])");
+    await page.click("#memory-setup-later");
+    await page.waitForSelector("#entity-picker:not([hidden])");
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("#entity-picker button")].find((x) => /add/i.test(x.textContent));
+      b.click();
+    });
+    await page.fill("#entity-add-name", NAME);
+    await page.click("#entity-add-go");
+    await page.waitForSelector("#first-run:not([hidden])");
+    const rail =await page.evaluate((name) => {
+      const label = [...document.querySelectorAll(".nav-group-label")].find((n) => n.textContent.trim() === name);
+      return label ? label.innerText.trim() : null;
+    }, NAME);
+    assertEqual(rail, NAME, "the rail paints the company's name exactly as he typed it");
+    await page.keyboard.press("Meta+k");
+    await page.waitForSelector("#search-input");
+    await page.fill("#search-input", "Brightwave");
+    await page.waitForSelector("#search-results .result-group");
+    const group = (await page.innerText("#search-results .result-group")).trim();
+    assertEqual(group, NAME, "search names the company exactly as he typed it");
+    bump(2);
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    await page.close();
+    return "rail and search both paint " + JSON.stringify(NAME);
+  });
+
+  // -------------------------------------------------------------------------------------
   // 10. It sits in the conversation's column, at every width the app has.
   // -------------------------------------------------------------------------------------
 
