@@ -27,4 +27,27 @@ final class ChannelWatchTests: XCTestCase {
         XCTAssertEqual(w.update(micDown: true, systemDown: false), [ChannelChange(channel: .systemAudio, stalled: false)])
         XCTAssertEqual(CaptureChannel.systemAudio.rawValue, "system-audio")
     }
+
+    // End-detection run 2 (2026-10-13): the microphone side was exactly zero for all 195 s, every
+    // health row green, and nothing said it.
+    func testAMicrophoneGivingExactSilenceIsSaidOnceAfterTenSecondsAndItsReturnOnce() {
+        var s = MicSilence()
+        var said: [String] = []
+        for _ in 0..<30 { if let x = s.update(micPeak: 0, micRunning: true) { said.append(x) } }
+        XCTAssertEqual(said, [MicSilence.silent])
+        XCTAssertTrue(MicSilence.silent.contains("microphone access may be turned off"))
+        XCTAssertEqual(s.update(micPeak: 0.002, micRunning: true), MicSilence.back)
+        XCTAssertNil(s.update(micPeak: 0.003, micRunning: true))
+    }
+
+    func testAQuietRoomOrAStoppedMicrophoneIsNotSilenceToSay() {
+        var s = MicSilence()
+        // A real microphone's noise floor is never exactly zero.
+        for _ in 0..<30 { XCTAssertNil(s.update(micPeak: 0.0001, micRunning: true)) }
+        // Nine zero seconds, then sound: nothing said.
+        for _ in 0..<9 { XCTAssertNil(s.update(micPeak: 0, micRunning: true)) }
+        XCTAssertNil(s.update(micPeak: 0.01, micRunning: true))
+        // A microphone that is not running is ChannelWatch's to say, not this.
+        for _ in 0..<30 { XCTAssertNil(s.update(micPeak: 0, micRunning: false)) }
+    }
 }

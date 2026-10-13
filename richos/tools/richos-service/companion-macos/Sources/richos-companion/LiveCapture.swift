@@ -69,6 +69,7 @@ func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32]) {
     var stalledSeconds = 0
     var systemAudioSeen = false
     var channels = ChannelWatch()
+    var micSilence = MicSilence()
     let health = DispatchSource.makeTimerSource(queue: timerQueue)
     health.schedule(deadline: .now() + 1.0, repeating: 1.0)
     health.setEventHandler {
@@ -87,6 +88,14 @@ func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32]) {
             Notifier.event("channel", [("channel", .string(change.channel.rawValue)),
                                        ("stalled", .bool(change.stalled)),
                                        ("message", .string(change.message))])
+        }
+        // A microphone that delivers exact digital silence: its access is most likely off.
+        if let said = micSilence.update(micPeak: mp, micRunning: capture.micRunning) {
+            let silent = said == MicSilence.silent
+            if silent { Notifier.alarm(said) } else { Notifier.info(said) }
+            Notifier.event("channel", [("channel", .string(CaptureChannel.microphone.rawValue)),
+                                       ("stalled", .bool(silent)),
+                                       ("message", .string(said))])
         }
         // Sound arrived through the system tap: the System Audio Recording grant exists (macOS
         // has no API to ask). Said once; the app may now show the voice bar's live level.

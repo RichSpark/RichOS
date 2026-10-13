@@ -35,6 +35,41 @@ public struct ChannelChange: Equatable {
     }
 }
 
+/// The microphone running but delivering exact digital silence: what macOS gives a process whose
+/// microphone access is off. A real microphone is never exactly zero for seconds on end (its own
+/// noise floor), so `seconds` of peak == 0 is said once, and said again only after sound has
+/// returned. Measured 2026-10-13 (end-detection run 2): the capture's microphone side was exactly
+/// zero for all 195 s while a known track played into it, and every health row said green.
+public struct MicSilence {
+    private let seconds: Int
+    private var zeroTicks = 0
+    private var said = false
+
+    public init(seconds: Int = 10) { self.seconds = seconds }
+
+    /// One health tick's microphone peak. Returns the change to say, if any.
+    public mutating func update(micPeak: Double, micRunning: Bool) -> String? {
+        guard micRunning else { zeroTicks = 0; return nil }
+        if micPeak == 0 {
+            zeroTicks += 1
+            if zeroTicks == seconds && !said {
+                said = true
+                return MicSilence.silent
+            }
+            return nil
+        }
+        zeroTicks = 0
+        if said {
+            said = false
+            return MicSilence.back
+        }
+        return nil
+    }
+
+    public static let silent = "The microphone is giving RichOS only silence; microphone access may be turned off for RichOS in System Settings."
+    public static let back = "The microphone is sending audio again."
+}
+
 /// Fed every health tick; returns only the changes.
 public struct ChannelWatch {
     private var micDown = false

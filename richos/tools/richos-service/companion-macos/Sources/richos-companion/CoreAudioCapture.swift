@@ -36,6 +36,7 @@ final class CoreAudioCapture {
     /// only once it has used audio, so `refreshExclusions()` re-checks once a second.
     private let excludePids: [Int32]
     private var excludedObjects: [AudioObjectID] = []
+    private var refusedObjects: [AudioObjectID]?
     private var tapDescription: CATapDescription?
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
@@ -119,7 +120,10 @@ final class CoreAudioCapture {
     func refreshExclusions() -> String? {
         guard let desc = tapDescription, tapID != kAudioObjectUnknown else { return nil }
         let now = excludedProcessObjects()
-        guard now != excludedObjects else { return nil }
+        // A set the tap already refused is not asked again every second: on a running tap macOS
+        // can answer '!hog' (OSStatus 560492391; end-detection run 2, 2026-10-13, 111 lines of it).
+        // The exclusions made at prepare() still hold; it is said once per new set.
+        guard now != excludedObjects, now != refusedObjects else { return nil }
         desc.processes = now
         var addr = AudioObjectPropertyAddress(mSelector: kAudioTapPropertyDescription,
                                               mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
@@ -131,7 +135,8 @@ final class CoreAudioCapture {
             excludedObjects = now
             return "system tap now excludes \(now.count) RichOS audio process(es)"
         }
-        return "could not update the system tap's exclusions (OSStatus \(status))"
+        refusedObjects = now
+        return "could not update the system tap's exclusions (OSStatus \(status)); the ones set at the start still hold"
     }
 
     // MARK: - System tap
