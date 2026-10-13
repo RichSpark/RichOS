@@ -31,12 +31,15 @@ settings file) by relaunch.py; the walk's own first launch has none.
                   for (the PRD's chat check during indexing; voice is not checked, the guest has
                   no microphone path); every source complete, each with one point per passage
                   and no point shared between two sources
-  modes           "the app felt slow on first open": with Super Finder checked the iPhone note,
-                  which shares none of those words, is listed; unchecked it is not, and the query
-                  stays; `cancel "30 days"` with Require quoted text checked lists only the note
-                  holding "30 days"; photographed, the first state in light and dark
-  open            the iPhone note chosen with the keyboard and Enter: the palette closes and the
-                  guest opens that file (Open original by source ID)
+  modes           "the kayak rental in Norway", which shares no word with any note: with Super
+                  Finder checked documents are listed (by meaning alone), unchecked "No documents
+                  match." and the query stays, checked again they are back; `cancel "30 days"`
+                  lists related wording, and with Require quoted text checked only the note
+                  holding "30 days"; photographed, the first state in light and dark. Which note
+                  Apple's model puts first is recorded, never required: a ranking on synthetic
+                  notes says nothing about his archive (the harness comparison is for that)
+  open            the exact-span note made active and opened with Enter: the palette closes and
+                  the guest opens that file (Open original by source ID)
   tool            Rich's tool exactly as claude reaches it (the app executable's --search-mcp
                   over stdio, to the running app's socket): the four checkbox combinations, the
                   mode that ran, coverage, and a forged `folder` argument refused
@@ -58,8 +61,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 STANDIN = HERE.parents[1] / 'crates' / 'richos-search' / 'tests' / 'fixtures' / 'standin'
 STEPS = ['identity', 'first-run', 'no-folder', 'missing-folder', 'backfill-kill', 'modes', 'open', 'tool']
-VAGUE = 'the app felt slow on first open'
-VAGUE_ANSWER = 'Why the iPhone build takes three seconds'
+# No note shares a word with it ("the" and "in" are stop words), so anything listed is listed by
+# meaning alone, and nothing is listed with Super Finder off. The harness found Apple's model
+# puts the Lisbon trip first on the stand-in (question s7); recorded here, never required.
+MEANING_ONLY = 'the kayak rental in Norway'
+MEANING_NEAREST = 'Planning the Lisbon conference trip'
 STRICT = 'cancel "30 days"'
 STRICT_ANSWER = 'Refund window for annual plans'
 STRICT_RELATED = 'Early draft of the refund rule'
@@ -89,8 +95,8 @@ def make_notes(folder, count):
 def tool_probe(exe, endpoint):
     """Rich's tool over its own stdio server, the way claude drives it, one process per call."""
     calls = [
-        {'query': VAGUE},
-        {'query': VAGUE, 'super_finder': False},
+        {'query': MEANING_ONLY},
+        {'query': MEANING_ONLY, 'super_finder': False},
         {'query': STRICT, 'strict': True},
         {'query': STRICT, 'super_finder': False, 'strict': True},
         {'query': 'refund', 'folder': '/'},
@@ -161,23 +167,28 @@ def build_walk(folders, guest, relaunch):
                 time.sleep(1)
             return False
 
-        BOXES = ('Super Finder', 'Require quoted text')
+        BOXES = {'Super Finder': 'srch-super', 'Require quoted text': 'srch-strict'}
 
         def checkbox(self, title):
             # A checkbox wrapped in its <label> carries its name in neither AXTitle nor
             # AXDescription (measured: `click --title "Super Finder" --role AXCheckBox` matched
-            # nothing in the open palette), so the two boxes are addressed by their order inside
-            # the palette, which round 26 fixes: Super Finder, then Require quoted text. The
-            # boxes' values before and after are recorded, so a click on the wrong one shows.
-            before = self.box_values()
-            self.ax('click', '--role', 'AXCheckBox', '--nth', str(self.BOXES.index(title)))
+            # nothing), and order is no address either: WebKit also exposes the aria-pressed
+            # toggles (both Output buttons, Talk to Rich) as AXCheckBox, and a click by order
+            # opened the Output panel and pressed Talk to Rich (measured). So each box is
+            # clicked by its DOM id, and its value before and after is recorded and must change.
+            box = self.BOXES[title]
+            before = self.box_value(box)
+            self.ax('click', '--id', box, '--role', 'AXCheckBox')
             time.sleep(3)
-            after = self.box_values()
+            after = self.box_value(box)
             self.facts.setdefault('checkbox_clicks', []).append({'box': title, 'before': before, 'after': after})
             self.save()
+            if before == after:
+                raise StepFailed(f'clicking {title} did not change it ({before})')
 
-        def box_values(self):
-            return [n.get('value') for n in self.nodes('--role', 'AXCheckBox')]
+        def box_value(self, box):
+            found = self.nodes('--id', box, '--role', 'AXCheckBox')
+            return found[0].get('value') if found else None
 
         def relaunch_with(self, root):
             self.env = {'RICHOS_SEARCH_DOCUMENTS_ROOT': root}
@@ -310,7 +321,7 @@ def build_walk(folders, guest, relaunch):
             per_source_ok = all(len(s['points']) == len(s['locators']) for s in final['sources'].values())
             if len(points) != len(set(points)) or not per_source_ok:
                 raise StepFailed('a point is shared between sources, or a source has a point per passage missing')
-            self.palette(VAGUE)
+            self.palette(MEANING_ONLY)
             if not self.says('Super Finder ready'):
                 raise StepFailed('the status line did not reach "Super Finder ready" after the relaunch')
             # Recorded, never fatal: a guest whose Claude login did not arrive cannot answer, and
@@ -322,25 +333,30 @@ def build_walk(folders, guest, relaunch):
                                             'indexing': sum(1 for s in (after_kill or {'sources': {}})['sources'].values() if s['state'] == 'indexing')},
                     'after_relaunch': {'sources': len(final['sources']), 'points': len(points), 'distinct_points': len(set(points))}}
 
+        def listed(self, mode_label):
+            """The Documents heading says `mode_label` and at least one document is listed."""
+            return self.says(mode_label, 20) and not self.text_on_screen('No documents match')
+
         def modes(self):
             out = {}
-            self.palette(VAGUE)
-            out['super_finder_on_lists_the_meaning_match'] = self.says(VAGUE_ANSWER, 20)
+            self.palette(MEANING_ONLY)
+            out['super_finder_on_lists_documents_by_meaning'] = self.listed('meaning and words')
+            out['recorded_nearest_is_lisbon'] = self.text_on_screen(MEANING_NEAREST)
             out['frames_on'] = self.both_themes('modes-on')
             self.checkbox('Super Finder')
-            out['super_finder_off_lists_it'] = self.text_on_screen(VAGUE_ANSWER)
-            out['query_kept'] = bool(self.nodes('--value', VAGUE, '--contains'))
+            out['super_finder_off_says_no_match'] = self.says('words only', 20) and self.says('No documents match', 20)
+            out['query_kept'] = bool(self.nodes('--value', MEANING_ONLY, '--contains'))
             self.shot('modes-off.png')
             self.checkbox('Super Finder')
-            out['back_on_lists_it'] = self.says(VAGUE_ANSWER, 20)
+            out['back_on_lists_documents'] = self.listed('meaning and words')
             self.palette(STRICT)
             out['loose_lists_related_wording'] = self.says(STRICT_RELATED, 20)
             self.checkbox('Require quoted text')
-            out['strict_lists_the_exact_one'] = self.text_on_screen(STRICT_ANSWER)
+            out['strict_lists_the_exact_one'] = self.says(STRICT_ANSWER, 20)
             out['strict_drops_related_wording'] = not self.text_on_screen(STRICT_RELATED)
             self.shot('modes-strict.png')
-            expected = {'super_finder_on_lists_the_meaning_match': True, 'super_finder_off_lists_it': False,
-                        'query_kept': True, 'back_on_lists_it': True, 'loose_lists_related_wording': True,
+            expected = {'super_finder_on_lists_documents_by_meaning': True, 'super_finder_off_says_no_match': True,
+                        'query_kept': True, 'back_on_lists_documents': True, 'loose_lists_related_wording': True,
                         'strict_lists_the_exact_one': True, 'strict_drops_related_wording': True}
             wrong = {k: out[k] for k, v in expected.items() if out[k] != v}
             if wrong:
@@ -349,12 +365,16 @@ def build_walk(folders, guest, relaunch):
 
         def open(self):
             before = guest(self.vm, 'ps -axo comm= | sort -u')
-            self.palette(VAGUE)
-            if not self.says(VAGUE_ANSWER, 20):
-                raise StepFailed('the meaning match is not listed')
-            # One click makes the row the active one (its passage and Open original show); Return
-            # then opens the active row, the keyboard path the palette's footer names.
-            self.ax('click', '--title', VAGUE_ANSWER, '--role', 'AXButton', '--contains', '--first')
+            # The exact-span note: listed first for this query whatever the model ranks, so the
+            # step tests Open original, not a ranking.
+            self.palette(STRICT)
+            if not self.says(STRICT_ANSWER, 20):
+                raise StepFailed('the exact-span note is not listed')
+            # The first document is the active row when the list is drawn (its passage and Open
+            # original show), and Return opens the active row: the keyboard path the palette's
+            # footer names. No click: a row is role="option", which accessibility exposes as
+            # static text, not a button (measured: `click --title ... --role AXButton` matched
+            # nothing, its near match an AXStaticText).
             time.sleep(1.5)
             self.shot('open-active-row.png')
             self.key('key code 36')
@@ -372,7 +392,7 @@ def build_walk(folders, guest, relaunch):
                 self.script('tell application ' + json.dumps(name) + ' to quit')
             if not viewers:
                 raise StepFailed('no application opened the document')
-            if not any('iphone-build-three-seconds' in w for w in windows.values()):
+            if not any('refund-window' in w for w in windows.values()):
                 raise StepFailed('the viewer did not open the chosen file: ' + json.dumps(windows))
             gone = guest(self.vm, 'ps -axo comm= | sort -u')
             left = [p for p in viewers if p in gone.splitlines()]
@@ -388,10 +408,16 @@ def build_walk(folders, guest, relaunch):
             (self.out / 'tool.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
             on, off, strict_on, strict_off, forged = rows
             problems = []
-            if not (on.get('effective', {}).get('super_finder') and any(r['path'] == '2025/iphone-build-three-seconds.md' for r in on.get('results', []))):
-                problems.append('Super Finder on did not find the meaning match')
-            if off.get('effective', {}).get('super_finder') is not False or any(r['path'] == '2025/iphone-build-three-seconds.md' for r in off.get('results', [])):
-                problems.append('Super Finder off ran meaning search or found the meaning match')
+            # A query no note shares a word with: on, every result is a meaning result; off,
+            # there are none. Which note leads is recorded, never required.
+            on_results = on.get('results', [])
+            if not (on.get('effective', {}).get('super_finder') and on_results and all(r['why'] == 'meaning' for r in on_results)):
+                problems.append('Super Finder on did not answer by meaning alone: ' + json.dumps(on_results))
+            if off.get('effective', {}).get('super_finder') is not False or off.get('results'):
+                problems.append('Super Finder off ran meaning search or listed something: ' + json.dumps(off.get('results')))
+            longest = max((r['excerpt_chars'] for x in rows[:4] for r in x.get('results', [])), default=0)
+            if longest > 602:
+                problems.append(f'an excerpt ran to {longest} characters')
             for r in (strict_on, strict_off):
                 if [x['path'] for x in r.get('results', [])] != ['2025/refund-window.md']:
                     problems.append('strict did not keep exactly the exact-span note: ' + json.dumps(r.get('results')))
@@ -399,7 +425,8 @@ def build_walk(folders, guest, relaunch):
                 problems.append('a forged folder argument was not refused')
             if problems:
                 raise StepFailed('; '.join(problems))
-            return {'calls': len(rows), 'wall_ms_including_process_start': [r['wall_ms_including_process_start'] for r in rows]}
+            return {'calls': len(rows), 'wall_ms_including_process_start': [r['wall_ms_including_process_start'] for r in rows],
+                    'on_first': on_results[0]['path'], 'longest_excerpt_chars': longest}
 
     return Walk, StepFailed
 
