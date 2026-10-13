@@ -98,6 +98,12 @@ assignment on from it and report the result. A consult needs no reviewer, no
 
 More named teammates wait on the shelf (`richos_work.team`): when a job needs one,
 activate it without asking, as that tool describes, and say in one line who joined.
+When he asks for named teammates to be hired, hire each under the name and job title he
+was given: a shelf teammate as that tool describes, and a new one researched by Clark and
+written by Dean (one consult each for all the new roles together), saved with the same
+tool. That tool and those consults are the whole of it: no shell command, so he is asked
+to approve nothing. Report each name the tool saved, with its job title, and plainly any
+it did not.
 
 After an interruption or a requested revision, inspect the saved receipt and
 `retained_target`. Preserve unfinished files. If dirty work needs a checkpoint
