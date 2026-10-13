@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""hire-walk.py — the onboarding interview ends with Rich proposing a team, and "go" hires it.
+
+Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
+
+  run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
+      hire-walk.py --out DIR --expect-sha SHA
+
+run-walk.py passes the owned VM name as the first argument. `--steps a,b,c` runs a subset, still
+as one run under run-walk.py.
+
+THE QUESTION. The CEO, 2026-10-13: "Why the fuck does Rich not already automatically auto-hire
+everyone he deems to be needed???", and the ending in his words: Rich names the five teammates
+he already has (Clark, Dean, Frank, Pierce, Reed), lists the new ones the interview calls for,
+and ends "Say go and I'll get them hired now." On go, they are hired in this install, and only
+the ones the app saved are named.
+
+WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
+  identity    the running app says it was built from --expect-sha
+  first-run   setup sheets declined, company "Acme" added, and "Start the questions" pressed
+  stock       a running lease's plugin registers the five every fresh install starts with
+  interview   the answers in ANSWERS typed one per finished turn (stage 4 names a marketing lead
+              and a bookkeeper), then "Let's wrap up the interview." until Rich's reply carries
+              "Say go and I'll get them hired now." PASS needs that reply to open with the five
+              and list, as bullets, a teammate for each role he asked for. Evidence: interview.json.
+  go          "Go." typed; the assignment it registers is followed until it closes (--hire-within).
+              PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
+              one named in what he was told, nobody named to him as a teammate who was not saved,
+              and no Approve card put in front of him along the way. Evidence: go-observed.json.
+  relaunch    command-walk.py's relaunch: the app stopped by pid and started again
+  roster      after the relaunch, the lease's roster holds the five and every hired teammate
+  approvals   last: the Approve cards the hiring put in front of him after his go, counted during
+              go and judged here so they do not hide the steps after it. Any fails.
+  delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs a back-end
+              dispatch receipt for THIS task's obligation naming that teammate, whose run handed back
+              an answer (consult_answer, set from the run's own hand-back or stop), and the task
+              closed settled with a result he was told. Evidence: delegate-observed.json.
+
+Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
+"""
+import argparse
+import importlib.util
+import json
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from relaunch import guest  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location('command_walk', HERE / 'command-walk.py')
+command_walk = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(command_walk)
+StepFailed = command_walk.StepFailed
+
+STEPS = ['identity', 'first-run', 'stock', 'interview', 'go', 'relaunch', 'roster', 'delegate', 'approvals']
+# The five every install registers (engine_profile.rs ALWAYS_ACTIVE), as the CEO's sentence names them.
+STOCK = {'clark': 'Senior Researcher', 'dean': 'HR Director', 'frank': 'Expert Advisor',
+         'pierce': 'Brief Checker', 'reed': 'Source-Reading'}
+GO_WORDS = "Say go and I'll get them hired now."
+# One answer per finished turn. A fictional coaching business; stage 4 names two specialists.
+ANSWERS = [
+    "Acme runs leadership coaching for managers at mid-size companies. It promises managers who can "
+    "lead their teams through change. The name is Acme.",
+    "One product: live coaching cohorts, plus a simple members website. One audience, the managers.",
+    "The website is on Squarespace, and I run everything myself with one part-time assistant.",
+    "I'd like a marketing lead who fills the cohorts, and a bookkeeper. That covers it.",
+    "Never share a client's coaching notes with anyone outside the company.",
+    "Pricing and any spend over $1,000 is my call. Scheduling and drafts you can decide.",
+]
+WRAP_UP = "Let's wrap up the interview."
+# The roles ANSWERS asks for in stage 4, each with the words a proposed job title may use for it.
+REQUESTED_ROLES = {'marketing lead': ('market',), 'bookkeeper': ('book', 'account', 'financ')}
+DELEGATE_TASK = ('Please ask {Name} to suggest three subject lines for our next newsletter to past '
+                 'coaching clients, and tell me what they suggest.')
+
+
+def turns_of(rows, thread):
+    """The conversation's visible turns in order: {turn, prompt, reply, done}, from the ledger rows."""
+    turns, by_id = [], {}
+    for r in rows:
+        event = r.get('event')
+        if event == 'PromptReceived' and r.get('thread_id') == thread and r.get('source') not in ('internal', 'proactive'):
+            t = {'turn': r['turn_id'], 'prompt': r.get('text', ''), 'reply': '', 'done': False, 'at': r.get('at')}
+            turns.append(t)
+            by_id[r['turn_id']] = t
+        elif event == 'AssistantDelta' and r.get('turn_id') in by_id:
+            by_id[r['turn_id']]['reply'] += r.get('text', '')
+        elif event in ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed') and r.get('turn_id') in by_id:
+            by_id[r['turn_id']]['done'] = True
+    return turns
+
+
+def proposed_teammates(reply):
+    """The new teammates in the end-of-interview message, one bullet each, "Name (Job title)":
+    [(name, the rest of the bullet line)]."""
+    tail = reply.split('following AI teammates', 1)[-1]
+    out = []
+    for line in tail.splitlines():
+        m = re.match(r'\s*(?:[-*•]|\d+[.)])\s+\**([A-Z][A-Za-z]+)\**\s*([(—:-].*)', line)
+        if m:
+            out.append((m.group(1).lower(), m.group(2)))
+    return out
+
+
+def proposed_names(reply):
+    return [name for name, _ in proposed_teammates(reply)]
+
+
+def proposal_verdict(reply):
+    """(proposed names, failures) for the reply that should end the interview. Every role he asked
+    for in stage 4 must be one of the proposed teammates' job titles."""
+    failures = []
+    if GO_WORDS not in reply.replace('’', "'"):
+        failures.append(f'the reply does not end with "{GO_WORDS}"')
+    if 'At the beginning, I already had these teammates on my AI team' not in reply.replace('’', "'"):
+        failures.append('the reply does not open the team message with the CEO\'s words')
+    for name, role in STOCK.items():
+        if f'{name.capitalize()} ({role}' not in reply:
+            failures.append(f'{name.capitalize()} ({role} ...) is not in the opening five')
+    proposed = proposed_teammates(reply)
+    if not proposed:
+        failures.append('no new teammate is listed as a bullet')
+    titles = [title.lower() for _, title in proposed]
+    for role, words in REQUESTED_ROLES.items():
+        if not any(w in t for t in titles for w in words):
+            failures.append(f'he asked for a {role} and no proposed teammate is one')
+    return [name for name, _ in proposed], failures
+
+
+# Words that open a sentence or name the company, never a teammate he is told about.
+# Words that open a sentence, stand in for a person or name the company, never a teammate: walk 9
+# of 2026-10-13 was told "Neither is on the team yet" and that read as a teammate called Neither.
+NOT_A_TEAMMATE = {'acme', 'rich', 'i', 'and', 'the', 'your', 'my', 'our', 'both', 'they', 'everyone', 'nobody',
+                  'neither', 'either', 'none', 'each', 'every', 'all', 'he', 'she', 'it', 'we', 'this', 'that',
+                  'these', 'those', 'someone', 'one', 'nothing', 'everything'}
+NAME = r'\*{0,2}([A-Z][a-z]{1,15})\*{0,2}'
+# A job title in parentheses: capitalized words only, such as "(Bookkeeper)", "(Marketing
+# Director)" or "(Source-Reading & Knowledge-Extraction Specialist)"; never "(a leadership firm)".
+TITLE = r'\(\s*[A-Z][A-Za-z]*(?:[ &/-]+[A-Z][A-Za-z]*)*\s*[;,)]'
+
+
+def claimed_names(told):
+    """Every name he was told about as a teammate: a name before its job title in parentheses
+    ("Bea (Bookkeeper)", "**Bea** (Bookkeeper)", "**Bea (Bookkeeper):**"), a bullet that opens with
+    a name and a colon or title, and each name in a list that "joined", "is on" or "are on" the
+    team ("Will and Bea joined", "Will, Nora and Bea are now on the team")."""
+    text = told or ''
+    names = set(re.findall(r'\b([A-Z][a-z]{1,15})\*{0,2}\s*' + TITLE, text))
+    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*(?::|\u2014|' + TITLE + ')', text))
+    joined = re.compile(r'((?:' + NAME + r'(?:\s*,\s*(?:and\s+)?|\s+and\s+))*' + NAME + r')'
+                        r'\s+(?:has\s+|have\s+)?(?:joined|(?:is|are)\s+(?:now\s+)?(?:on|part of))')
+    for m in joined.finditer(text):
+        names |= set(re.findall(r'[A-Z][a-z]{1,15}', m.group(1)))
+    return sorted({n.lower() for n in names} - NOT_A_TEAMMATE)
+
+
+def hired_verdict(proposed, saved, told):
+    """Every proposed teammate saved; every saved teammate named in what he was told; and nobody
+    he was told about as a teammate who is neither saved nor one of the five."""
+    failures = []
+    told_lower = (told or '').lower()
+    for claimed in claimed_names(told):
+        if claimed not in saved and claimed not in STOCK:
+            failures.append(f'he was told about {claimed.capitalize()} and no such teammate was saved')
+    for name in proposed:
+        if name not in saved:
+            failures.append(f'{name} was proposed and not saved in the team folder')
+    for name in saved:
+        if name not in told_lower:
+            failures.append(f'{name} was saved and not named in what he was told')
+    if not saved:
+        failures.append('nobody was saved in the team folder')
+    return failures
+
+
+def delegate_verdict(record, receipts, name):
+    """Why the task sent after the relaunch does NOT show `name` doing it ([] = it does).
+
+    The evidence is the back end's own dispatch receipts (engine/mega-lander/app.py, `folder`:
+    <app data>/engine-state/work-receipts/<hash>/*.json), taken only where the receipt's
+    obligation is THIS assignment's obligation, so another job's or another session's run of the
+    same teammate cannot count. A consult's answer is `consult_answer`, which the app sets only
+    from that run's own hand-back or its SubagentStop (`observe`), never from the Agent call's
+    immediate acknowledgment; it must say answered and carry a message."""
+    failures = []
+    notices = (record or {}).get('notices') or []
+    if not record or record.get('state') != 'settled':
+        failures.append(f"the task ended {(record or {}).get('state')}: {(record or {}).get('detail')}")
+    if any('No work was started' in n.get('text', '') for n in notices):
+        failures.append('he was told "No work was started"')
+    if not notices or not notices[-1].get('text', '').strip():
+        failures.append('he was told nothing about the result')
+    obligation = (record or {}).get('obligation_id')
+    mine = [r for r in receipts if obligation and (r.get('request') or {}).get('obligation_id') == obligation]
+    runs = [r for r in mine if (r.get('request') or {}).get('teammate') == name]
+    if not runs:
+        failures.append(f"no run of {name} was dispatched for this task; its runs were "
+                        f"{[(r.get('request') or {}).get('teammate') for r in mine]}")
+    answered = [r for r in runs if (r.get('consult_answer') or {}).get('answered')
+                and str((r.get('consult_answer') or {}).get('message', '')).strip()]
+    if runs and not answered:
+        failures.append(f'{name} was dispatched for this task and its run handed back no answer')
+    return failures
+
+
+def answer_of(receipts, record, name):
+    for r in receipts:
+        request = r.get('request') or {}
+        if request.get('obligation_id') == (record or {}).get('obligation_id') and request.get('teammate') == name:
+            answer = (r.get('consult_answer') or {}).get('message')
+            if answer:
+                return answer
+    return ''
+
+
+class HireWalk(command_walk.CommandWalk):
+    def type_into(self, text, *selector, app=None):
+        """One retry when the guest's accessibility read hits its own deadline (exit 124,
+        `guest_deadline`): walk 1 of 2026-10-13 stopped there with the host at 100% CPU. Typing
+        with --replace sets the field's whole value, so a second try cannot type it twice."""
+        # Walk 8 hit the deadline on two tries in a row while the just-launched app was busy, so up
+        # to four tries, 10 s apart.
+        for attempt in range(4):
+            try:
+                return super().type_into(text, *selector, app=app)
+            except StepFailed as exc:
+                if 'guest_deadline' not in str(exc) or attempt == 3:
+                    raise
+                time.sleep(10)
+
+    def present(self, title, role='AXButton', app=None):
+        """A read-only presence check whose accessibility read hit its own deadline counts as "not
+        seen yet" (walk 3 of 2026-10-13: `find --title Start the questions` exited 124 after 16.3 s
+        in the guest, host at 100% CPU), so the caller's own wait polls again until its limit."""
+        try:
+            return super().present(title, role, app)
+        except StepFailed as exc:
+            if '(124)' not in str(exc) and 'guest_deadline' not in str(exc):
+                raise
+            return False
+
+    def approve_if_asked(self, title):
+        """command-walk.py's one Approve press, searched by the start of the title, and a poll the
+        accessibility read could not answer in time counts as "not asked this time" (walk 2 of
+        2026-10-13: the search for a 150-character hiring title hit the read's 20 s deadline on a
+        host at 100% CPU and ended the step). The next poll asks again."""
+        try:
+            return super().approve_if_asked(title[:40])
+        except StepFailed as exc:
+            if '(124)' not in str(exc) and 'guest_deadline' not in str(exc):
+                raise
+            return False
+
+    def ledger(self):
+        text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
+        rows = []
+        for line in text.splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                pass
+        return rows
+
+    def turns(self):
+        return turns_of(self.ledger(), self.facts.get('thread'))
+
+    def told_since(self, since_ms):
+        """Every proactive message on the conversation since `since_ms`: how background results reach him."""
+        thread = self.facts.get('thread')
+        return [r.get('text', '') for r in self.ledger() if r.get('event') == 'ProactiveMessage'
+                and r.get('thread_id') == thread and r.get('at', 0) >= since_ms]
+
+    def wait_turns_done(self, count, seconds):
+        """Wait until at least `count` visible turns exist and the last is finished; return them."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            turns = self.turns()
+            if len(turns) >= count and turns[-1]['done']:
+                return turns
+            time.sleep(3)
+        raise StepFailed(f'turn {count} did not finish within {seconds:.0f} s')
+
+    def first_run(self):
+        self.decline_first_run_sheets()
+        guest(self.vm, 'mkdir -p ' + shlex.quote(self.company))
+        self.wait_for('Add this company')
+        self.type_into('Acme', '--role', 'AXTextField', '--title', "What's the company called?")
+        self.type_into(self.company, '--role', 'AXTextField', '--title', 'Its folder on this Mac')
+        self.press('Add this company')
+        self.wait_for('Start the questions', seconds=60)
+        self.press('Start the questions')
+        end = time.monotonic() + 60
+        while time.monotonic() < end:
+            created = [r for r in self.ledger() if r.get('event') == 'ThreadCreated']
+            if created:
+                self.facts['thread'] = created[0]['thread_id']
+                self.facts['thread_title'] = created[0].get('title')
+                self.save()
+                return {'thread': self.facts['thread'], 'title': self.facts['thread_title']}
+            time.sleep(1)
+        raise StepFailed('no conversation was created after the company was added')
+
+    def stock(self):
+        # The front desk's lease starts with the first conversation, and on a quick first run the
+        # walk gets here before it has (walk 5 of 2026-10-13): wait for it, bounded.
+        end, leases = time.monotonic() + 180, []
+        while time.monotonic() < end and not leases:
+            leases = self.leases()
+            if not leases:
+                time.sleep(3)
+        if not leases:
+            raise StepFailed('no running lease was found in the guest within 180 s')
+        missing = [n for n in STOCK for l in leases if f'./agents/{n}.md' not in (l.get('agents') or [])]
+        (self.out / 'stock-observed.json').write_text(json.dumps(leases, indent=2) + '\n')
+        if missing:
+            raise StepFailed('a running lease does not register: ' + ', '.join(sorted(set(missing))))
+        return {'leases': len(leases), 'registered': sorted(STOCK)}
+
+    def interview(self):
+        record = []
+        turns = self.wait_turns_done(1, self.a.turn_within)
+        record.append(turns[-1])
+        sends = list(ANSWERS) + [WRAP_UP] * 3
+        for text in sends:
+            if GO_WORDS in turns[-1]['reply'].replace('’', "'"):
+                break
+            self.send(text)
+            turns = self.wait_turns_done(len(turns) + 1, self.a.turn_within)
+            record.append(turns[-1])
+            (self.out / 'interview.json').write_text(json.dumps(record, indent=2) + '\n')
+        final = turns[-1]['reply']
+        names, failures = proposal_verdict(final)
+        self.facts['proposed'] = names
+        self.save()
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return {'turns': len(record), 'proposed': names, 'message': final}
+
+    def team_files(self):
+        listing = guest(self.vm, 'ls ' + shlex.quote(self.data + '/team') + ' 2>/dev/null || true')
+        return sorted(Path(n).stem for n in listing.split() if n.endswith('.md'))
+
+    def go(self):
+        proposed = self.facts.get('proposed') or []
+        if not proposed:
+            raise StepFailed('interview must have run (no proposed teammates on record)')
+        sent = self.send('Go.')
+        pressed = [0]
+        # The skill splits a long list into more than one hiring task, so every assignment
+        # registered after "Go." is followed until all of them have closed.
+        thread = self.facts.get('thread')
+        end, records = time.monotonic() + self.a.hire_within, []
+        while time.monotonic() < end:
+            records = [r for r in self.records() if r.get('thread_id') == thread and r.get('registered_at_ms', 0) >= sent[0]]
+            if records and all(r.get('state') not in command_walk.OPEN for r in records):
+                break
+            for r in records:
+                if r.get('state') in command_walk.OPEN and pressed[0] < self.a.approvals and self.approve_if_asked(r.get('title', '')):
+                    pressed[0] += 1
+            time.sleep(3)
+        records = [self.settled_read(r) for r in records]
+        saved = self.team_files()
+        told = [n.get('text', '') for r in records for n in r.get('notices', [])] + self.told_since(sent[0])
+        evidence = {'proposed': proposed, 'assignments': records, 'saved': saved, 'told': told,
+                    'approvals_pressed': pressed[0]}
+        (self.out / 'go-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        if not records:
+            raise StepFailed('"Go." registered no assignment')
+        still = [r.get('state') for r in records if r.get('state') in command_walk.OPEN]
+        if still:
+            raise StepFailed(f"the hiring was still {still} after {self.a.hire_within:g} s")
+        failures = hired_verdict(proposed, saved, '\n'.join(told))
+        # Counted here and judged in `approvals`, the last step, so one card does not hide whether
+        # relaunch, roster and delegation work.
+        self.facts['approvals_go'] = pressed[0]
+        self.save()
+        if failures:
+            raise StepFailed('; '.join(failures))
+        self.facts['hired'] = saved
+        self.save()
+        return {'hired': saved, 'states': [r.get('state') for r in records], 'told': told[-1] if told else ''}
+
+    def roster(self):
+        hired = self.facts.get('hired') or []
+        roster = sorted(Path(n).stem for n in guest(self.vm, 'ls ' + shlex.quote(
+            self.data + '/coordination/.claude/agents')).split())
+        missing = [n for n in list(STOCK) + hired if n not in roster]
+        if missing:
+            raise StepFailed('after the relaunch the roster lacks: ' + ', '.join(missing))
+        return {'roster': roster}
+
+    def approvals(self):
+        """The CEO says go and the team is hired: an Approve card put in front of him by the
+        hiring after his go fails. A card during the delegated task is reported, not judged here."""
+        go, delegate = self.facts.get('approvals_go'), self.facts.get('approvals_delegate')
+        if go is None:
+            raise StepFailed('go must have run (no approval count on record)')
+        if go:
+            raise StepFailed(f'he was asked to approve {go} step(s) of the hiring after his go '
+                             f'(and {delegate} during the delegated task); see callbacks.txt for the commands')
+        return {'approvals_during_hiring': go, 'approvals_during_delegated_task': delegate}
+
+    def receipts(self):
+        """The back end's dispatch receipts, read-only: request (teammate, role, obligation_id),
+        status and consult_answer, each bounded."""
+        script = ('import json,glob,sys\n'
+                  'out=[]\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/work-receipts/*/*.json"):\n'
+                  '    try: r=json.load(open(p))\n'
+                  '    except Exception: continue\n'
+                  '    q=r.get("request") or {}\n'
+                  '    a=r.get("consult_answer") or {}\n'
+                  '    out.append({"file":p.rsplit("/",2)[-1],"status":r.get("status"),\n'
+                  '                "request":{k:q.get(k) for k in ("teammate","role","obligation_id","title")},\n'
+                  '                "consult_answer":{"answered":a.get("answered"),"source":a.get("source"),\n'
+                  '                                  "message":str(a.get("message",""))[:4000]}})\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
+
+    def delegate(self):
+        hired = self.facts.get('hired') or []
+        if not hired:
+            raise StepFailed('go must have run (nobody hired on record)')
+        name = hired[0]
+        sent = self.send(DELEGATE_TASK.format(Name=name.capitalize()))
+        pressed = [0]
+        record = self.settled_read(self.until_closed(lambda: self.ours(sent), self.a.within, pressed))
+        receipts = self.receipts()
+        self.facts['approvals_delegate'] = pressed[0]
+        self.save()
+        evidence = {'teammate': name, 'assignment': record, 'receipts': receipts, 'approvals_pressed': pressed[0]}
+        (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        failures = delegate_verdict(record, receipts, name)
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return {'teammate': name, 'state': record.get('state'), 'answer': answer_of(receipts, record, name)[:1000],
+                'notice': record['notices'][-1].get('text', '')}
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('vm')
+    p.add_argument('--out', type=Path, required=True)
+    p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
+    p.add_argument('--turn-within', type=float, default=240, help='seconds for one interview turn to finish')
+    p.add_argument('--hire-within', type=float, default=2400, help='seconds for the hiring to close')
+    p.add_argument('--within', type=float, default=900, help='seconds for the delegated task to close')
+    p.add_argument('--approvals', type=int, default=3, help='most Approve presses on one assignment')
+    p.add_argument('--relaunch-within', type=float, default=120, help='seconds for the composer to come back')
+    p.add_argument('--steps', default=','.join(STEPS))
+    a = p.parse_args()
+    steps = a.steps.split(',')
+    unknown = [s for s in steps if s not in STEPS]
+    if unknown:
+        p.error('unknown step(s): ' + ', '.join(unknown))
+    walk = HireWalk(a)
+    report = {'vm': a.vm, 'expect_sha': a.expect_sha, 'steps': []}
+    ok = True
+    for step in steps:
+        began = time.monotonic()
+        row = {'step': step}
+        try:
+            row['evidence'] = getattr(walk, step.replace('-', '_'))()
+            row['outcome'] = 'PASS'
+        except (StepFailed, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError) as exc:
+            row['outcome'] = 'FAIL'
+            row['detail'] = str(exc)
+            ok = False
+        row['seconds'] = round(time.monotonic() - began, 1)
+        report['steps'].append(row)
+        (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+        print(f"{step}: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
+        if not ok:
+            break
+    try:
+        report['logs_kept'] = walk.keep_logs()
+    except (StepFailed, RuntimeError, subprocess.TimeoutExpired, OSError) as exc:
+        report['logs_kept'] = 'the guest logs could not be copied: ' + str(exc)
+    (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+    return 0 if ok else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
