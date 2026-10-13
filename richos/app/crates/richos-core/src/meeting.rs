@@ -38,11 +38,13 @@ use std::collections::BTreeSet;
 /// How long every process of the call's app must have been off the microphone before the call
 /// counts as ended; a mute, a silence, or a device switch inside a call must not reach it.
 ///
-/// `unverified:` 8 s is PROVISIONAL. The PRD orders the end-detection measurement first (native
-/// Zoom and a browser call through the Windows call lab: mute, unmute, silence, an idle app,
-/// hang-up), and as of this commit that measurement has not produced a call: the first guest run
-/// (2026-10-13) never got past Zoom's join preview. What settles it is the recorded `watch --trace`
-/// logs of those phases, replayed through this monitor.
+/// MEASURED (2026-10-13, real Zoom calls from a test VM guest against the Windows call lab;
+/// richos-hq `docs/verification/2026-10-13-granola-end-detection/`): the call app's input held
+/// through every mute (55 s native Zoom, 47 s Zoom in Chrome) and every minute of silence on both
+/// routes, with no gap at all inside a call, and stopped 2.6 s after the guest left, 3.2 to 4.0 s
+/// after the host ended the meeting and 1.8 s after the tab closed. An idle Zoom, an idle Chrome
+/// and played sounds never started input. 8 s is therefore longer than any in-call gap measured
+/// (none) and ends a recording within about 12 s of hang-up.
 pub const END_GRACE_MS: u64 = 8_000;
 
 /// One line of `richos-companion watch` (JSON lines on its stdout).
