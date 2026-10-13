@@ -663,6 +663,10 @@ richos/app/
                               canceller can reach on this host's speakers+Elgato (measured)
     src/fft.rs               512-point radix-2 FFT, hand-rolled (license: no vendored crate)
     src/endpoint.rs          utterance start/end, pre-roll ring, cough filter, 30.000 s cut
+    src/turn.rs              END OF HIS TURN, not of one stretch of speech: utterances are
+                              fragments, joined into one turn after 125 frames (2.000 s) of
+                              silence since his last word (nightly 54: a 1.406 s pause had made
+                              his first two words a turn of their own)
     src/noaudio.rs           post-open silent input: 188 frames (3.008 s) under -80.00 dBFS
     src/voiced.rs            DID THE MIC CARRY A VOICE? periodicity at a human pitch over
                               512-sample windows, hop 256. A transcript is refused unless the
@@ -687,6 +691,20 @@ richos/app/
                              (queued OR owed OR within the measured device hold, taint re-evaluated
                              every frame) admits none of it; the CEO after the answer and tap-to-stop
                              mid-answer are still admitted (positive controls).
+    tests/turn_on_the_ceos_rig.rs 8 tests: a sentence with his measured 1.406 s pause in it, on
+                              his room at his -18.1 dBFS (a synthetic voice, and his own private
+                              near-end recording), is ONE turn handed over 2.010 s after his
+                              last speech; the old rule made two, the first inside the pause.
+                              And the floor: an answer arriving while he has gone on after a
+                              longer pause is held, superseded, and never said; and a stretch
+                              cut at the 30.000 s window is not him stopping; and speech he
+                              resumes while Rich's answer is in synthesis is his, and Rich waits.
+                              every_way_his_turn_ends is the whole contract in one table: 8 ways
+                              a turn ends, each held to one turn per thought, nothing he said
+                              lost, Rich silent until he is done. And the onset-to-floor
+                              handoff on the app's own clocks (16 ms capture, 25 ms supervisor,
+                              10 ms speaker): a sentence ready at any moment of his first word
+                              never sounds over him
     tests/echo_path_replay.rs  the CEO's OWN echo path, recorded once and replayed with no
                               device: Mac mini speakers out, Elgato Wave:3 in, the path every
                               synthetic rig here fails to model. Pins that the canceller does
@@ -1222,7 +1240,7 @@ cargo test -p richos-core                       # 2004 tests + 5 doc-tests (2000
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 364 tests (4 live-device tests ignored without a device)
+cargo test -p richos-voice                      # 398 tests (4 live-device tests ignored without a device)
 #     …of which 325 RUN here and 4 report `ignored, LIVE AUDIO: …`, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test
