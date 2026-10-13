@@ -315,16 +315,29 @@ class HireWalk(command_walk.CommandWalk):
             raise StepFailed('interview must have run (no proposed teammates on record)')
         sent = self.send('Go.')
         pressed = [0]
-        record = self.settled_read(self.until_closed(lambda: self.ours(sent), self.a.hire_within, pressed))
+        # The skill splits a long list into more than one hiring task, so every assignment
+        # registered after "Go." is followed until all of them have closed.
+        thread = self.facts.get('thread')
+        end, records = time.monotonic() + self.a.hire_within, []
+        while time.monotonic() < end:
+            records = [r for r in self.records() if r.get('thread_id') == thread and r.get('registered_at_ms', 0) >= sent[0]]
+            if records and all(r.get('state') not in command_walk.OPEN for r in records):
+                break
+            for r in records:
+                if r.get('state') in command_walk.OPEN and pressed[0] < self.a.approvals and self.approve_if_asked(r.get('title', '')):
+                    pressed[0] += 1
+            time.sleep(3)
+        records = [self.settled_read(r) for r in records]
         saved = self.team_files()
-        told = [n.get('text', '') for n in (record or {}).get('notices', [])] + self.told_since(sent[0])
-        evidence = {'proposed': proposed, 'assignment': record, 'saved': saved, 'told': told,
+        told = [n.get('text', '') for r in records for n in r.get('notices', [])] + self.told_since(sent[0])
+        evidence = {'proposed': proposed, 'assignments': records, 'saved': saved, 'told': told,
                     'approvals_pressed': pressed[0]}
         (self.out / 'go-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
-        if not record:
+        if not records:
             raise StepFailed('"Go." registered no assignment')
-        if record.get('state') in command_walk.OPEN:
-            raise StepFailed(f"the hiring was still {record.get('state')} after {self.a.hire_within:g} s")
+        still = [r.get('state') for r in records if r.get('state') in command_walk.OPEN]
+        if still:
+            raise StepFailed(f"the hiring was still {still} after {self.a.hire_within:g} s")
         failures = hired_verdict(proposed, saved, '\n'.join(told))
         if pressed[0]:
             failures.append(f'he was asked to approve {pressed[0]} step(s) of the hiring after his go')
@@ -332,7 +345,7 @@ class HireWalk(command_walk.CommandWalk):
             raise StepFailed('; '.join(failures))
         self.facts['hired'] = saved
         self.save()
-        return {'hired': saved, 'state': record.get('state'), 'told': told[-1] if told else ''}
+        return {'hired': saved, 'states': [r.get('state') for r in records], 'told': told[-1] if told else ''}
 
     def roster(self):
         hired = self.facts.get('hired') or []
