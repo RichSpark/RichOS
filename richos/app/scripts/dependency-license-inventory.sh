@@ -87,9 +87,16 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 3
 fi
 
-# Every tracked lockfile, in sorted order, relative to the repository root.
+# Every tracked lockfile, in sorted order, relative to the repository root — except one a
+# vendored crate under richos/app/third-party/ was published with. That crate is a path
+# dependency of a RichOS workspace, and Cargo never reads a dependency's own lockfile: what it
+# really brings in is resolved in that workspace's lockfile and inventoried there, with the
+# vendored crate itself as a row (lib/dependency_license_inventory.py, VENDORED).
 LOCKS=()
-while IFS= read -r f; do [ -n "$f" ] && LOCKS+=("$f"); done <<EOF
+while IFS= read -r f; do
+  case "$f" in richos/app/third-party/*) continue ;; esac
+  [ -n "$f" ] && LOCKS+=("$f")
+done <<EOF
 $(cd "$ROOT" && git ls-files '*Cargo.lock' | LC_ALL=C sort)
 EOF
 

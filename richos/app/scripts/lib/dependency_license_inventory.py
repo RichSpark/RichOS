@@ -52,26 +52,42 @@ LICENSE_CLASS = {
     "Apache-2.0 / MIT": "permissive",
     "Apache-2.0 AND ISC": "permissive",
     "Apache-2.0 AND MIT": "permissive",
+    # Reviewed 2026-10-13 when Qdrant Edge (document search) arrived: Apache-2.0 is the branch
+    # taken; BSL-1.0 would serve too.
+    "Apache-2.0 OR BSL-1.0": "permissive",
+    # Reviewed 2026-10-13 (self_cell, via Qdrant Edge): Apache-2.0 is the branch taken. The
+    # GPL-2.0-only branch is NOT one RichOS could take, because it does not combine with
+    # AGPL-3.0-only; the Apache-2.0 offer is what makes this package acceptable.
+    "Apache-2.0 OR GPL-2.0-only": "permissive",
     "Apache-2.0 OR ISC OR MIT": "permissive",
     "Apache-2.0 OR MIT": "permissive",
+    "Apache-2.0 OR MIT OR Zlib": "permissive",
     "Apache-2.0 WITH LLVM-exception": "permissive",
     "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT": "permissive",
     "Apache-2.0/MIT": "permissive",
+    # Reviewed 2026-10-13 (Qdrant Edge's tree): BSD-2-Clause and the Boost license BSL-1.0 are
+    # attribution-only and listed by the FSF as GPL-compatible; the rest offer or combine only
+    # permissive terms.
+    "BSD-2-Clause": "permissive",
+    "BSD-2-Clause OR Apache-2.0 OR MIT": "permissive",
     "BSD-2-Clause OR MIT OR Apache-2.0": "permissive",
     "BSD-3-Clause": "permissive",
     "BSD-3-Clause AND MIT": "permissive",
     "BSD-3-Clause OR MIT OR Apache-2.0": "permissive",
     "BSD-3-Clause/MIT": "permissive",
+    "BSL-1.0": "permissive",
     "CC0-1.0": "permissive",
     "CC0-1.0 OR MIT-0 OR Apache-2.0": "permissive",
     "CDLA-Permissive-2.0": "data",
     "ISC": "permissive",
     "MIT": "permissive",
+    "MIT AND BSD-3-Clause": "permissive",
     "MIT OR Apache-2.0": "permissive",
     "MIT OR Apache-2.0 OR LGPL-2.1-or-later": "permissive",
     "MIT OR Apache-2.0 OR Zlib": "permissive",
     "MIT OR Zlib OR Apache-2.0": "permissive",
     "MIT/Apache-2.0": "permissive",
+    "MIT/BSD-3-Clause": "permissive",
     "MPL-2.0": "file-copyleft",
     "Unicode-3.0": "permissive",
     "Unlicense OR MIT": "permissive",
@@ -88,6 +104,18 @@ CLASS_NOTE = {
     ),
     "data": "A permissive license over data rather than code. No reciprocal obligation.",
 }
+
+
+# Third-party crates kept in the repository (richos/app/third-party/<crate>/, each with its
+# upstream LICENSE and a RICHOS-PATCH.md). Cargo sees them as path dependencies, the same as
+# RichOS's own crates, but their terms are the publisher's, so they are rows here like any
+# registry package.
+VENDORED = "richos/app/third-party/"
+
+
+def vendored(root, pkg):
+    rel = os.path.relpath(os.path.realpath(pkg["manifest_path"]), os.path.realpath(root)).replace(os.sep, "/")
+    return rel.startswith(VENDORED)
 
 
 def die(msg):
@@ -167,7 +195,7 @@ def main(argv):
             builds |= reachable(tmeta, {None, "build"})
 
         for pkg in full["packages"]:
-            if pkg.get("source") is None:
+            if pkg.get("source") is None and not vendored(root, pkg):
                 continue  # a workspace member or a path dependency: RichOS's own code
             key = (pkg["name"], pkg["version"])
             entry = packages.setdefault(

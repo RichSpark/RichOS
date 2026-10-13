@@ -1938,6 +1938,10 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             "type": "stdio", "command": executable,
             "args": ["--status-mcp", status_scope]
         });
+        // **RICH'S DOCUMENT SEARCH** (`search_tools.rs`, search PRD v3.1): the CEO's own
+        // conversation only, and only once the app's search socket is serving. The work lease
+        // never gets it (*"Other company or worker bindings receive no archive access."*).
+        search_server(&mut config, executable, role, crate::search_tools::endpoint_file());
         // **HIS TEAM'S TOOLS, on an operator install only** (operator back-end spec r3 (d),
         // (o); the operator-client record's §7 item 2): stop named agents, stop his team's
         // turn, read what it is doing. `operator_desk` is `None` on every product install, so
@@ -1970,6 +1974,21 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             "args":[profile.engine.join("mega-lander/app.py"),scope], "env":{"PYTHONDONTWRITEBYTECODE":"1"}});
     }
     config
+}
+
+/// Add `richos_search` to a CONVERSATION lease's servers when the app serves document search,
+/// and to no other lease. Separate from [`mcp_config`] so a test can name the endpoint without
+/// the process-wide one.
+fn search_server(config: &mut Value, executable: &Path, role: LeaseRole, endpoint: Option<&Path>) {
+    if role != LeaseRole::Conversation {
+        return;
+    }
+    if let Some(endpoint) = endpoint {
+        config["mcpServers"][crate::search_tools::SERVER_NAME] = json!({
+            "type": "stdio", "command": executable,
+            "args": ["--search-mcp", endpoint]
+        });
+    }
 }
 
 impl NativeClient {
@@ -5151,6 +5170,23 @@ done
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Work, Path::new("claude"));
         assert!(work["mcpServers"].get(crate::operator_desk_tools::SERVER_NAME).is_none(), "the back end stops nothing of his");
         if let Err(error) = std::fs::remove_dir_all(&root) { eprintln!("fixture cleanup: {error}"); }
+    }
+
+    /// **Rich's document search goes to his conversation and nowhere else** (search PRD v3.1:
+    /// *"Other company or worker bindings receive no archive access."*), and only once the app
+    /// serves it: no endpoint, no server entry.
+    #[test]
+    fn the_search_tool_is_offered_to_the_conversation_only_and_only_with_an_endpoint() {
+        let executable = Path::new("/Applications/RichOS.app/Contents/MacOS/RichOS");
+        let endpoint = Path::new("/fixture/search-endpoint.json");
+        let mut chat = json!({"mcpServers": {}});
+        search_server(&mut chat, executable, LeaseRole::Conversation, None);
+        assert!(chat["mcpServers"].get(crate::search_tools::SERVER_NAME).is_none());
+        search_server(&mut chat, executable, LeaseRole::Conversation, Some(endpoint));
+        assert_eq!(chat["mcpServers"][crate::search_tools::SERVER_NAME]["args"], json!(["--search-mcp", endpoint]));
+        let mut work = json!({"mcpServers": {}});
+        search_server(&mut work, executable, LeaseRole::Work, Some(endpoint));
+        assert!(work["mcpServers"].get(crate::search_tools::SERVER_NAME).is_none(), "a worker got the CEO's archive");
     }
 
     #[test]

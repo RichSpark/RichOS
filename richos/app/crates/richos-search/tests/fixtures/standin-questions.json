@@ -1,0 +1,18 @@
+{
+  "about": "Synthetic questions over tests/fixtures/standin, for exercising the harness only. The CEO's real questions and their answers live in richos-hq, never here.",
+  "questions": [
+    {"id": "s1", "kind": "forgotten-term", "query": "the app felt slow on first open",
+     "expected": [{"file": "2025/iphone-build-three-seconds.md", "passage_contains": "Three seconds at launch"}]},
+    {"id": "s2", "kind": "forgotten-term", "query": "what did we decide about giving money back",
+     "expected": [{"file": "2025/refund-window.md", "passage_contains": "money comes back"}]},
+    {"id": "s3", "kind": "quoted", "query": "cancel \"30 days\"", "strict": true,
+     "expected": [{"file": "2025/refund-window.md", "passage_contains": "30 days"}]},
+    {"id": "s4", "kind": "identifier", "query": "\"INV-2049\"", "strict": true,
+     "expected": [{"file": "2025/invoice-inv-2049.md", "passage_contains": "INV-2049"}]},
+    {"id": "s5", "kind": "late-answer", "query": "which subject line won the welcome emails",
+     "expected": [{"file": "2024/onboarding-email-brainstorm.md", "passage_contains": "Your first week, in three steps"}]},
+    {"id": "s6", "kind": "forgotten-term", "query": "the first word gets lost when I talk",
+     "expected": [{"file": "2025/voice-dictation.md", "passage_contains": "first word"}]},
+    {"id": "s7", "kind": "no-answer", "query": "the kayak rental in Norway", "expected": []}
+  ]
+}

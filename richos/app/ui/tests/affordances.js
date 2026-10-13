@@ -1141,7 +1141,8 @@ const FIXTURES = {
     await page.click("#nav-search");
     await page.waitForSelector("#search-overlay:not([hidden])");
     await page.fill("#search-input", "zzzqqqxyzzy");
-    await page.waitForSelector("#search-empty:not([hidden])");
+    // No company, thread or message matches, and the Documents section says no document does.
+    await page.waitForSelector("#search-results .srch-note");
     return page;
   },
 

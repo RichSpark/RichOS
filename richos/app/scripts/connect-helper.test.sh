@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('helper',Path(sys.argv[1])/'prepare-connect-helper.py')
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-scratch=Path(tempfile.mkdtemp(prefix='connect-helper-'))
+scratch=Path(tempfile.mkdtemp(prefix='connect-helper-')).resolve()
 try:
     binary=b'fixture executable'
     data=io.BytesIO()

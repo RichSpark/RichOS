@@ -18,8 +18,16 @@ pub const KEYS: &[&str] = &[
     "RICHOS_PHYSICAL_PRODUCTS",
     "GRADLE_USER_HOME",
     "RICHOS_ENGINE_CHECK_PROOF_DIR", "RICHOS_CAMPAIGN_PARENT",
+    "RICHOS_SEARCH_DOCUMENTS_ROOT",
 ];
 pub const RESOLVED: &str = "RICHOS_MACHINE_SETTINGS_RESOLVED";
+/// **The document folder the CEO opted into search, and no child process inherits it** (search
+/// PRD v3.1, "Goal and first version": *"Setting it explicitly opts that folder into the CEO's
+/// private archive search and CEO-bound Rich tool. Other company or worker bindings receive no
+/// archive access."*). It is read by the app for its own search service only; the engine, its
+/// workers and the nightly's gates never receive it through [`Settings::environment`], so the
+/// path to a private archive does not travel with every job.
+pub const NOT_FORWARDED: &[&str] = &["RICHOS_SEARCH_DOCUMENTS_ROOT"];
 const EXAMPLE: &str = include_str!("../../../../engine/.env.example");
 
 #[derive(Clone, Debug, Default)]
@@ -91,8 +99,36 @@ impl Settings {
 
     pub fn environment(&self) -> BTreeMap<String, String> {
         let mut values = self.0.clone();
+        for key in NOT_FORWARDED {
+            values.remove(*key);
+        }
         values.insert(RESOLVED.into(), "1".into());
         values
+    }
+
+    /// The folder the CEO included in document search, or `None` when he has not set one.
+    /// Never defaulted: unset means no folder is searched (search PRD v3.1).
+    pub fn search_documents_root(&self) -> Option<PathBuf> {
+        self.0.get("RICHOS_SEARCH_DOCUMENTS_ROOT").map(PathBuf::from)
+    }
+
+    /// **The shared cache location for one named cache**, the same resolution as the engine's
+    /// `machine_settings.py cache <name>`: `${RICHOS_BULK_ROOT}/caches/<name>` when the bulk
+    /// root is set, otherwise `~/Library/Caches/RichOS/<name>` on macOS (`~/.cache/richos/<name>`
+    /// elsewhere). A configured bulk root that is missing, unmounted or not a folder is an error
+    /// naming it, never a quiet fall back to the default: a silently relocated cache hides a
+    /// storage failure.
+    pub fn cache(&self, home: &Path, name: &str) -> Result<PathBuf, String> {
+        if let Some(bulk) = self.0.get("RICHOS_BULK_ROOT") {
+            let root = validate_existing_storage(Path::new(bulk))
+                .map_err(|error| format!("RICHOS_BULK_ROOT {bulk} is not usable: {error}"))?;
+            if !root.is_dir() {
+                return Err(format!("RICHOS_BULK_ROOT {bulk} is not a folder"));
+            }
+            return Ok(root.join("caches").join(name));
+        }
+        let base = if cfg!(target_os = "macos") { home.join("Library/Caches/RichOS") } else { home.join(".cache/richos") };
+        Ok(base.join(name))
     }
 
     pub fn agent_root(&self) -> PathBuf {
@@ -158,8 +194,36 @@ mod tests {
         let complete = KEYS.iter().map(|key| format!("{key}=/work data/clé")).collect::<Vec<_>>().join("\n");
         let settings = parse(&complete).unwrap();
         let forwarded = settings.environment();
-        for key in KEYS { assert_eq!(forwarded.get(*key).unwrap(), "/work data/clé"); }
-        assert_eq!(forwarded.len(), KEYS.len() + 1);
+        for key in KEYS {
+            if NOT_FORWARDED.contains(key) {
+                assert!(!forwarded.contains_key(*key), "{key} must never reach a child process");
+            } else {
+                assert_eq!(forwarded.get(*key).unwrap(), "/work data/clé");
+            }
+        }
+        assert_eq!(forwarded.len(), KEYS.len() - NOT_FORWARDED.len() + 1);
+    }
+    #[test]
+    fn search_documents_root_is_read_but_never_forwarded() {
+        let settings = parse("RICHOS_SEARCH_DOCUMENTS_ROOT=/private archive/chats\n").unwrap();
+        assert_eq!(settings.search_documents_root(), Some(PathBuf::from("/private archive/chats")));
+        assert!(!settings.environment().contains_key("RICHOS_SEARCH_DOCUMENTS_ROOT"));
+        assert_eq!(parse("").unwrap().search_documents_root(), None);
+        assert!(parse("RICHOS_SEARCH_DOCUMENTS_ROOT=relative/chats\n").is_err());
+    }
+    #[test]
+    fn named_cache_follows_the_bulk_root_or_the_platform_default_and_never_relocates() {
+        let home = Path::new("/home of someone");
+        let unset = Settings::default().cache(home, "search").unwrap();
+        let expected = if cfg!(target_os = "macos") { "/home of someone/Library/Caches/RichOS/search" } else { "/home of someone/.cache/richos/search" };
+        assert_eq!(unset, PathBuf::from(expected));
+        let bulk = std::env::temp_dir().join(format!("bulk-cache-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&bulk).unwrap();
+        let settings = parse(&format!("RICHOS_BULK_ROOT={}\n", bulk.display())).unwrap();
+        assert_eq!(settings.cache(home, "search").unwrap(), bulk.canonicalize().unwrap().join("caches/search"));
+        std::fs::remove_dir_all(&bulk).unwrap();
+        let missing = settings.cache(home, "search").unwrap_err();
+        assert!(missing.contains("RICHOS_BULK_ROOT"), "{missing}");
     }
     #[test]
     fn legacy_android_key_is_forwarded_with_explicit_current_name_priority() {

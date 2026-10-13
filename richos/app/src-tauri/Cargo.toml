@@ -73,6 +73,11 @@ richos-user-update = { path = "../crates/richos-user-update" }
 # Voice mode: native audio (cpal) + local whisper.cpp + macOS `say`. Kept OUT of the
 # richos-core workspace so `cargo test -p richos-core` never builds an audio stack.
 richos-voice = { path = "../crates/richos-voice" }
+# DOCUMENT SEARCH (search PRD v3.1): the palette's Documents section, Super Finder and the
+# service Rich's search tool reaches. Brings Qdrant Edge 0.8.0 and its dependency tree into
+# this binary, from the vendored copy patched in at the end of this file
+# (third-party/qdrant-edge/RICHOS-PATCH.md says why it is vendored).
+richos-search = { path = "../crates/richos-search" }
 # THE UPDATE PATH (src/updates.rs). Its minisign verification — `minisign_verify` inside
 # `Update::download` — is the only thing standing between a manifest URL and code running
 # on the CEO's Mac, so it is a pinned floor rather than a bare "2".
@@ -282,3 +287,8 @@ unused_must_use = "warn"
 let_underscore_future = "warn"
 let_underscore_must_use = "warn"
 await_holding_lock = "warn"
+
+# The same vendored Qdrant Edge the workspace above uses (this workspace is detached, so a
+# patch there does not reach here). Why: third-party/qdrant-edge/RICHOS-PATCH.md.
+[patch.crates-io]
+qdrant-edge = { path = "../third-party/qdrant-edge" }

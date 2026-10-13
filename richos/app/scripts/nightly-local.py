@@ -783,7 +783,7 @@ GATE_PASSTHROUGH = (
     # Cargo's input alias is normalized to RICHOS_CARGO_CACHE_ROOT below; each
     # workspace still chooses its own keyed CARGO_TARGET_DIR.
     "RICHOS_ENV_FILE",
-) + tuple(name for name in M.KEYS if name != "CARGO_TARGET_DIR")
+) + tuple(name for name in M.KEYS if name != "CARGO_TARGET_DIR" and name not in M.NOT_FORWARDED)
 
 # WHAT THIS SCRIPT SETS FOR EVERY GATE, whatever the shell held. Declared as names here so
 # that `run-tests.test.sh` case E1 -- which re-runs the whole suite under the environment a
@@ -807,7 +807,7 @@ GATE_SET_BY_BUILD = (
     # Set by Runner.runtime() beside it: the pinned speech models gui-boot's healthy machine
     # needs now that the video tools are a setup essential (lib/runtime_cache.py).
     "RICHOS_GUI_SPEECH_MODELS",
-) + tuple(name for name in M.KEYS if name != "CARGO_TARGET_DIR") + (M.RESOLVED,)
+) + tuple(name for name in M.KEYS if name != "CARGO_TARGET_DIR" and name not in M.NOT_FORWARDED) + (M.RESOLVED,)
 
 # WHAT THIS SCRIPT SETS FOR ONE STEP ONLY, at that step's own call site, through
 # `command(env_extra=...)`. These never come from the shell -- that is the point of them --
@@ -962,6 +962,10 @@ def gate_environment(environ, run_id=None, strict=True):
         environ["CARGO_TARGET_DIR"] = str(Path(cargo).resolve())
     env = {name: environ[name] for name in GATE_PASSTHROUGH if name in environ}
     settings = M.load(environ)
+    # The CEO's search folder never reaches a gate: a gate that launches the app must search
+    # its own fixture, not his private archive (machine_settings.NOT_FORWARDED).
+    for name in M.NOT_FORWARDED:
+        settings.pop(name, None)
     cargo = settings.pop("CARGO_TARGET_DIR", None)
     if cargo:
         settings.setdefault("RICHOS_CARGO_CACHE_ROOT", cargo)

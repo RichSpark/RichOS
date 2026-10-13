@@ -77,7 +77,6 @@ const composerBlockedEl = el("composer-blocked");
 const searchOverlayEl = el("search-overlay");
 const searchInputEl = el("search-input");
 const searchResultsEl = el("search-results");
-const searchEmptyEl = el("search-empty");
 const entityPickerEl = el("entity-picker");
 /// The first-run company question's "Not now" and the line saying what it costs (D5).
 const entityPickerDeferEl = el("entity-picker-defer");
@@ -6908,27 +6907,86 @@ window.RichSettings.registerMemory({
 });
 
 // ---------------------------------------------------------------------------------------
-// Search (§3.4) — a command-palette overlay, grouped by entity, fully keyboard-driven.
-// The MATCH runs in Rust (`search_nav`); only bounded excerpts cross the IPC boundary, so
-// this never loads thread bodies into the renderer.
+// Search (§3.4) — a command-palette overlay, grouped by entity, fully keyboard-driven, with
+// the Documents section, Super Finder and Require quoted text of the search PRD v3.1, built
+// as the CEO's chosen design shows them (richos-hq `design/mockups/rounds/round-26/`).
+//
+// Two commands answer one query. `search_nav` matches companies, threads and messages and is
+// unchanged by either checkbox (the PRD: *"Existing entity, thread and message search keeps
+// its current behavior in both modes"*). `search_documents` returns the Documents section, a
+// page at a time; more pages load as the list is scrolled, never through page controls.
+//
+// REQUEST IDENTITY. Every search takes a ticket (`searchState.gen`) and a reply is drawn only
+// if its ticket is still the latest: typing, toggling either checkbox, scrolling for more and
+// closing the palette all move the ticket, so a late reply cannot bring back an older query or
+// mode (the PRD's request-identity guarantee, for both checkbox modes).
 // ---------------------------------------------------------------------------------------
-let searchHits = [];
-let searchIndex = -1;
-let searchTimer = null;
+const searchSuperEl = el("srch-super");
+const searchStrictEl = el("srch-strict");
+const searchHeadEl = el("srch-head");
+const searchCountEl = el("srch-count");
+const searchStatusEl = el("srch-status");
+const searchStatusTextEl = el("srch-status-text");
+const searchProgressEl = el("srch-progress");
+const searchHintEl = el("search-hint");
+
+const SEARCH_PAGE = 12;
+const searchState = {
+  gen: 0,
+  open: false,
+  navHits: [],
+  docs: [],
+  total: 0,
+  resp: null,
+  items: [],
+  active: -1,
+  timer: null,
+  more: null,
+  status: null,
+  statusTimer: null,
+  /// Where the next page of documents starts in the whole ranked list.
+  nextOffset: 0,
+  /// The index generation the shown list was ranked by (the service's `status.generation`).
+  sourceGen: null,
+};
+
+function searchReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 function openSearch() {
   searchOverlayEl.hidden = false;
+  searchState.open = true;
+  searchState.gen += 1;
   searchInputEl.value = "";
+  // The PRD's initial state, every time the palette opens: Super Finder checked, Require
+  // quoted text unchecked. Kept as chosen while the palette stays open.
+  searchSuperEl.checked = true;
+  searchStrictEl.checked = false;
   searchResultsEl.innerHTML = "";
-  searchEmptyEl.hidden = true;
-  searchHits = [];
-  searchIndex = -1;
+  searchState.items = [];
+  searchState.active = -1;
+  searchState.navHits = [];
+  searchState.docs = [];
+  searchState.sourceGen = null;
+  searchHintEl.hidden = false;
+  searchCountEl.textContent = "";
+  searchCountEl.classList.add("is-empty");
   searchInputEl.setAttribute("aria-expanded", "false");
+  searchInputEl.removeAttribute("aria-activedescendant");
   searchInputEl.focus();
+  refreshSearchStatus();
 }
 
 function closeSearch() {
   searchOverlayEl.hidden = true;
+  searchState.open = false;
+  searchState.gen += 1;
+  if (searchState.more) {
+    searchState.more.disconnect();
+    searchState.more = null;
+  }
+  clearTimeout(searchState.statusTimer);
   searchInputEl.setAttribute("aria-expanded", "false");
 }
 
@@ -6942,17 +7000,313 @@ function relativeDate(ms) {
   return Math.floor(hours / 24) + "d ago";
 }
 
-function renderSearchResults() {
-  searchResultsEl.innerHTML = "";
-  searchIndex = searchHits.length ? 0 : -1;
-  searchEmptyEl.hidden = searchHits.length > 0 || !searchInputEl.value.trim();
-  if (searchEmptyEl.hidden === false) searchEmptyEl.textContent = "Nothing matches that.";
-  searchInputEl.setAttribute("aria-expanded", String(searchHits.length > 0));
+const SEARCH_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function searchDate(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  return SEARCH_MONTHS[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear();
+}
 
+function searchNumber(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+// ---- the status line ------------------------------------------------------------------
+
+async function refreshSearchStatus() {
+  clearTimeout(searchState.statusTimer);
+  let status = null;
+  try {
+    status = await Bridge.invoke("search_documents_status");
+  } catch (_e) {
+    status = null;
+  }
+  if (!searchState.open) return;
+  searchState.status = status;
+  paintSearchStatus();
+  // Each batch the index completes makes a newer generation, which can rank a newly searchable
+  // document first. A list built from an older one is asked again from its first page, never
+  // left as it was or extended with the newer ranking (newer only: a status read can lag the
+  // reply the list was built from).
+  if (status && searchState.sourceGen != null && status.generation > searchState.sourceGen && searchInputEl.value.trim()) {
+    runSearch(true);
+  }
+  // While the folder is being read or the index built, the counts move: look again.
+  const meaning = status && status.meaning && status.meaning.state;
+  const folder = status && status.folder && status.folder.state;
+  if (folder === "loading" || meaning === "starting" || meaning === "indexing") {
+    searchState.statusTimer = setTimeout(refreshSearchStatus, 1000);
+  }
+}
+
+function searchFolderFiles() {
+  const f = searchState.status && searchState.status.folder;
+  return f && f.state === "ready" ? f.files : 0;
+}
+
+function paintSearchStatus() {
+  const s = searchState.status;
+  const folder = s ? s.folder : { state: "none" };
+  const meaning = s ? s.meaning : { state: "unavailable", reason: "" };
+  let kind = "";
+  let text = "";
+  let title = s ? "Index kept in " + s.index_location : "";
+  let progress = 0;
+  if (folder.state === "none") {
+    kind = "is-nofolder";
+    text = "No search folder configured";
+  } else if (folder.state === "error") {
+    kind = "is-nofolder";
+    text = folder.message;
+  } else if (folder.state === "loading") {
+    kind = "is-indexing";
+    text = "Reading the search folder…";
+  } else if (!searchSuperEl.checked) {
+    kind = "is-text";
+    text = "Text search · " + searchNumber(folder.files) + " files";
+  } else if (meaning.state === "unavailable") {
+    kind = "is-unavailable";
+    text = "Super Finder unavailable; showing text matches";
+    title = meaning.reason;
+  } else if (meaning.state === "indexing") {
+    kind = "is-indexing";
+    text = "Super Finder indexing · " + searchNumber(meaning.files_done) + " of " + searchNumber(meaning.files_total) + " files";
+    progress = meaning.passages_total ? meaning.passages_done / meaning.passages_total : 0;
+  } else if (meaning.state === "starting") {
+    kind = "is-indexing";
+    text = "Super Finder starting…";
+  } else {
+    text = "Super Finder ready · " + searchNumber(meaning.files) + " files";
+  }
+  searchStatusEl.className = "srch-status" + (kind ? " " + kind : "");
+  searchStatusTextEl.textContent = text;
+  searchStatusEl.title = title || "";
+  searchHeadEl.classList.toggle("is-indexing", kind === "is-indexing" && searchSuperEl.checked);
+  searchProgressEl.style.width = Math.round(progress * 100) + "%";
+}
+
+function searchModeLabel(resp) {
+  const folder = searchState.status && searchState.status.folder;
+  if (!resp || (folder && folder.state !== "ready")) return "";
+  let m = resp.effective.super_finder ? "meaning and words" : "words only";
+  if (resp.requested.super_finder && !resp.effective.super_finder) m = "words only, Super Finder unavailable";
+  if (resp.requested.strict) m += " · quoted text required";
+  return m;
+}
+
+// ---- marking the query's words and quoted text in a passage ---------------------------
+
+function searchEscapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/// The text as nodes, with the query's words (`mark`) and quoted spans (`mark.q`) lifted,
+/// clipped to `clip` characters around the first mark when `clip` is set. Built from text
+/// nodes only: a document's own characters never become markup.
+function searchMarked(text, resp, clip) {
+  const ranges = [];
+  const lower = text.toLowerCase();
+  for (const span of (resp && resp.spans) || []) {
+    // A span is folded with whitespace collapsed; match it across any run of whitespace.
+    const re = new RegExp(span.split(" ").map(searchEscapeRe).join("\\s+"), "gi");
+    let m;
+    while ((m = re.exec(text)) && m[0].length) ranges.push([m.index, m.index + m[0].length, "q"]);
+  }
+  for (const w of (resp && resp.words) || []) {
+    const re = new RegExp("(^|[^\\p{L}\\p{N}])(" + searchEscapeRe(w) + "(?:s|es)?)(?=$|[^\\p{L}\\p{N}])", "giu");
+    let m;
+    while ((m = re.exec(lower))) {
+      const start = m.index + m[1].length;
+      ranges.push([start, start + m[2].length, "w"]);
+      re.lastIndex = start + m[2].length;
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0] || (a[2] === "q" ? -1 : 1));
+  const merged = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] < last[1]) {
+      if (r[2] === "q") last[2] = "q";
+      last[1] = Math.max(last[1], r[1]);
+    } else merged.push(r.slice());
+  }
+  let start = 0;
+  let end = text.length;
+  if (clip && text.length > clip) {
+    const first = merged.length ? merged[0][0] : 0;
+    start = Math.max(0, first - 70);
+    if (start > 0) {
+      const sp = text.lastIndexOf(" ", start);
+      start = sp > 0 ? sp + 1 : start;
+    }
+    end = Math.min(text.length, start + clip);
+  }
+  const frag = document.createDocumentFragment();
+  if (start > 0) frag.appendChild(document.createTextNode("…"));
+  let pos = start;
+  for (const r of merged) {
+    if (r[1] <= start || r[0] >= end) continue;
+    const a = Math.max(r[0], start);
+    const b = Math.min(r[1], end);
+    if (a > pos) frag.appendChild(document.createTextNode(text.slice(pos, a)));
+    const mark = document.createElement("mark");
+    if (r[2] === "q") mark.className = "q";
+    mark.textContent = text.slice(a, b);
+    frag.appendChild(mark);
+    pos = b;
+  }
+  if (pos < end) frag.appendChild(document.createTextNode(text.slice(pos, end)));
+  if (end < text.length) frag.appendChild(document.createTextNode("…"));
+  return frag;
+}
+
+function searchNode(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+// ---- rows ------------------------------------------------------------------------------
+
+function searchNavRow(hit) {
+  const idx = searchState.items.length;
+  const b = searchNode("button", "result-item srch-hit srch-nav");
+  b.type = "button";
+  b.id = "search-result-" + idx;
+  b.setAttribute("role", "option");
+  b.dataset.index = String(idx);
+  b.dataset.key = hit.kind + ":" + (hit.thread_id || hit.entity_id || "") + ":" + (hit.at || 0);
+  const title = searchNode("span", "result-title", hit.kind === "entity" ? hit.entity_label : hit.thread_title || "");
+  b.appendChild(title);
+  const meta = searchNode("span", "result-meta", [hit.entity_label, relativeDate(hit.at)].filter(Boolean).join(" · "));
+  b.appendChild(meta);
+  if (hit.excerpt && hit.kind === "message") b.appendChild(searchNode("span", "result-excerpt", hit.excerpt));
+  b.setAttribute("aria-label", [title.textContent, "in " + hit.entity_label, hit.excerpt].filter(Boolean).join(", "));
+  b.addEventListener("click", () => activateSearchHit(idx));
+  searchState.items.push({ key: b.dataset.key, node: b, kind: "nav", hit });
+  return b;
+}
+
+function searchWhy(hit) {
+  if (hit.why === "exact") return "exact " + hit.exact.map((s) => "“" + s + "”").join(" ");
+  if (hit.why === "both") return "meaning · words";
+  return hit.why;
+}
+
+function searchDocRow(hit, resp) {
+  const idx = searchState.items.length;
+  // `result-item` like every palette row, so a selector for "the rows" means all of them.
+  const row = searchNode("div", "result-item srch-hit srch-doc");
+  row.id = "search-result-" + idx;
+  row.setAttribute("role", "option");
+  row.tabIndex = -1;
+  row.dataset.index = String(idx);
+  row.dataset.key = "d:" + hit.source_id;
+  const top = searchNode("span", "srch-hit-top");
+  const title = searchNode("span", "srch-title");
+  title.appendChild(searchMarked(hit.title, resp, 0));
+  top.appendChild(title);
+  top.appendChild(searchNode("span", "srch-date", searchDate(hit.modified_ms)));
+  row.appendChild(top);
+  const passage = searchNode("span", "srch-passage");
+  passage.appendChild(searchMarked(hit.passage.text, resp, 230));
+  row.appendChild(passage);
+  const src = searchNode("span", "srch-src");
+  const why = searchNode("span", "srch-why" + (hit.why === "meaning" ? " is-meaning" : hit.why === "exact" ? " is-exact" : ""), searchWhy(hit));
+  src.appendChild(why);
+  src.appendChild(searchNode("span", "srch-path", hit.rel_path + (hit.passage.heading ? " · § " + hit.passage.heading : "")));
+  row.appendChild(src);
+  const open = searchNode("span", "srch-open");
+  const inner = searchNode("div");
+  const actions = searchNode("span", "srch-actions");
+  const btn = searchNode("button", "srch-open-btn");
+  btn.type = "button";
+  btn.tabIndex = -1;
+  btn.appendChild(document.createTextNode("Open original "));
+  btn.appendChild(searchNode("kbd", null, "⏎"));
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSearchDocument(idx);
+  });
+  actions.appendChild(btn);
+  const fileName = hit.rel_path.split("/").pop();
+  actions.appendChild(searchNode("span", "srch-where", "line " + hit.passage.line + " of " + fileName));
+  inner.appendChild(actions);
+  open.appendChild(inner);
+  row.appendChild(open);
+  row.setAttribute("aria-label", [hit.title, searchDate(hit.modified_ms), searchWhy(hit), hit.passage.text].join(", "));
+  row.addEventListener("click", () => {
+    if (searchState.active === idx) openSearchDocument(idx);
+    else setSearchActive(idx, true);
+  });
+  row.addEventListener("dblclick", () => openSearchDocument(idx));
+  searchState.items.push({ key: row.dataset.key, node: row, kind: "doc", hit, resp, passage: hit.passage.text });
+  return row;
+}
+
+function searchNote(title, line) {
+  const n = searchNode("div", "srch-note");
+  n.setAttribute("role", "note");
+  n.appendChild(searchNode("span", "srch-note-title", title));
+  if (line) n.appendChild(searchNode("span", "srch-note-line", line));
+  return n;
+}
+
+function searchDocumentsNote(resp) {
+  const folder = searchState.status && searchState.status.folder;
+  if (!resp || resp.empty === "no_folder" || (folder && folder.state === "none")) {
+    if (folder && folder.state === "error") return searchNote(folder.message, "Companies, threads and conversations are still searched above.");
+    const n = searchNote("No search folder configured");
+    const line = searchNode("span", "srch-note-line");
+    line.appendChild(document.createTextNode("Documents come from one folder named in RichOS’s settings ("));
+    line.appendChild(searchNode("code", null, "RICHOS_SEARCH_DOCUMENTS_ROOT"));
+    line.appendChild(document.createTextNode("). Companies, threads and conversations are still searched above."));
+    n.appendChild(line);
+    return n;
+  }
+  if (resp.empty === "quote_mismatch") {
+    return searchNote("The quote marks don’t match.", "Close the quote, or remove it; with Require quoted text checked, nothing is relaxed on a guess.");
+  }
+  if (resp.empty === "no_exact") {
+    return searchNote(
+      "No document contains " + resp.spans.map((s) => "“" + s + "”").join(" and ") + " word for word.",
+      "Uncheck Require quoted text to see related wording" + (resp.effective.super_finder ? " and documents about the same thing." : ".")
+    );
+  }
+  return searchNote(
+    "No documents match.",
+    resp.effective.super_finder
+      ? "Try saying what it was about in other words."
+      : "Text search needs one of your words in the file. Check Super Finder to search by what it is about."
+  );
+}
+
+function searchTail() {
+  let t;
+  if (searchState.nextOffset < searchState.total) {
+    t = searchNode("div", "srch-loading");
+    t.appendChild(searchNode("i"));
+    t.appendChild(searchNode("span", null, "Loading more…"));
+  } else {
+    t = searchNode("div", "srch-end", searchState.total > SEARCH_PAGE ? "That’s all " + searchState.total + " documents." : "");
+    if (!t.textContent) t.hidden = true;
+  }
+  t.id = "srch-tail";
+  return t;
+}
+
+// ---- drawing ---------------------------------------------------------------------------
+
+function renderSearchResults(before) {
+  const resp = searchState.resp;
+  const prevKey = searchState.active >= 0 && searchState.items[searchState.active] ? searchState.items[searchState.active].key : null;
+  searchState.items = [];
+  const frag = document.createDocumentFragment();
   // §3.4: "Results group by entity."
   const order = [];
   const byEntity = new Map();
-  for (const hit of searchHits) {
+  for (const hit of searchState.navHits) {
     const key = hit.entity_label;
     if (!byEntity.has(key)) {
       byEntity.set(key, []);
@@ -6960,67 +7314,232 @@ function renderSearchResults() {
     }
     byEntity.get(key).push(hit);
   }
-
-  let flat = 0;
   for (const label of order) {
-    const head = document.createElement("div");
-    head.className = "result-group";
-    head.textContent = label;
-    searchResultsEl.appendChild(head);
-    for (const hit of byEntity.get(label)) {
-      const idx = flat++;
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "result-item";
-      b.id = "search-result-" + idx;
-      b.setAttribute("role", "option");
-      b.dataset.index = String(idx);
-
-      const title = document.createElement("span");
-      title.className = "result-title";
-      title.textContent = hit.kind === "entity" ? hit.entity_label : hit.thread_title || "";
-      b.appendChild(title);
-
-      const meta = document.createElement("span");
-      meta.className = "result-meta";
-      meta.textContent = [hit.entity_label, relativeDate(hit.at)].filter(Boolean).join(" · ");
-      b.appendChild(meta);
-
-      if (hit.excerpt && hit.kind === "message") {
-        const ex = document.createElement("span");
-        ex.className = "result-excerpt";
-        ex.textContent = hit.excerpt;
-        b.appendChild(ex);
-      }
-
-      b.setAttribute(
-        "aria-label",
-        [title.textContent, "in " + hit.entity_label, hit.excerpt].filter(Boolean).join(", ")
-      );
-      b.addEventListener("click", () => activateSearchHit(idx));
-      searchResultsEl.appendChild(b);
-    }
+    frag.appendChild(searchNode("div", "result-group", label));
+    for (const hit of byEntity.get(label)) frag.appendChild(searchNavRow(hit));
   }
-  highlightSearchIndex();
+  const group = searchNode("div", "result-group srch-group");
+  group.appendChild(searchNode("span", null, "Documents"));
+  group.appendChild(searchNode("span", "srch-group-mode", searchModeLabel(resp)));
+  frag.appendChild(group);
+  // A page with no documents whose list goes on (every result on it had left the folder) is not
+  // "no documents": the tail loads the rest. Only an empty list that has ended says so.
+  const more = !!resp && !resp.empty && searchState.nextOffset < searchState.total;
+  if (!resp || resp.empty || (!searchState.docs.length && !more)) {
+    frag.appendChild(searchDocumentsNote(resp));
+  } else {
+    for (const hit of searchState.docs) frag.appendChild(searchDocRow(hit, resp));
+    frag.appendChild(searchTail());
+  }
+  searchResultsEl.textContent = "";
+  searchResultsEl.appendChild(frag);
+  searchInputEl.setAttribute("aria-expanded", String(searchState.items.length > 0));
+  let idx = -1;
+  if (prevKey) searchState.items.forEach((it, i) => {
+    if (it.key === prevKey) idx = i;
+  });
+  searchState.active = -1;
+  setSearchActive(idx >= 0 ? idx : searchState.items.length ? 0 : -1, false);
+  if (before && !searchReducedMotion()) searchFlip(before);
+  watchSearchTail();
 }
 
-function highlightSearchIndex() {
-  const items = searchResultsEl.querySelectorAll(".result-item");
-  items.forEach((node, i) => {
-    const on = i === searchIndex;
-    node.classList.toggle("is-active", on);
-    node.setAttribute("aria-selected", String(on));
-    if (on) {
-      searchInputEl.setAttribute("aria-activedescendant", node.id);
-      node.scrollIntoView({ block: "nearest" });
+/// A toggle re-sorts the list in front of him: rows that stay slide to their new place, new
+/// rows rise in, and a new first document gets a short gold outline (design round 26).
+function searchFlip(before) {
+  for (const n of searchResultsEl.querySelectorAll(".srch-hit")) {
+    const was = before[n.dataset.key];
+    if (was == null) {
+      n.classList.add("is-new");
+      continue;
     }
-  });
-  if (searchIndex < 0) searchInputEl.removeAttribute("aria-activedescendant");
+    const dy = was - n.getBoundingClientRect().top;
+    if (!dy) continue;
+    n.style.transition = "none";
+    n.style.transform = "translateY(" + dy + "px)";
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        n.style.transition = "transform .42s cubic-bezier(.22,.61,.36,1)";
+        n.style.transform = "";
+        setTimeout(() => (n.style.transition = ""), 460);
+      })
+    );
+  }
+  const first = searchResultsEl.querySelector(".srch-doc");
+  if (first && first.classList.contains("is-new")) first.classList.add("is-flash");
+}
+
+function searchSnapshot() {
+  const m = {};
+  for (const n of searchResultsEl.querySelectorAll(".srch-hit")) m[n.dataset.key] = n.getBoundingClientRect().top;
+  return m;
+}
+
+function setSearchActive(i, scroll) {
+  const old = searchState.items[searchState.active];
+  if (old) {
+    old.node.classList.remove("is-active");
+    old.node.setAttribute("aria-selected", "false");
+    if (old.kind === "doc") {
+      old.node.querySelector(".srch-open-btn").tabIndex = -1;
+      const p = old.node.querySelector(".srch-passage");
+      p.textContent = "";
+      p.appendChild(searchMarked(old.passage, old.resp, 230));
+    }
+  }
+  searchState.active = i;
+  const it = searchState.items[i];
+  if (!it) {
+    searchInputEl.removeAttribute("aria-activedescendant");
+    return;
+  }
+  it.node.classList.add("is-active");
+  it.node.setAttribute("aria-selected", "true");
+  searchInputEl.setAttribute("aria-activedescendant", it.node.id);
+  if (it.kind === "doc") {
+    const p = it.node.querySelector(".srch-passage");
+    p.textContent = "";
+    p.appendChild(searchMarked(it.passage, it.resp, 0));
+    it.node.querySelector(".srch-open-btn").tabIndex = 0;
+  }
+  if (scroll) it.node.scrollIntoView({ block: "nearest" });
+}
+
+// ---- running a search ------------------------------------------------------------------
+
+async function runSearch(animate) {
+  const gen = ++searchState.gen;
+  const query = searchInputEl.value.trim();
+  if (searchState.more) {
+    searchState.more.disconnect();
+    searchState.more = null;
+  }
+  if (!query) {
+    searchHintEl.hidden = false;
+    searchResultsEl.textContent = "";
+    searchState.items = [];
+    searchState.active = -1;
+    searchCountEl.textContent = "";
+    searchCountEl.classList.add("is-empty");
+    searchInputEl.setAttribute("aria-expanded", "false");
+    return;
+  }
+  searchHintEl.hidden = true;
+  searchHeadEl.classList.remove("is-searching");
+  void searchHeadEl.offsetWidth;
+  searchHeadEl.classList.add("is-searching");
+  const started = performance.now();
+  const request = { query, super_finder: searchSuperEl.checked, strict: searchStrictEl.checked, offset: 0, limit: SEARCH_PAGE };
+  const [nav, docs] = await Promise.all([
+    Bridge.invoke("search_nav", { query, limit: 40 }).catch(() => []),
+    Bridge.invoke("search_documents", { request }).catch(() => null),
+  ]);
+  if (gen !== searchState.gen || !searchState.open) return;
+  const before = animate ? searchSnapshot() : null;
+  searchState.navHits = nav || [];
+  searchState.resp = docs;
+  searchState.sourceGen = docs && docs.status ? docs.status.generation : null;
+  searchState.docs = docs ? docs.hits.slice() : [];
+  searchState.total = docs ? docs.total : 0;
+  searchState.nextOffset = docs ? docs.offset + docs.hits.length + docs.dropped : 0;
+  renderSearchResults(before);
+  const n = searchState.navHits.length + searchState.total;
+  const ms = Math.round(performance.now() - started);
+  searchCountEl.textContent = (n ? n + (n === 1 ? " result" : " results") + " · " : "") + ms + " ms";
+  searchCountEl.classList.remove("is-empty");
+}
+
+/// The next page of documents, when the end of the list comes into view.
+function watchSearchTail() {
+  if (searchState.more) {
+    searchState.more.disconnect();
+    searchState.more = null;
+  }
+  const tail = el("srch-tail");
+  if (!tail || !tail.classList.contains("srch-loading")) return;
+  searchState.more = new IntersectionObserver(
+    async (entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      searchState.more.disconnect();
+      searchState.more = null;
+      // The dot breathes only while a page is on its way: an idle tail below the fold animates
+      // nothing (and an endless animation would never let the palette count as settled).
+      tail.classList.add("is-fetching");
+      const gen = searchState.gen;
+      const resp = searchState.resp;
+      const request = {
+        query: searchInputEl.value.trim(),
+        super_finder: resp.requested.super_finder,
+        strict: resp.requested.strict,
+        offset: searchState.nextOffset,
+        limit: SEARCH_PAGE,
+      };
+      let next = null;
+      try {
+        next = await Bridge.invoke("search_documents", { request });
+      } catch (_e) {
+        next = null;
+      }
+      if (gen !== searchState.gen || !searchState.open) return;
+      if (!next) {
+        // Said where the list stops, rather than a "Loading more…" that never arrives.
+        tail.className = "srch-end";
+        tail.textContent = "More documents could not be loaded.";
+        return;
+      }
+      // A page ranked by another index generation would repeat some documents and skip
+      // others: the list starts again from that generation's first page instead.
+      if (next.status && next.status.generation !== searchState.sourceGen) {
+        runSearch(true);
+        return;
+      }
+      // A page whose results all left the folder still moves on; an empty page ends the list.
+      searchState.nextOffset = next.hits.length || next.dropped ? request.offset + next.hits.length + next.dropped : searchState.total;
+      searchState.resp = next;
+      if (!searchState.docs.length && !next.hits.length && searchState.nextOffset >= searchState.total) {
+        // Every result had left the folder: the list is empty after all, and says so.
+        renderSearchResults(null);
+        return;
+      }
+      const old = el("srch-tail");
+      const frag = document.createDocumentFragment();
+      next.hits.forEach((hit, i) => {
+        const row = searchDocRow(hit, next);
+        row.classList.add("is-new");
+        row.style.animationDelay = i * 28 + "ms";
+        frag.appendChild(row);
+        searchState.docs.push(hit);
+      });
+      if (old) old.replaceWith(frag);
+      searchResultsEl.appendChild(searchTail());
+      watchSearchTail();
+    },
+    { root: searchResultsEl, rootMargin: "0px 0px 80px 0px" }
+  );
+  searchState.more.observe(tail);
+}
+
+async function openSearchDocument(index) {
+  const it = searchState.items[index];
+  if (!it || it.kind !== "doc") return;
+  try {
+    await Bridge.invoke("open_search_document", { sourceId: it.hit.source_id });
+    closeSearch();
+  } catch (e) {
+    // Said on the row, where he was looking; the palette stays open so he can search again.
+    const where = it.node.querySelector(".srch-where");
+    if (where) where.textContent = String((e && e.message) || e || "That document could not be opened.");
+  }
 }
 
 async function activateSearchHit(index) {
-  const hit = searchHits[index];
-  if (!hit) return;
+  const it = searchState.items[index];
+  if (!it) return;
+  if (it.kind === "doc") {
+    openSearchDocument(index);
+    return;
+  }
+  const hit = it.hit;
   closeSearch();
   if (hit.kind === "entity" && hit.entity_id) {
     showEntityView(hit.entity_id, "overview");
@@ -7030,35 +7549,38 @@ async function activateSearchHit(index) {
 }
 
 searchInputEl.addEventListener("input", () => {
-  if (searchTimer) clearTimeout(searchTimer);
-  searchTimer = setTimeout(async () => {
-    const q = searchInputEl.value.trim();
-    if (!q) {
-      searchHits = [];
-      renderSearchResults();
-      return;
-    }
-    try {
-      searchHits = await Bridge.invoke("search_nav", { query: q, limit: 40 });
-    } catch (_e) {
-      searchHits = [];
-    }
-    renderSearchResults();
-  }, 120);
+  clearTimeout(searchState.timer);
+  searchState.gen += 1;
+  searchState.timer = setTimeout(() => runSearch(false), 120);
 });
 
+for (const box of [searchSuperEl, searchStrictEl]) {
+  box.addEventListener("change", () => {
+    // The query, the other box and the scope stay as they are; the search reruns at once.
+    clearTimeout(searchState.timer);
+    paintSearchStatus();
+    runSearch(true);
+  });
+}
+
 searchInputEl.addEventListener("keydown", (e) => {
+  const n = searchState.items.length;
   if (e.key === "ArrowDown") {
     e.preventDefault();
-    if (searchHits.length) searchIndex = (searchIndex + 1) % searchHits.length;
-    highlightSearchIndex();
+    if (n) setSearchActive((searchState.active + 1) % n, true);
   } else if (e.key === "ArrowUp") {
     e.preventDefault();
-    if (searchHits.length) searchIndex = (searchIndex - 1 + searchHits.length) % searchHits.length;
-    highlightSearchIndex();
+    if (n) setSearchActive((searchState.active - 1 + n) % n, true);
   } else if (e.key === "Enter") {
     e.preventDefault();
-    activateSearchHit(searchIndex);
+    if (searchState.active >= 0) activateSearchHit(searchState.active);
+  }
+});
+
+searchResultsEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && searchState.active >= 0 && !e.target.closest(".srch-open-btn")) {
+    e.preventDefault();
+    activateSearchHit(searchState.active);
   }
 });
 

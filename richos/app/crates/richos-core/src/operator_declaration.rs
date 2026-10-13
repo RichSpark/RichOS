@@ -171,6 +171,9 @@ impl FenceStatus for EngineFenceStatus {
 pub fn script_environment(declaration: &Declaration) -> BTreeMap<String, String> {
     let mut environment = declaration.environment.clone();
     environment.insert("HOME".into(), declaration.home.display().to_string());
+    // The CEO's archive folder is never passed on, even from a declaration that holds it
+    // (the gate above refuses one; this does not depend on it).
+    environment.retain(|name, _| !crate::machine_settings::NOT_FORWARDED.contains(&name.as_str()));
     environment
 }
 
@@ -457,7 +460,7 @@ fn validate(raw: RawDeclaration) -> Result<Declaration, Refusal> {
         if !is_variable_name(name) {
             return Err(Refusal::new(format!("its stored environment has a malformed name ({name})")));
         }
-        if is_denied_name(name) {
+        if is_denied_name(name) || crate::machine_settings::NOT_FORWARDED.contains(&name.as_str()) {
             return Err(Refusal::new(format!(
                 "its stored environment holds {name}, which may never be passed to your team")));
         }
@@ -819,6 +822,22 @@ mod tests {
             v["environment"][name] = json!("/x");
             refused_with(&f, v, name);
         }
+    }
+
+    /// The CEO's archive folder is never stored for his team, and an engine script run on his
+    /// behalf never gets it even from a declaration that carries it (search PRD v3.1: *"Other
+    /// company or worker bindings receive no archive access."*).
+    #[test]
+    fn the_search_folder_is_never_stored_or_passed_to_a_script() {
+        let f = fixture();
+        for name in crate::machine_settings::NOT_FORWARDED {
+            let mut v = f.valid();
+            v["environment"][*name] = json!("/synthetic archive");
+            refused_with(&f, v, name);
+        }
+        let mut d = declaration(&f);
+        d.environment.insert("RICHOS_SEARCH_DOCUMENTS_ROOT".into(), "/synthetic archive".into());
+        assert!(!script_environment(&d).contains_key("RICHOS_SEARCH_DOCUMENTS_ROOT"));
     }
 
     #[test]

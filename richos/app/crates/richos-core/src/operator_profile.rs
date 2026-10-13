@@ -264,6 +264,9 @@ impl OperatorProfile {
             environment.insert(REAP_LOG_ENV.into(), log.display().to_string());
             environment.insert(REAP_STATE_ENV.into(), state.display().to_string());
         }
+        // The CEO's archive folder never reaches the lead, whichever source held it: his
+        // settings file (already left out by `Settings::environment`) or the declaration.
+        environment.retain(|name, _| !crate::machine_settings::NOT_FORWARDED.contains(&name.as_str()));
         environment
     }
 
@@ -834,6 +837,22 @@ mod tests {
         std::fs::write(&source, "UNKNOWN=/edited\n").unwrap();
         assert_eq!(p.environment()["RICHOS_BULK_ROOT"], "/operator storage");
         assert!(OperatorProfile::new(f.declaration.clone(), session(), "claim").is_err());
+    }
+
+    /// The CEO's archive folder (search PRD v3.1: *"Other company or worker bindings receive no
+    /// archive access."*) never reaches the lead, from his settings file or from a declaration
+    /// that carries it anyway (the gate refuses one; this holds if a declaration ever did).
+    #[test]
+    fn the_search_folder_never_reaches_the_lead() {
+        let mut f = fixture();
+        let source = crate::machine_settings::file(&f.declaration.home);
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "RICHOS_SEARCH_DOCUMENTS_ROOT=/synthetic archive/from the file\n").unwrap();
+        assert!(!profile(&f).environment().contains_key("RICHOS_SEARCH_DOCUMENTS_ROOT"));
+        f.declaration.environment.insert("RICHOS_SEARCH_DOCUMENTS_ROOT".into(), "/synthetic archive/stored".into());
+        for name in crate::machine_settings::NOT_FORWARDED {
+            assert!(!profile(&f).environment().contains_key(*name), "{name} reached the lead");
+        }
     }
 
 }

@@ -220,7 +220,10 @@ MIN_QUOTE_WORDS=10
 CORPUS_MAX_FILES=16000
 CORPUS_MAX_BYTES=201326592
 
-ALLOWLIST=""
+# richos/app/third-party/qdrant-edge: Qdrant Edge 0.8.0's own Apache-2.0 source, published
+# by Qdrant on crates.io (vendored 2026-10-13, .richos/vendored-material). The verbatim
+# detector matches the runs of counting numbers in its test tables; nothing in it is ours.
+ALLOWLIST="richos/app/third-party/qdrant-edge"
 
 # 0 = an empty corpus is BROKEN. This repository has a private record, so an
 # empty corpus here means the guard lost sight of it, not that there is nothing

@@ -143,6 +143,7 @@ outage.js               @shell richos/app/ui/timeline.js richos/app/src-tauri/sr
 realbytes.js            @shell richos/app/ui/timeline.js richos/app/src-tauri/src/ richos/app/src-tauri/examples/timeline_payload.rs richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock richos/app/crates/
 restart-scope.js        @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 scale.js                @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
+search-documents.js     @shell richos/app/ui/mock.js richos/app/scripts/qa/contrast.py
 steering.js             @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 techy.js                @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/machinery-payload.json richos/app/src-tauri/src/machinery_view.rs richos/app/src-tauri/src/main.rs
 workers.js              @shell richos/app/ui/timeline.js
