@@ -23,6 +23,8 @@ public final class SessionWriter {
     /// Microphone-side silence the failover wrote since the microphone last delivered samples.
     private let micGapLock = NSLock()
     private var micSilenceFilled = 0
+    /// Frames delivered by each side, and the microphone silence added for restarts (health rows).
+    private var micFrames = 0, sysFrames = 0, micFillFrames = 0
 
     private var firstAudioMs: Int64?
     private var lastAudioMs: Int64?
@@ -54,10 +56,13 @@ public final class SessionWriter {
     }
 
     public func pushMic(_ mono: [Float]) {
-        micGapLock.lock(); micSilenceFilled = 0; micGapLock.unlock()
+        micGapLock.lock(); micSilenceFilled = 0; micFrames += mono.count; micGapLock.unlock()
         micRing.append(mono, nowMs: clock())
     }
-    public func pushSystem(_ mono: [Float]) { sysRing.append(mono, nowMs: clock()) }
+    public func pushSystem(_ mono: [Float]) {
+        micGapLock.lock(); sysFrames += mono.count; micGapLock.unlock()
+        sysRing.append(mono, nowMs: clock())
+    }
 
     /// The first microphone samples after the microphone was restarted on a new input device, which
     /// missed `seconds` of audio (`MicTimeline`). That time goes in as silence ahead of `mono`, so
@@ -70,6 +75,8 @@ public final class SessionWriter {
         micGapLock.lock()
         let pad = max(0, missed - micSilenceFilled)
         micSilenceFilled = 0
+        micFrames += mono.count
+        micFillFrames += pad
         micGapLock.unlock()
         if pad > 0 { micRing.append([Float](repeating: 0, count: pad), nowMs: clock()) }
         micRing.append(mono, nowMs: clock())
@@ -135,12 +142,16 @@ public final class SessionWriter {
         if !tapRunning { problems.append("system tap IOProc not running"); level = "red" }
         if !micRunning { problems.append("microphone input not running"); level = "red" }
 
+        micGapLock.lock()
+        let (micIn, sysIn, fill) = (micFrames, sysFrames, micFillFrames)
+        micGapLock.unlock()
         let sample = SessionContract.HealthSample(
             sessionId: params.sessionId, t: now,
             micRms: micPeak, sysRms: sysPeak,
             micRmsMean: micRms, sysRmsMean: sysRms,
             bytesTotal: bytesTotal, bytesDelta: delta, part: 0,
-            tapRunning: tapRunning, micRunning: micRunning, level: level, problems: problems
+            tapRunning: tapRunning, micRunning: micRunning, level: level, problems: problems,
+            micFrames: micIn, sysFrames: sysIn, micFillFrames: fill
         )
         if let h = healthHandle {
             try h.write(contentsOf: Data((sample.json().compact() + "\n").utf8))

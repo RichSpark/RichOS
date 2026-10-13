@@ -212,11 +212,22 @@ public enum SessionContract {
         public var micRunning: Bool
         public var level: String
         public var problems: [String]
+        /// Frames each side has delivered since the start, and the silence added on the microphone
+        /// side to fill restarts (`MicTimeline`). Against the clock they show which side lost time
+        /// and when: the two sides are paired frame by frame, so a side that delivers fewer frames
+        /// than the clock slides the other side's words later in the recording.
+        public var micFrames: Int
+        public var sysFrames: Int
+        public var micFillFrames: Int
         public init(
             sessionId: String, t: Int64, micRms: Double, sysRms: Double, micRmsMean: Double,
             sysRmsMean: Double, bytesTotal: Int, bytesDelta: Int, part: Int, tapRunning: Bool,
-            micRunning: Bool, level: String, problems: [String]
+            micRunning: Bool, level: String, problems: [String],
+            micFrames: Int = 0, sysFrames: Int = 0, micFillFrames: Int = 0
         ) {
+            self.micFrames = micFrames
+            self.sysFrames = sysFrames
+            self.micFillFrames = micFillFrames
             self.sessionId = sessionId
             self.t = t
             self.micRms = micRms
@@ -247,6 +258,9 @@ public enum SessionContract {
                 ("micRunning", .bool(micRunning)),
                 ("level", .string(level)),
                 ("problems", .array(problems.map { JSON.string($0) })),
+                ("micFrames", .int(micFrames)),
+                ("sysFrames", .int(sysFrames)),
+                ("micFillFrames", .int(micFillFrames)),
             ])
         }
 

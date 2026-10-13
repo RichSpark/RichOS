@@ -122,7 +122,16 @@ final class MicRestartTests: XCTestCase {
         let pad = writer.pushMic(marked(), afterGapOf: 2.05)
         writer.pushSystem(marked())
         try writer.pump()
+        try writer.writeHealthTick(micPeak: 0.9, micRms: 0.1, sysPeak: 0.9, sysRms: 0.1, tapRunning: true, micRunning: true)
         try writer.close()
+
+        // The health row says what each side delivered and what was filled, so a recording whose
+        // sides drift can be read back to the side that lost time.
+        let rows = try String(contentsOfFile: (writer.dir as NSString).appendingPathComponent("health.ndjson"), encoding: .utf8)
+        let row = try JSONSerialization.jsonObject(with: Data(rows.split(separator: "\n").last!.utf8)) as! [String: Any]
+        XCTAssertEqual(row["micFrames"] as? Int, 1_000 + 500)
+        XCTAssertEqual(row["sysFrames"] as? Int, 1_000 + 2_000 + 50 + 500)
+        XCTAssertEqual(row["micFillFrames"] as? Int, 50)
 
         // The failover wrote 2 s of microphone silence (the first pump, 100 ms in, was under the
         // 150 ms threshold and wrote nothing; the second wrote both 100 ms blocks), so the fill
