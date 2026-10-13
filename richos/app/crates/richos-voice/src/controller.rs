@@ -2493,6 +2493,8 @@ struct TurnDesk {
     withdrawn: Arc<Mutex<HashSet<u64>>>,
     /// `rich://turn-started` events so far (`VoiceController::turn_started`).
     turns_started: Arc<AtomicU64>,
+    /// The shell's stop for the running turn, for the withdrawal the voice-off flush makes.
+    stop: WithdrawHook,
 }
 
 /// A turn handed over that Rich has not yet begun to answer aloud.
@@ -2574,7 +2576,7 @@ const LAST_WORDS_WAIT: Duration = Duration::from_secs(30);
 
 impl Drop for TurnDesk {
     fn drop(&mut self) {
-        self.collect();
+        let mut starts_a_turn = self.collect();
         // **HIS LAST WORDS ARE PART OF THE TURN, even when he switches voice off before they are
         // recognized** (review rv-20261013T163358Z, finding 1). Without this wait the words already
         // recognized went out as one turn and the fragment still at the recognizer went out after
@@ -2585,7 +2587,7 @@ impl Drop for TurnDesk {
         while self.assembler.awaiting_recognition() > 0 {
             match self.words_rx.recv_timeout(LAST_WORDS_WAIT) {
                 Ok(words) => {
-                    self.assembler.recognized(words);
+                    starts_a_turn |= self.assembler.recognized(words);
                 }
                 Err(_) => {
                     eprintln!(
@@ -2594,6 +2596,25 @@ impl Drop for TurnDesk {
                         LAST_WORDS_WAIT.as_secs_f32()
                     );
                     break;
+                }
+            }
+        }
+        // **AND A CONTINUATION IS STILL ONE THOUGHT** (review rv-20261013T202747Z, finding 1). If
+        // these last words go on from a turn Rich had not yet begun to answer aloud, that turn is
+        // carried into this one and withdrawn, exactly as the supervisor does while voice is on.
+        // `turn_active` is passed as true because voice-off has already reset the state machine;
+        // the stop is asked only when that partial turn is the last one started, and a turn that
+        // already finished answers it with "nothing running".
+        if starts_a_turn {
+            if let Some(stop_it) = self.withdraw_unanswered(true) {
+                eprintln!(
+                    "[richos-voice] {} voice is going off; his earlier turn joins his last words",
+                    wall_clock_utc()
+                );
+                if stop_it {
+                    if let Some(stop) = self.stop.lock().ok().and_then(|h| h.clone()) {
+                        stop();
+                    }
                 }
             }
         }
@@ -2718,6 +2739,7 @@ fn supervise(
         unanswered: None,
         withdrawn: withdrawal.withdrawn.clone(),
         turns_started: withdrawal.turns_started.clone(),
+        stop: withdrawal.hook.clone(),
     };
     // Rich's first sound for an answer: from then on, what he says is a new turn, not the rest of
     // the one Rich is answering.
@@ -3218,6 +3240,7 @@ mod tests {
             unanswered: None,
             withdrawn: Default::default(),
             turns_started: Default::default(),
+            stop: Default::default(),
         };
         desk.assembler.utterance_started();
         desk.assembler.utterance_admitted(2512);
@@ -3290,6 +3313,7 @@ mod tests {
                 unanswered: None,
                 withdrawn: Default::default(),
                 turns_started: Default::default(),
+                stop: Default::default(),
             };
             desk.assembler.his_utterance_started();
             desk.assembler.utterance_admitted(1200);
@@ -3331,6 +3355,7 @@ mod tests {
             unanswered: None,
             withdrawn: Default::default(),
             turns_started: Default::default(),
+            stop: Default::default(),
         };
         desk.assembler.his_utterance_started();
         desk.assembler.utterance_admitted(1500);
@@ -3377,6 +3402,7 @@ mod tests {
                 unanswered: None,
                 withdrawn: Default::default(),
                 turns_started: Default::default(),
+                stop: Default::default(),
             };
             desk.assembler.utterance_started();
             desk.assembler.utterance_admitted(1800);
@@ -3385,6 +3411,58 @@ mod tests {
         }
         assert_eq!(submit_rx.try_recv().unwrap(), ("Send the deck to Dana.".to_string(), false));
         assert_eq!(transcripts(&rec).len(), 1);
+    }
+
+    /// INVARIANT — review rv-20261013T202747Z finding 1. He paused for longer than the window, so
+    /// "Send the draft" was handed over and started; he went on, and switched voice off while the
+    /// rest was still being captured. The voice-off flush does what a normal continuation does:
+    /// the earlier turn is carried into the one going out and withdrawn, so the request that
+    /// stands is his whole thought, never the instruction without its condition.
+    #[test]
+    fn voice_off_during_a_continuation_still_withdraws_the_partial_turn() {
+        let rec = Arc::new(Recorder::default());
+        let (words_tx, words_rx) = channel();
+        let (submit_tx, submit_rx) = channel();
+        let withdrawn: Arc<Mutex<HashSet<u64>>> = Default::default();
+        let stops = Arc::new(AtomicU32::new(0));
+        let counted = stops.clone();
+        let stop: WithdrawHook = Arc::new(Mutex::new(Some(Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }))));
+        {
+            let mut desk = TurnDesk {
+                assembler: TurnAssembler::new(),
+                words_rx,
+                submit_tx,
+                observer: rec.clone(),
+                last_end: None,
+                sent: 0,
+                unanswered: None,
+                withdrawn: withdrawn.clone(),
+                turns_started: Default::default(),
+                stop,
+            };
+            desk.assembler.his_utterance_started();
+            desk.assembler.utterance_admitted(1500);
+            words_tx.send(Some(("Send the draft".to_string(), false))).unwrap();
+            desk.collect();
+            desk.assembler.quiet();
+            desk.release();
+            assert_eq!(submit_rx.try_recv().unwrap().0, "Send the draft");
+            desk.turns_started.fetch_add(1, Ordering::SeqCst);
+            // He goes on; voice goes off before the supervisor has looked at the words.
+            desk.assembler.his_utterance_started();
+            desk.assembler.utterance_admitted(1200);
+            words_tx.send(Some(("after I approve it.".to_string(), false))).unwrap();
+        }
+        assert_eq!(
+            submit_rx.try_recv().unwrap().0,
+            "Send the draft after I approve it.",
+            "voice-off sent the continuation without the instruction it continues"
+        );
+        assert!(submit_rx.try_recv().is_err(), "one thought became more than one request");
+        assert!(withdrawn.lock().unwrap().contains(&1), "the partial turn was left standing");
+        assert_eq!(stops.load(Ordering::SeqCst), 1, "the running partial turn was not stopped");
     }
 
     /// INVARIANT: a ONE-WORD decision still gets through. `stt.rs` keeps its noise list
