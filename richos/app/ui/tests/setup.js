@@ -1944,6 +1944,22 @@ async function main() {
     assertEqual((await later.textContent("#dictation-offer-after")).trim(), "It's in Settings, under Dictation.", "not on");
     await later.close();
 
+    // A FRESH INSTALL: Start comes before his first company, so no conversation is open when
+    // the offer is made; it is drawn in the first one, once he has added the company (walked on
+    // the guest 2026-10-13: tying the note to the open conversation hid it when none was open).
+    const fresh = await finish({ chosenEntity: null, memory: "none" });
+    await fresh.waitForSelector("#memory-setup:not([hidden])");
+    await fresh.click("#memory-setup-later");
+    await fresh.waitForSelector("#entity-picker:not([hidden])");
+    await fresh.evaluate(() => {
+      const b = [...document.querySelectorAll("#entity-picker button")].find((x) => /add/i.test(x.textContent));
+      b.click();
+    });
+    await fresh.fill("#entity-add-name", "Brightwave LABS");
+    await fresh.click("#entity-add-go");
+    await fresh.waitForSelector("#dictation-offer-yes");
+    await fresh.close();
+
     // NEVER AGAIN: the offer was made in an earlier run (a relaunch reads `offered`).
     const again = await finish({ dictationOffered: true });
     await again.waitForFunction(() => window.__RICHOS_MOCK__.dictationOfferCalls().length > 0);

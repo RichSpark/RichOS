@@ -1787,7 +1787,8 @@ async function maybeOfferDictation() {
   dictationOfferWanted = false;
   const view = await invokeQuiet("dictation_offer");
   if (!view || !view.ready || view.offered) return;
-  // `thread`: the note belongs to the conversation it was shown in, never to every one he opens.
+  // `thread`: the note belongs to the conversation it is first drawn in, never to every one he
+  // opens (null until a conversation is open; see renderDictationOffer).
   dictationOffer = { phase: "open", key: "F" + (Number(view.key) || 1), thread: activeThreadId };
   invokeQuiet("dictation_offer_shown");
   followBottom = true;
@@ -1812,7 +1813,11 @@ async function answerDictationOffer(yes) {
 
 /// The note, appended after whatever the conversation shows (`flushRender` rebuilds the list).
 function renderDictationOffer() {
-  if (!dictationOffer || dictationOffer.thread !== activeThreadId) return;
+  if (!dictationOffer) return;
+  // Made before any conversation was open (Start comes before his first company on a fresh
+  // install): it belongs to the first one he is in when it is drawn.
+  if (!dictationOffer.thread) dictationOffer.thread = activeThreadId;
+  if (dictationOffer.thread !== activeThreadId) return;
   const art = document.createElement("article");
   art.className = "tl-rich dictation-offer";
   art.id = "dictation-offer";
