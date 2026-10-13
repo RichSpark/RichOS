@@ -161,9 +161,23 @@ def build_walk(folders, guest, relaunch):
                 time.sleep(1)
             return False
 
+        BOXES = ('Super Finder', 'Require quoted text')
+
         def checkbox(self, title):
-            self.ax('click', '--title', title, '--role', 'AXCheckBox', '--first')
+            # A checkbox wrapped in its <label> carries its name in neither AXTitle nor
+            # AXDescription (measured: `click --title "Super Finder" --role AXCheckBox` matched
+            # nothing in the open palette), so the two boxes are addressed by their order inside
+            # the palette, which round 26 fixes: Super Finder, then Require quoted text. The
+            # boxes' values before and after are recorded, so a click on the wrong one shows.
+            before = self.box_values()
+            self.ax('click', '--role', 'AXCheckBox', '--nth', str(self.BOXES.index(title)))
             time.sleep(3)
+            after = self.box_values()
+            self.facts.setdefault('checkbox_clicks', []).append({'box': title, 'before': before, 'after': after})
+            self.save()
+
+        def box_values(self):
+            return [n.get('value') for n in self.nodes('--role', 'AXCheckBox')]
 
         def relaunch_with(self, root):
             self.env = {'RICHOS_SEARCH_DOCUMENTS_ROOT': root}
@@ -188,21 +202,50 @@ def build_walk(folders, guest, relaunch):
             """The PRD: "Check chat ... once during indexing in the packaged app." One short message
             while the relaunched app is still building the index; the reply is the ledger's next
             TurnCompleted. Voice is not checked: the guest has no microphone path."""
-            end = time.monotonic() + 90
-            while time.monotonic() < end and not self.present('Message to Rich', role='AXTextArea'):
-                time.sleep(1)
+            # A launch after the first run opens on the home screen, whose live canvas starves
+            # accessibility reads (asked-again-walk.py, measured on .32; measured again here at
+            # 7 to 15 s a read, after indexing had finished too). Enter, the home screen's own
+            # hint, goes to the app's pid; then the conversation view.
+            command([HERE / 'ax.sh', self.vm, '--key', '36'])
+            self.wait_for('Message to Rich', 'AXTextArea', seconds=90)
+            self.shot('chat-while-indexing.png')
+            # Does the window answer while the index is built? Each sample times one
+            # accessibility read of the composer and records the app's CPU and memory and the
+            # index's progress, during indexing and after it, so the two can be compared.
+            samples = []
+
+            def sample():
+                began = time.monotonic()
+                found = self.present('Message to Rich', role='AXTextArea')
+                index = self.indexing_counts(total)
+                samples.append({'indexing': index['complete'] < total, 'read_s': round(time.monotonic() - began, 2),
+                                'found': found, 'index': index,
+                                'app_cpu_rss': guest(self.vm, 'ps -o %cpu=,rss= -p ' + self.app_pid() + ' || true').strip()})
+
+            sample()
             before = self.completed_turns()
             at_send = self.indexing_counts(total)
             sent = time.monotonic()
             self.type_into('Reply with the single word ready.', '--role', 'AXTextArea', '--title', 'Message to Rich')
             self.press('Send')
-            end = time.monotonic() + 180
+            reply_after = None
+            end = time.monotonic() + 900
             while time.monotonic() < end:
-                if self.completed_turns() > before:
-                    return {'indexing_at_send': at_send, 'indexing_at_reply': self.indexing_counts(total),
-                            'reply_after_s': round(time.monotonic() - sent, 1)}
-                time.sleep(1)
-            return {'indexing_at_send': at_send, 'reply_after_s': None}
+                if reply_after is None and self.completed_turns() > before:
+                    reply_after = round(time.monotonic() - sent, 1)
+                sample()
+                if not samples[-1]['indexing'] and sum(1 for s in samples if not s['indexing']) >= 3:
+                    break
+                time.sleep(2)
+            self.facts['responsiveness_while_indexing'] = samples
+            self.save()
+            during = [s['read_s'] for s in samples if s['indexing']]
+            after = [s['read_s'] for s in samples if not s['indexing']]
+            return {'sent_while_indexing': at_send['complete'] < total, 'indexing_at_send': at_send,
+                    'composer_read_s': {'during_indexing': during, 'after_indexing': after},
+                    # The guest has no signed-in Claude account, so no reply is expected; a reply
+                    # that does come is recorded with its time.
+                    'reply_after_s': reply_after, 'samples': samples}
 
         def app_pid(self):
             state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
@@ -370,7 +413,7 @@ def main():
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
-    p.add_argument('--bulk', type=int, default=400, help='generated notes added so indexing can be interrupted')
+    p.add_argument('--bulk', type=int, default=1500, help='generated notes added so indexing can be interrupted and outlasts reaching the composer')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')
