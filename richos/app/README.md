@@ -691,7 +691,7 @@ richos/app/
                              (queued OR owed OR within the measured device hold, taint re-evaluated
                              every frame) admits none of it; the CEO after the answer and tap-to-stop
                              mid-answer are still admitted (positive controls).
-    tests/turn_on_the_ceos_rig.rs 7 tests: a sentence with his measured 1.406 s pause in it, on
+    tests/turn_on_the_ceos_rig.rs 8 tests: a sentence with his measured 1.406 s pause in it, on
                               his room at his -18.1 dBFS (a synthetic voice, and his own private
                               near-end recording), is ONE turn handed over 2.010 s after his
                               last speech; the old rule made two, the first inside the pause.
@@ -701,7 +701,10 @@ richos/app/
                               resumes while Rich's answer is in synthesis is his, and Rich waits.
                               every_way_his_turn_ends is the whole contract in one table: 8 ways
                               a turn ends, each held to one turn per thought, nothing he said
-                              lost, Rich silent until he is done
+                              lost, Rich silent until he is done. And the onset-to-floor
+                              handoff on the app's own clocks (16 ms capture, 25 ms supervisor,
+                              10 ms speaker): a sentence ready at any moment of his first word
+                              never sounds over him
     tests/echo_path_replay.rs  the CEO's OWN echo path, recorded once and replayed with no
                               device: Mac mini speakers out, Elgato Wave:3 in, the path every
                               synthetic rig here fails to model. Pins that the canceller does
@@ -1237,7 +1240,7 @@ cargo test -p richos-core                       # 2002 tests + 5 doc-tests (1998
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 387 tests (4 live-device tests ignored without a device)
+cargo test -p richos-voice                      # 388 tests (4 live-device tests ignored without a device)
 #     …of which 325 RUN here and 4 report `ignored, LIVE AUDIO: …`, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test

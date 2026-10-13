@@ -583,8 +583,19 @@ impl CaptureBrain {
     /// 0.112 s would otherwise play over the start of his word, make it Rich's, and lose it. The
     /// speaker waits on this too ([`crate::turn::may_sound`]); a sound that never becomes an onset
     /// releases it a few frames later.
+    ///
+    /// **And it holds through the handoff to the floor** (review rv-20261013T192726Z, earlier
+    /// finding 2 still open): at the onset frame the run above resets to zero and `Started` goes
+    /// to the supervisor, which publishes the floor on its next 25 ms tick. Until then neither
+    /// said "his", and a sentence ready in that gap played over his word (the reviewer's 16/25/10
+    /// ms schedule: sounded at 120 ms, his word discarded as tainted). So an open recording that
+    /// is his (`Started { tainted: false }` was sent) keeps this true; once it closes the
+    /// supervisor's floor has long since been published (the close comes 0.800 s of silence
+    /// later) and covers what follows.
     pub fn his_onset_building(&self) -> bool {
-        self.quiet_frames > 0 && self.onset_run_frames() > 0
+        let building = self.quiet_frames > 0 && self.onset_run_frames() > 0;
+        let his_recording_open = self.recorder.is_recording() && !self.tainted;
+        building || his_recording_open
     }
 
     /// **Voice is going off: close the open recording and say what became of it** (review
@@ -931,8 +942,9 @@ struct Shared {
     /// queue, cleared by the supervisor when the answer's window closes. Until it is set nothing of
     /// Rich is in the room, so [`crate::turn::rich_audible`] is false however much is owed.
     answer_sounded: AtomicBool,
-    /// His next word is building toward its onset (`CaptureBrain::his_onset_building`). Written
-    /// per frame by the capture callback; the speaker waits on it as on the floor.
+    /// His next word is building toward its onset, or his recording is open and the supervisor
+    /// may not have published the floor yet (`CaptureBrain::his_onset_building`). Written per
+    /// frame by the capture callback; the speaker waits on it as on the floor.
     his_onset: AtomicBool,
     /// Voice is going off: the capture callback closes the open recording on its next frame.
     finish_capture: AtomicBool,
