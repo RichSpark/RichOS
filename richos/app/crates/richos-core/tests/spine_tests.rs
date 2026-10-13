@@ -121,17 +121,16 @@ fn internal_reprime_turn_is_never_rendered() {
 }
 
 #[test]
-fn default_thread_title_is_running_not_general() {
-    // UX doc §2.1 / §6.1: "the empty rail shows only 'Running'" — the pinned default
-    // thread's REAL title, not a client-side relabel of a literal "General" backend
-    // value (that relabel in app/ui/main.js is now dead code, kept only as a defensive
-    // fallback — this test is the backend-side proof the one-liner landed).
+fn default_thread_title_is_onboarding() {
+    // The CEO, 2026-10-13: the first conversation of the first company "should be named
+    // "Onboarding"", not "Running". The pinned default thread's REAL title, stored by the
+    // backend, never a client-side relabel.
     let (path, ledger) = tmp_ledger("default-title");
     let mut spine = support::spine(ledger);
     let thread_id = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
     let summaries = spine.threads();
     let default = summaries.iter().find(|t| t.id == thread_id).unwrap();
-    assert_eq!(default.title, "Running");
+    assert_eq!(default.title, "Onboarding");
     let _ = std::fs::remove_file(&path);
 }
 

@@ -2144,7 +2144,7 @@ impl Spine {
     /// dogfood shell, from deterministic repository-root resolution — ECS §3.3), never
     /// inferred here. If a thread is already active in that entity it is returned; if one
     /// exists in that entity it is activated (most recent first); otherwise a new
-    /// "Running" thread is created bound to it.
+    /// "Onboarding" thread is created bound to it.
     ///
     /// A thread active in a DIFFERENT entity is not reused — that would be a silent
     /// cross-entity switch.
@@ -2168,9 +2168,11 @@ impl Spine {
         match existing {
             Some(id) => self.activate(&id),
             None => {
-                // "Running" per the UX direction doc §2.1: the pinned default thread's real
-                // title, not a placeholder the UI has to cosmetically relabel.
-                let id = self.create_thread("Running", entity_id)?;
+                // "Onboarding" (the CEO, 2026-10-13: the first conversation of the first
+                // company "should be named "Onboarding""; it was "Running" per the UX direction
+                // doc §2.1): the pinned default thread's real title, not a placeholder the UI
+                // has to cosmetically relabel.
+                let id = self.create_thread("Onboarding", entity_id)?;
                 self.activate(&id)
             }
         }

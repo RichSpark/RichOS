@@ -1755,7 +1755,7 @@
     const existing = threads.filter(t => t.entity_id === entityId).sort((a, b) => b.created_at - a.created_at)[0];
     if (existing) { activeThreadId = existing.id; return; }
     const id = uid("thread");
-    threads.push({ id, title: "Running", entity_id: entityId, created_at: now(), message_count: 0,
+    threads.push({ id, title: "Onboarding", entity_id: entityId, created_at: now(), message_count: 0,
       last_activity: now(), last_turn_state: null, has_pending_turn: false });
     messagesByThread[id] = [];
     activeThreadId = id;
