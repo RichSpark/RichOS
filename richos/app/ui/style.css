@@ -2239,6 +2239,9 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   align-items: center;
   border-radius: 5px;
   border-left: 2px solid transparent;
+  /* WebKit selects the word under a right-click before the row's own menu opens. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .nav-thread-row:hover {
