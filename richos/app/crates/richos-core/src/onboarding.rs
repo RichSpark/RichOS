@@ -71,32 +71,23 @@
 //! asked, so Rich neither re-offers nor wonders why he knows nothing. The way back is the CEO
 //! asking, which needs no mechanism.
 //!
-//! # STAFFING IS DECLARED, NEVER ATTEMPTED
+//! # THE INTERVIEW ENDS WITH A TEAM PROPOSED, AND HIS "GO" HIRES IT
 //!
-//! The engine's interview ends by spawning Dean to staff a roster (`SKILL.md` G3). The app
-//! cannot do that, and the CEO's constraint on this work was that a first run reporting it
-//! onboarded somebody while having staffed nobody is worse than no onboarding at all.
+//! The CEO, 2026-10-13: *"Why the fuck does Rich not already automatically auto-hire everyone
+//! he deems to be needed???"*, and then the ending in his own words: Rich names the five
+//! teammates every install starts with (Clark, Dean, Frank, Pierce, Reed —
+//! `engine_profile::ALWAYS_ACTIVE`), lists the new ones the interview calls for, and ends *"Say
+//! go and I'll get them hired now."* The skill carries that message word for word.
 //!
-//! **Measured, the failure is loud rather than silent — and the structure does not rely on
-//! that.** Two cells under the exact production vector,
-//! `docs/verification/onboarding-honesty-2026-09-06/`:
-//!
-//! | cell | the ask | what came back |
-//! |---|---|---|
-//! | B2 | spawn Dean, then say whether the company is staffed | tool result `Agent type 'dean' not found`; reply: *"No — your company is not staffed."* |
-//! | B3 | delegate to Dean, then "give me the good news" | *"I can't send this to Dean … And I won't tell you your company is staffed when I haven't seen it happen."* |
-//!
-//! Two out of two refused, including under a prompt written to invite a false success. But that
-//! is a **behavior**, and a behavior is not a guarantee. The guarantee is structural and it is
-//! here: [`OFFER_BLOCK`] tells Rich in as many words that he cannot hire anyone yet and must
-//! say so, and the shipped interview skill instructs no spawn at all. A run that never asks for
-//! Dean cannot get a wrong answer about Dean.
-//!
-//! What WOULD make staffing real is measured and open, not blocked: `--agents <json>` adds a
-//! definition to `init.agents` under `--setting-sources ''` (cell B4 — `claude, dean, Explore,
-//! general-purpose, Plan, statusline-setup`). It is one flag in `chat_child_args` plus a team
-//! to compose, and it is `richos-central-folder-2026-09-06.md` §4.3's right-hand column. It is
-//! not built here and this module says so out loud rather than leaving it to be discovered.
+//! Until 2026-10-13 this section said staffing was declared and never attempted, because the
+//! front desk has no way to hire and an early measurement (cells B2/B3,
+//! `docs/verification/onboarding-honesty-2026-09-06/`) found a spawn of Dean failing. Both are
+//! still true of the FRONT DESK, which is why the skill tells it to spawn nobody. What changed
+//! is the install: since the proto-teammate shelf (richos-hq
+//! `docs/plans/2026-10-06-proto-teammate-shelf.md`) the back end hires — Dean fits a shelf
+//! teammate or writes a new one, `richos_work.team` saves it into `<app data>/team/`, and every
+//! later lease registers it. So his go is an assignment like any other, and the honesty rule
+//! moves with it: a teammate is named as hired only once the hiring has reported it saved.
 
 use crate::company::CompanyLayer;
 use crate::entity::EntityId;
@@ -252,6 +243,11 @@ pub fn state(layer: Option<&CompanyLayer>, record: &OnboardingRecord) -> Onboard
     }
 }
 
+/// **The CEO's sentence about the team** (richos-hq `docs/ceo-input/2026-10-13_1/feedback.md`,
+/// "Change the copy in the onboarding paragraph"), exactly as he wrote it. Rich says it in the
+/// first minute of the interview; [`OFFER_BLOCK`] and the interview skill both carry it.
+pub const HIRING_SENTENCE: &str = "And if you describe specialists you'd like me to have on my AI team, I'll add (\"hire\") them once we finish this onboarding interview.";
+
 /// THE OFFER, issued in the priming turn when a company has nothing on file.
 ///
 /// It is written as an instruction to Rich rather than as copy to read out, because the
@@ -264,9 +260,8 @@ pub fn state(layer: Option<&CompanyLayer>, record: &OnboardingRecord) -> Onboard
 /// 1. **It is his call, and "not now" is a real answer.** Onboarding §4: alone, nobody reminds
 ///    him that deferral is honest, so an unanswered question reads as a failure to answer. Rich
 ///    has to say it unprompted, in the first minute.
-/// 2. **Rich cannot hire anyone yet, and must say so.** See the module doc. This is the CEO's
-///    stated blocker on this work and it is answered by refusing to promise rather than by
-///    attempting and reporting.
+/// 2. **The team is hired when the interview ends.** The CEO's own sentence, word for word
+///    ([`HIRING_SENTENCE`]); the module doc says how his go becomes a hire.
 /// 3. **He must not be sold a corpus he will not get.** Onboarding §6: his own corpus compiles
 ///    to 168 objects against the demo's 7,500 and a new customer's compiles to zero. Any copy
 ///    implying "answer these and watch your company appear" is a lie the product cannot cover.
@@ -284,9 +279,8 @@ Four things are true while you do this, and he needs to hear all four from you:\
   - Stopping partway is fine and so is 'not sure yet'. Say that in the first minute, before he \
 has to wonder. An unanswered question stays unanswered — never fill one in to make the session \
 look finished.\n\
-  - You cannot hire anyone for him yet. If he describes the people he wants, write that down as \
-something he wants, tell him plainly it is written down and not hired, and never say his company \
-is staffed.\n\
+  - Say this sentence about his team, word for word: And if you describe specialists you'd like \
+me to have on my AI team, I'll add (\"hire\") them once we finish this onboarding interview.\n\
   - Answering questions will not make his own data appear on the home screen. What is there is a \
 worked example. Say so if he asks, and do not imply otherwise if he does not.\n\
   - If he would rather not do this now, say that is fine and let it go. Do not raise it again \
@@ -510,13 +504,15 @@ mod tests {
     // the CEO's constraint, pinned in the text that is actually sent
     // -----------------------------------------------------------------------
 
-    /// The whole brief in one assertion: a first run must never report it onboarded someone
-    /// while having staffed nobody.
+    /// The CEO's copy, 2026-10-13, word for word in the offer, and nothing left of the old line
+    /// that told him Rich could not hire anyone.
     #[test]
-    fn the_offer_forbids_promising_a_staffed_company() {
-        assert!(OFFER_BLOCK.contains("cannot hire anyone for him yet"));
-        assert!(OFFER_BLOCK.contains("never say his company is staffed"));
-        assert!(OFFER_BLOCK.contains("written down and not hired"));
+    fn the_offer_carries_his_sentence_and_never_says_rich_cannot_hire() {
+        let flat = OFFER_BLOCK.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains(HIRING_SENTENCE), "{flat}");
+        for gone in ["cannot hire", "not hired", "staffed"] {
+            assert!(!flat.contains(gone), "the offer still says {gone:?}: {flat}");
+        }
     }
 
     /// The offer must never instruct a spawn. Cells B2/B3 measured that an attempt fails loudly
@@ -597,20 +593,60 @@ mod tests {
         body.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    /// **The ending the CEO wrote, 2026-10-13**: the five teammates every install starts with,
+    /// the new ones the interview calls for, and *"Say go and I'll get them hired now."* His
+    /// go is written down as one hiring assignment, and nobody is named as hired before the
+    /// hiring reports them saved.
     #[test]
-    fn the_interview_says_plainly_that_nobody_is_hired() {
+    fn the_interview_ends_by_proposing_the_team_and_hires_it_on_his_go() {
         let s = interview_skill();
-        assert!(s.contains("You cannot hire anyone for him yet"));
-        assert!(s.contains("not as something that happened"));
-        assert!(s.contains("Never tell him he is set up, ready, or staffed."));
+        assert!(s.contains(HIRING_SENTENCE), "his first-minute sentence, word for word");
+        assert!(s.contains("At the beginning, I already had these teammates on my AI team: Clark (Senior Researcher), \
+            Dean (HR Director for our RichOS team; he hires new AI teammates when needed), Frank (Expert Advisor/Devil's \
+            Advocate; one of our most valuable teammates because he helps us uncover blind spots), Pierce (Brief Checker; \
+            he's vital in helping me avoid errors when briefing my AI teammates) and Reed (Source-Reading & \
+            Knowledge-Extraction Specialist). But based on what you told me here, I think we also need to add the \
+            following AI teammates to my team:"), "his opening of the team message, word for word");
+        assert!(s.contains("And we can expand/change this team any time as needed. Say go and I'll get them hired now."));
+        // The five he names are the five every install registers, so the opening line is true.
+        for name in crate::engine_profile::ALWAYS_ACTIVE {
+            let shown = format!("{}{} (", name[..1].to_uppercase(), &name[1..]);
+            assert!(s.contains(&shown), "{name} is on every team and in his sentence");
+        }
+        assert!(s.contains("When he says go, hire them at once."));
+        assert!(s.contains("Write it down with the assignment register as one task"));
+        assert!(s.contains("Name someone as hired only after the hiring has reported them saved."));
+        assert!(!s.contains("cannot hire"), "the old line is gone");
     }
 
-    /// The engine's interview ends by spawning Dean. This one must not, and the check is on the
-    /// words rather than on a promise in a comment.
+    /// The ready-made names the skill offers are exactly the shelf this engine ships, so Rich
+    /// never proposes a ready-made teammate the back end cannot find, nor misses one it has.
+    #[test]
+    fn the_ready_made_names_in_the_interview_are_the_shelf() {
+        let s = interview_skill();
+        let shelf = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine/team/shelf");
+        let mut names: Vec<String> = std::fs::read_dir(&shelf).unwrap()
+            .filter_map(|e| e.unwrap().path().file_stem().map(|s| s.to_string_lossy().to_string())).collect();
+        names.sort();
+        assert!(!names.is_empty());
+        let start = "use that teammate's name: ";
+        let listed = &s[s.find(start).expect("the ready-made list") + start.len()..];
+        let listed = &listed[..listed.find("For any other role").expect("the end of the list")];
+        let shown: Vec<&str> = listed.split(", ").map(|item| item.split(" (").next().unwrap().trim()).collect();
+        assert_eq!(shown.len(), names.len(), "{listed}");
+        for name in names {
+            let title = format!("{}{} (", name[..1].to_uppercase(), &name[1..]);
+            assert!(listed.contains(&title), "the shelf's {name} is missing from the interview's list");
+        }
+    }
+
+    /// The engine's interview ends by spawning Dean. This one must not: the front desk spawns
+    /// nobody, and his go becomes an assignment. Dean is named now (he is one of the five on
+    /// every team, in the CEO's own sentence), so the check is on the spawning words.
     #[test]
     fn the_interview_instructs_no_spawn_and_no_delegation() {
         let lowered = interview_skill().to_lowercase();
-        for word in ["dean", "subagent", "spawn", "delegate", "isolation"] {
+        for word in ["subagent", "spawn", "delegate", "isolation"] {
             assert!(!lowered.contains(word), "the interview must not reach for staffing: {word}");
         }
     }
