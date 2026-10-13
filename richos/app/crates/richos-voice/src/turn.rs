@@ -204,6 +204,16 @@ impl TurnAssembler {
         self.quiet = true;
     }
 
+    /// **His earlier turn joins this one** (review rv-20261013T184256Z, finding 4). He paused
+    /// for longer than the window, so `earlier` was handed over; then he went on before Rich
+    /// had said a word of the answer. The words he is saying now are the rest of the same thought,
+    /// so the turn that stands is the whole of it: `earlier` first, then what follows.
+    pub fn carry(&mut self, earlier: Turn) {
+        self.words.insert(0, earlier.text);
+        self.rich_audible |= earlier.rich_audible;
+        self.audio_ms += earlier.audio_ms;
+    }
+
     /// Recognized words that are not yet a turn. Diagnostics only.
     pub fn fragments_held(&self) -> usize {
         self.words.len()
@@ -526,6 +536,21 @@ mod tests {
         assert_eq!(g.offer("late", false), None, "the rest of a superseded answer was said");
         g.next_turn();
         assert_eq!(g.offer("next turn", false), Some("next turn"));
+    }
+
+    /// INVARIANT: an earlier turn carried into his continuation comes first, and the turn that
+    /// stands holds both.
+    #[test]
+    fn a_carried_turn_comes_first() {
+        let mut t = TurnAssembler::new();
+        t.his_utterance_started();
+        t.utterance_admitted(1000);
+        t.recognized(words("after I approve it."));
+        t.carry(Turn { text: "Send the draft".into(), rich_audible: false, fragments: 1, audio_ms: 1500 });
+        t.quiet();
+        let turn = t.take_turn().unwrap();
+        assert_eq!(turn.text, "Send the draft after I approve it.");
+        assert_eq!(turn.audio_ms, 2500);
     }
 
     /// INVARIANT: switching voice off keeps what was already understood, as before.

@@ -4887,6 +4887,23 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
     let opts = VoiceOptions { source: AudioSource::from_env(), scratch_dir };
     match VoiceController::start(opts, observer, submit) {
         Ok(ctl) => {
+            // HIS WHOLE THOUGHT IS ONE REQUEST (review rv-20261013T184256Z, finding 4). When he
+            // goes on after a pause longer than the end of turn, before Rich has said a word,
+            // voice carries the earlier words into his next turn and asks for the partial turn to
+            // be stopped: the same stop as his Esc (`stop_turn`), so it is recorded the same way.
+            let stop_app = app.clone();
+            ctl.on_withdraw(Arc::new(move || {
+                let state = stop_app.state::<AppState>();
+                match state.control.request_stop() {
+                    Ok(StopOutcome::Requested { turn_id, .. }) => eprintln!(
+                        "[richos] voice: he went on before Rich answered; stopped {turn_id} so his whole thought is one request"
+                    ),
+                    Ok(StopOutcome::NothingRunning) => {
+                        eprintln!("[richos] voice: he went on before Rich answered; nothing was running to stop")
+                    }
+                    Err(e) => eprintln!("[richos] voice: the partial turn could not be stopped: {e}"),
+                }
+            }));
             let d = ctl.diagnostics().clone();
             *slot = Some(ctl);
             Ok(serde_json::json!({
