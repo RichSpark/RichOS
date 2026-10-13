@@ -105,6 +105,9 @@ R19_STATE1_OCR = ('Wispr Flow', 'voice and video tools')
 # Measured on the guest (walk of 76167734c): the sheet breaks his download line after "local voice",
 # so "local voice AI" is never one OCR line; "Sit tight" and "Wispr Flow" each are.
 R19_STATE2_OCR = ('Sit tight', 'Wispr Flow')
+# State 2 is also recorded, for its spinners: 6 s at their 1 s turn is six turns, enough to see
+# that none snaps back at a counter reading (about five a second while the models arrive).
+R19_STATE2_RECORD_S = 6
 # The accessibility tree carries the exact words.
 R19_STATE1_AX = 'a free & private/local replacement for Wispr Flow'
 # The CEO's copy in the offer, 2026-10-13 (main.js DICTATION_OFFER_WHAT and _HOW_BEFORE).
@@ -556,6 +559,23 @@ class SetupWalk(adopt_walk.Walk):
         node = self.by_id(dom_id)
         return bool(node) and title in (node.get('title') or node.get('desc') or '')
 
+    def record(self, name, seconds):
+        """A screen recording of the guest, `seconds` long, into the walk's folder, for what a
+        still cannot show: the rows' spinners turning while the counter counts (his recording of
+        nightly 54, richos-hq docs/ceo-input/2026-10-13_1/animations.mov, showed them snap back on
+        every reading). Made in the guest with `screencapture -v -V` (no sound, `-x`), under its
+        home as `shot.sh` does. A recording that cannot be made is written down, never a PASS of
+        anything: the step's verdict does not rest on it."""
+        staged = 'testvm-rec-' + name
+        try:
+            guest(self.vm, 'cd $HOME && rm -f ' + shlex.quote(staged) + ' && screencapture -x -v -V '
+                  + str(int(seconds)) + ' ' + shlex.quote(staged), timeout=seconds + 60)
+            adopt_walk.command([HERE / 'guest.sh', self.vm, '--pull', staged, self.out / name], 120)
+            guest(self.vm, 'cd $HOME && rm -f ' + shlex.quote(staged))
+        except (RuntimeError, StepFailed, subprocess.TimeoutExpired) as exc:
+            return {'file': None, 'why': str(exc)[:300]}
+        return {'file': name, 'seconds': seconds}
+
     def counter(self):
         """The voice row's counter now, read from the accessibility tree, or None."""
         try:
@@ -602,6 +622,11 @@ class SetupWalk(adopt_walk.Walk):
                 if len(readings) == 1:
                     self.shot('r19-state2.png')
                     facts['state2_ocr'] = all(self.frame_says('r19-state2.png', t) for t in R19_STATE2_OCR)
+                # After the SECOND reading, so the recording's time never costs the two readings the
+                # verdict needs (the first walk with it, 2026-10-13, recorded at the first reading and
+                # the 1.06 GB was in before the loop read the counter again).
+                if len(readings) == 2 and 'state2_recording' not in facts:
+                    facts['state2_recording'] = self.record('r19-state2.mov', R19_STATE2_RECORD_S)
             if 'start' not in facts and self.shown('setup-start', 'Start'):
                 all_set = self.shows_text("You're all set.")
                 row = self.mark('Start is on the sheet' + (' with "You\'re all set."' if all_set
