@@ -170,15 +170,29 @@ pub fn serve_tool(service: &SearchService, data_dir: &Path) -> Option<richos_cor
 
 pub fn open(service: &SearchService, source_id: &str) -> Result<(), String> {
     let path = service.resolve_for_open(source_id)?;
-    let status = std::process::Command::new("/usr/bin/open")
-        .arg(&path)
-        .status()
-        .map_err(|e| format!("This Mac would not open it: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("This Mac would not open it.".into())
+    open_with(&path, &mut |args: &[&std::ffi::OsStr]| {
+        let out = std::process::Command::new("/usr/bin/open").args(args).output()?;
+        if !out.status.success() {
+            eprintln!("[richos] document search: open {:?} refused: {}", args, String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(out.status.success())
+    })
+}
+
+/// Open `path` through `run` (one `/usr/bin/open` call per invocation, given its arguments;
+/// true when it succeeded): with the application this Mac associates with the file, and when
+/// none takes it (a fresh Mac has none for `.md`, measured in the test guest), in the default
+/// text editor (`open -t`). Every searchable file is text, so that always fits.
+fn open_with(path: &Path, run: &mut dyn FnMut(&[&std::ffi::OsStr]) -> std::io::Result<bool>) -> Result<(), String> {
+    let as_text = std::ffi::OsStr::new("-t");
+    for args in [&[path.as_os_str()][..], &[as_text, path.as_os_str()][..]] {
+        match run(args) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(e) => return Err(format!("This Mac would not open it: {e}")),
+        }
     }
+    Err("This Mac would not open it.".into())
 }
 
 
@@ -402,5 +416,32 @@ mod tests {
         }
         service.shutdown();
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn open_original_falls_back_to_the_text_editor_when_no_application_takes_the_file() {
+        // Measured in the test guest: on a fresh Mac `/usr/bin/open` refused a `.md` result and
+        // the palette said "This Mac would not open it." Every searchable file is text, so the
+        // default text editor (`open -t`) opens what no other application takes. Driven through
+        // a stand-in runner: nothing is launched on this Mac.
+        let path = Path::new("/folder/2025/refund-window.md");
+        let calls = |answers: Vec<bool>| {
+            let mut answers = answers.into_iter();
+            let mut seen: Vec<Vec<String>> = Vec::new();
+            let result = open_with(path, &mut |args| {
+                seen.push(args.iter().map(|a| a.to_string_lossy().into_owned()).collect());
+                Ok(answers.next().unwrap_or(false))
+            });
+            (result, seen)
+        };
+        let (result, seen) = calls(vec![true]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen, vec![vec!["/folder/2025/refund-window.md".to_string()]], "an associated app opens it; no second call");
+        let (result, seen) = calls(vec![false, true]);
+        assert_eq!(result, Ok(()), "no associated app: the text editor opens it ({seen:?})");
+        assert_eq!(seen[1], vec!["-t".to_string(), "/folder/2025/refund-window.md".to_string()]);
+        let (result, seen) = calls(vec![false, false]);
+        assert_eq!(result, Err("This Mac would not open it.".to_string()));
+        assert_eq!(seen.len(), 2);
     }
 }
