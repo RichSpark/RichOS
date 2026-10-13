@@ -606,6 +606,10 @@ class SetupWalk(adopt_walk.Walk):
                 if len(readings) == 1:
                     self.shot('r19-state2.png')
                     facts['state2_ocr'] = all(self.frame_says('r19-state2.png', t) for t in R19_STATE2_OCR)
+                # After the SECOND reading, so the recording's time never costs the two readings the
+                # verdict needs (the first walk with it, 2026-10-13, recorded at the first reading and
+                # the 1.06 GB was in before the loop read the counter again).
+                if len(readings) == 2 and 'state2_recording' not in facts:
                     facts['state2_recording'] = self.record('r19-state2.mov', R19_STATE2_RECORD_S)
             if 'start' not in facts and self.shown('setup-start', 'Start'):
                 all_set = self.shows_text("You're all set.")
