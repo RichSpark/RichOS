@@ -10,7 +10,8 @@
 resolver = "2"
 # richos-command is the Tauri shell's `#[richos_command::command]` attribute (a proc-macro with
 # no native dependency), a member here so its expansion tests run without the webview tree.
-members = ["crates/richos-core", "crates/richos-voice", "crates/richos-command"]
+members = ["crates/richos-core", "crates/richos-voice", "crates/richos-command", "crates/richos-search"]
+exclude = ["third-party"]
 
 # Check ignored outcomes and asynchronous work at the lint entry point.
 # Timeout refusal regression: a0b51998. These warn on related Rust mistakes;
@@ -22,3 +23,8 @@ unused_must_use = "warn"
 let_underscore_future = "warn"
 let_underscore_must_use = "warn"
 await_holding_lock = "warn"
+
+[patch.crates-io]
+# Qdrant Edge 0.8.0 with one two-line change so it builds on this toolchain; what changed and
+# when this goes away: third-party/qdrant-edge/RICHOS-PATCH.md.
+qdrant-edge = { path = "third-party/qdrant-edge" }

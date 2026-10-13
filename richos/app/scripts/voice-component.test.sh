@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Source and consumer integration for engine/voice, including Rust's compiled metadata.
-# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/crates/richos-voice richos/app/crates/richos-core richos/app/crates/richos-command richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh
+# run-tests: inputs richos/app/scripts/voice-component.test.sh richos/engine/voice richos/engine/.env.example richos/engine/scripts/lib/machine_settings.fixtures.json richos/app/crates/richos-voice richos/app/crates/richos-core richos/app/crates/richos-command richos/app/crates/richos-search richos/app/third-party/qdrant-edge richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict richos/app/Cargo.toml richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/lib/cargo-target.sh
 # run-tests: covers richos/app/crates/richos-voice/build.rs
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +18,9 @@ mkdir -p "$PRODUCT/app/crates" "$PRODUCT/engine/voice"
 cp "$APP/Cargo.toml" "$APP/Cargo.lock" "$PRODUCT/app/"
 # Every member the workspace manifest lists must exist in the copy, or Cargo refuses
 # the whole workspace before building anything (richos-command joined with the command rule).
-cp -R "$APP/crates/richos-core" "$APP/crates/richos-voice" "$APP/crates/richos-command" "$PRODUCT/app/crates/"
+cp -R "$APP/crates/richos-core" "$APP/crates/richos-voice" "$APP/crates/richos-command" "$APP/crates/richos-search" "$PRODUCT/app/crates/"
+# The workspace patches qdrant-edge to the vendored copy, so the copied product carries it too.
+mkdir -p "$PRODUCT/app/third-party" && cp -R "$APP/third-party/qdrant-edge" "$PRODUCT/app/third-party/"
 cp -R "$VOICE/models" "$PRODUCT/engine/voice/"
 # richos-core's library embeds the American-spelling table from the engine
 # (american_spelling.rs, since 8a11f174), so the copied product carries it too.

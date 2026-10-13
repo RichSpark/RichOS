@@ -652,6 +652,9 @@ richos/app/
                               record on disk. It stops one hop short of the button, and its
                               header says exactly which hop
                               (docs/verification/loro-write-path-2026-09-01/)
+  crates/richos-search/      DOCUMENT SEARCH — one included folder, the shared text list, Qdrant
+                              Edge meaning search (third-party/qdrant-edge, RICHOS-PATCH.md) and
+                              Super Finder's rank fusion; src/bin/harness.rs is the archive harness
   crates/richos-voice/       VOICE MODE — mic -> whisper -> the spine -> TTS -> speakers
     src/vad.rs               RMS VAD + THE FRAME MATH (16000 Hz, 256-sample frames = 16.000 ms)
     src/bargein.rs           15-of-25 (0.400 s) window on VAD-speech-AND-near-end whenever a
@@ -1231,6 +1234,17 @@ cargo test -p richos-voice                      # 360 tests (4 live-device tests
 #     variable below into `cfg(live_audio)` so the default run says `ignored` instead.
 RICHOS_VOICE_LIVE_AUDIO=1 cargo test -p richos-voice   # all 359 run, incl. the audible ones
 cargo run -p richos-voice --example device_probe       # what the audio hardware really is
+
+# Document search (Super Finder) — Qdrant Edge in process; its tests need no model:
+cargo test -p richos-search                     # 34 tests
+#     `tests/search_service.rs` drives the whole service over the synthetic stand-in folder
+#     (`tests/fixtures/standin/`) with the stand-in embedder: the four checkbox combinations,
+#     the truthful fallback, current-source checks, restart reconciliation and Open original.
+#     One unit test loads Apple's sentence embedding and says NOT RUN on a Mac without it.
+cargo run -p richos-search --bin richos-search-harness -- inventory --root <folder>
+#     The archive-search harness (search PRD v3.1, "Delivery and acceptance"): `inventory`,
+#     `query` and `compare` over any folder, with its own index folder. `compare` quotes the
+#     searched files, so its `--out` is refused inside this published repository.
 
 # 2. The desktop shell (from richos/app/src-tauri/):
 cargo build                                     # -> target/debug/richos-tauri (Mach-O)

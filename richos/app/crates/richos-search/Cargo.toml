@@ -1,0 +1,35 @@
+[package]
+name = "richos-search"
+version = "0.1.0"
+edition = "2021"
+description = "RichOS document search: the shared text list, Qdrant Edge meaning search and Super Finder's fusion of the two. A separate member so `cargo test -p richos-core` never compiles Qdrant."
+license = "AGPL-3.0-only"
+
+# WHY THIS IS ITS OWN CRATE (search PRD v3.1, "Qdrant and the embedding model"): Qdrant Edge
+# 0.8.0 is an amalgamation of Qdrant's storage engine with dozens of direct dependencies. The
+# workspace already keeps the audio stack out of `cargo test -p richos-core` by giving it its own
+# member (`crates/richos-voice`); search follows the same pattern, so a core test never compiles
+# Qdrant.
+[dependencies]
+# THE CEO'S DECISION (richos-hq `docs/prds/2026-10-13-search-goal.md`, "Super Finder decision"):
+# "That checkbox shall be checked by default and will use Qdrant." Edge is the in-process form,
+# so there is no server, port or cloud. PINNED EXACTLY: Edge is beta and its API moves between
+# minor releases (the PRD names that maintenance cost), so a bump is a deliberate edit here, never
+# a `cargo update`. The index it writes is derived state that can be rebuilt from the folder.
+qdrant-edge = "=0.8.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+# Apple's sentence embedding (`NLEmbedding`, the NaturalLanguage framework) through objc2's
+# runtime and `msg_send!` only, the same edge the Tauri shell already takes
+# (`src-tauri/Cargo.toml`, "DICTATION IN ANY APP"). No framework crate.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
+[[bin]]
+name = "richos-search-harness"
+path = "src/bin/harness.rs"
+
+[lints]
+workspace = true
