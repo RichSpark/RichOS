@@ -112,7 +112,13 @@ fi
 tart set "$VM" --cpu "$TESTVM_CPU" --memory "$TESTVM_RAM_MB" --display "$TESTVM_DISPLAY"
 
 # --- 2. boot headless ---------------------------------------------------------
-if ! vm_running "$VM"; then
+WANT_AUDIO=on
+[ "$AUDIO" -eq 1 ] || WANT_AUDIO=off
+if vm_running "$VM"; then
+  # A running guest keeps the audio mode it booted with; never hand it to a run that asked for
+  # another (lib.sh guest_audio_reusable).
+  why="$(guest_audio_reusable "$STATE" "$WANT_AUDIO")" || die "refusing to reuse $VM: $why"
+else
   log "booting $VM headless..."
   # --no-graphics: the guest keeps a full virtual display and WindowServer;
   # the host simply never renders a window for it. This one flag is the
@@ -129,6 +135,7 @@ if ! vm_running "$VM"; then
   [ "$AUDIO" -eq 1 ] || AUDIO_ARGS=(--no-audio)
   nohup caffeinate -is "$TART_BIN" run "$VM" --no-graphics ${AUDIO_ARGS[@]+"${AUDIO_ARGS[@]}"} > "$TESTVM_LOG/$VM.log" 2>&1 &
   echo $! > "$STATE/vm.pid"
+  echo "$WANT_AUDIO" > "$STATE/audio"
 fi
 
 log "waiting for $VM to report an IP..."

@@ -132,6 +132,26 @@ t "node name: a bare VM name gets the richos-test- prefix reap.sh looks for"
   eq "$(tailnet_node_name a)" "richos-test-a"
 t_done
 
+t "audio: a running guest that booted with host audio is refused to a --no-audio run (review 2230466e, finding 2)"
+  st="$(mktemp -d)"; echo on > "$st/audio"
+  out="$(guest_audio_reusable "$st" off)"; no $? "reuse of an audio-on guest for audio off"
+  has "$out" "stop it (stop.sh) and boot it again"
+  rm -f "$st/audio"
+  guest_audio_reusable "$st" off >/dev/null; no $? "a guest with no record booted with tart's default, audio on"
+  echo off > "$st/audio"
+  guest_audio_reusable "$st" off >/dev/null; ok $? "a --no-audio guest serves a --no-audio run"
+  guest_audio_reusable "$st" on >/dev/null; no $? "and is refused to a run that wants audio"
+  rm -rf "$st"
+t_done
+
+t "audio: run.sh records the booted mode and checks it before reusing a running guest"
+  src="$(cat "$TESTVM_DIR/run.sh")"
+  # shellcheck disable=SC2016  # literal run.sh source text to find, not an expansion
+  has "$src" 'echo "$WANT_AUDIO" > "$STATE/audio"'
+  # shellcheck disable=SC2016  # literal run.sh source text to find, not an expansion
+  has "$src" 'guest_audio_reusable "$STATE" "$WANT_AUDIO"'
+t_done
+
 t "node name: an already-prefixed VM name is left alone, never doubled"
   eq "$(tailnet_node_name richos-test-b)" "richos-test-b"
 t_done

@@ -198,6 +198,23 @@ sys.exit(0 if any(r.get('Name')==want and r.get('Source')=='local' for r in rows
 " "$1"
 }
 
+# guest_audio_reusable <state-dir> <on|off>
+# May a guest that is ALREADY RUNNING be reused for a run that asked for this audio mode?
+# run.sh records the mode a guest booted with in <state-dir>/audio. Tart applies --no-audio only at
+# boot, so reusing a running guest that booted with host audio would hand a "--no-audio" walk a
+# guest that still reaches the host's microphone and speakers (second review
+# rv-20261013T090233Z-2230466e-9d08, finding 2). A guest with no record booted the old way, with
+# tart's default (audio on). Prints the refusal and returns 1 when the modes differ.
+guest_audio_reusable() {
+  local recorded
+  recorded="$(cat "$1/audio" 2>/dev/null || echo on)"
+  if [ "$recorded" != "$2" ]; then
+    echo "the running guest booted with audio $recorded and this run asked for audio $2; tart applies --no-audio only at boot, so stop it (stop.sh) and boot it again"
+    return 1
+  fi
+  return 0
+}
+
 vm_running() {
   tart list --format json 2>/dev/null \
     | python3 -c "
