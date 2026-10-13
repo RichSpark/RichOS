@@ -27,7 +27,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
               one named in what he was told, nobody named to him as a teammate who was not saved,
               and no Approve card put in front of him along the way. Evidence: go-observed.json.
-  relaunch    command-walk.py's relaunch: the app stopped by pid and started again
+  relaunch    command-walk.py's relaunch: the app stopped by pid and started again; before its
+              first read the walk waits for the guest's whisper-cli runs to end (--settle-within)
+              and then reads with a longer deadline (--after-relaunch-deadline)
   roster      after the relaunch, the lease's roster holds the five and every hired teammate
   approvals   last: the Approve cards the hiring put in front of him after his go, counted during
               go and judged here so they do not hide the steps after it. Any fails.
@@ -41,6 +43,7 @@ Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -218,7 +221,39 @@ def answer_of(receipts, record, name):
     return ''
 
 
+def read_timeout(asked, deadline):
+    """The seconds the host waits for one ax.sh call: what the caller asked, or the guest's read
+    deadline (TESTVM_AX_TIMEOUT) plus 25 s for the transport, whichever is longer. adopt-walk's
+    ax() waits 40 s, so a 60 s guest deadline was cut off by the host first (walk 4 of
+    ray-opus-test55, 2026-10-13: `timed out after 40 seconds` in go)."""
+    return max(asked, deadline + 25)
+
+
 class HireWalk(command_walk.CommandWalk):
+    def ax(self, mode, *args, app=None, timeout=40):
+        deadline = int(os.environ.get('TESTVM_AX_TIMEOUT', '20'))
+        return super().ax(mode, *args, app=app, timeout=read_timeout(timeout, deadline))
+
+    def after_relaunch(self):
+        """After the relaunch the guest is busy before the window can answer a read: the app runs
+        its speech-speed check (2 to 5 whisper-cli at 50-140% CPU each, guest idle 0%) and the home
+        screen animates, so every accessibility read took 16-35 s and the 'Onboarding' click hit
+        the read deadline in 3 of 3 runs (ray-opus-test55, 2026-10-13, runs 1, 3 and 5). Wait,
+        up to --settle-within seconds, until no whisper-cli runs, then give every later read
+        --after-relaunch-deadline seconds. Recorded in relaunch-observed.json as `settled`."""
+        began = time.monotonic()
+        end = began + self.a.settle_within
+        counts = []
+        while time.monotonic() < end:
+            running = guest(self.vm, 'pgrep -x whisper-cli | wc -l', 60).strip()
+            counts.append(running)
+            if running == '0':
+                break
+            time.sleep(5)
+        os.environ['TESTVM_AX_TIMEOUT'] = str(int(self.a.after_relaunch_deadline))
+        return {'whisper_cli_counts': counts, 'seconds': round(time.monotonic() - began, 1),
+                'ax_deadline_s': int(self.a.after_relaunch_deadline)}
+
     def type_into(self, text, *selector, app=None):
         """One retry when the guest's accessibility read hits its own deadline (exit 124,
         `guest_deadline`): walk 1 of 2026-10-13 stopped there with the host at 100% CPU. Typing
@@ -451,6 +486,10 @@ def main():
     p.add_argument('--within', type=float, default=900, help='seconds for the delegated task to close')
     p.add_argument('--approvals', type=int, default=3, help='most Approve presses on one assignment')
     p.add_argument('--relaunch-within', type=float, default=120, help='seconds for the composer to come back')
+    p.add_argument('--settle-within', type=float, default=300,
+                   help='seconds to wait after the relaunch for the guest to stop running whisper-cli')
+    p.add_argument('--after-relaunch-deadline', type=float, default=60,
+                   help='the guest accessibility read deadline (TESTVM_AX_TIMEOUT) after the relaunch')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')

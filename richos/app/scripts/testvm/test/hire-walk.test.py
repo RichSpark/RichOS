@@ -110,5 +110,14 @@ class Verdicts(unittest.TestCase):
         self.assertEqual([(t['prompt'], t['reply'], t['done']) for t in turns], [('hi', 'Hello', True)])
 
 
+class ReadTimeout(unittest.TestCase):
+    def test_the_host_outwaits_a_longer_guest_deadline(self):
+        # Walk 4 of ray-opus-test55: a 60 s guest deadline under a 40 s host wait failed in go.
+        self.assertEqual(hire_walk.read_timeout(40, 60), 85)
+
+    def test_the_callers_wait_stands_when_it_is_already_longer(self):
+        self.assertEqual(hire_walk.read_timeout(120, 20), 120)
+
+
 if __name__ == '__main__':
     unittest.main()
