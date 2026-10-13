@@ -743,15 +743,13 @@ class SetupWalk(adopt_walk.Walk):
         except ValueError:
             return {}
 
-    def feature_rows(self):
-        """How many "Dictation feature" conversations the rail lists."""
-        try:
-            nodes = self.ax('find', '--title', 'Dictation feature', '--role', 'AXButton', '--contains')
-        except StepFailed as exc:
-            if 'notfound' in str(exc) or 'nothing matched' in str(exc):
-                return 0
-            raise
-        return len([n for n in nodes if not n.get('meta')])
+    def feature_threads(self):
+        """How many "Dictation feature" conversations were ever created, from the conversation
+        ledger. Counting the rail's rows needs a whole-window accessibility read, which ran past
+        ax.sh's deadline in the guest (walk of 62ba08da2, 20:39Z); the rail is checked with
+        `present`, whose read stops at the first match."""
+        rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
+        return sum(1 for r in rows.splitlines() if '"ThreadCreated"' in r and '"Dictation feature"' in r)
 
     def r19_restart(self):
         """Second review rv-20261013T193550Z, finding 1: dictation turned on while Accessibility
@@ -776,7 +774,7 @@ class SetupWalk(adopt_walk.Walk):
         self.log = launched['log']
         self.wait_boot_setup(self.log)
         time.sleep(20)
-        facts['refused_rows'] = self.feature_rows()
+        facts['refused_threads'] = self.feature_threads()
         self.shot('restart-refused.png')
         quit_app(self.vm)
         facts['grants_allowed'] = self.grant('kTCCServiceAccessibility')
@@ -784,11 +782,12 @@ class SetupWalk(adopt_walk.Walk):
         self.log = launched['log']
         self.wait_boot_setup(self.log)
         end = time.monotonic() + 60
-        while time.monotonic() < end and not self.feature_rows():
+        while time.monotonic() < end and not self.present('Dictation feature'):
             time.sleep(2)
-        facts['allowed_rows'] = self.feature_rows()
+        facts['allowed_listed'] = self.present('Dictation feature')
+        facts['allowed_threads'] = self.feature_threads()
         facts['feature_thread'] = self.dictation_record().get('featureThread')
-        if facts['allowed_rows']:
+        if facts['allowed_listed']:
             self.press('Dictation feature')
             time.sleep(3)
         facts['feature_text'] = self.shows_text(R19_FEATURE_AX)
@@ -797,16 +796,19 @@ class SetupWalk(adopt_walk.Walk):
         self.log = launched['log']
         self.wait_boot_setup(self.log)
         time.sleep(20)
-        facts['again_rows'] = self.feature_rows()
+        facts['again_listed'] = self.present('Dictation feature')
+        facts['again_threads'] = self.feature_threads()
         facts['again_thread'] = self.dictation_record().get('featureThread')
         self.shot('restart-again.png')
         self.facts['r19_restart'] = facts
         self.save()
-        why = [w for ok, w in ((facts['refused_rows'] == 0, 'a conversation before dictation worked'),
-                               (facts['allowed_rows'] == 1, 'not exactly one conversation once allowed'),
+        why = [w for ok, w in ((facts['refused_threads'] == 0, 'a conversation before dictation worked'),
+                               (facts['allowed_listed'], 'the rail does not list it once allowed'),
+                               (facts['allowed_threads'] == 1, 'not exactly one conversation once allowed'),
                                (bool(facts['feature_thread']), 'dictation.json does not record it'),
                                (facts['feature_text'], 'its message does not name F2'),
-                               (facts['again_rows'] == 1, 'not exactly one after opening again'),
+                               (facts['again_listed'], 'the rail does not list it after opening again'),
+                               (facts['again_threads'] == 1, 'not exactly one after opening again'),
                                (facts['again_thread'] == facts['feature_thread'], 'its record changed')) if not ok]
         if why:
             raise StepFailed('; '.join(why) + ' — ' + json.dumps(facts))
