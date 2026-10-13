@@ -424,6 +424,10 @@ fn choose_model(bin: &Path) -> crate::hardware::Resolution {
     // speed attributed to the wrong build is the hole `toolchain.rs` exists to close.
     let bin_sha = crate::toolchain::hash_file(bin).unwrap_or_default();
     let key = hardware::cache_key(&bin_sha, &machine);
+    // ONE CALLER MEASURES, the others wait for it and then read what it saved (Ray, test55: a
+    // launch's callers used to run two to five measurements side by side). Taken BEFORE the
+    // cache is read, so a caller that waited sees the finished measurement.
+    let _turn = hardware::measuring_turn();
     let cached = hardware::load_speeds(&key);
 
     // The probe utterance, synthesized once for this whole walk and only if something is actually
@@ -439,7 +443,10 @@ fn choose_model(bin: &Path) -> crate::hardware::Resolution {
             .get_or_insert_with(|| synthesize_probe(&costs.probe_text, &probe_dir))
             .clone()?;
         let model = resolve_model(id).ok()?;
-        let secs = time_decode(bin, &model, &wav, costs.live_ceiling_secs)?;
+        let earlier = hardware::load_unfinished(&key, id);
+        let secs = time_decode(bin, &model, &wav, costs.live_ceiling_secs, earlier, |best, reps| {
+            hardware::record_unfinished(&key, id, best, reps)
+        })?;
         hardware::record_speed(&key, id, secs);
         Some(secs)
     });
@@ -543,26 +550,41 @@ const CALIBRATION_REJECT_REPS: usize = 3;
 /// [`decode_args`]`(None)` is passed VERBATIM, not an approximation. A calibration at different
 /// settings from the shipping run measures a decode this product never performs — `-fa` alone is
 /// worth 1.57 WER points and a measurable slice of the wall clock.
-fn time_decode(bin: &Path, model: &Path, wav: &Path, ceiling_secs: f64) -> Option<f64> {
-    let mut best: Option<f64> = None;
-    for _ in 0..CALIBRATION_REJECT_REPS {
+///
+/// # Why the reps of one rung can span launches
+///
+/// `earlier` is what a launch that was quit in the middle of this rung had already taken (best,
+/// reps), and `keep` saves each inconclusive rep as it is taken, so the reps of a rung add up
+/// across launches to the same at most three rather than starting again (Ray, test55: a guest
+/// quit half a minute into its measurement measured again on the next launch).
+fn time_decode(
+    bin: &Path,
+    model: &Path,
+    wav: &Path,
+    ceiling_secs: f64,
+    earlier: Option<(f64, usize)>,
+    mut keep: impl FnMut(f64, usize),
+) -> Option<f64> {
+    let (mut best, taken) = match earlier {
+        Some((secs, reps)) => (Some(secs), reps),
+        None => (None, 0),
+    };
+    for rep in taken..CALIBRATION_REJECT_REPS {
         let started = Instant::now();
-        let out = Command::new(bin)
-            .arg("-m")
-            .arg(model)
-            .arg("-f")
-            .arg(wav)
-            .args(decode_args(None))
-            .output()
+        let out = tethered_output(decoder_command(bin).arg("-m").arg(model).arg("-f").arg(wav).args(decode_args(None)))
             .ok()?;
         if !out.status.success() {
             return None;
         }
         let secs = started.elapsed().as_secs_f64();
-        best = Some(best.map_or(secs, |b: f64| b.min(secs)));
+        let min = best.map_or(secs, |b: f64| b.min(secs));
+        best = Some(min);
         // Settled: the minimum cannot rise, so no further rep could turn this into a rejection.
         if secs <= ceiling_secs {
             break;
+        }
+        if rep + 1 < CALIBRATION_REJECT_REPS {
+            keep(min, rep + 1);
         }
     }
     best
@@ -873,12 +895,12 @@ impl Recognizer {
         wav::write_pcm16_mono(&wav_path, samples, SAMPLE_RATE).map_err(|e| SttError::Io(e.to_string()))?;
 
         let started = Instant::now();
-        let mut cmd = Command::new(&self.bin);
+        let mut cmd = decoder_command(&self.bin);
         cmd.arg("-m").arg(&self.model).arg("-f").arg(&wav_path);
         cmd.args(decode_args(self.prompt.as_deref()));
         let out = match timeout {
             Some(timeout)=>bounded_decoder_until(&mut cmd,scratch_dir,timeout,stop),
-            None=>cmd.output(),
+            None=>tethered_output(&mut cmd),
         };
         // The recording is removed whatever the decoder did: a timeout, a stop or a failure
         // leaves no voice on disk here (the caller's scratch folder removes the rest).
@@ -896,8 +918,58 @@ impl Recognizer {
     }
 }
 
+/// **`whisper-cli` TIED TO THIS PROCESS'S LIFE**: `bin` and the arguments added after this, run
+/// so that it ends when this process ends, however it ends.
+///
+/// THE DEFECT (Ray, test55, nightly 54 and 55): a measurement decode kept running at full CPU
+/// after the app that started it had been quit. The app is quit by a signal more often than by
+/// its own exit path (the test VM's relaunch sends SIGTERM, a crash or a Force Quit sends none
+/// of it), no code of the app's runs then, and macOS has no "end my children when I end".
+///
+/// So the tie is made by the kernel. A small `/bin/sh` starts the decoder and a watcher; the
+/// watcher reads a pipe whose only writing end this process holds and never writes, so the read
+/// returns exactly when this process closes it: when the decode is over, or when this process
+/// is gone, because the kernel closes every descriptor of a process that ends. The watcher then
+/// ends the decoder. When the decoder ends first, the shell ends the watcher and exits with the
+/// decoder's own status. No polling and no clock.
+///
+/// The writing end is this command's stdin: a caller runs it through [`tethered_output`] or
+/// [`bounded_decoder_until`], which hold it until the decode is over.
+pub fn decoder_command(bin: &Path) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(DECODER_TETHER).arg("richos-decoder").arg(bin);
+    command.stdin(std::process::Stdio::piped());
+    command
+}
+
+/// The shell of [`decoder_command`]. The decoder gets an empty stdin and not the tether, and the
+/// watcher keeps the tether as descriptor 3 (a background job's own stdin is `/dev/null`).
+const DECODER_TETHER: &str = "exec 3<&0 0</dev/null
+\"$@\" 3<&- &
+decoder=$!
+(read -r _ <&3; kill -KILL \"$decoder\" 2>/dev/null) &
+watcher=$!
+exec 3<&-
+wait \"$decoder\"
+status=$?
+kill -KILL \"$watcher\" 2>/dev/null
+exit \"$status\"";
+
+/// Run a [`decoder_command`] to the end and collect what it printed, holding its tether until
+/// then. `Command::output` would close the tether at once (it drops a piped stdin before
+/// waiting), which ends the decoder before it starts.
+pub fn tethered_output(command: &mut Command) -> std::io::Result<std::process::Output> {
+    use std::process::Stdio;
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let tether = child.stdin.take();
+    let out = child.wait_with_output();
+    drop(tether);
+    out
+}
+
 // Spool bounded decoder output to owned scratch rather than blocking on full pipes.
-// Drop always kills/reaps only this child. No process-name or USB resets are involved.
+// Drop always kills/reaps only this child. No process-name or USB resets are involved. A
+// [`decoder_command`]'s tether is closed first, so its decoder ends with it.
 // `pub` since dictation: its scratch-folder tests run the real decoder handling twice in a row and
 // past its deadline (`src-tauri/src/dictation/scratch.rs`).
 pub fn bounded_decoder(command:&mut Command,dir:&Path,timeout:std::time::Duration)->std::io::Result<std::process::Output> {
@@ -911,6 +983,7 @@ pub fn bounded_decoder_until(command:&mut Command,dir:&Path,timeout:std::time::D
     struct Owned(Child);
     impl Drop for Owned {
         fn drop(&mut self) {
+            drop(self.0.stdin.take());
             match self.0.try_wait() {
                 Ok(Some(_)) => return,
                 Ok(None) => {},
@@ -926,7 +999,9 @@ pub fn bounded_decoder_until(command:&mut Command,dir:&Path,timeout:std::time::D
     }
     let output=dir.join("decoder.stdout");let errors=dir.join("decoder.stderr");
     let file=|path:&Path|std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path);
-    let mut child=Owned(command.stdin(Stdio::null()).stdout(file(&output)?).stderr(file(&errors)?).spawn()?);
+    // A pipe never written rather than `/dev/null`: it is a [`decoder_command`]'s tether, held
+    // here until the guard drops, and an empty input to any other command.
+    let mut child=Owned(command.stdin(Stdio::piped()).stdout(file(&output)?).stderr(file(&errors)?).spawn()?);
     let started=Instant::now();
     loop {
         if stop.is_some_and(|s|s.load(std::sync::atomic::Ordering::SeqCst)) {return Err(io::Error::new(io::ErrorKind::Interrupted,"decoder stopped by its owner"))}
@@ -1413,5 +1488,212 @@ mod bounded_tests {
         // SAFETY: signal 0 checks existence of the child this test started, and nothing else.
         assert_ne!(unsafe{libc::kill(pid,0)},0,"the stopped decoder (pid {pid}) is gone");
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// INVARIANT: a [`decoder_command`] passed its deadline ends its DECODER, not only the shell
+    /// that holds it, and a finished one hands back the decoder's own words and status.
+    #[test] fn a_tethered_decoder_ends_at_its_deadline_and_reports_like_the_bare_one() {
+        let directory=std::env::temp_dir().join(format!("bounded-decoder-tether-{}",std::process::id()));
+        std::fs::remove_dir_all(&directory).ok();
+        std::fs::create_dir_all(&directory).unwrap();
+        let pid_file=directory.join("decoder.pid");
+        let result=bounded_decoder(decoder_command(Path::new("/bin/sh")).args(["-c","echo $$ > \"$1\"; exec /bin/sleep 10","x"]).arg(&pid_file),&directory,std::time::Duration::from_millis(300));
+        assert_eq!(result.unwrap_err().kind(),std::io::ErrorKind::TimedOut);
+        let pid:i32=std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        // SAFETY: signal 0 only checks that the decoder this test started still exists.
+        let alive=||unsafe{libc::kill(pid,0)}==0;
+        let by=Instant::now()+std::time::Duration::from_secs(2);
+        while alive()&&Instant::now()<by {std::thread::sleep(std::time::Duration::from_millis(10));}
+        assert!(!alive(),"the decoder (pid {pid}) outlived its deadline");
+        let out=tethered_output(decoder_command(Path::new("/bin/sh")).args(["-c","echo words; exit 3"])).unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(),"words");
+        assert_eq!(out.status.code(),Some(3));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+/// **A LAUNCH IS A PROCESS**, so these tests launch processes. Each "launch" re-runs this test
+/// binary on one test with its own `HOME`, temporary folder, model folder, speed cache and a
+/// stand-in `whisper-cli`, which keeps every variable out of the other tests' environment and
+/// lets a quit be a real signal to a real process. The stand-in decodes nothing: it appends its
+/// pid to a log and sleeps, so the log is the count of measurement runs and their pids.
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    const ROLE: &str = "RICHOS_TEST_LAUNCH_ROLE";
+
+    struct Machine {
+        root: PathBuf,
+    }
+
+    impl Machine {
+        fn new(name: &str) -> Machine {
+            let root = std::env::temp_dir().join(format!("richos-launch-{name}-{}", std::process::id()));
+            std::fs::remove_dir_all(&root).ok();
+            for dir in ["home", "tmp/richos-voice-calibration", "models"] {
+                std::fs::create_dir_all(root.join(dir)).unwrap();
+            }
+            // The probe utterance is already rendered, so no launch runs `say`.
+            std::fs::write(root.join("tmp/richos-voice-calibration/probe.wav"), b"RIFF").unwrap();
+            // One installed rung, so one walk is exactly one measurement run.
+            std::fs::write(root.join("models/ggml-large-v3-turbo-q5_0.bin"), b"weights").unwrap();
+            let fake = root.join("whisper-cli");
+            std::fs::write(
+                &fake,
+                "#!/bin/sh\ncase \" $* \" in *\" -m \"*) ;; *) exit 0;; esac\n\
+                 echo $$ >> \"$RICHOS_TEST_DECODE_LOG\"\nexec /bin/sleep \"$RICHOS_TEST_DECODE_SECS\"\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+            Machine { root }
+        }
+
+        /// This test binary, re-run on `test` as one launch of the app on this machine.
+        fn launch(&self, test: &str, role: &str, decode_secs: &str) -> Command {
+            let mut c = Command::new(std::env::current_exe().unwrap());
+            c.args([test, "--exact", "--test-threads=1", "--nocapture"])
+                .env(ROLE, role)
+                .env("HOME", self.root.join("home"))
+                .env("TMPDIR", self.root.join("tmp"))
+                .env("RICHOS_MODEL_DIR", self.root.join("models"))
+                .env("RICHOS_WHISPER_BIN", self.root.join("whisper-cli"))
+                .env("RICHOS_WHISPER_SPEED_CACHE", self.root.join("whisper-speed.json"))
+                .env("RICHOS_TEST_DECODE_LOG", self.root.join("decodes.log"))
+                .env("RICHOS_TEST_DECODE_SECS", decode_secs)
+                .env_remove("RICHOS_VOICE_WHISPER_MODEL")
+                .env_remove("RICHOS_WHISPER_MODEL")
+                .env_remove("RICHOS_VOICE_WHISPER_MODEL_ID")
+                .env_remove("RICHOS_HW_TOTAL_MEMORY_BYTES")
+                .env_remove("RICHOS_HW_AVAILABLE_MEMORY_BYTES");
+            c
+        }
+
+        /// The pid of every measurement run started on this machine so far, in order.
+        fn decodes(&self) -> Vec<i32> {
+            std::fs::read_to_string(self.root.join("decodes.log"))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| l.trim().parse().ok())
+                .collect()
+        }
+    }
+
+    impl Drop for Machine {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).ok();
+        }
+    }
+
+    /// What one launch of the app does: every caller that asks which model this machine uses
+    /// (the window's readiness, the phone's voice desk, a lease's video model) asks at once.
+    fn act_as_a_launch(callers: usize) {
+        let bin = resolve_whisper_bin().expect("the stand-in decoder");
+        let start = std::sync::Arc::new(std::sync::Barrier::new(callers));
+        let handles: Vec<_> = (0..callers)
+            .map(|_| {
+                let (bin, start) = (bin.clone(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    choose_model(&bin).model_id
+                })
+            })
+            .collect();
+        for h in handles {
+            assert_eq!(h.join().unwrap(), "large-v3-turbo-q5_0");
+        }
+    }
+
+    /// INVARIANT (Ray, test55): the speed measurement runs ONCE PER MACHINE. The first launch's
+    /// callers ask together and one measurement run answers all of them; the second launch reuses
+    /// the saved measurement and starts no measurement run at all.
+    #[test]
+    fn the_speed_measurement_runs_once_per_machine_and_a_second_launch_reuses_it() {
+        if std::env::var(ROLE).as_deref() == Ok("launch") {
+            return act_as_a_launch(4);
+        }
+        let name = "stt::launch_tests::the_speed_measurement_runs_once_per_machine_and_a_second_launch_reuses_it";
+        let machine = Machine::new("once");
+        let first = machine.launch(name, "launch", "0.3").output().unwrap();
+        assert!(first.status.success(), "first launch: {}", String::from_utf8_lossy(&first.stdout));
+        let runs = machine.decodes().len();
+        assert_eq!(runs, 1, "the first launch's four callers started {runs} measurement runs");
+        let second = machine.launch(name, "launch", "0.3").output().unwrap();
+        assert!(second.status.success(), "second launch: {}", String::from_utf8_lossy(&second.stdout));
+        let runs = machine.decodes().len();
+        assert_eq!(runs, 1, "the second launch measured again ({} runs in all) instead of reusing the saved measurement", runs);
+    }
+
+    /// INVARIANT: a launch quit in the middle of a measurement does not cost the next launch the
+    /// whole measurement again. The stand-in takes 1.05 s, over the 1.000 s ceiling, so the rung
+    /// wants three reps; the first launch is quit during its second, and the next launch takes
+    /// the two still owed, not three.
+    #[test]
+    fn a_measurement_cut_short_by_a_quit_is_resumed_not_restarted() {
+        if std::env::var(ROLE).as_deref() == Ok("launch") {
+            return act_as_a_launch(1);
+        }
+        let name = "stt::launch_tests::a_measurement_cut_short_by_a_quit_is_resumed_not_restarted";
+        let machine = Machine::new("resume");
+        let mut app = machine
+            .launch(name, "launch", "1.05")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(20);
+        while machine.decodes().len() < 2 && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // SAFETY: SIGTERM to the child this test spawned and has not yet reaped.
+        unsafe { libc::kill(app.id() as i32, libc::SIGTERM) };
+        app.wait().unwrap();
+        let interrupted = machine.decodes();
+        assert_eq!(interrupted.len(), 2, "the first launch was quit during its second rep");
+        // Each stand-in logs once, when it starts, so the interrupted rep cannot be counted below.
+        let second = machine.launch(name, "launch", "1.05").output().unwrap();
+        assert!(second.status.success(), "second launch: {}", String::from_utf8_lossy(&second.stdout));
+        let resumed = machine.decodes().len() - interrupted.len();
+        assert_eq!(resumed, 2, "the second launch took {resumed} reps; one was kept, so two were owed");
+    }
+
+    /// INVARIANT (Ray, test55): no `whisper-cli` outlives the app that started it. The app is
+    /// quit the way the test VM's relaunch quits it (SIGTERM, which runs none of the app's own
+    /// exit code) in the middle of a measurement run, and the run must end with it.
+    #[test]
+    fn a_quit_leaves_no_whisper_cli() {
+        if std::env::var(ROLE).as_deref() == Ok("quit") {
+            return act_as_a_launch(1);
+        }
+        let name = "stt::launch_tests::a_quit_leaves_no_whisper_cli";
+        let machine = Machine::new("quit");
+        let mut app = machine
+            .launch(name, "quit", "30")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(20);
+        while machine.decodes().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let decoder = *machine.decodes().first().expect("the app started its measurement run");
+        // SAFETY: SIGTERM to the child this test spawned and has not yet reaped.
+        unsafe { libc::kill(app.id() as i32, libc::SIGTERM) };
+        app.wait().unwrap();
+        // SAFETY: signal 0 only checks that the stand-in this test's app started still exists.
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        let gone_by = Instant::now() + std::time::Duration::from_secs(3);
+        while alive(decoder) && Instant::now() < gone_by {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let survived = alive(decoder);
+        if survived {
+            // Never leave the stand-in running past the test, whatever the verdict.
+            // SAFETY: the pid this test's own stand-in wrote, checked alive just above.
+            unsafe { libc::kill(decoder, libc::SIGKILL) };
+        }
+        assert!(!survived, "whisper-cli (pid {decoder}) kept running after the app that started it quit");
     }
 }
