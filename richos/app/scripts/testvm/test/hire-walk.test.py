@@ -25,10 +25,23 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(names, ['nora', 'will', 'bea'])
 
+    def test_the_ending_walk_4_saw_passes(self):
+        # Rich's own words at the end of walk 4 of 2026-10-13, on this branch's build.
+        reply = OPENING + "- Will (Marketing Director)\n- Penny (Bookkeeper)" + CLOSING
+        self.assertEqual(hire_walk.proposal_verdict(reply), (['will', 'penny'], []))
+
     def test_the_old_ending_that_hires_nobody_fails(self):
         _, failures = hire_walk.proposal_verdict("I've written down who you want. I can't hire anyone for you yet.")
         self.assertTrue(any('Say go' in f for f in failures), failures)
         self.assertTrue(any('no new teammate' in f for f in failures), failures)
+
+    def test_a_proposal_missing_a_role_he_asked_for_fails(self):
+        # Review rv-20261013T163700Z-d59c8398-4191 #2: he asked for a marketing lead and a
+        # bookkeeper, and a proposal of Will alone passed.
+        _, failures = hire_walk.proposal_verdict(OPENING + "- Will (Marketing Director)" + CLOSING)
+        self.assertTrue(any('bookkeeper' in f for f in failures), failures)
+        _, failures = hire_walk.proposal_verdict(OPENING + "- Penny (Bookkeeper)" + CLOSING)
+        self.assertTrue(any('marketing lead' in f for f in failures), failures)
 
     def test_a_proposal_saved_and_named_passes_and_any_gap_fails(self):
         self.assertEqual(hire_walk.hired_verdict(['nora', 'bea'], ['bea', 'nora'], 'Nora and Bea joined.'), [])
@@ -37,32 +50,44 @@ class Verdicts(unittest.TestCase):
                         'a saved teammate he was not told about fails')
         self.assertTrue(hire_walk.hired_verdict([], [], 'Everyone joined.'), 'nobody saved fails')
 
-    def test_a_proposal_missing_a_role_he_asked_for_fails(self):
-        # Review rv-20261013T163700Z-d59c8398-4191, finding 2: he asked for a marketing lead and a
-        # bookkeeper, and a proposal of Will alone passed.
-        _, failures = hire_walk.proposal_verdict(OPENING + "- Will (Marketing Director)" + CLOSING)
-        self.assertTrue(any('bookkeeper' in f for f in failures), failures)
+    def test_a_hire_he_is_told_about_that_was_not_saved_fails_in_every_spelling(self):
+        # Reviews rv-20261013T163700Z-d59c8398-4191 #2 and rv-20261013T173718Z-c59b9c38-d018:
+        # saved=['will'] and he is told Bea joined, as "Bea (Bookkeeper)", "**Bea** (Bookkeeper)"
+        # or "Will and Bea joined the team."
+        for told in ['Will (Marketing Director) and Bea (Bookkeeper) joined the team.',
+                     '**Will** (Marketing Director) and **Bea** (Bookkeeper) joined the team.',
+                     'Will and Bea joined the team.',
+                     'Will, Nora and Bea are now on your team.',
+                     '- Will (Marketing Director)\n- Bea (Bookkeeper)']:
+            failures = hire_walk.hired_verdict(['will'], ['will'], told)
+            self.assertTrue(any('Bea' in f for f in failures), (told, failures))
 
-    def test_a_hire_he_is_told_about_that_was_not_saved_fails(self):
-        # The same finding's second half: saved=['will'], told "Will and Bea (Bookkeeper) joined".
-        failures = hire_walk.hired_verdict(['will'], ['will'], 'Will (Marketing Director) and Bea (Bookkeeper) joined the team.')
-        self.assertTrue(any('Bea' in f for f in failures), failures)
-        self.assertEqual(hire_walk.hired_verdict(['will'], ['will'], 'Will (Marketing Director) joined; Frank (Expert Advisor) was already here.'), [])
+    def test_an_honest_report_of_what_was_saved_passes(self):
+        for told in ['Will (Marketing Director) and Penny (Bookkeeper) joined the team.',
+                     '**Will** (Marketing Director) and **Penny** (Bookkeeper) are now on your team. '
+                     'Frank (Expert Advisor) and the rest were already here.',
+                     'Done. Will and Penny joined the team, and Acme (your company) is all set up for them.']:
+            self.assertEqual(hire_walk.hired_verdict(['will', 'penny'], ['will', 'penny'], told), [], told)
 
-    def test_delegation_needs_this_tasks_own_dispatch_and_answer_and_a_settled_task(self):
-        # Finding 3: an interrupted task told "No work was started", with only an earlier job's
-        # dispatch of the teammate on record, passed.
-        settled = {'state': 'settled', 'notices': [{'text': 'Nora suggests: one, two, three.'}]}
-        pre = {'hook_event_name': 'PreToolUse', 'tool_name': 'Agent', 'tool_input': {'subagent_type': 'richos-app-engine:nora'}}
-        post = dict(pre, hook_event_name='PostToolUse', tool_response='1. Lead through change 2. ...')
-        self.assertEqual(hire_walk.delegate_verdict(settled, [pre, post], 'nora'), [])
-        interrupted = {'state': 'interrupted', 'notices': [{'text': 'No work was started.'}]}
-        failures = hire_walk.delegate_verdict(interrupted, [], 'nora')
+    def test_delegation_needs_this_tasks_own_receipt_with_an_answer_and_a_settled_task(self):
+        # #3 in both reviews: an interrupted task told "No work was started"; an Agent call's
+        # async_launched acknowledgment taken for an answer; another session's run counted.
+        settled = {'state': 'settled', 'obligation_id': 'work-1', 'notices': [{'text': 'Penny suggests: one, two, three.'}]}
+        answered = {'request': {'teammate': 'penny', 'role': 'consult', 'obligation_id': 'work-1'},
+                    'consult_answer': {'answered': True, 'source': 'SubagentStop', 'message': '1. Lead through change'}}
+        self.assertEqual(hire_walk.delegate_verdict(settled, [answered], 'penny'), [])
+        launched_only = {'request': {'teammate': 'penny', 'role': 'consult', 'obligation_id': 'work-1'},
+                         'status': 'async_launched', 'consult_answer': {}}
+        self.assertTrue(any('handed back no answer' in f for f in
+                            hire_walk.delegate_verdict(settled, [launched_only], 'penny')))
+        elsewhere = dict(answered, request={'teammate': 'penny', 'role': 'consult', 'obligation_id': 'work-0'})
+        self.assertTrue(any('no run of penny' in f for f in hire_walk.delegate_verdict(settled, [elsewhere], 'penny')))
+        interrupted = {'state': 'interrupted', 'obligation_id': 'work-1', 'notices': [{'text': 'No work was started.'}]}
+        failures = hire_walk.delegate_verdict(interrupted, [], 'penny')
         self.assertTrue(any('interrupted' in f for f in failures) and any('No work was started' in f for f in failures)
-                        and any('did not dispatch' in f for f in failures), failures)
-        self.assertTrue(hire_walk.delegate_verdict(settled, [pre], 'nora'), 'a dispatch with no answer handed back fails')
+                        and any('no run of penny' in f for f in failures), failures)
 
-    def test_the_turns_and_the_dispatched_teammates_are_read_off_the_records(self):
+    def test_the_turns_are_read_off_the_ledger(self):
         rows = [{'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'a', 'text': 'hi', 'source': 'text'},
                 {'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'x', 'text': 'prime', 'source': 'internal'},
                 {'event': 'AssistantDelta', 'turn_id': 'a', 'text': 'Hel'},
@@ -70,9 +95,6 @@ class Verdicts(unittest.TestCase):
                 {'event': 'TurnCompleted', 'turn_id': 'a'}]
         turns = hire_walk.turns_of(rows, 't')
         self.assertEqual([(t['prompt'], t['reply'], t['done']) for t in turns], [('hi', 'Hello', True)])
-        calls = [{'hook_event_name': 'PreToolUse', 'tool_name': 'Agent',
-                  'tool_input': {'subagent_type': 'richos-app-engine:nora'}}]
-        self.assertEqual(hire_walk.dispatched_teammates(calls), ['nora'])
 
 
 if __name__ == '__main__':

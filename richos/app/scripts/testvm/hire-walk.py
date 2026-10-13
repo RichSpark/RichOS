@@ -29,10 +29,10 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               and no Approve card put in front of him along the way. Evidence: go-observed.json.
   relaunch    command-walk.py's relaunch: the app stopped by pid and started again
   roster      after the relaunch, the lease's roster holds the five and every hired teammate
-  delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs, in the hook
-              records written after that send only: an Agent call naming that teammate and its
-              finished run handing back an answer; and the task closed settled with a result he was
-              told. Evidence: delegate-observed.json.
+  delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs a back-end
+              dispatch receipt for THIS task's obligation naming that teammate, whose run handed back
+              an answer (consult_answer, set from the run's own hand-back or stop), and the task
+              closed settled with a result he was told. Evidence: delegate-observed.json.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
@@ -130,12 +130,32 @@ def proposal_verdict(reply):
     return [name for name, _ in proposed], failures
 
 
+# Words that open a sentence or name the company, never a teammate he is told about.
+NOT_A_TEAMMATE = {'acme', 'rich', 'i', 'and', 'the', 'your', 'my', 'both', 'they', 'everyone', 'nobody'}
+NAME = r'\*{0,2}([A-Z][a-z]{1,15})\*{0,2}'
+
+
+def claimed_names(told):
+    """Every name he was told about as a teammate: a bold name, a name followed by its job title in
+    parentheses, a bullet that starts with a name, and each name in a list that "joined", "is on"
+    or "are on" the team ("Will and Bea joined", "Will, Nora and Bea are now on the team")."""
+    text = told or ''
+    names = set(re.findall(r'\*\*([A-Z][a-z]{1,15})\*\*', text))
+    names |= set(re.findall(r'\b([A-Z][a-z]{1,15})\*{0,2}\s*\(', text))
+    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})', text))
+    joined = re.compile(r'((?:' + NAME + r'(?:\s*,\s*(?:and\s+)?|\s+and\s+))*' + NAME + r')'
+                        r'\s+(?:has\s+|have\s+)?(?:joined|(?:is|are)\s+(?:now\s+)?(?:on|part of))')
+    for m in joined.finditer(text):
+        names |= set(re.findall(r'[A-Z][a-z]{1,15}', m.group(1)))
+    return sorted({n.lower() for n in names} - NOT_A_TEAMMATE)
+
+
 def hired_verdict(proposed, saved, told):
     """Every proposed teammate saved; every saved teammate named in what he was told; and nobody
-    he was told about as a teammate ("Name (Job title)") who is neither saved nor one of the five."""
+    he was told about as a teammate who is neither saved nor one of the five."""
     failures = []
     told_lower = (told or '').lower()
-    for claimed in sorted({m.lower() for m in re.findall(r'\b([A-Z][a-z]+)\s+\(', told or '')}):
+    for claimed in claimed_names(told):
         if claimed not in saved and claimed not in STOCK:
             failures.append(f'he was told about {claimed.capitalize()} and no such teammate was saved')
     for name in proposed:
@@ -149,32 +169,15 @@ def hired_verdict(proposed, saved, told):
     return failures
 
 
-def dispatched_teammates(callback_rows):
-    """The teammates the back end's Agent calls named, from its hook records."""
-    out = []
-    for c in callback_rows:
-        if c.get('hook_event_name') == 'PreToolUse' and c.get('tool_name') == 'Agent':
-            kind = (c.get('tool_input') or {}).get('subagent_type', '')
-            out.append(kind.split(':', 1)[-1])
-    return out
+def delegate_verdict(record, receipts, name):
+    """Why the task sent after the relaunch does NOT show `name` doing it ([] = it does).
 
-
-def answered_by(callback_rows, name):
-    """The answers `name` handed back: each PostToolUse of an Agent call that named it, non-empty."""
-    out = []
-    for c in callback_rows:
-        kind = ((c.get('tool_input') or {}).get('subagent_type') or '').split(':', 1)[-1]
-        if c.get('hook_event_name') == 'PostToolUse' and c.get('tool_name') == 'Agent' and kind == name:
-            answer = c.get('tool_response')
-            if answer:
-                out.append(answer if isinstance(answer, str) else json.dumps(answer))
-    return out
-
-
-def delegate_verdict(record, new_rows, name):
-    """Why the task sent after the relaunch does NOT show `name` doing it ([] = it does). `new_rows`
-    are only the hook records written after that task was sent, so an earlier job's dispatch of
-    the same teammate cannot count."""
+    The evidence is the back end's own dispatch receipts (engine/mega-lander/app.py, `folder`:
+    <app data>/engine-state/work-receipts/<hash>/*.json), taken only where the receipt's
+    obligation is THIS assignment's obligation, so another job's or another session's run of the
+    same teammate cannot count. A consult's answer is `consult_answer`, which the app sets only
+    from that run's own hand-back or its SubagentStop (`observe`), never from the Agent call's
+    immediate acknowledgment; it must say answered and carry a message."""
     failures = []
     notices = (record or {}).get('notices') or []
     if not record or record.get('state') != 'settled':
@@ -183,11 +186,27 @@ def delegate_verdict(record, new_rows, name):
         failures.append('he was told "No work was started"')
     if not notices or not notices[-1].get('text', '').strip():
         failures.append('he was told nothing about the result')
-    if name not in dispatched_teammates(new_rows):
-        failures.append(f'the back end did not dispatch {name} for this task; it dispatched {dispatched_teammates(new_rows)}')
-    if not answered_by(new_rows, name):
-        failures.append(f'{name} handed back no answer for this task')
+    obligation = (record or {}).get('obligation_id')
+    mine = [r for r in receipts if obligation and (r.get('request') or {}).get('obligation_id') == obligation]
+    runs = [r for r in mine if (r.get('request') or {}).get('teammate') == name]
+    if not runs:
+        failures.append(f"no run of {name} was dispatched for this task; its runs were "
+                        f"{[(r.get('request') or {}).get('teammate') for r in mine]}")
+    answered = [r for r in runs if (r.get('consult_answer') or {}).get('answered')
+                and str((r.get('consult_answer') or {}).get('message', '')).strip()]
+    if runs and not answered:
+        failures.append(f'{name} was dispatched for this task and its run handed back no answer')
     return failures
+
+
+def answer_of(receipts, record, name):
+    for r in receipts:
+        request = r.get('request') or {}
+        if request.get('obligation_id') == (record or {}).get('obligation_id') and request.get('teammate') == name:
+            answer = (r.get('consult_answer') or {}).get('message')
+            if answer:
+                return answer
+    return ''
 
 
 class HireWalk(command_walk.CommandWalk):
@@ -356,20 +375,20 @@ class HireWalk(command_walk.CommandWalk):
             raise StepFailed('after the relaunch the roster lacks: ' + ', '.join(missing))
         return {'roster': roster}
 
-    def callback_rows(self):
-        """Every Agent hook record in the guest, each keyed by its file and line, so the rows written
-        after a moment can be told from the ones before it."""
+    def receipts(self):
+        """The back end's dispatch receipts, read-only: request (teammate, role, obligation_id),
+        status and consult_answer, each bounded."""
         script = ('import json,glob,sys\n'
                   'out=[]\n'
-                  'for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):\n'
-                  '    for i,l in enumerate(open(p)):\n'
-                  '        try: c=json.loads(l).get("callback",{})\n'
-                  '        except Exception: continue\n'
-                  '        if c.get("tool_name")!="Agent": continue\n'
-                  '        r=c.get("tool_response")\n'
-                  '        out.append({"key":p+":"+str(i),"hook_event_name":c.get("hook_event_name"),"tool_name":"Agent",\n'
-                  '                    "tool_input":{"subagent_type":(c.get("tool_input") or {}).get("subagent_type")},\n'
-                  '                    "tool_response":(r if isinstance(r,str) else json.dumps(r) if r else "")[:4000]})\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/work-receipts/*/*.json"):\n'
+                  '    try: r=json.load(open(p))\n'
+                  '    except Exception: continue\n'
+                  '    q=r.get("request") or {}\n'
+                  '    a=r.get("consult_answer") or {}\n'
+                  '    out.append({"file":p.rsplit("/",2)[-1],"status":r.get("status"),\n'
+                  '                "request":{k:q.get(k) for k in ("teammate","role","obligation_id","title")},\n'
+                  '                "consult_answer":{"answered":a.get("answered"),"source":a.get("source"),\n'
+                  '                                  "message":str(a.get("message",""))[:4000]}})\n'
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
 
@@ -378,19 +397,17 @@ class HireWalk(command_walk.CommandWalk):
         if not hired:
             raise StepFailed('go must have run (nobody hired on record)')
         name = hired[0]
-        before = {r['key'] for r in self.callback_rows()}
         sent = self.send(DELEGATE_TASK.format(Name=name.capitalize()))
         pressed = [0]
         record = self.settled_read(self.until_closed(lambda: self.ours(sent), self.a.within, pressed))
-        new_rows = [r for r in self.callback_rows() if r['key'] not in before]
-        evidence = {'teammate': name, 'assignment': record, 'agent_rows_after_send': new_rows}
+        receipts = self.receipts()
+        evidence = {'teammate': name, 'assignment': record, 'receipts': receipts}
         (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
-        failures = delegate_verdict(record, new_rows, name)
+        failures = delegate_verdict(record, receipts, name)
         if failures:
             raise StepFailed('; '.join(failures))
-        return {'teammate': name, 'state': record.get('state'), 'answer': answered_by(new_rows, name)[-1][:1000],
+        return {'teammate': name, 'state': record.get('state'), 'answer': answer_of(receipts, record, name)[:1000],
                 'notice': record['notices'][-1].get('text', '')}
-
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
