@@ -50,4 +50,15 @@ final class ChannelWatchTests: XCTestCase {
         // A microphone that is not running is ChannelWatch's to say, not this.
         for _ in 0..<30 { XCTAssertNil(s.update(micPeak: 0, micRunning: false)) }
     }
+
+    // The installed-app walk, run 8 (2026-10-13): the microphone gave the speech, then exact
+    // zeros between phrases (a device gating itself), and the brief opened with a false "may be
+    // turned off". Access that is off gives zeros from the first sample; a heard microphone is
+    // never called silent.
+    func testAMicrophoneThatHasGivenSoundIsNeverCalledSilent() {
+        var s = MicSilence()
+        XCTAssertNil(s.update(micPeak: 0.2, micRunning: true))
+        for _ in 0..<60 { XCTAssertNil(s.update(micPeak: 0, micRunning: true)) }
+        XCTAssertNil(s.update(micPeak: 0.1, micRunning: true))
+    }
 }

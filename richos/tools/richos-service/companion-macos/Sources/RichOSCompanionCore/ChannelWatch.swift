@@ -40,16 +40,23 @@ public struct ChannelChange: Equatable {
 /// noise floor), so `seconds` of peak == 0 is said once, and said again only after sound has
 /// returned. Measured 2026-10-13 (end-detection run 2): the capture's microphone side was exactly
 /// zero for all 195 s while a known track played into it, and every health row said green.
+///
+/// ONLY A MICROPHONE THAT HAS NEVER GIVEN SOUND. Access that is off gives zeros from the first
+/// sample; a microphone that has been heard and then goes digitally silent is a device gating
+/// itself (the installed-app walk's virtual microphone between phrases, run 8, 2026-10-13, which
+/// put a false "may be turned off" line at the top of the brief), not a missing grant.
 public struct MicSilence {
     private let seconds: Int
     private var zeroTicks = 0
     private var said = false
+    private var heard = false
 
     public init(seconds: Int = 10) { self.seconds = seconds }
 
     /// One health tick's microphone peak. Returns the change to say, if any.
     public mutating func update(micPeak: Double, micRunning: Bool) -> String? {
         guard micRunning else { zeroTicks = 0; return nil }
+        if micPeak == 0 && heard { return nil }
         if micPeak == 0 {
             zeroTicks += 1
             if zeroTicks == seconds && !said {
@@ -59,6 +66,7 @@ public struct MicSilence {
             return nil
         }
         zeroTicks = 0
+        heard = true
         if said {
             said = false
             return MicSilence.back
