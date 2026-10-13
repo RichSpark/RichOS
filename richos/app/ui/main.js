@@ -1758,9 +1758,12 @@ function renderFirstRun() {
 //
 // **Turn on dictation** hands over to the Dictation sheet's own turn-on (slice 2 registers
 // `window.RichDictation.turnOn`, which opens the sheet and runs the permission flow and answers
-// `{on}`); the note then says the drawn "Dictation is on. Tap F1 in any app." when it is on,
-// otherwise the drawn "It's in Settings, under Dictation." **Not now** says the drawn "Okay. It's
-// in Settings, under Dictation, whenever you want it."
+// `{on}`). When it is on, the dictation text LEAVES this conversation and only "Voice is ready."
+// stays: once dictation is set up (the sheet closed on it, after he picked his key there), the
+// app opens a conversation titled "Dictation feature" under the company, with Rich's message
+// naming the key he picked (the CEO, 2026-10-13, onboarding5.png; `dictation_feature_thread`).
+// When it did not end up on, the note says the drawn "It's in Settings, under Dictation." **Not
+// now** says the drawn "Okay. It's in Settings, under Dictation, whenever you want it."
 // ---------------------------------------------------------------------------------------
 
 const DICTATION_OFFER_VOICE = "Voice is ready. Press the round button beside the message box and just talk to me.";
@@ -1784,7 +1787,8 @@ async function maybeOfferDictation() {
   dictationOfferWanted = false;
   const view = await invokeQuiet("dictation_offer");
   if (!view || !view.ready || view.offered) return;
-  dictationOffer = { phase: "open", key: "F" + (Number(view.key) || 1) };
+  // `thread`: the note belongs to the conversation it was shown in, never to every one he opens.
+  dictationOffer = { phase: "open", key: "F" + (Number(view.key) || 1), thread: activeThreadId };
   invokeQuiet("dictation_offer_shown");
   followBottom = true;
   scheduleRender();
@@ -1808,7 +1812,7 @@ async function answerDictationOffer(yes) {
 
 /// The note, appended after whatever the conversation shows (`flushRender` rebuilds the list).
 function renderDictationOffer() {
-  if (!dictationOffer) return;
+  if (!dictationOffer || dictationOffer.thread !== activeThreadId) return;
   const art = document.createElement("article");
   art.className = "tl-rich dictation-offer";
   art.id = "dictation-offer";
@@ -1840,6 +1844,13 @@ function renderDictationOffer() {
   key.className = "dictation-offer-key";
   key.textContent = dictationOffer.key;
   third.append(DICTATION_OFFER_HOW_BEFORE, key, DICTATION_OFFER_HOW_AFTER);
+  // On: the dictation text has moved to its own conversation ("Dictation feature"), so this one
+  // keeps only the sentence about voice.
+  if (dictationOffer.phase === "on") {
+    art.append(first);
+    messagesEl.appendChild(art);
+    return;
+  }
   art.append(first, second, third);
   if (dictationOffer.phase === "open") {
     const acts = document.createElement("div");
@@ -1862,15 +1873,19 @@ function renderDictationOffer() {
     const after = document.createElement("p");
     after.className = "tl-prose dictation-offer-after";
     after.id = "dictation-offer-after";
-    after.textContent = dictationOffer.phase === "no"
-      ? DICTATION_OFFER_NOT_NOW
-      : dictationOffer.phase === "on"
-        ? "Dictation is on. Tap " + dictationOffer.key + " in any app."
-        : DICTATION_OFFER_LATER;
+    after.textContent = dictationOffer.phase === "no" ? DICTATION_OFFER_NOT_NOW : DICTATION_OFFER_LATER;
     art.append(after);
   }
   messagesEl.appendChild(art);
 }
+
+/// **DICTATION WAS JUST SET UP** (`dictation.js` says so when the sheet closes on a turn-on that
+/// worked, after he picked his key there): the app opens the "Dictation feature" conversation
+/// under his company, once, with Rich's message naming the key he picked, and the rail shows it.
+window.addEventListener("richos:dictation-set-up", async () => {
+  const created = await invokeQuiet("dictation_feature_thread");
+  if (created) await refreshNavigation();
+});
 
 /// The reload path. Fails closed exactly like `get_messages` did: an unbound thread refuses
 /// rather than returning an empty conversation, and the calm §21 screen takes over.

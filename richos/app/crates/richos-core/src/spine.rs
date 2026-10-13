@@ -2060,6 +2060,30 @@ impl Spine {
         Ok(turn_id)
     }
 
+    /// **A conversation the app opens on its own, with Rich's first message already in it**
+    /// (the CEO, 2026-10-13: once dictation is set up, a conversation titled "Dictation feature"
+    /// is created under the company, holding Rich's message about it).
+    ///
+    /// The message is a proactive turn ([`Self::raise_proactive`]), so it is Rich's, durable,
+    /// and in the verbatim tail the desk answering there is primed with. The thread is created
+    /// through the ledger directly rather than [`Self::create_thread`], so a spare front desk
+    /// standing ready for his next new conversation is not spent on this one, and the
+    /// conversation he is in stays the active one.
+    pub fn open_conversation_with_message(
+        &mut self,
+        entity_id: &EntityId,
+        title: &str,
+        text: &str,
+    ) -> Result<String, SpineError> {
+        if !self.registry.contains(entity_id) {
+            return Err(SpineError::UnknownEntity(entity_id.to_string()));
+        }
+        let id = self.ledger.create_thread(title, entity_id)?;
+        self.raise_proactive(Some(&id), AttentionTier::Digest, text)?;
+        self.publish_read_metadata();
+        Ok(id)
+    }
+
     // ---- threads -----------------------------------------------------------
 
     /// Replace the entity registry (tests, or a future CEO-configured registry).

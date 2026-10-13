@@ -1906,8 +1906,35 @@ async function main() {
     const on = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
     await on.waitForSelector("#dictation-offer-yes");
     await on.click("#dictation-offer-yes");
-    await on.waitForSelector("#dictation-offer-after");
-    assertEqual((await on.textContent("#dictation-offer-after")).trim(), "Dictation is on. Tap F1 in any app.", "on, both allowed");
+    // ONCE IT IS SET UP, ITS TEXT MOVES TO ITS OWN CONVERSATION (the CEO, 2026-10-13,
+    // onboarding5.png): this conversation keeps only "Voice is ready.", and he picks his key in
+    // the sheet before closing it (onboarding3.png: he picked F2, the app said F1).
+    await on.waitForSelector("#dictation-sheet:not([hidden])");
+    await on.waitForFunction(() => !document.getElementById("dictation-offer-yes"));
+    assertEqual(
+      await on.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.trim())),
+      ["Voice is ready. Press the round button beside the message box and just talk to me."],
+      "the dictation text left the onboarding conversation"
+    );
+    await on.click('.dict-key[data-k="2"]');
+    await on.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
+    await on.click("#dict-close");
+    const feature = on.locator(".nav-thread", { hasText: "Dictation feature" });
+    await feature.waitFor();
+    assertEqual(await on.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation, under his company");
+    await feature.click();
+    await on.waitForFunction(() => /Good news!/.test(document.getElementById("messages").innerText));
+    assertEqual(
+      // Rich's prose is one Markdown body; his four paragraphs are its four paragraphs.
+      await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
+      [
+        "Good news! Dictation is set up and enabled.",
+        "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
+        "Click into where you want your words to appear, tap F2, say what you want written, then tap it again. See how your words appear where your cursor is.",
+        "If you have any questions about this, we can discuss it here.",
+      ],
+      "his text, word for word, with the key he picked, and nothing else in that conversation"
+    );
     await on.close();
     const later = await finish({ dictationKey: 5, dictationView: { mic: "denied" } });
     await later.waitForSelector("#dictation-offer-yes");

@@ -4018,6 +4018,7 @@ fn main() {
             // --- Rich's one offer of dictation (dictation plan slice 4) — appended ---
             dictation_offer,
             dictation_offer_shown,
+            dictation_feature_thread,
             // --- the Dictation sheet and the Settings row (dictation plan slice 2) — appended ---
             #[cfg(target_os = "macos")]
             dictation_app::dictation_status,
@@ -6035,6 +6036,29 @@ fn dictation_offer_shown(state: State<AppState>) -> Result<(), String> {
     dictation_offer::mark_shown(&state.data_dir).inspect_err(|why| {
         eprintln!("[richos] dictation offer: the offer was shown and could not be recorded: {why}")
     })
+}
+
+/// **Dictation was just set up: open the "Dictation feature" conversation** (the CEO,
+/// 2026-10-13, onboarding5.png). Under the company he is in, with Rich's message naming the key
+/// he picked, read from the dictation settings file now, after he picked it. Once only: the
+/// answer is the new conversation's id, or `None` when it was created before.
+#[richos_command::command]
+fn dictation_feature_thread(state: State<AppState>) -> Result<Option<String>, String> {
+    if dictation_offer::feature_thread(&state.data_dir).is_some() {
+        return Ok(None);
+    }
+    let key = dictation_offer::view(&state.data_dir, true).key;
+    let id = {
+        let mut spine = take_the_spine(&state.spine);
+        let entity = spine.active_entity().cloned().ok_or_else(|| ENTITY_UNRESOLVED_MESSAGE.to_string())?;
+        spine
+            .open_conversation_with_message(&entity, dictation_offer::FEATURE_TITLE, &dictation_offer::feature_text(key))
+            .map_err(|e| e.to_string())?
+    };
+    dictation_offer::mark_feature_thread(&state.data_dir, &id).inspect_err(|why| {
+        eprintln!("[richos] dictation feature conversation {id}: created and could not be recorded: {why}")
+    })?;
+    Ok(Some(id))
 }
 
 /// **THE CEO PRESSES "Set it up".** Install what is missing, reporting each step on

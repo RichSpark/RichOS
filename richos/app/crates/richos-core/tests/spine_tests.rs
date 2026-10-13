@@ -135,6 +135,35 @@ fn default_thread_title_is_onboarding() {
 }
 
 #[test]
+fn a_conversation_the_app_opens_carries_richs_message_and_rich_is_primed_with_it() {
+    // The CEO, 2026-10-13: once dictation is set up, a conversation titled "Dictation feature"
+    // is created under the company with Rich's message in it, and "If you have any questions
+    // about this, we can discuss it here." So the message is Rich's, in the ledger, and the desk
+    // that answers in that conversation is primed with it; the conversation he is in stays open.
+    let (path, ledger) = tmp_ledger("app-opened");
+    let mut spine = support::spine(ledger);
+    let first = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+    let id = spine
+        .open_conversation_with_message(&femcboost(), "Dictation feature", "Good news! Dictation is set up and enabled.")
+        .unwrap();
+    assert_ne!(id, first);
+    assert_eq!(spine.active_thread(), Some(first.as_str()), "the conversation he is in stays the one he is in");
+    let row = spine.threads().into_iter().find(|t| t.id == id).expect("the new conversation is listed");
+    assert_eq!(row.title, "Dictation feature");
+    assert_eq!(row.entity_id.as_deref(), Some("femcboost"), "under his company");
+    let said = spine.messages(&id).unwrap();
+    assert_eq!(said.len(), 1);
+    assert_eq!((said[0].role.as_str(), said[0].text.as_str()), ("assistant", "Good news! Dictation is set up and enabled."));
+    let lease = MockCognition::new("sess-one", vec!["On it!"]);
+    let reprimes = lease.reprimes.clone();
+    spine.attach_lease(Box::new(lease));
+    spine.prime_front_desk(&id);
+    let primed = reprimes.lock().unwrap().join("\n");
+    assert!(primed.contains("Good news! Dictation is set up and enabled."), "Rich knows what he said there: {primed}");
+    std::fs::remove_file(&path).expect("the test ledger is removable");
+}
+
+#[test]
 fn threads_are_views_over_one_shared_ledger() {
     let (path, ledger) = tmp_ledger("threads");
     let mut spine = support::spine(ledger);

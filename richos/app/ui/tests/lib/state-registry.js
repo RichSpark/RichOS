@@ -1776,7 +1776,6 @@ module.exports = [
     fixture: null,
     why: "What the offer says after Turn on dictation when dictation did not end up on: where it lives. Nothing is asked of him.",
   },
-  {s: "Dictation is on. Tap", c: "FRAGMENT", why: "Followed by the key's name and \" in any app.\"; INFORMATIONAL as a whole, after the offer's Turn on dictation."},
   {
     s: "{FILE_NAME} is not a JSON object",
     c: "NOT-RENDERED",

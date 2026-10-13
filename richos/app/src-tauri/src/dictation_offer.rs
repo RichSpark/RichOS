@@ -74,9 +74,52 @@ pub fn view(data_dir: &Path, ready: bool) -> OfferView {
 /// file lock the sheet and the tool write through (`store::update`), so this third writer loses
 /// nothing of theirs and they lose nothing of its (review finding 3, 2026-10-08).
 pub fn mark_shown(data_dir: &Path) -> Result<(), String> {
+    set_field(data_dir, "offered", serde_json::Value::Bool(true))
+}
+
+// ---- THE "DICTATION FEATURE" CONVERSATION ------------------------------------------------
+//
+// The CEO, 2026-10-13 (richos-hq docs/ceo-input/2026-10-13_1, onboarding5.png): "Once
+// dictation is setup, ... a new conversation should be automatically created titled
+// "Dictation feature"", holding his text below with the key he actually picked. Created once:
+// `featureThread` in the same file records the conversation's id.
+
+/// The conversation's title, his words.
+pub const FEATURE_TITLE: &str = "Dictation feature";
+
+/// Rich's message in it, his words verbatim, "[selected key]" filled in with the chosen key.
+pub fn feature_text(key: u8) -> String {
+    format!(
+        "Good news! Dictation is set up and enabled.\n\n\
+         So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:\n\n\
+         Click into where you want your words to appear, tap F{key}, say what you want written, then \
+         tap it again. See how your words appear where your cursor is.\n\n\
+         If you have any questions about this, we can discuss it here."
+    )
+}
+
+/// The id of the conversation already created, if it was. An unreadable file answers "created",
+/// for the reason [`view`] answers "offered": a broken file never makes Rich repeat himself.
+pub fn feature_thread(data_dir: &Path) -> Option<String> {
+    match read_object(data_dir) {
+        Ok(map) => map.get("featureThread").and_then(|v| v.as_str()).map(str::to_string),
+        Err(why) => {
+            eprintln!("[richos] dictation feature conversation: not created, because {why}");
+            Some(String::new())
+        }
+    }
+}
+
+/// Record the conversation that was created, every other field kept.
+pub fn mark_feature_thread(data_dir: &Path, thread_id: &str) -> Result<(), String> {
+    set_field(data_dir, "featureThread", serde_json::Value::String(thread_id.to_string()))
+}
+
+/// Set one field of the file, every other field kept, under the writers' shared lock.
+fn set_field(data_dir: &Path, field: &str, value: serde_json::Value) -> Result<(), String> {
     let _held = crate::dictation::store::lock(data_dir)?;
     let mut map = read_object(data_dir)?;
-    map.insert("offered".to_string(), serde_json::Value::Bool(true));
+    map.insert(field.to_string(), value);
     std::fs::create_dir_all(data_dir).map_err(|e| format!("the data folder could not be created: {e}"))?;
     let partial = data_dir.join(format!(".{FILE_NAME}.offer.{}", std::process::id()));
     let body = serde_json::to_vec_pretty(&serde_json::Value::Object(map)).map_err(|e| e.to_string())?;
@@ -150,6 +193,39 @@ mod tests {
         // A key outside F1..F19 names F1.
         std::fs::write(path(&d), br#"{"key":42}"#).unwrap();
         assert_eq!(view(&d, true).key, 1);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// INVARIANT: the "Dictation feature" message is his text word for word, with the key he
+    /// picked (onboarding5.png: he picked F2 and the app said F1).
+    #[test]
+    fn the_feature_message_is_his_text_with_the_picked_key() {
+        assert_eq!(
+            feature_text(2),
+            "Good news! Dictation is set up and enabled.\n\n\
+             So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:\n\n\
+             Click into where you want your words to appear, tap F2, say what you want written, then tap it again. \
+             See how your words appear where your cursor is.\n\n\
+             If you have any questions about this, we can discuss it here."
+        );
+        assert_eq!(FEATURE_TITLE, "Dictation feature");
+    }
+
+    /// INVARIANT: the conversation is created once, the record keeps every other setting, and a
+    /// broken file never creates it again.
+    #[test]
+    fn the_feature_conversation_is_recorded_once_and_keeps_every_other_setting() {
+        let d = dir("feature");
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(feature_thread(&d), None);
+        std::fs::write(path(&d), br#"{"on":true,"key":2,"offered":true}"#).unwrap();
+        assert_eq!(feature_thread(&d), None);
+        mark_feature_thread(&d, "thr_dictation").unwrap();
+        assert_eq!(feature_thread(&d).as_deref(), Some("thr_dictation"));
+        let after: serde_json::Value = serde_json::from_slice(&std::fs::read(path(&d)).unwrap()).unwrap();
+        assert_eq!(after, serde_json::json!({"on":true,"key":2,"offered":true,"featureThread":"thr_dictation"}));
+        std::fs::write(path(&d), b"{not json").unwrap();
+        assert!(feature_thread(&d).is_some(), "a broken file is read as created");
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

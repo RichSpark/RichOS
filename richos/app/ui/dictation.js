@@ -314,10 +314,21 @@
     paint();
     settle();
     placeCaret();
+    if (sheet.hidden) announceSetUp();
+  }
+  // **SET UP, SAID ONCE** (the CEO, 2026-10-13, onboarding5.png): a turn-on that worked is
+  // announced as `richos:dictation-set-up` when the sheet closes, so the key named in the
+  // "Dictation feature" conversation is the one he picked in the sheet (main.js listens). If it
+  // became ready with the sheet already closed (Accessibility allowed later), it is said then.
+  let setUpPending = false;
+  function announceSetUp() {
+    if (!setUpPending || !ready()) return;
+    setUpPending = false;
+    window.dispatchEvent(new CustomEvent("richos:dictation-set-up"));
   }
   async function turnOn() {
     if (flow) return;
-    flow = true; feedback = null;
+    flow = true; feedback = null; setUpPending = true;
     const v = await call("dictation_set_on", { on: true });
     if (v) view = v;
     await proceed();
@@ -346,7 +357,7 @@
     becameReady();
   }
   async function turnOff() {
-    axWait = null; micWait = null; feedback = null;
+    axWait = null; micWait = null; feedback = null; setUpPending = false;
     const v = await call("dictation_set_on", { on: false });
     if (v) view = v;
     paint();
@@ -510,7 +521,7 @@
     if (capture) stopCapture();
     sheet.hidden = true;
     feedback = null;
-    if (!axWait && !micWait) settle();
+    if (!axWait && !micWait) { settle(); announceSetUp(); }
     queueMicrotask(() => { const btn = document.getElementById("set-btn"); if (btn) btn.focus(); });
   }
 
