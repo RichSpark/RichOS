@@ -1,0 +1,40 @@
+[
+  {"op": "until", "args": ["find", "--title", "Not now", "--role", "AXButton", "--contains", "--first"], "contains": "Not now", "seconds": 90},
+  {"op": "wait", "seconds": 3},
+  {"op": "guest", "command": "grep -m1 'this app: built from' /Users/admin/testvm/walk-*/app.log"},
+  {"op": "guest", "command": "mkdir -p \"$HOME/Acme\" && echo \"$HOME/Acme\""},
+  {"op": "ax", "args": ["click", "--title", "Not now", "--role", "AXButton", "--contains", "--first"]},
+  {"op": "until", "args": ["find", "--title", "Add this company", "--role", "AXButton", "--contains", "--first"], "contains": "Add this company", "seconds": 60},
+  {"op": "ax", "args": ["type", "Acme", "--role", "AXTextField", "--title", "What's the company called?", "--contains", "--first", "--replace"]},
+  {"op": "ax", "args": ["type", "/Users/admin/Acme", "--role", "AXTextField", "--title", "Its folder on this Mac", "--contains", "--first", "--replace"]},
+  {"op": "ax", "args": ["click", "--title", "Add this company", "--role", "AXButton", "--contains", "--first"]},
+  {"op": "until", "args": ["find", "--id", "first-run-later", "--first"], "contains": "Not now", "seconds": 60},
+  {"op": "ax", "args": ["click", "--id", "first-run-later", "--first"]},
+  {"op": "until", "args": ["find", "--value", "Left with you", "--contains", "--first"], "contains": "Left with you", "seconds": 120},
+  {"op": "wait", "seconds": 3},
+  {"op": "shot", "name": "01-row-before"},
+
+  {"op": "pointer", "points": ["195,384", "195,384"], "right": true},
+  {"op": "until", "args": ["find", "--title", "Rename", "--role", "AXMenuItem", "--contains", "--first"], "contains": "Rename", "seconds": 10},
+  {"op": "ax", "args": ["find", "--title", "Reload", "--contains", "--first"], "allow_fail": true},
+  {"op": "ax", "args": ["find", "--title", "Look Up", "--contains", "--first"], "allow_fail": true},
+  {"op": "shot", "name": "02-right-click-title", "ocr": true},
+  {"op": "ax", "args": ["--key", "53"]},
+  {"op": "wait", "seconds": 1},
+
+  {"op": "pointer", "points": ["320,384", "320,384"], "right": true},
+  {"op": "until", "args": ["find", "--title", "Rename", "--role", "AXMenuItem", "--contains", "--first"], "contains": "Rename", "seconds": 10},
+  {"op": "ax", "args": ["find", "--title", "Reload", "--contains", "--first"], "allow_fail": true},
+  {"op": "shot", "name": "03-right-click-empty-space", "ocr": true},
+  {"op": "ax", "args": ["--key", "53"]},
+  {"op": "wait", "seconds": 1},
+
+  {"op": "pointer", "points": ["413,384", "413,384"], "right": true},
+  {"op": "until", "args": ["find", "--title", "Rename", "--role", "AXMenuItem", "--contains", "--first"], "contains": "Rename", "seconds": 10},
+  {"op": "ax", "args": ["find", "--title", "Reload", "--contains", "--first"], "allow_fail": true},
+  {"op": "shot", "name": "04-right-click-dots", "ocr": true},
+
+  {"op": "ax", "args": ["click", "--title", "Pin", "--role", "AXMenuItem", "--first"]},
+  {"op": "wait", "seconds": 2},
+  {"op": "shot", "name": "05-after-pin-from-right-click", "ocr": true}
+]
