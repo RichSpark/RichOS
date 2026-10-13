@@ -228,4 +228,18 @@ mod tests {
         assert!(feature_thread(&d).is_some(), "a broken file is read as created");
         std::fs::remove_dir_all(&d).unwrap();
     }
+
+    /// INVARIANT: an ordinary settings write (the switch, the key, the accuracy, through
+    /// `store::update`) keeps the record, so turning dictation off and on again never opens a
+    /// second "Dictation feature" conversation (second review rv-20261013T173014Z, finding 1).
+    #[test]
+    fn a_settings_write_keeps_the_feature_conversation_record() {
+        let d = dir("feature-kept");
+        std::fs::create_dir_all(&d).unwrap();
+        mark_feature_thread(&d, "thr_dictation").unwrap();
+        crate::dictation::store::update(&d, |s| { s.on = false; s.key = 7; }).unwrap();
+        crate::dictation::store::update(&d, |s| s.on = true).unwrap();
+        assert_eq!(feature_thread(&d).as_deref(), Some("thr_dictation"));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 }

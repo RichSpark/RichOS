@@ -38,6 +38,11 @@ pub struct Settings {
     pub ax_asked: bool,
     /// Rich made his one offer.
     pub offered: bool,
+    /// The "Dictation feature" conversation opened once dictation was set up
+    /// (`dictation_offer::mark_feature_thread`). Kept here so every write through [`update`]
+    /// keeps it: dropped, the next turn-on would open a second one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feature_thread: Option<String>,
 }
 
 impl Default for Settings {
@@ -49,6 +54,7 @@ impl Default for Settings {
             mic_asked: false,
             ax_asked: false,
             offered: false,
+            feature_thread: None,
         }
     }
 }
@@ -148,7 +154,7 @@ mod tests {
     #[test]
     fn a_write_reads_back_with_the_plans_field_names() {
         let d = dir("roundtrip");
-        let s = Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: true };
+        let s = Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None };
         write(&d, &s).unwrap();
         assert_eq!(read(&d).unwrap(), s);
         let raw = std::fs::read_to_string(path(&d)).unwrap();
@@ -198,7 +204,7 @@ mod tests {
     #[test]
     fn an_update_keeps_what_it_does_not_change() {
         let d = dir("update");
-        let s = Settings { on: true, key: 5, model: "large-v3-turbo-q5_0".into(), mic_asked: true, ax_asked: true, offered: true };
+        let s = Settings { on: true, key: 5, model: "large-v3-turbo-q5_0".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None };
         write(&d, &s).unwrap();
         let after = update(&d, |s| s.model = "small.en".into()).unwrap();
         assert_eq!(after, Settings { model: "small.en".into(), ..s.clone() });
