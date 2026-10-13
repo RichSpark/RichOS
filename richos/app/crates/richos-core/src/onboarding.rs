@@ -366,7 +366,7 @@ pub fn priming_block(
 pub fn company_name_block(entity: &EntityId, name: &str) -> String {
     let quoted = serde_json::to_string(name).expect("a string serializes");
     format!(
-        "COMPANY NAME: this company is called {quoted}. Whenever you write or say its name, write \
+        "\n\nCOMPANY NAME: this company is called {quoted}. Whenever you write or say its name, write \
          it exactly so, letter for letter, with exactly this capitalization. Never re-capitalize \
          it and never rebuild it from the id {entity}.\n\n"
     )
