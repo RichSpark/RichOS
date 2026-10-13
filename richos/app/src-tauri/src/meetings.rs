@@ -688,6 +688,9 @@ impl Meetings {
                 logged("remembering the system-audio grant", self.remember(&inner));
             }
             "alarm" => eprintln!("[richos] meeting notes: capture alarm: {}", v["message"].as_str().unwrap_or("")),
+            // What the recorder says about itself (the microphone following a device change, with
+            // the gap it filled): the log is the only place this is visible.
+            "info" => eprintln!("[richos] meeting notes: capture: {}", v["message"].as_str().unwrap_or("")),
             "failed" | "stand-down" => {
                 let message = v["message"].as_str().or(v["reason"].as_str()).unwrap_or("").to_string();
                 let recorded = run.recording;
