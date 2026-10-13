@@ -139,7 +139,12 @@
 #                    from. Added 2026-09-27. Governed because the engine asset
 #                    ships every tracked engine file and the generated table is
 #                    compiled into the application.
-REDISTRIBUTABLE_PATHS="richos/engine/skills richos/engine/tools richos/app/ui/fonts richos/engine/scripts/hooks/fixtures/third_party richos/engine/scripts/lib/dialect/third_party"
+#   richos/app/third-party/qdrant-edge   Qdrant Edge 0.8.0 (Apache-2.0), vendored on
+#                    2026-10-13 with a two-line change because the published crate
+#                    does not compile on the app's Rust toolchain; compiled into
+#                    the application through [patch.crates-io]. Its RICHOS-PATCH.md
+#                    says what changed. Governed for as long as it is here.
+REDISTRIBUTABLE_PATHS="richos/engine/skills richos/engine/tools richos/app/ui/fonts richos/engine/scripts/hooks/fixtures/third_party richos/engine/scripts/lib/dialect/third_party richos/app/third-party/qdrant-edge"
 
 # ---------------------------------------------------------------------------
 # THE ENTRIES
@@ -237,3 +242,6 @@ richos/engine/scripts/hooks/fixtures/third_party/copywriting	third-party	MIT	202
 # --- spelling variant data (American spelling table) ------------------------
 richos/engine/scripts/lib/dialect/third_party/varcon	third-party	LicenseRef-VarCon	2000-2020 Kevin Atkinson; 2016 Benjamin Titze; 1993 Geoff Kuenning (Ispell)	crate-ci/typos, crates/varcon/assets (VarCon 2020.12.07 from SCOWL, http://wordlist.aspell.net/)	dd3e1018f8a825a98be71048c21a9b0495aff703; varcon.txt sha256 c1e234817b526a809fa745d742fec84db88b65c429e22faf8a556b3d5a224085	2026-09-27 richos cc/zach-opus-amspell3	certain	verbatim — varcon.txt and README byte-identical to the pinned revision (git blob a17201d05017 and af9e19ae1a17); the README carries all three notices	docs/legal/THIRD-PARTY-NOTICES.md
 richos/engine/scripts/lib/dialect/dialect-en-US.generated.dict	third-party	LicenseRef-VarCon	2000-2020 Kevin Atkinson; 2016 Benjamin Titze; 1993 Geoff Kuenning (Ispell)	generated from richos/engine/scripts/lib/dialect/third_party/varcon/varcon.txt by richos/engine/scripts/lib/dialect/dialect-table.py	varcon.txt sha256 c1e234817b526a809fa745d742fec84db88b65c429e22faf8a556b3d5a224085	2026-09-27 richos cc/zach-opus-amspell3	certain	MODIFIED VERSION — a generated subset (verified clusters, SCOWL level 70 or below, British forms with one preferred American form, reformatted to one pair per line) with RichOS additions and removals merged in from dialect-en-US.dict, dialect-en-US.overrides.dict and dialect-en-US.leave.tsv; the file header marks it modified	docs/legal/THIRD-PARTY-NOTICES.md
+
+# --- richos/app/third-party — Rust source compiled into the application -----------
+richos/app/third-party/qdrant-edge	third-party	Apache-2.0	Qdrant Team (Qdrant Solutions GmbH)	crates.io qdrant-edge 0.8.0 (qdrant/qdrant, lib/edge); LICENSE from qdrant/qdrant	0.8.0 (crates.io); LICENSE at 016542aa5deb6c66380bb137badf73d54f742bde	2026-10-13 richos branch cc/echo-opus-search1	certain	src/shard/optimize.rs only: the unstable std::debug_assert_matches! replaced by debug_assert!(matches!(..)) with the same message; LICENSE and RICHOS-PATCH.md added; see richos/app/third-party/qdrant-edge/RICHOS-PATCH.md	docs/legal/THIRD-PARTY-NOTICES.md

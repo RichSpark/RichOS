@@ -448,6 +448,26 @@ Read for RichOS by Reed on 2026-09-18 and 2026-09-19 —
 `richos-hq/docs/research/t3code-mobile-vs-richos-phone-2026-09-18.md` §1 item 6
 and `richos-hq/docs/research/t3code-tooling-what-to-adopt-2026-09-19.md` §2.6.
 
+## Bundled Rust source compiled into the application
+
+| Work | Upstream | Revision / version | License | Copyright | Full terms | Verified |
+|---|---|---|---|---|---|---|
+| `richos/app/third-party/qdrant-edge/` | `qdrant-edge` on crates.io (Qdrant's in-process vector search, from `qdrant/qdrant` `lib/edge`) | 0.8.0 as published 2026-08-05; `LICENSE` from `qdrant/qdrant` at `016542aa5deb6c66380bb137badf73d54f742bde` | Apache-2.0 | Qdrant Team | `richos/app/third-party/qdrant-edge/LICENSE` | **modified version**: one file, see below |
+
+**Why it is here rather than coming from crates.io.** Document search's meaning half (the
+Super Finder checkbox) runs on Qdrant Edge inside the application. The published 0.8.0 crate
+does not compile on the Rust toolchain RichOS builds with (1.95.0): one file uses an assertion
+macro that release still treats as unstable. The copy here is the published crate with that one
+use rewritten, and both Cargo workspaces take it through `[patch.crates-io]`.
+
+**What differs from upstream, as Apache-2.0 section 4(b) requires.** In
+`src/shard/optimize.rs`, the import of `std::debug_assert_matches` is removed and its single
+use is written as `debug_assert!(matches!(..))` with the same message. That is a debug-build
+check only; release builds contain neither form. `LICENSE` and `RICHOS-PATCH.md` are added;
+`RICHOS-PATCH.md` records the change and says the folder is removed once an upstream release
+builds on the Rust RichOS uses. The Qdrant repository ships no NOTICE file, so there is none to
+carry. Apache-2.0 is compatible with distribution inside the AGPL-3.0-only application.
+
 ## Adding something new
 
 Vendoring anything means three things in the same commit:

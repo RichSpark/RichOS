@@ -1,0 +1,44 @@
+use std::collections::BTreeSet;
+
+use crate::blobstore::config::{DEFAULT_REGION_SIZE_BLOCKS, GridstoreConfig, StorageConfig};
+use crate::blobstore::{Blob, Blobstore};
+
+use super::Encodable;
+use crate::segment::index::field_index::histogram::Histogram;
+use crate::segment::index::field_index::numeric_point::{Numericable, Point};
+
+mod lifecycle;
+pub mod read_only;
+mod read_ops;
+
+/// Default options for Gridstore storage
+pub(super) const fn default_gridstore_options<T: Sized>() -> StorageConfig {
+    let block_size = size_of::<T>();
+    StorageConfig::Mutable(GridstoreConfig {
+        // Scale page size down with block size, prevents overhead of first page when there's (almost) no values
+        page_size_bytes: block_size * DEFAULT_REGION_SIZE_BLOCKS * 32, // 4 to 8 MiB = block_size * region_blocks * regions,
+        // Size of numeric values in index
+        block_size_bytes: block_size,
+        region_size_blocks: DEFAULT_REGION_SIZE_BLOCKS,
+        // Compressing numeric values is unreasonable
+        compression: crate::blobstore::config::Compression::None,
+    })
+}
+
+pub struct MutableNumericIndex<T: Encodable + Numericable>
+where
+    Vec<T>: Blob,
+{
+    // Backing storage, source of state, persists deletions
+    pub(super) storage: Blobstore<Vec<T>>,
+    pub(super) in_memory_index: InMemoryNumericIndex<T>,
+}
+
+// Numeric Index with insertions and deletions without persistence
+pub struct InMemoryNumericIndex<T: Encodable + Numericable> {
+    pub map: BTreeSet<Point<T>>,
+    pub histogram: Histogram<T>,
+    pub points_count: usize,
+    pub max_values_per_point: usize,
+    pub point_to_values: Vec<Vec<T>>,
+}
