@@ -178,6 +178,40 @@ test('iOS proof reports NOT RUN when no simulator runtime is available', (t) => 
   assert.doesNotMatch(result.stdout, /PASS/);
 });
 
+test('iOS proof selects its fresh cache before creating the suite lock or building', { skip: process.platform !== 'darwin' }, (t) => {
+  const { dir, env, cache: original } = session(t);
+  const bin = join(dir, 'bin'), selected = join(dir, 'selected proof cache');
+  mkdirSync(bin);
+  for (const name of ['xcodebuild', 'xcodegen']) writeFileSync(join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'xcrun'), `#!${process.execPath}\n` +
+    `const fs = require('node:fs'), {join} = require('node:path'), {spawnSync} = require('node:child_process');\n` +
+    `if (process.argv[2] === 'simctl') { console.log(JSON.stringify({runtimes:[{isAvailable:true,name:'iOS fixture'}]})); process.exit(0); }\n` +
+    `const cache = process.env.RICHOS_MOBILE_CACHE;\n` +
+    `if (!fs.existsSync(join(cache, 'suite.lock'))) throw Error('selected proof lock absent before build');\n` +
+    `if (Number(process.env.RICHOS_TEST_DEVICE_OWNER_PID) !== process.ppid) throw Error('simulator owner is not the proof process');\n` +
+    `const child = spawnSync(process.execPath, [${JSON.stringify(join(mobile, 'cli/mobile.mjs'))}, 'headless', 'action', JSON.stringify({type:'compose',text:'proof child'})], {encoding:'utf8'});\n` +
+    `if (child.status !== 0) throw Error(child.stderr);\n` +
+    `fs.writeFileSync(join(cache, 'reached-build'), child.stdout);\n` +
+    `process.stderr.write('controlled compile refusal'); process.exit(1);\n`, { mode: 0o755 });
+  const childEnv = { ...env, PATH: `${bin}:${env.PATH}`, RICHOS_MOBILE_IOS_TEST_CACHE: selected };
+  // load-bound: stubbed compilation stops at the first build; the timeout only catches a stuck child.
+  const run = () => spawnSync(process.execPath, [join(__dirname, 'proof-driver.mjs'), 'ios'], { env: childEnv, encoding: 'utf8', timeout: 30000 });
+  const result = run();
+  assert.ifError(result.error);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /controlled compile refusal/);
+  assert.equal(JSON.parse(readFileSync(join(selected, 'reached-build'), 'utf8')).result.state.draft, 'proof child');
+  assert(!existsSync(original), 'Do not initialize the original CLI cache');
+  assert(!existsSync(join(selected, 'suite.lock')), 'The failed build releases its own suite lock');
+  mkdirSync(join(selected, 'suite.lock'));
+  writeFileSync(join(selected, 'suite.lock/owner'), 'another proof');
+  const occupied = run();
+  assert.ifError(occupied.error);
+  assert.equal(occupied.status, 1, occupied.stderr);
+  assert.match(occupied.stderr, /EEXIST/);
+  assert.equal(readFileSync(join(selected, 'suite.lock/owner'), 'utf8'), 'another proof');
+});
+
 test('PWA proof reports NOT RUN when its browser executable is missing', (t) => {
   const { dir, env } = session(t);
   const modulePath = join(dir, 'playwright.cjs');
