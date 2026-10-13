@@ -1894,8 +1894,24 @@ window.addEventListener("richos:dictation-set-up", async () => {
     dictationOffer.phase = "on";
     scheduleRender();
   }
-  await showDictationFeature(await invokeQuiet("dictation_feature_thread", { create: true }));
+  await createDictationFeature();
 });
+
+/// Set when the conversation could not be made: dictation was set up before his first company
+/// (the app refuses a conversation under no company), so it is made once he chooses or adds
+/// one (`chooseCompany`, `addCompany`; second review rv-20261013T204926Z).
+let dictationFeatureOwed = false;
+async function createDictationFeature() {
+  let threadId;
+  try {
+    threadId = await Bridge.invoke("dictation_feature_thread", { create: true });
+  } catch (_e) {
+    dictationFeatureOwed = true;
+    return;
+  }
+  dictationFeatureOwed = false;
+  await showDictationFeature(threadId);
+}
 
 /// **HE PICKED ANOTHER KEY**: the "Dictation feature" message, if there is one, is replaced so it
 /// names the new key (the CEO: "make sure the correct key is actually within that message").
@@ -5638,6 +5654,7 @@ async function chooseCompany(entityId) {
   await renderFirstRunNotice();
   syncComposerMode();
   inputEl.focus();
+  if (dictationFeatureOwed) await createDictationFeature();
 }
 
 /// HE ADDS ONE OF HIS OWN COMPANIES.
@@ -5682,6 +5699,7 @@ async function addCompany() {
   await renderFirstRunNotice();
   syncComposerMode();
   inputEl.focus();
+  if (dictationFeatureOwed) await createDictationFeature();
 }
 
 entityAddGoEl.addEventListener("click", addCompany);

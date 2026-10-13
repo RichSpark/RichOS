@@ -25,11 +25,11 @@ async function main() {
     const page = await browser.newPage({ viewport: opts.viewport || { width: 1440, height: 900 }, locale: "en-US" });
     page.setDefaultTimeout(30000); // load-bound: a hang guard only; every wait below waits for a fact
     page.on("pageerror", e => errors.push(String(e)));
-    await page.addInitScript(({ theme, view, ready, axAsked, tapNever, sheetPending, owner }) => {
+    await page.addInitScript(({ theme, view, ready, axAsked, tapNever, sheetPending, owner, extra }) => {
       localStorage.setItem("richos-theme", theme);
       localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100 }));
-      window.__RICHOS_MOCK_PRESET__ = { dictation: ready, dictationView: view, dictationAxAsked: axAsked, dictationTapNever: tapNever, dictationSheetPending: sheetPending, dictationOwner: owner };
-    }, { theme, view: view || {}, ready: opts.ready !== false, axAsked: !!opts.axAsked, sheetPending: !!opts.sheetPending, owner: opts.owner,
+      window.__RICHOS_MOCK_PRESET__ = { dictation: ready, dictationView: view, dictationAxAsked: axAsked, dictationTapNever: tapNever, dictationSheetPending: sheetPending, dictationOwner: owner, ...extra };
+    }, { theme, view: view || {}, ready: opts.ready !== false, axAsked: !!opts.axAsked, sheetPending: !!opts.sheetPending, owner: opts.owner, extra: opts.preset || {},
          // A fixture that says keyTap false with its own tool and Accessibility allowed is a tool
          // whose tap never comes (the sheet pokes it once; recheck finding 6), unless opts says.
          tapNever: opts.tapNever !== undefined ? !!opts.tapNever : !!(view && view.keyTap === false && view.owner === "self" && view.ax === "allowed") });
@@ -272,6 +272,23 @@ async function main() {
     assertEqual(await page.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation");
     await page.close();
     return "relaunched on and refused, allowed, back in RichOS: one Dictation feature conversation in the rail";
+  });
+
+  // Second review rv-20261013T204926Z: dictation set up before his first company. The app
+  // refuses a conversation under no company, so it is made once he adds one.
+  await run.check("set up before the first company: the Dictation feature conversation comes once he adds one", async () => {
+    const page = await open("dark", ALLOWED, { preset: { chosenEntity: null } });
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_feature_thread" && c.create));
+    assertEqual(await page.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 0, "no company, so no conversation yet");
+    if (await page.locator("#memory-setup:not([hidden])").count()) await page.click("#memory-setup-later");
+    await page.waitForSelector("#entity-picker:not([hidden])");
+    await page.evaluate(() => [...document.querySelectorAll("#entity-picker button")].find(b => /add/i.test(b.textContent)).click());
+    await page.fill("#entity-add-name", "Brightwave LABS");
+    await page.click("#entity-add-go");
+    await page.locator(".nav-thread", { hasText: "Dictation feature" }).waitFor();
+    assertEqual(await page.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation");
+    await page.close();
+    return "refused under no company, then made when Brightwave LABS was added";
   });
 
   await run.check("state 12: a refusal is said plainly, with Open System Settings on the right pane; back without allowing, it is said again", async () => {
