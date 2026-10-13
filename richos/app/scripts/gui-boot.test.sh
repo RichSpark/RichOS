@@ -444,7 +444,7 @@ declare_rules() {
     'which kind of window this is and whether the splash applies; a fact about the launch'
   # THE SECOND-REVIEW WATCHER (main.rs `review_watch::ensure`, d74d92732): printed only when it
   # started at launch. Its "could not start" form stays UNACCOUNTED on purpose.
-  routine '^\[richos\] second review: the app.s review-watch runs as pid [0-9]+$' \
+  routine '^\[richos\] second review: the app'"'"'s review-watch runs as pid [1-9][0-9]*$' \
     'the review watcher is running, and its pid; the could-not-start form stays unaccounted'
 
   # -- the declared gaps ------------------------------------------------------------------
