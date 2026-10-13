@@ -85,7 +85,7 @@ fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child(
     let mut command = std::process::Command::new("/fictional/provider");
     command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
         .env("RICHOS_APP_READ_ROOTS", "[\"/fictional/other-company\"]");
-    profile.configure(&mut command, "fictional-session", &f.0.join("scope.json"));
+    profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
     let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
     assert_eq!(environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"].as_deref(), Some("1"));
     assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
@@ -103,6 +103,23 @@ fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child(
     assert!(args.contains(&"--settings".to_string()));
 }
 
+/// **Helpers inside a lease are told the `claude` path, never the supervisor's Python.** Every
+/// product lease runs `provider-supervisor.py` with the app's Python in front of `claude`
+/// (`native.rs`, `lease_commands::supervisor_args`), and the brief check (`pierce.py`) runs
+/// `$RICHOS_CLAUDE_BIN --print …`. Nightly 54 named the Python there, so every dispatch's check
+/// failed with Python's own "unknown option --print", and the back end's dismissal of that
+/// broken check stopped as "Approve this" in front of the CEO (2026-10-13).
+#[test]
+fn a_supervised_lease_names_claude_and_not_python_as_the_provider() {
+    let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let mut command = std::process::Command::new(&profile.runtime.python);
+    command.args(richos_core::lease_commands::supervisor_args(&profile.engine, &f.0.join("lease.json"), &f.0.join("reap.log")))
+        .arg("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert_eq!(environment["RICHOS_CLAUDE_BIN"].as_deref(), Some("/fictional/provider"));
+}
+
 /// **Weekly-switch plan §1: the provider is told which Claude account it spends**, beside its
 /// folder, so the quota gate can order the helpers of an account being left. With no account
 /// bound nothing is set (the gate reads that as Account 1), and a value inherited from the
@@ -115,7 +132,7 @@ fn the_provider_is_told_which_claude_account_it_spends() {
     let environment = |profile: &EngineProfile| {
         let mut command = std::process::Command::new("/fictional/provider");
         command.env("RICHOS_CLAUDE_ACCOUNT", "9");
-        profile.configure(&mut command, "fictional-session", &f.0.join("scope.json"));
+        profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
         command.get_envs().map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
             .collect::<BTreeMap<_, _>>()
     };
@@ -141,7 +158,7 @@ fn the_provider_is_told_where_the_speech_model_is() {
     let environment = |profile: &EngineProfile| {
         let mut command = std::process::Command::new("/fictional/provider");
         command.env("RICHOS_SPEECH_MODEL", "/fictional/inherited.bin");
-        profile.configure(&mut command, "fictional-session", &f.0.join("scope.json"));
+        profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
         command.get_envs().map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
             .collect::<BTreeMap<_, _>>()
     };
@@ -307,7 +324,7 @@ fn the_back_end_is_told_it_is_stu_and_the_front_desk_that_it_is_rich() {
 fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_override_it() {
     let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut configured=std::process::Command::new("/fictional/provider");
-    profile.configure(&mut configured,"fixture-session",&f.0.join("scope.json"));
+    profile.configure(&mut configured,Path::new("/fictional/provider"),"fixture-session",&f.0.join("scope.json"));
     for (extra, expected) in [(vec![],"RichOS"), (vec!["-c","user.name=Fixture"],"Fixture")] {
         let mut git=std::process::Command::new("/usr/bin/git");
         for (key,value) in configured.get_envs() {
@@ -333,7 +350,7 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     let thread=spine.create_thread("Alpha",&alpha).unwrap();
     let mut profile=prepare_fixture(&engine(),&f.0,f.runtime()).unwrap();
     profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
-    let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,"session",&f.0.join("scope"));
+    let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,Path::new("/fictional/provider"),"session",&f.0.join("scope"));
     let args:Vec<_>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
     assert!(args.windows(2).any(|pair|pair==["--permission-mode","auto"]));
     let start=args.iter().position(|arg|arg=="--add-dir").unwrap()+1;
@@ -422,7 +439,7 @@ fn the_provider_child_is_pinned_to_that_preflight_and_to_nothing_else() {
     // A machine whose own sessions register the engine's nine guards: the variable must be
     // REPLACED, never inherited, or the app is judged by whatever that machine installed.
     command.env("RICHOS_SPAWN_HOOK_SOURCES", "engine=/fictional/hooks.json");
-    profile.configure(&mut command, "fictional-session", &f.0.join("scope.json"));
+    profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
     let environment: BTreeMap<_, _> = command.get_envs()
         .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
         .collect();
@@ -679,7 +696,7 @@ fn machine_settings_survive_filtering_and_hold_a_job_snapshot() {
     let profile = EngineProfile::prepare_with_settings(&engine(), &f.0, f.runtime(), settings).unwrap();
     let mut command = std::process::Command::new("claude");
     command.env("RICHOS_UNSUPPORTED", "private").env("RICHOS_BULK_ROOT", "/old");
-    profile.configure(&mut command, "session", &f.0);
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0);
     let values: BTreeMap<_,_> = command.get_envs().map(|(key,value)|(key.to_string_lossy().to_string(),value.map(|v|v.to_string_lossy().to_string()))).collect();
     assert_eq!(values["RICHOS_BULK_ROOT"].as_deref(), Some("/external data"));
     assert_eq!(values["CARGO_TARGET_DIR"].as_deref(), Some("/component cache"));
