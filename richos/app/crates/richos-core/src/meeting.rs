@@ -33,6 +33,7 @@
 //! it has ended. The next call prompts normally. While prompts are paused nothing prompts, and
 //! a running recording is left alone.
 
+use crate::meeting_calendar::CalendarMeeting;
 use std::collections::BTreeSet;
 
 /// How long every process of the call's app must have been off the microphone before the call
@@ -339,6 +340,25 @@ impl MeetingMonitor {
         };
         self.phase = Phase::Idle;
         out
+    }
+
+    /// The app's clock, once a second: [`MeetingMonitor::tick`], then every synced meeting due now
+    /// ([`CalendarMeeting::due`]) offered to [`MeetingMonitor::scheduled`], then a calendar
+    /// meeting held without a call that is over retired. One function, so the sequences the
+    /// tests walk are the ones the app runs.
+    pub fn clock(&mut self, now: u64, calendar: &[CalendarMeeting]) -> Vec<Action> {
+        let mut actions = self.tick(now);
+        for meeting in calendar.iter().filter(|m| m.due(now)) {
+            actions.extend(self.scheduled(meeting.scheduled()));
+        }
+        let over = self
+            .pending_calendar_event()
+            .map(str::to_string)
+            .filter(|id| calendar.iter().find(|m| &m.event_id == id).is_none_or(|m| !m.due(now)));
+        if let Some(id) = over {
+            actions.extend(self.retire(&id));
+        }
+        actions
     }
 
     /// A calendar meeting is due to prompt.

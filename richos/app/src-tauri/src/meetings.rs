@@ -205,22 +205,9 @@ pub fn start(app: &AppHandle) {
             std::thread::sleep(Duration::from_secs(1));
             let now = now_millis();
             let actions = {
-                let mut inner = clock.inner.lock().unwrap();
-                let mut actions = inner.monitor.tick(now);
-                // A calendar meeting a minute from its start (the monitor prompts each event once).
-                let due: Vec<_> = inner.calendar.iter().filter(|m| m.due(now)).map(CalendarMeeting::scheduled).collect();
-                for meeting in due {
-                    actions.extend(inner.monitor.scheduled(meeting));
-                }
-                // A calendar meeting held without a call (an unjoined prompt, or one declined
-                // before joining) that is over: it goes.
-                let over = inner.monitor.pending_calendar_event().map(str::to_string).filter(|id| {
-                    inner.calendar.iter().find(|m| &m.event_id == id).is_none_or(|m| !m.due(now))
-                });
-                if let Some(id) = over {
-                    actions.extend(inner.monitor.retire(&id));
-                }
-                actions
+                let mut guard = clock.inner.lock().unwrap();
+                let inner = &mut *guard;
+                inner.monitor.clock(now, &inner.calendar)
             };
             clock.apply(actions);
         })
