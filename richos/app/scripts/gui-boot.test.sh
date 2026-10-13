@@ -437,6 +437,16 @@ declare_rules() {
   routine '^\[richos\] loro corpus: in-repo layout at .+ - this is .+ own' \
     'whose record an in-repo corpus is; a statement about ownership, not resolution'
 
+  # THE WINDOW'S LAUNCH KIND AND SPLASH STATE (main.rs `launch_init_script`, ef9fbbe81): one line
+  # per window. Only the three pairings the code can print are accepted: a fresh start with the
+  # splash on or off by the switch, and the other two kinds, which never show it.
+  routine '^\[richos\] window: launch kind (fresh, splash (on|off by the switch)|(crash-restart|second-window), splash not for this kind)$' \
+    'which kind of window this is and whether the splash applies; a fact about the launch'
+  # THE SECOND-REVIEW WATCHER (main.rs `review_watch::ensure`, d74d92732): printed only when it
+  # started at launch. Its "could not start" form stays UNACCOUNTED on purpose.
+  routine '^\[richos\] second review: the app.s review-watch runs as pid [0-9]+$' \
+    'the review watcher is running, and its pid; the could-not-start form stays unaccounted'
+
   # -- the declared gaps ------------------------------------------------------------------
   gap 'RICHOS_SERVICE_BIN' \
     '^\[richos\] no RICHOS_SERVICE_BIN' \
