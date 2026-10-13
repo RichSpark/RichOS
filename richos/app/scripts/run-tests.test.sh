@@ -47,7 +47,7 @@
 # put something.
 # run-tests: no-host-screen: its matches are its own S6 search pattern and the fake suites S1 writes under mktemp
 # run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh
-# run-tests: covers richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/gui-launch.sh
+# run-tests: covers richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm/run-suite.sh richos/app/scripts/testvm/suite-in-guest.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -857,12 +857,14 @@ else
   # as a pass and a failing one keeps its own exit code.
   GRES_OK="$TMP/guest-results-ok"; GRES_BAD="$TMP/guest-results-blocked/under-a-file"
   : > "$TMP/guest-results-blocked"
-  gsuite() {  # gsuite <suite> <results dir>
+  gsuite() {  # gsuite <suite> <results dir> [runner args...]
+    local suite="$1" results="$2"; shift 2
     harness RUN_TESTS_DECLARED_GAPS= RICHOS_GUI_HOST=richos-test-g \
       "TESTVM_RUN_WALK=$GBIN/run-walk" "TESTVM_GUEST_EXEC=$GBIN/guest" \
       "GUEST_ROOT=$GROOT" "GUEST_SUDO=$GSUDO" "GLOG=$GLOG" \
-      "RICHOS_GUI_PREBUILT=$GPRE" "RICHOS_GUI_ENGINE_SOURCE=$GENG" "RICHOS_TEST_RESULTS_DIR=$2" \
-      -- "$GBOX/testvm/run-suite.sh" richos-test-g "$GBOX/$1"
+      "RICHOS_GUI_PREBUILT=$GPRE" "RICHOS_GUI_ENGINE_SOURCE=$GENG" "RICHOS_TEST_RESULTS_DIR=$results" \
+      "PATH=$GBIN:$FIXTURE_PATH" TESTVM_SLOT=stand-in-slot \
+      -- "$GBOX/testvm/run-suite.sh" richos-test-g "$GBOX/$suite" "$@"
   }
   mkdir -p "$GRES_OK"
   gsuite window.test.sh "$GRES_OK"
@@ -884,6 +886,54 @@ else
         "exit $CODE, wanted 1: $(tail -3 <<<"$OUT" | tr '\n' ' ' | cut -c1-300)"
   else
     ok "G6 a failing suite whose results were lost still fails with its own exit code, and the loss is named"
+  fi
+
+  # The nightly already owns a booted guest. The real payload transport must attach to
+  # that guest, carry the release and cliclick, run BOTH suites and bring both verdicts back.
+  GRELEASE="$TMP/guest-release"; mkdir -p "$GRELEASE"
+  printf '#!/bin/sh\necho guest-cliclick\n' > "$GBIN/cliclick"; chmod +x "$GBIN/cliclick"
+  cat > "$GBOX/front-door.test.sh" <<'SH'
+#!/bin/bash
+[ "$1" = --release ] && [ -f "$2/RichOS.app.tar.gz" ] && [ "$3" = --evidence ] || exit 64
+[ "$(cliclick)" = guest-cliclick ] || exit 64
+mkdir -p "$4" || exit 2
+echo front-door-evidence > "$4/observed"
+echo "front-door ran in the guest with the transferred archive"
+exit "$(cat "$2/RichOS.app.tar.gz")"
+SH
+  printf '%s\n' "$G_HEAD" "$G_LIB" 'echo "gui refusal in the guest"' 'exit 2' > "$GBOX/refusewin.test.sh"
+  for gcase in green front-red front-refused gui-red gui-refused; do
+    front=0; gui=0; suite=window.test.sh
+    case "$gcase" in
+      front-red) front=1 ;;
+      front-refused) front=2 ;;
+      gui-red) gui=1; suite=redwin.test.sh ;;
+      gui-refused) gui=2; suite=refusewin.test.sh ;;
+    esac
+    expected="$gui"; [ "$front" = 0 ] || expected="$front"
+    printf '%s\n' "$front" > "$GRELEASE/RichOS.app.tar.gz"
+    result="$TMP/guest-pair-$gcase"
+    rm -f "$GLOG/walk.args"
+    gsuite "$suite" "$result" --existing-guest nightly-owned --release "$GRELEASE"
+    if [ "$CODE" != "$expected" ] || [ -e "$GLOG/walk.args" ] \
+       || [ "$(cat "$result/front-door.rc" 2>/dev/null)" != "$front" ] \
+       || [ "$(cat "$result/$suite.rc" 2>/dev/null)" != "$gui" ] \
+       || [ ! -s "$result/front-door.log" ] || [ ! -s "$result/$suite.log" ] \
+       || [ ! -f "$result/front-door/observed" ] \
+       || ! says "guest nightly-owned; caller must stop and delete the guest"; then
+      bad "G7 $gcase: both guest screen verdicts survive without booting another guest" \
+          "exit $CODE, wanted $expected: $(tail -4 <<<"$OUT" | tr '\n' ' ' | cut -c1-400)"
+    else
+      ok "G7 $gcase: both guest screen verdicts and logs survive; caller owns the single guest"
+    fi
+  done
+  printf '0\n' > "$GRELEASE/RichOS.app.tar.gz"
+  gsuite window.test.sh "$GRES_BAD" --existing-guest nightly-owned --release "$GRELEASE"
+  if [ "$CODE" = 2 ] && says "results folder could not be brought back" \
+     && says "caller retains guest cleanup ownership"; then
+    ok "G8 an existing guest's missing results refuse instead of passing"
+  else
+    bad "G8 an existing guest's missing results refuse instead of passing" "exit $CODE: $OUT"
   fi
 fi
 

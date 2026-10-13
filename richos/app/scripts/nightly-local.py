@@ -271,12 +271,11 @@ NO_HOST_SCREEN_COMMANDS = ("build",)
 # suite=shipped-bundle-boot) and keeps the proof where `publish` finds it without being told.
 # Nobody sets a variable, remembers a flag or runs a second command.
 #
-# WHAT IT DOES NOT DO, SAID HERE SO NOBODY FINDS IT LATER: gui-boot.test.sh itself (a debug
-# binary built from the checkout, B0-B8/C1-C5) is still recorded NOT RUN (no screen) here: the
-# gates do not hand RICHOS_GUI_HOST to `run-tests.sh`. Given it, `run-tests.sh` runs the suite in
-# a guest through testvm/run-suite.sh (2026-09-30), which builds the two executables on this Mac
-# because the guest has no cargo and no repository. The proof `publish` accepts is the shipped
-# bundle's boot.
+# The pre-packaging script gate still records screen suites NOT RUN. Once packaging finishes,
+# that same boot guest runs front-door against the release archive and gui-boot against its
+# prebuilt fixture executables. Each verdict is retained; either red fails the build. New
+# candidates require both verdicts at publication, so an older window-only proof cannot cover
+# this requirement. Candidates built before this addition retain their original proof contract.
 VM_PROOF_PHASE = "vm-boot-proof"
 # gui-proof-in-vm.sh waits up to 3600 s for one of the two guest slots (its --wait default,
 # chosen so a build that is walked away from still gets its proof), then boots, watches and
@@ -2478,8 +2477,10 @@ class Runner:
 
     @classmethod
     def needs_gui_proof(cls, info):
-        """True when nobody has seen this candidate boot: the same rule require_gui_proof
-        enforces, asked before publish so the build can take the proof itself."""
+        """Whether the candidate still needs its guest proof, including both screen suites
+        for new builds. This is the same requirement publication enforces."""
+        if info.get("screen_suites_required"):
+            return True
         state = cls.gui_boot_state(info)
         if state == "passed":
             return False
@@ -2561,7 +2562,7 @@ class Runner:
                 print(f"Using the build's own VM boot proof: {own}", flush=True)
                 gui_proof = own
         state = self.gui_boot_state(info)
-        if state is None and not info.get("no_host_screen"):
+        if state is None and not info.get("no_host_screen") and not info.get("screen_suites_required"):
             # A candidate from before this field existed. `build` had no way to hold the
             # suite back, so it ran. See gui_boot_state.
             if gui_proof:
@@ -2569,7 +2570,7 @@ class Runner:
                     "this candidate predates the gui-boot record and was built with the suite "
                     "running, so --gui-proof names evidence nothing is waiting for.")
             return None
-        if state == "passed":
+        if state == "passed" and not info.get("screen_suites_required"):
             if gui_proof:
                 raise ValueError(
                     "this candidate ran gui-boot.test.sh during its build and it passed, so "
@@ -2605,6 +2606,11 @@ class Runner:
         if fields.get("result") != "pass":
             raise ValueError(f"--gui-proof records {fields.get('result')!r}, not a pass. "
                              "A failed boot is not evidence of a working one.")
+        if info.get("screen_suites_required"):
+            for suite in ("front-door", "gui-boot"):
+                if fields.get(f"{suite}_exit") != "0":
+                    raise ValueError(f"--gui-proof does not record {suite} exit 0; "
+                                     "this candidate requires both screen suites in its guest.")
         # THE SHA IS THE WHOLE POINT, exactly as --checks-done-at-land's is: a proof taken
         # against a different tree proves something about that tree. `build_commit` is the
         # commit the bundle was compiled from (it carries the version bump); `source_commit`
@@ -2620,6 +2626,8 @@ class Runner:
                 f"--gui-proof was taken against {seen or '<no commit>'}, and this candidate is "
                 f"{' / '.join(accepted)}. The proof is about a different tree, so it proves "
                 "nothing about this one; take it again against this candidate.")
+        if info.get("screen_suites_required") and fields.get("gui-boot_commit") not in accepted:
+            raise ValueError("--gui-proof gui-boot source is not this candidate's source or build commit")
         return fields
 
     def accept_land_proof(self, sha, source):
@@ -2890,6 +2898,9 @@ class Runner:
         if not info["build"]:
             print(info["reason"] + "; nothing published.", flush=True)
             return
+        if command == "build":
+            info = {**info, "screen_suites_required": True}
+            plan_path.write_text(json.dumps(info, indent=2) + "\n")
         if no_host_screen or isinstance(suites, dict):
             # Into the plan for the same reason the land proof is: nightly.py copies the
             # plan verbatim into build-info.json and the candidate's committed provenance,

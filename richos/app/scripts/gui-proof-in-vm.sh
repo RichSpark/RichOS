@@ -4,7 +4,10 @@
 #                      what was seen, so `nightly-local.py publish` has something to check.
 #
 #   gui-proof-in-vm.sh --run <run-id> [--vm <name>] [--out <path>] [--wait <seconds>]
-#   gui-proof-in-vm.sh --bundle <RichOS.app.zip> --commit <sha> [--vm <name>] [--out <path>] [--wait <seconds>]
+#   gui-proof-in-vm.sh --bundle <RichOS.app.zip> --commit <sha> [--screen-suites] [--vm <name>] [--out <path>] [--wait <seconds>]
+# --run also runs front-door --release and gui-boot in this guest. --screen-suites does
+# the same for --bundle, using RichOS.app.tar.gz beside the zip. Each suite keeps its own
+# verdict and logs; a refusal or failure in either makes the combined proof fail.
 #
 # --wait: how long to wait for one of the test VM's two guest slots (testvm/slots.py) and
 # its CPU admission; default 3600, so a build that is walked away from still gets its proof.
@@ -34,13 +37,11 @@
 # question `publish` actually needs answered: does the thing about to become installable
 # start, and does it draw a window.
 #
-# IT IS NOT `gui-boot.test.sh`, AND IT DOES NOT CLAIM TO BE. That suite builds a debug
-# binary from the checkout and asserts B0-B8 and C1-C5 over a synthetic machine — engine
-# resolution through candidate 6, the Info.plist's shape, the company registry, the corpus
-# pointer. This file asserts one thing about a different artifact. So the proof it writes
-# says `suite=shipped-bundle-boot`, never `suite=gui-boot.test.sh`, and `publish` accepts
-# either while recording which it got. A proof that borrowed the other's name would be the
-# most useful lie in the release chain.
+# The initial boot names suite=shipped-bundle-boot because it checks the published artifact.
+# The subsequent front-door suite drives that release archive. gui-boot checks separate
+# debug executables built from this checkout on a synthetic machine. Their individual
+# exit codes and gui-boot's source commit are recorded separately, so publication can
+# require all three checks without attributing the debug suite to the signed archive.
 #
 # =========================================================================================
 # THE GARBAGE (CEO ruling §54) AND THE HOST'S SCREEN
@@ -62,10 +63,11 @@ TESTVM="$HERE/testvm"
 STATE_DIR="${RICHOS_NIGHTLY_STATE:-$HOME/.richos-nightly}"
 
 ORIG_ARGS=("$@")
-RUN_ID=""; BUNDLE=""; COMMIT=""; VM=""; OUT=""; WAIT=3600
+RUN_ID=""; BUNDLE=""; COMMIT=""; VERSION=""; VM=""; OUT=""; WAIT=3600; SCREEN_SUITES=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --run)    RUN_ID="${2:-}"; shift 2 || { echo "gui-proof-in-vm.sh: $1 needs a value" >&2; exit 2; } ;;
+    --run)    RUN_ID="${2:-}"; SCREEN_SUITES=1; shift 2 || { echo "gui-proof-in-vm.sh: $1 needs a value" >&2; exit 2; } ;;
+    --screen-suites) SCREEN_SUITES=1; shift ;;
     --bundle) BUNDLE="${2:-}"; shift 2 || { echo "gui-proof-in-vm.sh: $1 needs a value" >&2; exit 2; } ;;
     --commit) COMMIT="${2:-}"; shift 2 || { echo "gui-proof-in-vm.sh: $1 needs a value" >&2; exit 2; } ;;
     --vm)     VM="${2:-}"; shift 2 || { echo "gui-proof-in-vm.sh: $1 needs a value" >&2; exit 2; } ;;
@@ -116,6 +118,11 @@ else
   [ -e "$BUNDLE" ] || die "no such bundle: $BUNDLE"
   [ -n "$COMMIT" ] || die "--bundle needs --commit <sha>: a proof that does not name the tree it was taken against proves nothing about any particular one."
   TAG="${TAG:-unversioned}"
+  CAND_DIR="$(cd "$(dirname "$BUNDLE")" && pwd)"
+fi
+if [ "$SCREEN_SUITES" = 1 ]; then
+  [ -f "$CAND_DIR/RichOS.app.tar.gz" ] || die "screen suites need $CAND_DIR/RichOS.app.tar.gz"
+  command -v cliclick >/dev/null 2>&1 || die "screen suites need cliclick on PATH to transfer into the guest"
 fi
 
 # ONE GUEST SLOT, FOR THIS RUN ONLY (testvm/slots.py; the CEO, 2026-09-27). Everything
@@ -134,7 +141,7 @@ mkdir -p "$(dirname "$OUT")" || die "cannot create $(dirname "$OUT")"
 # Scratch, and the promise that none of it outlives this script (CEO ruling §54)
 # ---------------------------------------------------------------------------------------
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/richos-gui-proof.XXXXXX")" || die "cannot create a scratch directory"
-STOPPED=0
+STOPPED=1
 # cleanup returns the run's own status, unless that status was 0 and the guest could not be
 # stopped: then 1. A failed run keeps its own code (the proof's result is not overwritten by
 # the cleanup's), and a passing run never exits 0 over a guest left on this Mac (§54).
@@ -174,6 +181,17 @@ trap 'cleanup; exit 130' INT TERM
 FIXTURE="$WORK/home"
 mkdir -p "$FIXTURE"
 
+# Compile before booting the guest. run-suite reuses these exact executables and attaches
+# to our held guest instead of taking another slot or cloning another machine.
+if [ "$SCREEN_SUITES" = 1 ]; then
+  GUI_APP_DIR="$(cd "$HERE/.." && pwd)"; export GUI_APP_DIR
+  . "$HERE/lib/gui-launch.sh"
+  gui_prebuild "$WORK/prebuilt"; PREBUILD_RC=$?
+  [ "$PREBUILD_RC" = 0 ] || exit "$PREBUILD_RC"
+  export RICHOS_GUI_PREBUILT="$WORK/prebuilt"
+  GUI_COMMIT="$(git -C "$GUI_APP_DIR" rev-parse HEAD)" || die "cannot identify gui-boot source"
+fi
+
 echo "gui-proof-in-vm.sh: booting ${TAG:-the bundle} in guest '$VM'"
 echo "  bundle : $BUNDLE"
 echo "  commit : $COMMIT"
@@ -182,6 +200,8 @@ echo ""
 
 RESULT="fail:no-window"
 WINDOWS=0
+FRONT_RC=not-run; GUI_RC=not-run
+STOPPED=0
 # --no-tailnet: this proof is "does the app draw a window", nothing to do with the phone; a
 # failed network join must not fail it (run.sh exits 1 on one, and says so at its :36-41).
 if "$TESTVM/run.sh" --bundle "$BUNDLE" --home "$FIXTURE" --vm "$VM" --no-tailnet > "$WORK/run.out" 2>&1; then
@@ -198,6 +218,35 @@ else
 fi
 cat "$WORK/run.out"
 
+if [ "$RESULT" = pass ] && [ "$SCREEN_SUITES" = 1 ]; then
+  RESULTS="$OUT.suites"
+  # This is the pid returned by this run.sh, inside this guest. End only that app before
+  # front-door owns the foreground. stop.sh still owns the eventual clone cleanup.
+  APP_PID="$(sed -n 's/^vm=.* pid=\([0-9][0-9]*\) .*$/\1/p' "$WORK/run.out" | tail -1)"
+  case "$APP_PID" in
+    ''|*[!0-9]*) RESULT="fail:boot-pid" ;;
+    *)
+      if ! "$TESTVM/guest.sh" "$VM" "kill -TERM $APP_PID 2>/dev/null; for i in 1 2 3 4 5; do kill -0 $APP_PID 2>/dev/null || exit 0; sleep 1; done; kill -KILL $APP_PID 2>/dev/null; for i in 1 2 3 4 5; do kill -0 $APP_PID 2>/dev/null || exit 0; sleep 1; done; exit 1"; then
+        RESULT="fail:boot-stop"
+      fi ;;
+  esac
+  if [ "$RESULT" = pass ]; then
+    mkdir -p "$RESULTS" || die "cannot create screen results at $RESULTS"
+    # Remove only these previous verdicts. A failed transfer must not read an old pass.
+    rm -f "$RESULTS/front-door.rc" "$RESULTS/gui-boot.test.sh.rc"
+    RICHOS_TEST_RESULTS_DIR="$RESULTS" "$TESTVM/run-suite.sh" "$VM" "$HERE/gui-boot.test.sh" \
+      --existing-guest "$VM" --release "$CAND_DIR" 2>&1 | tee "$WORK/suites.out"
+    SUITE_PIPE=("${PIPESTATUS[@]}")
+    SUITES_RC=${SUITE_PIPE[0]}
+    [ "${SUITE_PIPE[1]}" = 0 ] || SUITES_RC=2
+    FRONT_RC="$(cat "$RESULTS/front-door.rc" 2>/dev/null || echo not-run)"
+    GUI_RC="$(cat "$RESULTS/gui-boot.test.sh.rc" 2>/dev/null || echo not-run)"
+    if [ "$SUITES_RC" != 0 ] || [ "$FRONT_RC" != 0 ] || [ "$GUI_RC" != 0 ]; then
+      RESULT="fail:screen-suites"
+    fi
+  fi
+fi
+
 {
   echo "richos-gui-proof 1"
   echo "suite=shipped-bundle-boot"
@@ -205,22 +254,28 @@ cat "$WORK/run.out"
   echo "where=vm:$VM"
   echo "result=$RESULT"
   echo "windows=$WINDOWS"
+  if [ "$SCREEN_SUITES" = 1 ]; then
+    echo "front-door_exit=$FRONT_RC"
+    echo "gui-boot_exit=$GUI_RC"
+    echo "gui-boot_commit=$GUI_COMMIT"
+  fi
   echo "bundle=$(basename "$BUNDLE")"
   echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "--- output ---"
   cat "$WORK/run.out" 2>/dev/null
+  cat "$WORK/suites.out" 2>/dev/null || true
 } > "$OUT"
 
 echo ""
 if [ "$RESULT" = "pass" ]; then
   echo "  PASS  the candidate's own signed bundle started in a clean guest and drew $WINDOWS window(s)"
+  [ "$SCREEN_SUITES" = 0 ] || echo "  PASS  front-door --release and gui-boot both passed in that same guest; results: $RESULTS"
   echo "  proof: $OUT"
   echo ""
   echo "  nightly-local.py publish --run ${RUN_ID:-<run-id>} --gui-proof $OUT"
   exit 0
 fi
-echo "  FAIL  the candidate's bundle did not reach a window in the guest ($RESULT)"
+echo "  FAIL  the candidate's guest proof did not complete ($RESULT)"
 echo "        The proof records the failure rather than deleting it: $OUT"
-echo "        publish will refuse it, which is the correct outcome for a bundle that"
-echo "        does not start. Read the run output above and the guest's own app.log."
+echo "        publish will refuse it. Read the recorded boot and screen-suite output."
 exit 1

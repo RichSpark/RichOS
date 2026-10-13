@@ -1257,7 +1257,7 @@ while True: time.sleep(.02)
 
     # ---- 2026-09-29: the build boots its own candidate in the test VM ----------------------
     def screenless_candidate(self, out):
-        info = {**self.CANDIDATE_INFO, "no_host_screen": True, "script_suites": {"suites": [
+        info = {**self.CANDIDATE_INFO, "no_host_screen": True, "screen_suites_required": True, "script_suites": {"suites": [
             {"name": "gui-boot.test.sh", "state": "not-run", "reason": "no screen"}]}}
         out.mkdir(parents=True, exist_ok=True)
         (out / "candidate.json").write_text(json.dumps({"info": info, "files": {}}))
@@ -1271,13 +1271,18 @@ while True: time.sleep(.02)
         def fake_command(*args, **kwargs):
             calls.append((args, kwargs))
             if args[2] == "build":
+                plan = json.loads(Path(args[args.index("--plan") + 1]).read_text())
+                self.assertIs(plan.get("screen_suites_required"), True,
+                              "the built candidate must retain the two-suite publication requirement")
                 self.screenless_candidate(Path(args[args.index("--out") + 1]))
             elif str(args[1]).endswith("gui-proof-in-vm.sh"):
                 proof = Path(args[args.index("--out") + 1])
                 proof.parent.mkdir(parents=True, exist_ok=True)
                 proof.write_text(f"richos-gui-proof 1\nsuite=shipped-bundle-boot\n"
                                  f"commit={self.CANDIDATE_INFO['source_commit']}\nwhere=vm:richos-test-1\n"
-                                 f"result={proof_result}\nat=2026-09-29T12:00:00Z\n--- output ---\n")
+                                 f"result={proof_result}\nfront-door_exit=0\ngui-boot_exit=0\n"
+                                 f"gui-boot_commit={self.CANDIDATE_INFO['source_commit']}\n"
+                                 "at=2026-09-29T12:00:00Z\n--- output ---\n")
                 if proof_result != "pass":
                     raise RuntimeError("bash failed (exit 1); see the run log")
         r.command = Mock(side_effect=fake_command)
@@ -2041,6 +2046,40 @@ while True: time.sleep(.02)
                         f"where={where}\nresult={result}\nat=2026-09-19T20:00:00Z\n"
                         "--- output ---\n  PASS  B1 the app booted\n")
         return path
+
+    def test_new_candidate_requires_both_screen_verdicts_even_after_a_gate_gui_pass(self):
+        for gate_state in ("passed", "not-run", None):
+            with self.subTest(gate_state=gate_state):
+                r, info = self.gui_candidate(gui_state=gate_state, no_host_screen=True)
+                info["screen_suites_required"] = True
+                self.assertTrue(r.needs_gui_proof(info))
+                with self.assertRaisesRegex(ValueError, "front-door exit 0"):
+                    r.require_gui_proof(info, self.proof(suite="shipped-bundle-boot"))
+
+    def test_screen_proof_keeps_failure_refusal_missing_result_and_source_mismatch_red(self):
+        r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
+        info["screen_suites_required"] = True
+        good = {"front-door_exit": "0", "gui-boot_exit": "0",
+                "gui-boot_commit": info["source_commit"]}
+        for key, value in (("front-door_exit", "1"), ("front-door_exit", "2"),
+                           ("gui-boot_exit", "1"), ("gui-boot_exit", "2"),
+                           ("gui-boot_exit", None), ("gui-boot_commit", "a" * 40)):
+            with self.subTest(key=key, value=value):
+                fields = {**good, key: value}
+                proof = self.proof(suite="shipped-bundle-boot")
+                proof.write_text(proof.read_text().replace("--- output ---",
+                    "".join(f"{k}={v}\n" for k, v in fields.items() if v is not None) + "--- output ---"))
+                with self.assertRaises(ValueError):
+                    r.require_gui_proof(info, proof)
+
+    def test_matching_two_suite_proof_is_accepted_for_new_candidate(self):
+        r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
+        info["screen_suites_required"] = True
+        proof = self.proof(suite="shipped-bundle-boot")
+        proof.write_text(proof.read_text().replace("--- output ---",
+            "front-door_exit=0\ngui-boot_exit=0\n"
+            f"gui-boot_commit={info['source_commit']}\n--- output ---"))
+        self.assertEqual(r.require_gui_proof(info, proof)["gui-boot_exit"], "0")
 
     def test_a_candidate_whose_gui_boot_did_not_run_is_refused_without_a_proof(self):
         """THE CASE THE WHOLE MODE TURNS ON.
