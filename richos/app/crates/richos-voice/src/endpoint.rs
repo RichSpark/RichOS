@@ -41,6 +41,8 @@ pub enum EndReason {
     Silence,
     /// The utterance hit whisper's 30 s window and was cut so it can still be transcribed.
     MaxLength,
+    /// Voice was switched off while it was still being recorded. What he had said is kept.
+    Stopped,
 }
 
 /// What one frame did to the endpointer.
@@ -225,6 +227,26 @@ impl UtteranceRecorder {
         }
         self.reset();
         out
+    }
+
+    /// **Voice is going off: close the open recording NOW, as an utterance.** Without this the
+    /// words still inside the 0.800 s hangover were destroyed with the capture stream, so an
+    /// instruction he finished just before switching off lost its last phrase (review
+    /// rv-20261013T183507Z). The same rule as an ordinary end decides whether it is worth
+    /// transcribing: under [`MIN_SPEECH_FRAMES`] of speech it is a cough and is dropped.
+    pub fn finish_now(&mut self) -> Option<Utterance> {
+        if !self.recording {
+            self.reset();
+            return None;
+        }
+        let samples = std::mem::take(&mut self.buffer);
+        let speech_frames = self.endpointer.speech_frames();
+        let total_frames = self.endpointer.total_frames();
+        self.reset();
+        if speech_frames < MIN_SPEECH_FRAMES {
+            return None;
+        }
+        Some(Utterance { samples, reason: EndReason::Stopped, speech_frames, total_frames })
     }
 
     /// Feed one exact VAD frame plus its speech verdict.
@@ -447,6 +469,30 @@ mod tests {
         assert!((u.duration_secs() - expected).abs() < f32::EPSILON);
         // And the audio really does contain the speech + the whole hangover.
         assert!(u.duration_secs() > 1.6 + 0.8 - 0.02, "{}", u.duration_secs());
+    }
+
+    /// INVARIANT — review rv-20261013T183507Z. Voice going off mid-sentence closes the open
+    /// recording as an utterance (`Stopped`), by the same cough rule as any end, and nothing is
+    /// made out of a recorder that was not recording.
+    #[test]
+    fn voice_off_closes_the_open_recording_by_the_same_rule_as_any_end() {
+        let sp = speech_frame();
+        let mut rec = UtteranceRecorder::new();
+        for _ in 0..(SPEECH_ONSET_FRAMES + MIN_SPEECH_FRAMES) {
+            assert!(rec.push_frame(&sp, true).is_none());
+        }
+        assert!(rec.is_recording());
+        let u = rec.finish_now().expect("what he had said was thrown away when voice went off");
+        assert_eq!(u.reason, EndReason::Stopped);
+        assert_eq!(u.speech_frames, SPEECH_ONSET_FRAMES + MIN_SPEECH_FRAMES);
+        assert!(!rec.is_recording());
+
+        let mut cough = UtteranceRecorder::new();
+        for _ in 0..SPEECH_ONSET_FRAMES {
+            cough.push_frame(&sp, true);
+        }
+        assert!(cough.finish_now().is_none(), "a cough became an utterance because voice went off");
+        assert!(UtteranceRecorder::new().finish_now().is_none());
     }
 
     /// INVARIANT: promoting an interrupted capture keeps the audio — barge-in must not eat

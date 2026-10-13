@@ -576,6 +576,33 @@ impl CaptureBrain {
         }
     }
 
+    /// **Voice is going off: close the open recording and say what became of it** (review
+    /// rv-20261013T183507Z). The capture stream is about to be destroyed, and with it whatever he
+    /// said in the last 0.800 s, which the endpointer had not yet closed. It is closed here by the
+    /// same rules as any other end: admitted if it holds a sentence's worth of speech and is not
+    /// Rich's echo, discarded otherwise. Nothing is sent when nothing was being recorded.
+    pub fn finish(&mut self) -> Vec<CapMsg> {
+        let mut out = Vec::new();
+        let was_recording = self.recorder.is_recording();
+        match self.recorder.finish_now() {
+            Some(utterance) if !self.tainted || self.barged => {
+                out.push(CapMsg::Utterance(Box::new(AdmittedUtterance {
+                    utterance: Box::new(utterance),
+                    rich_audible: self.rich_audible,
+                })));
+            }
+            Some(_) => out.push(CapMsg::Discarded { tainted: true }),
+            None if was_recording => out.push(CapMsg::Discarded { tainted: self.tainted }),
+            None => {}
+        }
+        self.was_recording = false;
+        self.tainted = false;
+        self.barged = false;
+        self.rich_audible = false;
+        self.turn_quiet_armed = false;
+        out
+    }
+
     /// Consecutive speech frames counted toward an interruption — the diagnostic that makes
     /// "why didn't it barge in" answerable.
     pub fn barge_run_frames(&self) -> u32 {
@@ -893,6 +920,13 @@ struct Shared {
     /// queue, cleared by the supervisor when the answer's window closes. Until it is set nothing of
     /// Rich is in the room, so [`crate::turn::rich_audible`] is false however much is owed.
     answer_sounded: AtomicBool,
+    /// Voice is going off: the capture callback closes the open recording on its next frame.
+    finish_capture: AtomicBool,
+    /// The capture callback has closed it and sent what became of it.
+    capture_finished: AtomicBool,
+    /// The supervisor has drained everything the capture callback sent before it finished, so
+    /// his last utterance is with the recognizer and counted in the turn.
+    drained_after_finish: AtomicBool,
     running: AtomicBool,
 }
 
@@ -1621,6 +1655,9 @@ impl VoiceController {
             speaking: AtomicBool::new(false),
             his_floor: AtomicBool::new(false),
             answer_sounded: AtomicBool::new(false),
+            finish_capture: AtomicBool::new(false),
+            capture_finished: AtomicBool::new(false),
+            drained_after_finish: AtomicBool::new(false),
             pending_speech: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             no_audio: AtomicBool::new(false),
@@ -1660,6 +1697,20 @@ impl VoiceController {
         let aec_state = aec_state_for_diagnostics.clone();
 
         let capture = capture::start(&opts.source, move |frame| {
+            // VOICE IS GOING OFF: close what he is still saying, once, and hear nothing after.
+            if cb_shared.finish_capture.load(Ordering::SeqCst) {
+                if !cb_shared.capture_finished.load(Ordering::SeqCst) {
+                    for msg in brain.finish() {
+                        // Fails only when the supervisor has already gone; then nobody is left
+                        // to hand his words to, and there is nothing more to send.
+                        if cap_tx.send(msg).is_err() {
+                            break;
+                        }
+                    }
+                    cb_shared.capture_finished.store(true, Ordering::SeqCst);
+                }
+                return;
+            }
             let speaking = cb_shared.speaking.load(Ordering::Relaxed);
             let forced = cb_force.swap(false, Ordering::Relaxed);
             for msg in brain.push_frame(frame, speaking, forced) {
@@ -2073,8 +2124,23 @@ fn release_then_join<T>(held: T, threads: Vec<std::thread::JoinHandle<()>>) {
     }
 }
 
+/// How long switching voice off waits for his last open recording to be closed and handed over:
+/// one capture callback (a 16.000 ms frame) plus one supervisor tick (25 ms) is the expected
+/// cost; this bounds a dead capture stream, it is not an estimate.
+const FINISH_WAIT: Duration = Duration::from_millis(500);
+
 impl Drop for VoiceController {
     fn drop(&mut self) {
+        // **HIS LAST WORDS FIRST** (review rv-20261013T183507Z). What he said in the last 0.800 s
+        // is still an open recording inside the capture callback, and destroying the stream
+        // destroyed it. Ask the callback to close it, wait until the supervisor has handed it to
+        // the recognizer, and only then shut down; `TurnDesk`'s drop then waits for its words and
+        // sends the turn whole.
+        self.shared.finish_capture.store(true, Ordering::SeqCst);
+        let asked = Instant::now();
+        while !self.shared.drained_after_finish.load(Ordering::SeqCst) && asked.elapsed() < FINISH_WAIT {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         self.shared.running.store(false, Ordering::SeqCst);
         // Silence Rich immediately, then let the channels close and the threads finish.
         self.playout.stop_now();
@@ -2531,6 +2597,9 @@ fn supervise(
     let mut no_audio_changed = false;
 
     while shared.running.load(Ordering::SeqCst) {
+        // Read BEFORE the drain: if the capture callback had finished by now, everything it sent
+        // was sent before that, so this drain takes it all (`VoiceController::drop`).
+        let capture_had_finished = shared.capture_finished.load(Ordering::SeqCst);
         // 1. Drain the audio thread's messages.
         loop {
             match cap_rx.try_recv() {
@@ -2708,6 +2777,10 @@ fn supervise(
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
+        }
+
+        if capture_had_finished {
+            shared.drained_after_finish.store(true, Ordering::SeqCst);
         }
 
         // 1b. What the recognizer made of each fragment, in admission order — then, if he is
@@ -3007,6 +3080,33 @@ mod tests {
         assert_eq!(transcripts(&rec), vec![whole.clone()]);
         assert_eq!(submit_rx.try_recv().unwrap(), (whole, false));
         assert!(submit_rx.try_recv().is_err(), "one thought became more than one turn");
+    }
+
+    /// INVARIANT — review rv-20261013T183507Z / rv-20261013T184256Z finding 1. Voice switched off
+    /// while he is still talking: the open recording is closed and ADMITTED, so it reaches the
+    /// recognizer and the turn. Before, it was destroyed with the capture stream.
+    #[test]
+    fn voice_off_while_he_is_talking_keeps_what_he_had_said() {
+        let mut brain = CaptureBrain::new();
+        let mut audio = hiss(1.0, -55.0, 41);
+        audio.extend(synthetic_voice(1.0, 190.0, 130.0, -26.0));
+        let (mut started, mut admitted) = (0, 0);
+        for f in audio.chunks_exact(crate::vad::VAD_FRAME_SAMPLES) {
+            for m in brain.push_frame(f, false, false) {
+                match m {
+                    CapMsg::Started { .. } => started += 1,
+                    CapMsg::Utterance(_) => admitted += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!((started, admitted), (1, 0), "the replay did not leave him mid-sentence");
+        let out = brain.finish();
+        assert!(
+            matches!(out.as_slice(), [CapMsg::Utterance(u)] if u.utterance.reason == EndReason::Stopped),
+            "voice off lost what he was saying: {out:?}"
+        );
+        assert!(brain.finish().is_empty(), "a second finish made something out of nothing");
     }
 
     /// INVARIANT — review rv-20261013T163358Z finding 1. Voice switched off while his LAST fragment
