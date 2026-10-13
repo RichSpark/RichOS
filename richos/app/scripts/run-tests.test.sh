@@ -741,6 +741,9 @@ for f in testvm/run-suite.sh testvm/suite-walk.sh testvm/suite-in-guest.sh lib/g
   if [ -f "$DIR/$f" ]; then cp "$DIR/$f" "$GBOX/$f"; else G_READY=""; G_MISSING="${G_MISSING:-} $f"; fi
 done
 echo "the engine a suite provisions from" > "$GENG/VERSION"
+mkdir -p "$GENG/scripts/lib"
+cp "$DIR/../../engine/scripts/lib/machine_settings.py" \
+   "$DIR/../../engine/scripts/lib/machine-settings.sh" "$GENG/scripts/lib/"
 for n in richos-tauri gui_boot_machine; do
   printf '#!/bin/sh\necho "stand-in %s, built on the host"\n' "$n" > "$GPRE/$n"
   chmod +x "$GPRE/$n"
@@ -934,6 +937,25 @@ SH
     ok "G8 an existing guest's missing results refuse instead of passing"
   else
     bad "G8 an existing guest's missing results refuse instead of passing" "exit $CODE: $OUT"
+  fi
+
+  # Exercise the real library after transfer, with a guest-owned setting. A copied
+  # suite can otherwise pass in prebuilt mode after cargo-cache-env failed to load.
+  mkdir -p "$GROOT/Library/Application Support/RichOS"
+  printf 'RICHOS_BUILD_CACHE=%s\n' "$GROOT/selected-cache" \
+    > "$GROOT/Library/Application Support/RichOS/.env"
+  # shellcheck disable=SC2016  # these expressions run inside the guest fixture
+  printf '%s\n' "$G_HEAD" "$G_LIB" \
+    'unset RICHOS_MACHINE_SETTINGS_RESOLVED RICHOS_BUILD_CACHE' \
+    '. "$DIR/lib/cargo-cache-env.sh" || exit 1' \
+    '[ "$RICHOS_BUILD_CACHE" = "$HOME/selected-cache" ] || exit 1' \
+    'echo "PASS guest library read the guest settings"' \
+    > "$GBOX/settingswin.test.sh"
+  gsuite settingswin.test.sh "$TMP/guest-settings" --existing-guest nightly-owned
+  if [ "$CODE" = 0 ] && says "PASS guest library read the guest settings"; then
+    ok "G9 transferred app libraries resolve the engine and load guest settings"
+  else
+    bad "G9 transferred app libraries resolve the engine and load guest settings" "exit $CODE: $OUT"
   fi
 fi
 

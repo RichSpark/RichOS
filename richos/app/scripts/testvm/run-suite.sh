@@ -143,6 +143,9 @@ fi
 
 ENGINE="${RICHOS_GUI_ENGINE_SOURCE:-$REPO_DIR/engine}"
 [ -d "$ENGINE" ] || { echo "run-suite.sh: no engine at $ENGINE for the suite to provision from" >&2; exit 1; }
+# App launchers resolve shared libraries beside the app tree. Keep that source
+# layout while suite-walk transfers just one engine copy at the payload root.
+ln -s ../../engine "$PAYLOAD/tree/richos/engine" || no_guest "could not stage the engine library link"
 RUNTIME=""
 if [ ! -f "$ENGINE/runtime/delivery.json" ] && [ -n "${RICHOS_RUNTIME_DIR:-}" ]; then
   [ -d "$RICHOS_RUNTIME_DIR" ] || no_guest "RICHOS_RUNTIME_DIR names $RICHOS_RUNTIME_DIR, which is not a directory"
