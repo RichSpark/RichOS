@@ -359,6 +359,19 @@ pub fn priming_block(
     Some(block)
 }
 
+/// The company's name, exactly as he typed it, for the priming turn.
+///
+/// The CEO, 2026-10-13: a name with a word in capitals was written back re-capitalized,
+/// because nothing told Rich the name and the id is all lower case.
+pub fn company_name_block(entity: &EntityId, name: &str) -> String {
+    let quoted = serde_json::to_string(name).expect("a string serializes");
+    format!(
+        "\n\nCOMPANY NAME: this company is called {quoted}. Whenever you write or say its name, write \
+         it exactly so, letter for letter, with exactly this capitalization. Never re-capitalize \
+         it and never rebuild it from the id {entity}.\n\n"
+    )
+}
+
 /// One line for the boot log, naming what this launch will actually do about onboarding.
 ///
 /// It exists because the failure being fixed was silent. `--plugin-dir`'s silence on a missing

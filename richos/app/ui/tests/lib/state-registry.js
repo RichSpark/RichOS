@@ -1748,14 +1748,20 @@ module.exports = [
       "button beside the message box exists and works. The control it names is that button.",
   },
   {
-    s: "I can also type for you in any other app on your Mac, like Mail, Slack or your browser. Tap",
-    c: "FRAGMENT",
-    why: "The offer's second paragraph, up to the key's name (`F1`, a key cap). ACTIONABLE as a whole through Turn on dictation beside it.",
+    s: "If you turn on dictation, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)",
+    c: "INFORMATIONAL",
+    fixture: null,
+    why: "The CEO's copy (2026-10-13), the offer's second paragraph: what dictation gives him. Turn on dictation is beside it.",
   },
   {
-    s: ", say what you want written, then tap it again. Your words appear where your cursor is.",
+    s: "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press",
     c: "FRAGMENT",
-    why: "The offer's second paragraph after the key's name.",
+    why: "The CEO's copy (2026-10-13), the offer's third paragraph, up to the key's name (`F1`, a key cap). ACTIONABLE as a whole through Turn on dictation beside it.",
+  },
+  {
+    s: "(or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊",
+    c: "FRAGMENT",
+    why: "The CEO's copy (2026-10-13), the offer's third paragraph after the key's name.",
   },
   {s: "Turn on dictation", c: "CONTROL", why: "The offer's first answer: hands over to the Dictation sheet's turn-on (slice 2)."},
   {
@@ -1770,7 +1776,6 @@ module.exports = [
     fixture: null,
     why: "What the offer says after Turn on dictation when dictation did not end up on: where it lives. Nothing is asked of him.",
   },
-  {s: "Dictation is on. Tap", c: "FRAGMENT", why: "Followed by the key's name and \" in any app.\"; INFORMATIONAL as a whole, after the offer's Turn on dictation."},
   {
     s: "{FILE_NAME} is not a JSON object",
     c: "NOT-RENDERED",
@@ -5340,7 +5345,6 @@ module.exports = [
   {"s": "Click here, tap and say something.", "c": "FRAGMENT", "why": "Round 19 (richos-hq design/mockups/rounds/round-19/dictation.html, dictation plan slice 2, `dictation.js`), state 10: Try it here's placeholder, completed by the key's name. ACTIONABLE as a whole: the box (#dict-try) is the control. tests/dictation.js renders it in both themes with contrast computed."},
   {"s": "Command, Option, Control and Shift can't be used: anything you type while one is down would set off shortcuts. Use a function key, F1 to F19.", "c": "ACTIONABLE", "control": "#dict-capture-cancel", "fixture": null, "why": "Round 19 (richos-hq design/mockups/rounds/round-19/dictation.html, dictation plan slice 2, `dictation.js`), state 11: a modifier refused while the key capture waits; he presses another key, or Cancel beside it. tests/dictation.js renders it in both themes with contrast computed."},
   {"s": "Dictation is off. Turn it on in Settings, under Dictation.", "c": "ACTIONABLE", "control": "#set-btn", "fixture": null, "why": "Round 19 (richos-hq design/mockups/rounds/round-19/dictation.html, dictation plan slice 2, `dictation.js`): the off notice when his key is pressed in RichOS's window with dictation off; Settings is always on screen. tests/dictation.js renders it in both themes with contrast computed."},
-  {"s": "Dictation is on: tap and talk, here or in any app", "c": "FRAGMENT", "why": "Round 19 (richos-hq design/mockups/rounds/round-19/dictation.html, dictation plan slice 2, `dictation.js`), state 10: the composer's line, completed by the key's name. ACTIONABLE as a whole: the message box (#input) is beside it. tests/dictation.js renders it in both themes with contrast computed."},
   {"s": "Dictation now starts and stops with F.", "c": "FRAGMENT", "why": "Round 19 (richos-hq design/mockups/rounds/round-19/dictation.html, dictation plan slice 2, `dictation.js`), state 11: the notice after a key is chosen, completed by its number. INFORMATIONAL as a whole. tests/dictation.js renders it in both themes with contrast computed."},
   {"s": "Needs a permission", "c": "ACTIONABLE", "control": "#set-dictation-open", "fixture": null, "why": "Round 19 (richos-hq design/mockups/rounds/round-19/dictation.html, dictation plan slice 2, `dictation.js`), state 5: the Settings row's line; the row itself opens the sheet that asks. tests/dictation.js renders it in both themes with contrast computed."},
   {"s": "Not working yet: macOS has not allowed the microphone.", "c": "ACTIONABLE", "control": "#dictation-sheet [data-act=\"open-sys\"][data-pane=\"microphone\"]", "fixture": null, "why": "Round 19 (richos-hq design/mockups/rounds/round-19/dictation.html, dictation plan slice 2, `dictation.js`), state 12 for the microphone: Open System Settings is in the microphone's row. tests/dictation.js renders it in both themes with contrast computed."},

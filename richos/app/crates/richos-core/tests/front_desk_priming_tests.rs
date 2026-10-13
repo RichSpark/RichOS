@@ -253,3 +253,28 @@ fn a_prime_that_failed_for_want_of_a_lease_is_free_to_his_next_message_once_it_i
     assert_eq!(spine.ledger().turn(&turn).unwrap().assistant_text, "On it!");
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn rich_is_given_the_company_name_exactly_as_he_typed_it() {
+    // The CEO, 2026-10-13 (onboarding2.png): he typed a name with a word in capitals and Rich
+    // wrote it back re-capitalized, because the priming named the company only by its id, and
+    // the id is lower case. Rich has to be told the name itself, letter for letter, whether or
+    // not the company has notes on file.
+    let (path, ledger) = tmp_ledger("company-name");
+    let mut spine = richos_core::spine::Spine::new(ledger);
+    spine.set_entity_registry(
+        richos_core::entity::EntityRegistry::new(vec![
+            richos_core::entity::Entity::new("brightwave-labs", "Brightwave LABS", &["/fixture/brightwave"]).unwrap(),
+        ])
+        .unwrap(),
+    );
+    let thread = spine.create_thread("Onboarding", &EntityId::parse("brightwave-labs").unwrap()).unwrap();
+    let lease = MockCognition::new("sess-one", vec!["On it!"]);
+    let reprimes = lease.reprimes.clone();
+    spine.attach_lease(Box::new(lease));
+    assert!(matches!(spine.prime_front_desk(&thread), FrontDeskReady::Ready { .. }));
+    let priming = reprimes.lock().unwrap()[0].clone();
+    assert!(priming.contains("\"Brightwave LABS\""), "the name as he typed it is in the priming: {priming}");
+    assert!(priming.contains("exactly"), "and Rich is told to write it exactly so: {priming}");
+    std::fs::remove_file(&path).expect("the test ledger is removable");
+}

@@ -121,18 +121,71 @@ fn internal_reprime_turn_is_never_rendered() {
 }
 
 #[test]
-fn default_thread_title_is_running_not_general() {
-    // UX doc §2.1 / §6.1: "the empty rail shows only 'Running'" — the pinned default
-    // thread's REAL title, not a client-side relabel of a literal "General" backend
-    // value (that relabel in app/ui/main.js is now dead code, kept only as a defensive
-    // fallback — this test is the backend-side proof the one-liner landed).
+fn default_thread_title_is_onboarding() {
+    // The CEO, 2026-10-13: the first conversation of the first company "should be named
+    // "Onboarding"", not "Running". The pinned default thread's REAL title, stored by the
+    // backend, never a client-side relabel.
     let (path, ledger) = tmp_ledger("default-title");
     let mut spine = support::spine(ledger);
     let thread_id = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
     let summaries = spine.threads();
     let default = summaries.iter().find(|t| t.id == thread_id).unwrap();
-    assert_eq!(default.title, "Running");
+    assert_eq!(default.title, "Onboarding");
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_conversation_the_app_opens_carries_richs_message_and_rich_is_primed_with_it() {
+    // The CEO, 2026-10-13: once dictation is set up, a conversation titled "Dictation feature"
+    // is created under the company with Rich's message in it, and "If you have any questions
+    // about this, we can discuss it here." So the message is Rich's, in the ledger, and the desk
+    // that answers in that conversation is primed with it; the conversation he is in stays open.
+    let (path, ledger) = tmp_ledger("app-opened");
+    let mut spine = support::spine(ledger);
+    let first = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+    let (id, _message) = spine
+        .open_conversation_with_message(&femcboost(), "Dictation feature", "Good news! Dictation is set up and enabled.")
+        .unwrap();
+    assert_ne!(id, first);
+    assert_eq!(spine.active_thread(), Some(first.as_str()), "the conversation he is in stays the one he is in");
+    let row = spine.threads().into_iter().find(|t| t.id == id).expect("the new conversation is listed");
+    assert_eq!(row.title, "Dictation feature");
+    assert_eq!(row.entity_id.as_deref(), Some("femcboost"), "under his company");
+    let said = spine.messages(&id).unwrap();
+    assert_eq!(said.len(), 1);
+    assert_eq!((said[0].role.as_str(), said[0].text.as_str()), ("assistant", "Good news! Dictation is set up and enabled."));
+    let lease = MockCognition::new("sess-one", vec!["On it!"]);
+    let reprimes = lease.reprimes.clone();
+    spine.attach_lease(Box::new(lease));
+    spine.prime_front_desk(&id);
+    let primed = reprimes.lock().unwrap().join("\n");
+    assert!(primed.contains("Good news! Dictation is set up and enabled."), "Rich knows what he said there: {primed}");
+    std::fs::remove_file(&path).expect("the test ledger is removable");
+}
+
+#[test]
+fn an_app_message_replaced_is_the_one_message_there_and_the_one_rich_is_primed_with() {
+    // The CEO, 2026-10-13: "make sure the correct key is actually within that message". When he
+    // picks another key later, the "Dictation feature" message is replaced: the conversation
+    // shows the new one only, and the desk answering there is primed with the new one only.
+    let (path, ledger) = tmp_ledger("app-replaced");
+    let mut spine = support::spine(ledger);
+    spine.ensure_active_thread_in(&femcboost()).unwrap();
+    let (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
+    let second = spine.replace_app_message(&id, &first, "tap F3, then").unwrap();
+    assert_ne!(first, second);
+    let said: Vec<String> = spine.messages(&id).unwrap().into_iter().map(|m| m.text).collect();
+    assert_eq!(said, vec!["tap F3, then".to_string()], "one message, naming the new key");
+    let lease = MockCognition::new("sess-one", vec!["On it!"]);
+    let reprimes = lease.reprimes.clone();
+    spine.attach_lease(Box::new(lease));
+    spine.prime_front_desk(&id);
+    let primed = reprimes.lock().unwrap().join("\n");
+    assert!(primed.contains("tap F3, then"), "{primed}");
+    // The conversation he resumes holds the new message only. The action ledger keeps both lines,
+    // because Rich did say both: it is the record of what happened, the newer one last.
+    assert!(!primed.contains("assistant (unprompted): tap F2, then"), "the replaced message is not in the conversation: {primed}");
+    std::fs::remove_file(&path).expect("the test ledger is removable");
 }
 
 #[test]

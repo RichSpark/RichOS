@@ -2175,7 +2175,7 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  /* The company's name exactly as he typed it, never re-capitalized (CEO 2026-10-13). */
   color: var(--ink-soft);
   white-space: nowrap;
   overflow: hidden;
@@ -2954,7 +2954,7 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  /* A company's name, exactly as he typed it (CEO 2026-10-13). */
   color: var(--ink-faint);
   padding: 8px 10px 4px;
 }

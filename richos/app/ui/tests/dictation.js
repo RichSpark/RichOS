@@ -50,7 +50,7 @@ async function main() {
     await page.waitForSelector("#dictation-sheet:not([hidden]) #dict-state");
   }
   const text = (page, sel) => page.locator(sel).innerText().then(t => t.replace(/\s+/g, " ").trim());
-  const calls = page => page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().map(c => c.cmd + (c.on !== undefined ? ":" + c.on : "") + (c.key !== undefined ? ":" + c.key : "") + (c.accuracy ? ":" + c.accuracy : "") + (c.pane ? ":" + c.pane : "") + (c.forward !== undefined ? ":" + c.forward : "")).filter(c => c !== "dictation_status" && c !== "dictation_take_sheet_request"));
+  const calls = page => page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().map(c => c.cmd + (c.on !== undefined ? ":" + c.on : "") + (c.key !== undefined ? ":" + c.key : "") + (c.accuracy ? ":" + c.accuracy : "") + (c.pane ? ":" + c.pane : "") + (c.forward !== undefined ? ":" + c.forward : "")).filter(c => c !== "dictation_status" && c !== "dictation_take_sheet_request" && c !== "dictation_feature_thread"));
   const set = (page, patch) => page.evaluate(p => window.__RICHOS_MOCK__.dictationSet(p), patch);
   const waitText = (page, sel, want) => page.waitForFunction(([s, w]) => {
     const n = document.querySelector(s);
@@ -164,7 +164,9 @@ async function main() {
     await page.waitForFunction(() => document.activeElement && document.activeElement.id === "dict-try");
     assertEqual(await page.getAttribute("#dict-try", "data-ph"), "Click here, tap F1 and say something.");
     assertEqual(await text(page, "#dict-try-note"), "This box is only for trying. Your words go wherever your cursor is.");
-    assertEqual(await text(page, "#dictation-composer-note"), "Dictation is on: tap F1 and talk, here or in any app");
+    // DICTATION IS FOR OTHER APPS (the CEO, 2026-10-13, onboarding4.png): inside RichOS, Talk to
+    // Rich is the way to speak, so nothing under the message box offers dictation, on or off.
+    assertEqual(await page.locator("#dictation-composer-note").count(), 0, "no dictation line under the message box");
     await page.close();
     return "microphone, then Accessibility, then On with the cursor in Try it here";
   });
@@ -215,19 +217,38 @@ async function main() {
     return "the line after the grant's tap, after the switch's tap, and gone once the sheet was closed";
   });
 
-  await run.check("turning it off: the tool is told, the sheet says Off, the composer's line goes", async () => {
+  await run.check("turning it off: the tool is told, the sheet says Off", async () => {
     const page = await open("dark", ALLOWED);
     await sheet(page);
-    await page.waitForSelector("#dictation-composer-note:not([hidden])");
     await page.click("#dict-switch");
     await waitText(page, "#dict-state", "Off. Turn it on to type with your voice in Mail, Slack, your browser, anywhere.");
     assertEqual(await calls(page), ["dictation_set_on:false"]);
-    assert(await page.locator("#dictation-composer-note").isHidden(), "the composer's line goes");
     await page.close();
     return "off";
   });
 
   // ---- 5. the refusals ------------------------------------------------------------------------
+  // Second review rv-20261013T183104Z, finding 1: Accessibility refused, the sheet closed, then
+  // allowed in System Settings. Coming back to RichOS finishes setting it up: the "Dictation
+  // feature" conversation is asked for without the sheet being opened again.
+  await run.check("set up with the sheet closed: allowed later in System Settings, the Dictation feature conversation still comes", async () => {
+    const page = await open("dark", { mic: "allowed" }, { axAsked: true });
+    await sheet(page);
+    await page.click("#dict-switch");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_ask_accessibility"));
+    await page.click("#dict-close");
+    await page.waitForFunction(() => document.getElementById("dictation-sheet").hidden);
+    assert(
+      !(await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_feature_thread"))),
+      "not set up yet, so no conversation"
+    );
+    await set(page, { ax: "allowed", keyTap: true });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some(c => c.cmd === "dictation_feature_thread"));
+    await page.close();
+    return "refused, closed, allowed in System Settings: back in RichOS, dictation_feature_thread was called";
+  });
+
   await run.check("state 12: a refusal is said plainly, with Open System Settings on the right pane; back without allowing, it is said again", async () => {
     let page = await open("dark", { on: true, mic: "allowed", ax: "denied", owner: "self" }, { axAsked: true });
     await sheet(page);
@@ -440,9 +461,8 @@ async function main() {
     ["starting", { ...ALLOWED, owner: "none", keyTap: false }, sheet],
     ["no-tap", { ...ALLOWED, keyTap: false }, sheet],
     ["row-no-tap", { ...ALLOWED, keyTap: false }, menu],
-    ["composer", ALLOWED, async p => { await p.waitForSelector("#dictation-composer-note:not([hidden])"); }],
   ];
-  const ROOTS = "#dictation-sheet:not([hidden]) .dict-panel, #set-dictation-open, #dictation-composer-note";
+  const ROOTS = "#dictation-sheet:not([hidden]) .dict-panel, #set-dictation-open";
   // Declared skippable (style.css's own note): the 14px "Settings" breadcrumb over the 32px title.
   const SKIPPABLE = ".dict-eyebrow";
   for (const theme of ["dark", "light"]) {

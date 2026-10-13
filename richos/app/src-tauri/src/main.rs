@@ -4018,6 +4018,7 @@ fn main() {
             // --- Rich's one offer of dictation (dictation plan slice 4) — appended ---
             dictation_offer,
             dictation_offer_shown,
+            dictation_feature_thread,
             // --- the Dictation sheet and the Settings row (dictation plan slice 2) — appended ---
             #[cfg(target_os = "macos")]
             dictation_app::dictation_status,
@@ -6052,6 +6053,39 @@ fn dictation_offer_shown(state: State<AppState>) -> Result<(), String> {
     dictation_offer::mark_shown(&state.data_dir).inspect_err(|why| {
         eprintln!("[richos] dictation offer: the offer was shown and could not be recorded: {why}")
     })
+}
+
+/// **Dictation was just set up, or its key changed: the "Dictation feature" conversation** (the
+/// CEO, 2026-10-13, onboarding5.png). Opened once, under the company he is in, with Rich's message
+/// naming the key he picked, read from the dictation settings file now; when he picks another key
+/// later, that message is replaced so it names the new one (`create` false: a key change, which
+/// never opens it). The answer is the conversation's id
+/// when it was opened or its message replaced, `None` when nothing changed.
+#[richos_command::command]
+fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Option<String>, String> {
+    let key = dictation_offer::view(&state.data_dir, true).key;
+    let text = dictation_offer::feature_text(key);
+    let record = dictation_offer::feature_record(&state.data_dir);
+    let (thread, message) = match dictation_offer::feature_action(record, key, create) {
+        dictation_offer::FeatureAction::Nothing => return Ok(None),
+        dictation_offer::FeatureAction::Create => {
+            let mut spine = take_the_spine(&state.spine);
+            let entity = spine.active_entity().cloned().ok_or_else(|| ENTITY_UNRESOLVED_MESSAGE.to_string())?;
+            spine
+                .open_conversation_with_message(&entity, dictation_offer::FEATURE_TITLE, &text)
+                .map_err(|e| e.to_string())?
+        }
+        dictation_offer::FeatureAction::Replace { thread, message } => {
+            let new_message = take_the_spine(&state.spine)
+                .replace_app_message(&thread, &message, &text)
+                .map_err(|e| e.to_string())?;
+            (thread, new_message)
+        }
+    };
+    dictation_offer::mark_feature(&state.data_dir, &thread, &message, key).inspect_err(|why| {
+        eprintln!("[richos] dictation feature conversation {thread}: written and could not be recorded: {why}")
+    })?;
+    Ok(Some(thread))
 }
 
 /// **THE CEO PRESSES "Set it up".** Install what is missing, reporting each step on

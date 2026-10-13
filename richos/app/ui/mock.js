@@ -1446,6 +1446,15 @@
     mic: "unknown", ax: "unknown", owner: "none", keyTap: false, secure: null }, preset.dictationView || {});
   let dictationAxAsked = !!preset.dictationAxAsked;
   const dictationCalls = [];
+  // The "Dictation feature" conversation (`dictation_offer.rs` FEATURE_TITLE and feature_text,
+  // the CEO's words, 2026-10-13): created once, its id kept as `featureThread` is.
+  let dictationFeatureThread = null;
+  const dictationFeatureText = (key) =>
+    "Good news! Dictation is set up and enabled.\n\n" +
+    "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:\n\n" +
+    "Click into where you want your words to appear, tap F" + key + ", say what you want written, then tap it again. " +
+    "See how your words appear where your cursor is.\n\n" +
+    "If you have any questions about this, we can discuss it here.";
   // "LET CODEX REVIEW YOUR TEAM'S WORK" (round 20.2): `codex_reviews_status`, as richos-core
   // codex_reviews.rs reports it. Off on first run, Codex installed and signed in, as the round
   // opens; `preset.codexReviews` overrides either fact, `__RICHOS_MOCK__.codexSet` changes what
@@ -1755,7 +1764,7 @@
     const existing = threads.filter(t => t.entity_id === entityId).sort((a, b) => b.created_at - a.created_at)[0];
     if (existing) { activeThreadId = existing.id; return; }
     const id = uid("thread");
-    threads.push({ id, title: "Running", entity_id: entityId, created_at: now(), message_count: 0,
+    threads.push({ id, title: "Onboarding", entity_id: entityId, created_at: now(), message_count: 0,
       last_activity: now(), last_turn_state: null, has_pending_turn: false });
     messagesByThread[id] = [];
     activeThreadId = id;
@@ -3287,6 +3296,36 @@
           dictationOfferCalls.push("dictation_offer_shown");
           dictationOffered = true;
           return null;
+        // Dictation was just set up (`main.rs` dictation_feature_thread): the conversation, under
+        // the company he is in, with Rich's message naming the key in the settings now. Once.
+        case "dictation_feature_thread": {
+          dictationCalls.push({ cmd });
+          const key = dictationView.key, at = now(), text = dictationFeatureText(key), turnId = uid("turn");
+          if (dictationFeatureThread) {
+            // A key change replaces the message (`dictation_offer::feature_action`, Replace): the
+            // old turn is superseded, so the conversation shows the new one only.
+            if (dictationFeatureThread.key === key) return null;
+            const old = turnsById.get(dictationFeatureThread.turn);
+            const thread = threads.find((x) => x.id === dictationFeatureThread.thread);
+            turnsById.set(turnId, { threadId: thread.id, entityId: thread.entity_id, userText: null, proactive: true,
+              runs: [{ text, startSeq: 0, at }], state: "completed", createdAt: at, startedAt: at, endedAt: at, activities: [] });
+            if (old) old.supersededBy = turnId;
+            messagesByThread[thread.id] = [{ role: "assistant", text, turn_id: turnId, at }];
+            dictationFeatureThread = { thread: thread.id, turn: turnId, key };
+            return thread.id;
+          }
+          if (!args.create) return null;
+          const here = threads.find((x) => x.id === activeThreadId);
+          if (!here || !here.entity_id) return Promise.reject("No company is chosen yet, so I won't guess which one this belongs to.");
+          const id = uid("thread");
+          threads.push({ id, title: "Dictation feature", entity_id: here.entity_id, created_at: at, message_count: 1,
+            last_activity: at, last_turn_state: "completed", has_pending_turn: false });
+          messagesByThread[id] = [{ role: "assistant", text, turn_id: turnId, at }];
+          turnsById.set(turnId, { threadId: id, entityId: here.entity_id, userText: null, proactive: true,
+            runs: [{ text, startSeq: 0, at }], state: "completed", createdAt: at, startedAt: at, endedAt: at, activities: [] });
+          dictationFeatureThread = { thread: id, turn: turnId, key };
+          return id;
+        }
         // API-EQUIVALENT TOKEN SPEND (spend.js): the ledger's snapshot and its live line.
         case "spend_view": return spendMock.view(args.from);
         case "spend_live": return spendMock.live();
