@@ -194,6 +194,35 @@ NOTICES_SRC="$REPO_ROOT/docs/legal/THIRD-PARTY-NOTICES.md"
 [ -f "$LICENSE_SRC" ] || die "no LICENSE at $LICENSE_SRC - refusing to build an unlicensed asset"
 [ -f "$NOTICES_SRC" ] || die "no third-party notices at $NOTICES_SRC - refusing to build an asset that cannot name what it bundles"
 
+# ---------------------------------------------------------------------------------------
+# THE MEETING-NOTES SERVICE, IN THE VOICE DELIVERY CONTRACT'S PRODUCT LAYOUT
+# ---------------------------------------------------------------------------------------
+#
+# Granola PRD V4, "Deliver the existing components with the app": the Node service and the
+# source it imports go into this versioned payload, keeping the relative layout of
+# `engine/voice/contracts/delivery.md`, so an installed app transcribes a meeting with no
+# checkout on the Mac. The service imports `../../../engine/voice/...`,
+# `../../../../engine/loro/lib/...` and `../../richos-extension/sync/reconcile.js`; those only
+# resolve with the service two levels under a product root, and the archive's one top-level
+# directory is `engine/`, so the product root is `engine/service/` and the app runs
+# `engine/service/tools/richos-service/bin/richos-service.js` (`meetings.rs`). Tracked files
+# only, each declared to the members check below as a packaging addition, and every module is
+# imported from the finished archive's own copy before anything is published
+# (`lib/service-imports.mjs`). The voice tests stay out; nothing here is a second source.
+SERVICE_SOURCES="tools/richos-service/package.json tools/richos-service/bin tools/richos-service/lib tools/richos-extension/package.json tools/richos-extension/sync/reconcile.js engine/voice engine/loro/package.json engine/loro/lib"
+# shellcheck disable=SC2086 # the pathspecs above are fixed words, split on purpose
+SERVICE_LIST="$(git -C "$REPO_ROOT/richos" ls-files -- $SERVICE_SOURCES | grep -v '^engine/voice/tests/')" \
+    || die "the meeting-notes service's sources could not be listed"
+[ -n "$SERVICE_LIST" ] || die "git tracks none of the meeting-notes service's sources"
+printf '%s\n' "$SERVICE_LIST" | grep -q '[[:space:]]' \
+    && die "a meeting-notes service path contains a space; the members check cannot pair it"
+SERVICE_PAIRS=()
+while IFS= read -r rel; do
+    SERVICE_PAIRS+=("service/$rel=richos/$rel")
+done <<EOF
+$SERVICE_LIST
+EOF
+
 # The engine's own commit time, so the archive's mtimes are a property of the CONTENT and not
 # of when somebody happened to run this. Outside a checkout, 0.
 SOURCE_EPOCH="$(git -C "$REPO_ROOT" log -1 --format=%ct -- richos/engine 2>/dev/null || true)"
@@ -239,6 +268,11 @@ build_into() {
         ( cd "$RUNTIME_DIR" && /usr/bin/tar -cf - . ) \
             | ( cd "$staging/engine/runtime" && /usr/bin/tar -xf - ) || return 1
     fi
+    # The meeting-notes service, its product layout under engine/service (see SERVICE_SOURCES).
+    mkdir "$staging/engine/service" || return 1
+    printf '%s\n' "$SERVICE_LIST" | tr '\n' '\0' > "$staging/service.z" || return 1
+    ( cd "$REPO_ROOT/richos" && /usr/bin/tar -cf - --null -T "$staging/service.z" ) \
+        | ( cd "$staging/engine/service" && /usr/bin/tar -xf - ) || return 1
 
     # MODE, fixed. Read the executable bit off the COPY (which preserves the source's u+x
     # under any sane umask) and then flatten everything to two permissions. `-perm -u+x` is
@@ -432,6 +466,13 @@ EOF
 # present in the archive, so its length IS the number of bundled license files intact.
 TP_COUNT="$(license_files_under "$ENGINE_DIR" | wc -l | tr -d ' ')"
 FILES="$(find "$VERIFY/engine" -type f | wc -l | tr -d ' ')"
+
+# THE SERVICE LOADS FROM THE ARCHIVE ALONE, with the runtime's own Node when this asset carries
+# one, from `/`, so a module the packaging left out fails here rather than on the CEO's Mac.
+SERVICE_NODE="node"
+[ -z "$RUNTIME_DIR" ] || SERVICE_NODE="$VERIFY/engine/runtime/bin/node"
+SERVICE_CHECK="$( cd / && "$SERVICE_NODE" "$SELF_DIR/lib/service-imports.mjs" "$VERIFY/engine/service" )" \
+    || die "the meeting-notes service does not load from the archive's own copy (above)"
 rm -rf "$VERIFY"
 
 # ---------------------------------------------------------------------------------------
@@ -446,6 +487,7 @@ echo "=== every member accounted for, against git ==="
 RICHOS_RUNTIME_DIR="$RUNTIME_DIR" bash "$MEMBERS_CHECK" "$TARBALL" "$REPO_ROOT" \
     "LICENSE=${LICENSE_SRC#"$REPO_ROOT"/}" \
     "THIRD-PARTY-NOTICES.md=${NOTICES_SRC#"$REPO_ROOT"/}" \
+    "${SERVICE_PAIRS[@]}" \
     || die "the archive's contents are not what git tracks (above)"
 echo
 
@@ -455,6 +497,7 @@ echo "  engine/VERSION        $VERSION"
 echo "  engine/LICENSE        canonical ($LICENSE_CANON)"
 echo "  third-party notices   present, $TP_COUNT bundled license file(s) intact"
 echo "  files                 $FILES"
+echo "$SERVICE_CHECK"
 echo
 
 # ---------------------------------------------------------------------------------------
