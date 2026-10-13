@@ -166,6 +166,56 @@ async function main() {
         assert(m.px >= 16, theme + " size " + m.px);
       }
     });
+    // CEO, nightly 54 (2026-10-13, right-click-in-left-bar.mov): a right-click anywhere on a
+    // thread row showed WebKit's own "Reload" menu, or selected the title and offered Look Up /
+    // Translate. He expects the row's own menu, the one its ⋯ button opens.
+    const rightClick = async (selector, position) => {
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => {
+        window.getSelection().removeAllRanges();
+        window.__nativeMenuAllowed = null;
+        window.addEventListener("contextmenu", e => { window.__nativeMenuAllowed = !e.defaultPrevented; }, { once: true });
+      });
+      const box = await page.locator(selector).boundingBox();
+      const at = { x: box.x + position(box).x, y: box.y + position(box).y };
+      await page.mouse.click(at.x, at.y, { button: "right" });
+      await page.waitForTimeout(50);
+      return page.evaluate(() => {
+        const m = document.getElementById("thread-menu");
+        const r = m.getBoundingClientRect();
+        return {
+          open: !m.hidden,
+          items: [...m.querySelectorAll(".menu-item")].map(b => b.textContent),
+          left: r.left, top: r.top,
+          nativeMenuAllowed: window.__nativeMenuAllowed,
+          selection: window.getSelection().toString(),
+        };
+      }).then(view => ({ ...view, at }));
+    };
+    const row = '.nav-thread-row:has(.nav-thread[data-thread-id="acme"])';
+    for (const [where, position] of [
+      ["on the title text", () => ({ x: 20, y: 0 }) ],
+      ["on the empty space between the title and the ⋯", box => ({ x: box.width - 40, y: 0 })],
+      ["on the ⋯ button itself", box => ({ x: box.width - 11, y: 0 })],
+    ]) {
+      await run.check(`a right-click ${where} opens the row's own menu, never WebKit's`, async () => {
+        const view = await rightClick(row, box => ({ x: position(box).x, y: box.height / 2 }));
+        assert(view.open, "the thread menu must open on a right-click");
+        assertEqual(view.items.join(" | "), "Rename… | Pin | Archive", "the same menu the ⋯ button opens");
+        assertEqual(view.nativeMenuAllowed, false, "the browser's own context menu must be suppressed");
+        assertEqual(view.selection, "", "a right-click must not select the title text");
+        assert(Math.abs(view.left - view.at.x) <= 2 && Math.abs(view.top - view.at.y) <= 2,
+          `the menu opens at the pointer (${view.at.x},${view.at.y}), was at (${view.left},${view.top})`);
+        return `menu at (${Math.round(view.left)},${Math.round(view.top)}) for a click at (${Math.round(view.at.x)},${Math.round(view.at.y)})`;
+      });
+    }
+    await run.check("a right-click outside any thread row closes the open menu", async () => {
+      await rightClick(row, () => ({ x: 20, y: 10 }));
+      assert(await page.locator("#thread-menu").isVisible(), "precondition: the menu is open");
+      // The middle of the main pane, well right of the rail (viewport 1400 x 900).
+      await page.mouse.click(900, 500, { button: "right" });
+      assert(await page.locator("#thread-menu").isHidden(), "the row menu must not stay open");
+    });
     await run.check("no browser errors", () => assertEqual(errors.length, 0, errors.join("\n")));
   } finally {
     await browser.close();
