@@ -32,5 +32,33 @@ try:
         else: raise AssertionError('unverified download accepted')
     assert not target.exists()
     print('  PASS  helper digest, verified cache reuse, tamper recovery and refusal before extraction')
+    old=scratch/'old-storage/richos-connect/helper'/m.VERSION
+    new_root=scratch/'new-storage/richos-connect/helper'
+    new=new_root/m.VERSION
+    link=scratch/'connect-helper'
+    with patch.object(m.urllib.request,'urlopen',download):
+        m.prepare(old,'arm64'); m.prepare(new,'arm64')
+    link.symlink_to(old,target_is_directory=True)
+    m.link_helper(link,new,new_root)
+    assert link.resolve()==new and old.is_dir(), 'owned old link was not retargeted or old cache was removed'
+    m.link_helper(link,new,new_root)
+    assert link.resolve()==new, 'repeated preparation changed the selected link'
+    for prior in (old,scratch/'unrelated',scratch/'missing/richos-connect/helper'/m.VERSION):
+        link.unlink(); link.symlink_to(prior,target_is_directory=True)
+        if prior==old:
+            (old/'cloudflared-aarch64-apple-darwin').write_bytes(b'tampered')
+        try: m.link_helper(link,new,new_root)
+        except SystemExit: pass
+        else: raise AssertionError('unverified prior helper link accepted')
+        assert link.is_symlink() and link.resolve()==prior, 'refusal changed prior link'
+    for broken in ('[1,2,3]', '{not-json'):
+        (old/'verified-aarch64-apple-darwin.json').write_text(broken)
+        assert not m.owned_cache(old), 'malformed ownership receipt accepted'
+    link.unlink(); link.mkdir(); (link/'keep').write_text('unrelated directory')
+    try: m.link_helper(link,new,new_root)
+    except SystemExit: pass
+    else: raise AssertionError('existing directory replaced')
+    assert (link/'keep').read_text()=='unrelated directory'
+    print('  PASS  verified prior storage link retargeted; unrelated, missing and tampered targets preserved')
 finally: shutil.rmtree(scratch)
 PY
