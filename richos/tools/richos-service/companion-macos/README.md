@@ -60,6 +60,13 @@ richos-companion ingest --stereo <wav> [--zone DIR] [--started-at MS]
 richos-companion ingest --mic <monoWav> --system <monoWav> [--zone DIR]
     Headless: push a pre-made sample through the REAL contract writer (no grant) → a valid session
     dir the P1 pipeline transcribes. This is the on-Mac proof of the contract + handoff.
+
+richos-companion watch [--exclude-pid N]... [--exclude-bundle ID]... [--poll S] [--trace]
+    Report OTHER processes' microphone use as JSON lines (Core Audio's per-process
+    kAudioProcessPropertyIsRunningInput; no permission, no device opened). The app's meeting
+    prompts and end-of-call detection read it (Granola PRD V4). RichOS's own voice/dictation and
+    the capture process are excluded by the caller. Exits when stdin closes, so it dies with the
+    app that started it. --trace adds every process's input/output flags, for measurement only.
 ```
 
 Drop zone resolves exactly as the pipeline's `config.js#dropZone` does — `$RICHOS_DROP_ZONE`, else
@@ -72,8 +79,15 @@ resolved path and which rule produced it.
 
 ```
 swift build
-swift test        # 36 deterministic unit tests: channel mapping, mix/failover, contract shape,
-                  # WAV, coordination parsing, drop-zone resolution + the in-repo refusal
+swift test        # deterministic unit tests: channel mapping, mix/failover, contract shape, WAV,
+                  # coordination parsing, drop-zone resolution + the in-repo refusal, the
+                  # microphone-activity tracker behind `watch`
+```
+
+The proof selector's seat for this package is `richos/app/scripts/companion-macos.test.sh`: the
+unit tests (it reads the passing count back) and `watch`'s exit-on-stdin-close contract.
+
+```
 ```
 
 ## Reliability model (matches the shared guarantees, §6)

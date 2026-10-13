@@ -198,6 +198,9 @@ func usage() {
       richos-companion ingest --mic <monoWav> --system <monoWav> [--zone DIR]
           Headless: push a sample through the real contract writer (no grant needed) -> a valid
           session dir the P1 pipeline transcribes.
+      richos-companion watch [--exclude-pid N]... [--exclude-bundle ID]... [--poll S] [--trace]
+          Report other processes' microphone use as JSON lines (no permission needed). Exits when
+          stdin closes. The app's meeting prompts and end-of-call detection read it.
 
     The drop zone defaults to $RICHOS_DROP_ZONE, else <checkout>/wiki/raw/meetings.
     """)
@@ -213,6 +216,7 @@ do {
     case "doctor": cmdDoctor()
     case "ingest": try cmdIngest(rest)
     case "capture": cmdCapture(rest)
+    case "watch": cmdWatch(rest)
     case "-h", "--help", "help": usage()
     default:
         FileErr.write("unknown command: \(cmd)\n")
