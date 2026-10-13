@@ -146,12 +146,24 @@ def raise_escalation(repo, path, commit, new, changed, scratch):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--repo", default=os.environ.get("RICHOS_AUDIT_RECORD_REPO")
-                    or str(Path(subprocess.check_output(["git", "-C", ENGINE_SCRIPTS, "rev-parse", "--path-format=absolute", "--git-common-dir"], text=True).strip()).parent.parent / "richos-hq"))
+    ap.add_argument("--repo", default=os.environ.get("RICHOS_AUDIT_RECORD_REPO"))
     ap.add_argument("--subdir", default="docs/audits")
     ap.add_argument("--state-dir", default=os.environ.get("RICHOS_AUDIT_WATCH_STATE")
                     or os.path.expanduser("~/.claude/state/audit-report-watch"))
     a = ap.parse_args()
+
+    if a.repo is None:
+        source = Path(ENGINE_SCRIPTS)
+        if not any(os.path.lexists(parent / ".git") for parent in (source, *source.parents)):
+            return 0  # extracted engines have no implicit record repository
+        try:
+            common = subprocess.check_output(
+                ["git", "-C", ENGINE_SCRIPTS, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                text=True, stderr=subprocess.PIPE, timeout=30).strip()
+        except (OSError, subprocess.SubprocessError) as e:
+            print("audit-report-watch: cannot resolve record repository: %s" % e, file=sys.stderr)
+            return 2
+        a.repo = str(Path(common).parent.parent / "richos-hq")
 
     if not os.path.isdir(os.path.join(a.repo, ".git")) and not os.path.isfile(os.path.join(a.repo, ".git")):
         return 0  # no record repository on this machine: nothing to watch

@@ -4569,8 +4569,8 @@
     },
     "scripts/lib/audit-report-watch.py": {
       "source": "scripts/lib/audit-report-watch.py",
-      "sha256": "d75211a65f2867d37e020feb0cd82e77d18dbad10538d1889a5f593814705ccd",
-      "evidence": "Reads the record repository's docs/audits reports at HEAD through fixed git calls (path from RICHOS_AUDIT_RECORD_REPO or a fixed home default) and a state file under RICHOS_AUDIT_WATCH_STATE. Report text is parsed as data, never evaluated. Raises through the fixed sibling escalate.sh with a fields file it writes itself. No orchestration config or manifest is read.",
+      "sha256": "442fb2b6eda0507d16d810cfa75a7719cd8e16c3bfd8c907af4fdde6b6ff5d43",
+      "evidence": "Reads the record repository's docs/audits reports at HEAD through fixed git calls. Explicit --repo or RICHOS_AUDIT_RECORD_REPO wins before discovery; only a source tree with Git metadata derives its primary checkout's sibling richos-hq. An extracted engine without an explicit repository reads no record or state. Broken checkout discovery refuses. State stays under RICHOS_AUDIT_WATCH_STATE. Report text is parsed as data, never evaluated. Raises through the fixed sibling escalate.sh with a fields file it writes itself. No orchestration config or manifest is read.",
       "keys": [],
       "edges": [
         {
