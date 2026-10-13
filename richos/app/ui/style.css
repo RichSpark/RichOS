@@ -10899,3 +10899,572 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .setmenu > .set-floor { position: sticky; bottom: 0; z-index: 1; background-color: var(--surface); }
 .set-floor > .bugbtn:hover:not(:disabled) { background: linear-gradient(var(--tint-gold), var(--tint-gold)), var(--surface); }
 .set-floor > .bugbtn + .bugbtn { margin-top: 2px; }
+
+/* ---- the search palette with Super Finder (search PRD v3.1; design round 26) ----------
+   Built as the CEO's chosen design (richos-hq `design/mockups/rounds/round-26/`) shows it:
+   860px wide so a passage has room to be read; a head that never scrolls away, holding the
+   query, the count, the two checkboxes and the status; results that scroll under it.
+   Every color is an app token; the round's audit computed every pair in both themes
+   (round-26 NOTES.md, "Contrast"), and the ones this file adds are the round's own.
+
+   DECLARED 14px, SKIPPABLE (the round's own declaration): the section labels, the source line
+   under a document (why · path · heading; the title, date and passage above it carry the row),
+   the key hints at the foot and the ⏎ glyph inside the Open original button. Everything else
+   here is 16px or larger. */
+.overlay-panel--search {
+  width: min(860px, 92vw);
+  /* The list scrolls, never the panel: the head with the query and the two checkboxes stays
+     in view. 82vh under a 9vh top margin leaves the panel's shadow clear of the bottom. */
+  max-height: 82vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+}
+#search-overlay {
+  padding-top: 9vh;
+}
+.srch-head {
+  flex-shrink: 0;
+  padding: 14px 22px 0;
+  position: relative;
+}
+.srch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.srch-glass {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--ink-soft);
+}
+#search-input.srch-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1.125rem;
+  line-height: 1.4;
+  padding: 10px 0;
+}
+.srch-input::placeholder {
+  color: var(--ink-faint);
+}
+.srch-count {
+  flex-shrink: 0;
+  font-size: 1rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+}
+.srch-count.is-empty {
+  opacity: 0;
+}
+.srch-modes {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 6px 0 14px;
+}
+.srch-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 1rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+}
+.srch-check:hover {
+  color: var(--ink);
+}
+.srch-check:has(input:checked) {
+  color: var(--ink);
+  font-weight: 600;
+}
+/* The house checkbox, scaled from 16 to 18px: indicator-grade border, gold when checked,
+   the tick cut out in the panel's own color. */
+.srch-check > input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border: 2px solid var(--line-control);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+  /* Transform only: a fading fill or border would pass through an unreadable mix for the first
+     frames of a theme switch (contrast.js check 19 measured 2.35:1). */
+  transition: transform 0.18s;
+}
+.srch-check > input[type="checkbox"]:checked {
+  border-color: var(--gold);
+  background: var(--gold);
+}
+.srch-check > input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  width: 5px;
+  height: 9px;
+  border: solid var(--surface);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.srch-check > input[type="checkbox"]:active {
+  transform: scale(0.9);
+}
+.srch-check > input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.srch-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.srch-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold);
+  flex: none;
+}
+.srch-status.is-text .srch-status-dot {
+  background: var(--trim-text);
+}
+.srch-status.is-indexing .srch-status-dot {
+  animation: srch-breathe 1.6s ease-in-out infinite;
+}
+.srch-status.is-unavailable .srch-status-dot,
+.srch-status.is-nofolder .srch-status-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--ink-soft);
+}
+.srch-status.is-unavailable {
+  color: var(--ink);
+}
+@keyframes srch-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* The rule under the head, the gold hairline that sweeps along it while a search runs, and a
+   second hairline that fills while the index is built. */
+.srch-life {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 0;
+  height: 1px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.srch-life i {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 0;
+  width: 22%;
+  background: var(--gold);
+  transform: translateX(-120%);
+  opacity: 0;
+}
+.srch-head.is-searching .srch-life i {
+  animation: srch-sweep 0.55s cubic-bezier(0.4, 0, 0.2, 1) 1;
+}
+@keyframes srch-sweep {
+  0% {
+    transform: translateX(-120%);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(560%);
+    opacity: 1;
+  }
+}
+.srch-life b {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  background: var(--gold);
+  opacity: 0;
+  transition: width 0.6s ease, opacity 0.3s;
+}
+.srch-head.is-indexing .srch-life b {
+  opacity: 1;
+}
+
+/* the list */
+#search-results.srch-results {
+  max-height: none;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 8px 12px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  overscroll-behavior: contain;
+}
+#search-overlay .result-group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--trim-text);
+  padding: 14px 12px 6px;
+}
+#search-overlay .result-group:first-child {
+  padding-top: 8px;
+}
+.srch-group-mode {
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  text-transform: none;
+  font-size: 0.875rem;
+}
+.srch-hit {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  border-radius: 10px;
+  padding: 10px 14px 11px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  transition: background-color 0.15s;
+  will-change: transform;
+}
+.srch-hit:hover {
+  background: var(--line-soft);
+}
+.srch-hit.is-active {
+  background: var(--gold-soft);
+}
+.srch-hit.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--gold);
+}
+.srch-hit:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+}
+.srch-hit.is-new {
+  animation: srch-hitin 0.38s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+@keyframes srch-hitin {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.srch-hit.is-flash {
+  animation: srch-hitflash 1.4s ease-out both;
+}
+@keyframes srch-hitflash {
+  0%,
+  25% {
+    box-shadow: inset 0 0 0 1px var(--gold);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+.srch-hit-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.srch-title {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.35;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.srch-date {
+  flex: none;
+  font-size: 1rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.srch-passage {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin-top: 4px;
+  max-height: 3em;
+  white-space: pre-line;
+  transition: max-height 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.srch-hit.is-active .srch-passage {
+  -webkit-line-clamp: unset;
+  max-height: 14em;
+  overflow-y: auto;
+  color: var(--ink);
+}
+.srch-hit mark {
+  background: var(--gold-soft);
+  color: var(--ink);
+  border-radius: 3px;
+  padding: 0 2px;
+  margin: 0 -2px;
+}
+/* Quoted text on a stronger gold than a plain word. Translucent --gold, written out per theme
+   (the contrast gate reads rgba(), not color-mix()), so it sits on whatever is under it, the
+   active row's tint included. */
+:root {
+  --srch-mark-q: rgba(194, 163, 92, 0.28);
+  --srch-mark-active: rgba(194, 163, 92, 0.22);
+  --srch-mark-q-active: rgba(194, 163, 92, 0.36);
+}
+:root[data-theme="light"] {
+  --srch-mark-q: rgba(156, 124, 52, 0.28);
+  --srch-mark-active: rgba(156, 124, 52, 0.22);
+  --srch-mark-q-active: rgba(156, 124, 52, 0.36);
+}
+.srch-hit mark.q {
+  background: var(--srch-mark-q);
+  font-weight: 600;
+}
+.srch-hit.is-active mark {
+  background: var(--srch-mark-active);
+}
+.srch-hit.is-active mark.q {
+  background: var(--srch-mark-q-active);
+}
+.srch-src {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.srch-why {
+  flex: none;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--trim-text);
+}
+/* Trim blue on a tinted row falls under 4.5:1 in dark: 4.26:1 on the selected row's gold tint
+   (round 26's walk) and, on this app's lighter panel (--surface is --card, #182440, where the
+   round drew #141E34), 4.41:1 on a hovered row. --ink-soft there is 5.40:1 hovered and 4.97:1
+   selected in dark, 5.81:1 and 6.02:1 in light (computed, not seen). */
+.srch-hit:hover .srch-why:not(.is-meaning):not(.is-exact),
+.srch-hit.is-active .srch-why:not(.is-meaning):not(.is-exact) {
+  color: var(--ink-soft);
+}
+.srch-why.is-meaning {
+  color: var(--gold-text);
+}
+.srch-why.is-exact {
+  color: var(--gold-text);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.srch-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.srch-open {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.srch-hit.is-active .srch-open {
+  grid-template-rows: 1fr;
+}
+.srch-open > div {
+  overflow: hidden;
+  min-height: 0;
+}
+.srch-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 12px;
+}
+.srch-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--gold);
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 12px 7px 14px;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--on-gold);
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.srch-open-btn:hover {
+  filter: brightness(1.06);
+}
+.srch-open-btn:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.srch-open-btn kbd {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.srch-where {
+  font-size: 1rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.srch-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 10px;
+  font-size: 1rem;
+  color: var(--ink-soft);
+}
+.srch-loading i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+.srch-loading.is-fetching i {
+  animation: srch-breathe 1.1s ease-in-out infinite;
+}
+.srch-end {
+  padding: 12px 14px 8px;
+  font-size: 1rem;
+  color: var(--ink-soft);
+}
+.srch-note {
+  padding: 10px 14px 12px;
+}
+.srch-note-title {
+  display: block;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.35;
+}
+.srch-note-line {
+  display: block;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin-top: 4px;
+  max-width: 66ch;
+}
+.srch-note code {
+  font-family: var(--mono);
+  font-size: 1rem;
+  color: var(--ink);
+}
+.srch-hint {
+  margin: 0;
+  padding: 18px 22px 22px;
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  max-width: 60ch;
+}
+.srch-hint b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.srch-foot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
+  padding: 8px 22px 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+.srch-foot kbd {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-right: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .srch-hit,
+  .srch-hit.is-new,
+  .srch-hit.is-flash {
+    animation: none !important;
+    transition: none !important;
+  }
+  .srch-passage,
+  .srch-open {
+    transition: none;
+  }
+  .srch-status-dot,
+  .srch-loading i,
+  .srch-head.is-searching .srch-life i {
+    animation: none;
+  }
+}
