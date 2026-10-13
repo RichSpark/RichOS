@@ -173,6 +173,23 @@ async function main() {
     return "take, the bar (hover back, Escape), the × as the decline, stop";
   });
 
+  await run.check("a window never yet on screen still asks to be shown: the size goes out in the same turn, no animation frame", async () => {
+    // The installed app (walk run 7, 2026-10-13): the panel window is built hidden and only this
+    // report shows it, and WebKit runs no animation frame for a window that has never been on
+    // screen. The report waited for one, so the prompt never appeared. Here no frame ever runs.
+    const page = await open(browser);
+    const sent = await page.evaluate((view) => {
+      window.requestAnimationFrame = () => 0;
+      window.__calls.length = 0;
+      window.__say("meeting-panel", view);
+      return window.__calls.filter((c) => c[0] === "meeting_panel_laid_out").map((c) => c[1]);
+    }, SCHEDULED);
+    assertEqual(sent.length, 1, "one layout report, sent before any frame");
+    assert(sent[0].w > 300 && sent[0].h > 100, `a real size: ${JSON.stringify(sent[0])}`);
+    await page.close();
+    return `${sent[0].w} x ${sent[0].h} with no animation frame`;
+  });
+
   await run.check("the window asked for is the panel plus its shadow room", async () => {
     const page = await open(browser);
     await say(page, "meeting-panel", SCHEDULED);

@@ -44,18 +44,26 @@ window.RichMeetingPanel = (function () {
   function fmt(s) { var m = Math.floor(s / 60), r = s % 60; return m + ":" + (r < 10 ? "0" : "") + r; }
 
   /// Tell Rust the window this panel needs, after layout (and again after a fold settles).
+  /// SYNCHRONOUS, never in an animation frame: the window is hidden until this report shows it,
+  /// and WebKit runs no animation frame for a window that has never been on screen, so a report
+  /// waiting for one never came and the prompt never appeared (the installed app, walk run 7,
+  /// 2026-10-13: "the panel window is built" and no "laid out" after it). Reading the layout box
+  /// lays the card out on the spot, which is all the frame was waiting for; offsetWidth and
+  /// offsetHeight are that box without the swap animation's transform, which a synchronous read
+  /// would otherwise catch mid-flight.
   function report() {
-    requestAnimationFrame(function () {
-      if (fl.hidden) { invoke("meeting_panel_laid_out", { w: 0, h: 0, aside: false }); return; }
-      var r = fl.getBoundingClientRect();
-      invoke("meeting_panel_laid_out", {
-        w: Math.ceil(r.width) + PAD.left + PAD.right,
-        h: Math.ceil(r.height) + PAD.top + PAD.bottom,
-        aside: aside,
-      });
+    if (fl.hidden) { invoke("meeting_panel_laid_out", { w: 0, h: 0, aside: false }); return; }
+    invoke("meeting_panel_laid_out", {
+      w: fl.offsetWidth + PAD.left + PAD.right,
+      h: fl.offsetHeight + PAD.top + PAD.bottom,
+      aside: aside,
     });
   }
   fl.addEventListener("transitionend", function (e) { if (e.target === fl) report(); });
+  // The card's size can settle after the first report (its typeface arriving, a swap ending):
+  // once the window is on screen its frames run, and every change of size is reported again.
+  if (window.ResizeObserver) new ResizeObserver(function () { if (!fl.hidden) report(); }).observe(fl);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (!fl.hidden) report(); });
 
   function bump() { fl.classList.remove("swap"); void fl.offsetWidth; fl.classList.add("swap"); }
   function panel(cls, html, label) {
