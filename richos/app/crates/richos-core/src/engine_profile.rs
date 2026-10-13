@@ -541,8 +541,12 @@ impl EngineProfile {
         format!("app={}", self.plugin.join("spawn-preflight.json").display())
     }
 
-    pub fn configure(&self, command: &mut Command, session: &str, scope: &Path) {
-        let provider = command.get_program().to_os_string();
+    /// `provider` is the `claude` binary itself, named by the caller. It is NOT read off
+    /// `command`: a product lease's program is the supervisor's Python
+    /// (`lease_commands::supervisor_args`), and reading it there told every helper that Python
+    /// was Claude Code — so the brief check ran `python3 --print` and failed on every dispatch
+    /// (nightly 54, 2026-10-13).
+    pub fn configure(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path) {
         crate::runtime::isolate_interpreter_environment(command);
         // App bindings replace terminal component roots, test overrides and
         // transcript discovery. The provider's account location is unchanged.

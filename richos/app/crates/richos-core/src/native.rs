@@ -2039,7 +2039,7 @@ impl NativeClient {
         command.env(retry_name, retry_value);
         if let Some(profile) = profile {
             let scope = continuity.ok_or_else(|| NativeError::Protocol("desktop engine needs a scoped continuity bridge".into()))?.1;
-            profile.configure(&mut command, &session_id, scope);
+            profile.configure(&mut command, bin, &session_id, scope);
         }
         let mut child = command
             .args(args)
