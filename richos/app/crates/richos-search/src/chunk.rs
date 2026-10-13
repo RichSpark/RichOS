@@ -32,6 +32,11 @@ pub const CHUNKER_IDENTITY: &str = "md-paragraphs-v1-700-1200";
 pub struct Passage {
     /// The nearest heading above the passage, without its `#` marks; empty before any heading.
     pub heading: String,
+    /// Every heading the passage sits under, outermost first, ending with [`Passage::heading`]
+    /// (empty before any heading). A heading stays on the path until the next heading at its
+    /// level or above it, so a `##` heading covers the `###` sections below it and never the
+    /// next `##` section. Not part of what is embedded, so it does not change the index.
+    pub headings: Vec<String>,
     /// Byte range of the passage in the file.
     pub start: usize,
     pub end: usize,
@@ -45,13 +50,14 @@ impl Passage {
     }
 }
 
-fn heading_of(line: &str) -> Option<&str> {
+/// A heading line's level (its number of `#` marks) and its text.
+fn heading_of(line: &str) -> Option<(usize, &str)> {
     let trimmed = line.trim_start();
     let hashes = trimmed.chars().take_while(|c| *c == '#').count();
     if (1..=6).contains(&hashes) {
         let rest = &trimmed[hashes..];
         if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
-            return Some(rest.trim().trim_end_matches('#').trim());
+            return Some((hashes, rest.trim().trim_end_matches('#').trim()));
         }
     }
     None
@@ -96,38 +102,42 @@ fn split_long(text: &str, start: usize, end: usize, out: &mut Vec<(usize, usize)
 /// The passages of one Markdown file, in file order.
 pub fn passages(text: &str) -> Vec<Passage> {
     let mut out: Vec<Passage> = Vec::new();
-    let mut heading = String::new();
+    // The open headings, outermost first, each with its level.
+    let mut path: Vec<(usize, String)> = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
 
     // Close the blocks gathered under one heading into passages.
-    fn flush(text: &str, heading: &str, blocks: &mut Vec<Block>, out: &mut Vec<Passage>) {
+    fn flush(text: &str, path: &[(usize, String)], blocks: &mut Vec<Block>, out: &mut Vec<Passage>) {
+        let headings: Vec<String> = path.iter().map(|(_, h)| h.clone()).collect();
+        let heading = headings.last().cloned().unwrap_or_default();
+        let passage = |start, end, line| Passage { heading: heading.clone(), headings: headings.clone(), start, end, line };
         let line_of = |at: usize| 1 + text[..at].matches('\n').count() as u32;
         let mut current: Option<(usize, usize, u32)> = None;
         for block in blocks.drain(..) {
             let len = text[block.start..block.end].chars().count();
             if len > MAX_CHARS {
                 if let Some((s, e, l)) = current.take() {
-                    out.push(Passage { heading: heading.to_string(), start: s, end: e, line: l });
+                    out.push(passage(s, e, l));
                 }
                 let mut pieces = Vec::new();
                 split_long(text, block.start, block.end, &mut pieces);
                 for (s, e) in pieces {
                     let trimmed_end = s + text[s..e].trim_end().len();
-                    out.push(Passage { heading: heading.to_string(), start: s, end: trimmed_end, line: line_of(s) });
+                    out.push(passage(s, trimmed_end, line_of(s)));
                 }
                 continue;
             }
             match current {
                 Some((s, e, l)) if text[s..e].chars().count() + len < TARGET_CHARS => current = Some((s, block.end, l)),
                 Some((s, e, l)) => {
-                    out.push(Passage { heading: heading.to_string(), start: s, end: e, line: l });
+                    out.push(passage(s, e, l));
                     current = Some((block.start, block.end, block.line));
                 }
                 None => current = Some((block.start, block.end, block.line)),
             }
         }
         if let Some((s, e, l)) = current {
-            out.push(Passage { heading: heading.to_string(), start: s, end: e, line: l });
+            out.push(passage(s, e, l));
         }
     }
 
@@ -150,10 +160,13 @@ pub fn passages(text: &str) -> Vec<Passage> {
             }
             continue;
         }
-        if let Some(h) = heading_of(line) {
+        if let Some((level, h)) = heading_of(line) {
             blocks.extend(open.take());
-            flush(text, &heading, &mut blocks, &mut out);
-            heading = h.to_string();
+            flush(text, &path, &mut blocks, &mut out);
+            while path.last().is_some_and(|(open_level, _)| *open_level >= level) {
+                path.pop();
+            }
+            path.push((level, h.to_string()));
             continue;
         }
         if line.trim().is_empty() {
@@ -175,7 +188,7 @@ pub fn passages(text: &str) -> Vec<Passage> {
         }
     }
     blocks.extend(open.take());
-    flush(text, &heading, &mut blocks, &mut out);
+    flush(text, &path, &mut blocks, &mut out);
     out
 }
 

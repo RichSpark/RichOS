@@ -318,6 +318,23 @@ mod tests {
         // query, so a choice that reads bodies only picks the agenda).
         let heading_meeting = "# Pricing review\n\n## Agenda\n\nAnnual plan pricing, support cost, and the annual plan pricing review.\n\n\
                                ## Refunds within 30 days\n\nThis is the final decision for every new customer.\n";
+        // HEADING PATHS (sixth review): a passage is matched on every heading above it, so a
+        // quote in a parent heading picks a passage under one of its subheadings, and a quote in
+        // a sibling's heading never does.
+        // The sixth review's fixture: the quote in `##`, the decision under a `###` below it.
+        let parent_meeting = "# Pricing decision\n\n## Agenda\n\nAnnual plan pricing, support cost, and the annual plan pricing review.\n\n\
+                              ## Refunds within 30 days\n\n### Final decision\n\nThis is the last word for each new account.\n";
+        // The quote two levels up: `##` holds it, the passage is under a `####` below a `###`.
+        let grandparent = "# Refund rules\n\n## Agenda\n\nAnnual plan pricing, support cost, and the annual plan pricing review.\n\n\
+                           ## Refunds within 30 days\n\n### New customers\n\n#### First charge\n\nThe first charge is returned in full on request.\n";
+        // The quote in a `###` heading; its sibling `###` below holds more of the query's words
+        // and must not inherit the quote.
+        let siblings = "# Cancellation notes\n\n## Refunds\n\n### Within 30 days\n\nThe support lead signed the change off on Monday.\n\n\
+                        ### After the window\n\nAnnual plan pricing, support cost, and the annual plan pricing review for late cancellations.\n";
+        // The quote in a `##` heading with a `###` under it; the next `##` closes both, so the
+        // passage under that next `##`'s own `###` must not inherit the quote either.
+        let next_section = "# Cancellation review\n\n## Cancel within 30 days\n\n### Who decided\n\nThe billing lead approved it on Tuesday.\n\n\
+                            ## Annual plan pricing\n\n### Support cost\n\nAnnual plan pricing, support cost, and the annual plan pricing review for late cancellations.\n";
         // A plural of the query's word at the end of a paragraph longer than Rich's bound:
         // text search matches it (text.rs: `refund` matches `refunds`), so the excerpt must too.
         let plural = long_paragraph(879, "Customers get refunds when they cancel early.");
@@ -337,6 +354,10 @@ mod tests {
         let (service, base) = standin_with("passages", true, 0, &[
             ("2024/pricing-meeting.md", meeting.to_string()),
             ("2024/pricing-review.md", heading_meeting.to_string()),
+            ("2024/pricing-decision.md", parent_meeting.to_string()),
+            ("2024/refund-rules.md", grandparent.to_string()),
+            ("2024/cancellation-notes.md", siblings.to_string()),
+            ("2024/cancellation-review.md", next_section.to_string()),
             ("2024/club-notes.md", club.to_string()),
             ("2024/weekly-log.md", log),
             ("2024/onboarding-decision.md", onboarding),
@@ -352,6 +373,11 @@ mod tests {
             ("quoted, strict off, Super Finder off", quoted, false, false, "2024/pricing-meeting.md", "refunds within 30 days"),
             ("quoted, strict off, Super Finder on", quoted, true, false, "2024/pricing-meeting.md", "refunds within 30 days"),
             ("quoted text in the heading above the passage", quoted, false, true, "2024/pricing-review.md", "the final decision for every new customer"),
+            ("quoted text in the parent heading, strict on", quoted, false, true, "2024/pricing-decision.md", "the last word for each new account"),
+            ("quoted text in the parent heading, strict off", quoted, false, false, "2024/pricing-decision.md", "the last word for each new account"),
+            ("quoted text two headings up", quoted, false, true, "2024/refund-rules.md", "returned in full on request"),
+            ("quoted text in a sibling's heading picks the sibling, not this passage", quoted, false, true, "2024/cancellation-notes.md", "signed the change off on Monday"),
+            ("quoted text in an earlier section's heading stays in that section", quoted, false, true, "2024/cancellation-review.md", "approved it on Tuesday"),
             ("meaning only, not the first passage", "chargeback", true, false, "2024/club-notes.md", "asked for a refund"),
             ("long file, words in the last passage", "vendor invoice approved", false, false, "2024/weekly-log.md", "vendor invoice was approved"),
             ("long file, quoted text in the last passage", "\"invoice was approved\"", true, true, "2024/weekly-log.md", "vendor invoice was approved"),
