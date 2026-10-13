@@ -58,7 +58,27 @@
 //!
 //! A pause LONGER than 2.000 s still ends the turn. That is not hidden: the CEO's next words
 //! then become a turn of their own, and what keeps Rich from talking over them is the floor
-//! rule in the controller, not this window.
+//! rule below ([`AnswerGate`]), not this window.
+//!
+//! ## The floor: Rich does not START talking while the CEO has it
+//!
+//! In the same log, Rich's answer became audible 3.719 s after the turn was handed over
+//! (52.877 -> 56.596). A window covers the pauses it covers; a person who thinks for longer than
+//! it and then goes on is mid-thought again exactly when that answer arrives. So the CEO HOLDS
+//! THE FLOOR ([`TurnAssembler::has_floor`]) from the moment an utterance he began opens, while
+//! any fragment of his is at the recognizer, and while any recognized words of his are not yet a
+//! turn. While he holds it:
+//!
+//! - **Rich's sentences wait.** They are held, in order, and are not handed to the speaker, so
+//!   nothing of Rich is audible and the half-duplex rule does not discard what the CEO is saying.
+//!   When he gives the floor back without having said anything (a cough, a refused fragment) the
+//!   held answer is spoken, unchanged.
+//! - **Words of his that start a new turn while an answer is still unsaid SUPERSEDE it.** That
+//!   answer was to a thought he had not finished; it stays on screen, and the rest of it is not
+//!   spoken. His new words become the next turn, and Rich answers that one aloud.
+//!
+//! The same mute follows a barge-in: once he has taken the floor back from an answer, the rest of
+//! that answer does not resume over him. Every mute ends when the next turn starts.
 //!
 //! Pure: no clock, no thread, no channel. The supervisor feeds it events in the order it sees
 //! them, so the whole rule is unit-testable and replayable over a recording.
@@ -109,6 +129,12 @@ pub struct TurnAssembler {
     /// [`END_OF_TURN_FRAMES`] of silence have passed since the last utterance ended, and no
     /// utterance has started since.
     quiet: bool,
+    /// The open utterance began while Rich was NOT audible, so it is presumed to be the CEO
+    /// rather than Rich's own echo. An utterance born while Rich was audible never holds the
+    /// floor: on speakers Rich's own voice opens one after nearly every sentence (the half-duplex
+    /// discards in `controller.rs`), and letting it hold the floor would make Rich stall on his
+    /// own echo.
+    his_open: bool,
 }
 
 impl TurnAssembler {
@@ -120,12 +146,21 @@ impl TurnAssembler {
     /// void.
     pub fn utterance_started(&mut self) {
         self.open = true;
+        self.his_open = false;
         self.quiet = false;
+    }
+
+    /// The same, for an utterance that began while Rich was not audible: the CEO now holds the
+    /// floor ([`Self::has_floor`]).
+    pub fn his_utterance_started(&mut self) {
+        self.utterance_started();
+        self.his_open = true;
     }
 
     /// The utterance closed and went to the recognizer. `audio_ms` is its recorded length.
     pub fn utterance_admitted(&mut self, audio_ms: u64) {
         self.open = false;
+        self.his_open = false;
         self.awaiting.push_back(audio_ms);
     }
 
@@ -133,20 +168,34 @@ impl TurnAssembler {
     /// half-duplex rule refused). Nothing of it joins the turn.
     pub fn utterance_discarded(&mut self) {
         self.open = false;
+        self.his_open = false;
     }
 
     /// The recognizer finished one admitted utterance, in the order they were admitted. `None`
     /// is a refusal — no voice in it, or whisper's own noise — and adds nothing to the turn.
-    pub fn recognized(&mut self, words: Option<(String, bool)>) {
+    ///
+    /// Returns `true` when these words START a new turn: nothing of his was held before them. That
+    /// is the moment an answer still unsaid stops being an answer to what he is saying.
+    pub fn recognized(&mut self, words: Option<(String, bool)>) -> bool {
         let audio_ms = self.awaiting.pop_front().unwrap_or(0);
         if let Some((text, rich_audible)) = words {
             let text = text.trim();
             if !text.is_empty() {
+                let starts_a_turn = self.words.is_empty();
                 self.words.push(text.to_string());
                 self.rich_audible |= rich_audible;
                 self.audio_ms += audio_ms;
+                return starts_a_turn;
             }
         }
+        false
+    }
+
+    /// **The CEO has the floor**: an utterance he began is open, a fragment of his is at the
+    /// recognizer, or words of his are not yet a turn. Rich does not start speaking while this is
+    /// true ([`AnswerGate`]).
+    pub fn has_floor(&self) -> bool {
+        self.his_open || !self.awaiting.is_empty() || !self.words.is_empty()
     }
 
     /// The capture path counted [`END_OF_TURN_FRAMES`] of silence since his last speech.
@@ -178,6 +227,7 @@ impl TurnAssembler {
     /// a fragment still at the recognizer is not waited for here.
     pub fn flush(&mut self) -> Option<Turn> {
         self.open = false;
+        self.his_open = false;
         self.take()
     }
 
@@ -195,6 +245,74 @@ impl TurnAssembler {
         self.rich_audible = false;
         self.audio_ms = 0;
         Some(turn)
+    }
+}
+
+/// **Rich's sentences, held while the CEO has the floor.** See the module documentation.
+///
+/// Generic over what a sentence is, so the controller can keep its own message type in it and
+/// the rule stays testable without a speaker thread. Pure: the caller says whether he has the
+/// floor; this decides what may be spoken now.
+#[derive(Debug)]
+pub struct AnswerGate<T> {
+    held: VecDeque<T>,
+    /// The answer in progress was superseded or interrupted: nothing more of it is spoken.
+    muted: bool,
+}
+
+impl<T> Default for AnswerGate<T> {
+    fn default() -> Self {
+        AnswerGate { held: VecDeque::new(), muted: false }
+    }
+}
+
+impl<T> AnswerGate<T> {
+    pub fn new() -> Self {
+        AnswerGate::default()
+    }
+
+    /// A sentence of Rich's is ready. `Some` means speak it now. It is held instead while he has
+    /// the floor, and also while earlier sentences are still held, so an answer is never spoken
+    /// out of order. A muted answer's sentences are dropped.
+    pub fn offer(&mut self, sentence: T, his_floor: bool) -> Option<T> {
+        if self.muted {
+            return None;
+        }
+        if his_floor || !self.held.is_empty() {
+            self.held.push_back(sentence);
+            return None;
+        }
+        Some(sentence)
+    }
+
+    /// The held sentences, in order, once he has given the floor back. Nothing while he has it.
+    pub fn release(&mut self, his_floor: bool) -> Vec<T> {
+        if his_floor {
+            return Vec::new();
+        }
+        self.held.drain(..).collect()
+    }
+
+    /// He went on, or took the floor back, before this answer was said: drop what is held and
+    /// speak nothing more of it. Returns how many held sentences were dropped.
+    pub fn supersede(&mut self) -> usize {
+        self.muted = true;
+        let dropped = self.held.len();
+        self.held.clear();
+        dropped
+    }
+
+    /// A new turn started: its answer is his to hear.
+    pub fn next_turn(&mut self) {
+        self.muted = false;
+    }
+
+    pub fn held(&self) -> usize {
+        self.held.len()
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted
     }
 }
 
@@ -325,6 +443,65 @@ mod tests {
         t.recognized(words("Next."));
         t.quiet();
         assert!(!t.take_turn().unwrap().rich_audible, "the last turn's provenance leaked");
+    }
+
+    /// INVARIANT: the floor is his from his first word until his words are a turn, and an
+    /// utterance born while Rich was audible (his own echo, on speakers) never holds it.
+    #[test]
+    fn the_floor_is_his_from_his_first_word_until_his_turn_is_handed_over() {
+        let mut t = TurnAssembler::new();
+        assert!(!t.has_floor());
+        t.utterance_started();
+        assert!(!t.has_floor(), "an utterance born while Rich was audible held the floor");
+        t.utterance_discarded();
+        t.his_utterance_started();
+        assert!(t.has_floor(), "he is talking and the floor is not his");
+        t.utterance_admitted(1000);
+        assert!(t.has_floor(), "his words are at the recognizer and the floor was given away");
+        assert!(t.recognized(words("Let me think")), "his first words did not start a turn");
+        assert!(t.has_floor(), "his words are not yet a turn and the floor was given away");
+        t.his_utterance_started();
+        t.utterance_admitted(1000);
+        assert!(!t.recognized(words("about it.")), "a second fragment started a second turn");
+        t.quiet();
+        assert!(t.take_turn().is_some());
+        assert!(!t.has_floor(), "the turn was handed over and he still holds the floor");
+    }
+
+    /// INVARIANT: a refused fragment gives the floor back and starts nothing.
+    #[test]
+    fn a_refused_fragment_gives_the_floor_back() {
+        let mut t = TurnAssembler::new();
+        t.his_utterance_started();
+        t.utterance_admitted(600);
+        assert!(!t.recognized(None));
+        assert!(!t.has_floor());
+    }
+
+    /// INVARIANT: while he has the floor Rich's sentences wait, in order, and are said, unchanged,
+    /// when he gives it back without having said anything.
+    #[test]
+    fn rich_waits_while_he_has_the_floor_and_then_says_it_all_in_order() {
+        let mut g = AnswerGate::new();
+        assert_eq!(g.offer("one", false), Some("one"));
+        assert_eq!(g.offer("two", true), None);
+        assert_eq!(g.offer("three", false), None, "a later sentence overtook a held one");
+        assert!(g.release(true).is_empty(), "released while he still had the floor");
+        assert_eq!(g.release(false), vec!["two", "three"]);
+        assert_eq!(g.offer("four", false), Some("four"));
+    }
+
+    /// INVARIANT: a superseded answer is never said, not what is held and not what arrives after,
+    /// until the next turn starts.
+    #[test]
+    fn a_superseded_answer_is_never_said() {
+        let mut g = AnswerGate::new();
+        assert_eq!(g.offer("held", true), None);
+        assert_eq!(g.supersede(), 1);
+        assert!(g.release(false).is_empty(), "a superseded sentence was released");
+        assert_eq!(g.offer("late", false), None, "the rest of a superseded answer was said");
+        g.next_turn();
+        assert_eq!(g.offer("next turn", false), Some("next turn"));
     }
 
     /// INVARIANT: switching voice off keeps what was already understood, as before.

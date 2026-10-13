@@ -44,7 +44,7 @@ use crate::playout::Playout;
 use crate::state::{VoiceState, VoiceStateMachine};
 use crate::stt::{self, Recognizer};
 use crate::tts::{MacSay, SpeechSynth};
-use crate::turn::TurnAssembler;
+use crate::turn::{AnswerGate, TurnAssembler};
 use crate::vad::{frames_to_secs, Vad};
 use crate::voiced::VoiceEvidence;
 use std::path::PathBuf;
@@ -814,6 +814,18 @@ struct SpeakMsg {
     text: String,
 }
 
+/// **THE ONLY PLACE A SENTENCE ACTUALLY GOES TO THE SPEAKER THREAD**, for the controller and the
+/// supervisor alike. The increment of [`Shared::pending_speech`] happens here, at the send, for
+/// the reason [`VoiceController::send_speak`] gives; a failed send takes it back.
+fn dispatch(shared: &Shared, tx: &Sender<SpeakMsg>, msg: SpeakMsg) {
+    shared.pending_speech.fetch_add(1, Ordering::Relaxed);
+    if tx.send(msg).is_err() {
+        let _undo = shared.pending_speech.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            Some(n.saturating_sub(1))
+        });
+    }
+}
+
 /// **THE DECREMENT OF [`Shared::pending_speech`], MADE STRUCTURAL.**
 ///
 /// A counter that says "Rich still owes the speakers a sentence" is only safe if it can never
@@ -865,6 +877,10 @@ struct Shared {
     /// The open stream is delivering nothing (see `noaudio.rs`). Owned by the supervisor,
     /// readable by the shell/tests without touching the audio thread.
     no_audio: AtomicBool,
+    /// **The CEO has the floor** ([`crate::turn::TurnAssembler::has_floor`]), published by the
+    /// supervisor the moment it changes. [`VoiceController::send_speak`] reads it to hold Rich's
+    /// sentences instead of saying them over him.
+    his_floor: AtomicBool,
     running: AtomicBool,
 }
 
@@ -985,6 +1001,9 @@ pub struct VoiceController {
     shared: Arc<Shared>,
     machine: Arc<Mutex<VoiceStateMachine>>,
     chunker: Mutex<SentenceChunker>,
+    /// Rich's sentences, held while the CEO has the floor, and the mute that follows a superseded
+    /// or interrupted answer (`turn.rs`). Shared with the supervisor, which knows the floor.
+    gate: Arc<Mutex<AnswerGate<SpeakMsg>>>,
     /// `Option` so `Drop` can close the channel BEFORE joining the speaker thread —
     /// joining first would deadlock on a `recv()` that can never fail.
     speak_tx: Option<Sender<SpeakMsg>>,
@@ -1588,6 +1607,7 @@ impl VoiceController {
         let shared = Arc::new(Shared {
             level: AtomicU32::new(0),
             speaking: AtomicBool::new(false),
+            his_floor: AtomicBool::new(false),
             pending_speech: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             no_audio: AtomicBool::new(false),
@@ -1595,6 +1615,7 @@ impl VoiceController {
         });
         let machine = Arc::new(Mutex::new(VoiceStateMachine::new()));
         machine.lock().unwrap().start();
+        let gate: Arc<Mutex<AnswerGate<SpeakMsg>>> = Arc::new(Mutex::new(AnswerGate::new()));
 
         let (cap_tx, cap_rx) = channel::<CapMsg>();
         let (speak_tx, speak_rx) = channel::<SpeakMsg>();
@@ -1782,6 +1803,7 @@ impl VoiceController {
             let aec_state = aec_state_for_diagnostics.clone();
             let input_latency = capture.latency();
             let notices = notices.clone();
+            let floor = Floor { gate: gate.clone(), speak_tx: speak_tx.clone(), held_logged: 0 };
             threads.push(std::thread::spawn(move || {
                 supervise(
                     shared,
@@ -1792,6 +1814,7 @@ impl VoiceController {
                     utt_tx,
                     words_rx,
                     submit_tx,
+                    floor,
                     aec_state,
                     input_latency,
                     notices,
@@ -1803,6 +1826,7 @@ impl VoiceController {
             shared,
             machine,
             chunker: Mutex::new(SentenceChunker::new()),
+            gate,
             speak_tx: Some(speak_tx),
             playout,
             force_barge,
@@ -1877,15 +1901,22 @@ impl VoiceController {
     /// supervisor would otherwise take to notice the queue filling.
     ///
     /// A failed send decrements immediately: the speaker thread is gone, so nothing is owed.
+    ///
+    /// **And it asks the floor first** (`turn.rs`, [`AnswerGate`]). While the CEO has the floor the
+    /// sentence is held rather than sent, so nothing of Rich is owed and nothing of him is audible
+    /// while the CEO is still talking; the supervisor sends it when he gives the floor back. A
+    /// superseded or interrupted answer's sentences are dropped here.
     fn send_speak(&self, generation: u64, text: String) {
         let Some(tx) = &self.speak_tx else { return };
-        self.shared.pending_speech.fetch_add(1, Ordering::Relaxed);
-        if tx.send(SpeakMsg { generation, text }).is_err() {
-            let _ = self.shared.pending_speech.fetch_update(
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-                |n| Some(n.saturating_sub(1)),
-            );
+        let his_floor = self.shared.his_floor.load(Ordering::Relaxed);
+        let msg = SpeakMsg { generation, text };
+        let now = match self.gate.lock() {
+            Ok(mut gate) => gate.offer(msg, his_floor),
+            // A poisoned gate must not silence Rich for the rest of the session.
+            Err(_) => Some(msg),
+        };
+        if let Some(msg) = now {
+            dispatch(&self.shared, tx, msg);
         }
     }
 
@@ -1950,6 +1981,10 @@ impl VoiceController {
         if let Ok(mut m) = self.machine.lock() {
             m.turn_started();
         }
+        // A new turn's answer is his to hear, whatever the last one was.
+        if let Ok(mut gate) = self.gate.lock() {
+            gate.next_turn();
+        }
         if let Ok(mut c) = self.chunker.lock() {
             c.reset();
         }
@@ -1967,6 +2002,11 @@ impl VoiceController {
     pub fn force_barge_in(&self) -> usize {
         self.force_barge.store(true, Ordering::Relaxed);
         self.shared.generation.fetch_add(1, Ordering::Relaxed);
+        // He stopped this answer: nothing more of it is said, including sentences the model is
+        // still writing.
+        if let Ok(mut gate) = self.gate.lock() {
+            gate.supersede();
+        }
         if let Ok(mut c) = self.chunker.lock() {
             c.reset();
         }
@@ -2269,16 +2309,18 @@ struct TurnDesk {
 }
 
 impl TurnDesk {
-    /// What the recognizer made of each fragment since the last look.
-    fn collect(&mut self) {
+    /// What the recognizer made of each fragment since the last look. `true` when any of it
+    /// started a new turn of his (`TurnAssembler::recognized`).
+    fn collect(&mut self) -> bool {
+        let mut starts_a_turn = false;
         while let Ok(words) = self.words_rx.try_recv() {
-            self.assembler.recognized(words);
+            starts_a_turn |= self.assembler.recognized(words);
         }
+        starts_a_turn
     }
 
-    /// Hand over the turn if he is finished. Called once per supervisor tick.
+    /// Hand over the turn if he is finished. Called once per supervisor tick, after `collect`.
     fn release(&mut self) {
-        self.collect();
         if let Some(turn) = self.assembler.take_turn() {
             self.send(turn, "his turn is over");
         }
@@ -2317,6 +2359,69 @@ impl Drop for TurnDesk {
     }
 }
 
+/// **The supervisor's half of the floor rule** (`turn.rs`): the shared [`AnswerGate`] and the
+/// channel its held sentences go out on when he gives the floor back.
+struct Floor {
+    gate: Arc<Mutex<AnswerGate<SpeakMsg>>>,
+    speak_tx: Sender<SpeakMsg>,
+    /// How many held sentences were last reported, so the log says HELD once per change.
+    held_logged: usize,
+}
+
+impl Floor {
+    fn held(&self) -> usize {
+        self.gate.lock().map(|g| g.held()).unwrap_or(0)
+    }
+
+    fn publish(&mut self, shared: &Shared, his_floor: bool) {
+        shared.his_floor.store(his_floor, Ordering::Relaxed);
+        let held = self.held();
+        if held > self.held_logged {
+            eprintln!(
+                "[richos-voice] {} answer HELD — he has the floor; {held} sentence(s) of Rich's waiting",
+                wall_clock_utc()
+            );
+        }
+        self.held_logged = held;
+    }
+
+    fn release(&mut self, shared: &Shared, his_floor: bool) {
+        let ready = match self.gate.lock() {
+            Ok(mut gate) => gate.release(his_floor),
+            Err(_) => Vec::new(),
+        };
+        if ready.is_empty() {
+            return;
+        }
+        eprintln!(
+            "[richos-voice] {} answer RELEASED — he gave the floor back; {} held sentence(s) to the speaker",
+            wall_clock_utc(),
+            ready.len()
+        );
+        let current = shared.generation.load(Ordering::Relaxed);
+        for msg in ready.into_iter().filter(|m| m.generation == current) {
+            dispatch(shared, &self.speak_tx, msg);
+        }
+        self.held_logged = 0;
+    }
+
+    fn supersede(&mut self, why: &str) {
+        let (was_muted, dropped) = match self.gate.lock() {
+            Ok(mut g) => (g.muted(), g.supersede()),
+            Err(_) => (true, 0),
+        };
+        self.held_logged = 0;
+        // Said once per answer: a tap-to-stop reaches here twice (the button, then the frame it
+        // causes), and a second line for the same answer says nothing new.
+        if !was_muted || dropped > 0 {
+            eprintln!(
+                "[richos-voice] {} answer SUPERSEDED — {why}; {dropped} held sentence(s) dropped, and the rest of that answer stays on screen only until the next turn starts",
+                wall_clock_utc()
+            );
+        }
+    }
+}
+
 /// A voice session's length as `M:SS.mmm`, for the closing line.
 ///
 /// Pure, and separate from the guard, so the arithmetic is testable without a thread: the
@@ -2338,6 +2443,7 @@ fn supervise(
     utt_tx: Sender<Box<AdmittedUtterance>>,
     words_rx: Receiver<Option<(String, bool)>>,
     submit_tx: Sender<(String, bool)>,
+    mut floor: Floor,
     shared_aec: Arc<AecShared>,
     input_latency: crate::capture::InputLatency,
     notices: Arc<Mutex<RefusalNotices>>,
@@ -2381,8 +2487,12 @@ fn supervise(
                         if let Ok(mut m) = machine.lock() {
                             m.utterance_started();
                         }
+                        // Begun while Rich was silent: the CEO has the floor from this frame.
+                        turns.assembler.his_utterance_started();
+                    } else {
+                        turns.assembler.utterance_started();
                     }
-                    turns.assembler.utterance_started();
+                    floor.publish(&shared, turns.assembler.has_floor());
                 }
                 Ok(CapMsg::Utterance(u)) => {
                     eprintln!(
@@ -2521,6 +2631,9 @@ fn supervise(
                         "[richos-voice] barge-in: cut Rich, dropped {dropped} samples ({:.3} s of queued speech)",
                         dropped as f32 / playout.device_rate.max(1) as f32
                     );
+                    // He took the floor back from this answer: nothing more of it is said, including
+                    // the sentences the model is still writing. Ends when the next turn starts.
+                    floor.supersede("he interrupted it");
                 }
                 Ok(CapMsg::TurnQuiet) => {
                     eprintln!(
@@ -2540,7 +2653,30 @@ fn supervise(
         // 1b. What the recognizer made of each fragment, in admission order — then, if he is
         //     finished, his turn. After the capture messages, so a fragment admitted on this
         //     tick is already counted as awaiting before its words could be looked for.
+        //
+        //     Words of his that START a new turn while an answer is still unsaid (a turn in flight,
+        //     or sentences held for him) supersede that answer: it was to a thought he had not
+        //     finished. It stays on screen; the rest of it is not spoken.
+        if turns.collect() {
+            let outstanding = machine.lock().map(|m| m.turn_active()).unwrap_or(false) || floor.held() > 0;
+            if outstanding {
+                shared.generation.fetch_add(1, Ordering::Relaxed);
+                let cut = playout.stop_now();
+                floor.supersede("he went on talking before Rich had said it");
+                if cut > 0 {
+                    eprintln!(
+                        "[richos-voice] and {:.3} s of it already queued was cut",
+                        cut as f32 / playout.device_rate.max(1) as f32
+                    );
+                }
+            }
+        }
         turns.release();
+        // 1c. The floor. While he has it Rich's sentences wait; when he gives it back they go to
+        //     the speaker in order (unless the answer was superseded, which dropped them).
+        let his_floor = turns.assembler.has_floor();
+        floor.publish(&shared, his_floor);
+        floor.release(&shared, his_floor);
 
         // 2. Reconcile playout with the state machine, and decide whether Rich is AUDIBLE.
         //
@@ -2782,16 +2918,20 @@ mod tests {
         desk.assembler.utterance_started();
         desk.assembler.utterance_admitted(2512);
         words_tx.send(Some(("So here is the first part".to_string(), false))).unwrap();
+        desk.collect();
         desk.release();
         desk.assembler.utterance_started();
+        desk.collect();
         desk.release();
         desk.assembler.utterance_admitted(2640);
         words_tx.send(Some(("and here is the rest of it.".to_string(), false))).unwrap();
+        desk.collect();
         desk.release();
         assert!(transcripts(&rec).is_empty(), "a fragment reached the window before he was finished");
         assert!(submit_rx.try_recv().is_err(), "a fragment became a turn before he was finished");
 
         desk.assembler.quiet();
+        desk.collect();
         desk.release();
         let whole = "So here is the first part and here is the rest of it.".to_string();
         assert_eq!(transcripts(&rec), vec![whole.clone()]);

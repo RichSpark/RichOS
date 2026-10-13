@@ -23,13 +23,17 @@
 //! Rich is silent throughout (`speaking = false`, a zero reference), because that is the case the
 //! CEO met: the answer had not started when his turn was taken from him.
 //!
+//! The third test is the FLOOR (`turn.rs`, `AnswerGate`): he thinks for longer than the window, so
+//! the first turn IS handed over, and he goes on; Rich's answer to it arrives while he is speaking
+//! again, is held, is superseded by his new words, and is never said.
+//!
 //! No sound is played anywhere. Everything here is samples in memory (CEO §53).
 
 use richos_voice::aec::EchoCanceller;
 use richos_voice::controller::{CapMsg, CaptureBrain};
 use richos_voice::endpoint::{SILENCE_HANGOVER_FRAMES, SPEECH_ONSET_FRAMES};
 use richos_voice::private_fixtures;
-use richos_voice::turn::{end_of_turn_secs, Turn, TurnAssembler, END_OF_TURN_FRAMES};
+use richos_voice::turn::{end_of_turn_secs, AnswerGate, Turn, TurnAssembler, END_OF_TURN_FRAMES};
 use richos_voice::vad::{frames_to_secs, SAMPLE_RATE, VAD_FRAME_SAMPLES};
 use richos_voice::wav;
 use std::path::{Path, PathBuf};
@@ -249,4 +253,145 @@ fn a_pause_in_the_middle_of_his_own_sentence_is_one_turn() {
     }
     let r = replay(&mic);
     assert_one_turn_after_he_is_done(&r, b + second.len(), "his own voice on his room");
+}
+
+// ------------------------------------------------------------------------------------------------
+// THE FLOOR: a pause LONGER than the window, and Rich's answer arriving while he has gone on.
+// ------------------------------------------------------------------------------------------------
+
+/// His second pause on nightly 54 was at least 2.058 s (his last word 54.538 s, Rich audible
+/// 56.596 s), and whatever came after it was cut off by Rich. A pause like that is longer than the
+/// 2.000 s window, so the turn IS handed over during it; this is the case the floor rule exists for.
+const LONG_PAUSE_SECS: f32 = 2.950;
+/// How long the model takes to send Rich's first sentence after a turn is handed over. His log says
+/// 3.719 s (52.877 -> 56.596, synthesis included); 1.504 s here (94 frames) is FASTER, which brings
+/// the answer in while he is mid-sentence and so is the harder case.
+const MODEL_FRAMES: usize = 94;
+
+/// When each of Rich's sentences reached the speaker, and what the floor did.
+#[derive(Debug, Default)]
+struct FloorReplay {
+    turns: Vec<(usize, Turn)>,
+    spoken: Vec<(usize, String)>,
+    superseded: usize,
+}
+
+/// THE SHIPPED RULES, in `supervise`'s order, over a microphone track: `CaptureBrain`, the
+/// `TurnAssembler` with its floor, and the `AnswerGate`. Each handed-over turn starts at once (as
+/// `rich://turn-started` does) and its answer's two sentences are offered `MODEL_FRAMES` and
+/// `MODEL_FRAMES + 30` frames later; the model finishes the turn 60 frames after its first sentence.
+fn replay_with_answers(mic: &[f32]) -> FloorReplay {
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let mut gate: AnswerGate<String> = AnswerGate::new();
+    let mut r = FloorReplay::default();
+    let mut offers: Vec<(usize, String)> = Vec::new();
+    let mut turn_ends: Vec<usize> = Vec::new();
+    let mut fragments = 0;
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+    for (b, frame) in mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        ring.push(&silence);
+        for m in brain.push_frame(frame, false, false) {
+            match m {
+                CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+                CapMsg::Started { tainted: true, .. } => turns.utterance_started(),
+                CapMsg::Utterance(u) => {
+                    fragments += 1;
+                    turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                    let starts = turns.recognized(Some((format!("fragment {fragments}"), false)));
+                    let turn_active = turn_ends.iter().any(|&end| b < end);
+                    if starts && (turn_active || gate.held() > 0) {
+                        gate.supersede();
+                        r.superseded += 1;
+                    }
+                }
+                CapMsg::Discarded { .. } => turns.utterance_discarded(),
+                CapMsg::TurnQuiet => turns.quiet(),
+                _ => {}
+            }
+        }
+        if let Some(t) = turns.take_turn() {
+            let k = r.turns.len() + 1;
+            r.turns.push((b, t));
+            gate.next_turn();
+            offers.push((b + MODEL_FRAMES, format!("answer {k} sentence 1")));
+            offers.push((b + MODEL_FRAMES + 30, format!("answer {k} sentence 2")));
+            turn_ends.push(b + MODEL_FRAMES + 60);
+        }
+        let floor = turns.has_floor();
+        for (_, s) in offers.iter().filter(|(at, _)| *at == b) {
+            if let Some(now) = gate.offer(s.clone(), floor) {
+                r.spoken.push((b, now));
+            }
+        }
+        for now in gate.release(floor) {
+            r.spoken.push((b, now));
+        }
+    }
+    r
+}
+
+/// THE FLOOR, on his room with a voice at his level: he thinks for longer than the window, the
+/// first turn is handed over, and he goes on. Rich's answer to the first turn arrives while he is
+/// mid-sentence: it is held, then superseded by his new words, and never said. Rich speaks only
+/// the answer to his last turn, and only once he is done.
+#[test]
+fn rich_never_starts_talking_while_he_has_gone_on() {
+    let lead = 1.0;
+    let parts = [synthetic_voice(1.904, 1), synthetic_voice(1.104, 2), synthetic_voice(1.904, 3)];
+    let gaps = [HIS_PAUSE_SECS, LONG_PAUSE_SECS];
+    let total = lead + 1.904 + 1.104 + 1.904 + HIS_PAUSE_SECS + LONG_PAUSE_SECS + 6.0;
+    let mut mic = room(total);
+    let mut at = secs_to_samples(lead);
+    let mut voiced = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        superimpose(&mut mic, at, part);
+        voiced.push((at, at + part.len()));
+        at += part.len() + gaps.get(i).map(|g| secs_to_samples(*g)).unwrap_or(0);
+    }
+    let r = replay_with_answers(&mic);
+    println!("[replay] the floor: {r:?}");
+    let secs = |frame: usize| ((frame + 1) * VAD_FRAME_SAMPLES) as f32 / SAMPLE_RATE as f32;
+
+    // The 1.406 s pause is inside the window and the 2.950 s pause is not: two turns, the first
+    // holding both stretches before the long pause.
+    let texts: Vec<&str> = r.turns.iter().map(|(_, t)| t.text.as_str()).collect();
+    assert_eq!(texts, vec!["fragment 1 fragment 2", "fragment 3"]);
+
+    // POSITIVE CONTROL: the first answer really did arrive while he was speaking again, so the
+    // rule below is being tested and not passed by timing.
+    let (third_start, third_end) = voiced[2];
+    let first_offer = r.turns[0].0 + MODEL_FRAMES;
+    let offered_at = first_offer * VAD_FRAME_SAMPLES;
+    assert!(
+        offered_at > third_start && offered_at < third_end,
+        "the first answer was offered at {:.3} s, outside his third stretch ({:.3}-{:.3} s): this \
+         replay does not put Rich's answer over him",
+        secs(first_offer),
+        third_start as f32 / SAMPLE_RATE as f32,
+        third_end as f32 / SAMPLE_RATE as f32
+    );
+
+    // THE RULE: nothing of the first answer is ever said, and it was superseded exactly once.
+    assert_eq!(r.superseded, 1, "the first answer was not superseded by his new words");
+    let said: Vec<&str> = r.spoken.iter().map(|(_, s)| s.as_str()).collect();
+    assert_eq!(said, vec!["answer 2 sentence 1", "answer 2 sentence 2"], "Rich said: {said:?}");
+
+    // RICH SILENT UNTIL HE IS DONE: nothing is said while any of his voice is in the room, and the
+    // first word of Rich's comes after his last word plus the whole end-of-turn window.
+    for (frame, s) in &r.spoken {
+        let sample = (frame + 1) * VAD_FRAME_SAMPLES;
+        for (a, b) in &voiced {
+            assert!(sample < *a || sample > *b, "Rich said {s:?} at {:.3} s while he was talking", secs(*frame));
+        }
+    }
+    let first_word = r.spoken[0].0;
+    let after = secs(first_word) - third_end as f32 / SAMPLE_RATE as f32;
+    println!(
+        "[measured] Rich's first word {after:.3} s after the CEO's last ({:.3} s window + {:.3} s model)",
+        end_of_turn_secs(),
+        frames_to_secs(MODEL_FRAMES as u32)
+    );
+    assert!(after >= end_of_turn_secs(), "Rich spoke {after:.3} s after his last word");
 }
