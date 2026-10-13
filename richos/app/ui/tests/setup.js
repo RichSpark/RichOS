@@ -2080,6 +2080,62 @@ async function main() {
     return "two spinners kept their angle through three counter readings and the voice spinner through Start appearing (within 50 ms of a turn)";
   });
 
+  await run.check("30  round 19, state 2: the installing row's spinner is round 19's ring, its arc on a track", async () => {
+    // ROUND 19 (design/mockups/rounds/round-19/dictation.html, `.ring`): an 18px ring, a 2.5px
+    // track in --line all the way round, the arc on its top, one turn a second; NOTES.md judges
+    // "a spinner by its moving gold arc, not its faint track". Nightly 54 drew a 22px arc in a
+    // 2px border with no track, turning every 0.9 s (his recording, animations.mov). The arc keeps
+    // --live-mark rather than the round's --gold, the contrast substitution style.css's table
+    // already records (--gold is 2.55:1 on the light track).
+    const page = await openApp(browser, R19);
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    await page.evaluate((line) => window.__RICHOS_MOCK__.setupEmit(line), toolsLine(300_000_000, 1_061_655_396, true, "300 MB of 1.06 GB"));
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(true));
+    await page.click("#setup-go");
+    await page.waitForSelector('#setup-steps .setup-step.is-now[data-component="media-tools"]');
+    const read = () => page.evaluate(() => {
+      const mark = document.querySelector('#setup-steps .setup-step.is-now[data-component="media-tools"] .setup-step-mark');
+      const cs = getComputedStyle(mark);
+      const probe = document.createElement("span");
+      probe.style.color = "var(--line)";
+      document.body.append(probe);
+      const line = getComputedStyle(probe).color;
+      probe.remove();
+      // Round 19's 2.5px stroke as THIS page computes it: WebKit snaps a border to device pixels
+      // (2px at a scale factor of 1, 2.5px on a Retina screen), and the round's own CSS snaps alike.
+      const stroke = document.createElement("span");
+      stroke.style.cssText = "display:block;border:2.5px solid";
+      document.body.append(stroke);
+      const roundStroke = getComputedStyle(stroke).borderRightWidth;
+      stroke.remove();
+      const live = document.createElement("span");
+      live.style.color = "var(--live-mark)";
+      document.body.append(live);
+      const arc = getComputedStyle(live).color;
+      live.remove();
+      // Layout size, not getBoundingClientRect: a turning ring's box is its rotated bounds.
+      return {
+        w: mark.offsetWidth, h: mark.offsetHeight,
+        stroke: cs.borderRightWidth, roundStroke, track: [cs.borderRightColor, cs.borderBottomColor, cs.borderLeftColor],
+        top: cs.borderTopColor, line, arc, dur: cs.animationDuration, name: cs.animationName,
+      };
+    });
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+      const m = await read();
+      assertEqual(m.w + "x" + m.h, "18x18", theme + ": the ring's size");
+      assertEqual(m.stroke, m.roundStroke, theme + ": the ring's stroke is round 19's 2.5px");
+      assert(m.track.every((c) => c === m.line), theme + ": the track is --line all the way round: " + JSON.stringify(m));
+      assertEqual(m.top, m.arc, theme + ": the arc is --live-mark");
+      assertEqual(m.name + " " + m.dur, "setup-step-spin 1s", theme + ": one turn a second");
+    }
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(false));
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    bump(10);
+    await page.close();
+    return "18px ring, 2.5px --line track, --live-mark arc, 1 s a turn, in both themes";
+  });
+
   await run.check("11  this suite actually checked something", async () => {
     assert(
       assertions >= 40,

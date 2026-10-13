@@ -3153,6 +3153,7 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
      .is-done .setup-step-mark fill --gold  6.36:1    3.83:1   (its check, --on-gold: 7.68 / 4.72)
      .is-wait .setup-step-mark ring --line-control 3.79:1 4.06:1
      .is-now  spinner arc       --live-mark 6.36:1    6.65:1
+     .is-now  arc on its track (--line, decoration) 5.15:1 4.43:1
      .setup-step-bar fill on its track --live-mark 5.15:1 4.43:1  (--gold would be 2.55:1 light)
 
    The bullet before each item is decoration, not an indicator: the item's text says what it is.
@@ -3316,9 +3317,18 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
 }
 
 .setup-step.is-now .setup-step-mark {
-  border: 2px solid transparent;
+  /* ROUND 19'S RING (design/mockups/rounds/round-19/dictation.html, `.ring`): 18px, a 2.5px
+     track in --line all the way round, the arc on its top, one turn a second. Round 19's NOTES
+     judge "a spinner by its moving gold arc, not its faint track"; nightly 54 drew the arc with
+     no track, in a 22px 2px border, every 0.9 s (the CEO's recording, 2026-10-13). It sits in
+     the 22px mark's place (2px margin), so the row and its column do not move. The arc is
+     --live-mark, not the round's --gold, as the table above records. */
+  width: 18px;
+  height: 18px;
+  margin: 2px;
+  border: 2.5px solid var(--line);
   border-top-color: var(--live-mark);
-  animation: setup-step-spin 0.9s linear infinite;
+  animation: setup-step-spin 1s linear infinite;
 }
 
 @keyframes setup-step-spin {
