@@ -78,5 +78,28 @@ else
   bad "C4 prepare-companion.py --check" "$K1 / $K2 $(head -c 300 "$SCRATCH/prep.err")"
 fi
 
+# C5 — the bundle's companion carries no build-machine path: not this Mac's home folder, not this
+# checkout, and no LC_RPATH outside the system. The first candidate with the companion
+# (2026-10-13) was refused by package-app.sh for exactly that: 19 source paths, the debug map's
+# object paths and the toolchain's rpath. Builds once (cached by key), then reads the bytes.
+if OVERLAY="$(python3 "$PREP" 2>"$SCRATCH/prep-build.err")"; then
+  KEY="$(python3 "$PREP" --check | python3 -c 'import json,sys; print(json.load(sys.stdin)["key"])')"
+  CBIN=""
+  for c in "$(dirname "$(readlink "$ROOT/richos/app/src-tauri/companion-helper")")/$KEY"/richos-companion-*; do
+    if [ -x "$c" ]; then CBIN="$c"; break; fi
+  done
+  if [ -z "$CBIN" ]; then
+    bad "C5 the bundle's companion" "no binary for key $KEY (overlay $OVERLAY)"
+  elif LEAK="$(python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); print(" ".join(p for p in sys.argv[2:] if p.encode() in d))' "$CBIN" "$HOME" "$ROOT")" && [ -n "$LEAK" ]; then
+    bad "C5 the bundle's companion carries no build-machine path" "it carries: $LEAK"
+  elif otool -l "$CBIN" | awk '/cmd LC_RPATH/{getline; getline; print $2}' | grep -v -E '^(/usr/|@)' | grep -q .; then
+    bad "C5 the bundle's companion has no toolchain rpath" "$(otool -l "$CBIN" | awk '/cmd LC_RPATH/{getline; getline; print $2}' | tr '\n' ' ')"
+  else
+    ok "C5 the bundle's companion carries no build-machine path and only system rpaths"
+  fi
+else
+  bad "C5 build the bundle's companion" "$(tail -5 "$SCRATCH/prep-build.err" | tr '\n' ' ')"
+fi
+
 echo "companion-macos: $PASS passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

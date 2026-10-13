@@ -36,11 +36,23 @@ PACKAGE = APP.parent / "tools/richos-service/companion-macos"
 NATIVE_WORK = APP.parent / "engine/scripts/lib/native-work.py"
 TRIPLES = {"arm64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"}
 
+# HOW IT IS BUILT, AND WHY EACH PART: no build-machine path may ship (package-app.sh refuses a
+# bundle that carries one, and the first candidate with the companion, 2026-10-13, was refused:
+# 19 source paths, 18 object paths in the debug map and the toolchain's LC_RPATH, all of this Mac).
+#   -file-prefix-map  the package's own path becomes "companion-macos" in #file/#filePath strings
+#   -Xlinker -S       no debug map (its N_OSO entries name every object file on this disk)
+#   delete_rpath      SwiftPM adds the toolchain's swift-6.x directory; the system's /usr/lib/swift
+#                     (macOS 14, Package.swift) is what runs, and it stays
+# Part of the cache key, so a change here never reuses a binary built the old way.
+SWIFT_FLAGS = ["-Xswiftc", "-file-prefix-map", "-Xswiftc", "{package}=companion-macos", "-Xlinker", "-S"]
+RECIPE = "2"
+
 
 def source_key():
     """sha256 over the package's build inputs (Package.swift and every file under Sources/),
     path and bytes, in a fixed order. Tests are not a build input."""
     digest = hashlib.sha256()
+    digest.update(("recipe " + RECIPE + " " + " ".join(SWIFT_FLAGS)).encode() + b"\0")
     files = [PACKAGE / "Package.swift"] + sorted(p for p in (PACKAGE / "Sources").rglob("*") if p.is_file())
     for f in files:
         digest.update(str(f.relative_to(PACKAGE)).encode() + b"\0" + f.read_bytes() + b"\0")
@@ -52,8 +64,9 @@ def prepare(directory, triple):
     if target.is_file() and os.access(target, os.X_OK):
         return target
     scratch = directory / "build"
+    flags = [f.replace("{package}", str(PACKAGE)) for f in SWIFT_FLAGS]
     subprocess.run([sys.executable, str(NATIVE_WORK), "--", "swift", "build", "-c", "release",
-                    "--package-path", str(PACKAGE), "--scratch-path", str(scratch)],
+                    "--package-path", str(PACKAGE), "--scratch-path", str(scratch), *flags],
                    check=True, stdout=sys.stderr, stderr=sys.stderr)
     built = scratch / "release" / "richos-companion"
     if not built.is_file():
@@ -61,9 +74,40 @@ def prepare(directory, triple):
     pending = target.with_suffix(".pending")
     shutil.copyfile(built, pending)
     pending.chmod(0o755)
+    for rpath in toolchain_rpaths(pending):
+        subprocess.run(["install_name_tool", "-delete_rpath", rpath, str(pending)], check=True)
+    leaked = host_paths(pending.read_bytes())
+    if leaked:
+        pending.unlink()
+        raise SystemExit("the companion carries build-machine paths: " + ", ".join(sorted(leaked)[:5]))
     pending.replace(target)
     shutil.rmtree(scratch, ignore_errors=True)
     return target
+
+
+def toolchain_rpaths(binary):
+    """The LC_RPATH entries outside the system (SwiftPM's toolchain directory)."""
+    out = subprocess.run(["otool", "-l", str(binary)], check=True, capture_output=True, text=True).stdout
+    paths, lines = [], out.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == "cmd LC_RPATH":
+            for follow in lines[i + 1:i + 4]:
+                follow = follow.strip()
+                if follow.startswith("path "):
+                    path = follow[len("path "):].rsplit(" (offset", 1)[0]
+                    if not (path.startswith("/usr/") or path.startswith("@")):
+                        paths.append(path)
+    return paths
+
+
+def host_paths(data):
+    """Every build-machine prefix the bytes still carry: the home folder, this checkout and the
+    volume the cache lives on (when it is not the system's)."""
+    prefixes = {str(Path.home()), str(APP.parent.parent)}
+    cache_root = Path(M.cache("richos-companion")).resolve()
+    if cache_root.parts[:2] == ("/", "Volumes"):
+        prefixes.add("/".join(cache_root.parts[:3]).replace("//", "/"))
+    return {p for p in prefixes if p.encode() in data}
 
 
 def link(link_path, directory, root):
