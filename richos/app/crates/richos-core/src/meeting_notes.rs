@@ -279,6 +279,37 @@ pub fn write_state(session: &Path, state: &BriefState) -> std::io::Result<()> {
     std::fs::rename(pending, session.join(STATE_FILE))
 }
 
+/// Said in the notes of a meeting whose recording RichOS did not see to its end: it was quit,
+/// relaunched for an update or crashed while the call was still being recorded.
+pub const CUT_SHORT_WARNING: &str = "RichOS closed while this meeting was being recorded, so the recording ends there.";
+
+/// The recorder finished its files: `session.json` says `closed` (the capture's own last write).
+pub fn recorder_closed(session: &Path) -> bool {
+    recorder_session(session).is_some_and(|v| v["status"] == "closed")
+}
+
+fn recorder_session(session: &Path) -> Option<serde_json::Value> {
+    std::fs::read(session.join("session.json")).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+/// The facts of a recording RichOS did not see end. `meeting.json` is written the moment a
+/// recording starts with `ended_at` 0, so a quit, an update's relaunch or a crash in the middle
+/// still leaves a session the next launch finds ([`unfinished_sessions`]); a recording the app saw
+/// end has its real end and is returned unchanged. Otherwise it ends where the recorder closed its
+/// files (`session.json` `endedAt`), or `now` if it never did, and the notes say it was cut short
+/// (handover review rv-20261013T145354Z-da4ac5cf-c86a #1).
+pub fn cut_short(session: &Path, mut facts: MeetingFacts, now: u64) -> MeetingFacts {
+    if facts.ended_at != 0 {
+        return facts;
+    }
+    let closed_at = recorder_session(session).filter(|v| v["status"] == "closed").and_then(|v| v["endedAt"].as_u64());
+    facts.ended_at = closed_at.unwrap_or(now);
+    if !facts.warnings.iter().any(|w| w == CUT_SHORT_WARNING) {
+        facts.warnings.push(CUT_SHORT_WARNING.to_string());
+    }
+    facts
+}
+
 pub fn read_facts(session: &Path) -> Option<MeetingFacts> {
     std::fs::read(session.join(MEETING_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok())
 }
@@ -463,6 +494,43 @@ mod tests {
         write_state(&b, &state).unwrap();
         assert_eq!(unfinished_sessions(&corpus), vec![c, a]);
         assert!(unfinished_sessions(&corpus.join("nothing-here")).is_empty());
+        std::fs::remove_dir_all(&corpus).unwrap();
+    }
+
+    #[test]
+    fn a_recording_cut_short_by_a_quit_is_found_and_says_where_it_ends() {
+        // Handover review rv-20261013T145354Z-da4ac5cf-c86a #1: quitting RichOS while a meeting was
+        // being recorded left no meeting.json (it was written only when the app saw the recording
+        // close), so the next launch never found the session and its notes never came.
+        let corpus = std::env::temp_dir().join(format!("richos-notes-cut-{}", std::process::id()));
+        if corpus.exists() {
+            std::fs::remove_dir_all(&corpus).unwrap();
+        }
+        let s = meeting_zone(&corpus, Some("acme")).join("2026-10-13T15-00-00Z--system--call");
+        std::fs::create_dir_all(&s).unwrap();
+        // What the app writes the moment the recorder says it started: the end is not known yet.
+        let started = MeetingFacts { started_at: 1_000, ended_at: 0, ..facts() };
+        write_facts(&s, &started).unwrap();
+        std::fs::write(s.join("session.json"), r#"{"status":"open","endedAt":null}"#).unwrap();
+        assert_eq!(unfinished_sessions(&corpus), vec![s.clone()], "a recording in progress at the quit is found at the next launch");
+        assert!(!recorder_closed(&s));
+        // The recorder never closed (it was killed too): the recording ends at the recovery, said.
+        let unclosed = cut_short(&s, started.clone(), 9_000);
+        assert_eq!(unclosed.ended_at, 9_000);
+        assert_eq!(unclosed.warnings, vec![CUT_SHORT_WARNING.to_string()]);
+        // The recorder closed its files when the app went (its stdin closed): its own end is used.
+        std::fs::write(s.join("session.json"), r#"{"status":"closed","endedAt":4200}"#).unwrap();
+        assert!(recorder_closed(&s));
+        let closed = cut_short(&s, started, 9_000);
+        assert_eq!(closed.ended_at, 4_200);
+        assert_eq!(closed.warnings, vec![CUT_SHORT_WARNING.to_string()]);
+        // Applied twice (the quit wrote it, the relaunch reads it), said once.
+        let mut again = closed.clone();
+        again.ended_at = 0;
+        assert_eq!(cut_short(&s, again, 9_000).warnings.len(), 1);
+        // A recording the app saw end is never called cut short.
+        let ended = MeetingFacts { ended_at: 5_000, ..facts() };
+        assert_eq!(cut_short(&s, ended.clone(), 9_000), ended);
         std::fs::remove_dir_all(&corpus).unwrap();
     }
 

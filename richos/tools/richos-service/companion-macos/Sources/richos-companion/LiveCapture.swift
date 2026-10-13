@@ -11,7 +11,10 @@ import RichOSCompanionCore
 /// be made therefore leaves NO session directory: there is nothing recorded to be loud about, and
 /// the failure is reported (stderr, and a `failed` line to the app in `--json` mode).
 @available(macOS 14.4, *)
-func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32]) {
+func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32], endWithStdin: Bool = false) {
+    // The app that reads our stdout may be gone before we finish (it quit or crashed): a write to
+    // the closed pipe must fail quietly, never end this process before session.json is closed.
+    signal(SIGPIPE, SIG_IGN)
     let capture = CoreAudioCapture(excludePids: excludePids)
     capture.onInfo = { Notifier.info($0) }
     do {
@@ -140,6 +143,18 @@ func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32]) {
         }
         source.resume()
         sources.append(source)
+    }
+
+    // --end-with-stdin: the app holds this pipe for as long as the recording runs. When it closes
+    // (Quit, an update's relaunch, a crash: the kernel closes it however the app ends), finish
+    // exactly as on the app's SIGINT. Before this a Quit left the recorder writing with nobody
+    // to stop it (handover review rv-20261013T145354Z-da4ac5cf-c86a #1).
+    if endWithStdin {
+        DispatchQueue.global(qos: .utility).async {
+            while !FileHandle.standardInput.availableData.isEmpty {}
+            Notifier.info("the app that started this recording has closed; finishing the recording")
+            kill(getpid(), SIGINT)
+        }
     }
 
     withExtendedLifetime(sources) { RunLoop.main.run() }

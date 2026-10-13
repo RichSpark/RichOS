@@ -4182,6 +4182,10 @@ fn main() {
                 }
             }
             if let tauri::RunEvent::Exit = event {
+                // A meeting being recorded is finished and kept FIRST, before the quit's own
+                // two-second bound below starts: its files and its notes are his data
+                // (handover review rv-20261013T145354Z-da4ac5cf-c86a #1).
+                meetings::quit(handle);
                 if let Some(state) = handle.try_state::<AppState>() {
                     // ONE bound for the whole quit, shared by the work lease's runners below and
                     // every lease's supervisor after them (reap gap 1.3(c)).

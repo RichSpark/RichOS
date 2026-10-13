@@ -194,7 +194,8 @@ func cmdCapture(_ args: [String]) {
     }
 
     if #available(macOS 14.4, *) {
-        runLiveCapture(zone: zone, startedAt: startedAt, excludePids: excludePids)
+        runLiveCapture(zone: zone, startedAt: startedAt, excludePids: excludePids,
+                       endWithStdin: args.contains("--end-with-stdin"))
     } else {
         FileErr.write("capture requires macOS 14.4+ (Core Audio process taps).\n")
         exit(1)
@@ -209,10 +210,13 @@ func usage() {
       richos-companion doctor
           Report environment + the permission gate.
       richos-companion capture [--zone DIR] [--json] [--exclude-pid N]... [--kind K] [--force]
+                               [--end-with-stdin]
           Live capture: system-audio tap + mic -> 2-channel contract dir (needs the TCC grant).
           SIGINT or SIGTERM finalizes. --json: state and alarms as JSON lines for the app;
           a stand-down (another surface owns the call) exits 3. --exclude-pid: keep that
-          process's output (RichOS's own speech) out of the system tap.
+          process's output (RichOS's own speech) out of the system tap. --end-with-stdin:
+          finalize, as on SIGINT, when stdin closes (the app holds the pipe, so a recording
+          never outlives the app that started it, however it ends).
       richos-companion ingest --stereo <wav> [--zone DIR] [--started-at MS]
       richos-companion ingest --mic <monoWav> --system <monoWav> [--zone DIR]
           Headless: push a sample through the real contract writer (no grant needed) -> a valid

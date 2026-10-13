@@ -15,7 +15,11 @@
 //! - **The capture**: `richos-companion capture --json`, started on the one click, stopped with
 //!   SIGINT when the call ends (or on Stop). Its JSON lines say when it is really recording, and
 //!   any failure, so the app can say so instead of leaving it on stderr. Its own pid is excluded
-//!   from the monitor: RichOS holding the microphone is never "the call".
+//!   from the monitor: RichOS holding the microphone is never "the call". Like the watcher, it
+//!   holds a pipe from this app (`--end-with-stdin`): when RichOS quits, is relaunched for an
+//!   update or crashes, the pipe closes and the recorder finishes its files itself. Its
+//!   `meeting.json` is written the moment it starts, so the next launch finds a recording cut
+//!   short and still makes its notes ([`quit`], [`meeting_notes::cut_short`]).
 //!
 //! What happens to a finished recording (transcript, notes, the brief through Rich) is
 //! [`Meetings::recording_closed`]'s job.
@@ -52,6 +56,11 @@ const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
 const BRIEF_DEADLINE: Duration = Duration::from_secs(5 * 60);
 /// Between failed brief attempts (PRD V4: up to three attempts per session).
 const RETRY_AFTER: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
+/// How long a quit waits for a running recorder to finish its files (its SIGINT finish drains,
+/// flushes and rewrites `session.json`: one pump and one fsync).
+const QUIT_CLOSE_WAIT: Duration = Duration::from_secs(3);
+/// How long a launch waits for a previous launch's recorder to close before making its notes.
+const RECORDER_CLOSE_WAIT: Duration = Duration::from_secs(10);
 
 /// The panel's place on the display (round 25.1: `top:35px;right:14px` under a 25px menu bar):
 /// its right edge 14 points in from the display's visible right, its top 10 below the menu bar.
@@ -114,6 +123,28 @@ struct CaptureRun {
     /// A side that stalled during the recording, in the capture's own words: the notes must say
     /// the capture is partial instead of reading as complete (PRD V4).
     warnings: Vec<String>,
+    /// The recorder's stdin. Held for as long as the recorder runs: it closes with this app,
+    /// however the app ends, and the recorder then finishes its files by itself.
+    _stdin: Option<Arc<ChildStdin>>,
+}
+
+impl CaptureRun {
+    /// What the app knows about this recording, as `meeting.json` holds it. `ended_at` 0: the
+    /// recording has not ended yet (written at its start, so a quit or crash leaves it findable).
+    fn facts(&self, ended_at: u64) -> MeetingFacts {
+        MeetingFacts {
+            title: self.title.clone(),
+            event_id: self.event_id.clone(),
+            date_line: date_line(self.started_at),
+            started_at: self.started_at,
+            ended_at,
+            stopped_early: self.stop == Some(EndReason::StoppedEarly),
+            manual: self.manual,
+            entity: self.entity.clone(),
+            thread: self.thread.clone(),
+            warnings: self.warnings.clone(),
+        }
+    }
 }
 
 /// The recorder with this pid, out of the current slot or the ones still finishing after a
@@ -212,6 +243,13 @@ pub fn start(app: &AppHandle) {
         }),
     });
     app.manage(meetings.clone());
+    // Meetings recorded before a quit, an update or a crash whose notes were never said: found
+    // NOW, before the watcher can start this launch's first recording (whose meeting.json is
+    // written at its start and must never be taken for a previous launch's), and finished one at
+    // a time on a thread of their own (handover review rv-20261013T141401Z-390d6bea-2e23 #2).
+    let unfinished = meeting_notes::unfinished_sessions(&meetings.corpus_root());
+    let resume = meetings.clone();
+    std::thread::Builder::new().name("meeting-resume".into()).spawn(move || resume.resume_unfinished(unfinished)).ok();
     let watcher = meetings.clone();
     std::thread::Builder::new().name("meeting-watcher".into()).spawn(move || watcher.run_watcher()).ok();
     let clock = meetings.clone();
@@ -228,11 +266,6 @@ pub fn start(app: &AppHandle) {
             clock.apply(actions);
         })
         .ok();
-    // Meetings recorded before a quit, an update or a crash whose notes were never said: finished
-    // now, one at a time, on a thread of their own (handover review
-    // rv-20261013T141401Z-390d6bea-2e23 #2).
-    let resume = meetings.clone();
-    std::thread::Builder::new().name("meeting-resume".into()).spawn(move || resume.resume_unfinished()).ok();
     // The calendar: one pass at launch and every five minutes, one at a time (this one thread).
     let calendar = meetings.clone();
     std::thread::Builder::new()
@@ -598,7 +631,8 @@ impl Meetings {
             .args(["capture", "--json", "--zone"])
             .arg(&zone)
             .args(["--exclude-pid", &std::process::id().to_string()])
-            .stdin(Stdio::null())
+            .arg("--end-with-stdin")
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         if let Some(e) = &entity {
@@ -629,6 +663,7 @@ impl Meetings {
                 recording: false,
                 stop: None,
                 warnings: Vec::new(),
+                _stdin: child.stdin.take().map(Arc::new),
             });
         }
         let stdout = child.stdout.take();
@@ -666,6 +701,11 @@ impl Meetings {
                 run.recording = true;
                 run.started_at = v["at"].as_u64().unwrap_or_else(now_millis);
                 run.dir = v["dir"].as_str().map(PathBuf::from);
+                // Written now, not only when the recording closes: a quit, an update or a crash
+                // in the middle of the call still leaves a session the next launch finds.
+                if let Some(dir) = &run.dir {
+                    logged("writing meeting.json at the start", meeting_notes::write_facts(dir, &run.facts(0)));
+                }
                 let view = PanelView::Recording { started_at: run.started_at, note: None };
                 drop(inner);
                 self.show(view);
@@ -679,6 +719,10 @@ impl Meetings {
                 eprintln!("[richos] meeting notes: capture: {message}");
                 if v["stalled"].as_bool() == Some(true) && !message.is_empty() {
                     run.warnings.push(message);
+                    // Kept on disk at once, so a recording cut short still says it.
+                    if let Some(dir) = &run.dir {
+                        logged("writing meeting.json", meeting_notes::write_facts(dir, &run.facts(0)));
+                    }
                 }
             }
             // Sound came through the system tap: the grant exists. Remembered, so the voice bar may
@@ -735,6 +779,11 @@ impl Meetings {
         }
         if code == Some(0) && finished.recording {
             self.recording_closed(finished);
+        } else if let Some(dir) = finished.dir.as_deref().filter(|_| finished.recording) {
+            // A recorder that failed (said beside the call): its session stays as it always has,
+            // without notes, and the meeting.json written at its start must not make the next
+            // launch present it as a meeting RichOS was closed during.
+            logged("removing the failed recording's meeting.json", std::fs::remove_file(dir.join(meeting_notes::MEETING_FILE)));
         }
         self.publish_state();
     }
@@ -786,18 +835,7 @@ impl Meetings {
             eprintln!("[richos] meeting notes: the recorder closed without naming its session");
             return;
         };
-        let facts = MeetingFacts {
-            title: run.title.clone(),
-            event_id: run.event_id.clone(),
-            date_line: date_line(run.started_at),
-            started_at: run.started_at,
-            ended_at: now_millis(),
-            stopped_early: run.stop == Some(EndReason::StoppedEarly),
-            manual: run.manual,
-            entity: run.entity.clone(),
-            thread: run.thread.clone(),
-            warnings: run.warnings.clone(),
-        };
+        let facts = run.facts(now_millis());
         eprintln!(
             "[richos] meeting notes: recorded {} ({}, company {}, partial: {}) into {}",
             facts.title.as_deref().unwrap_or("a call"),
@@ -817,17 +855,69 @@ impl Meetings {
 
     /// Every meeting a previous launch recorded and never finished ([`meeting_notes::unfinished_sessions`]),
     /// oldest first: its notes are prepared from where they stopped, exactly as at the call's end.
-    fn resume_unfinished(&self) {
-        for dir in meeting_notes::unfinished_sessions(&self.corpus_root()) {
-            let Some(facts) = meeting_notes::read_facts(&dir) else {
+    /// A recording the previous launch never saw end (quit, update or crash mid-call) is first given
+    /// the moment its recorder finishes its files, then its end and the line saying it was cut short.
+    fn resume_unfinished(&self, sessions: Vec<PathBuf>) {
+        for dir in sessions {
+            let Some(mut facts) = meeting_notes::read_facts(&dir) else {
                 eprintln!("[richos] meeting notes: {} has an unreadable meeting.json; left as it is", dir.display());
                 continue;
             };
             let Some(zone) = dir.parent().map(Path::to_path_buf) else { continue };
             eprintln!("[richos] meeting notes: finishing the notes a previous launch left unfinished ({})", dir.display());
+            if facts.ended_at == 0 {
+                let closed = wait_for_recorder(&dir, RECORDER_CLOSE_WAIT);
+                facts = meeting_notes::cut_short(&dir, facts, now_millis());
+                eprintln!(
+                    "[richos] meeting notes: its recording was cut short by the previous launch's end; the recorder {}",
+                    if closed { "had closed its files" } else { "never closed its files (it ends where it stopped)" }
+                );
+                logged("writing meeting.json", meeting_notes::write_facts(&dir, &facts));
+            }
             wait_for_orphaned_transcription(&dir);
             self.prepare_notes(&dir, &zone, facts);
         }
+    }
+
+    /// RichOS is quitting (Quit, or the relaunch an update asks for): every recording still running
+    /// is told to finish its files now, and its `meeting.json` says where and why it ends, so the
+    /// next launch makes its notes ([`Self::resume_unfinished`]). Bounded: a recorder that has not
+    /// closed by then still does, by itself, when this app's pipe to it closes.
+    fn finish_for_quit(&self, bound: Duration) {
+        let runs: Vec<CaptureRun> = {
+            let mut inner = self.inner.lock().unwrap();
+            let mut runs: Vec<CaptureRun> = inner.draining.drain(..).collect();
+            runs.extend(inner.capture.take());
+            runs
+        };
+        if runs.is_empty() {
+            return;
+        }
+        let now = now_millis();
+        for run in &runs {
+            if let (Some(dir), Some(facts)) = (run.dir.as_deref(), quit_facts(run, now)) {
+                logged("writing meeting.json at the quit", meeting_notes::write_facts(dir, &facts));
+            }
+            if run.stop.is_none() {
+                // SAFETY: `pid` is a recorder this module spawned; its capture thread has not
+                // reaped it (it was still in the slot this lock just emptied).
+                unsafe {
+                    libc::kill(run.pid as i32, libc::SIGINT);
+                }
+            }
+        }
+        let dirs: Vec<&Path> = runs.iter().filter(|r| r.recording).filter_map(|r| r.dir.as_deref()).collect();
+        let deadline = std::time::Instant::now() + bound;
+        while dirs.iter().any(|d| !meeting_notes::recorder_closed(d)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let closed = dirs.iter().filter(|d| meeting_notes::recorder_closed(d)).count();
+        eprintln!(
+            "[richos] meeting notes: quitting with {} recorder(s) running; {closed} of {} recording(s) closed within {} ms; their notes come at the next launch",
+            runs.len(),
+            dirs.len(),
+            bound.as_millis()
+        );
     }
 
     /// A failure said through Rich finishes the session: the next launch does not say it again.
@@ -1045,6 +1135,36 @@ pub fn service_cli() -> Option<PathBuf> {
 
 /// The running transcription's pid, beside its session while it runs.
 const TRANSCRIBING_FILE: &str = "transcribing.pid";
+
+/// RichOS is quitting: finish every running recording's files and keep what the next launch
+/// needs to make its notes (handover review rv-20261013T145354Z-da4ac5cf-c86a #1). Called from the
+/// app's exit path; a launch without meeting notes has nothing to do.
+pub fn quit(app: &AppHandle) {
+    if let Some(meetings) = app.try_state::<Arc<Meetings>>() {
+        meetings.finish_for_quit(QUIT_CLOSE_WAIT);
+    }
+}
+
+/// What a quit writes as a recording's `meeting.json`: one already told to stop (the call ended,
+/// or Stop) ended where it was told to; one still running is cut short by the quit, and its notes
+/// say so. Nothing for a recorder that never started writing.
+fn quit_facts(run: &CaptureRun, now: u64) -> Option<MeetingFacts> {
+    let dir = run.dir.as_deref().filter(|_| run.recording)?;
+    Some(if run.stop.is_some() { run.facts(now) } else { meeting_notes::cut_short(dir, run.facts(0), now) })
+}
+
+/// Wait, at most `bound`, for a recorder to close its session's files (a previous launch's
+/// recorder finishes them when that launch's pipe to it closes). True when it did.
+fn wait_for_recorder(dir: &Path, bound: Duration) -> bool {
+    let deadline = std::time::Instant::now() + bound;
+    while !meeting_notes::recorder_closed(dir) {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    true
+}
 
 /// A transcription a previous launch started may still be running: quitting or a crash of the app
 /// does not end its child, and two runs on one session would write the same files. The next launch
@@ -1267,6 +1387,7 @@ mod tests {
             recording: true,
             stop: None,
             warnings: Vec::new(),
+            _stdin: None,
         }
     }
 
@@ -1283,6 +1404,31 @@ mod tests {
         let (new, current) = take_run(&mut capture, &mut draining, 20).unwrap();
         assert_eq!((new.pid, current), (20, true));
         assert!(take_run(&mut capture, &mut draining, 20).is_none());
+    }
+
+    #[test]
+    fn a_quit_during_a_recording_keeps_it_and_says_it_was_cut_short() {
+        // Handover review rv-20261013T145354Z-da4ac5cf-c86a #1: Quit during a recording left it
+        // running and unrecoverable. The quit now writes each recording's meeting.json.
+        let dir = std::env::temp_dir().join(format!("richos-quit-facts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut running = run(30);
+        running.dir = Some(dir.clone());
+        running.started_at = 1_000;
+        let facts = quit_facts(&running, 7_000).expect("a running recording is kept");
+        assert_eq!(facts.ended_at, 7_000, "it ends at the quit (the recorder had not closed yet)");
+        assert_eq!(facts.warnings, vec![meeting_notes::CUT_SHORT_WARNING.to_string()]);
+        assert!(!facts.stopped_early);
+        // One the call's end had already stopped ended where it was told to: no cut-short line.
+        let mut stopped = running.clone();
+        stopped.stop = Some(EndReason::CallEnded);
+        let facts = quit_facts(&stopped, 7_000).unwrap();
+        assert_eq!((facts.ended_at, facts.warnings.len()), (7_000, 0));
+        // A recorder that never started writing has nothing to keep.
+        let mut starting = running.clone();
+        starting.recording = false;
+        assert!(quit_facts(&starting, 7_000).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

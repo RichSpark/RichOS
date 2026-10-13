@@ -20,6 +20,8 @@ import RichOSCompanionCore
 ///   {"type":"channel","at":ms,"channel":"microphone"|"system-audio","stalled":bool,"message":..}
 ///     once when a side stops delivering audio (silence-filled from then) and once when it resumes
 ///   {"type":"system-audio","at":ms,"flowing":true}   once, when sound first arrives through the tap
+/// The app holds the capture's stdin (`--end-with-stdin`): when it closes, the capture finishes as
+/// on SIGINT, and these lines then go nowhere, quietly.
 enum Notifier {
     /// Set by `capture --json`.
     static var appMode = false
@@ -39,7 +41,9 @@ enum Notifier {
     static func event(_ type: String, _ fields: [(String, JSON)]) {
         guard appMode else { return }
         let line = JSON.object([("type", .string(type)), ("at", .int(Int(Date().timeIntervalSince1970 * 1000)))] + fields)
-        FileHandle.standardOutput.write(Data((line.compact() + "\n").utf8))
+        // `try?`, not `write(_:)`: the app may have gone (quit, crash) while the recording finishes,
+        // and the old call raises an exception on the closed pipe that would end this process.
+        try? FileHandle.standardOutput.write(contentsOf: Data((line.compact() + "\n").utf8))
     }
 
     private static func notify(title: String, message: String) {
@@ -59,6 +63,6 @@ enum Notifier {
 
 enum FileErr {
     static func write(_ s: String) {
-        FileHandle.standardError.write(Data(s.utf8))
+        try? FileHandle.standardError.write(contentsOf: Data(s.utf8))
     }
 }
