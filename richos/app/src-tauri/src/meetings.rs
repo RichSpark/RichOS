@@ -23,10 +23,12 @@
 use crate::dictation::appkit::{self, Win};
 use richos_core::ledger::AttentionTier;
 use richos_core::meeting::{parse_watch_line, Action, EndReason, Input, MeetingMonitor, PromptKind, WatchLine};
+use richos_core::meeting_calendar::{self, CalendarMeeting};
 use richos_core::meeting_notes::{self, meeting_zone, MeetingFacts, NextStep};
 use richos_core::util::now_millis;
 use richos_voice::dictation_bar::Rect;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
@@ -41,6 +43,8 @@ pub const EVENT_STATE: &str = "meeting-state";
 /// The voice bar's level, about 20 a second while the bar is up: `{"rms": .., "peak": ..}`.
 pub const EVENT_LEVEL: &str = "meeting-level";
 
+/// One calendar sync pass is bounded, so a stuck network never holds the next one back.
+const CALENDAR_SYNC_DEADLINE: Duration = Duration::from_secs(3 * 60);
 /// A meeting's transcription is bounded (whisper on Apple silicon measured 249 s for a 92-minute
 /// channel, `config.js`; two channels of an hour stay well inside this).
 const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
@@ -126,6 +130,8 @@ struct Inner {
     system_audio_seen: bool,
     /// The voice bar's level reader (`richos-companion level`) while the bar is up.
     level: Option<LevelRun>,
+    /// The synced calendar's meetings that may prompt, as of the last refresh.
+    calendar: Vec<CalendarMeeting>,
 }
 
 /// The level reader: its pid (to end it) and its stdin (dropping it also ends it).
@@ -180,6 +186,7 @@ pub fn start(app: &AppHandle) {
             watcher_pid: None,
             system_audio_seen,
             level: None,
+            calendar: Vec::new(),
         }),
     });
     app.manage(meetings.clone());
@@ -190,13 +197,103 @@ pub fn start(app: &AppHandle) {
         .name("meeting-clock".into())
         .spawn(move || loop {
             std::thread::sleep(Duration::from_secs(1));
-            let actions = clock.inner.lock().unwrap().monitor.tick(now_millis());
+            let now = now_millis();
+            let actions = {
+                let mut inner = clock.inner.lock().unwrap();
+                let mut actions = inner.monitor.tick(now);
+                // A calendar meeting a minute from its start (the monitor prompts each event once).
+                let due: Vec<_> = inner.calendar.iter().filter(|m| m.due(now)).map(CalendarMeeting::scheduled).collect();
+                for meeting in due {
+                    actions.extend(inner.monitor.scheduled(meeting));
+                }
+                actions
+            };
             clock.apply(actions);
+        })
+        .ok();
+    // The calendar: one pass at launch and every five minutes, one at a time (this one thread).
+    let calendar = meetings.clone();
+    std::thread::Builder::new()
+        .name("meeting-calendar".into())
+        .spawn(move || {
+            let mut known = BTreeMap::new();
+            loop {
+                calendar.refresh_calendar(&mut known);
+                std::thread::sleep(Duration::from_millis(meeting_calendar::REFRESH_MS));
+            }
         })
         .ok();
 }
 
 impl Meetings {
+    // ---- the calendar ------------------------------------------------------------------------
+
+    /// One calendar pass: `workspace sync <vendor> --once --source calendar` for each connected
+    /// vendor (the existing sync and its Keychain grant), then the latest revisions read back.
+    /// A failed or unconnected sync is logged and never blocks microphone prompts or capture; the
+    /// meetings already synced still prompt. A canceled or moved meeting's prompt is withdrawn.
+    fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>) {
+        let zone = meeting_calendar::workspace_zone(&self.corpus_root());
+        let vendors = meeting_calendar::connected_vendors(&zone);
+        if vendors.is_empty() {
+            return;
+        }
+        match service_cli() {
+            Some(service) => {
+                for vendor in &vendors {
+                    if let Err(why) = self.sync_calendar(&service, vendor) {
+                        eprintln!("[richos] meeting notes: calendar sync ({vendor}) did not complete: {why}");
+                    }
+                }
+            }
+            None => eprintln!("[richos] meeting notes: no calendar sync in this build; using what was synced before"),
+        }
+        let current = meeting_calendar::meetings(&zone);
+        let gone = meeting_calendar::withdrawn(known, &current);
+        *known = current.iter().map(|m| (m.event_id.clone(), m.starts_at)).collect();
+        let actions = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.calendar = current;
+            gone.iter().flat_map(|id| inner.monitor.withdraw(id)).collect::<Vec<_>>()
+        };
+        self.apply(actions);
+    }
+
+    /// One bounded sync pass for one vendor, with the installed runtime and the CEO's corpus.
+    fn sync_calendar(&self, service: &Path, vendor: &str) -> Result<(), String> {
+        let mut command = Command::new(node_bin());
+        command
+            .arg(service)
+            .args(["workspace", "sync", vendor, "--once", "--source", "calendar"])
+            .env("LORO_CORPUS", self.corpus_root())
+            .env_remove("RICHOS_ACTIVE_COMPANY")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        installed_paths(&mut command);
+        let mut child = command.spawn().map_err(|e| e.to_string())?;
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if started.elapsed() < CALENDAR_SYNC_DEADLINE => std::thread::sleep(Duration::from_millis(250)),
+                _ => {
+                    logged("stopping the calendar sync", child.kill());
+                    logged("reaping the calendar sync", child.wait());
+                    return Err("it took longer than three minutes".into());
+                }
+            }
+        }
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        let said = String::from_utf8_lossy(&out.stdout);
+        let last = said.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!("{} ({last})", out.status))
+        }
+    }
+
     // ---- the watcher -----------------------------------------------------------------------
 
     fn run_watcher(self: Arc<Self>) {
