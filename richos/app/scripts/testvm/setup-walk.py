@@ -112,7 +112,9 @@ R19_OFFER_AX = 'a free & private/local replacement for Wispr Flow. (saves you $1
 R19_OFFER_COPY_AX = (R19_OFFER_AX, 'Just click into any other app (Mail, Slack, Chrome/Safari, anything), press')
 R19_NOT_NOW_AX = "Okay. It's in Settings, under Dictation, whenever you want it."
 # The sheet's On line (dictation.js) and the "Dictation feature" message with F2 (dictation_offer.rs).
-R19_ON_AX = 'On. Tap F'
+# The key in the On line is its own key cap, so the words after it are what is matched (walk of
+# 6c09d61b9, 19:18Z: the sheet said On and 'On. Tap F' was never one AX value).
+R19_ON_AX = 'in any app, talk, and tap it again.'
 R19_FEATURE_AX = 'Click into where you want your words to appear, tap F2, say what you want written'
 # The microphone's stand-in for the voice step (capture.rs RICHOS_VOICE_INPUT_WAV), in the guest.
 SILENCE_WAV = '/Users/admin/voice-silence.wav' # machine-path-exempt: isolated test VM account/path; never a customer default
