@@ -610,3 +610,286 @@ fn speech_that_resumes_as_synthesis_ends_is_his_and_rich_waits() {
     let said: Vec<&str> = r.sounded.iter().map(|(_, s)| s.as_str()).collect();
     assert_eq!(said, vec!["answer 2 sentence 1"], "Rich said: {said:?}");
 }
+
+// ================================================================================================
+// EVERY WAY HIS TURN ENDS, IN ONE TABLE.
+//
+// Three reviews in a row found a turn ending the earlier tests did not cover. This table is the
+// whole contract in one place. Each row is a way a turn ends, replayed through the SHIPPED rules:
+// `CaptureBrain` (canceller, VAD, endpointer with its 30 s continuation, onset signal, `finish`),
+// `TurnAssembler` (fragments, quiet, floor, `carry`), `AnswerGate`, `AudibleWindow`,
+// `rich_audible`, `may_sound`, with Rich's synthesis (21 frames) and the recognizer's latency in
+// the loop, and on voice-off the desk's drain. Every row is held to the same three promises:
+//
+//   ONE TURN PER THOUGHT  the requests that STAND (handed over and not withdrawn) are exactly the
+//                         ones listed, each a whole thought
+//   NOTHING LOST          every fragment he said is in a request that stands, in order
+//   RICH SILENT           nothing of Rich sounds while any of his voice is in the room, and Rich's
+//                         first sound comes no sooner than 2.000 s after his last word
+// ================================================================================================
+
+/// One way a turn ends.
+struct Ending {
+    name: &'static str,
+    mic: Vec<f32>,
+    /// Sample ranges in which his voice is in the room.
+    voiced: Vec<(usize, usize)>,
+    /// Frame at which the FIRST answer is offered; later answers come `MODEL_FRAMES` after their
+    /// turn. `None`: the first answer too.
+    first_offer: Option<usize>,
+    /// How long the recognizer takes on each fragment, in frames.
+    recognition_frames: usize,
+    /// Frame at which he switches voice off, if he does.
+    voice_off_at: Option<usize>,
+    /// The requests that stand, in order.
+    stands: &'static [&'static str],
+    /// What Rich says aloud, in order.
+    said: &'static [&'static str],
+}
+
+/// What a row did.
+#[derive(Debug, Default)]
+struct Ended {
+    /// Every turn handed over, and whether it was withdrawn when he went on.
+    handed_over: Vec<(String, bool)>,
+    said: Vec<(usize, String)>,
+    tainted_starts: usize,
+    admitted: usize,
+}
+
+impl Ended {
+    fn stands(&self) -> Vec<String> {
+        self.handed_over.iter().filter(|(_, withdrawn)| !withdrawn).map(|(t, _)| t.clone()).collect()
+    }
+}
+
+fn replay_ending(e: &Ending) -> Ended {
+    use std::collections::VecDeque;
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let mut gate: AnswerGate<(u64, String)> = AnswerGate::new();
+    let mut window = AudibleWindow::new();
+    let mut r = Ended::default();
+    let mut recognizing: VecDeque<(usize, String)> = VecDeque::new();
+    let mut offers: Vec<(usize, String)> = Vec::new();
+    let mut synthesis: Vec<(usize, u64, String)> = Vec::new();
+    let (mut playing_until, mut sounded, mut speaking, mut was_speaking, mut generation) = (0usize, false, false, false, 0u64);
+    let mut turn_ends: Vec<usize> = Vec::new();
+    // The last turn handed over while Rich has not yet made a sound answering it.
+    let mut unanswered: Option<(usize, Turn)> = None;
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+
+    fn handle(m: CapMsg, b: usize, latency: usize, turns: &mut TurnAssembler, r: &mut Ended, rec: &mut VecDeque<(usize, String)>) {
+        match m {
+            CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+            CapMsg::Started { tainted: true, .. } => {
+                r.tainted_starts += 1;
+                turns.utterance_started();
+            }
+            CapMsg::Utterance(u) => {
+                r.admitted += 1;
+                turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                rec.push_back((b + latency, format!("fragment {}", r.admitted)));
+            }
+            CapMsg::Discarded { .. } => turns.utterance_discarded(),
+            CapMsg::TurnQuiet => turns.quiet(),
+            _ => {}
+        }
+    }
+
+    for (b, frame) in e.mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        if e.voice_off_at == Some(b) {
+            // VOICE OFF: the capture callback closes his open recording, the supervisor hands it
+            // on, and the desk waits for every fragment's words before the turn goes out whole.
+            for m in brain.finish() {
+                handle(m, b, e.recognition_frames, &mut turns, &mut r, &mut recognizing);
+            }
+            while let Some((_, words)) = recognizing.pop_front() {
+                turns.recognized(Some((words, false)));
+            }
+            if let Some(t) = turns.flush() {
+                r.handed_over.push((t.text, false));
+            }
+            return r;
+        }
+        ring.push(&silence);
+        for m in brain.push_frame(frame, speaking, false) {
+            handle(m, b, e.recognition_frames, &mut turns, &mut r, &mut recognizing);
+        }
+        while recognizing.front().is_some_and(|(ready, _)| *ready <= b) {
+            let (_, words) = recognizing.pop_front().unwrap();
+            let starts = turns.recognized(Some((words, false)));
+            let outstanding = turn_ends.iter().any(|&end| b < end) || gate.held() > 0 || !synthesis.is_empty();
+            if starts && outstanding {
+                gate.supersede();
+                generation += 1;
+                // ONE THOUGHT, ONE REQUEST: the turn he had not finished joins this one.
+                if let Some((i, earlier)) = unanswered.take() {
+                    turns.carry(earlier);
+                    r.handed_over[i].1 = true;
+                }
+            }
+        }
+        if let Some(t) = turns.take_turn() {
+            let k = r.handed_over.len() + 1;
+            let at = match (k, e.first_offer) {
+                (1, Some(at)) => at,
+                _ => b + MODEL_FRAMES,
+            };
+            assert!(at > b, "{}: the first answer was offered before its turn was handed over", e.name);
+            unanswered = Some((r.handed_over.len(), t.clone()));
+            r.handed_over.push((t.text, false));
+            gate.next_turn();
+            offers.push((at, format!("answer {k}")));
+            turn_ends.push(at + 60);
+        }
+        let floor = turns.has_floor();
+        for (_, s) in offers.iter().filter(|(at, _)| *at == b) {
+            if let Some((g, s)) = gate.offer((generation, s.clone()), floor) {
+                synthesis.push((b + SYNTH_FRAMES, g, s));
+            }
+        }
+        for (g, s) in gate.release(floor) {
+            synthesis.push((b + SYNTH_FRAMES, g, s));
+        }
+        synthesis.retain(|(_, g, _)| *g == generation);
+        if let Some(pos) = synthesis.iter().position(|(ready, _, _)| *ready <= b) {
+            if may_sound(floor, brain.his_onset_building()) && b >= playing_until {
+                let (_, _, s) = synthesis.remove(pos);
+                r.said.push((b, s));
+                sounded = true;
+                playing_until = b + SENTENCE_FRAMES;
+            }
+        }
+        window.observe(b < playing_until, !synthesis.is_empty(), 0.032, (b * 16) as u64);
+        if !window.is_open() {
+            sounded = false;
+        }
+        speaking = rich_audible(window.is_open(), sounded);
+        if speaking && !was_speaking {
+            // Rich has begun answering aloud: what he says next is a new turn.
+            unanswered = None;
+        }
+        was_speaking = speaking;
+    }
+    r
+}
+
+/// His room with stretches of voice laid in at his level; returns the track and the voiced ranges.
+fn speak(lead: f32, parts: &[(Vec<f32>, f32)], tail: f32) -> (Vec<f32>, Vec<(usize, usize)>) {
+    let total = lead + parts.iter().map(|(v, gap)| v.len() as f32 / SAMPLE_RATE as f32 + gap).sum::<f32>() + tail;
+    let mut mic = room(total);
+    let mut at = secs_to_samples(lead);
+    let mut voiced = Vec::new();
+    for (voice, gap_after) in parts {
+        superimpose(&mut mic, at, voice);
+        voiced.push((at, at + voice.len()));
+        at += voice.len() + secs_to_samples(*gap_after);
+    }
+    (mic, voiced)
+}
+
+#[test]
+fn every_way_his_turn_ends() {
+    let frame_of = |sample: usize| sample / VAD_FRAME_SAMPLES;
+    let thought = || vec![(synthetic_voice(1.904, 1), HIS_PAUSE_SECS), (synthetic_voice(1.104, 2), 0.0)];
+    let three_words = |seed| {
+        let w = synthetic_voice(0.224, seed);
+        vec![(synthetic_voice(1.904, 1), LONG_PAUSE_SECS), (w.clone(), 0.224), (w.clone(), 0.224), (w, 0.0)]
+    };
+    let mut rows = Vec::new();
+
+    // 1. A SHORT SILENCE MID-SENTENCE: his measured 1.406 s pause.
+    let (mic, voiced) = speak(1.0, &thought(), 6.0);
+    rows.push(Ending { name: "a short silence mid-sentence", mic, voiced, first_offer: None, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 1"] });
+
+    // 2. A SILENCE LONGER THAN 2 s, THEN MORE SPEECH: the first part is handed over, he goes on
+    //    before Rich answers, and the request that stands is the whole thought.
+    let (mic, voiced) = speak(1.0, &[(synthetic_voice(1.904, 1), LONG_PAUSE_SECS), (synthetic_voice(1.104, 2), 0.0)], 6.0);
+    rows.push(Ending { name: "a silence longer than 2 s, then more", mic, voiced, first_offer: None, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 2"] });
+
+    // 3. A LONG STRETCH CUT AT THE 30.000 s WINDOW WITH A SHORT TAIL: his last word runs 0.224 s
+    //    (14 frames) past the cut, under the 19-frame cough minimum, and he stops.
+    let (mic, voiced) = speak(1.0, &[(spoken_words(30.224, 4), 0.0)], 6.0);
+    rows.push(Ending { name: "a 30 s stretch cut at the window, short tail", mic, voiced, first_offer: None, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 1"] });
+
+    // 4. SPEECH THAT STARTS AGAIN WHILE RICH'S ANSWER IS BEING PREPARED: 128 ms into synthesis.
+    let (mic, voiced) = speak(1.0, &three_words(6), 6.0);
+    let first_offer = Some(frame_of(voiced[1].0) - 8);
+    rows.push(Ending { name: "he goes on while the answer is being prepared", mic, voiced, first_offer, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 2"] });
+
+    // 5. SPEECH STARTING DURING THE ONSET DEBOUNCE: 20 frames into the 21-frame synthesis, so the
+    //    sentence is ready while his first word is still building toward its 7-frame onset.
+    let (mic, voiced) = speak(1.0, &three_words(7), 6.0);
+    let first_offer = Some(frame_of(voiced[1].0) - 20);
+    rows.push(Ending { name: "he starts during the onset debounce", mic, voiced, first_offer, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 2"] });
+
+    // 6. RECOGNITION STILL PENDING WHEN THE QUIET COMES: 160 frames (2.560 s) per fragment, longer
+    //    than the 75 frames (1.200 s) from an utterance's end to the turn's quiet.
+    let (mic, voiced) = speak(1.0, &thought(), 8.0);
+    rows.push(Ending { name: "recognition pending when the quiet comes", mic, voiced, first_offer: None, recognition_frames: 160,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 1"] });
+
+    // 7. VOICE OFF WHILE HE IS STILL TALKING: 0.600 s into his second stretch.
+    let (mic, voiced) = speak(1.0, &thought(), 4.0);
+    let off = Some(frame_of(voiced[1].0 + secs_to_samples(0.600)));
+    rows.push(Ending { name: "voice off while he is still talking", mic, voiced, first_offer: None, recognition_frames: 40,
+        voice_off_at: off, stands: &["fragment 1 fragment 2"], said: &[] });
+
+    // 8. VOICE OFF WHILE HIS LAST WORDS ARE STILL BEING RECOGNIZED: 128 ms after his last word,
+    //    inside the 0.800 s hangover, with 40 frames (0.640 s) of recognition per fragment.
+    let (mic, voiced) = speak(1.0, &thought(), 4.0);
+    let off = Some(frame_of(voiced[1].1) + 8);
+    rows.push(Ending { name: "voice off as his last words are recognized", mic, voiced, first_offer: None, recognition_frames: 40,
+        voice_off_at: off, stands: &["fragment 1 fragment 2"], said: &[] });
+
+    let mut failures = Vec::new();
+    for e in &rows {
+        let r = replay_ending(e);
+        let stands = r.stands();
+        let said: Vec<&str> = r.said.iter().map(|(_, s)| s.as_str()).collect();
+        let mut problems = Vec::new();
+        if stands != e.stands {
+            problems.push(format!("ONE TURN PER THOUGHT: the requests that stand are {stands:?}, expected {:?}", e.stands));
+        }
+        let all: Vec<String> = (1..=r.admitted).map(|n| format!("fragment {n}")).collect();
+        if stands.join(" ") != all.join(" ") {
+            problems.push(format!("NOTHING LOST: {} fragment(s) admitted, the requests that stand hold {stands:?}", r.admitted));
+        }
+        if r.tainted_starts != 0 {
+            problems.push(format!("NOTHING LOST: {} of his starts were taken for Rich's echo", r.tainted_starts));
+        }
+        if said != e.said {
+            problems.push(format!("RICH SILENT: Rich said {said:?}, expected {:?}", e.said));
+        }
+        let last_word = e.voiced.iter().map(|(_, end)| *end).max().unwrap_or(0);
+        for (frame, s) in &r.said {
+            let at = (frame + 1) * VAD_FRAME_SAMPLES;
+            if e.voiced.iter().any(|(a, b)| at >= *a && at <= *b) {
+                problems.push(format!("RICH SILENT: {s:?} sounded at {:.3} s while he was talking", at as f32 / SAMPLE_RATE as f32));
+            }
+            let after = (at as f32 - last_word as f32) / SAMPLE_RATE as f32;
+            if after < end_of_turn_secs() {
+                problems.push(format!("RICH SILENT: {s:?} sounded {after:.3} s after his last word"));
+            }
+        }
+        println!(
+            "[ending] {:<46} stands {:?}  handed over {}  said {:?}  {}",
+            e.name,
+            stands,
+            r.handed_over.len(),
+            said,
+            if problems.is_empty() { "OK" } else { "FAILED" }
+        );
+        if !problems.is_empty() {
+            failures.push(format!("{}:\n    {}", e.name, problems.join("\n    ")));
+        }
+    }
+    assert!(failures.is_empty(), "turn endings that broke a promise:\n  {}", failures.join("\n  "));
+}
