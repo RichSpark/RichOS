@@ -116,10 +116,25 @@ struct CaptureRun {
     warnings: Vec<String>,
 }
 
+/// The recorder with this pid, out of the current slot or the ones still finishing after a
+/// stop, and whether it was the current one. A stopped recorder drains for seconds after its
+/// SIGINT, and the next call's prompt can be answered inside them: its lines and its exit must
+/// still find it, and must not touch the recording that started meanwhile.
+fn take_run(capture: &mut Option<CaptureRun>, draining: &mut Vec<CaptureRun>, pid: u32) -> Option<(CaptureRun, bool)> {
+    if capture.as_ref().is_some_and(|c| c.pid == pid) {
+        return capture.take().map(|run| (run, true));
+    }
+    let i = draining.iter().position(|r| r.pid == pid)?;
+    Some((draining.remove(i), false))
+}
+
 struct Inner {
     monitor: MeetingMonitor,
     view: PanelView,
+    /// The recording now running (Settings' Stop, the voice bar), if any.
     capture: Option<CaptureRun>,
+    /// Recorders told to stop that are still finishing their files ([`take_run`]).
+    draining: Vec<CaptureRun>,
     processing: Option<String>,
     /// Holding this keeps the watcher's stdin open; dropping it ends the watcher.
     watcher_stdin: Option<ChildStdin>,
@@ -186,6 +201,7 @@ pub fn start(app: &AppHandle) {
             monitor,
             view: PanelView::Hidden,
             capture: None,
+            draining: Vec::new(),
             processing: None,
             watcher_stdin: None,
             watcher_pid: None,
@@ -632,8 +648,15 @@ impl Meetings {
         let kind = v["type"].as_str().unwrap_or("");
         let mut inner = self.inner.lock().unwrap();
         let grant_known = inner.system_audio_seen;
-        let Some(run) = inner.capture.as_mut().filter(|c| c.pid == pid) else { return };
+        let current = inner.capture.as_ref().is_some_and(|c| c.pid == pid);
+        let run = if current { inner.capture.as_mut() } else { inner.draining.iter_mut().find(|r| r.pid == pid) };
+        let Some(run) = run else { return };
         match kind {
+            // A stopped recorder finishing its files: what it reports is logged; the panel and the
+            // monitor now belong to whatever came next.
+            "started" | "failed" | "stand-down" if !current => {
+                eprintln!("[richos] meeting notes: a stopped recorder ({pid}) reported {kind} while finishing: {}", v["message"].as_str().unwrap_or(""));
+            }
             "started" => {
                 run.recording = true;
                 run.started_at = v["at"].as_u64().unwrap_or_else(now_millis);
@@ -678,16 +701,14 @@ impl Meetings {
     /// The capture process ended. After a stop this is the normal end; otherwise the recording
     /// ended by itself, and the monitor is told so the call does not prompt again.
     fn capture_exited(&self, pid: u32, code: Option<i32>) {
-        let finished = {
-            let mut inner = self.inner.lock().unwrap();
-            if inner.capture.as_ref().map(|c| c.pid) != Some(pid) {
-                return;
-            }
-            let run = inner.capture.take().unwrap();
+        let (finished, current) = {
+            let mut guard = self.inner.lock().unwrap();
+            let inner = &mut *guard;
+            let Some((run, current)) = take_run(&mut inner.capture, &mut inner.draining, pid) else { return };
             if run.stop.is_none() {
                 inner.monitor.input(Input::CaptureEnded);
             }
-            run
+            (run, current)
         };
         eprintln!(
             "[richos] meeting notes: capture {} ended (exit {:?}, {}), session {}",
@@ -700,7 +721,8 @@ impl Meetings {
             },
             finished.dir.as_deref().map(Path::display).map(|d| d.to_string()).unwrap_or_else(|| "none".into())
         );
-        if matches!(self.inner.lock().unwrap().view, PanelView::Recording { .. } | PanelView::Starting) {
+        // Only the current recorder's indicator is its to take down; a stopped one's went at the stop.
+        if current && matches!(self.inner.lock().unwrap().view, PanelView::Recording { .. } | PanelView::Starting) {
             self.show(PanelView::Hidden);
         }
         if code == Some(0) && finished.recording {
@@ -712,9 +734,12 @@ impl Meetings {
     fn stop_capture(&self, reason: EndReason) {
         let pid = {
             let mut inner = self.inner.lock().unwrap();
-            let Some(run) = inner.capture.as_mut() else { return };
+            let Some(mut run) = inner.capture.take() else { return };
             run.stop = Some(reason);
-            run.pid
+            let pid = run.pid;
+            // Finishing from here on; the slot is free for the next call's recording.
+            inner.draining.push(run);
+            pid
         };
         // SIGINT is the recorder's own clean finish: drain, flush, close the session.
         // SAFETY: `pid` is the child this module spawned and has not reaped (the capture thread
@@ -1155,6 +1180,38 @@ pub fn meeting_state(app: AppHandle) -> MeetingState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(pid: u32) -> CaptureRun {
+        CaptureRun {
+            pid,
+            started_at: 0,
+            title: None,
+            event_id: None,
+            manual: false,
+            zone: PathBuf::new(),
+            entity: None,
+            thread: None,
+            dir: None,
+            recording: true,
+            stop: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_stopped_recorder_finishing_late_never_takes_the_next_recording_with_it() {
+        // The next call's prompt shows the moment a call ends (rv-20261013T130528Z #3), so Take
+        // Notes can come while the stopped recorder is still draining: its exit is its own.
+        let mut capture = Some(run(20));
+        let mut draining = vec![run(10)];
+        let (old, current) = take_run(&mut capture, &mut draining, 10).unwrap();
+        assert_eq!((old.pid, current), (10, false));
+        assert_eq!(capture.as_ref().map(|c| c.pid), Some(20), "the new recording keeps running");
+        assert!(draining.is_empty());
+        let (new, current) = take_run(&mut capture, &mut draining, 20).unwrap();
+        assert_eq!((new.pid, current), (20, true));
+        assert!(take_run(&mut capture, &mut draining, 20).is_none());
+    }
 
     #[test]
     fn the_brief_dates_the_meeting_by_its_local_day() {
