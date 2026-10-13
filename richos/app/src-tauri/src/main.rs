@@ -4812,6 +4812,13 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
             }
             let state = submit_app.state::<AppState>();
             let Some(spine) = take_the_spine_or_give_up(&state.spine) else { return };
+            // HIS WHOLE THOUGHT IS ONE REQUEST, even after a wait here: earlier work held the
+            // spine, he went on talking meanwhile, and his next turn already carries these words.
+            if richos_voice::controller::spoken_turn_withdrawn() {
+                drop(spine);
+                eprintln!("[richos] voice: a spoken turn was withdrawn while it waited for earlier work; his next turn carries its words");
+                return;
+            }
             // ===========================================================================
             // A FACTORY IS NOT AN ENGINE — the spoken half of the same arm
             // ===========================================================================
