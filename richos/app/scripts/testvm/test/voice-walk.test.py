@@ -27,6 +27,34 @@ class SpokenPrompt(unittest.TestCase):
         self.assertEqual(walk.spoken_prompt(rows)['text'], 'Ship the new build tomorrow morning.')
 
 
+class OneTurn(unittest.TestCase):
+    """2026-10-13, nightly 54: two stretches of one thought, said 1.406 s apart, were stored as two
+    spoken turns. The --one-turn verdict is what refuses that."""
+
+    def test_a_sentence_split_by_its_pause_is_refused(self):
+        problem = walk.one_turn_problem(['Let me think about the onboarding', 'and the questions you asked.'], [])
+        self.assertIn('2 spoken turns', problem)
+
+    def test_one_turn_missing_the_second_half_is_refused(self):
+        problem = walk.one_turn_problem(['Let me think about the onboarding'], ['onboarding', 'questions'])
+        self.assertIn("'every app'", problem)
+
+    def test_one_turn_with_both_halves_passes(self):
+        self.assertIsNone(walk.one_turn_problem(
+            ['Let me think about the onboarding and the questions you asked.'], ['Onboarding', 'questions']))
+
+    def test_no_turn_at_all_is_refused(self):
+        self.assertIn('0 spoken turns', walk.one_turn_problem([], []))
+
+    def test_every_voice_prompt_is_counted_and_nothing_else(self):
+        rows = [{'event': 'PromptReceived', 'source': 'internal', 'text': '[re-prime]'},
+                {'event': 'PromptReceived', 'source': 'jam', 'text': 'Let me think about the onboarding'},
+                {'event': 'PromptReceived', 'source': 'text', 'text': 'typed'},
+                {'event': 'PromptReceived', 'source': 'jam', 'text': 'and the questions you asked.'}]
+        self.assertEqual([r['text'] for r in walk.spoken_prompts(rows)],
+                         ['Let me think about the onboarding', 'and the questions you asked.'])
+
+
 class DecoderIdentity(unittest.TestCase):
     def test_the_readiness_line_names_the_decoder_by_sha(self):
         line = ('[richos] voice: ready on this machine (ready) — whisper.cpp 1.9.1 bin:fe7b744a4b31 '
