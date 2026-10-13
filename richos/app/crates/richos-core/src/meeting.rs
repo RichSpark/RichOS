@@ -345,9 +345,34 @@ impl MeetingMonitor {
                 *s = Some(meeting);
                 vec![Action::ShowPrompt(kind)]
             }
+            // A calendar prompt nobody joined, and a later meeting is due: the later one replaces it
+            // (second review rv-20261013T110409Z-a46fc74d-c9b9 #1: the old invitation stayed up for
+            // ever and took the next call). A prompt with a live call is never replaced.
+            Phase::Prompting { call: None, scheduled: Some(old) } if old.starts_at < meeting.starts_at => {
+                self.phase = Phase::Prompting { call: None, scheduled: Some(meeting) };
+                vec![Action::ShowPrompt(kind)]
+            }
             // A recording, a declined call or another calendar prompt: no second prompt.
             _ => vec![],
         }
+    }
+
+    /// The calendar meeting a prompt nobody has joined is for, if that is what is up.
+    pub fn unjoined_calendar_prompt(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::Prompting { call: None, scheduled: Some(s) } => Some(&s.event_id),
+            _ => None,
+        }
+    }
+
+    /// The meeting a calendar prompt was for has ended and nobody joined: the prompt goes, and the
+    /// event stays prompted (it never comes back). A prompt with a live call is untouched.
+    pub fn retire(&mut self, event_id: &str) -> Vec<Action> {
+        if self.unjoined_calendar_prompt() == Some(event_id) {
+            self.phase = Phase::Idle;
+            return vec![Action::HidePrompt];
+        }
+        vec![]
     }
 
     /// The calendar no longer has this event (canceled), or moved it: a prompt for it that
@@ -381,8 +406,10 @@ impl MeetingMonitor {
                 self.phase = Phase::done(call);
                 vec![Action::HidePrompt]
             }
-            (Input::Retry, Phase::Failed { call, start }) => {
-                // The same recording again: a detected call stays armed and still ends it.
+            (Input::Retry | Input::ManualStart, Phase::Failed { call, start }) => {
+                // The same recording again: a detected call stays armed and still ends it. Settings'
+                // Start while a failed capture's card (or its bar) is up is that same retry
+                // (second review rv-20261013T110409Z-a46fc74d-c9b9 #3: it did nothing).
                 let action = start.action();
                 self.phase = Phase::Recording { call: call.clone(), start: start.clone() };
                 vec![Action::HidePrompt, action]
@@ -625,6 +652,53 @@ mod tests {
         d.watch(&stopped(11, ZOOM), 2_000);
         d.tick(2_000 + END_GRACE_MS);
         assert_eq!(d.watch(&started(12, ZOOM, "zoom.us"), 20_000), zoom_prompt());
+    }
+
+    #[test]
+    fn an_unjoined_calendar_prompt_gives_way_to_the_next_meeting_and_retires_when_over() {
+        // Second review rv-20261013T110409Z-a46fc74d-c9b9 #1: an invitation nobody joined stayed
+        // up for ever, the next meeting never prompted, and its call took the old title.
+        let missed = Scheduled { event_id: "old".into(), title: "Missed meeting".into(), starts_at: 1_000 };
+        let next = Scheduled { event_id: "new".into(), title: "Pricing review".into(), starts_at: 3_600_000 };
+        let mut m = MeetingMonitor::new();
+        m.scheduled(missed.clone());
+        assert_eq!(m.unjoined_calendar_prompt(), Some("old"));
+        assert_eq!(
+            m.scheduled(next.clone()),
+            vec![Action::ShowPrompt(PromptKind::Scheduled { event_id: "new".into(), title: "Pricing review".into(), starts_at: 3_600_000 })]
+        );
+        // The old one, still listed as due by a calendar that keeps history, never comes back.
+        assert_eq!(m.scheduled(missed), vec![]);
+        m.watch(&started(10, ZOOM, "zoom.us"), 3_600_000);
+        assert_eq!(
+            m.input(Input::TakeNotes),
+            vec![Action::HidePrompt, Action::StartCapture { title: Some("Pricing review".into()), event_id: Some("new".into()), manual: false }]
+        );
+        // Retiring: only an unjoined calendar prompt, and only its own event.
+        let mut r = MeetingMonitor::new();
+        r.scheduled(next.clone());
+        assert_eq!(r.retire("other"), vec![]);
+        assert_eq!(r.retire("new"), vec![Action::HidePrompt]);
+        assert_eq!(r.scheduled(next), vec![], "a retired meeting does not prompt again");
+        // A prompt with a live call is never replaced or retired.
+        let mut c = MeetingMonitor::new();
+        c.scheduled(Scheduled { event_id: "a".into(), title: "A".into(), starts_at: 1_000 });
+        c.watch(&started(10, ZOOM, "zoom.us"), 2_000);
+        assert_eq!(c.scheduled(Scheduled { event_id: "b".into(), title: "B".into(), starts_at: 9_000 }), vec![]);
+        assert_eq!(c.retire("a"), vec![]);
+        assert!(c.is_prompting());
+    }
+
+    #[test]
+    fn settings_start_on_a_failed_capture_retries_that_recording() {
+        // Second review rv-20261013T110409Z-a46fc74d-c9b9 #3: it did nothing and left the bar up.
+        let mut m = MeetingMonitor::new();
+        m.watch(&started(10, ZOOM, "zoom.us"), 0);
+        m.input(Input::TakeNotes);
+        m.input(Input::CaptureEnded);
+        assert_eq!(m.input(Input::ManualStart), vec![Action::HidePrompt, Action::StartCapture { title: None, event_id: None, manual: false }]);
+        m.watch(&stopped(10, ZOOM), 10_000);
+        assert_eq!(m.tick(10_000 + END_GRACE_MS), vec![Action::StopCapture(EndReason::CallEnded)]);
     }
 
     #[test]

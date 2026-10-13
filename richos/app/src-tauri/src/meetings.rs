@@ -209,6 +209,13 @@ pub fn start(app: &AppHandle) {
                 for meeting in due {
                     actions.extend(inner.monitor.scheduled(meeting));
                 }
+                // A calendar prompt nobody joined, for a meeting that is over: it goes.
+                let over = inner.monitor.unjoined_calendar_prompt().map(str::to_string).filter(|id| {
+                    inner.calendar.iter().find(|m| &m.event_id == id).is_none_or(|m| !m.due(now))
+                });
+                if let Some(id) = over {
+                    actions.extend(inner.monitor.retire(&id));
+                }
                 actions
             };
             clock.apply(actions);
@@ -782,6 +789,15 @@ impl Meetings {
                 return;
             }
         }
+        // The transcription's own warnings join the capture's, so a span it found missing is said
+        // in the notes rather than written up as complete; kept in meeting.json beside them.
+        let mut facts = facts;
+        for w in meeting_notes::transcription_warnings(dir) {
+            if !facts.warnings.contains(&w) {
+                facts.warnings.push(w);
+            }
+        }
+        logged("writing meeting.json", meeting_notes::write_facts(dir, &facts));
         let transcript = match std::fs::read_to_string(dir.join(meeting_notes::TRANSCRIPT_FILE)) {
             Ok(t) => t,
             Err(e) => {

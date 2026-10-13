@@ -35,6 +35,21 @@ pub const STATE_FILE: &str = "brief-state.json";
 /// Facts the app keeps about the meeting beside its session (title, company, conversation).
 pub const MEETING_FILE: &str = "meeting.json";
 pub const MAX_ATTEMPTS: u32 = 3;
+/// The pipeline's own record of the transcript (`pipeline.js` ARTIFACTS.verification).
+pub const VERIFICATION_FILE: &str = "verification.json";
+
+/// The transcription's own warnings: `verification.json`'s `warnings` (a span of speech missing
+/// from the transcript, an unchecked span, a hallucination it could only detect, a changed
+/// toolchain). transcript.md does not carry them, so without this a detected omission would be
+/// written up as a complete meeting (second review rv-20261013T110409Z-a46fc74d-c9b9 #2).
+pub fn transcription_warnings(session: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(session.join(VERIFICATION_FILE)) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    v["warnings"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|w| w.as_str()).map(str::to_string).filter(|w| !w.trim().is_empty()).collect())
+        .unwrap_or_default()
+}
 
 /// The capture destination, by the service's own rule (`config.js` `evidenceRoot` + `dropZone`):
 /// a company's `companies/<id>/evidence/meetings`, or `ceo/evidence/unfiled/meetings` when the
@@ -98,10 +113,10 @@ pub fn writer_prompt(facts: &MeetingFacts, transcript: &str) -> String {
         "The recording ran until the call ended."
     };
     let warnings = if facts.warnings.is_empty() {
-        "The capture reported no problems.".to_string()
+        "The recording and its transcription reported no problems.".to_string()
     } else {
         format!(
-            "The capture reported these problems, and the notes must say so plainly near the top, in one short line, instead of reading as a complete record: {}",
+            "The recording and its transcription reported these problems, and the notes must say so plainly near the top, in one short line, instead of reading as a complete record: {}",
             facts.warnings.join("; ")
         )
     };
@@ -274,6 +289,28 @@ mod tests {
         MeetingFacts { title: Some("Acme pricing review".into()), date_line: "12 October 2026".into(), ..Default::default() }
     }
     const GOOD: &str = "**Acme pricing review · 12 October 2026**\n\nWe agreed to test the annual plan.\n\n**Decisions:** Keep monthly pricing unchanged.\n\n**Your actions:** Approve the pilot budget by Friday.\n\n**Other commitments:** Maya will prepare the customer list.\n\n**Open questions:** Who owns onboarding?";
+
+    #[test]
+    fn the_transcriptions_own_warnings_reach_the_writer() {
+        // Second review rv-20261013T110409Z-a46fc74d-c9b9 #2: verification.json said ten seconds of
+        // speech were missing and the prompt said there were no problems.
+        let dir = std::env::temp_dir().join(format!("richos-notes-verification-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(transcription_warnings(&dir).is_empty(), "no verification.json: nothing");
+        let missing = "10s of speech on the \"them\" channel at 00:12:03–00:12:13 is MISSING from the transcript";
+        std::fs::write(dir.join(VERIFICATION_FILE), serde_json::json!({"warnings": [missing, ""], "channels": {}}).to_string()).unwrap();
+        let warnings = transcription_warnings(&dir);
+        assert_eq!(warnings, vec![missing.to_string()]);
+        let mut f = facts();
+        f.warnings.extend(warnings);
+        let prompt = writer_prompt(&f, "Me: hello");
+        assert!(prompt.contains(missing) && prompt.contains("instead of reading as a complete record"));
+        assert!(!prompt.contains("reported no problems"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn the_zone_is_the_services_rule_and_rich_is_told_its_layout_as_quoted_data() {
