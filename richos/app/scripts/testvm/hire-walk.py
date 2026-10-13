@@ -295,9 +295,15 @@ class HireWalk(command_walk.CommandWalk):
         raise StepFailed('no conversation was created after the company was added')
 
     def stock(self):
-        leases = self.leases()
+        # The front desk's lease starts with the first conversation, and on a quick first run the
+        # walk gets here before it has (walk 5 of 2026-10-13): wait for it, bounded.
+        end, leases = time.monotonic() + 180, []
+        while time.monotonic() < end and not leases:
+            leases = self.leases()
+            if not leases:
+                time.sleep(3)
         if not leases:
-            raise StepFailed('no running lease was found in the guest')
+            raise StepFailed('no running lease was found in the guest within 180 s')
         missing = [n for n in STOCK for l in leases if f'./agents/{n}.md' not in (l.get('agents') or [])]
         (self.out / 'stock-observed.json').write_text(json.dumps(leases, indent=2) + '\n')
         if missing:
