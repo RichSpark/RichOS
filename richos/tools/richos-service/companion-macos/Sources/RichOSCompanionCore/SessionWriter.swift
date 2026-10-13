@@ -20,6 +20,9 @@ public final class SessionWriter {
     private var wav: WavWriter?
     private let micRing = RingBuffer()
     private let sysRing = RingBuffer()
+    /// Microphone-side silence the failover wrote since the microphone last delivered samples.
+    private let micGapLock = NSLock()
+    private var micSilenceFilled = 0
 
     private var firstAudioMs: Int64?
     private var lastAudioMs: Int64?
@@ -50,8 +53,28 @@ public final class SessionWriter {
         healthHandle = FileHandle(forWritingAtPath: healthPath)
     }
 
-    public func pushMic(_ mono: [Float]) { micRing.append(mono, nowMs: clock()) }
+    public func pushMic(_ mono: [Float]) {
+        micGapLock.lock(); micSilenceFilled = 0; micGapLock.unlock()
+        micRing.append(mono, nowMs: clock())
+    }
     public func pushSystem(_ mono: [Float]) { sysRing.append(mono, nowMs: clock()) }
+
+    /// The first microphone samples after the microphone was restarted on a new input device, which
+    /// missed `seconds` of audio (`MicTimeline`). That time goes in as silence ahead of `mono`, so
+    /// the two sides stay paired frame for frame. Silence the failover already wrote on the
+    /// microphone side during the gap (a restart that took longer than `starveThresholdMs`) counts
+    /// toward it, so the gap is never filled twice. Returns the frames of silence added.
+    @discardableResult
+    public func pushMic(_ mono: [Float], afterGapOf seconds: Double) -> Int {
+        let missed = Int((max(0, seconds) * Double(params.sampleRate)).rounded())
+        micGapLock.lock()
+        let pad = max(0, missed - micSilenceFilled)
+        micSilenceFilled = 0
+        micGapLock.unlock()
+        if pad > 0 { micRing.append([Float](repeating: 0, count: pad), nowMs: clock()) }
+        micRing.append(mono, nowMs: clock())
+        return pad
+    }
 
     /// Mix one block of aligned frames to the WAV. Returns bytes written this pump.
     @discardableResult
@@ -72,6 +95,7 @@ public final class SessionWriter {
 
         let mic = decision.useMic ? micRing.take(decision.frames)
                                   : [Float](repeating: 0, count: decision.frames)
+        if !decision.useMic { micGapLock.lock(); micSilenceFilled += decision.frames; micGapLock.unlock() }
         let sys = decision.useSystem ? sysRing.take(decision.frames)
                                      : [Float](repeating: 0, count: decision.frames)
         // Guard alignment even under failover silence-fill.
