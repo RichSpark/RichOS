@@ -3634,6 +3634,8 @@ def config_from_env(process_only=False):
         if not process_only:
             machine_settings.apply()
         named_root = str(machine_settings.agent_root()) if not process_only else ""
+        cache_root = str(machine_settings.cache()) if not process_only else ""
+        cargo_roots = [str(machine_settings.cache("cargo-target", "CARGO_TARGET_DIR"))] if not process_only else []
     except (ValueError, OSError) as exc:
         raise Fatal(str(exc)) from exc
     def need(name):
@@ -3764,8 +3766,8 @@ def config_from_env(process_only=False):
         "kept_retention_days": opt_number("SCRATCH_KEPT_RETENTION_DAYS", 7),
         # Build caches on the external drive (2026-10-08, lib/build_caches.py). Empty
         # fallbacks: an engine whose config predates these keys deletes no build cache.
-        "build_cache_root": str(machine_settings.cache()) if not process_only else "",
-        "cargo_target_roots": [str(machine_settings.cache("cargo-target", "CARGO_TARGET_DIR"))] if not process_only else [],
+        "build_cache_root": cache_root,
+        "cargo_target_roots": cargo_roots,
         "checkout_parents": [],  # build_caches discovers actual registered Git parents
         "build_cache_orphan_hours": opt_number("SCRATCH_BUILD_CACHE_ORPHAN_HOURS", 6),
         "build_cache_idle_hours": opt_number("SCRATCH_BUILD_CACHE_IDLE_HOURS", 72),

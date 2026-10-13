@@ -23,7 +23,9 @@ Everything lives in a temporary directory; nothing outside it is read or written
 `git`, run against checkouts created here.
 """
 import ast
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -323,6 +325,26 @@ class BuildCaches(unittest.TestCase):
         shutil.rmtree(checkout)
         plan, _ = self.plan()
         self.assertEqual(plan[cargo].action, reaper.DELETE)
+
+    def test_unmounted_cargo_settings_refuse_before_any_cleanup(self):
+        missing = Path('/Volumes') / ('unmounted-' + Path(self.tmp).name)
+        self.assertFalse(missing.exists())
+        private = Path(self.tmp) / 'machine.env'
+        for key in ('CARGO_TARGET_DIR', 'RICHOS_CARGO_CACHE_ROOT'):
+            with self.subTest(key=key):
+                private.write_text(f'RICHOS_BULK_ROOT={self.tmp}\n{key}={missing}/cargo\n')
+                error = io.StringIO()
+                with patch.dict(os.environ, {'HOME': self.tmp, 'TMPDIR': self.tmp,
+                                             'RICHOS_ENV_FILE': str(private)}, clear=True), \
+                        patch.object(reaper, 'load_workspaces') as load, \
+                        patch.object(reaper, 'Reaper') as sweep, \
+                        contextlib.redirect_stderr(error):
+                    self.assertEqual(reaper.main([]), 2)
+                    load.assert_not_called()
+                    sweep.assert_not_called()
+                self.assertIn('storage volume is not mounted', error.getvalue())
+                self.assertNotIn('Traceback', error.getvalue())
+                self.assertFalse(missing.exists())
 
     def test_lander_calls_the_current_discard_api(self):
         source = HERE.parents[1] / 'mega-lander/workspaces.py'
