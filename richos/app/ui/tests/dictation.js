@@ -164,7 +164,9 @@ async function main() {
     await page.waitForFunction(() => document.activeElement && document.activeElement.id === "dict-try");
     assertEqual(await page.getAttribute("#dict-try", "data-ph"), "Click here, tap F1 and say something.");
     assertEqual(await text(page, "#dict-try-note"), "This box is only for trying. Your words go wherever your cursor is.");
-    assertEqual(await text(page, "#dictation-composer-note"), "Dictation is on: tap F1 and talk, here or in any app");
+    // DICTATION IS FOR OTHER APPS (the CEO, 2026-10-13, onboarding4.png): inside RichOS, Talk to
+    // Rich is the way to speak, so nothing under the message box offers dictation, on or off.
+    assertEqual(await page.locator("#dictation-composer-note").count(), 0, "no dictation line under the message box");
     await page.close();
     return "microphone, then Accessibility, then On with the cursor in Try it here";
   });
@@ -215,14 +217,12 @@ async function main() {
     return "the line after the grant's tap, after the switch's tap, and gone once the sheet was closed";
   });
 
-  await run.check("turning it off: the tool is told, the sheet says Off, the composer's line goes", async () => {
+  await run.check("turning it off: the tool is told, the sheet says Off", async () => {
     const page = await open("dark", ALLOWED);
     await sheet(page);
-    await page.waitForSelector("#dictation-composer-note:not([hidden])");
     await page.click("#dict-switch");
     await waitText(page, "#dict-state", "Off. Turn it on to type with your voice in Mail, Slack, your browser, anywhere.");
     assertEqual(await calls(page), ["dictation_set_on:false"]);
-    assert(await page.locator("#dictation-composer-note").isHidden(), "the composer's line goes");
     await page.close();
     return "off";
   });
@@ -440,9 +440,8 @@ async function main() {
     ["starting", { ...ALLOWED, owner: "none", keyTap: false }, sheet],
     ["no-tap", { ...ALLOWED, keyTap: false }, sheet],
     ["row-no-tap", { ...ALLOWED, keyTap: false }, menu],
-    ["composer", ALLOWED, async p => { await p.waitForSelector("#dictation-composer-note:not([hidden])"); }],
   ];
-  const ROOTS = "#dictation-sheet:not([hidden]) .dict-panel, #set-dictation-open, #dictation-composer-note";
+  const ROOTS = "#dictation-sheet:not([hidden]) .dict-panel, #set-dictation-open";
   // Declared skippable (style.css's own note): the 14px "Settings" breadcrumb over the 32px title.
   const SKIPPABLE = ".dict-eyebrow";
   for (const theme of ["dark", "light"]) {

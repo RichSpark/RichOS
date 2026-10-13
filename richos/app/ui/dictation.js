@@ -27,8 +27,9 @@
 // - `window.RichDictation.turnOn`, which Rich's offer calls (main.js `answerDictationOffer`):
 //   opens the sheet, runs the same flow, and answers `{on}` once it has settled.
 // - THE OFF NOTICE: the chosen key pressed in RichOS's own window while dictation is off.
-// - THE COMPOSER'S LINE once dictation works: "Dictation is on: tap F1 and talk, here or in any
-//   app".
+// - NO LINE UNDER THE MESSAGE BOX. Dictation is for other apps; inside RichOS, Talk to Rich is
+//   the way to speak (the CEO, 2026-10-13, onboarding4.png: "Dictation is for other apps only,
+//   not for RichOS"), so the composer's dictation line is gone.
 //
 // Every word is round 19's, quoted from the two mockup files. Every fact is the app's own
 // (`dictation_status`); nothing here invents a state.
@@ -138,23 +139,6 @@
     line.textContent = text;
     line.hidden = false;
     line.classList.toggle("is-attention", attention);
-  }
-
-  // ---- the composer's line ---------------------------------------------------------------
-  function paintComposer() {
-    const zone = document.getElementById("composer-zone"), row = document.getElementById("composer-row");
-    let note = document.getElementById("dictation-composer-note");
-    const on = !!view && view.ready && works();
-    if (!on) { if (note) note.hidden = true; return; }
-    if (!note && zone && row) {
-      note = document.createElement("p");
-      note.id = "dictation-composer-note";
-      note.className = "composer-voice-note";
-      zone.insertBefore(note, row);
-    }
-    if (!note) return;
-    note.textContent = `Dictation is on: tap ${keyName()} and talk, here or in any app`;
-    note.hidden = false;
   }
 
   // ---- the sheet -------------------------------------------------------------------------
@@ -284,7 +268,6 @@
   function paint() {
     paintRow();
     paintSheet();
-    paintComposer();
   }
 
   // ---- the sample bar breathes, while the sheet shows and motion is welcome ---------------
@@ -542,7 +525,7 @@
     },
   };
 
-  // The row, the composer line and the off notice need the state once at start; while the row
+  // The row and the off notice need the state once at start; while the row
   // or the sheet shows, it is read again every 2 s (another app's hidden keys come and go).
   read();
   setInterval(() => {
