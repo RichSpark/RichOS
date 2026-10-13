@@ -69,6 +69,19 @@ class Verdicts(unittest.TestCase):
                      'Done. Will and Penny joined the team, and Acme (your company) is all set up for them.']:
             self.assertEqual(hire_walk.hired_verdict(['will', 'penny'], ['will', 'penny'], told), [], told)
 
+    def test_the_report_walk_9_gave_passes_and_its_words_are_not_teammates(self):
+        # From what he was told in walk 9 of 2026-10-13 (merged tree 7a4f05998), where "Neither"
+        # was once read as a teammate and "Acme (a leadership coaching firm)" could have been.
+        told = ("Pierce flagged that earlier conversation already described the business (Acme, a leadership "
+                "coaching firm), so I'm revising the research brief.\n\nI've started on the hires, but neither "
+                "Will nor Bea is on the team yet.\n\n- **Bea (Bookkeeper):** She isn't one of the ready-made "
+                "teammates.\n- **Will (Marketing Director):** He's already one of the ready-made teammates.\n\n"
+                "Neither is on the team yet.\n\nWill (Marketing Director) and Bea (Bookkeeper) joined the team.")
+        self.assertEqual(hire_walk.claimed_names(told), ['bea', 'will'])
+        self.assertEqual(hire_walk.hired_verdict(['will', 'bea'], ['bea', 'will'], told), [])
+        self.assertTrue(any('Bea' in f for f in hire_walk.hired_verdict(['will'], ['will'], told)),
+                        'the same report with Bea unsaved still fails')
+
     def test_delegation_needs_this_tasks_own_receipt_with_an_answer_and_a_settled_task(self):
         # #3 in both reviews: an interrupted task told "No work was started"; an Agent call's
         # async_launched acknowledgment taken for an answer; another session's run counted.

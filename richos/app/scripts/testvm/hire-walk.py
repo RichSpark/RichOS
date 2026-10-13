@@ -133,18 +133,25 @@ def proposal_verdict(reply):
 
 
 # Words that open a sentence or name the company, never a teammate he is told about.
-NOT_A_TEAMMATE = {'acme', 'rich', 'i', 'and', 'the', 'your', 'my', 'both', 'they', 'everyone', 'nobody'}
+# Words that open a sentence, stand in for a person or name the company, never a teammate: walk 9
+# of 2026-10-13 was told "Neither is on the team yet" and that read as a teammate called Neither.
+NOT_A_TEAMMATE = {'acme', 'rich', 'i', 'and', 'the', 'your', 'my', 'our', 'both', 'they', 'everyone', 'nobody',
+                  'neither', 'either', 'none', 'each', 'every', 'all', 'he', 'she', 'it', 'we', 'this', 'that',
+                  'these', 'those', 'someone', 'one', 'nothing', 'everything'}
 NAME = r'\*{0,2}([A-Z][a-z]{1,15})\*{0,2}'
+# A job title in parentheses: capitalized words only, such as "(Bookkeeper)", "(Marketing
+# Director)" or "(Source-Reading & Knowledge-Extraction Specialist)"; never "(a leadership firm)".
+TITLE = r'\(\s*[A-Z][A-Za-z]*(?:[ &/-]+[A-Z][A-Za-z]*)*\s*[;,)]'
 
 
 def claimed_names(told):
-    """Every name he was told about as a teammate: a bold name, a name followed by its job title in
-    parentheses, a bullet that starts with a name, and each name in a list that "joined", "is on"
-    or "are on" the team ("Will and Bea joined", "Will, Nora and Bea are now on the team")."""
+    """Every name he was told about as a teammate: a name before its job title in parentheses
+    ("Bea (Bookkeeper)", "**Bea** (Bookkeeper)", "**Bea (Bookkeeper):**"), a bullet that opens with
+    a name and a colon or title, and each name in a list that "joined", "is on" or "are on" the
+    team ("Will and Bea joined", "Will, Nora and Bea are now on the team")."""
     text = told or ''
-    names = set(re.findall(r'\*\*([A-Z][a-z]{1,15})\*\*', text))
-    names |= set(re.findall(r'\b([A-Z][a-z]{1,15})\*{0,2}\s*\(', text))
-    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})', text))
+    names = set(re.findall(r'\b([A-Z][a-z]{1,15})\*{0,2}\s*' + TITLE, text))
+    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*(?::|\u2014|' + TITLE + ')', text))
     joined = re.compile(r'((?:' + NAME + r'(?:\s*,\s*(?:and\s+)?|\s+and\s+))*' + NAME + r')'
                         r'\s+(?:has\s+|have\s+)?(?:joined|(?:is|are)\s+(?:now\s+)?(?:on|part of))')
     for m in joined.finditer(text):
