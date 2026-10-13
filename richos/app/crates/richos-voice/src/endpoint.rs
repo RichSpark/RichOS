@@ -180,6 +180,9 @@ pub struct Utterance {
     pub speech_frames: u32,
     /// Every frame in `samples` including pre-roll, pauses and hangover.
     pub total_frames: u32,
+    /// This is the rest of an utterance cut at the 30.000 s window: its speech is the end of a
+    /// sentence the cut fragment already carried, so it may be shorter than any proof of voice.
+    pub continues_cut: bool,
 }
 
 impl Utterance {
@@ -285,11 +288,12 @@ impl UtteranceRecorder {
         let speech_frames = self.endpointer.speech_frames();
         let total_frames = self.endpointer.total_frames();
         let min_speech = self.min_speech_frames();
+        let continues_cut = self.continuation;
         self.reset();
         if speech_frames < min_speech {
             return None;
         }
-        Some(Utterance { samples, reason: EndReason::Stopped, speech_frames, total_frames })
+        Some(Utterance { samples, reason: EndReason::Stopped, speech_frames, total_frames, continues_cut })
     }
 
     /// Feed one exact VAD frame plus its speech verdict.
@@ -334,6 +338,7 @@ impl UtteranceRecorder {
                 self.recording = false;
                 self.pre_roll.clear();
                 let min_speech = self.min_speech_frames();
+                let continues_cut = self.continuation;
                 self.continuation = false;
                 // Cut at the window while he was still talking: the next frame continues it.
                 self.continue_next = reason == EndReason::MaxLength;
@@ -341,7 +346,7 @@ impl UtteranceRecorder {
                     // A cough, a door, a chair. Never sent to whisper, never shown.
                     return None;
                 }
-                Some(Utterance { samples, reason, speech_frames, total_frames })
+                Some(Utterance { samples, reason, speech_frames, total_frames, continues_cut })
             }
         }
     }

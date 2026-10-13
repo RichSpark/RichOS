@@ -1499,6 +1499,10 @@ pub struct RecognizerDesk {
     /// thread. The lock is taken for the length of one comparison and never across a
     /// `transcribe` call.
     notices: Arc<Mutex<RefusalNotices>>,
+    /// The last utterance was cut at the 30.000 s window and carried a voice, so the next one,
+    /// its continuation, does not have to prove a voice on its own (review rv-20261013T202747Z,
+    /// finding 2).
+    cut_voiced: bool,
 }
 
 impl Default for RecognizerDesk {
@@ -1511,12 +1515,12 @@ impl RecognizerDesk {
     /// A desk with a budget of its own. For tests and for any caller that is the only emitter;
     /// the shipped wiring uses [`Self::sharing`].
     pub fn new() -> RecognizerDesk {
-        RecognizerDesk { discards: 0, notices: Arc::new(Mutex::new(RefusalNotices::new())) }
+        RecognizerDesk::sharing(Arc::new(Mutex::new(RefusalNotices::new())))
     }
 
     /// A desk that spends the SAME budget as [`supervise`]. This is the shipped construction.
     pub fn sharing(notices: Arc<Mutex<RefusalNotices>>) -> RecognizerDesk {
-        RecognizerDesk { discards: 0, notices }
+        RecognizerDesk { discards: 0, notices, cut_voiced: false }
     }
 
     /// The budget this desk is spending, so a test can hand it to the other emitter.
@@ -1553,7 +1557,20 @@ impl RecognizerDesk {
 
         // ---- 1. THE AUDIO, BEFORE ANY TRANSCRIPT EXISTS ---------------------------------
         let evidence = VoiceEvidence::measure(&utterance.samples);
-        if !evidence.carried_speech() {
+        // **THE REST OF A CUT SENTENCE IS ALREADY PROVEN.** The recorder admits the continuation
+        // of an utterance cut at the 30.000 s window with as little as one frame of speech,
+        // because it is the end of his sentence; measured alone, a last word 0.032 s past the cut
+        // is 2 voiced windows against the 6 the gate needs (review rv-20261013T202747Z, finding 2).
+        // The cut fragment it continues carried a voice, so it does too.
+        let carried = evidence.carried_speech() || (utterance.continues_cut && self.cut_voiced);
+        self.cut_voiced = carried && utterance.reason == crate::endpoint::EndReason::MaxLength;
+        if carried && !evidence.carried_speech() {
+            eprintln!(
+                "[richos-voice] the rest of a cut utterance, admitted on the voice its first part carried: {}",
+                evidence.summary()
+            );
+        }
+        if !carried {
             // The operator gets the measurement; the CEO gets the sentence. Neither gets a
             // transcript, because none was produced.
             eprintln!(
@@ -3117,6 +3134,7 @@ mod tests {
                 reason: EndReason::Silence,
                 speech_frames: total,
                 total_frames: total,
+                continues_cut: false,
             }),
             rich_audible,
         }
@@ -3463,6 +3481,52 @@ mod tests {
         assert!(submit_rx.try_recv().is_err(), "one thought became more than one request");
         assert!(withdrawn.lock().unwrap().contains(&1), "the partial turn was left standing");
         assert_eq!(stops.load(Ordering::SeqCst), 1, "the running partial turn was not stopped");
+    }
+
+    /// INVARIANT — review rv-20261013T202747Z finding 2. He talked past the 30.000 s window and
+    /// his last word ended 2 frames (0.032 s) after the cut. The recorder admits that tail as the
+    /// rest of his sentence; the recognizer must not then refuse it for failing to prove a voice
+    /// on its own, because the cut fragment it continues already did.
+    #[test]
+    fn the_tail_of_a_cut_utterance_reaches_whisper() {
+        use crate::endpoint::{UtteranceRecorder, MAX_UTTERANCE_FRAMES, SILENCE_HANGOVER_FRAMES};
+        use crate::vad::VAD_FRAME_SAMPLES;
+        let speech_frames = MAX_UTTERANCE_FRAMES as usize + 2;
+        let voice = synthetic_voice(
+            (speech_frames * VAD_FRAME_SAMPLES) as f32 / crate::vad::SAMPLE_RATE as f32,
+            190.0,
+            130.0,
+            -26.0,
+        );
+        let mut rec = UtteranceRecorder::new();
+        let mut out = Vec::new();
+        for f in voice.chunks_exact(VAD_FRAME_SAMPLES) {
+            out.extend(rec.push_frame(f, true));
+        }
+        let silent = vec![0.0f32; VAD_FRAME_SAMPLES];
+        for _ in 0..SILENCE_HANGOVER_FRAMES {
+            out.extend(rec.push_frame(&silent, false));
+        }
+        assert_eq!(out.len(), 2, "the replay did not produce a cut and its tail");
+        assert_eq!(out[0].reason, EndReason::MaxLength);
+        assert_eq!(out[1].speech_frames, 2);
+
+        let events = Recorder::default();
+        let mut desk = RecognizerDesk::new();
+        let heard = Mutex::new(Vec::<String>::new());
+        for (u, words) in out.into_iter().zip(["the first thirty seconds", "today."]) {
+            desk.handle(
+                &AdmittedUtterance { utterance: Box::new(u), rich_audible: false },
+                &events,
+                |_| Ok((words.to_string(), 300)),
+                |t, _| heard.lock().unwrap().push(t),
+            );
+        }
+        assert_eq!(
+            heard.into_inner().unwrap(),
+            vec!["the first thirty seconds".to_string(), "today.".to_string()],
+            "the last word after the cut never reached whisper"
+        );
     }
 
     /// INVARIANT: a ONE-WORD decision still gets through. `stt.rs` keeps its noise list
