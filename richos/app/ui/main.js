@@ -632,6 +632,14 @@ function buildThreadRow(row, opts) {
   });
   wrap.appendChild(more);
 
+  // A right-click anywhere on the row opens the same menu as ⋯, at the pointer, instead of
+  // WebKit's own "Reload" / "Look Up" menu (CEO, nightly 54, right-click-in-left-bar.mov).
+  wrap.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const fromKeyboard = e.clientX === 0 && e.clientY === 0;
+    openThreadMenu(row, more, fromKeyboard ? null : { x: e.clientX, y: e.clientY });
+  });
+
   // Keyboard parity with the pointer affordance (§18: all functions work by keyboard).
   wrap.addEventListener("keydown", (e) => {
     if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
@@ -5258,7 +5266,7 @@ function closeThreadMenu() {
   threadMenuEl.innerHTML = "";
 }
 
-function openThreadMenu(row, anchor) {
+function openThreadMenu(row, anchor, at) {
   closeThreadMenu();
   const add = (label, onClick) => {
     const b = document.createElement("button");
@@ -5293,14 +5301,26 @@ function openThreadMenu(row, anchor) {
 
   const r = anchor.getBoundingClientRect();
   threadMenuEl.hidden = false;
-  threadMenuEl.style.top = Math.round(r.bottom + 4) + "px";
-  threadMenuEl.style.left = Math.round(Math.min(r.left, window.innerWidth - 200)) + "px";
+  if (at) {
+    // A right-click opens the menu at the pointer, kept inside the window.
+    const maxTop = window.innerHeight - threadMenuEl.offsetHeight - 4;
+    threadMenuEl.style.top = Math.round(Math.max(0, Math.min(at.y, maxTop))) + "px";
+    threadMenuEl.style.left = Math.round(Math.min(at.x, window.innerWidth - 200)) + "px";
+  } else {
+    threadMenuEl.style.top = Math.round(r.bottom + 4) + "px";
+    threadMenuEl.style.left = Math.round(Math.min(r.left, window.innerWidth - 200)) + "px";
+  }
   const first = threadMenuEl.querySelector(".menu-item");
   if (first) first.focus();
 }
 
 document.addEventListener("click", (e) => {
   if (!threadMenuEl.hidden && !threadMenuEl.contains(e.target)) closeThreadMenu();
+});
+// A right-click elsewhere closes it too; a right-click on another row reopens it for that row.
+document.addEventListener("contextmenu", (e) => {
+  if (threadMenuEl.hidden || threadMenuEl.contains(e.target)) return;
+  if (!(e.target instanceof Element && e.target.closest(".nav-thread-row"))) closeThreadMenu();
 });
 
 // A pin, archive or rename that could not be saved is SAID, in the rail where he made it

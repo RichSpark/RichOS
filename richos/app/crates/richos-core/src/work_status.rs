@@ -43,62 +43,91 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
     // activity. Ties fall back to the path so the order is deterministic.
     let mut dated = Vec::with_capacity(paths.len());
     for path in paths {
-        let meta = std::fs::symlink_metadata(&path).map_err(|_| "A saved work record could not be read.")?;
-        dated.push((meta.modified().unwrap_or(std::time::UNIX_EPOCH), path));
+        // A record that cannot even be dated sorts as the oldest; inside the hundred it is
+        // still shown, as unreadable.
+        let modified = std::fs::symlink_metadata(&path).ok().and_then(|meta| meta.modified().ok());
+        dated.push((modified.unwrap_or(std::time::UNIX_EPOCH), path));
     }
     dated.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     let paths: Vec<_> = dated.into_iter().map(|(_, p)| p).collect();
     let mut summary = WorkSummary { omitted: paths.len().saturating_sub(100), ..Default::default() };
     let mut bytes_read = 0;
+    // **One record the reader cannot read never hides the others** (Ray, test VM,
+    // 2026-10-13). Each failure below is about ONE file, so it becomes one row saying that
+    // file could not be read, and nothing from that file is shown: not its title, not its
+    // repository, and never a guess at its state. Only a failure about the directory itself
+    // (above) still refuses the whole view.
     for path in paths.into_iter().take(100) {
-        let size = std::fs::symlink_metadata(&path).map_err(|_| "A saved work record could not be read.")?;
-        bytes_read += size.len();
-        if !size.is_file() || size.len() > 1024 * 1024 || bytes_read > 16 * 1024 * 1024 {
-            return Err("A saved work record is too large or redirected.".into());
-        }
-        let bytes = std::fs::read(path).map_err(|_| "A saved work record could not be read.")?;
-        let row: Value = serde_json::from_slice(&bytes).map_err(|_| "A saved work record is damaged.")?;
-        if row["schema"] != 1 || row["binding"]["entity_id"] != entity || row["binding"]["thread_id"] != thread {
-            return Err("A saved work record has an unsupported schema or different scope.".into());
-        }
-        let field = |key: &str| -> Result<String, String> {
-            row["request"][key].as_str().filter(|s| !s.is_empty() && s.len() <= 4096)
-                .map(str::to_owned).ok_or_else(|| "A saved work record is incomplete.".into())
-        };
-        // A consult (plan §3, slice 3) has no repository and nothing to integrate: its record
-        // is the teammate's answer, handed back to the back end.
-        let consult = row["request"]["role"].as_str() == Some("consult");
-        let (state, detail) = if consult && row["status"] == "run-ended" {
-            if row["consult_answer"]["answered"] == true {
-                ("answered", "The teammate's answer was handed back to Rich. It changed no repository.")
-            } else {
-                ("run-ended", "The teammate's run ended with no answer on record. It changed no repository.")
-            }
-        } else if row["integration"]["verified"] == true {
-            if row["integration"]["cleanup_pending"].as_array().is_some_and(|a| a.is_empty()) {
-                ("integrated", "Reviewed commit integrated locally. Workspace cleanup verified. This does not mark the whole assignment complete.")
-            } else {
-                ("cleanup-pending", "Reviewed commit integrated locally. Workspace cleanup still needs reconciliation.")
-            }
-        } else {
-            match row["status"].as_str() {
-                Some("preparing" | "unknown") => ("unresolved", "Preparation or execution outcome is uncertain. Ask Rich to reconcile the saved work before retrying."),
-                Some("prepared") => ("prepared", "Workspace prepared. No worker dispatch has been observed."),
-                Some("dispatching") => ("dispatching", "Dispatch attempted. Worker acknowledgement has not been reconciled."),
-                Some("running") => ("observed-start", "Worker start recorded. A current running state is not established by this saved receipt."),
-                Some("interrupted") => ("interrupted", "Execution was interrupted. Files are retained. Ask Rich to inspect and continue the work."),
-                Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "changes-requested" =>
-                    ("changes-requested", "The independent reviewer requested changes. Nothing has been integrated."),
-                Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "passed" =>
-                    ("review-passed", "Independent review passed for the recorded commit. Integration is separate."),
-                Some("run-ended") => ("run-ended", "Worker run ended. Review and verified integration are still separate steps."),
-                _ => return Err("A saved work record has an unsupported state.".into()),
-            }
-        };
-        let repository = if consult { "no repository".to_string() } else { field("repo")? };
-        summary.items.push(WorkItem { title: field("title")?, repository, role: field("role")?, state: state.into(), detail: detail.into() });
+        let item = read_one(&path, entity, thread, &mut bytes_read).unwrap_or_else(|reason| WorkItem {
+            title: "A saved work record that could not be read".into(),
+            repository: "unknown repository".into(),
+            role: "unknown role".into(),
+            state: "unreadable".into(),
+            detail: format!("{reason} The other saved work is shown as recorded."),
+        });
+        summary.items.push(item);
     }
     Ok(summary)
+}
+
+/// One receipt, read into one row of the saved-work view, or the reason it could not be.
+fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Result<WorkItem, String> {
+    let size = std::fs::symlink_metadata(path).map_err(|_| "A saved work record could not be read.")?;
+    if !size.is_file() || size.len() > 1024 * 1024 || *bytes_read + size.len() > 16 * 1024 * 1024 {
+        return Err("A saved work record is too large or redirected.".into());
+    }
+    *bytes_read += size.len();
+    let bytes = std::fs::read(path).map_err(|_| "A saved work record could not be read.")?;
+    let row: Value = serde_json::from_slice(&bytes).map_err(|_| "A saved work record is damaged.")?;
+    if row["schema"] != 1 || row["binding"]["entity_id"] != entity || row["binding"]["thread_id"] != thread {
+        return Err("A saved work record has an unsupported schema or different scope.".into());
+    }
+    let field = |key: &str| -> Result<String, String> {
+        row["request"][key].as_str().filter(|s| !s.is_empty() && s.len() <= 4096)
+            .map(str::to_owned).ok_or_else(|| "A saved work record is incomplete.".into())
+    };
+    // A consult (plan §3, slice 3) has no repository and nothing to integrate: its record
+    // is the teammate's answer, handed back to the back end.
+    let consult = row["request"]["role"].as_str() == Some("consult");
+    let (state, detail) = if consult && row["status"] == "run-ended" {
+        if row["consult_answer"]["answered"] == true {
+            ("answered", "The teammate's answer was handed back to Rich. It changed no repository.")
+        } else {
+            ("run-ended", "The teammate's run ended with no answer on record. It changed no repository.")
+        }
+    } else if row["integration"]["verified"] == true {
+        if row["integration"]["cleanup_pending"].as_array().is_some_and(|a| a.is_empty()) {
+            ("integrated", "Reviewed commit integrated locally. Workspace cleanup verified. This does not mark the whole assignment complete.")
+        } else {
+            ("cleanup-pending", "Reviewed commit integrated locally. Workspace cleanup still needs reconciliation.")
+        }
+    } else {
+        // Every status `engine/mega-lander/app.py` writes into a receipt: `preparing`,
+        // `prepared`, `dispatching`, `running`, `blocked`, `unknown`, `interrupted`,
+        // `run-ended` and `integrated`.
+        match row["status"].as_str() {
+            Some("preparing" | "unknown") => ("unresolved", "Preparation or execution outcome is uncertain. Ask Rich to reconcile the saved work before retrying."),
+            Some("prepared") => ("prepared", "Workspace prepared. No worker dispatch has been observed."),
+            Some("dispatching") => ("dispatching", "Dispatch attempted. Worker acknowledgement has not been reconciled."),
+            Some("running") => ("observed-start", "Worker start recorded. A current running state is not established by this saved receipt."),
+            // Both places the engine writes `blocked` come before any dispatch: a preparation
+            // that was refused (Pierce's refusal included), and `settle_undispatched` closing
+            // one that never reached a worker. So it ended, and it never started.
+            Some("blocked") => ("ended-without-starting", "Ended without starting. Its preparation was refused or closed before any worker was dispatched, so it did no work."),
+            Some("interrupted") => ("interrupted", "Execution was interrupted. Files are retained. Ask Rich to inspect and continue the work."),
+            Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "changes-requested" =>
+                ("changes-requested", "The independent reviewer requested changes. Nothing has been integrated."),
+            Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "passed" =>
+                ("review-passed", "Independent review passed for the recorded commit. Integration is separate."),
+            Some("run-ended") => ("run-ended", "Worker run ended. Review and verified integration are still separate steps."),
+            // The engine writes `integrated` only together with `integration.verified`, which
+            // is read above. Without that evidence the land is not claimed.
+            Some("integrated") => ("unresolved", "The receipt says integrated but carries no verified integration. Ask Rich to reconcile the saved work."),
+            _ => return Err("A saved work record has an unsupported state.".into()),
+        }
+    };
+    let repository = if consult { "no repository".to_string() } else { field("repo")? };
+    Ok(WorkItem { title: field("title")?, repository, role: field("role")?, state: state.into(), detail: detail.into() })
 }
 
 // =======================================================================================
@@ -327,10 +356,14 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         assert_eq!(read(&root,"depot","thread").unwrap().items[0].state,"run-ended");
         row["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]}); save(&row);
         assert_eq!(read(&root,"depot","thread").unwrap().items[0].state,"integrated");
+        // A record bound to another scope, or damaged, is one unreadable row; nothing from
+        // the file itself (its title, its repository) is shown.
         row["binding"]["entity_id"] = "other".into(); save(&row);
-        assert!(read(&root,"depot","thread").is_err());
+        let foreign = read(&root,"depot","thread").unwrap();
+        assert_eq!((foreign.items.len(), foreign.items[0].state.as_str()), (1, "unreadable"));
+        assert!(foreign.items[0].title != "Fictional work" && foreign.items[0].repository != "/fictional/project");
         std::fs::write(path.join("receipt.json"),"partial").unwrap();
-        assert!(read(&root,"depot","thread").is_err());
+        assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "unreadable");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -521,6 +554,50 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         assert_eq!(summary.omitted, 21);
         assert!(summary.items.iter().any(|i| i.title == "the newest work"), "the newest record was hidden by its filename");
         assert!(!summary.items.iter().any(|i| i.title == "old 0"), "the oldest record outranked a newer one");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A preparation the engine settled as `blocked` sits beside running work without
+    /// hiding it** (Ray, test VM, 2026-10-13, esc-20261013T203037Z-9b49483d). Pierce refused a
+    /// brief, `settle_undispatched` wrote `status: "blocked"` (`engine/mega-lander/app.py`
+    /// `record.update(status="blocked", ...)`), and the one status this reader did not know
+    /// turned the whole Under-the-hood list into "unsupported state" while the replacement
+    /// consult was still running. Every status the engine writes is read, and a record the
+    /// reader still cannot read is shown as one unreadable row next to the others.
+    #[test] fn a_blocked_preparation_is_shown_as_ended_without_starting_beside_running_work() {
+        let root = temp();
+        let mut blocked = receipt("aaa", "obligation-7", "consult");
+        blocked["request"]["repo"] = Value::Null;
+        blocked["request"]["title"] = "Refused before it started".into();
+        blocked["status"] = "blocked".into();
+        blocked["pierce_refused"] = true.into();
+        blocked["settled"] = serde_json::json!({"at":"2026-10-13T20:00:00Z","withdrawn":[],
+            "reason":"never dispatched: no worker was registered or started for this receipt"});
+        let mut running = receipt("bbb", "obligation-7", "consult");
+        running["request"]["repo"] = Value::Null;
+        running["request"]["title"] = "The replacement, still running".into();
+        running["status"] = "running".into();
+        let path = write(&root, &[blocked, running]);
+        let summary = read(&root, "depot", "thread").expect("one blocked record hid the whole work list");
+        let state = |summary: &WorkSummary, title: &str| summary.items.iter().find(|i| i.title == title).map(|i| i.state.clone());
+        assert_eq!(state(&summary, "Refused before it started").as_deref(), Some("ended-without-starting"));
+        assert_eq!(state(&summary, "The replacement, still running").as_deref(), Some("observed-start"));
+        // Every status the engine writes into a receipt is a state this reader knows.
+        for status in ["preparing", "prepared", "dispatching", "running", "blocked", "unknown",
+                       "interrupted", "run-ended", "integrated"] {
+            let mut row = receipt("ccc", "obligation-7", "worker");
+            row["status"] = status.into();
+            write(&root, &[row]);
+            let summary = read(&root, "depot", "thread").unwrap();
+            assert_eq!(summary.items.len(), 3);
+            assert!(summary.items.iter().all(|i| i.state != "unreadable"), "status {status} was not read");
+        }
+        // A record it still cannot read is one row of its own; the others stay readable.
+        std::fs::write(path.join("ccc.json"), "partial").unwrap();
+        let summary = read(&root, "depot", "thread").expect("one damaged record hid the others");
+        assert_eq!(summary.items.len(), 3);
+        assert_eq!(summary.items.iter().filter(|i| i.state == "unreadable").count(), 1);
+        assert_eq!(state(&summary, "The replacement, still running").as_deref(), Some("observed-start"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
