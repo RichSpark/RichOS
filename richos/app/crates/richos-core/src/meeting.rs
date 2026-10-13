@@ -40,7 +40,9 @@
 //! Another app's call that starts while one call is followed (or a manual recording runs) is
 //! kept, and prompts the moment that call ends; so does a calendar meeting that comes due while
 //! another call is followed, if it is still on. A meeting that comes due during a call that began
-//! close enough to its start ([`SAME_MEETING_MS`]) IS that call, and never prompts afterwards.
+//! close enough to its start ([`SAME_MEETING_MS`]) and is still on when it starts IS that call,
+//! and never prompts afterwards; a call over before the meeting starts was not it, and the
+//! meeting prompts.
 //! Every sequence is one row of `every_call_sequence_gives_the_expected_prompt_and_recording`.
 
 use crate::meeting_calendar::CalendarMeeting;
@@ -177,11 +179,15 @@ struct Call {
     quiet_since: Option<u64>,
     /// When its microphone use was first seen.
     since: u64,
+    /// Calendar meetings (event id, start) that came due while this call was followed and that it
+    /// began close enough to be ([`Call::is_meeting`]). Only the call's end says whether it WAS
+    /// one: see [`MeetingMonitor::end_call`].
+    meetings: BTreeMap<String, u64>,
 }
 
 impl Call {
     fn new(family: &str, app: Option<String>, now: u64) -> Call {
-        Call { family: family.to_string(), app, live: BTreeSet::new(), quiet_since: None, since: now }
+        Call { family: family.to_string(), app, live: BTreeSet::new(), quiet_since: None, since: now, meetings: BTreeMap::new() }
     }
     fn ended(&self, now: u64) -> bool {
         self.live.is_empty() && self.quiet_since.is_some_and(|q| now.saturating_sub(q) >= END_GRACE_MS)
@@ -257,9 +263,10 @@ pub struct MeetingMonitor {
     /// kept, so the next call prompts when this one ends (second review
     /// rv-20261013T130528Z-361c4090-dbf1 #3: a call started inside the end grace was lost).
     others: BTreeMap<String, Call>,
-    /// Calendar events shown, attached to a call, or that WERE the call followed, so the clock's
-    /// offer every second does not prompt twice. A meeting that had to wait is not in here, so it
-    /// prompts when the call ends (rv-20261013T130528Z-361c4090-dbf1 #1).
+    /// Calendar events shown, attached to a call, or that WERE the call followed (decided when
+    /// that call ends), so the clock's offer every second does not prompt twice. A meeting that had
+    /// to wait is not in here, so it prompts when the call ends (rv-20261013T130528Z-361c4090-dbf1
+    /// #1).
     prompted_events: BTreeSet<String>,
     /// A calendar meeting declined before anyone joined it: its call, when it starts, is that
     /// declined meeting and does not prompt (second review rv-20261013T120455Z-516bb135-67f2 #1).
@@ -336,7 +343,7 @@ impl MeetingMonitor {
         // never pauses inside a call, through mute or silence (END_GRACE_MS).
         let mut out = vec![];
         if self.phase.call().is_some_and(|c| c.family == family) {
-            out = self.end_call();
+            out = self.end_call(now);
         }
         // Any other app is kept; `settle` gives it to the state when the state can take a call.
         // An app waiting there that left the microphone and is back is a new call too.
@@ -408,7 +415,16 @@ impl MeetingMonitor {
 
     /// The followed call is over: its grace ran out ([`MeetingMonitor::tick`]), or its app came
     /// back as the next call ([`MeetingMonitor::watch`]).
-    fn end_call(&mut self) -> Vec<Action> {
+    fn end_call(&mut self, now: u64) -> Vec<Action> {
+        if let Some(c) = self.phase.call() {
+            // A meeting this call began close enough to be WAS this call if the call was still on
+            // when the meeting started, and never prompts. A call over before the meeting started
+            // was not it: the meeting stays eligible and prompts on the clock's next offer
+            // (handover review rv-20261013T135051Z-1b6ba88a-4002 #2).
+            let ended_at = c.quiet_since.unwrap_or(now);
+            let was: Vec<String> = c.meetings.iter().filter(|(_, starts_at)| ended_at >= **starts_at).map(|(id, _)| id.clone()).collect();
+            self.prompted_events.extend(was);
+        }
         let (said, idle) = match &mut self.phase {
             // The call went before anybody answered: the prompt goes with it.
             Phase::Prompting { .. } => (Some(Action::HidePrompt), true),
@@ -432,7 +448,7 @@ impl MeetingMonitor {
     pub fn tick(&mut self, now: u64) -> Vec<Action> {
         let mut out = vec![];
         if self.phase.call().is_some_and(|c| c.ended(now)) {
-            out.extend(self.end_call());
+            out.extend(self.end_call(now));
         }
         // Other apps whose calls ended while they waited are forgotten; one still on is next.
         self.others.retain(|_, c| !c.ended(now));
@@ -471,8 +487,11 @@ impl MeetingMonitor {
             Show,
             /// The unscheduled prompt up is this meeting: it gets the title.
             Title,
-            /// Nothing to show: paused, or it is the call already followed.
+            /// Nothing to show: paused, or a manual recording is most likely it.
             Taken,
+            /// The followed call began close enough to be it: nothing to show while that call is
+            /// on, and the call's end settles whether it was ([`MeetingMonitor::end_call`]).
+            Held,
             /// Another call is followed: offered again once that call ends.
             Wait,
         }
@@ -488,7 +507,7 @@ impl MeetingMonitor {
             Phase::Recording { start, .. } | Phase::Failed { start, .. } if start.event_id.is_some() => Offer::Wait,
             Phase::Prompting { call: Some(c), .. } | Phase::Recording { call: Some(c), .. } | Phase::Failed { call: Some(c), .. } | Phase::Done { call: c } => {
                 if c.is_meeting(&meeting) {
-                    Offer::Taken
+                    Offer::Held
                 } else {
                     Offer::Wait
                 }
@@ -502,6 +521,12 @@ impl MeetingMonitor {
             Offer::Wait => vec![],
             Offer::Taken => {
                 self.prompted_events.insert(meeting.event_id);
+                vec![]
+            }
+            Offer::Held => {
+                if let Some(c) = self.phase.call_mut() {
+                    c.meetings.insert(meeting.event_id, meeting.starts_at);
+                }
                 vec![]
             }
             Offer::Title => {
@@ -1235,6 +1260,16 @@ mod tests {
                 (1500, Off(1, ZOOM), &[], "recording 'Early' on Zoom"),
                 (1508, Wait, &["stop: call ended"], "idle"),
                 (1530, Wait, &[], "idle"),
+            ]),
+            ("a short call declined and over before a different meeting starts: that meeting prompts (rv-20261013T135051Z #2)", &[
+                (0, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (1, Cal("B", 300, 2100), &[], "prompting on Zoom"),
+                (2, Do(NotThisOne), &["hide"], "holding Zoom"),
+                (241, Wait, &[], "holding Zoom"),
+                (250, Off(1, ZOOM), &[], "holding Zoom"),
+                (258, Wait, &["prompt 'B'"], "prompting 'B'"),
+                (300, On(2, TEAMS), &[], "prompting 'B' on Teams"),
+                (301, Do(TakeNotes), &["hide", "start 'B'"], "recording 'B' on Teams"),
             ]),
             ("joining early and recording before the meeting is due: no second prompt after", &[
                 (0, Cal("Early", 300, 2100), &[], "idle"),
