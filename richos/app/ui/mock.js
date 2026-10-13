@@ -3299,7 +3299,7 @@
         // Dictation was just set up (`main.rs` dictation_feature_thread): the conversation, under
         // the company he is in, with Rich's message naming the key in the settings now. Once.
         case "dictation_feature_thread": {
-          dictationCalls.push({ cmd });
+          dictationCalls.push({ cmd, create: !!args.create });
           const key = dictationView.key, at = now(), text = dictationFeatureText(key), turnId = uid("turn");
           if (dictationFeatureThread) {
             // A key change replaces the message (`dictation_offer::feature_action`, Replace): the
