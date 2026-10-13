@@ -2005,6 +2005,81 @@ async function main() {
     return "no button while the press runs; Try again (case 27) or Start (case 25) when it ends";
   });
 
+  await run.check("29  round 19, state 2: the spinners keep turning through every counter reading and through Start appearing", async () => {
+    // HIS RECORDING OF NIGHTLY 54 (docs/ceo-input/2026-10-13_1/animations.mov, 0 to 13.9 s): at
+    // 60 frames a second both spinners swept from 12 o'clock to about 3 o'clock and snapped back
+    // every 12 frames (200 ms), the cadence of the download's counter. Each reading rebuilt the
+    // rows, so each spinner was a new element whose rotation started again at 0 degrees:
+    // 400 degrees a second for 0.2 s is 80 degrees, and it never went round. Round 19 updates the
+    // counter and the bar in place (its `runSetup`), so its ring turns without a break.
+    //
+    // Measured as he sees it, by the ANGLE: whatever element is turning in a row, its rotation
+    // after a reading is where it was before plus the time between, never back at the start.
+    const page = await openApp(browser, R19);
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    await page.evaluate((line) => window.__RICHOS_MOCK__.setupEmit(line), toolsLine(300_000_000, 1_061_655_396, true, "300 MB of 1.06 GB"));
+    // Held at Claude Code's step: two rows turn at once, as in his recording.
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(true));
+    await page.click("#setup-go");
+    await page.waitForFunction(() => document.querySelectorAll("#setup-steps .setup-step.is-now").length === 2);
+    // Each turning row's spinner: its node, its turn so far (0..1) and the clock, read together.
+    const turns = () => page.evaluate(() => {
+      window.__spinNodes = window.__spinNodes || new Map();
+      const now = document.timeline.currentTime;
+      return [...document.querySelectorAll("#setup-steps .setup-step.is-now")].map((li) => {
+        const a = li.getAnimations({ subtree: true }).find((x) => x.animationName === "setup-step-spin");
+        const t = a && a.effect.getComputedTiming();
+        const known = window.__spinNodes.get(li.dataset.component);
+        if (!known && a) window.__spinNodes.set(li.dataset.component, a.effect.target);
+        return {
+          c: li.dataset.component,
+          now,
+          turn: t ? t.progress : null,
+          ms: t ? t.duration : null,
+          same: known ? known === (a && a.effect.target) && known.isConnected : true,
+        };
+      });
+    });
+    // The angle that should follow `before` after `dt` ms, compared on the circle.
+    const offBy = (before, after) => {
+      const want = (before.turn + (after.now - before.now) / before.ms) % 1;
+      const d = Math.abs(after.turn - want);
+      return Math.min(d, 1 - d);
+    };
+    // 50 ms of a turn: three frames of slack for a loaded machine, a fifth of what a restart loses.
+    const SLACK = (b) => 50 / b.ms;
+    await settledFrames(page);
+    let before = await turns();
+    assert(before.length === 2 && before.every((b) => typeof b.turn === "number"), "two turning spinners: " + JSON.stringify(before));
+    for (const [n, label] of [[400_000_000, "400 MB of 1.06 GB"], [500_000_000, "500 MB of 1.06 GB"], [600_000_000, "600 MB of 1.06 GB"]]) {
+      // A reading lands partway through a turn, as the real counter's do.
+      await page.waitForTimeout(170);
+      await page.evaluate((line) => window.__RICHOS_MOCK__.setupEmit(line), toolsLine(n, 1_061_655_396, true, label));
+      await settledFrames(page);
+      const after = await turns();
+      for (let i = 0; i < 2; i++) {
+        assert(offBy(before[i], after[i]) <= SLACK(before[i]),
+          "the " + after[i].c + " spinner jumped " + Math.round(360 * offBy(before[i], after[i])) + " degrees at the " + label + " reading");
+        assert(after[i].same, "the " + after[i].c + " spinner was rebuilt by the " + label + " reading");
+      }
+      before = after;
+    }
+    // START APPEARS while the voice row still counts (`lockSetupHeight` measures the finished
+    // sheet in the same task). The voice spinner carries on from where it was.
+    const voiceBefore = before.find((b) => b.c === "media-tools");
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(false));
+    await page.waitForSelector("#setup-start:not([hidden])");
+    await settledFrames(page);
+    const voiceAfter = (await turns()).find((b) => b.c === "media-tools");
+    assert(voiceAfter && typeof voiceAfter.turn === "number", "the voice row still turns once Start is up");
+    assert(offBy(voiceBefore, voiceAfter) <= SLACK(voiceBefore),
+      "the voice spinner jumped " + Math.round(360 * offBy(voiceBefore, voiceAfter)) + " degrees as Start appeared");
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    bump(15);
+    await page.close();
+    return "two spinners kept their angle through three counter readings and the voice spinner through Start appearing (within 50 ms of a turn)";
+  });
+
   await run.check("11  this suite actually checked something", async () => {
     assert(
       assertions >= 40,
