@@ -378,10 +378,11 @@ pub enum CapMsg {
     /// the button in silence. Without this the state machine would be told "he is talking"
     /// and, with no utterance to end, would sit in `Hearing` forever.
     BargeIn { mid_utterance: bool },
-    /// **His turn is over**: [`crate::turn::END_OF_TURN_FRAMES`] of silence since the last speech
-    /// frame of the last utterance (125 x 256 / 16000 = 2.000 s), and no onset building. Sent
-    /// once per silence, after an utterance has ended, never once per frame. Counted here, on
-    /// the frames themselves, so the window is exact rather than a supervisor-tick estimate.
+    /// **His turn is over**: [`crate::turn::END_OF_TURN_FRAMES`] consecutive frames the VAD did
+    /// not call speech (125 x 256 / 16000 = 2.000 s), after an utterance has ended. Sent once per
+    /// silence, never once per frame. Counted here, on the frames themselves, so the window is
+    /// exact rather than a supervisor-tick estimate, and an utterance cut at the 30.000 s window
+    /// while he is still talking does not start it early.
     TurnQuiet,
 }
 
@@ -473,10 +474,12 @@ pub struct CaptureBrain {
     /// [`ECHO_LOOKBACK_FRAMES`] so the pre-roll already sitting in the recorder is judged too,
     /// not just the frame `Started` happens to land on.
     quiet_frames: u32,
-    /// Frames since the last utterance ENDED, counting toward [`crate::turn::TURN_QUIET_FRAMES`].
-    /// `None` while an utterance is open and once [`CapMsg::TurnQuiet`] has been sent for this
-    /// silence, so it is sent exactly once per silence.
-    turn_quiet_run: Option<u32>,
+    /// Consecutive frames the VAD has NOT called speech, saturating: the silence since his last
+    /// speech frame, which is what [`crate::turn::END_OF_TURN_FRAMES`] is measured against.
+    since_speech: u32,
+    /// An utterance has ended and [`CapMsg::TurnQuiet`] has not yet been sent for the silence
+    /// after it, so it is sent exactly once per silence.
+    turn_quiet_armed: bool,
 }
 
 impl Default for CaptureBrain {
@@ -501,7 +504,8 @@ impl CaptureBrain {
             tainted: false,
             barged: false,
             quiet_frames: u32::MAX,
-            turn_quiet_run: None,
+            since_speech: 0,
+            turn_quiet_armed: false,
         }
     }
 
@@ -781,28 +785,27 @@ impl CaptureBrain {
             self.barged = false;
         }
 
-        // **THE END OF HIS TURN, counted on the frames.** An utterance ends at 0.800 s of
-        // silence; his TURN ends at 2.000 s (`turn.rs`). The endpointer's hangover is the first
-        // 0.800 s of that silence, so the count starts on the END frame and runs the remaining
-        // 75 frames (1.200 s). An open utterance stops it, and so does an onset still building
-        // when the count is reached: a sound that is about to become his next word is not quiet.
+        // **THE END OF HIS TURN, counted on the frames, as SILENCE SINCE HIS LAST SPEECH FRAME.**
+        // An utterance ends at 0.800 s of silence; his TURN ends at 2.000 s (`turn.rs`). After an
+        // ordinary end the hangover's 50 silent frames are already counted, so the quiet comes 75
+        // frames (1.200 s) after the END. It is NOT counted from the END itself: an utterance cut
+        // at whisper's 30.000 s window ends while he is still talking, and timing from that cut
+        // handed his turn over 1.200 s into a 1.408 s pause (review rv-20261013T163358Z, finding
+        // 2). Any frame the VAD calls speech restarts the count, so a sound that is about to
+        // become his next word is not quiet either.
+        self.since_speech = if is_speech { 0 } else { self.since_speech.saturating_add(1) };
         if started {
-            self.turn_quiet_run = None;
+            self.turn_quiet_armed = false;
         } else if stopped {
-            // Admitted or too short, the utterance is over on this frame either way.
-            self.turn_quiet_run = Some(0);
-        } else if !recording {
-            if let Some(run) = self.turn_quiet_run {
-                let run = run.saturating_add(1);
-                if run >= crate::turn::TURN_QUIET_FRAMES
-                    && self.recorder.endpointer().speech_run_frames() == 0
-                {
-                    self.turn_quiet_run = None;
-                    out.push(CapMsg::TurnQuiet);
-                } else {
-                    self.turn_quiet_run = Some(run);
-                }
-            }
+            // Admitted, too short, or cut at the window: the utterance is over on this frame.
+            self.turn_quiet_armed = true;
+        }
+        if self.turn_quiet_armed
+            && !recording
+            && self.since_speech >= crate::turn::END_OF_TURN_FRAMES
+        {
+            self.turn_quiet_armed = false;
+            out.push(CapMsg::TurnQuiet);
         }
     }
 }

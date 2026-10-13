@@ -91,10 +91,11 @@ use std::collections::VecDeque;
 /// 125 x 256 / 16000 = 2.000 s.
 pub const END_OF_TURN_FRAMES: u32 = 125;
 
-/// The part of [`END_OF_TURN_FRAMES`] that runs AFTER the endpointer has closed the utterance.
-/// The endpointer's own [`SILENCE_HANGOVER_FRAMES`] are the first 0.800 s of the same silence,
-/// so the capture path only has to count the rest: 125 - 50 = 75 frames, 75 x 256 / 16000 =
-/// 1.200 s after the utterance's END.
+/// After an utterance that ended in silence, how long after its END the turn's quiet arrives: the
+/// endpointer's own [`SILENCE_HANGOVER_FRAMES`] are the first 0.800 s of the same silence, so
+/// 125 - 50 = 75 frames, 75 x 256 / 16000 = 1.200 s. The capture path counts silence since the
+/// last speech frame rather than frames since the END, so an utterance cut at the 30.000 s window
+/// while he is still talking waits the full 2.000 s (review rv-20261013T163358Z, finding 2).
 pub const TURN_QUIET_FRAMES: u32 = END_OF_TURN_FRAMES - SILENCE_HANGOVER_FRAMES;
 
 /// [`END_OF_TURN_FRAMES`] in seconds, from the one frame-math helper. Never typed.

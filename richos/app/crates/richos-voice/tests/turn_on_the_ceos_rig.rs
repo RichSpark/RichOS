@@ -31,7 +31,7 @@
 
 use richos_voice::aec::EchoCanceller;
 use richos_voice::controller::{CapMsg, CaptureBrain};
-use richos_voice::endpoint::{SILENCE_HANGOVER_FRAMES, SPEECH_ONSET_FRAMES};
+use richos_voice::endpoint::{EndReason, SILENCE_HANGOVER_FRAMES, SPEECH_ONSET_FRAMES};
 use richos_voice::private_fixtures;
 use richos_voice::turn::{end_of_turn_secs, AnswerGate, Turn, TurnAssembler, END_OF_TURN_FRAMES};
 use richos_voice::vad::{frames_to_secs, SAMPLE_RATE, VAD_FRAME_SAMPLES};
@@ -119,6 +119,8 @@ fn synthetic_voice(secs: f32, seed: u32) -> Vec<f32> {
 #[derive(Debug, Default)]
 struct Replay {
     admitted: usize,
+    /// Utterances cut at whisper's 30.000 s window rather than ended by silence.
+    cuts: usize,
     turns: Vec<(usize, Turn)>,
     quiet_frames: Vec<usize>,
 }
@@ -139,6 +141,9 @@ fn replay(mic: &[f32]) -> Replay {
                 CapMsg::Started { .. } => turns.utterance_started(),
                 CapMsg::Utterance(u) => {
                     r.admitted += 1;
+                    if u.utterance.reason == EndReason::MaxLength {
+                        r.cuts += 1;
+                    }
                     turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
                     turns.recognized(Some((format!("fragment {}", r.admitted), false)));
                 }
@@ -394,4 +399,43 @@ fn rich_never_starts_talking_while_he_has_gone_on() {
         frames_to_secs(MODEL_FRAMES as u32)
     );
     assert!(after >= end_of_turn_secs(), "Rich spoke {after:.3} s after his last word");
+}
+
+// ------------------------------------------------------------------------------------------------
+// A STRETCH CUT AT WHISPER'S 30.000 s WINDOW IS NOT HIM STOPPING (review rv-20261013T163358Z, 2).
+// ------------------------------------------------------------------------------------------------
+
+/// Words: the synthetic voice with a 0.120 s gap in every 0.600 s, so the VAD hears speech with
+/// the gaps between words that speech has, rather than one 30 s tone it would learn as noise.
+fn spoken_words(secs: f32, seed: u32) -> Vec<f32> {
+    let period = secs_to_samples(0.600);
+    let gap = secs_to_samples(0.120);
+    synthetic_voice(secs, seed)
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| if i % period >= period - gap { 0.0 } else { s })
+        .collect()
+}
+
+/// He talks for a little over 30 s, so the endpointer cuts the utterance at its 30.000 s window
+/// (`endpoint.rs` MAX_UTTERANCE_FRAMES) a few frames before he pauses; then he thinks for his
+/// measured 1.406 s and goes on. The cut is not silence, so the quiet is counted from his last
+/// speech frame: ONE turn. Timed from the cut, the quiet came 1.200 s after it, inside the pause,
+/// and his turn was handed over mid-thought.
+#[test]
+fn a_cut_at_the_thirty_second_window_is_not_his_turn_ending() {
+    let lead = 1.0;
+    let long = spoken_words(30.030, 4);
+    let after = synthetic_voice(1.0, 5);
+    let total = lead + 30.030 + HIS_PAUSE_SECS + 1.0 + 4.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    superimpose(&mut mic, a, &long);
+    let b = a + long.len() + secs_to_samples(HIS_PAUSE_SECS);
+    superimpose(&mut mic, b, &after);
+    let r = replay(&mic);
+    println!("[replay] the 30 s cut: {r:?}");
+    // POSITIVE CONTROL: the long stretch really was cut at the window, not ended by silence.
+    assert_eq!(r.cuts, 1, "the long stretch was not cut at the 30.000 s window; this replay shows nothing");
+    assert_one_turn_after_he_is_done(&r, b + after.len(), "a 30 s stretch cut at the window");
 }
