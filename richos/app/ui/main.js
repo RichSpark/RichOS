@@ -730,6 +730,7 @@ function buildEntityGroup(group) {
     selectLabel: entity.display_name + " overview",
     onAdd: () => showEntityView(entity.id, "new"),
   });
+  section.classList.add("nav-group--entity");
 
   const expanded = expandedEntities.has(entity.id);
   const shown = expanded ? visible : visible.slice(0, THREADS_SHOWN_INITIALLY);
@@ -7090,7 +7091,9 @@ function renderSearchResults() {
   let flat = 0;
   for (const label of order) {
     const head = document.createElement("div");
-    head.className = "result-group";
+    // "No entity" is `search` label_of's (src-tauri main.rs) word for no company; every other
+    // heading is a company's name, painted exactly as he typed it.
+    head.className = "result-group" + (label === "No entity" ? "" : " result-group--entity");
     head.textContent = label;
     searchResultsEl.appendChild(head);
     for (const hit of byEntity.get(label)) {
