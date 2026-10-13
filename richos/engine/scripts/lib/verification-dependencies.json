@@ -14851,7 +14851,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "fcf13e80db73e3ed3718aa9fb4bbc5bc41625b5eb49de3bb2a5ced3467d286b0",
+          "sha256": "56b73e7082b9457dedfbb30e9ac71a4a8fcb16aa55654c055fc9bc607a4d2f50",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -16292,7 +16292,7 @@
     },
     "scripts/lib/machine_settings.py": {
       "source": "scripts/lib/machine_settings.py",
-      "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+      "sha256": "fed1265bba0dd80ba97a04d201a24d8eabbe6419d54dc9d405d03102d051b82e",
       "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader.",
       "keys": [],
       "edges": []

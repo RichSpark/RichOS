@@ -26,8 +26,12 @@ KEYS = (
     'GRADLE_USER_HOME',
     'RICHOS_ENGINE_CHECK_PROOF_DIR',
     'RICHOS_CAMPAIGN_PARENT',
+    'RICHOS_SEARCH_DOCUMENTS_ROOT',
 )
 RESOLVED = 'RICHOS_MACHINE_SETTINGS_RESOLVED'
+# The CEO's search folder is read by the app's own search service and handed to no child
+# process, gate or worker (search PRD v3.1): environment() and `env` leave it out.
+NOT_FORWARDED = ('RICHOS_SEARCH_DOCUMENTS_ROOT',)
 
 
 def parse(text, source='<settings>'):
@@ -82,6 +86,8 @@ def apply():
 def environment(environment=None, home=None):
     env = dict(os.environ if environment is None else environment)
     env.update(load(env, home))
+    for key in NOT_FORWARDED:
+        env.pop(key, None)
     env[RESOLVED] = '1'
     return env
 
@@ -163,7 +169,7 @@ def main():
         if args.command == 'values':
             print(json.dumps({**load(), RESOLVED: '1'}))
         elif args.command == 'env':
-            values = load()
+            values = {key: value for key, value in load().items() if key not in NOT_FORWARDED}
             for key, value in {**values, RESOLVED: '1'}.items():
                 print(f'export {key}={shlex.quote(value)}')
             if args.array:

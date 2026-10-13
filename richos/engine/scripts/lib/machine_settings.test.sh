@@ -121,6 +121,24 @@ class Settings(unittest.TestCase):
   with patch.object(R,'config_from_env',return_value={}), patch.object(R,'load_workspaces',return_value=[]), patch.object(R,'Reaper',return_value=reaper), patch.object(R,'Walls'), patch.object(reaper,'scan_scratch_root'), patch.object(reaper,'collect_test_instances',return_value=[]), patch.object(reaper,'collect_test_devices',return_value=[]) as devices, patch.object(reaper,'prune_docker',return_value=[]) as docker, patch.object(reaper,'_record_failures'), patch.object(R,'write_log'), patch.object(R,'write_state') as state, contextlib.redirect_stdout(io.StringIO()):
    self.assertEqual(R.main(['--process-only','--apply','--json']),0)
   devices.assert_not_called();docker.assert_not_called();state.assert_not_called()
+ def test_search_documents_root_is_read_and_never_forwarded(self):
+  # Search PRD v3.1: the CEO's archive folder is the app's to search; no child process,
+  # gate or worker inherits its path through the forwarded settings.
+  with tempfile.TemporaryDirectory() as root:
+   base=pathlib.Path(root).resolve();source=base/'settings'
+   source.write_text('RICHOS_SEARCH_DOCUMENTS_ROOT=/private archive/chats\nSCCACHE_DIR=/cache\n')
+   env={key:value for key,value in os.environ.items() if key not in M.KEYS and key!=M.RESOLVED}
+   env.update(HOME=str(base),RICHOS_ENV_FILE=str(source))
+   self.assertEqual(M.load(env)['RICHOS_SEARCH_DOCUMENTS_ROOT'],'/private archive/chats')
+   self.assertIn('RICHOS_SEARCH_DOCUMENTS_ROOT',M.NOT_FORWARDED)
+   forwarded=M.environment({**env,'RICHOS_SEARCH_DOCUMENTS_ROOT':'/from shell'})
+   self.assertNotIn('RICHOS_SEARCH_DOCUMENTS_ROOT',forwarded)
+   self.assertEqual(forwarded['SCCACHE_DIR'],'/cache')
+   command='source "$1/machine-settings.sh"; richos_machine_settings || exit; printf "%s\\n" "${RICHOS_SEARCH_DOCUMENTS_ROOT-unset}" "${RICHOS_MACHINE_ENV[@]}"'
+   result=subprocess.run(['bash','-c',command,'fixture',sys.argv[1]],env=env,capture_output=True,text=True,check=True)
+   lines=result.stdout.splitlines()
+   self.assertEqual(lines[0],'unset')
+   self.assertFalse(any(line.startswith('RICHOS_SEARCH_DOCUMENTS_ROOT=') for line in lines))
  def test_shell_quotes_literal_values_and_forward_array(self):
   with tempfile.TemporaryDirectory() as root:
    base=pathlib.Path(root).resolve();source=base/'settings';marker=base/'executed'
