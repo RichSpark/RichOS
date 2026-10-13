@@ -727,7 +727,26 @@ class SetupWalk(adopt_walk.Walk):
         while time.monotonic() < end and not self.shows_text(R19_ON_AX):
             time.sleep(2)
         facts['sheet_on'] = self.shows_text(R19_ON_AX)
-        self.ax('click', '--title', 'F2', '--role', 'AXRadioButton')
+        self.shot('set-up-sheet-on.png')
+        self.facts['r19_set_up'] = facts
+        self.save()
+        # Scoped to the sheet: a whole-window search for the key ran past ax.sh's 20 s deadline
+        # in the guest (walk of 2047c2a73, 18:05Z).
+        try:
+            self.ax('click', '--title', 'F2', '--role', 'AXRadioButton', '--in', 'dialog')
+            facts['key_picked_by'] = 'the F2 button in the key strip'
+        except StepFailed:
+            # The other way a person picks it: "Press a different key", then F2 (key code 120).
+            self.ax('click', '--id', 'dict-capture')
+            time.sleep(1)
+            guest(self.vm, "osascript -e 'tell application \"System Events\" to key code 120'")
+            facts['key_picked_by'] = '"Press a different key", then F2'
+        time.sleep(2)
+        record = guest(self.vm, 'cat ' + shlex.quote(self.data + '/dictation.json') + ' 2>/dev/null || true')
+        try:
+            facts['key_saved'] = json.loads(record).get('key')
+        except ValueError:
+            facts['key_saved'] = None
         time.sleep(2)
         self.ax('click', '--id', 'dict-close')
         self.mark('key F2 picked, the sheet closed', pressed=True)
@@ -772,6 +791,8 @@ class SetupWalk(adopt_walk.Walk):
                            'no_composer_line', 'rail_ocr_exact', 'feature_text', 'feature_thread_recorded')
                if not facts[k]]
         why += [k for k in ('rail_ocr_upper', 'feature_wrong_key', 'rich_recapitalized') if facts[k]]
+        if facts['key_saved'] != 2:
+            why.append(f"key_saved ({facts['key_saved']}, not F2)")
         if not facts['rich_exact']:
             why.append('rich_exact (Rich never wrote the name)')
         if why:
