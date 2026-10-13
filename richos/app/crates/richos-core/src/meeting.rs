@@ -12,7 +12,9 @@
 //!
 //! A call is identified by the app family holding the microphone (`us.zoom.xos`,
 //! `com.google.Chrome`; the companion folds helper processes into their app). It is LIVE while
-//! any process of that family runs input, and it has ENDED once none has for [`END_GRACE_MS`].
+//! any process of that family runs input, and it is over once none does: its recording stops
+//! after [`END_GRACE_MS`] of that, or at once when that app takes the microphone again, which is
+//! the next call (a call's input never pauses inside the call, measured through mute and silence).
 //! RichOS's own processes never count: the watcher is started excluding the app, and the capture
 //! process the app starts is excluded here ([`MeetingMonitor::exclude_pid`]), because a
 //! device-wide "microphone in use" flag cannot see a call end while RichOS itself holds the
@@ -44,16 +46,18 @@
 use crate::meeting_calendar::CalendarMeeting;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// How long every process of the call's app must have been off the microphone before the call
-/// counts as ended; a mute, a silence, or a device switch inside a call must not reach it.
+/// How long every process of the call's app must have been off the microphone before the call's
+/// recording stops, when that app has not taken the microphone again (if it has, that is the next
+/// call, and the recording stops at once).
 ///
 /// MEASURED (2026-10-13, real Zoom calls from a test VM guest against the Windows call lab;
 /// richos-hq `docs/verification/2026-10-13-granola-end-detection/`): the call app's input held
 /// through every mute (55 s native Zoom, 47 s Zoom in Chrome) and every minute of silence on both
 /// routes, with no gap at all inside a call, and stopped 2.6 s after the guest left, 3.2 to 4.0 s
 /// after the host ended the meeting and 1.8 s after the tab closed. An idle Zoom, an idle Chrome
-/// and played sounds never started input. 8 s is therefore longer than any in-call gap measured
-/// (none) and ends a recording within about 12 s of hang-up.
+/// and played sounds never started input; every start after a stop was a new join. 8 s ends a
+/// recording within about 12 s of hang-up. NOT measured: a change of microphone inside a call; if
+/// it stops the app's input, the call is split there and the rest is prompted as the next call.
 pub const END_GRACE_MS: u64 = 8_000;
 
 /// A calendar meeting that comes due while a call is followed is THAT call when the call began no
@@ -319,17 +323,30 @@ impl MeetingMonitor {
     }
 
     fn mic_started(&mut self, pid: i32, family: &str, app: Option<String>, now: u64) -> Vec<Action> {
-        // The followed call's own app: the same call (a second process, or input back after a mute).
-        if let Some(c) = self.phase.call_mut().filter(|c| c.family == family) {
+        // Another process of the followed call's app joining while the call holds the microphone:
+        // the same call.
+        if let Some(c) = self.phase.call_mut().filter(|c| c.family == family && !c.live.is_empty()) {
             c.live.insert(pid);
-            c.quiet_since = None;
             return vec![];
         }
+        // The followed call's app back after every process of it left the microphone: that call
+        // is over and this is the next one, with its own prompt and recording (handover review
+        // rv-20261013T135051Z-1b6ba88a-4002 #1: leaving one Zoom call and joining the next inside
+        // the end grace recorded the second without its own click). Measured, a call's input
+        // never pauses inside a call, through mute or silence (END_GRACE_MS).
+        let mut out = vec![];
+        if self.phase.call().is_some_and(|c| c.family == family) {
+            out = self.end_call();
+        }
         // Any other app is kept; `settle` gives it to the state when the state can take a call.
-        let c = self.others.entry(family.to_string()).or_insert_with(|| Call::new(family, app, now));
+        // An app waiting there that left the microphone and is back is a new call too.
+        let c = self.others.entry(family.to_string()).or_insert_with(|| Call::new(family, app.clone(), now));
+        if c.live.is_empty() {
+            *c = Call::new(family, app, now);
+        }
         c.live.insert(pid);
-        c.quiet_since = None;
-        self.settle()
+        out.extend(self.settle());
+        out
     }
 
     fn mic_stopped(&mut self, pid: i32, family: &str, now: u64) -> Vec<Action> {
@@ -389,27 +406,33 @@ impl MeetingMonitor {
         }
     }
 
+    /// The followed call is over: its grace ran out ([`MeetingMonitor::tick`]), or its app came
+    /// back as the next call ([`MeetingMonitor::watch`]).
+    fn end_call(&mut self) -> Vec<Action> {
+        let (said, idle) = match &mut self.phase {
+            // The call went before anybody answered: the prompt goes with it.
+            Phase::Prompting { .. } => (Some(Action::HidePrompt), true),
+            // A manual recording only followed a declined call; it ends with Stop alone.
+            Phase::Recording { call, start } if start.manual => {
+                *call = None;
+                (None, false)
+            }
+            Phase::Recording { .. } => (Some(Action::StopCapture(EndReason::CallEnded)), true),
+            // A failed recording's call ended: nothing is left to retry against. The problem
+            // card stays until answered; "Try again" is then a manual start.
+            _ => (None, true),
+        };
+        if idle {
+            self.phase = Phase::Idle;
+        }
+        said.into_iter().collect()
+    }
+
     /// The clock. Ends a call whose app has stayed off the microphone for [`END_GRACE_MS`].
     pub fn tick(&mut self, now: u64) -> Vec<Action> {
         let mut out = vec![];
         if self.phase.call().is_some_and(|c| c.ended(now)) {
-            let (said, idle) = match &mut self.phase {
-                // The call went before anybody answered: the prompt goes with it.
-                Phase::Prompting { .. } => (Some(Action::HidePrompt), true),
-                // A manual recording only followed a declined call; it ends with Stop alone.
-                Phase::Recording { call, start } if start.manual => {
-                    *call = None;
-                    (None, false)
-                }
-                Phase::Recording { .. } => (Some(Action::StopCapture(EndReason::CallEnded)), true),
-                // A failed recording's call ended: nothing is left to retry against. The problem
-                // card stays until answered; "Try again" is then a manual start.
-                _ => (None, true),
-            };
-            out.extend(said);
-            if idle {
-                self.phase = Phase::Idle;
-            }
+            out.extend(self.end_call());
         }
         // Other apps whose calls ended while they waited are forgotten; one still on is next.
         self.others.retain(|_, c| !c.ended(now));
@@ -651,17 +674,6 @@ mod tests {
     }
 
     #[test]
-    fn input_returning_inside_the_grace_interval_does_not_split_the_call() {
-        let mut m = MeetingMonitor::new();
-        m.watch(&started(10, ZOOM, "zoom.us"), 0);
-        m.input(Input::TakeNotes);
-        m.watch(&stopped(10, ZOOM), 5_000);
-        m.watch(&started(10, ZOOM, "zoom.us"), 5_000 + END_GRACE_MS - 100);
-        assert_eq!(m.tick(5_000 + 3 * END_GRACE_MS), vec![]);
-        assert!(m.is_recording());
-    }
-
-    #[test]
     fn ignoring_the_prompt_records_nothing_and_the_prompt_goes_with_the_call() {
         let mut m = MeetingMonitor::new();
         m.watch(&started(10, ZOOM, "zoom.us"), 0);
@@ -675,9 +687,9 @@ mod tests {
         let mut m = MeetingMonitor::new();
         m.watch(&started(10, ZOOM, "zoom.us"), 0);
         assert_eq!(m.input(Input::NotThisOne), vec![Action::HidePrompt]);
-        // The same call's input flickering does not prompt again.
-        m.watch(&stopped(10, ZOOM), 2_000);
-        assert_eq!(m.watch(&started(10, ZOOM, "zoom.us"), 3_000), vec![]);
+        // Another process of the same app joining the call does not prompt again.
+        assert_eq!(m.watch(&started(11, ZOOM, "zoom.us"), 3_000), vec![]);
+        m.watch(&stopped(11, ZOOM), 9_000);
         m.watch(&stopped(10, ZOOM), 10_000);
         assert_eq!(m.tick(10_000 + END_GRACE_MS), vec![]);
         // The next meeting prompts normally.
@@ -1103,12 +1115,26 @@ mod tests {
                 (300, Off(2, TEAMS), &[], "recording on Teams"),
                 (308, Wait, &["stop: call ended"], "idle"),
             ]),
-            ("a mute inside the call is the same call", &[
+            ("the next call in the same app inside the end grace is its own call (rv-20261013T135051Z #1)", &[
                 (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
                 (12, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
                 (100, Off(1, ZOOM), &[], "recording on Zoom"),
-                (105, On(1, ZOOM), &[], "recording on Zoom"),
+                (102, On(1, ZOOM), &["stop: call ended", "prompt Zoom"], "prompting on Zoom"),
+                (110, Wait, &[], "prompting on Zoom"),
+                (111, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (200, Off(1, ZOOM), &[], "recording on Zoom"),
+                (208, Wait, &["stop: call ended"], "idle"),
+            ]),
+            // A mute does not stop the app's input at all (END_GRACE_MS, measured): what can come
+            // and go inside a call is a second process of the same app.
+            ("a second process of the call's app is the same call", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (12, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (50, On(2, ZOOM), &[], "recording on Zoom"),
+                (100, Off(1, ZOOM), &[], "recording on Zoom"),
                 (130, Wait, &[], "recording on Zoom"),
+                (200, Off(2, ZOOM), &[], "recording on Zoom"),
+                (208, Wait, &["stop: call ended"], "idle"),
             ]),
             ("a second app while a prompt is up prompts when the first call goes", &[
                 (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
