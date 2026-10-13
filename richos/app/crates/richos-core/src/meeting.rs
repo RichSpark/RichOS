@@ -32,9 +32,17 @@
 //! detected in …"). Not this one, and Stop, hold for that call: it does not prompt again until
 //! it has ended. The next call prompts normally. While prompts are paused nothing prompts, and
 //! a running recording is left alone.
+//!
+//! # Nothing that waits is forgotten
+//!
+//! Another app's call that starts while one call is followed (or a manual recording runs) is
+//! kept, and prompts the moment that call ends; so does a calendar meeting that comes due while
+//! another call is followed, if it is still on. A meeting that comes due during a call that began
+//! close enough to its start ([`SAME_MEETING_MS`]) IS that call, and never prompts afterwards.
+//! Every sequence is one row of `every_call_sequence_gives_the_expected_prompt_and_recording`.
 
 use crate::meeting_calendar::CalendarMeeting;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// How long every process of the call's app must have been off the microphone before the call
 /// counts as ended; a mute, a silence, or a device switch inside a call must not reach it.
@@ -47,6 +55,12 @@ use std::collections::BTreeSet;
 /// and played sounds never started input. 8 s is therefore longer than any in-call gap measured
 /// (none) and ends a recording within about 12 s of hang-up.
 pub const END_GRACE_MS: u64 = 8_000;
+
+/// A calendar meeting that comes due while a call is followed is THAT call when the call began no
+/// earlier than this before the meeting's start (joining a few minutes early); otherwise it is
+/// the next meeting, and it prompts once the call ends. A chosen value, not a measured one: longer
+/// than any early join, shorter than the shortest meeting of a back-to-back day.
+pub const SAME_MEETING_MS: u64 = 10 * 60_000;
 
 /// One line of `richos-companion watch` (JSON lines on its stdout).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,14 +171,20 @@ struct Call {
     live: BTreeSet<i32>,
     /// When the last of them stopped, while none is live.
     quiet_since: Option<u64>,
+    /// When its microphone use was first seen.
+    since: u64,
 }
 
 impl Call {
-    fn new(family: &str, app: Option<String>, pid: i32) -> Call {
-        Call { family: family.to_string(), app, live: BTreeSet::from([pid]), quiet_since: None }
+    fn new(family: &str, app: Option<String>, now: u64) -> Call {
+        Call { family: family.to_string(), app, live: BTreeSet::new(), quiet_since: None, since: now }
     }
     fn ended(&self, now: u64) -> bool {
         self.live.is_empty() && self.quiet_since.is_some_and(|q| now.saturating_sub(q) >= END_GRACE_MS)
+    }
+    /// This call is that calendar meeting: it began no earlier than [`SAME_MEETING_MS`] before it.
+    fn is_meeting(&self, meeting: &Scheduled) -> bool {
+        self.since + SAME_MEETING_MS >= meeting.starts_at
     }
 }
 
@@ -194,6 +214,24 @@ impl Phase {
         }
     }
 
+    fn call(&self) -> Option<&Call> {
+        match self {
+            Phase::Prompting { call, .. } | Phase::Recording { call, .. } | Phase::Failed { call, .. } => call.as_ref(),
+            Phase::Done { call } => Some(call),
+            Phase::Idle => None,
+        }
+    }
+
+    /// The state can follow a call it does not have yet: nothing is up, a calendar prompt nobody
+    /// joined, or a calendar recording started before its call.
+    fn can_take_a_call(&self) -> bool {
+        match self {
+            Phase::Idle | Phase::Prompting { call: None, .. } => true,
+            Phase::Recording { call: None, start } | Phase::Failed { call: None, start } => !start.manual,
+            _ => false,
+        }
+    }
+
     /// Declined or stopped: wait for this call to end, or Idle when there is none.
     fn done(call: &Option<Call>) -> Phase {
         match call {
@@ -211,7 +249,13 @@ pub struct MeetingMonitor {
     phase: Phase,
     excluded: BTreeSet<i32>,
     paused: bool,
-    /// Calendar events already prompted for (or declined), so a refresh does not prompt twice.
+    /// Microphone use by other apps while the state follows one call (or a manual recording):
+    /// kept, so the next call prompts when this one ends (second review
+    /// rv-20261013T130528Z-361c4090-dbf1 #3: a call started inside the end grace was lost).
+    others: BTreeMap<String, Call>,
+    /// Calendar events shown, attached to a call, or that WERE the call followed, so the clock's
+    /// offer every second does not prompt twice. A meeting that had to wait is not in here, so it
+    /// prompts when the call ends (rv-20261013T130528Z-361c4090-dbf1 #1).
     prompted_events: BTreeSet<String>,
     /// A calendar meeting declined before anyone joined it: its call, when it starts, is that
     /// declined meeting and does not prompt (second review rv-20261013T120455Z-516bb135-67f2 #1).
@@ -225,10 +269,20 @@ impl MeetingMonitor {
     }
 
     /// A process whose microphone use is RichOS's own (the capture process it starts).
+    ///
+    /// Its own start may already have been reported (the watcher's poll and the spawn race): a
+    /// "call" that was only this process was never a call, and a recording it armed is unarmed.
     pub fn exclude_pid(&mut self, pid: i32) {
         self.excluded.insert(pid);
-        if let Some(c) = self.phase.call_mut() {
+        self.others.retain(|_, c| {
             c.live.remove(&pid);
+            !c.live.is_empty() || c.quiet_since.is_some()
+        });
+        let only_ours = self.phase.call_mut().is_some_and(|c| c.live.remove(&pid) && c.live.is_empty() && c.quiet_since.is_none());
+        if only_ours {
+            if let Phase::Recording { call, .. } | Phase::Failed { call, .. } | Phase::Prompting { call, scheduled: Some(_) } = &mut self.phase {
+                *call = None;
+            }
         }
     }
 
@@ -258,87 +312,108 @@ impl MeetingMonitor {
     /// One watcher line, at `now`.
     pub fn watch(&mut self, line: &WatchLine, now: u64) -> Vec<Action> {
         match line {
-            WatchLine::Started { pid, family, app, .. } if !self.excluded.contains(pid) => self.mic_started(*pid, family, app.clone()),
+            WatchLine::Started { pid, family, app, .. } if !self.excluded.contains(pid) => self.mic_started(*pid, family, app.clone(), now),
             WatchLine::Stopped { pid, family, .. } if !self.excluded.contains(pid) => self.mic_stopped(*pid, family, now),
             _ => vec![],
         }
     }
 
-    fn mic_started(&mut self, pid: i32, family: &str, app: Option<String>) -> Vec<Action> {
-        if let Some(c) = self.phase.call_mut() {
-            if c.family == family {
-                c.live.insert(pid);
-                c.quiet_since = None;
-            }
-            // Another app while one call is prompting, recording or declined: one prompt and one
-            // recording at a time, never a second.
+    fn mic_started(&mut self, pid: i32, family: &str, app: Option<String>, now: u64) -> Vec<Action> {
+        // The followed call's own app: the same call (a second process, or input back after a mute).
+        if let Some(c) = self.phase.call_mut().filter(|c| c.family == family) {
+            c.live.insert(pid);
+            c.quiet_since = None;
             return vec![];
         }
-        match &mut self.phase {
-            Phase::Idle if self.declined_event.is_some() => {
-                // The calendar meeting he declined before joining: this is its call. Held as
-                // declined until it ends, like any declined call.
-                self.declined_event = None;
-                self.phase = Phase::Done { call: Call::new(family, app, pid) };
-                vec![]
-            }
-            Phase::Idle => {
-                let call = Call::new(family, app, pid);
-                if self.paused {
-                    // Nothing prompts while paused; remember the call so it does not prompt the
-                    // moment prompts resume halfway through it.
-                    self.phase = Phase::Done { call };
-                    return vec![];
-                }
-                let kind = PromptKind::Unscheduled { app: call.app.clone().unwrap_or_else(|| call.family.clone()) };
-                self.phase = Phase::Prompting { call: Some(call), scheduled: None };
-                vec![Action::ShowPrompt(kind)]
-            }
-            // A calendar prompt nobody had joined: this is its call (no second prompt).
-            Phase::Prompting { call, .. } => {
-                *call = Some(Call::new(family, app, pid));
-                vec![]
-            }
-            // An unarmed calendar recording arms on the first call to start; a manual one never does.
-            // So does a failed one waiting on its card, so Try again still ends with the call
-            // (second review rv-20261013T120455Z-516bb135-67f2 #2).
-            Phase::Recording { call, start } | Phase::Failed { call, start } if !start.manual => {
-                *call = Some(Call::new(family, app, pid));
-                vec![]
-            }
-            _ => vec![],
-        }
+        // Any other app is kept; `settle` gives it to the state when the state can take a call.
+        let c = self.others.entry(family.to_string()).or_insert_with(|| Call::new(family, app, now));
+        c.live.insert(pid);
+        c.quiet_since = None;
+        self.settle()
     }
 
     fn mic_stopped(&mut self, pid: i32, family: &str, now: u64) -> Vec<Action> {
-        if let Some(c) = self.phase.call_mut() {
-            if c.family == family && c.live.remove(&pid) && c.live.is_empty() {
+        let call = match self.phase.call_mut().filter(|c| c.family == family) {
+            Some(c) => Some(c),
+            None => self.others.get_mut(family),
+        };
+        if let Some(c) = call {
+            if c.live.remove(&pid) && c.live.is_empty() {
                 c.quiet_since = Some(now);
             }
         }
         vec![]
     }
 
-    /// The clock. Ends a call whose app has stayed off the microphone for [`END_GRACE_MS`].
-    pub fn tick(&mut self, now: u64) -> Vec<Action> {
-        let ended = self.phase.call_mut().is_some_and(|c| c.ended(now));
-        if !ended {
+    /// When the state can follow a call, the earliest other app still on the microphone becomes
+    /// it: a prompt, the call of a declined calendar meeting, or the call a calendar recording
+    /// arms on. One prompt and one recording at a time; whatever waits, waits here.
+    fn settle(&mut self) -> Vec<Action> {
+        if !self.phase.can_take_a_call() {
             return vec![];
         }
-        let out = match &mut self.phase {
-            // The call went before anybody answered: the prompt goes with it.
-            Phase::Prompting { .. } => vec![Action::HidePrompt],
-            // A manual recording only followed a declined call; it ends with Stop alone.
-            Phase::Recording { call, start } if start.manual => {
-                *call = None;
-                return vec![];
-            }
-            Phase::Recording { .. } => vec![Action::StopCapture(EndReason::CallEnded)],
-            // A failed recording's call ended: nothing is left to retry against. The problem card
-            // stays until answered; "Try again" is then a manual start.
-            _ => vec![],
+        let next = self.others.iter().filter(|(_, c)| !c.live.is_empty()).min_by_key(|(_, c)| c.since).map(|(f, _)| f.clone());
+        let Some(call) = next.and_then(|family| self.others.remove(&family)) else {
+            return vec![];
         };
-        self.phase = Phase::Idle;
+        match &mut self.phase {
+            Phase::Idle if self.declined_event.is_some() => {
+                // The calendar meeting he declined before joining: this is its call. Held as
+                // declined until it ends, like any declined call.
+                self.declined_event = None;
+                self.phase = Phase::Done { call };
+                vec![]
+            }
+            Phase::Idle if self.paused => {
+                // Nothing prompts while paused; the call is remembered so it does not prompt the
+                // moment prompts resume halfway through it.
+                self.phase = Phase::Done { call };
+                vec![]
+            }
+            Phase::Idle => {
+                let kind = PromptKind::Unscheduled { app: call.app.clone().unwrap_or_else(|| call.family.clone()) };
+                self.phase = Phase::Prompting { call: Some(call), scheduled: None };
+                vec![Action::ShowPrompt(kind)]
+            }
+            // A calendar prompt nobody had joined: this is its call (no second prompt). A calendar
+            // recording, or a failed one waiting on its card, arms on it, so it ends with the call
+            // (second review rv-20261013T120455Z-516bb135-67f2 #2).
+            Phase::Prompting { call: slot, .. } | Phase::Recording { call: slot, .. } | Phase::Failed { call: slot, .. } => {
+                *slot = Some(call);
+                vec![]
+            }
+            Phase::Done { .. } => {
+                self.others.insert(call.family.clone(), call);
+                vec![]
+            }
+        }
+    }
+
+    /// The clock. Ends a call whose app has stayed off the microphone for [`END_GRACE_MS`].
+    pub fn tick(&mut self, now: u64) -> Vec<Action> {
+        let mut out = vec![];
+        if self.phase.call().is_some_and(|c| c.ended(now)) {
+            let (said, idle) = match &mut self.phase {
+                // The call went before anybody answered: the prompt goes with it.
+                Phase::Prompting { .. } => (Some(Action::HidePrompt), true),
+                // A manual recording only followed a declined call; it ends with Stop alone.
+                Phase::Recording { call, start } if start.manual => {
+                    *call = None;
+                    (None, false)
+                }
+                Phase::Recording { .. } => (Some(Action::StopCapture(EndReason::CallEnded)), true),
+                // A failed recording's call ended: nothing is left to retry against. The problem
+                // card stays until answered; "Try again" is then a manual start.
+                _ => (None, true),
+            };
+            out.extend(said);
+            if idle {
+                self.phase = Phase::Idle;
+            }
+        }
+        // Other apps whose calls ended while they waited are forgotten; one still on is next.
+        self.others.retain(|_, c| !c.ended(now));
+        out.extend(self.settle());
         out
     }
 
@@ -361,35 +436,64 @@ impl MeetingMonitor {
         actions
     }
 
-    /// A calendar meeting is due to prompt.
+    /// A calendar meeting is due to prompt. The app's clock offers every due meeting every second
+    /// ([`MeetingMonitor::clock`]): one that cannot prompt now is simply not taken, and prompts on
+    /// a later offer, once the call in the way has ended, if the meeting is still on.
     pub fn scheduled(&mut self, meeting: Scheduled) -> Vec<Action> {
-        if !self.prompted_events.insert(meeting.event_id.clone()) {
+        if self.prompted_events.contains(&meeting.event_id) {
             return vec![];
         }
+        enum Offer {
+            /// Prompt for it (replacing a calendar prompt nobody joined, if one is up).
+            Show,
+            /// The unscheduled prompt up is this meeting: it gets the title.
+            Title,
+            /// Nothing to show: paused, or it is the call already followed.
+            Taken,
+            /// Another call is followed: offered again once that call ends.
+            Wait,
+        }
+        let offer = match &self.phase {
+            Phase::Idle if self.paused => Offer::Taken,
+            Phase::Idle => Offer::Show,
+            // A calendar prompt nobody joined, and a later meeting is due: the later one replaces
+            // it (second review rv-20261013T110409Z-a46fc74d-c9b9 #1).
+            Phase::Prompting { call: None, scheduled: Some(old) } if old.starts_at < meeting.starts_at => Offer::Show,
+            Phase::Prompting { call: Some(c), scheduled: None } if c.is_meeting(&meeting) => Offer::Title,
+            // Following another calendar meeting: this one is a different meeting.
+            Phase::Prompting { scheduled: Some(_), .. } => Offer::Wait,
+            Phase::Recording { start, .. } | Phase::Failed { start, .. } if start.event_id.is_some() => Offer::Wait,
+            Phase::Prompting { call: Some(c), .. } | Phase::Recording { call: Some(c), .. } | Phase::Failed { call: Some(c), .. } | Phase::Done { call: c } => {
+                if c.is_meeting(&meeting) {
+                    Offer::Taken
+                } else {
+                    Offer::Wait
+                }
+            }
+            // A manual recording with no call to compare: an in-person meeting is most likely
+            // this one, so it is taken, as before.
+            _ => Offer::Taken,
+        };
         let kind = PromptKind::Scheduled { event_id: meeting.event_id.clone(), title: meeting.title.clone(), starts_at: meeting.starts_at };
-        match &mut self.phase {
-            // Paused: no prompt. The event is remembered above, so it does not prompt on resume,
-            // and nothing else is held: a call that starts later is free to prompt.
-            Phase::Idle if self.paused => vec![],
-            Phase::Idle => {
+        match offer {
+            Offer::Wait => vec![],
+            Offer::Taken => {
+                self.prompted_events.insert(meeting.event_id);
+                vec![]
+            }
+            Offer::Title => {
+                self.prompted_events.insert(meeting.event_id.clone());
+                if let Phase::Prompting { scheduled, .. } = &mut self.phase {
+                    *scheduled = Some(meeting);
+                }
+                vec![Action::ShowPrompt(kind)]
+            }
+            Offer::Show => {
+                self.prompted_events.insert(meeting.event_id.clone());
                 self.declined_event = None;
                 self.phase = Phase::Prompting { call: None, scheduled: Some(meeting) };
                 vec![Action::ShowPrompt(kind)]
             }
-            // An unscheduled prompt already up for a live call: the same meeting; give it the title.
-            Phase::Prompting { scheduled: s @ None, .. } => {
-                *s = Some(meeting);
-                vec![Action::ShowPrompt(kind)]
-            }
-            // A calendar prompt nobody joined, and a later meeting is due: the later one replaces it
-            // (second review rv-20261013T110409Z-a46fc74d-c9b9 #1: the old invitation stayed up for
-            // ever and took the next call). A prompt with a live call is never replaced.
-            Phase::Prompting { call: None, scheduled: Some(old) } if old.starts_at < meeting.starts_at => {
-                self.phase = Phase::Prompting { call: None, scheduled: Some(meeting) };
-                vec![Action::ShowPrompt(kind)]
-            }
-            // A recording, a declined call or another calendar prompt: no second prompt.
-            _ => vec![],
         }
     }
 
@@ -416,7 +520,9 @@ impl MeetingMonitor {
         }
         if self.unjoined_calendar_prompt() == Some(event_id) {
             self.phase = Phase::Idle;
-            return vec![Action::HidePrompt];
+            let mut out = vec![Action::HidePrompt];
+            out.extend(self.settle());
+            return out;
         }
         vec![]
     }
@@ -428,13 +534,22 @@ impl MeetingMonitor {
         if let Phase::Prompting { call: None, scheduled: Some(s) } = &self.phase {
             if s.event_id == event_id {
                 self.phase = Phase::Idle;
-                return vec![Action::HidePrompt];
+                let mut out = vec![Action::HidePrompt];
+                out.extend(self.settle());
+                return out;
             }
         }
         vec![]
     }
 
     pub fn input(&mut self, input: Input) -> Vec<Action> {
+        let mut out = self.answer(input);
+        // Declining or stopping may leave the state free: a call that waited prompts now.
+        out.extend(self.settle());
+        out
+    }
+
+    fn answer(&mut self, input: Input) -> Vec<Action> {
         match (input, &self.phase) {
             (Input::TakeNotes | Input::ManualStart, Phase::Prompting { call, scheduled }) => {
                 // Starting from Settings while a prompt (or its bar) is up starts THAT recording
@@ -807,7 +922,11 @@ mod tests {
         m.input(Input::TakeNotes);
         assert_eq!(m.watch(&started(20, "com.apple.VoiceMemos", "Voice Memos"), 1_000), vec![]);
         m.watch(&stopped(10, ZOOM), 5_000);
-        assert_eq!(m.tick(5_000 + END_GRACE_MS), vec![Action::StopCapture(EndReason::CallEnded)]);
+        // Still on the microphone when the call ends, it is the next one (rv-20261013T130528Z #3).
+        assert_eq!(
+            m.tick(5_000 + END_GRACE_MS),
+            vec![Action::StopCapture(EndReason::CallEnded), Action::ShowPrompt(PromptKind::Unscheduled { app: "Voice Memos".into() })]
+        );
     }
 
     #[test]
@@ -835,5 +954,286 @@ mod tests {
         assert_eq!(m.withdraw("e1"), vec![Action::HidePrompt]);
         assert!(!m.is_prompting());
         assert_eq!(m.scheduled(s).len(), 1, "moved to a later time: it prompts at the new time");
+    }
+
+    // ---- Call sequences, as a table ---------------------------------------------------------
+    //
+    // Four second reviews in a row (rv-20261013T090233Z, rv-20261013T100322Z-8bfcf4fe-37ac,
+    // rv-20261013T110409Z-a46fc74d-c9b9, rv-20261013T120455Z-516bb135-67f2, then
+    // rv-20261013T130528Z-361c4090-dbf1) each found one more sequence this state got wrong. This
+    // is every sequence the monitor must handle, written as what the CEO would see: each row is a
+    // moment (seconds), what happens then, what the app is told to do since the row before, and
+    // the state after. The clock runs once a second through MeetingMonitor::clock, with the
+    // calendar the rows have added, exactly as the app's clock thread runs it.
+
+    const TEAMS: &str = "com.microsoft.teams2";
+    const CAPTURE: &str = "pid:99";
+
+    #[derive(Debug, Clone)]
+    enum Ev {
+        /// A process of this app family starts using the microphone.
+        On(i32, &'static str),
+        /// It stops.
+        Off(i32, &'static str),
+        /// The synced calendar gains a meeting: title (also its id), start and end, in seconds.
+        Cal(&'static str, u64, u64),
+        /// The CEO's input or the capture's news.
+        Do(Input),
+        /// The app excludes its own capture process.
+        Exclude(i32),
+        Pause(bool),
+        /// Only the clock runs.
+        Wait,
+    }
+    use Ev::*;
+
+    fn app_of(family: &str) -> &'static str {
+        match family {
+            ZOOM => "Zoom",
+            TEAMS => "Teams",
+            _ => "RichOS capture",
+        }
+    }
+
+    fn say(a: &Action) -> String {
+        match a {
+            Action::ShowPrompt(PromptKind::Unscheduled { app }) => format!("prompt {app}"),
+            Action::ShowPrompt(PromptKind::Scheduled { title, .. }) => format!("prompt '{title}'"),
+            Action::HidePrompt => "hide".into(),
+            Action::StartCapture { manual: true, .. } => "start manual".into(),
+            Action::StartCapture { title: Some(t), .. } => format!("start '{t}'"),
+            Action::StartCapture { title: None, .. } => "start".into(),
+            Action::StopCapture(EndReason::CallEnded) => "stop: call ended".into(),
+            Action::StopCapture(EndReason::StoppedEarly) => "stop: early".into(),
+        }
+    }
+
+    fn state(m: &MeetingMonitor) -> String {
+        let on = |call: &Option<Call>| match call {
+            Some(c) => format!(" on {}", app_of(&c.family)),
+            None => String::new(),
+        };
+        let what = |start: &Start, call: &Option<Call>| {
+            let title = start.title.as_ref().map(|t| format!(" '{t}'")).unwrap_or_default();
+            let tail = match (start.manual, call) {
+                (true, _) => " manual".to_string(),
+                (false, None) => " unarmed".to_string(),
+                (false, c) => on(c),
+            };
+            format!("{title}{tail}")
+        };
+        match &m.phase {
+            Phase::Idle => "idle".into(),
+            Phase::Prompting { call, scheduled } => {
+                let title = scheduled.as_ref().map(|s| format!(" '{}'", s.title)).unwrap_or_default();
+                format!("prompting{title}{}", on(call))
+            }
+            Phase::Recording { call, start } => format!("recording{}", what(start, call)),
+            Phase::Failed { call, start } => format!("failed{}", what(start, call)),
+            Phase::Done { call } => format!("holding {}", app_of(&call.family)),
+        }
+    }
+
+    type Row = (u64, Ev, &'static [&'static str], &'static str);
+
+    /// Walk one table; every mismatch is returned, not just the first.
+    fn walk(name: &str, rows: &[Row]) -> Vec<String> {
+        let mut m = MeetingMonitor::new();
+        let mut calendar: Vec<CalendarMeeting> = Vec::new();
+        let mut clock = 0u64;
+        let mut wrong = Vec::new();
+        for (i, (t, ev, want, want_state)) in rows.iter().enumerate() {
+            let mut got = Vec::new();
+            while clock < *t {
+                clock += 1;
+                got.extend(m.clock(clock * 1000, &calendar));
+            }
+            let now = t * 1000;
+            got.extend(match ev.clone() {
+                On(pid, family) => m.watch(&started(pid, family, app_of(family)), now),
+                Off(pid, family) => m.watch(&stopped(pid, family), now),
+                Cal(title, start, end) => {
+                    calendar.push(CalendarMeeting { event_id: title.into(), title: title.into(), starts_at: start * 1000, ends_at: Some(end * 1000) });
+                    m.clock(now, &calendar)
+                }
+                Do(input) => m.input(input),
+                Exclude(pid) => {
+                    m.exclude_pid(pid);
+                    vec![]
+                }
+                Pause(p) => m.set_paused(p),
+                Wait => vec![],
+            });
+            let got: Vec<String> = got.iter().map(say).collect();
+            if got != *want || state(&m) != *want_state {
+                wrong.push(format!(
+                    "{name}, row {} (t={t} s, {ev:?}): told {got:?}, now {:?}; expected {want:?}, {want_state:?}",
+                    i + 1,
+                    state(&m)
+                ));
+                break;
+            }
+        }
+        wrong
+    }
+
+    #[test]
+    fn every_call_sequence_gives_the_expected_prompt_and_recording() {
+        use Input::*;
+        let tables: &[(&str, &[Row])] = &[
+            ("back-to-back calls, in two apps and then the same app", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (12, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (100, Off(1, ZOOM), &[], "recording on Zoom"),
+                (107, Wait, &[], "recording on Zoom"),
+                (108, Wait, &["stop: call ended"], "idle"),
+                (130, On(2, TEAMS), &["prompt Teams"], "prompting on Teams"),
+                (131, Do(TakeNotes), &["hide", "start"], "recording on Teams"),
+                (200, Off(2, TEAMS), &[], "recording on Teams"),
+                (208, Wait, &["stop: call ended"], "idle"),
+                (220, On(3, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+            ]),
+            ("the next call starts inside the end grace (rv-20261013T130528Z #3)", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (12, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (100, Off(1, ZOOM), &[], "recording on Zoom"),
+                (102, On(2, TEAMS), &[], "recording on Zoom"),
+                (108, Wait, &["stop: call ended", "prompt Teams"], "prompting on Teams"),
+                (110, Do(TakeNotes), &["hide", "start"], "recording on Teams"),
+                (300, Off(2, TEAMS), &[], "recording on Teams"),
+                (308, Wait, &["stop: call ended"], "idle"),
+            ]),
+            ("a mute inside the call is the same call", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (12, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (100, Off(1, ZOOM), &[], "recording on Zoom"),
+                (105, On(1, ZOOM), &[], "recording on Zoom"),
+                (130, Wait, &[], "recording on Zoom"),
+            ]),
+            ("a second app while a prompt is up prompts when the first call goes", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (20, On(2, TEAMS), &[], "prompting on Zoom"),
+                (30, Off(1, ZOOM), &[], "prompting on Zoom"),
+                (38, Wait, &["hide", "prompt Teams"], "prompting on Teams"),
+            ]),
+            ("calendar prompt, then its call", &[
+                (0, Cal("Weekly sync", 60, 1860), &["prompt 'Weekly sync'"], "prompting 'Weekly sync'"),
+                (65, On(1, ZOOM), &[], "prompting 'Weekly sync' on Zoom"),
+                (70, Do(TakeNotes), &["hide", "start 'Weekly sync'"], "recording 'Weekly sync' on Zoom"),
+                (1800, Off(1, ZOOM), &[], "recording 'Weekly sync' on Zoom"),
+                (1808, Wait, &["stop: call ended"], "idle"),
+                (1840, Wait, &[], "idle"),
+            ]),
+            ("Take Notes before joining: the call arms it and ends it", &[
+                (0, Cal("Board", 60, 1860), &["prompt 'Board'"], "prompting 'Board'"),
+                (10, Do(TakeNotes), &["hide", "start 'Board'"], "recording 'Board' unarmed"),
+                (600, Wait, &[], "recording 'Board' unarmed"),
+                (610, On(1, ZOOM), &[], "recording 'Board' on Zoom"),
+                (1500, Off(1, ZOOM), &[], "recording 'Board' on Zoom"),
+                (1508, Wait, &["stop: call ended"], "idle"),
+            ]),
+            ("the capture's own microphone use reported before the app excludes it", &[
+                (0, Cal("Board", 60, 1860), &["prompt 'Board'"], "prompting 'Board'"),
+                (10, Do(TakeNotes), &["hide", "start 'Board'"], "recording 'Board' unarmed"),
+                (11, On(99, CAPTURE), &[], "recording 'Board' on RichOS capture"),
+                (11, Exclude(99), &[], "recording 'Board' unarmed"),
+                (70, On(1, ZOOM), &[], "recording 'Board' on Zoom"),
+                (900, Off(1, ZOOM), &[], "recording 'Board' on Zoom"),
+                (908, Wait, &["stop: call ended"], "idle"),
+            ]),
+            ("a calendar prompt dismissed, then joined (rv-20261013T120455Z #1)", &[
+                (0, Cal("Standup", 60, 960), &["prompt 'Standup'"], "prompting 'Standup'"),
+                (5, Do(NotThisOne), &["hide"], "idle"),
+                (60, On(1, ZOOM), &[], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+            ]),
+            ("a call dismissed; a second app waits for it to end", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (12, Do(NotThisOne), &["hide"], "holding Zoom"),
+                (20, On(2, TEAMS), &[], "holding Zoom"),
+                (100, Off(1, ZOOM), &[], "holding Zoom"),
+                (108, Wait, &["prompt Teams"], "prompting on Teams"),
+            ]),
+            ("a failed capture, Try again, a second failure, then a new call", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (12, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (40, Do(CaptureEnded), &[], "failed on Zoom"),
+                (50, On(2, TEAMS), &[], "failed on Zoom"),
+                (60, Do(Retry), &["hide", "start"], "recording on Zoom"),
+                (70, Do(CaptureEnded), &[], "failed on Zoom"),
+                (100, Off(1, ZOOM), &[], "failed on Zoom"),
+                (108, Wait, &["prompt Teams"], "prompting on Teams"),
+            ]),
+            ("a pre-call capture fails, then the call starts (rv-20261013T120455Z #2)", &[
+                (0, Cal("Standup", 60, 960), &["prompt 'Standup'"], "prompting 'Standup'"),
+                (5, Do(TakeNotes), &["hide", "start 'Standup'"], "recording 'Standup' unarmed"),
+                (6, Do(CaptureEnded), &[], "failed 'Standup' unarmed"),
+                (60, On(1, ZOOM), &[], "failed 'Standup' on Zoom"),
+                (61, Do(Retry), &["hide", "start 'Standup'"], "recording 'Standup' on Zoom"),
+                (900, Off(1, ZOOM), &[], "recording 'Standup' on Zoom"),
+                (908, Wait, &["stop: call ended"], "idle"),
+            ]),
+            ("two calendar meetings due: the later replaces a prompt nobody joined", &[
+                (0, Cal("Missed", 0, 1800), &["prompt 'Missed'"], "prompting 'Missed'"),
+                (0, Cal("Pricing", 120, 1920), &[], "prompting 'Missed'"),
+                (60, Wait, &["prompt 'Pricing'"], "prompting 'Pricing'"),
+                (125, On(1, ZOOM), &[], "prompting 'Pricing' on Zoom"),
+                (126, Do(TakeNotes), &["hide", "start 'Pricing'"], "recording 'Pricing' on Zoom"),
+            ]),
+            ("two calendar meetings back to back, the first recorded (rv-20261013T130528Z #1)", &[
+                (0, Cal("A", 60, 1860), &["prompt 'A'"], "prompting 'A'"),
+                (0, Cal("B", 1860, 3660), &[], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (61, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' on Zoom"),
+                (1810, Wait, &[], "recording 'A' on Zoom"),
+                (1850, Off(1, ZOOM), &[], "recording 'A' on Zoom"),
+                (1858, Wait, &["stop: call ended", "prompt 'B'"], "prompting 'B'"),
+                (1865, On(2, ZOOM), &[], "prompting 'B' on Zoom"),
+                (1866, Do(TakeNotes), &["hide", "start 'B'"], "recording 'B' on Zoom"),
+            ]),
+            ("a meeting due during a long declined call prompts when that call ends", &[
+                (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (12, Do(NotThisOne), &["hide"], "holding Zoom"),
+                (20, Cal("Later", 3000, 4800), &[], "holding Zoom"),
+                (2960, Wait, &[], "holding Zoom"),
+                (3100, Off(1, ZOOM), &[], "holding Zoom"),
+                (3108, Wait, &["prompt 'Later'"], "prompting 'Later'"),
+            ]),
+            ("joining a little early: the meeting due during that call IS that call", &[
+                (0, Cal("Early", 300, 2100), &[], "idle"),
+                (200, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (240, Wait, &["prompt 'Early'"], "prompting 'Early' on Zoom"),
+                (245, Do(TakeNotes), &["hide", "start 'Early'"], "recording 'Early' on Zoom"),
+                (1500, Off(1, ZOOM), &[], "recording 'Early' on Zoom"),
+                (1508, Wait, &["stop: call ended"], "idle"),
+                (1530, Wait, &[], "idle"),
+            ]),
+            ("joining early and recording before the meeting is due: no second prompt after", &[
+                (0, Cal("Early", 300, 2100), &[], "idle"),
+                (200, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (205, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (260, Wait, &[], "recording on Zoom"),
+                (1500, Off(1, ZOOM), &[], "recording on Zoom"),
+                (1508, Wait, &["stop: call ended"], "idle"),
+                (1530, Wait, &[], "idle"),
+            ]),
+            ("paused: nothing prompts, the call is not prompted on resume, the next one is", &[
+                (0, Pause(true), &[], "idle"),
+                (10, On(1, ZOOM), &[], "holding Zoom"),
+                (20, Pause(false), &[], "holding Zoom"),
+                (100, Off(1, ZOOM), &[], "holding Zoom"),
+                (108, Wait, &[], "idle"),
+                (120, On(2, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+            ]),
+            ("manual notes, then a call: offered when the notes stop", &[
+                (0, Do(ManualStart), &["start manual"], "recording manual"),
+                (10, On(1, ZOOM), &[], "recording manual"),
+                (60, Do(Stop), &["stop: early", "prompt Zoom"], "prompting on Zoom"),
+            ]),
+        ];
+        let wrong: Vec<String> = tables.iter().flat_map(|(name, rows)| walk(name, rows)).collect();
+        assert!(wrong.is_empty(), "{} of {} sequences went wrong:\n{}", wrong.len(), tables.len(), wrong.join("\n"));
     }
 }
