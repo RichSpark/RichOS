@@ -42,7 +42,9 @@
 //! another call is followed, if it is still on. A meeting that comes due during a call that began
 //! close enough to its start ([`SAME_MEETING_MS`]) and is still on when it starts IS that call,
 //! and never prompts afterwards; a call over before the meeting starts was not it, and the
-//! meeting prompts.
+//! meeting prompts. A call already known to be one calendar meeting (it joined that meeting's
+//! prompt or recording, or is the meeting he declined) is never another: a different meeting due
+//! while it runs over, declined or stopped, prompts when it ends.
 //! Every sequence is one row of `every_call_sequence_gives_the_expected_prompt_and_recording`.
 
 use crate::meeting_calendar::CalendarMeeting;
@@ -183,18 +185,28 @@ struct Call {
     /// began close enough to be ([`Call::is_meeting`]). Only the call's end says whether it WAS
     /// one: see [`MeetingMonitor::end_call`].
     meetings: BTreeMap<String, u64>,
+    /// The calendar meeting this call is KNOWN to be: the calendar prompt it joined, the calendar
+    /// recording it armed, the declined meeting whose call it is, or the title its prompt took.
+    /// Kept when the call is declined or stopped, so a different meeting due while it runs over
+    /// waits for its end instead of being taken for it (handover review
+    /// rv-20261013T141401Z-390d6bea-2e23 #1).
+    event: Option<String>,
 }
 
 impl Call {
     fn new(family: &str, app: Option<String>, now: u64) -> Call {
-        Call { family: family.to_string(), app, live: BTreeSet::new(), quiet_since: None, since: now, meetings: BTreeMap::new() }
+        Call { family: family.to_string(), app, live: BTreeSet::new(), quiet_since: None, since: now, meetings: BTreeMap::new(), event: None }
     }
     fn ended(&self, now: u64) -> bool {
         self.live.is_empty() && self.quiet_since.is_some_and(|q| now.saturating_sub(q) >= END_GRACE_MS)
     }
-    /// This call is that calendar meeting: it began no earlier than [`SAME_MEETING_MS`] before it.
+    /// This call is that calendar meeting: it is known to be it, or, known to be none, it began no
+    /// earlier than [`SAME_MEETING_MS`] before it. A call known to be another meeting never is.
     fn is_meeting(&self, meeting: &Scheduled) -> bool {
-        self.since + SAME_MEETING_MS >= meeting.starts_at
+        match &self.event {
+            Some(known) => *known == meeting.event_id,
+            None => self.since + SAME_MEETING_MS >= meeting.starts_at,
+        }
     }
 }
 
@@ -377,14 +389,14 @@ impl MeetingMonitor {
             return vec![];
         }
         let next = self.others.iter().filter(|(_, c)| !c.live.is_empty()).min_by_key(|(_, c)| c.since).map(|(f, _)| f.clone());
-        let Some(call) = next.and_then(|family| self.others.remove(&family)) else {
+        let Some(mut call) = next.and_then(|family| self.others.remove(&family)) else {
             return vec![];
         };
         match &mut self.phase {
             Phase::Idle if self.declined_event.is_some() => {
                 // The calendar meeting he declined before joining: this is its call. Held as
-                // declined until it ends, like any declined call.
-                self.declined_event = None;
+                // declined until it ends, like any declined call, and known to be that meeting.
+                call.event = self.declined_event.take();
                 self.phase = Phase::Done { call };
                 vec![]
             }
@@ -401,8 +413,15 @@ impl MeetingMonitor {
             }
             // A calendar prompt nobody had joined: this is its call (no second prompt). A calendar
             // recording, or a failed one waiting on its card, arms on it, so it ends with the call
-            // (second review rv-20261013T120455Z-516bb135-67f2 #2).
-            Phase::Prompting { call: slot, .. } | Phase::Recording { call: slot, .. } | Phase::Failed { call: slot, .. } => {
+            // (second review rv-20261013T120455Z-516bb135-67f2 #2). Either way the call is known to
+            // be that calendar meeting.
+            Phase::Prompting { call: slot, scheduled } => {
+                call.event = scheduled.as_ref().map(|s| s.event_id.clone());
+                *slot = Some(call);
+                vec![]
+            }
+            Phase::Recording { call: slot, start } | Phase::Failed { call: slot, start } => {
+                call.event = start.event_id.clone();
                 *slot = Some(call);
                 vec![]
             }
@@ -531,7 +550,8 @@ impl MeetingMonitor {
             }
             Offer::Title => {
                 self.prompted_events.insert(meeting.event_id.clone());
-                if let Phase::Prompting { scheduled, .. } = &mut self.phase {
+                if let Phase::Prompting { call: Some(c), scheduled } = &mut self.phase {
+                    c.event = Some(meeting.event_id.clone());
                     *scheduled = Some(meeting);
                 }
                 vec![Action::ShowPrompt(kind)]
@@ -1270,6 +1290,34 @@ mod tests {
                 (258, Wait, &["prompt 'B'"], "prompting 'B'"),
                 (300, On(2, TEAMS), &[], "prompting 'B' on Teams"),
                 (301, Do(TakeNotes), &["hide", "start 'B'"], "recording 'B' on Teams"),
+            ]),
+            ("a known meeting declined in its call, which runs into the next meeting: the next prompts when it ends (rv-20261013T141401Z #1)", &[
+                (0, Cal("A", 60, 660), &["prompt 'A'"], "prompting 'A'"),
+                (0, Cal("B", 660, 1260), &[], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (61, Do(NotThisOne), &["hide"], "holding Zoom"),
+                (600, Wait, &[], "holding Zoom"),
+                (670, Off(1, ZOOM), &[], "holding Zoom"),
+                (678, Wait, &["prompt 'B'"], "prompting 'B'"),
+            ]),
+            ("a known meeting stopped early, its call running into the next meeting: the next prompts when it ends", &[
+                (0, Cal("A", 60, 660), &["prompt 'A'"], "prompting 'A'"),
+                (0, Cal("B", 660, 1260), &[], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (61, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' on Zoom"),
+                (120, Do(Stop), &["stop: early"], "holding Zoom"),
+                (600, Wait, &[], "holding Zoom"),
+                (670, Off(1, ZOOM), &[], "holding Zoom"),
+                (678, Wait, &["prompt 'B'"], "prompting 'B'"),
+            ]),
+            ("a known meeting declined before joining, its call running into the next meeting: the next prompts when it ends", &[
+                (0, Cal("A", 60, 660), &["prompt 'A'"], "prompting 'A'"),
+                (0, Cal("B", 660, 1260), &[], "prompting 'A'"),
+                (5, Do(NotThisOne), &["hide"], "idle"),
+                (60, On(1, ZOOM), &[], "holding Zoom"),
+                (600, Wait, &[], "holding Zoom"),
+                (670, Off(1, ZOOM), &[], "holding Zoom"),
+                (678, Wait, &["prompt 'B'"], "prompting 'B'"),
             ]),
             ("joining early and recording before the meeting is due: no second prompt after", &[
                 (0, Cal("Early", 300, 2100), &[], "idle"),
