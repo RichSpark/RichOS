@@ -62,10 +62,12 @@ built with one: a nightly's engine-pin.env).
   r19-offer   Start pressed, first setup answered (the memory question "Not now", the company
               added); Rich's offer appears once, its "Not now" says the drawn line, and
               dictation.json says offered
+  r19-grants  before r19-sheet, for r19-set-up: the Microphone and Accessibility rows a person's
+              Allow writes, so the app r19-sheet relaunches starts with them
   r19-set-up  instead of r19-offer, the CEO's 2026-10-13 test of nightly 54: Start pressed, the
               company added as --company-name, "Start the questions" pressed; the rail paints the
               name as typed (OCR, case kept), the first conversation is "Onboarding", the offer says
-              his copy; Turn on dictation with both grants written as a person gives them, F2 picked
+              his copy; Turn on dictation (both grants from r19-grants), F2 picked
               in the sheet and the sheet closed: a "Dictation feature" conversation naming F2,
               recorded in dictation.json, the dictation text gone from the onboarding conversation,
               no dictation line under the message box, and Rich's reply naming the company exactly
@@ -95,7 +97,7 @@ StepFailed = adopt_walk.StepFailed
 
 STEPS = ['identity', 'meanwhile', 'arrived', 'voice', 'relaunch']
 # Round 19's states 1 to 4 (dictation plan slice 4); never in the default run.
-R19_STEPS = ['r19-sheet', 'r19-offer', 'r19-set-up', 'r19-again']
+R19_STEPS = ['r19-grants', 'r19-sheet', 'r19-offer', 'r19-set-up', 'r19-again']
 QA = HERE.parent / 'qa'
 # What OCR must read in each state: fragments of his two lines short enough to sit on one line
 # of the sheet (setup.rs MEDIA_TOOLS_WHY, setup_view.rs SETUP_DOWNLOAD_LINE).
@@ -675,6 +677,25 @@ class SetupWalk(adopt_walk.Walk):
             raise StepFailed('; '.join(why) + ' — ' + json.dumps(facts))
         return facts
 
+    def r19_grants(self):
+        """The two grants a person gives when he turns dictation on, written as dictation-walk.py
+        `stage` writes them, BEFORE r19-sheet relaunches the app. Written while the app ran (the
+        walk of 2047c2a73, 18:34Z), the microphone read Allowed and macOS still asked for
+        Accessibility, so the app that turns dictation on must start after the rows exist."""
+        user_db = '"$HOME/Library/Application Support/com.apple.TCC/TCC.db"'
+        sys_db = '"/Library/Application Support/com.apple.TCC/TCC.db"'
+        row = ("INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, "
+               "indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) "
+               "VALUES ('{svc}', 'com.richos.app', 0, 2, 2, 1, 0, 'UNUSED', 0, strftime('%s','now'));")
+        guest(self.vm, f'sqlite3 {user_db} ' + shlex.quote(row.format(svc='kTCCServiceMicrophone')))
+        guest(self.vm, f'sudo -n sqlite3 {sys_db} ' + shlex.quote(row.format(svc='kTCCServiceAccessibility')))
+        query = "SELECT service FROM access WHERE client='com.richos.app' ORDER BY service;"
+        grants = (guest(self.vm, f'sqlite3 {user_db} ' + shlex.quote(query)).splitlines()
+                  + guest(self.vm, f'sudo -n sqlite3 {sys_db} ' + shlex.quote(query)).splitlines())
+        if sorted(grants) != ['kTCCServiceAccessibility', 'kTCCServiceMicrophone']:
+            raise StepFailed(f'com.richos.app must have exactly Microphone and Accessibility: {grants}')
+        return {'grants': sorted(grants)}
+
     def r19_set_up(self):
         """The CEO's test of nightly 54 (richos-hq docs/ceo-input/2026-10-13_1), on this fresh
         install: the company he adds keeps its capitals in the rail and in Rich's words, the first
@@ -713,14 +734,6 @@ class SetupWalk(adopt_walk.Walk):
         facts['onboarding_title'] = self.present('Onboarding', role='AXButton')
         facts['offer_copy'] = all(self.shows_text(t) for t in R19_OFFER_COPY_AX)
         self.shot('set-up-offer.png')
-        # The two grants a person gives when he turns dictation on (dictation-walk.py `stage`).
-        user_db = '"$HOME/Library/Application Support/com.apple.TCC/TCC.db"'
-        sys_db = '"/Library/Application Support/com.apple.TCC/TCC.db"'
-        row = ("INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, "
-               "indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) "
-               "VALUES ('{svc}', 'com.richos.app', 0, 2, 2, 1, 0, 'UNUSED', 0, strftime('%s','now'));")
-        guest(self.vm, f'sqlite3 {user_db} ' + shlex.quote(row.format(svc='kTCCServiceMicrophone')))
-        guest(self.vm, f'sudo -n sqlite3 {sys_db} ' + shlex.quote(row.format(svc='kTCCServiceAccessibility')))
         self.ax('click', '--id', 'dictation-offer-yes')
         self.mark('"Turn on dictation" pressed', pressed=True)
         end = time.monotonic() + 120
