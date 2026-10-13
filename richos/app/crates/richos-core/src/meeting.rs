@@ -212,6 +212,10 @@ pub struct MeetingMonitor {
     paused: bool,
     /// Calendar events already prompted for (or declined), so a refresh does not prompt twice.
     prompted_events: BTreeSet<String>,
+    /// A calendar meeting declined before anyone joined it: its call, when it starts, is that
+    /// declined meeting and does not prompt (second review rv-20261013T120455Z-516bb135-67f2 #1).
+    /// Cleared when that call starts, when a later meeting prompts, or when the meeting is over.
+    declined_event: Option<String>,
 }
 
 impl MeetingMonitor {
@@ -270,6 +274,13 @@ impl MeetingMonitor {
             return vec![];
         }
         match &mut self.phase {
+            Phase::Idle if self.declined_event.is_some() => {
+                // The calendar meeting he declined before joining: this is its call. Held as
+                // declined until it ends, like any declined call.
+                self.declined_event = None;
+                self.phase = Phase::Done { call: Call::new(family, app, pid) };
+                vec![]
+            }
             Phase::Idle => {
                 let call = Call::new(family, app, pid);
                 if self.paused {
@@ -288,7 +299,9 @@ impl MeetingMonitor {
                 vec![]
             }
             // An unarmed calendar recording arms on the first call to start; a manual one never does.
-            Phase::Recording { call, start } if !start.manual => {
+            // So does a failed one waiting on its card, so Try again still ends with the call
+            // (second review rv-20261013T120455Z-516bb135-67f2 #2).
+            Phase::Recording { call, start } | Phase::Failed { call, start } if !start.manual => {
                 *call = Some(Call::new(family, app, pid));
                 vec![]
             }
@@ -339,6 +352,7 @@ impl MeetingMonitor {
             // and nothing else is held: a call that starts later is free to prompt.
             Phase::Idle if self.paused => vec![],
             Phase::Idle => {
+                self.declined_event = None;
                 self.phase = Phase::Prompting { call: None, scheduled: Some(meeting) };
                 vec![Action::ShowPrompt(kind)]
             }
@@ -367,9 +381,19 @@ impl MeetingMonitor {
         }
     }
 
+    /// The calendar meeting held without a call: an unjoined prompt, or one declined before
+    /// anyone joined. The app retires it once the meeting is over.
+    pub fn pending_calendar_event(&self) -> Option<&str> {
+        self.unjoined_calendar_prompt().or(self.declined_event.as_deref())
+    }
+
     /// The meeting a calendar prompt was for has ended and nobody joined: the prompt goes, and the
-    /// event stays prompted (it never comes back). A prompt with a live call is untouched.
+    /// event stays prompted (it never comes back); a declined one is forgotten, so the next call
+    /// prompts. A prompt with a live call is untouched.
     pub fn retire(&mut self, event_id: &str) -> Vec<Action> {
+        if self.declined_event.as_deref() == Some(event_id) {
+            self.declined_event = None;
+        }
         if self.unjoined_calendar_prompt() == Some(event_id) {
             self.phase = Phase::Idle;
             return vec![Action::HidePrompt];
@@ -405,6 +429,10 @@ impl MeetingMonitor {
                 vec![Action::HidePrompt, action]
             }
             (Input::NotThisOne, Phase::Prompting { call, .. } | Phase::Failed { call, .. }) => {
+                // Declined before anyone joined: remember the meeting, so its call does not prompt.
+                if let Phase::Prompting { call: None, scheduled: Some(s) } = &self.phase {
+                    self.declined_event = Some(s.event_id.clone());
+                }
                 self.phase = Phase::done(call);
                 vec![Action::HidePrompt]
             }
@@ -689,6 +717,44 @@ mod tests {
         assert_eq!(c.scheduled(Scheduled { event_id: "b".into(), title: "B".into(), starts_at: 9_000 }), vec![]);
         assert_eq!(c.retire("a"), vec![]);
         assert!(c.is_prompting());
+    }
+
+    #[test]
+    fn a_calendar_meeting_declined_before_joining_does_not_prompt_when_its_call_starts() {
+        // Second review rv-20261013T120455Z-516bb135-67f2 #1: closing the pre-call prompt, then
+        // joining, prompted again for the same meeting.
+        let meeting = Scheduled { event_id: "e1".into(), title: "Standup".into(), starts_at: 60_000 };
+        let mut m = MeetingMonitor::new();
+        m.scheduled(meeting);
+        assert_eq!(m.input(Input::NotThisOne), vec![Action::HidePrompt]);
+        assert_eq!(m.pending_calendar_event(), Some("e1"));
+        assert_eq!(m.watch(&started(10, ZOOM, "zoom.us"), 70_000), vec![], "its call does not prompt");
+        // Held as declined until it ends; the next call prompts.
+        m.watch(&stopped(10, ZOOM), 90_000);
+        m.tick(90_000 + END_GRACE_MS);
+        assert_eq!(m.watch(&started(11, ZOOM, "zoom.us"), 200_000), zoom_prompt());
+        // Never joined: once the meeting is over the app retires it, and a later call prompts.
+        let mut r = MeetingMonitor::new();
+        r.scheduled(Scheduled { event_id: "e2".into(), title: "Sync".into(), starts_at: 60_000 });
+        r.input(Input::NotThisOne);
+        assert_eq!(r.retire("e2"), vec![]);
+        assert_eq!(r.pending_calendar_event(), None);
+        assert_eq!(r.watch(&started(10, ZOOM, "zoom.us"), 9_000_000), zoom_prompt());
+    }
+
+    #[test]
+    fn a_call_that_starts_while_a_pre_call_capture_is_failed_is_followed_by_the_retry() {
+        // Second review rv-20261013T120455Z-516bb135-67f2 #2: the retry stayed unarmed, so
+        // hang-up never stopped it.
+        let mut m = MeetingMonitor::new();
+        m.scheduled(Scheduled { event_id: "e1".into(), title: "Standup".into(), starts_at: 60_000 });
+        m.input(Input::TakeNotes);
+        m.input(Input::CaptureEnded);
+        assert_eq!(m.watch(&started(10, ZOOM, "zoom.us"), 70_000), vec![], "no second prompt");
+        m.input(Input::Retry);
+        assert!(m.is_recording());
+        m.watch(&stopped(10, ZOOM), 100_000);
+        assert_eq!(m.tick(100_000 + END_GRACE_MS), vec![Action::StopCapture(EndReason::CallEnded)]);
     }
 
     #[test]

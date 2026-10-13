@@ -209,8 +209,9 @@ pub fn start(app: &AppHandle) {
                 for meeting in due {
                     actions.extend(inner.monitor.scheduled(meeting));
                 }
-                // A calendar prompt nobody joined, for a meeting that is over: it goes.
-                let over = inner.monitor.unjoined_calendar_prompt().map(str::to_string).filter(|id| {
+                // A calendar meeting held without a call (an unjoined prompt, or one declined
+                // before joining) that is over: it goes.
+                let over = inner.monitor.pending_calendar_event().map(str::to_string).filter(|id| {
                     inner.calendar.iter().find(|m| &m.event_id == id).is_none_or(|m| !m.due(now))
                 });
                 if let Some(id) = over {
