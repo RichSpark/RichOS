@@ -5809,50 +5809,84 @@ function renderSetupRichLine() {
 }
 
 /// The rows, from `setupRows` and the download's last reading.
+///
+/// **THE ROWS ARE UPDATED IN PLACE, NEVER REBUILT** (his recording of nightly 54,
+/// `richos-hq/docs/ceo-input/2026-10-13_1/animations.mov`). This used to empty the list and draw
+/// every row again, and it runs on every counter reading of the download, about five a second.
+/// Each reading made a new spinner, whose rotation began again at 0 degrees: at 60 frames a
+/// second his screen showed both spinners sweep from 12 o'clock to about 3 o'clock and snap back
+/// every 12 frames (200 ms; 360 degrees per 0.9 s for 0.2 s is 80 degrees), never once going
+/// round. Round 19 (`design/mockups/rounds/round-19/dictation.html`, `runSetup`) writes only the
+/// counter and the bar's width while it counts, so its ring turns without a break; so do these.
 function renderSetupSteps() {
-  setupStepsEl.replaceChildren();
   setupStepsEl.hidden = !setupRows;
-  if (!setupRows) return;
-  for (const row of setupRows) {
-    const li = document.createElement("li");
-    li.className = "setup-step is-" + row.state;
-    li.dataset.component = row.component;
-    const mark = document.createElement("span");
-    mark.className = "setup-step-mark";
-    mark.setAttribute("aria-hidden", "true");
-    if (row.state === "done") mark.textContent = "✓";
-    const name = document.createElement("span");
-    name.className = "setup-step-name";
-    name.textContent = row.name;
-    const state = document.createElement("span");
-    state.className = "setup-step-state";
-    const counting = row.component === "media-tools" && row.state === "now" && videoToolsCount && videoToolsCount.counter;
-    if (row.state === "done") state.textContent = "Installed";
-    else if (counting) {
-      state.textContent = videoToolsCount.counter;
-      // The one element whose words carry digits and a decimal point (setup.js case 2's
-      // declared exemption names it by this attribute).
-      state.dataset.counter = "";
-    } else if (row.state === "failed") {
-      // A STEP THAT FAILED STOPS SAYING IT IS INSTALLING (found on the guest, 2026-10-08: the
-      // engine's download was refused and its row kept "Installing…" and a turning spinner under
-      // the failure sentence). The row goes still with no word of its own; the failure's own
-      // sentence, verbatim, is directly beneath the rows (`#setup-error`).
-      state.textContent = "";
-    } else state.textContent = row.state === "now" ? "Installing…" : "Waiting";
-    li.append(mark, name, state);
-    if (counting && videoToolsCount.of > 0) {
-      const bar = document.createElement("span");
+  if (!setupRows) {
+    setupStepsEl.replaceChildren();
+    return;
+  }
+  // Built once per set of items; a different set (another press) is built afresh.
+  const drawn = [...setupStepsEl.children].map((li) => li.dataset.component).join(",");
+  if (drawn !== setupRows.map((r) => r.component).join(",")) {
+    setupStepsEl.replaceChildren(...setupRows.map((row) => {
+      const li = document.createElement("li");
+      li.dataset.component = row.component;
+      const mark = document.createElement("span");
+      mark.className = "setup-step-mark";
+      mark.setAttribute("aria-hidden", "true");
+      const name = document.createElement("span");
+      name.className = "setup-step-name";
+      name.textContent = row.name;
+      const state = document.createElement("span");
+      state.className = "setup-step-state";
+      li.append(mark, name, state);
+      return li;
+    }));
+  }
+  setupRows.forEach((row, i) => paintSetupStep(setupStepsEl.children[i], row));
+  renderSetupRichLine();
+}
+
+/// One row, changed only where it differs from what is drawn.
+function paintSetupStep(li, row) {
+  const cls = "setup-step is-" + row.state;
+  if (li.className !== cls) li.className = cls;
+  const mark = li.querySelector(".setup-step-mark");
+  const check = row.state === "done" ? "✓" : "";
+  if (mark.textContent !== check) mark.textContent = check;
+  const state = li.querySelector(".setup-step-state");
+  const counting = row.component === "media-tools" && row.state === "now" && videoToolsCount && videoToolsCount.counter;
+  let words;
+  if (row.state === "done") words = "Installed";
+  else if (counting) words = videoToolsCount.counter;
+  // A STEP THAT FAILED STOPS SAYING IT IS INSTALLING (found on the guest, 2026-10-08: the
+  // engine's download was refused and its row kept "Installing…" and a turning spinner under
+  // the failure sentence). The row goes still with no word of its own; the failure's own
+  // sentence, verbatim, is directly beneath the rows (`#setup-error`).
+  else if (row.state === "failed") words = "";
+  else words = row.state === "now" ? "Installing…" : "Waiting";
+  if (state.textContent !== words) state.textContent = words;
+  // The one element whose words carry digits and a decimal point (setup.js case 2's declared
+  // exemption names it by this attribute).
+  if (counting) state.dataset.counter = "";
+  else delete state.dataset.counter;
+  let bar = li.querySelector(".setup-step-bar");
+  if (counting && videoToolsCount.of > 0) {
+    if (!bar) {
+      bar = document.createElement("span");
       bar.className = "setup-step-bar";
       bar.setAttribute("aria-hidden", "true");
-      const fill = document.createElement("b");
-      fill.style.width = Math.min(100, (100 * videoToolsCount.received) / videoToolsCount.of).toFixed(1) + "%";
-      bar.append(fill);
+      bar.append(document.createElement("b"));
       li.append(bar);
     }
-    setupStepsEl.append(li);
+    bar.firstChild.style.width = Math.min(100, (100 * videoToolsCount.received) / videoToolsCount.of).toFixed(1) + "%";
+  } else if (bar) bar.remove();
+  // EVERY SPINNER KEEPS ONE CLOCK. A spinner that starts (a row that begins installing, or the
+  // voice row drawn again by `lockSetupHeight`'s measurement of the finished sheet the moment
+  // Start appears) takes its angle from the document's clock rather than from 0 degrees, so it
+  // never jumps, and two rows turning at once turn together.
+  if (row.state === "now" && mark.getAnimations) {
+    for (const a of mark.getAnimations()) if (a.startTime !== 0) a.startTime = 0;
   }
-  renderSetupRichLine();
 }
 
 function setSetupRow(component, state) {

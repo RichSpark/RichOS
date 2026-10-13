@@ -2005,6 +2005,137 @@ async function main() {
     return "no button while the press runs; Try again (case 27) or Start (case 25) when it ends";
   });
 
+  await run.check("29  round 19, state 2: the spinners keep turning through every counter reading and through Start appearing", async () => {
+    // HIS RECORDING OF NIGHTLY 54 (docs/ceo-input/2026-10-13_1/animations.mov, 0 to 13.9 s): at
+    // 60 frames a second both spinners swept from 12 o'clock to about 3 o'clock and snapped back
+    // every 12 frames (200 ms), the cadence of the download's counter. Each reading rebuilt the
+    // rows, so each spinner was a new element whose rotation started again at 0 degrees:
+    // 400 degrees a second for 0.2 s is 80 degrees, and it never went round. Round 19 updates the
+    // counter and the bar in place (its `runSetup`), so its ring turns without a break.
+    //
+    // Measured as he sees it, by the ANGLE: whatever element is turning in a row, its rotation
+    // after a reading is where it was before plus the time between, never back at the start.
+    const page = await openApp(browser, R19);
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    await page.evaluate((line) => window.__RICHOS_MOCK__.setupEmit(line), toolsLine(300_000_000, 1_061_655_396, true, "300 MB of 1.06 GB"));
+    // Held at Claude Code's step: two rows turn at once, as in his recording.
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(true));
+    await page.click("#setup-go");
+    await page.waitForFunction(() => document.querySelectorAll("#setup-steps .setup-step.is-now").length === 2);
+    // Each turning row's spinner: its node, its turn so far (0..1) and the clock, read together.
+    const turns = () => page.evaluate(() => {
+      window.__spinNodes = window.__spinNodes || new Map();
+      const now = document.timeline.currentTime;
+      return [...document.querySelectorAll("#setup-steps .setup-step.is-now")].map((li) => {
+        const a = li.getAnimations({ subtree: true }).find((x) => x.animationName === "setup-step-spin");
+        const t = a && a.effect.getComputedTiming();
+        const known = window.__spinNodes.get(li.dataset.component);
+        if (!known && a) window.__spinNodes.set(li.dataset.component, a.effect.target);
+        return {
+          c: li.dataset.component,
+          now,
+          turn: t ? t.progress : null,
+          ms: t ? t.duration : null,
+          same: known ? known === (a && a.effect.target) && known.isConnected : true,
+        };
+      });
+    });
+    // The angle that should follow `before` after `dt` ms, compared on the circle.
+    const offBy = (before, after) => {
+      const want = (before.turn + (after.now - before.now) / before.ms) % 1;
+      const d = Math.abs(after.turn - want);
+      return Math.min(d, 1 - d);
+    };
+    // 50 ms of a turn: three frames of slack for a loaded machine, a fifth of what a restart loses.
+    const SLACK = (b) => 50 / b.ms;
+    await settledFrames(page);
+    let before = await turns();
+    assert(before.length === 2 && before.every((b) => typeof b.turn === "number"), "two turning spinners: " + JSON.stringify(before));
+    for (const [n, label] of [[400_000_000, "400 MB of 1.06 GB"], [500_000_000, "500 MB of 1.06 GB"], [600_000_000, "600 MB of 1.06 GB"]]) {
+      // A reading lands partway through a turn, as the real counter's do.
+      await page.waitForTimeout(170);
+      await page.evaluate((line) => window.__RICHOS_MOCK__.setupEmit(line), toolsLine(n, 1_061_655_396, true, label));
+      await settledFrames(page);
+      const after = await turns();
+      for (let i = 0; i < 2; i++) {
+        assert(offBy(before[i], after[i]) <= SLACK(before[i]),
+          "the " + after[i].c + " spinner jumped " + Math.round(360 * offBy(before[i], after[i])) + " degrees at the " + label + " reading");
+        assert(after[i].same, "the " + after[i].c + " spinner was rebuilt by the " + label + " reading");
+      }
+      before = after;
+    }
+    // START APPEARS while the voice row still counts (`lockSetupHeight` measures the finished
+    // sheet in the same task). The voice spinner carries on from where it was.
+    const voiceBefore = before.find((b) => b.c === "media-tools");
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(false));
+    await page.waitForSelector("#setup-start:not([hidden])");
+    await settledFrames(page);
+    const voiceAfter = (await turns()).find((b) => b.c === "media-tools");
+    assert(voiceAfter && typeof voiceAfter.turn === "number", "the voice row still turns once Start is up");
+    assert(offBy(voiceBefore, voiceAfter) <= SLACK(voiceBefore),
+      "the voice spinner jumped " + Math.round(360 * offBy(voiceBefore, voiceAfter)) + " degrees as Start appeared");
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    bump(15);
+    await page.close();
+    return "two spinners kept their angle through three counter readings and the voice spinner through Start appearing (within 50 ms of a turn)";
+  });
+
+  await run.check("30  round 19, state 2: the installing row's spinner is round 19's ring, its arc on a track", async () => {
+    // ROUND 19 (design/mockups/rounds/round-19/dictation.html, `.ring`): an 18px ring, a 2.5px
+    // track in --line all the way round, the arc on its top, one turn a second; NOTES.md judges
+    // "a spinner by its moving gold arc, not its faint track". Nightly 54 drew a 22px arc in a
+    // 2px border with no track, turning every 0.9 s (his recording, animations.mov). The arc keeps
+    // --live-mark rather than the round's --gold, the contrast substitution style.css's table
+    // already records (--gold is 2.55:1 on the light track).
+    const page = await openApp(browser, R19);
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    await page.evaluate((line) => window.__RICHOS_MOCK__.setupEmit(line), toolsLine(300_000_000, 1_061_655_396, true, "300 MB of 1.06 GB"));
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(true));
+    await page.click("#setup-go");
+    await page.waitForSelector('#setup-steps .setup-step.is-now[data-component="media-tools"]');
+    const read = () => page.evaluate(() => {
+      const mark = document.querySelector('#setup-steps .setup-step.is-now[data-component="media-tools"] .setup-step-mark');
+      const cs = getComputedStyle(mark);
+      const probe = document.createElement("span");
+      probe.style.color = "var(--line)";
+      document.body.append(probe);
+      const line = getComputedStyle(probe).color;
+      probe.remove();
+      // Round 19's 2.5px stroke as THIS page computes it: WebKit snaps a border to device pixels
+      // (2px at a scale factor of 1, 2.5px on a Retina screen), and the round's own CSS snaps alike.
+      const stroke = document.createElement("span");
+      stroke.style.cssText = "display:block;border:2.5px solid";
+      document.body.append(stroke);
+      const roundStroke = getComputedStyle(stroke).borderRightWidth;
+      stroke.remove();
+      const live = document.createElement("span");
+      live.style.color = "var(--live-mark)";
+      document.body.append(live);
+      const arc = getComputedStyle(live).color;
+      live.remove();
+      // Layout size, not getBoundingClientRect: a turning ring's box is its rotated bounds.
+      return {
+        w: mark.offsetWidth, h: mark.offsetHeight,
+        stroke: cs.borderRightWidth, roundStroke, track: [cs.borderRightColor, cs.borderBottomColor, cs.borderLeftColor],
+        top: cs.borderTopColor, line, arc, dur: cs.animationDuration, name: cs.animationName,
+      };
+    });
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+      const m = await read();
+      assertEqual(m.w + "x" + m.h, "18x18", theme + ": the ring's size");
+      assertEqual(m.stroke, m.roundStroke, theme + ": the ring's stroke is round 19's 2.5px");
+      assert(m.track.every((c) => c === m.line), theme + ": the track is --line all the way round: " + JSON.stringify(m));
+      assertEqual(m.top, m.arc, theme + ": the arc is --live-mark");
+      assertEqual(m.name + " " + m.dur, "setup-step-spin 1s", theme + ": one turn a second");
+    }
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupHold(false));
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    bump(10);
+    await page.close();
+    return "18px ring, 2.5px --line track, --live-mark arc, 1 s a turn, in both themes";
+  });
+
   await run.check("11  this suite actually checked something", async () => {
     assert(
       assertions >= 40,
