@@ -444,6 +444,11 @@ impl ScopedPermissions {
             // input for him to approve, and a permission sheet asking him to allow Rich to
             // LOOK at his own record would be a question with one answer.
             "mcp__richos_status__background_work"|
+            // RICH'S DOCUMENT SEARCH (`search_tools.rs`): on the conversation lease only, it
+            // reads the CEO's own folder through the app's socket and changes nothing. A sheet
+            // asking him to let Rich look something up in his own documents would be a
+            // question with one answer.
+            "mcp__richos_search__search_documents"|
             // HIS TEAM'S TOOLS (`operator_desk_tools.rs`), present only on an operator install's
             // front desk. A named stop only removes (§67: *"unconditional for the agents his
             // words name"*), the interrupt ends a turn and keeps its agents, and the read

@@ -143,6 +143,9 @@ mod mobile_mac_server;
 /// than a URL opener: the how-to screens need five fixed destinations, so the command takes the
 /// address as a key into a table rather than as data to act on.
 mod opener;
+// DOCUMENT SEARCH (search PRD v3.1): the palette's Documents section, Super Finder, Open
+// original and the socket Rich's search tool reaches it through.
+mod doc_search;
 mod emission_trace;
 
 /// **DICTATION IN ANY APP** (`richos-hq/docs/plans/2026-10-08-dictation-anywhere.md`, rev 2).
@@ -875,6 +878,11 @@ struct AppState {
     /// that locked the spine would fire only after the work it meant to interrupt had
     /// already ended. This is the same `Arc` the spine holds, reached without the lock.
     control: TurnControl,
+    /// DOCUMENT SEARCH (`doc_search.rs`): the one search service for the palette and Rich's
+    /// tool, started at launch; text search answers as soon as the folder is read.
+    search: richos_search::SearchService,
+    /// The socket Rich's `richos_search` tool reaches the service through; closed at exit.
+    search_socket: Option<richos_core::search_tools::SearchSocket>,
     /// THE LORO CORRECTION DESK (open-items 3.5). Its writer comes from the SAME
     /// `LoroInstall` the read half was built from (`memory::wire_company_memory`), so the
     /// record the CEO is shown and the record his confirmation writes to cannot be two
@@ -2291,6 +2299,18 @@ fn main() {
     // conversation lease; this is what it answers "what is running", "what is waiting for
     // me" and "what finished" with instead, and it reads the record on disk without calling
     // the back end or changing anything.
+    // RICH'S DOCUMENT SEARCH (`richos-core`'s `search_tools.rs`): the same shape as the status
+    // read below. It holds no index and no model; it carries each call to the running app's
+    // search socket and returns the app's answer.
+    if first.as_deref() == Some(std::ffi::OsStr::new("--search-mcp")) {
+        let result = args.next().ok_or_else(|| "Missing search endpoint".to_string())
+            .and_then(|endpoint| richos_core::search_tools::run_stdio(Path::new(&endpoint)).map_err(|e| e.to_string()));
+        if let Err(error) = result {
+            eprintln!("Search tool server: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if first.as_deref() == Some(std::ffi::OsStr::new("--status-mcp")) {
         let result = args.next().ok_or_else(|| "Missing status scope".to_string())
             // **The screen reader goes with it** — the CEO's ruling §56. This arm IS the app's
@@ -3431,6 +3451,17 @@ fn main() {
             };
             spine.set_turn_control(control.clone());
 
+            // DOCUMENT SEARCH, started before the first lease so every conversation lease is
+            // offered Rich's search tool. Reading the folder and building the meaning index run
+            // on the service's own utility-priority thread; a running turn makes indexing step
+            // aside briefly before each passage (information, not a scheduler).
+            let search = {
+                let busy_control = control.clone();
+                let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+                doc_search::start(&home, std::sync::Arc::new(move || busy_control.active_turn().is_some()))
+            };
+            let search_socket = doc_search::serve_tool(&search, &data_dir);
+
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
             //
             // The same shape as the ledger's line above and for the same reason:
@@ -3655,6 +3686,8 @@ fn main() {
                 entity_source: Mutex::new(boot.source),
                 nav: Mutex::new(nav_store),
                 control,
+                search,
+                search_socket,
                 correction: Mutex::new(correction),
                 spoken,
                 feedback,
@@ -4052,7 +4085,11 @@ fn main() {
             bug_report::bug_report_open_issue,
             // --- "Let Codex review your team's work" (round 20.2, ruling §114) — appended ---
             codex_reviews_status,
-            codex_reviews_set
+            codex_reviews_set,
+            // --- document search (search PRD v3.1, 2026-10-13) — appended, never reordered ---
+            search_documents,
+            search_documents_status,
+            open_search_document,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -4142,6 +4179,10 @@ fn main() {
                     // every lease's supervisor after them (reap gap 1.3(c)).
                     let quit_bound = std::time::Instant::now() + std::time::Duration::from_secs(2);
                     state.quota.shutdown();
+                    if let Some(socket) = &state.search_socket {
+                        socket.close();
+                    }
+                    state.search.shutdown();
                     let _ = state.control.request_stop();
                     state.control.shutdown_lease();
                     // **The WORK lease is stopped BY NAME, because nothing else reaches it**
@@ -6681,6 +6722,26 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 
     hits.truncate(limit);
     hits
+}
+
+/// One page of the palette's Documents section (`doc_search.rs`). Navigation hits stay with
+/// `search_nav`, unchanged by either checkbox.
+#[richos_command::command]
+fn search_documents(state: State<AppState>, request: richos_search::SearchRequest) -> richos_search::SearchResponse {
+    doc_search::search(&state.search, request)
+}
+
+/// Ready, indexing or unavailable, and where the index is kept, for the status line.
+#[richos_command::command]
+fn search_documents_status(state: State<AppState>) -> richos_search::Status {
+    doc_search::status(&state.search)
+}
+
+/// **Open original**: a source ID from the renderer, resolved and revalidated by the host, and
+/// only then a canonical path handed to `/usr/bin/open` (`doc_search::open`).
+#[richos_command::command]
+fn open_search_document(state: State<AppState>, source_id: String) -> Result<(), String> {
+    doc_search::open(&state.search, &source_id)
 }
 
 // ---- durable navigation view state (nav.rs) -------------------------------------------
