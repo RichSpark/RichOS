@@ -1,0 +1,1016 @@
+//! **A sentence with a pause in the middle of it is ONE turn — replayed on the CEO's own rig.**
+//!
+//! The defect (nightly 54, 2026-10-13, his folder a): he pressed Talk to Rich, said two words,
+//! thought for 1.406 s, and said the sentence his screenshot marks. The endpointer
+//! closed the first stretch at 0.800 s of silence, the app sent it as a turn, and Rich's answer to
+//! those two words reached his ear 1.258 s after he finished the second sentence. His log and his
+//! ledger, and the arithmetic, are in `src/turn.rs`.
+//!
+//! This file drives the SHIPPED composition — [`CaptureBrain`] (canceller, VAD, endpointer, and
+//! the end-of-turn count) feeding a [`TurnAssembler`] exactly as `supervise` feeds it — over a
+//! microphone track built from the committed echo-path fixture:
+//!
+//! - **the room**: the first 0.700 s of `ceo-rig-2026-09-18-nearend-mic.wav`, the CEO's own room
+//!   on his own microphone before playback began (`-nearend-session.json`: `lead_ms` 700), tiled.
+//!   Its reference track is measured silent there, so nothing of Rich is in it.
+//! - **the near-end voice**, superimposed at his measured near-field level, **-18.1 dBFS**
+//!   (`-nearend2-nearend.json`): in the public test a synthetic voiced signal, and in the private
+//!   test his OWN recorded voice, his first two intervals from `-nearend2-mic.wav`. Those were
+//!   recorded while Rich was speaking, so Rich's echo is under them at -46.7 dBFS, 28.6 dB below
+//!   him; it is left in, not filtered, and the gap between them is his room, not that recording.
+//! - **the pause between the two stretches is his measured 1.406 s.**
+//!
+//! Rich is silent throughout (`speaking = false`, a zero reference), because that is the case the
+//! CEO met: the answer had not started when his turn was taken from him.
+//!
+//! The third test is the FLOOR (`turn.rs`, `AnswerGate`): he thinks for longer than the window, so
+//! the first turn IS handed over, and he goes on; Rich's answer to it arrives while he is speaking
+//! again, is held, is superseded by his new words, and is never said.
+//!
+//! No sound is played anywhere. Everything here is samples in memory (CEO §53).
+
+use richos_voice::aec::EchoCanceller;
+use richos_voice::controller::{AudibleWindow, CapMsg, CaptureBrain};
+use richos_voice::endpoint::{EndReason, SILENCE_HANGOVER_FRAMES, SPEECH_ONSET_FRAMES};
+use richos_voice::private_fixtures;
+use richos_voice::turn::{end_of_turn_secs, may_sound, rich_audible, AnswerGate, Turn, TurnAssembler, END_OF_TURN_FRAMES};
+use richos_voice::vad::{frames_to_secs, SAMPLE_RATE, VAD_FRAME_SAMPLES};
+use richos_voice::wav;
+use std::path::{Path, PathBuf};
+
+const ROOM: &str = "tests/fixtures/echo-path/ceo-rig-2026-09-18-nearend";
+/// `-nearend-session.json`: playback began 0.700 s into the recording.
+const LEAD_SECS: f32 = 0.700;
+/// `-nearend2-nearend.json`: his level at the microphone.
+const HIS_LEVEL_DBFS: f32 = -18.1;
+/// His measured pause, nightly 54: (53.024 - 0.112) - (52.306 - 0.800).
+const HIS_PAUSE_SECS: f32 = 1.406;
+/// His first two intervals in `-nearend2-mic.wav` (`-nearend2-nearend.json`).
+const HIS_FIRST: (f32, f32) = (3.568, 5.472);
+const HIS_SECOND: (f32, f32) = (6.256, 7.360);
+
+fn read_wav(p: &Path) -> Vec<f32> {
+    let bytes = std::fs::read(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let pcm = wav::read_pcm16(&bytes).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    assert_eq!(pcm.sample_rate, SAMPLE_RATE, "{} is not 16 kHz", p.display());
+    wav::to_mono(&pcm.samples, pcm.channels)
+}
+
+fn committed(suffix: &str) -> Vec<f32> {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push(format!("{ROOM}{suffix}"));
+    read_wav(&p)
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
+}
+
+fn dbfs(x: &[f32]) -> f32 {
+    20.0 * rms(x).max(1e-12).log10()
+}
+
+fn secs_to_samples(s: f32) -> usize {
+    (s * SAMPLE_RATE as f32).round() as usize
+}
+
+/// His room, `secs` long: the pre-playback lead of the echo-only recording, tiled. The reference
+/// over that lead is checked silent, so the room carries none of Rich.
+fn room(secs: f32) -> Vec<f32> {
+    let mic = committed("-mic.wav");
+    let reference = committed("-reference.wav");
+    let lead = secs_to_samples(LEAD_SECS);
+    assert!(
+        rms(&reference[..lead]) == 0.0,
+        "the reference is not silent over the first {LEAD_SECS} s, so the room would carry Rich"
+    );
+    let tone = &mic[..lead];
+    tone.iter().copied().cycle().take(secs_to_samples(secs)).collect()
+}
+
+/// `voice` scaled to his measured near-field level and laid over `room`.
+fn superimpose(room: &mut [f32], at: usize, voice: &[f32]) {
+    let gain = 10f32.powf(HIS_LEVEL_DBFS / 20.0) / rms(voice).max(1e-12);
+    for (i, s) in voice.iter().enumerate() {
+        room[at + i] += s * gain;
+    }
+}
+
+/// A voiced stretch: a 130 Hz glottal-like harmonic series under a 4 Hz syllable envelope. Not a
+/// person — the public stand-in for one, used only where his recording cannot be.
+fn synthetic_voice(secs: f32, seed: u32) -> Vec<f32> {
+    let n = secs_to_samples(secs);
+    let sr = SAMPLE_RATE as f32;
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / sr;
+            let f0 = 130.0 + 12.0 * (2.0 * std::f32::consts::PI * 0.7 * t + seed as f32).sin();
+            let mut v = 0.0;
+            for h in 1..=12 {
+                v += (2.0 * std::f32::consts::PI * f0 * h as f32 * t).sin() / h as f32;
+            }
+            let syllable = 0.55 + 0.45 * (2.0 * std::f32::consts::PI * 4.0 * t).sin();
+            v * syllable
+        })
+        .collect()
+}
+
+/// What a replay saw.
+#[derive(Debug, Default)]
+struct Replay {
+    admitted: usize,
+    /// Utterances cut at whisper's 30.000 s window rather than ended by silence.
+    cuts: usize,
+    turns: Vec<(usize, Turn)>,
+    quiet_frames: Vec<usize>,
+}
+
+/// THE SHIPPED COMPOSITION over a microphone track. Every admitted utterance is "recognized" at
+/// once as `fragment N`, which is the recognizer finishing early — the case that released a turn
+/// soonest before the fix and so the one that can hide nothing.
+fn replay(mic: &[f32]) -> Replay {
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let mut r = Replay::default();
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+    for (b, frame) in mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        ring.push(&silence);
+        for m in brain.push_frame(frame, false, false) {
+            match m {
+                CapMsg::Started { .. } => turns.utterance_started(),
+                CapMsg::Utterance(u) => {
+                    r.admitted += 1;
+                    if u.utterance.reason == EndReason::MaxLength {
+                        r.cuts += 1;
+                    }
+                    turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                    turns.recognized(Some((format!("fragment {}", r.admitted), false)));
+                }
+                CapMsg::Discarded { .. } => turns.utterance_discarded(),
+                CapMsg::TurnQuiet => {
+                    r.quiet_frames.push(b);
+                    turns.quiet();
+                }
+                _ => {}
+            }
+            if let Some(t) = turns.take_turn() {
+                r.turns.push((b, t));
+            }
+        }
+    }
+    r
+}
+
+/// The verdict these tests share. `last_speech_end` is the sample at which his voice stops;
+/// `fragments` is how many utterances the recording must be split into.
+fn assert_one_turn_after_he_is_done(r: &Replay, last_speech_end: usize, fragments: usize, what: &str) {
+    println!("[replay] {what}: {r:?}");
+    // POSITIVE CONTROL. His pause is longer than the endpointer's 0.800 s, so it DOES split the
+    // recording into utterances — which is exactly what made several turns before the fix. If this
+    // fails the fixture no longer contains the defect and the verdict below proves nothing.
+    assert_eq!(
+        r.admitted, fragments,
+        "{what}: the {HIS_PAUSE_SECS:.3} s pause should split the speech into two utterances (the \
+         endpointer closes one at {:.3} s); it did not, so this replay cannot show the defect",
+        frames_to_secs(SILENCE_HANGOVER_FRAMES)
+    );
+    // THE DEFECT: one thought, one turn.
+    assert_eq!(r.turns.len(), 1, "{what}: one thought with a pause in it became {} turns", r.turns.len());
+    let (frame, turn) = &r.turns[0];
+    let all: Vec<String> = (1..=fragments).map(|n| format!("fragment {n}")).collect();
+    assert_eq!(turn.text, all.join(" "), "{what}: the turn lost or reordered a fragment");
+    assert_eq!(turn.fragments as usize, fragments);
+    // NOTHING DURING THE PAUSE: no end-of-turn quiet while he was thinking.
+    assert_eq!(r.quiet_frames.len(), 1, "{what}: the quiet fired during his pause: {:?}", r.quiet_frames);
+    // RICH SILENT UNTIL HE IS DONE: the turn — the only thing that can start an answer — is handed
+    // over no sooner than 2.000 s after his last speech, measured in frames on this replay.
+    let released_at = (frame + 1) * VAD_FRAME_SAMPLES;
+    let after = (released_at as f32 - last_speech_end as f32) / SAMPLE_RATE as f32;
+    println!(
+        "[measured] {what}: turn handed over {after:.3} s after his last speech (end of turn = \
+         {END_OF_TURN_FRAMES} x 256 / 16000 = {:.3} s)",
+        end_of_turn_secs()
+    );
+    assert!(
+        after >= end_of_turn_secs() - frames_to_secs(SPEECH_ONSET_FRAMES),
+        "{what}: the turn was handed over {after:.3} s after his last speech, before the {:.3} s end of turn",
+        end_of_turn_secs()
+    );
+    // And not much later than that: the window is the only wait, so the cost per answer is the
+    // window and nothing else. A VAD hangover on the room's own tail can add a few frames.
+    assert!(after < end_of_turn_secs() + 0.5, "{what}: the turn waited {after:.3} s");
+}
+
+/// THE PUBLIC REPLAY: his room, a synthetic voice at his level, his pause. Runs everywhere.
+#[test]
+fn a_pause_in_the_middle_of_a_sentence_is_one_turn_on_his_room() {
+    let first = synthetic_voice(1.904, 1);
+    let second = synthetic_voice(1.104, 2);
+    let lead = 1.0;
+    let total = lead + 1.904 + HIS_PAUSE_SECS + 1.104 + 4.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    superimpose(&mut mic, a, &first);
+    let b = a + first.len() + secs_to_samples(HIS_PAUSE_SECS);
+    superimpose(&mut mic, b, &second);
+    println!(
+        "[fixture] room {:.1} dBFS, voice {HIS_LEVEL_DBFS} dBFS, pause {HIS_PAUSE_SECS} s",
+        dbfs(&room(LEAD_SECS))
+    );
+    let r = replay(&mic);
+    assert_one_turn_after_he_is_done(&r, b + second.len(), 2, "synthetic voice on his room");
+}
+
+/// THE PRIVATE REPLAY: his OWN recorded voice — his first two intervals from the near-end
+/// recording, at the level he arrived at — on his room, with his pause between them.
+///
+/// `-nearend2-mic.wav` lives in the private `richos-hq` repository (`src/private_fixtures.rs`).
+/// Without it this reports `ignored, PRIVATE FIXTURE: …`, never `ok`.
+#[test]
+#[cfg_attr(
+    not(private_fixtures),
+    ignore = "PRIVATE FIXTURE: ceo-rig-2026-09-18-nearend2-mic.wav is a recording of the CEO's \
+              own voice and is not committed to this public repository. It is in the private \
+              richos-hq repository at fixtures/echo-path/. Set RICHOS_PRIVATE_FIXTURES to that \
+              directory to run this."
+)]
+fn a_pause_in_the_middle_of_his_own_sentence_is_one_turn() {
+    let his = read_wav(&private_fixtures::require_ceo_mic_track());
+    let cut = |(a, b): (f32, f32)| his[secs_to_samples(a)..secs_to_samples(b)].to_vec();
+    let (first, second) = (cut(HIS_FIRST), cut(HIS_SECOND));
+    println!(
+        "[fixture] his voice {:.1} / {:.1} dBFS as recorded, {:.3} s and {:.3} s",
+        dbfs(&first),
+        dbfs(&second),
+        first.len() as f32 / SAMPLE_RATE as f32,
+        second.len() as f32 / SAMPLE_RATE as f32
+    );
+    let lead = 1.0;
+    let total = lead + (first.len() + second.len()) as f32 / SAMPLE_RATE as f32 + HIS_PAUSE_SECS + 4.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    // His own recording carries his own level; it is laid in as recorded rather than rescaled.
+    for (i, s) in first.iter().enumerate() {
+        mic[a + i] += s;
+    }
+    let b = a + first.len() + secs_to_samples(HIS_PAUSE_SECS);
+    for (i, s) in second.iter().enumerate() {
+        mic[b + i] += s;
+    }
+    let r = replay(&mic);
+    assert_one_turn_after_he_is_done(&r, b + second.len(), 2, "his own voice on his room");
+}
+
+// ------------------------------------------------------------------------------------------------
+// THE FLOOR: a pause LONGER than the window, and Rich's answer arriving while he has gone on.
+// ------------------------------------------------------------------------------------------------
+
+/// His second pause on nightly 54 was at least 2.058 s (his last word 54.538 s, Rich audible
+/// 56.596 s), and whatever came after it was cut off by Rich. A pause like that is longer than the
+/// 2.000 s window, so the turn IS handed over during it; this is the case the floor rule exists for.
+const LONG_PAUSE_SECS: f32 = 2.950;
+/// How long the model takes to send Rich's first sentence after a turn is handed over. His log says
+/// 3.719 s (52.877 -> 56.596, synthesis included); 1.504 s here (94 frames) is FASTER, which brings
+/// the answer in while he is mid-sentence and so is the harder case.
+const MODEL_FRAMES: usize = 94;
+
+/// When each of Rich's sentences reached the speaker, and what the floor did.
+#[derive(Debug, Default)]
+struct FloorReplay {
+    turns: Vec<(usize, Turn)>,
+    spoken: Vec<(usize, String)>,
+    superseded: usize,
+}
+
+/// THE SHIPPED RULES, in `supervise`'s order, over a microphone track: `CaptureBrain`, the
+/// `TurnAssembler` with its floor, and the `AnswerGate`. Each handed-over turn starts at once (as
+/// `rich://turn-started` does) and its answer's two sentences are offered `MODEL_FRAMES` and
+/// `MODEL_FRAMES + 30` frames later; the model finishes the turn 60 frames after its first sentence.
+fn replay_with_answers(mic: &[f32]) -> FloorReplay {
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let mut gate: AnswerGate<String> = AnswerGate::new();
+    let mut r = FloorReplay::default();
+    let mut offers: Vec<(usize, String)> = Vec::new();
+    let mut turn_ends: Vec<usize> = Vec::new();
+    let mut fragments = 0;
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+    for (b, frame) in mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        ring.push(&silence);
+        for m in brain.push_frame(frame, false, false) {
+            match m {
+                CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+                CapMsg::Started { tainted: true, .. } => turns.utterance_started(),
+                CapMsg::Utterance(u) => {
+                    fragments += 1;
+                    turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                    let starts = turns.recognized(Some((format!("fragment {fragments}"), false)));
+                    let turn_active = turn_ends.iter().any(|&end| b < end);
+                    if starts && (turn_active || gate.held() > 0) {
+                        gate.supersede();
+                        r.superseded += 1;
+                    }
+                }
+                CapMsg::Discarded { .. } => turns.utterance_discarded(),
+                CapMsg::TurnQuiet => turns.quiet(),
+                _ => {}
+            }
+        }
+        if let Some(t) = turns.take_turn() {
+            let k = r.turns.len() + 1;
+            r.turns.push((b, t));
+            gate.next_turn();
+            offers.push((b + MODEL_FRAMES, format!("answer {k} sentence 1")));
+            offers.push((b + MODEL_FRAMES + 30, format!("answer {k} sentence 2")));
+            turn_ends.push(b + MODEL_FRAMES + 60);
+        }
+        let floor = turns.has_floor();
+        for (_, s) in offers.iter().filter(|(at, _)| *at == b) {
+            if let Some(now) = gate.offer(s.clone(), floor) {
+                r.spoken.push((b, now));
+            }
+        }
+        for now in gate.release(floor) {
+            r.spoken.push((b, now));
+        }
+    }
+    r
+}
+
+/// THE FLOOR, on his room with a voice at his level: he thinks for longer than the window, the
+/// first turn is handed over, and he goes on. Rich's answer to the first turn arrives while he is
+/// mid-sentence: it is held, then superseded by his new words, and never said. Rich speaks only
+/// the answer to his last turn, and only once he is done.
+#[test]
+fn rich_never_starts_talking_while_he_has_gone_on() {
+    let lead = 1.0;
+    let parts = [synthetic_voice(1.904, 1), synthetic_voice(1.104, 2), synthetic_voice(1.904, 3)];
+    let gaps = [HIS_PAUSE_SECS, LONG_PAUSE_SECS];
+    let total = lead + 1.904 + 1.104 + 1.904 + HIS_PAUSE_SECS + LONG_PAUSE_SECS + 6.0;
+    let mut mic = room(total);
+    let mut at = secs_to_samples(lead);
+    let mut voiced = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        superimpose(&mut mic, at, part);
+        voiced.push((at, at + part.len()));
+        at += part.len() + gaps.get(i).map(|g| secs_to_samples(*g)).unwrap_or(0);
+    }
+    let r = replay_with_answers(&mic);
+    println!("[replay] the floor: {r:?}");
+    let secs = |frame: usize| ((frame + 1) * VAD_FRAME_SAMPLES) as f32 / SAMPLE_RATE as f32;
+
+    // The 1.406 s pause is inside the window and the 2.950 s pause is not: two turns, the first
+    // holding both stretches before the long pause.
+    let texts: Vec<&str> = r.turns.iter().map(|(_, t)| t.text.as_str()).collect();
+    assert_eq!(texts, vec!["fragment 1 fragment 2", "fragment 3"]);
+
+    // POSITIVE CONTROL: the first answer really did arrive while he was speaking again, so the
+    // rule below is being tested and not passed by timing.
+    let (third_start, third_end) = voiced[2];
+    let first_offer = r.turns[0].0 + MODEL_FRAMES;
+    let offered_at = first_offer * VAD_FRAME_SAMPLES;
+    assert!(
+        offered_at > third_start && offered_at < third_end,
+        "the first answer was offered at {:.3} s, outside his third stretch ({:.3}-{:.3} s): this \
+         replay does not put Rich's answer over him",
+        secs(first_offer),
+        third_start as f32 / SAMPLE_RATE as f32,
+        third_end as f32 / SAMPLE_RATE as f32
+    );
+
+    // THE RULE: nothing of the first answer is ever said, and it was superseded exactly once.
+    assert_eq!(r.superseded, 1, "the first answer was not superseded by his new words");
+    let said: Vec<&str> = r.spoken.iter().map(|(_, s)| s.as_str()).collect();
+    assert_eq!(said, vec!["answer 2 sentence 1", "answer 2 sentence 2"], "Rich said: {said:?}");
+
+    // RICH SILENT UNTIL HE IS DONE: nothing is said while any of his voice is in the room, and the
+    // first word of Rich's comes after his last word plus the whole end-of-turn window.
+    for (frame, s) in &r.spoken {
+        let sample = (frame + 1) * VAD_FRAME_SAMPLES;
+        for (a, b) in &voiced {
+            assert!(sample < *a || sample > *b, "Rich said {s:?} at {:.3} s while he was talking", secs(*frame));
+        }
+    }
+    let first_word = r.spoken[0].0;
+    let after = secs(first_word) - third_end as f32 / SAMPLE_RATE as f32;
+    println!(
+        "[measured] Rich's first word {after:.3} s after the CEO's last ({:.3} s window + {:.3} s model)",
+        end_of_turn_secs(),
+        frames_to_secs(MODEL_FRAMES as u32)
+    );
+    assert!(after >= end_of_turn_secs(), "Rich spoke {after:.3} s after his last word");
+}
+
+// ------------------------------------------------------------------------------------------------
+// A STRETCH CUT AT WHISPER'S 30.000 s WINDOW IS NOT HIM STOPPING (review rv-20261013T163358Z, 2).
+// ------------------------------------------------------------------------------------------------
+
+/// Words: the synthetic voice with a 0.120 s gap in every 0.600 s, so the VAD hears speech with
+/// the gaps between words that speech has, rather than one 30 s tone it would learn as noise.
+fn spoken_words(secs: f32, seed: u32) -> Vec<f32> {
+    let period = secs_to_samples(0.600);
+    let gap = secs_to_samples(0.120);
+    synthetic_voice(secs, seed)
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| if i % period >= period - gap { 0.0 } else { s })
+        .collect()
+}
+
+/// He talks for a little over 30 s, so the endpointer cuts the utterance at its 30.000 s window
+/// (`endpoint.rs` MAX_UTTERANCE_FRAMES) a few frames before he pauses; then he thinks for his
+/// measured 1.406 s and goes on. The cut is not silence, so the quiet is counted from his last
+/// speech frame: ONE turn. Timed from the cut, the quiet came 1.200 s after it, inside the pause,
+/// and his turn was handed over mid-thought.
+#[test]
+fn a_cut_at_the_thirty_second_window_is_not_his_turn_ending() {
+    let lead = 1.0;
+    let long = spoken_words(30.030, 4);
+    let after = synthetic_voice(1.0, 5);
+    let total = lead + 30.030 + HIS_PAUSE_SECS + 1.0 + 4.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    superimpose(&mut mic, a, &long);
+    let b = a + long.len() + secs_to_samples(HIS_PAUSE_SECS);
+    superimpose(&mut mic, b, &after);
+    let r = replay(&mic);
+    println!("[replay] the 30 s cut: {r:?}");
+    // POSITIVE CONTROL: the long stretch really was cut at the window, not ended by silence.
+    assert_eq!(r.cuts, 1, "the long stretch was not cut at the 30.000 s window; this replay shows nothing");
+    // THREE fragments: the 30.000 s cut, the 2 frames of his word that ran past it (kept since
+    // review rv-20261013T184256Z finding 3, under the cough minimum), and what he said after
+    // his pause. All of them are in the one turn.
+    assert_one_turn_after_he_is_done(&r, b + after.len(), 3, "a 30 s stretch cut at the window");
+}
+
+// ------------------------------------------------------------------------------------------------
+// HE GOES ON WHILE RICH'S FIRST SENTENCE IS STILL BEING SYNTHESIZED (review rv-20261013T173416Z, 1).
+// ------------------------------------------------------------------------------------------------
+
+/// `say` producing one sentence, as the review modeled it: 21 frames = 0.336 s.
+const SYNTH_FRAMES: usize = 21;
+/// One synthesized sentence, once it plays: 2.000 s.
+const SENTENCE_FRAMES: usize = 125;
+
+/// What the synthesis replay saw.
+#[derive(Debug, Default)]
+struct SynthReplay {
+    turns: Vec<(usize, Turn)>,
+    /// Frames at which a sentence reached the device, and which sentence.
+    sounded: Vec<(usize, String)>,
+    tainted_starts: usize,
+    superseded: usize,
+}
+
+/// THE SHIPPED RULES with synthesis in the loop: `CaptureBrain` hears the microphone with the
+/// `speaking` flag the supervisor would publish (`AudibleWindow` over queued/owed, gated by
+/// `rich_audible`), sentences pass the `AnswerGate`, spend `SYNTH_FRAMES` in synthesis, and are
+/// played only if `may_sound`; a superseded sentence is dropped by its generation. The first turn's
+/// first sentence is offered at `first_offer`; every later sentence `MODEL_FRAMES` after its turn.
+fn replay_with_synthesis(mic: &[f32], first_offer: usize) -> SynthReplay {
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let mut gate: AnswerGate<(u64, String)> = AnswerGate::new();
+    let mut window = AudibleWindow::new();
+    let mut r = SynthReplay::default();
+    let mut offers: Vec<(usize, String)> = Vec::new();
+    let mut synthesis: Vec<(usize, u64, String)> = Vec::new(); // (ready frame, generation, text)
+    let mut playing_until = 0usize;
+    let mut sounded = false;
+    let mut speaking = false;
+    let mut generation = 0u64;
+    let mut turn_ends: Vec<usize> = Vec::new();
+    let mut fragments = 0;
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+    for (b, frame) in mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        ring.push(&silence);
+        for m in brain.push_frame(frame, speaking, false) {
+            match m {
+                CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+                CapMsg::Started { tainted: true, .. } => {
+                    r.tainted_starts += 1;
+                    turns.utterance_started();
+                }
+                CapMsg::Utterance(u) => {
+                    fragments += 1;
+                    turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                    let starts = turns.recognized(Some((format!("fragment {fragments}"), false)));
+                    let outstanding = turn_ends.iter().any(|&end| b < end) || gate.held() > 0 || !synthesis.is_empty();
+                    if starts && outstanding {
+                        gate.supersede();
+                        generation += 1;
+                        r.superseded += 1;
+                    }
+                }
+                CapMsg::Discarded { .. } => turns.utterance_discarded(),
+                CapMsg::TurnQuiet => turns.quiet(),
+                _ => {}
+            }
+        }
+        if let Some(t) = turns.take_turn() {
+            let k = r.turns.len() + 1;
+            let at = if k == 1 { first_offer } else { b + MODEL_FRAMES };
+            assert!(at > b, "the first answer was offered before its turn was handed over");
+            r.turns.push((b, t));
+            gate.next_turn();
+            offers.push((at, format!("answer {k} sentence 1")));
+            turn_ends.push(at + 60);
+        }
+        let floor = turns.has_floor();
+        for (_, s) in offers.iter().filter(|(at, _)| *at == b) {
+            if let Some((g, s)) = gate.offer((generation, s.clone()), floor) {
+                synthesis.push((b + SYNTH_FRAMES, g, s));
+            }
+        }
+        for (g, s) in gate.release(floor) {
+            synthesis.push((b + SYNTH_FRAMES, g, s));
+        }
+        // The speaker: drop what was superseded, wait while the floor is his, else play.
+        synthesis.retain(|(_, g, _)| *g == generation);
+        if let Some(pos) = synthesis.iter().position(|(ready, _, _)| *ready <= b) {
+            if may_sound(floor, brain.his_onset_building()) && b >= playing_until {
+                let (_, _, s) = synthesis.remove(pos);
+                r.sounded.push((b, s));
+                sounded = true;
+                playing_until = b + SENTENCE_FRAMES;
+            }
+        }
+        // The supervisor's `speaking` for the next frame.
+        window.observe(b < playing_until, !synthesis.is_empty(), 0.032, (b * 16) as u64);
+        if !window.is_open() {
+            sounded = false;
+        }
+        speaking = rich_audible(window.is_open(), sounded);
+    }
+    r
+}
+
+/// He thinks for longer than the window, so his first turn is handed over; Rich's first sentence
+/// goes into synthesis; he goes on 128 ms into it with three 0.224 s words and 0.224 s gaps (the
+/// review's case). His words must be his: not tainted, holding the floor, superseding the answer
+/// in synthesis, which is never played. Rich's only sound is the answer to his last turn, after he
+/// is done.
+#[test]
+fn speech_that_resumes_during_synthesis_is_his_and_rich_waits() {
+    let lead = 1.0;
+    let first = synthetic_voice(1.904, 1);
+    let word = synthetic_voice(0.224, 6);
+    let total = lead + 1.904 + LONG_PAUSE_SECS + 1.120 + 6.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    superimpose(&mut mic, a, &first);
+    let resume = a + first.len() + secs_to_samples(LONG_PAUSE_SECS);
+    for i in 0..3 {
+        superimpose(&mut mic, resume + i * secs_to_samples(0.448), &word);
+    }
+    let last_word_end = resume + 2 * secs_to_samples(0.448) + word.len();
+    // The first sentence is offered 8 frames (0.128 s) + its synthesis before he resumes, so he
+    // resumes 128 ms into its synthesis.
+    let first_offer = resume / VAD_FRAME_SAMPLES - 8;
+    let r = replay_with_synthesis(&mic, first_offer);
+    println!("[replay] resumed during synthesis: {r:?}");
+    let secs = |frame: usize| ((frame + 1) * VAD_FRAME_SAMPLES) as f32 / SAMPLE_RATE as f32;
+
+    assert_eq!(r.tainted_starts, 0, "his resumed words were taken for Rich's echo");
+    let texts: Vec<&str> = r.turns.iter().map(|(_, t)| t.text.as_str()).collect();
+    assert_eq!(texts, vec!["fragment 1", "fragment 2"], "his resumed words did not become his turn");
+    assert_eq!(r.superseded, 1, "the answer in synthesis was not superseded by his words");
+    let said: Vec<&str> = r.sounded.iter().map(|(_, s)| s.as_str()).collect();
+    assert_eq!(said, vec!["answer 2 sentence 1"], "Rich said: {said:?}");
+    let first_sound = secs(r.sounded[0].0);
+    let after = first_sound - last_word_end as f32 / SAMPLE_RATE as f32;
+    println!("[measured] Rich's first sound {after:.3} s after the CEO's last word");
+    assert!(after >= end_of_turn_secs(), "Rich sounded {after:.3} s after his last word");
+}
+
+/// The same, but he resumes 20 frames into the 21-frame synthesis (review rv-20261013T184256Z,
+/// finding 2): the sentence is ready while his first word is still building toward its 7-frame
+/// (0.112 s) onset, before the floor is his. The speaker must wait on the onset too.
+#[test]
+fn speech_that_resumes_as_synthesis_ends_is_his_and_rich_waits() {
+    let lead = 1.0;
+    let first = synthetic_voice(1.904, 1);
+    let word = synthetic_voice(0.224, 7);
+    let total = lead + 1.904 + LONG_PAUSE_SECS + 1.120 + 6.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    superimpose(&mut mic, a, &first);
+    let resume = a + first.len() + secs_to_samples(LONG_PAUSE_SECS);
+    for i in 0..3 {
+        superimpose(&mut mic, resume + i * secs_to_samples(0.448), &word);
+    }
+    let r = replay_with_synthesis(&mic, resume / VAD_FRAME_SAMPLES - 20);
+    println!("[replay] resumed as synthesis ends: {r:?}");
+    assert_eq!(r.tainted_starts, 0, "his resumed word was taken for Rich's echo");
+    let texts: Vec<&str> = r.turns.iter().map(|(_, t)| t.text.as_str()).collect();
+    assert_eq!(texts, vec!["fragment 1", "fragment 2"], "his resumed words did not become his turn");
+    let said: Vec<&str> = r.sounded.iter().map(|(_, s)| s.as_str()).collect();
+    assert_eq!(said, vec!["answer 2 sentence 1"], "Rich said: {said:?}");
+}
+
+// ------------------------------------------------------------------------------------------------
+// THE ONSET-TO-FLOOR HANDOFF, ON THE APP'S THREE CLOCKS (review rv-20261013T184256Z finding 2,
+// still open in rv-20261013T192726Z).
+// ------------------------------------------------------------------------------------------------
+
+/// The capture callback's frame period, the supervisor's `TICK` and the speaker's `FLOOR_POLL`,
+/// in ms: 256 / 16000 = 16 ms; 25 ms; 10 ms (`controller.rs`).
+const CAPTURE_MS: usize = 16;
+const SUPERVISOR_MS: usize = 25;
+const SPEAKER_POLL_MS: usize = 10;
+
+/// What one schedule saw.
+#[derive(Debug, PartialEq)]
+struct Handoff {
+    /// When Rich's sentence reached the device, ms after his first speech sample.
+    sounded_at: Option<i64>,
+    tainted_starts: usize,
+    tainted_discards: usize,
+    admitted: usize,
+}
+
+/// THE SHIPPED PIECES ON THEIR OWN CLOCKS, one millisecond at a time. The earlier replays publish
+/// the floor on the same frame as `Started`, which the app does not: the capture callback sends
+/// `Started` and writes `Shared::his_onset` per 16 ms frame, the supervisor drains the channel
+/// and publishes `Shared::his_floor` (and `Shared::speaking`) on its 25 ms tick, and the speaker,
+/// once synthesis is done, asks `may_sound` at once and then every 10 ms. Rich's sentence finishes
+/// synthesis `ready_ms` after he starts talking again (negative: before he does); the supervisor's
+/// tick is offset by `phase_ms`. His words are recognized at once and are never handed over, so
+/// the floor stays his to the end: any sound at all after he resumed is Rich talking over him.
+fn handoff(mic: &[f32], resume: usize, ready_ms: i64, phase_ms: usize) -> Handoff {
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+    let resume_ms = (resume / VAD_FRAME_SAMPLES * CAPTURE_MS) as i64;
+    let ready = resume_ms + ready_ms;
+    let frames = mic.len() / VAD_FRAME_SAMPLES;
+    let (mut pending, mut onset, mut floor, mut speaking) = (Vec::new(), false, false, false);
+    let mut h = Handoff { sounded_at: None, tainted_starts: 0, tainted_discards: 0, admitted: 0 };
+    let mut sounded = false;
+    for t in 1..=(frames * CAPTURE_MS) {
+        // The capture callback: frame k is delivered when its 16 ms are over.
+        if t.is_multiple_of(CAPTURE_MS) {
+            let k = t / CAPTURE_MS - 1;
+            ring.push(&silence);
+            pending.extend(brain.push_frame(&mic[k * VAD_FRAME_SAMPLES..(k + 1) * VAD_FRAME_SAMPLES], speaking, false));
+            onset = brain.his_onset_building();
+        }
+        // The supervisor: drain, then publish the floor and whether Rich is audible.
+        if (t + phase_ms).is_multiple_of(SUPERVISOR_MS) {
+            for m in pending.drain(..) {
+                match m {
+                    CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+                    CapMsg::Started { tainted: true, .. } => {
+                        h.tainted_starts += 1;
+                        turns.utterance_started();
+                    }
+                    CapMsg::Utterance(u) => {
+                        h.admitted += 1;
+                        turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                        turns.recognized(Some(("his words".to_string(), false)));
+                    }
+                    CapMsg::Discarded { tainted } => {
+                        h.tainted_discards += tainted as usize;
+                        turns.utterance_discarded();
+                    }
+                    CapMsg::TurnQuiet => turns.quiet(),
+                    _ => {}
+                }
+            }
+            floor = turns.has_floor();
+            speaking = rich_audible(sounded, sounded);
+        }
+        // The speaker: synthesis done at `ready`, asks now and every 10 ms after.
+        let t = t as i64;
+        if !sounded && t >= ready && (t - ready) % SPEAKER_POLL_MS as i64 == 0 && may_sound(floor, onset) {
+            sounded = true;
+            h.sounded_at = Some(t - resume_ms);
+        }
+    }
+    h
+}
+
+/// He resumes talking (three 0.224 s words, 0.224 s apart, the review's case, at his -18.1 dBFS on
+/// his room) while Rich's sentence is in synthesis, and synthesis completes at every moment from
+/// 20 ms into his first word to past his last, under four supervisor phases. Before the fix the
+/// onset signal fell at the onset frame (112 ms) while the floor waited for the next 25 ms tick,
+/// and a sentence ready in that gap sounded over him: his word was then Rich's echo and
+/// discarded (the reviewer: "sounded_at=Some(120)ms, admitted=0, tainted_discards=1").
+#[test]
+fn rich_never_sounds_in_the_gap_between_his_onset_and_the_published_floor() {
+    let lead = 1.024; // 64 whole frames, so his first word starts on a frame edge
+    let word = synthetic_voice(0.224, 3);
+    let mut mic = room(lead + 3.0 * 0.448 + 1.5);
+    let resume = secs_to_samples(lead);
+    for i in 0..3 {
+        superimpose(&mut mic, resume + i * secs_to_samples(0.448), &word);
+    }
+
+    // POSITIVE CONTROL: a sentence ready before he says anything plays at once, so this replay
+    // can see Rich sound at all.
+    let early = handoff(&mic, resume, -200, 0);
+    assert_eq!(early.sounded_at, Some(-200), "the replay never lets Rich sound: {early:?}");
+
+    let mut over_him = Vec::new();
+    for phase in [0, 6, 12, 18] {
+        for ready in (20..=1200).step_by(4) {
+            let h = handoff(&mic, resume, ready, phase);
+            let ok = Handoff { sounded_at: None, tainted_starts: 0, tainted_discards: 0, admitted: 1 };
+            if h != ok {
+                over_him.push(format!("ready {ready} ms, tick phase {phase} ms: {h:?}"));
+            }
+        }
+    }
+    println!("[handoff] {} schedules talked over him", over_him.len());
+    for line in over_him.iter().take(12) {
+        println!("[handoff]   {line}");
+    }
+    assert!(over_him.is_empty(), "Rich sounded over his resumed words in {} schedules, first: {}", over_him.len(), over_him[0]);
+}
+
+// ================================================================================================
+// EVERY WAY HIS TURN ENDS, IN ONE TABLE.
+//
+// Three reviews in a row found a turn ending the earlier tests did not cover. This table is the
+// whole contract in one place. Each row is a way a turn ends, replayed through the SHIPPED rules:
+// `CaptureBrain` (canceller, VAD, endpointer with its 30 s continuation, onset signal, `finish`),
+// `TurnAssembler` (fragments, quiet, floor, `carry`), `AnswerGate`, `AudibleWindow`,
+// `rich_audible`, `may_sound`, with Rich's synthesis (21 frames) and the recognizer's latency in
+// the loop, and on voice-off the desk's drain. Every row is held to the same three promises:
+//
+//   ONE TURN PER THOUGHT  the requests that STAND (handed over and not withdrawn) are exactly the
+//                         ones listed, each a whole thought
+//   NOTHING LOST          every fragment he said is in a request that stands, in order
+//   RICH SILENT           nothing of Rich sounds while any of his voice is in the room, and Rich's
+//                         first sound comes no sooner than 2.000 s after his last word
+// ================================================================================================
+
+/// One way a turn ends.
+struct Ending {
+    name: &'static str,
+    mic: Vec<f32>,
+    /// Sample ranges in which his voice is in the room.
+    voiced: Vec<(usize, usize)>,
+    /// Frame at which the FIRST answer is offered; later answers come `MODEL_FRAMES` after their
+    /// turn. `None`: the first answer too.
+    first_offer: Option<usize>,
+    /// How long the recognizer takes on each fragment, in frames.
+    recognition_frames: usize,
+    /// Frame at which he switches voice off, if he does.
+    voice_off_at: Option<usize>,
+    /// The requests that stand, in order.
+    stands: &'static [&'static str],
+    /// What Rich says aloud, in order.
+    said: &'static [&'static str],
+}
+
+/// What a row did.
+#[derive(Debug, Default)]
+struct Ended {
+    /// Every turn handed over, and whether it was withdrawn when he went on.
+    handed_over: Vec<(String, bool)>,
+    said: Vec<(usize, String)>,
+    tainted_starts: usize,
+    admitted: usize,
+}
+
+impl Ended {
+    fn stands(&self) -> Vec<String> {
+        self.handed_over.iter().filter(|(_, withdrawn)| !withdrawn).map(|(t, _)| t.clone()).collect()
+    }
+}
+
+fn replay_ending(e: &Ending) -> Ended {
+    use std::collections::VecDeque;
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let mut gate: AnswerGate<(u64, String)> = AnswerGate::new();
+    let mut window = AudibleWindow::new();
+    let mut r = Ended::default();
+    let mut recognizing: VecDeque<(usize, String)> = VecDeque::new();
+    let mut offers: Vec<(usize, String)> = Vec::new();
+    let mut synthesis: Vec<(usize, u64, String)> = Vec::new();
+    let (mut playing_until, mut sounded, mut speaking, mut was_speaking, mut generation) = (0usize, false, false, false, 0u64);
+    let mut turn_ends: Vec<usize> = Vec::new();
+    // The last turn handed over while Rich has not yet made a sound answering it.
+    let mut unanswered: Option<(usize, Turn)> = None;
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+
+    fn handle(m: CapMsg, b: usize, latency: usize, turns: &mut TurnAssembler, r: &mut Ended, rec: &mut VecDeque<(usize, String)>) {
+        match m {
+            CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+            CapMsg::Started { tainted: true, .. } => {
+                r.tainted_starts += 1;
+                turns.utterance_started();
+            }
+            CapMsg::Utterance(u) => {
+                r.admitted += 1;
+                turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                rec.push_back((b + latency, format!("fragment {}", r.admitted)));
+            }
+            CapMsg::Discarded { .. } => turns.utterance_discarded(),
+            CapMsg::TurnQuiet => turns.quiet(),
+            _ => {}
+        }
+    }
+
+    for (b, frame) in e.mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        if e.voice_off_at == Some(b) {
+            // VOICE OFF: the capture callback closes his open recording, the supervisor hands it
+            // on, and the desk waits for every fragment's words before the turn goes out whole.
+            for m in brain.finish() {
+                handle(m, b, e.recognition_frames, &mut turns, &mut r, &mut recognizing);
+            }
+            while let Some((_, words)) = recognizing.pop_front() {
+                turns.recognized(Some((words, false)));
+            }
+            if let Some(t) = turns.flush() {
+                r.handed_over.push((t.text, false));
+            }
+            return r;
+        }
+        ring.push(&silence);
+        for m in brain.push_frame(frame, speaking, false) {
+            handle(m, b, e.recognition_frames, &mut turns, &mut r, &mut recognizing);
+        }
+        while recognizing.front().is_some_and(|(ready, _)| *ready <= b) {
+            let (_, words) = recognizing.pop_front().unwrap();
+            let starts = turns.recognized(Some((words, false)));
+            let outstanding = turn_ends.iter().any(|&end| b < end) || gate.held() > 0 || !synthesis.is_empty();
+            if starts && outstanding {
+                gate.supersede();
+                generation += 1;
+                // ONE THOUGHT, ONE REQUEST: the turn he had not finished joins this one.
+                if let Some((i, earlier)) = unanswered.take() {
+                    turns.carry(earlier);
+                    r.handed_over[i].1 = true;
+                }
+            }
+        }
+        if let Some(t) = turns.take_turn() {
+            let k = r.handed_over.len() + 1;
+            let at = match (k, e.first_offer) {
+                (1, Some(at)) => at,
+                _ => b + MODEL_FRAMES,
+            };
+            assert!(at > b, "{}: the first answer was offered before its turn was handed over", e.name);
+            unanswered = Some((r.handed_over.len(), t.clone()));
+            r.handed_over.push((t.text, false));
+            gate.next_turn();
+            offers.push((at, format!("answer {k}")));
+            turn_ends.push(at + 60);
+        }
+        let floor = turns.has_floor();
+        for (_, s) in offers.iter().filter(|(at, _)| *at == b) {
+            if let Some((g, s)) = gate.offer((generation, s.clone()), floor) {
+                synthesis.push((b + SYNTH_FRAMES, g, s));
+            }
+        }
+        for (g, s) in gate.release(floor) {
+            synthesis.push((b + SYNTH_FRAMES, g, s));
+        }
+        synthesis.retain(|(_, g, _)| *g == generation);
+        if let Some(pos) = synthesis.iter().position(|(ready, _, _)| *ready <= b) {
+            if may_sound(floor, brain.his_onset_building()) && b >= playing_until {
+                let (_, _, s) = synthesis.remove(pos);
+                r.said.push((b, s));
+                sounded = true;
+                playing_until = b + SENTENCE_FRAMES;
+            }
+        }
+        window.observe(b < playing_until, !synthesis.is_empty(), 0.032, (b * 16) as u64);
+        if !window.is_open() {
+            sounded = false;
+        }
+        speaking = rich_audible(window.is_open(), sounded);
+        if speaking && !was_speaking {
+            // Rich has begun answering aloud: what he says next is a new turn.
+            unanswered = None;
+        }
+        was_speaking = speaking;
+    }
+    r
+}
+
+/// His room with stretches of voice laid in at his level; returns the track and the voiced ranges.
+fn speak(lead: f32, parts: &[(Vec<f32>, f32)], tail: f32) -> (Vec<f32>, Vec<(usize, usize)>) {
+    let total = lead + parts.iter().map(|(v, gap)| v.len() as f32 / SAMPLE_RATE as f32 + gap).sum::<f32>() + tail;
+    let mut mic = room(total);
+    let mut at = secs_to_samples(lead);
+    let mut voiced = Vec::new();
+    for (voice, gap_after) in parts {
+        superimpose(&mut mic, at, voice);
+        voiced.push((at, at + voice.len()));
+        at += voice.len() + secs_to_samples(*gap_after);
+    }
+    (mic, voiced)
+}
+
+#[test]
+fn every_way_his_turn_ends() {
+    let frame_of = |sample: usize| sample / VAD_FRAME_SAMPLES;
+    let thought = || vec![(synthetic_voice(1.904, 1), HIS_PAUSE_SECS), (synthetic_voice(1.104, 2), 0.0)];
+    let three_words = |seed| {
+        let w = synthetic_voice(0.224, seed);
+        vec![(synthetic_voice(1.904, 1), LONG_PAUSE_SECS), (w.clone(), 0.224), (w.clone(), 0.224), (w, 0.0)]
+    };
+    let mut rows = Vec::new();
+
+    // 1. A SHORT SILENCE MID-SENTENCE: his measured 1.406 s pause.
+    let (mic, voiced) = speak(1.0, &thought(), 6.0);
+    rows.push(Ending { name: "a short silence mid-sentence", mic, voiced, first_offer: None, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 1"] });
+
+    // 2. A SILENCE LONGER THAN 2 s, THEN MORE SPEECH: the first part is handed over, he goes on
+    //    before Rich answers, and the request that stands is the whole thought.
+    let (mic, voiced) = speak(1.0, &[(synthetic_voice(1.904, 1), LONG_PAUSE_SECS), (synthetic_voice(1.104, 2), 0.0)], 6.0);
+    rows.push(Ending { name: "a silence longer than 2 s, then more", mic, voiced, first_offer: None, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 2"] });
+
+    // 3. A LONG STRETCH CUT AT THE 30.000 s WINDOW WITH A SHORT TAIL: his last word runs 0.224 s
+    //    (14 frames) past the cut, under the 19-frame cough minimum, and he stops.
+    let (mic, voiced) = speak(1.0, &[(spoken_words(30.224, 4), 0.0)], 6.0);
+    rows.push(Ending { name: "a 30 s stretch cut at the window, short tail", mic, voiced, first_offer: None, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 1"] });
+
+    // 4. SPEECH THAT STARTS AGAIN WHILE RICH'S ANSWER IS BEING PREPARED: 128 ms into synthesis.
+    let (mic, voiced) = speak(1.0, &three_words(6), 6.0);
+    let first_offer = Some(frame_of(voiced[1].0) - 8);
+    rows.push(Ending { name: "he goes on while the answer is being prepared", mic, voiced, first_offer, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 2"] });
+
+    // 5. SPEECH STARTING DURING THE ONSET DEBOUNCE: 20 frames into the 21-frame synthesis, so the
+    //    sentence is ready while his first word is still building toward its 7-frame onset.
+    let (mic, voiced) = speak(1.0, &three_words(7), 6.0);
+    let first_offer = Some(frame_of(voiced[1].0) - 20);
+    rows.push(Ending { name: "he starts during the onset debounce", mic, voiced, first_offer, recognition_frames: 0,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 2"] });
+
+    // 6. RECOGNITION STILL PENDING WHEN THE QUIET COMES: 160 frames (2.560 s) per fragment, longer
+    //    than the 75 frames (1.200 s) from an utterance's end to the turn's quiet.
+    let (mic, voiced) = speak(1.0, &thought(), 8.0);
+    rows.push(Ending { name: "recognition pending when the quiet comes", mic, voiced, first_offer: None, recognition_frames: 160,
+        voice_off_at: None, stands: &["fragment 1 fragment 2"], said: &["answer 1"] });
+
+    // 7. VOICE OFF WHILE HE IS STILL TALKING: 0.600 s into his second stretch.
+    let (mic, voiced) = speak(1.0, &thought(), 4.0);
+    let off = Some(frame_of(voiced[1].0 + secs_to_samples(0.600)));
+    rows.push(Ending { name: "voice off while he is still talking", mic, voiced, first_offer: None, recognition_frames: 40,
+        voice_off_at: off, stands: &["fragment 1 fragment 2"], said: &[] });
+
+    // 8. VOICE OFF WHILE HIS LAST WORDS ARE STILL BEING RECOGNIZED: 128 ms after his last word,
+    //    inside the 0.800 s hangover, with 40 frames (0.640 s) of recognition per fragment.
+    let (mic, voiced) = speak(1.0, &thought(), 4.0);
+    let off = Some(frame_of(voiced[1].1) + 8);
+    rows.push(Ending { name: "voice off as his last words are recognized", mic, voiced, first_offer: None, recognition_frames: 40,
+        voice_off_at: off, stands: &["fragment 1 fragment 2"], said: &[] });
+
+    let mut failures = Vec::new();
+    for e in &rows {
+        let r = replay_ending(e);
+        let stands = r.stands();
+        let said: Vec<&str> = r.said.iter().map(|(_, s)| s.as_str()).collect();
+        let mut problems = Vec::new();
+        if stands != e.stands {
+            problems.push(format!("ONE TURN PER THOUGHT: the requests that stand are {stands:?}, expected {:?}", e.stands));
+        }
+        let all: Vec<String> = (1..=r.admitted).map(|n| format!("fragment {n}")).collect();
+        if stands.join(" ") != all.join(" ") {
+            problems.push(format!("NOTHING LOST: {} fragment(s) admitted, the requests that stand hold {stands:?}", r.admitted));
+        }
+        if r.tainted_starts != 0 {
+            problems.push(format!("NOTHING LOST: {} of his starts were taken for Rich's echo", r.tainted_starts));
+        }
+        if said != e.said {
+            problems.push(format!("RICH SILENT: Rich said {said:?}, expected {:?}", e.said));
+        }
+        let last_word = e.voiced.iter().map(|(_, end)| *end).max().unwrap_or(0);
+        for (frame, s) in &r.said {
+            let at = (frame + 1) * VAD_FRAME_SAMPLES;
+            if e.voiced.iter().any(|(a, b)| at >= *a && at <= *b) {
+                problems.push(format!("RICH SILENT: {s:?} sounded at {:.3} s while he was talking", at as f32 / SAMPLE_RATE as f32));
+            }
+            let after = (at as f32 - last_word as f32) / SAMPLE_RATE as f32;
+            if after < end_of_turn_secs() {
+                problems.push(format!("RICH SILENT: {s:?} sounded {after:.3} s after his last word"));
+            }
+        }
+        println!(
+            "[ending] {:<46} stands {:?}  handed over {}  said {:?}  {}",
+            e.name,
+            stands,
+            r.handed_over.len(),
+            said,
+            if problems.is_empty() { "OK" } else { "FAILED" }
+        );
+        if !problems.is_empty() {
+            failures.push(format!("{}:\n    {}", e.name, problems.join("\n    ")));
+        }
+    }
+    assert!(failures.is_empty(), "turn endings that broke a promise:\n  {}", failures.join("\n  "));
+}
