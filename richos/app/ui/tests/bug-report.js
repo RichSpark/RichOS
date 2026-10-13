@@ -2111,13 +2111,18 @@ async function main() {
           const card = document.querySelector(".bugcard.is-queued");
           const c = card.getBoundingClientRect();
           const k = card.querySelector(".bug-kind");
-          const pill = card.querySelector(".bug-pill").getBoundingClientRect();
+          const pillEl = card.querySelector(".bug-pill");
+          const pill = pillEl.getBoundingClientRect();
+          const pillLh = parseFloat(getComputedStyle(pillEl).lineHeight) || parseFloat(getComputedStyle(pillEl).fontSize) * 1.4;
           const lh = parseFloat(getComputedStyle(k).lineHeight) || parseFloat(getComputedStyle(k).fontSize) * 1.4;
-          return { cardRight: c.right, pillRight: pill.right, pillLeft: pill.left, cardLeft: c.left, kindH: k.getBoundingClientRect().height, lh, cardW: c.width, pillW: pill.width };
+          return { cardRight: c.right, pillRight: pill.right, pillLeft: pill.left, cardLeft: c.left, kindH: k.getBoundingClientRect().height, lh, cardW: c.width, pillW: pill.width, pillH: pill.height, pillLh };
         });
         assert(m.kindH < m.lh * 1.5, `${scale * 100}% ${theme} ${kind}: the title breaks onto two lines (height ${m.kindH}px, line ${m.lh}px)`);
         assert(m.pillRight <= m.cardRight - 1 && m.pillLeft >= m.cardLeft, `${scale * 100}% ${theme} ${kind}: the pill runs outside the card (pill ${m.pillLeft}..${m.pillRight}, card ${m.cardLeft}..${m.cardRight})`);
-        seen.push(`${scale * 100}% ${theme} ${kind} card ${Math.round(m.cardW)}px pill ${Math.round(m.pillW)}px title ${Math.round(m.kindH)}px`);
+        // The pill's own text: one line at 100%, wrapped (taller than one and a half lines) at 150%.
+        const pillLines = m.pillH > m.pillLh * 1.5;
+        assert(pillLines === (scale > 1), `${scale * 100}% ${theme} ${kind}: the pill text ${pillLines ? "wraps" : "stays on one line"} (height ${m.pillH}px, line ${m.pillLh}px), expected ${scale > 1 ? "wrapped" : "one line"}`);
+        seen.push(`${scale * 100}% ${theme} ${kind} card ${Math.round(m.cardW)}px pill ${Math.round(m.pillW)}px title ${Math.round(m.kindH)}px pill ${Math.round(m.pillH)}px high`);
         await page.close();
       }
     }
