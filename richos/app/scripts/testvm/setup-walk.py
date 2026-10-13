@@ -702,6 +702,9 @@ class SetupWalk(adopt_walk.Walk):
                 asked = True
             elif added and asked and self.shown('dictation-offer-yes', 'Turn on dictation'):
                 break
+            elif self.present('Allow action'):
+                # Rich reading his company notes asks first in the guest (seen 2026-10-13).
+                self.click('Allow action', 'Rich asked to read the company notes: "Allow action"')
             time.sleep(2)
         if not self.shown('dictation-offer-yes', 'Turn on dictation'):
             self.shot('set-up-no-offer.png')
@@ -757,6 +760,8 @@ class SetupWalk(adopt_walk.Walk):
             said = ''.join(json.loads(r).get('text', '') for r in rows.splitlines() if '"AssistantDelta"' in r)
             if name in said or name.title() in said or name.upper() in said:
                 break
+            if self.present('Allow action'):
+                self.click('Allow action', 'Rich asked for an action: "Allow action"')
             time.sleep(5)
         facts['rich_exact'] = said.count(name)
         facts['rich_recapitalized'] = said.count(name.title()) + (said.count(name.upper()) if name.upper() != name else 0)
