@@ -1888,6 +1888,12 @@ function renderDictationOffer() {
 /// worked, after he picked his key there): the app opens the "Dictation feature" conversation
 /// under his company, once, with Rich's message naming the key he picked, and the rail shows it.
 window.addEventListener("richos:dictation-set-up", async () => {
+  // Set up later (after "Not now", or from Settings after a refused permission): the dictation
+  // text leaves the onboarding conversation all the same (second review rv-20261013T173014Z).
+  if (dictationOffer && dictationOffer.phase !== "on") {
+    dictationOffer.phase = "on";
+    scheduleRender();
+  }
   const created = await invokeQuiet("dictation_feature_thread");
   if (created) await refreshNavigation();
 });

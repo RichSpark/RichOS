@@ -1944,6 +1944,29 @@ async function main() {
     assertEqual((await later.textContent("#dictation-offer-after")).trim(), "It's in Settings, under Dictation.", "not on");
     await later.close();
 
+    // SET UP LATER, FROM SETTINGS (second review rv-20261013T173014Z, finding 2): "Not now" first,
+    // then dictation turned on in its sheet with F2. The dictation text still leaves the
+    // onboarding conversation, and "Dictation feature" names F2.
+    const later2 = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
+    await later2.waitForSelector("#dictation-offer-no");
+    await later2.click("#dictation-offer-no");
+    await later2.waitForSelector("#dictation-offer-after");
+    await later2.evaluate(() => window.RichDictation.open());
+    await later2.waitForSelector("#dictation-sheet:not([hidden])");
+    await later2.click("#dict-switch");
+    await later2.waitForFunction(() => /^On\. Tap/.test((document.getElementById("dict-state") || {}).textContent || ""));
+    await later2.click('.dict-key[data-k="2"]');
+    await later2.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
+    await later2.click("#dict-close");
+    await later2.locator(".nav-thread", { hasText: "Dictation feature" }).waitFor();
+    await later2.waitForFunction(() => document.querySelectorAll("#dictation-offer .tl-prose").length === 1);
+    assertEqual(
+      await later2.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.trim())),
+      ["Voice is ready. Press the round button beside the message box and just talk to me."],
+      "set up later: the dictation text left the onboarding conversation too"
+    );
+    await later2.close();
+
     // A FRESH INSTALL: Start comes before his first company, so no conversation is open when
     // the offer is made; it is drawn in the first one, once he has added the company (walked on
     // the guest 2026-10-13: tying the note to the open conversation hid it when none was open).
