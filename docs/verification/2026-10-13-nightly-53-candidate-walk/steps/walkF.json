@@ -1,0 +1,21 @@
+[
+  {"op": "guest", "command": "mkdir -p /Users/admin/fd/richos/app /Users/admin/fd/richos/engine/scripts /Users/admin/fd-release /Users/admin/fd-bin && echo made"},
+  {"op": "push", "src": "richos/app/scripts", "dest": "/Users/admin/fd/richos/app/scripts"},
+  {"op": "push", "src": "richos/engine/scripts/lib", "dest": "/Users/admin/fd/richos/engine/scripts/lib"},
+  {"op": "push", "src": "CANDIDATE_DIR/RichOS.app.tar.gz", "dest": "/Users/admin/fd-release/RichOS.app.tar.gz"},
+  {"op": "push", "src": "/opt/homebrew/bin/cliclick", "dest": "/Users/admin/fd-bin/cliclick"},
+  {"op": "guest", "command": "shasum -a 256 /Users/admin/fd-release/RichOS.app.tar.gz; chmod 755 /Users/admin/fd-bin/cliclick; /Users/admin/fd-bin/cliclick -V 2>&1 | head -2; ls /Users/admin/fd/richos/app/scripts/front-door.test.sh"},
+  {"op": "guest", "command": "rm -f /Users/admin/fd.rc /Users/admin/fd.log; nohup sudo -n launchctl asuser $(id -u) sudo -n -u admin /usr/bin/env -i HOME=/Users/admin USER=admin TMPDIR=$(getconf DARWIN_USER_TEMP_DIR) PATH=/Users/admin/fd-bin:/usr/bin:/bin:/usr/sbin:/sbin /bin/bash -c '/bin/bash /Users/admin/fd/richos/app/scripts/front-door.test.sh --release /Users/admin/fd-release --evidence /Users/admin/fd-evidence > /Users/admin/fd.log 2>&1; echo $? > /Users/admin/fd.rc' >/dev/null 2>&1 & echo started"},
+  {"op": "guest", "command": "for i in $(seq 1 10); do [ -s /Users/admin/fd.rc ] && { echo \"exit $(cat /Users/admin/fd.rc)\"; exit 0; }; sleep 10; done; echo 'still running'; tail -3 /Users/admin/fd.log", "allow_fail": true},
+  {"op": "guest", "command": "for i in $(seq 1 10); do [ -s /Users/admin/fd.rc ] && { echo \"exit $(cat /Users/admin/fd.rc)\"; exit 0; }; sleep 10; done; echo 'still running'; tail -3 /Users/admin/fd.log", "allow_fail": true},
+  {"op": "guest", "command": "for i in $(seq 1 10); do [ -s /Users/admin/fd.rc ] && { echo \"exit $(cat /Users/admin/fd.rc)\"; exit 0; }; sleep 10; done; echo 'still running'; tail -3 /Users/admin/fd.log", "allow_fail": true},
+  {"op": "guest", "command": "for i in $(seq 1 10); do [ -s /Users/admin/fd.rc ] && { echo \"exit $(cat /Users/admin/fd.rc)\"; exit 0; }; sleep 10; done; echo 'still running'; tail -3 /Users/admin/fd.log", "allow_fail": true},
+  {"op": "guest", "command": "cat /Users/admin/fd.rc 2>/dev/null || echo 'no exit code'; wc -l < /Users/admin/fd.log; sed -n '1,16p' /Users/admin/fd.log"},
+  {"op": "guest", "command": "sed -n '17,32p' /Users/admin/fd.log"},
+  {"op": "guest", "command": "sed -n '33,48p' /Users/admin/fd.log"},
+  {"op": "guest", "command": "sed -n '49,64p' /Users/admin/fd.log"},
+  {"op": "guest", "command": "sed -n '65,80p' /Users/admin/fd.log"},
+  {"op": "guest", "command": "sed -n '81,100p' /Users/admin/fd.log"},
+  {"op": "guest", "command": "grep -E 'PASS|FAIL|REFUSED|GAP|RESIDUE' /Users/admin/fd.log | cut -c1-150"},
+  {"op": "guest", "command": "pgrep -fl richos-tauri || echo 'no richos-tauri left running in the guest'"}
+]

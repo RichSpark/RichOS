@@ -1,0 +1,290 @@
+[
+ {
+  "op": "guest",
+  "command": "echo \"account: $(id -un) uid $(id -u), home $HOME\"; ls /Volumes; if [ -e /Volumes/E1TB ]; then echo '/Volumes/E1TB PRESENT'; exit 1; else echo 'no /Volumes/E1TB in this guest'; fi",
+  "allow_fail": true
+ },
+ {
+  "op": "guest",
+  "command": "pid=$(pgrep -n -f richos-tauri); echo pid=$pid; ps eww -o command= -p $pid | tr ' ' '\\n' | grep -E '^(HOME|RICHOS_|TMPDIR)=' ; ps eww -o command= -p $pid | grep -c 'RICHOS_ENV_FILE\\|RICHOS_ENGINE_DIR\\|RICHOS_BULK_ROOT' || true"
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); f=\"$h/Library/Application Support/RichOS/.env\"; stat -f 'mode %Sp (%Lp) owner %Su size %z born %SB' \"$f\"; shasum -a 256 \"$f\"; grep -vc '^#' \"$f\" || true"
+ },
+ {
+  "op": "guest",
+  "command": "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to false'"
+ },
+ {
+  "op": "guest",
+  "command": "mkdir -p /Users/admin/Acme && say -o /Users/admin/Acme/memo.aiff 'Note for Friday. Order two bags of coffee beans, and call the printer about the brochure proof before noon.' && ls -l /Users/admin/Acme"
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Set it up",
+   "--role",
+   "AXButton",
+   "--first"
+  ],
+  "contains": "Set it up",
+  "seconds": 60
+ },
+ {
+  "op": "shot",
+  "name": "a-01-setup-sheet",
+  "ocr": true
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Set it up",
+   "--role",
+   "AXButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 5
+ },
+ {
+  "op": "shot",
+  "name": "a-02-setup-running"
+ },
+ {"op": "until", "args": ["find", "--value", "all set", "--contains", "--first"], "contains": "all set", "seconds": 900},
+ {"op": "wait", "seconds": 3},
+ {"op": "tree", "name": "a-02b-setup-done"},
+ {"op": "shot", "name": "a-02b-setup-done", "ocr": true},
+ {"op": "guest", "command": "grep -E 'setup:|video tools' /Users/admin/testvm/walk-*/app.log | head -12"},
+ {"op": "ax", "args": ["click", "--title", "Start", "--role", "AXButton", "--first"]},
+ {"op": "wait", "seconds": 5},
+ {"op": "until", "args": ["find", "--title", "Not now", "--role", "AXButton", "--contains", "--first"], "contains": "Not now", "seconds": 60, "allow_fail": true},
+ {"op": "tree", "name": "a-02c-before-not-now"},
+ {"op": "ax", "args": ["click", "--title", "Not now", "--role", "AXButton", "--contains", "--first"], "allow_fail": true},
+ {"op": "wait", "seconds": 3},
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Add this company",
+   "--role",
+   "AXButton",
+   "--contains",
+   "--first"
+  ],
+  "contains": "Add this company",
+  "seconds": 600,
+  "allow_fail": true
+ },
+ {
+  "op": "tree",
+  "name": "a-03-after-setup"
+ },
+ {
+  "op": "shot",
+  "name": "a-03-after-setup",
+  "ocr": true
+ },
+ {
+  "op": "guest",
+  "command": "grep -E 'setup:|video tools|engine' /Users/admin/testvm/walk-*/app.log | head -30"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Acme",
+   "--role",
+   "AXTextField",
+   "--title",
+   "What's the company called?",
+   "--contains",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "/Users/admin/Acme",
+   "--role",
+   "AXTextField",
+   "--title",
+   "Its folder on this Mac",
+   "--contains",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Add this company",
+   "--role",
+   "AXButton",
+   "--contains",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--id",
+   "first-run-later",
+   "--first"
+  ],
+  "contains": "Not now",
+  "seconds": 90,
+  "allow_fail": true
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--id",
+   "first-run-later",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 5
+ },
+ {
+  "op": "tree",
+  "name": "a-04-after-company"
+ },
+ {
+  "op": "shot",
+  "name": "a-04-after-company",
+  "ocr": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); for i in $(seq 1 10); do n=$(find \"$h/Library\" -name 'ggml-*.bin' -size +100000k 2>/dev/null | grep -v -i -e incoming -e '\\.part' | wc -l | tr -d ' '); if [ \"$n\" -ge 2 ]; then echo \"models on disk: $n\"; exit 0; fi; sleep 10; done; echo \"models not yet: $n\"; exit 1",
+  "allow_fail": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); for i in $(seq 1 10); do n=$(find \"$h/Library\" -name 'ggml-*.bin' -size +100000k 2>/dev/null | grep -v -i -e incoming -e '\\.part' | wc -l | tr -d ' '); if [ \"$n\" -ge 2 ]; then echo \"models on disk: $n\"; exit 0; fi; sleep 10; done; echo \"models not yet: $n\"; exit 1",
+  "allow_fail": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); for i in $(seq 1 10); do n=$(find \"$h/Library\" -name 'ggml-*.bin' -size +100000k 2>/dev/null | grep -v -i -e incoming -e '\\.part' | wc -l | tr -d ' '); if [ \"$n\" -ge 2 ]; then echo \"models on disk: $n\"; exit 0; fi; sleep 10; done; echo \"models not yet: $n\"; exit 1",
+  "allow_fail": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); find \"$h/Library\" -name 'ggml-*' -exec ls -l {} \\; 2>/dev/null; grep -E 'video tools|voice:' /Users/admin/testvm/walk-*/app.log | tail -5"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Please transcribe the voice memo at /Users/admin/Acme/memo.aiff and tell me what it says.",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--contains",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "--key",
+   "36"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 10
+ },
+ {
+  "op": "shot",
+  "name": "a-05-asked"
+ },
+ {"op": "until", "args": ["find", "--title", "waiting for you", "--contains", "--first"], "contains": "waiting for you", "seconds": 240, "allow_fail": true},
+ {"op": "ax", "args": ["click", "--title", "waiting for you", "--contains", "--first"], "allow_fail": true},
+ {"op": "wait", "seconds": 3},
+ {"op": "tree", "name": "a-05b-work-summary"},
+ {"op": "shot", "name": "a-05b-work-summary", "ocr": true},
+ {"op": "ax", "args": ["click", "--title", "Approve", "--role", "AXButton", "--contains", "--first"], "allow_fail": true},
+ {"op": "until", "args": ["find", "--value", "brochure", "--contains", "--first"], "contains": "brochure", "seconds": 150, "allow_fail": true},
+ {"op": "until", "args": ["find", "--title", "Approve", "--role", "AXButton", "--contains", "--first"], "contains": "Approve", "seconds": 20, "allow_fail": true},
+ {"op": "tree", "name": "a-05c-second-ask"},
+ {"op": "ax", "args": ["click", "--title", "Approve", "--role", "AXButton", "--contains", "--first"], "allow_fail": true},
+ {"op": "until", "args": ["find", "--value", "brochure", "--contains", "--first"], "contains": "brochure", "seconds": 150, "allow_fail": true},
+ {"op": "until", "args": ["find", "--title", "Approve", "--role", "AXButton", "--contains", "--first"], "contains": "Approve", "seconds": 20, "allow_fail": true},
+ {"op": "ax", "args": ["click", "--title", "Approve", "--role", "AXButton", "--contains", "--first"], "allow_fail": true},
+ {"op": "until", "args": ["find", "--value", "brochure", "--contains", "--first"], "contains": "brochure", "seconds": 240, "allow_fail": true},
+ {"op": "guest", "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); grep -rl 'memo.aiff' \"$h/Library/Application Support/com.richos.app\" \"$h/.claude\" 2>/dev/null | head -8"},
+ {"op": "guest", "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); grep -rhoE '(mktemp|whisper-cli|ffmpeg|machine_settings|richos-agents|TMPDIR)[^\"]{0,160}' \"$h/Library/Application Support/com.richos.app\" \"$h/.claude/projects\" 2>/dev/null | sort -u | head -20"},
+ {
+  "op": "wait",
+  "seconds": 5
+ },
+ {
+  "op": "tree",
+  "name": "a-06-answer"
+ },
+ {
+  "op": "shot",
+  "name": "a-06-answer",
+  "ocr": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); d=\"$h/Library/Application Support/com.richos.app/machinery\"; grep -rhoE '\"command\":\"[^\"]{0,300}' \"$d\" 2>/dev/null | sort -u | head -40"
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); ls -la /Users/admin/Acme; find /Users/admin/Acme \"$h/Library/Application Support/RichOS\" -maxdepth 3 -newer /Users/admin/Acme/memo.aiff -name '*audio*' -o -maxdepth 3 -name 'transcript*' 2>/dev/null | head; ls -la \"${TMPDIR:-/tmp}\" | head -5"
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); e=\"$h/Library/Application Support/RichOS/engine\"; ls \"$e\" | head; py=$(ls \"$e\"/runtime/bin/python3* 2>/dev/null | head -1); echo \"python: $py\"; HOME=\"$h\" TMPDIR=$(getconf DARWIN_USER_TEMP_DIR) \"$py\" \"$e/scripts/lib/machine_settings.py\" show; HOME=\"$h\" TMPDIR=$(getconf DARWIN_USER_TEMP_DIR) \"$py\" \"$e/scripts/lib/machine_settings.py\" scratch walk53-probe"
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); echo 'files naming the external disk, home and payload:'; grep -rIl 'E1TB' \"$h\" /Users/admin/testvm/walk-*/app.log /Users/admin/Acme 2>/dev/null | head -20; echo 'end of list'",
+  "allow_fail": true
+ },
+ {
+  "op": "guest",
+  "command": "h=$(ls -d /Users/admin/testvm/walk-*/home); f=\"$h/Library/Application Support/RichOS/.env\"; stat -f 'mode %Sp (%Lp) size %z modified %Sm' \"$f\"; shasum -a 256 \"$f\""
+ },
+ {
+  "op": "guest",
+  "command": "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to true'"
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "shot",
+  "name": "a-07-answer-dark",
+  "ocr": true
+ },
+ {
+  "op": "guest",
+  "command": "grep -E 'machine settings|E1TB|Volumes' /Users/admin/testvm/walk-*/app.log | head -20; echo end",
+  "allow_fail": true
+ }
+]
