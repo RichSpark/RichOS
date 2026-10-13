@@ -1774,6 +1774,8 @@ const DICTATION_OFFER_HOW_BEFORE = "So, instead of typing you'll be able to do t
 const DICTATION_OFFER_HOW_AFTER = " (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊";
 const DICTATION_OFFER_NOT_NOW = "Okay. It's in Settings, under Dictation, whenever you want it.";
 const DICTATION_OFFER_LATER = "It's in Settings, under Dictation.";
+/// The conversation dictation opens once set up (`dictation_offer.rs` FEATURE_TITLE).
+const DICTATION_FEATURE_TITLE = "Dictation feature";
 
 /// The note's state: null (not shown), or `{phase, key}` with phase "open", "no", "on" or
 /// "later", and the key's name ("F1").
@@ -6685,6 +6687,14 @@ async function renderFirstRunNotice() {
   const ticket = ++firstRunRead;
   const view = await invokeQuiet("onboarding_view");
   if (ticket !== firstRunRead || context !== firstRunContext()) return;
+  // Never in the "Dictation feature" conversation: it holds Rich's dictation message, and the
+  // business questions belong to onboarding (Ray on the combined build,
+  // esc-20261013T210016Z-20625b89).
+  const row = threadRow(activeThreadId);
+  if (row && row.title === DICTATION_FEATURE_TITLE) {
+    box.hidden = true;
+    return;
+  }
   const entityId = draftEntityId || activeContext && activeContext.entity_id;
   if (view && view.entityId && entityId && view.entityId !== entityId) {
     box.hidden = true;

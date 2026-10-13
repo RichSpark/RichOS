@@ -13,7 +13,7 @@
 // themes for contrast, the type floor, fit and no dash, computed in WebKit.
 const path = require("path");
 const contrast = require("./lib/contrast");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
+const { leaveHome, loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
 
 const ALLOWED = { on: true, mic: "allowed", ax: "allowed", owner: "self", keyTap: true };
 
@@ -289,6 +289,24 @@ async function main() {
     assertEqual(await page.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation");
     await page.close();
     return "refused under no company, then made when Brightwave LABS was added";
+  });
+
+  // Ray on the combined build (esc-20261013T210016Z-20625b89): the "Dictation feature"
+  // conversation opened under the business-questions card. The card belongs to onboarding, so
+  // it stays out of that conversation, and is there again back in the one he came from.
+  await run.check("the business-questions card stays out of the Dictation feature conversation", async () => {
+    const page = await open("dark", ALLOWED, { preset: { onboarding: "not-yet" } });
+    await leaveHome(page);
+    await page.waitForSelector("#first-run:not([hidden])");
+    const home = await page.locator(".nav-thread-row.is-active .nav-thread").getAttribute("data-thread-id");
+    const feature = page.locator(".nav-thread", { hasText: "Dictation feature" });
+    await feature.waitFor();
+    await feature.click();
+    await page.waitForFunction(() => document.getElementById("first-run").hidden);
+    await page.click(`.nav-thread[data-thread-id="${home}"]`);
+    await page.waitForSelector("#first-run:not([hidden])");
+    await page.close();
+    return "card in the conversation he was in, none in Dictation feature, back again on return";
   });
 
   await run.check("state 12: a refusal is said plainly, with Open System Settings on the right pane; back without allowing, it is said again", async () => {
