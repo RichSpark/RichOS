@@ -187,27 +187,37 @@ pub fn rank(corpus: &Corpus, query: &ParsedQuery, strict: bool, lexical: &[Lexic
 ///    over the stand-in folder: for "which subject line won the welcome emails" the
 ///    word-count rule picked one of sixty early brainstorm passages full of "welcome emails"
 ///    and "subject lines" and never the late passage that answers the question.
-/// 3. Otherwise, the PRD's text rule: the passage with the most query-word matches (a quoted
-///    span counts more than a word, the design's weighting); failing any match, the first.
+/// 3. Otherwise, the PRD's text rule: the passage with the most query-word matches; failing
+///    any match, the first.
+///
+/// Rule 1 is a tier, not a weight: only the passages holding the most quoted spans are
+/// candidates, and words decide among them. As a weight (a span worth five, a word two) an
+/// agenda paragraph with five of the query's words beat the decision holding the quoted text
+/// (fourth review: "annual plan pricing support cost \"30 days\"" showed the agenda in all
+/// four modes, to the palette and to Rich).
 pub fn best_passage(doc: &Document, query: &ParsedQuery, semantic_passage: Option<usize>) -> usize {
     let semantic = semantic_passage.filter(|p| *p < doc.passages.len());
-    let span_passage = doc.folded_passages.iter().any(|f| query.spans.iter().any(|s| has_span(f, s)));
-    if let (Some(p), false) = (semantic, span_passage) {
+    let spans_in = |folded: &str| query.spans.iter().filter(|s| has_span(folded, s)).count();
+    let most_spans = doc.folded_passages.iter().map(|f| spans_in(f)).max().unwrap_or(0);
+    if let (Some(p), 0) = (semantic, most_spans) {
         return p;
     }
     let mut best: Option<(usize, usize)> = None;
     for (i, folded) in doc.folded_passages.iter().enumerate() {
-        let score = count_words(folded, &query.words) * 2 + query.spans.iter().filter(|s| has_span(folded, s)).count() * 5;
+        if spans_in(folded) < most_spans {
+            continue;
+        }
+        let score = count_words(folded, &query.words);
         let better = match best {
             None => true,
-            Some((_, b)) => score > b || (score == b && semantic_passage == Some(i)),
+            Some((_, b)) => score > b || (score == b && semantic == Some(i)),
         };
         if better {
             best = Some((i, score));
         }
     }
     match best {
-        Some((i, score)) if score > 0 => i,
+        Some((i, score)) if score > 0 || most_spans > 0 => i,
         _ => semantic.unwrap_or(0),
     }
 }

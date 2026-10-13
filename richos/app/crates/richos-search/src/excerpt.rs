@@ -32,24 +32,45 @@ fn folded_with_origin(text: &str) -> (Vec<char>, Vec<usize>) {
     (chars, origin)
 }
 
-/// Every place `needle` stands in `hay` as whole words (no letter or digit just before or just
-/// after it, the rule `text::has_span` and `text::has_word` apply), as folded offsets.
-fn occurrences(hay: &[char], needle: &str) -> Vec<(usize, usize)> {
+/// How a needle is matched: exactly as ranking matched it, so the excerpt shows what made the
+/// result.
+#[derive(Clone, Copy)]
+enum Match {
+    /// `text::has_span`: the folded span literally, nothing relaxed.
+    Span,
+    /// `text::has_word`: a whole word, allowing a plural `s` or `es` (`refund` in `refunds`).
+    Word,
+}
+
+/// Every place `needle` stands in `hay` under `rule`, as folded offsets (a plural ending
+/// included in the range).
+fn occurrences(hay: &[char], needle: &str, rule: Match) -> Vec<(usize, usize)> {
     let needle: Vec<char> = needle.chars().collect();
     let mut out = Vec::new();
     if needle.is_empty() || needle.len() > hay.len() {
         return out;
     }
+    let alnum_at = |i: usize| i < hay.len() && hay[i].is_alphanumeric();
     for start in 0..=hay.len() - needle.len() {
-        let end = start + needle.len();
+        let mut end = start + needle.len();
         if hay[start..end] != needle[..] {
             continue;
         }
-        let before_ok = start == 0 || !hay[start - 1].is_alphanumeric();
-        let after_ok = end == hay.len() || !hay[end].is_alphanumeric();
-        if before_ok && after_ok {
-            out.push((start, end));
+        if let Match::Word = rule {
+            if start > 0 && hay[start - 1].is_alphanumeric() {
+                continue;
+            }
+            // text::has_word's order: "es" when nothing alphanumeric follows it, else "s".
+            if hay[end..].starts_with(&['e', 's']) && !alnum_at(end + 2) {
+                end += 2;
+            } else if hay[end..].starts_with(&['s']) {
+                end += 1;
+            }
+            if alnum_at(end) {
+                continue;
+            }
         }
+        out.push((start, end));
     }
     out
 }
@@ -60,13 +81,13 @@ fn occurrences(hay: &[char], needle: &str) -> Vec<(usize, usize)> {
 pub fn lexical_focus(text: &str, spans: &[String], words: &[String], max: usize) -> Option<(usize, usize)> {
     let (hay, origin) = folded_with_origin(text);
     let back = |(s, e): (usize, usize)| (origin[s], origin[e - 1] + 1);
-    let first_span = spans.iter().filter_map(|span| occurrences(&hay, span).into_iter().next()).min();
+    let first_span = spans.iter().filter_map(|span| occurrences(&hay, span, Match::Span).into_iter().next()).min();
     if let Some(found) = first_span {
         return Some(back(found));
     }
     let mut found: Vec<(usize, usize, usize)> = Vec::new();
     for (w, word) in words.iter().enumerate() {
-        for (s, e) in occurrences(&hay, word) {
+        for (s, e) in occurrences(&hay, word, Match::Word) {
             let (s, e) = back((s, e));
             found.push((s, e, w));
         }
@@ -188,9 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn a_span_inside_a_longer_word_is_not_a_match() {
-        assert_eq!(lexical_focus("the callback ran", &words(&["call"]), &[], 600), None);
+    fn matches_follow_the_ranking_rules_spans_literal_words_whole_with_plurals() {
+        // text::has_span is literal, so a span is found where ranking found it.
+        assert_eq!(lexical_focus("the callback ran", &words(&["call"]), &[], 600), Some((4, 8)));
+        // text::has_word: whole words only, with a plural "s" or "es" included in the range.
         assert_eq!(lexical_focus("the callback ran", &[], &words(&["call"]), 600), None);
+        let text = "we give refunds";
+        assert_eq!(lexical_focus(text, &[], &words(&["refund"]), 600).map(|r| slice(text, r)).as_deref(), Some("refunds"));
+        let text = "two boxes";
+        assert_eq!(lexical_focus(text, &[], &words(&["box"]), 600).map(|r| slice(text, r)).as_deref(), Some("boxes"));
+        assert_eq!(lexical_focus("dayss", &[], &words(&["day"]), 600), None);
+        assert_eq!(lexical_focus("today", &[], &words(&["day"]), 600), None);
     }
 
     #[test]

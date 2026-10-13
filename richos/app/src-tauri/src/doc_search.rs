@@ -285,35 +285,88 @@ mod tests {
         text + last
     }
 
-    fn excerpt_of(answer: &serde_json::Value, path: &str) -> String {
-        let results = answer["results"].as_array().unwrap();
-        let found = results.iter().find(|r| r["path"] == path).unwrap_or_else(|| panic!("{path} not in {answer}"));
-        found["excerpt"].as_str().unwrap().to_string()
-    }
-
+    /// WHICH PASSAGE A RESULT SHOWS, in one table (two reviews in a row found a result showing the
+    /// wrong part of its file). Each row: the query and both checkboxes, the file, and the text
+    /// that must be shown, checked in BOTH places a result is shown: the palette's passage
+    /// (`search`, what the CEO reads) and the bounded excerpt Rich's tool receives (at most
+    /// MAX_EXCERPT_CHARS plus a "…" at each cut end). Every row is checked and every failure
+    /// reported together.
     #[test]
-    fn the_excerpt_keeps_the_part_of_a_long_passage_that_matched() {
-        // The review's fixture shape: one 862-character paragraph, its decision near the end.
+    fn every_result_shows_the_passage_that_matched_in_the_palette_and_to_rich() {
+        // A meeting note whose agenda holds more of the query's words than the decision does,
+        // and only the decision holds the quoted text, whose own words are all it shares with
+        // the query (the fourth review's fixture: agenda 5 words = 10, decision 2 words + the
+        // span = 9).
+        let meeting = "# Pricing meeting\n\n## Agenda\n\nAnnual plan pricing, support cost, and the annual plan pricing review.\n\n\
+                       ## Decision\n\nWe decided on refunds within 30 days of the first charge.\n";
+        // A plural of the query's word at the end of a paragraph longer than Rich's bound:
+        // text search matches it (text.rs: `refund` matches `refunds`), so the excerpt must too.
+        let plural = long_paragraph(879, "Customers get refunds when they cancel early.");
+        // Matched by meaning alone, and not in its first passage.
+        let club = "# Club notes\n\n## Garden\n\nThe garden committee reviewed the hedge schedule and the compost rota.\n\n\
+                    ## Money\n\nA member asked for a refund after the money left her account.\n";
+        // A long file whose match is in its last passage.
+        let mut log = String::from("# Weekly log\n");
+        for week in 1..=40 {
+            log.push_str(&format!("\n## Week {week}\n\nThe garden committee reviewed the hedge schedule and the compost rota.\n"));
+        }
+        log.push_str("\n## Week 41\n\nThe vendor invoice was approved by the board on Friday.\n");
+        // One long paragraph (one passage, longer than Rich's bound) whose match is at its end.
         let decision = "In the end we chose the two-week onboarding call for every new client.";
-        let words_doc = long_paragraph(862, decision);
-        // Found by meaning alone: no query word in it, its one subject sentence at the end.
-        let meaning_doc = long_paragraph(1000, "A customer asked for a refund after the money left her account.");
-        let (service, base) = standin_with("excerpt", true, 0, &[
-            ("2024/onboarding-decision.md", format!("# Onboarding decision\n\n{words_doc}\n")),
-            ("2024/garden-and-refund.md", format!("# Garden notes\n\n{meaning_doc}\n")),
+        let onboarding = format!("# Onboarding decision\n\n{}\n", long_paragraph(862, decision));
+        let refund_tail = long_paragraph(1000, "A customer asked for a refund after the money left her account.");
+        let (service, base) = standin_with("passages", true, 0, &[
+            ("2024/pricing-meeting.md", meeting.to_string()),
+            ("2024/club-notes.md", club.to_string()),
+            ("2024/weekly-log.md", log),
+            ("2024/onboarding-decision.md", onboarding),
+            ("2024/garden-and-refund.md", format!("# Garden notes\n\n{refund_tail}\n")),
+            ("2024/hedge-and-refunds.md", format!("# Hedge notes\n\n{plural}\n")),
         ]);
         let tool = ToolAnswer(service.clone());
-        for (query, strict) in [("\"two-week onboarding call\"", true), ("two-week onboarding call", false)] {
-            let excerpt = excerpt_of(&tool.answer(&ask(query, false, strict)), "2024/onboarding-decision.md");
-            assert!(excerpt.chars().count() <= MAX_EXCERPT_CHARS + 2, "{} characters", excerpt.chars().count());
-            assert!(excerpt.contains("the two-week onboarding call for every new client"), "{query}: {excerpt}");
+        // (what the row is, query, Super Finder, Require quoted text, file, text that must show)
+        let quoted = "annual plan pricing support cost \"30 days\"";
+        let rows: &[(&str, &str, bool, bool, &str, &str)] = &[
+            ("quoted, strict on, Super Finder off", quoted, false, true, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted, strict on, Super Finder on", quoted, true, true, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted, strict off, Super Finder off", quoted, false, false, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted, strict off, Super Finder on", quoted, true, false, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("meaning only, not the first passage", "chargeback", true, false, "2024/club-notes.md", "asked for a refund"),
+            ("long file, words in the last passage", "vendor invoice approved", false, false, "2024/weekly-log.md", "vendor invoice was approved"),
+            ("long file, quoted text in the last passage", "\"invoice was approved\"", true, true, "2024/weekly-log.md", "vendor invoice was approved"),
+            ("long paragraph, quoted text at its end", "\"two-week onboarding call\"", false, true, "2024/onboarding-decision.md", "the two-week onboarding call for every new client"),
+            ("long paragraph, words at its end", "two-week onboarding call", false, false, "2024/onboarding-decision.md", "the two-week onboarding call for every new client"),
+            ("long paragraph, meaning only, at its end", "chargeback", true, false, "2024/garden-and-refund.md", "asked for a refund"),
+            ("long paragraph, a plural of the word at its end", "refund", false, false, "2024/hedge-and-refunds.md", "Customers get refunds"),
+        ];
+        let mut failures = Vec::new();
+        for &(what, query, super_finder, strict, path, must_show) in rows {
+            let page = search(&service, SearchRequest { query: query.into(), super_finder, strict, offset: 0, limit: PAGE });
+            match page.hits.iter().find(|h| h.rel_path == path) {
+                None => failures.push(format!("{what}: {path} not on the palette's first page")),
+                Some(h) if !h.passage.text.contains(must_show) => {
+                    failures.push(format!("{what}: the palette shows \"{}\" (under \"{}\")", h.passage.text, h.passage.heading))
+                }
+                Some(_) => {}
+            }
+            let answer = tool.answer(&ask(query, super_finder, strict));
+            let results = answer["results"].as_array().unwrap();
+            match results.iter().find(|r| r["path"] == path) {
+                None => failures.push(format!("{what}: {path} not in Rich's results")),
+                Some(r) => {
+                    let excerpt = r["excerpt"].as_str().unwrap();
+                    if excerpt.chars().count() > MAX_EXCERPT_CHARS + 2 {
+                        failures.push(format!("{what}: Rich's excerpt is {} characters", excerpt.chars().count()));
+                    }
+                    if !excerpt.contains(must_show) {
+                        failures.push(format!("{what}: Rich receives \"{excerpt}\""));
+                    }
+                }
+            }
         }
-        let answer = tool.answer(&ask("chargeback", true, false));
-        let excerpt = excerpt_of(&answer, "2024/garden-and-refund.md");
-        assert!(excerpt.chars().count() <= MAX_EXCERPT_CHARS + 2, "{} characters", excerpt.chars().count());
-        assert!(excerpt.contains("asked for a refund"), "{excerpt}");
         service.shutdown();
         std::fs::remove_dir_all(base).unwrap();
+        assert!(failures.is_empty(), "{} of {} rows wrong:\n{}", failures.len(), rows.len(), failures.join("\n"));
     }
 
     #[test]
