@@ -2096,9 +2096,13 @@ async function main() {
   // the title when both do not fit; the title stays on one line and the pill stays inside the card.
   await run.check("a queued idea or bug card keeps its title on one line and its pill inside the card, in light and dark", async () => {
     const seen = [];
+    // 1 = default text size; 1.5 = the 150% setting (review rv-20261013T021147Z-978eb49c-a02f: the nowrap
+    // pill outgrew the fixed 452px panel there and ran past the card).
+    for (const scale of [1, 1.5]) {
     for (const theme of ["light", "dark"]) {
       for (const kind of ["idea", "bug"]) {
         const page = await open(theme, { bugNet: "offline" });
+        await page.evaluate((sc) => document.documentElement.style.setProperty("--app-font-scale", String(sc)), scale);
         if (kind === "idea") { await requestAFeature(page); await answerIdea(page); }
         else { await bustABug(page); await answer(page, ANSWER); }
         await page.click("#bug-send");
@@ -2111,11 +2115,12 @@ async function main() {
           const lh = parseFloat(getComputedStyle(k).lineHeight) || parseFloat(getComputedStyle(k).fontSize) * 1.4;
           return { cardRight: c.right, pillRight: pill.right, pillLeft: pill.left, cardLeft: c.left, kindH: k.getBoundingClientRect().height, lh, cardW: c.width, pillW: pill.width };
         });
-        assert(m.kindH < m.lh * 1.5, `${theme} ${kind}: the title breaks onto two lines (height ${m.kindH}px, line ${m.lh}px)`);
-        assert(m.pillRight <= m.cardRight - 1 && m.pillLeft >= m.cardLeft, `${theme} ${kind}: the pill runs outside the card (pill ${m.pillLeft}..${m.pillRight}, card ${m.cardLeft}..${m.cardRight})`);
-        seen.push(`${theme} ${kind} card ${Math.round(m.cardW)}px pill ${Math.round(m.pillW)}px title ${Math.round(m.kindH)}px`);
+        assert(m.kindH < m.lh * 1.5, `${scale * 100}% ${theme} ${kind}: the title breaks onto two lines (height ${m.kindH}px, line ${m.lh}px)`);
+        assert(m.pillRight <= m.cardRight - 1 && m.pillLeft >= m.cardLeft, `${scale * 100}% ${theme} ${kind}: the pill runs outside the card (pill ${m.pillLeft}..${m.pillRight}, card ${m.cardLeft}..${m.cardRight})`);
+        seen.push(`${scale * 100}% ${theme} ${kind} card ${Math.round(m.cardW)}px pill ${Math.round(m.pillW)}px title ${Math.round(m.kindH)}px`);
         await page.close();
       }
+    }
     }
     return seen.join("; ");
   });

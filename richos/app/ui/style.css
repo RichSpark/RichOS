@@ -10112,7 +10112,11 @@ body.panel-full .op-body {
   border-radius: 999px;
   border: 1px solid var(--ink-faint);
   color: var(--ink-soft);
-  white-space: nowrap;
+  /* The pill may wrap: the Rich panel is a fixed 452px, so at 150% text size a nowrap pill outgrew the
+     card (review rv-20261013T021147Z-978eb49c-a02f). It stays within the head's width instead. */
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .bugcard.is-sending .bug-pill {
   color: var(--gold-text);
