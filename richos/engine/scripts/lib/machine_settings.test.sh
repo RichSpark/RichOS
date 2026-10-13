@@ -139,6 +139,13 @@ class Settings(unittest.TestCase):
    lines=result.stdout.splitlines()
    self.assertEqual(lines[0],'unset')
    self.assertFalse(any(line.startswith('RICHOS_SEARCH_DOCUMENTS_ROOT=') for line in lines))
+   # Already exported by the parent (second review of 38c7cd862, P2): still gone afterwards.
+   inherited={**env,'RICHOS_SEARCH_DOCUMENTS_ROOT':'/synthetic private archive/chats'}
+   result=subprocess.run(['bash','-c',command,'fixture',sys.argv[1]],env=inherited,capture_output=True,text=True,check=True)
+   self.assertEqual(result.stdout.splitlines()[0],'unset')
+   child='import machine_settings as M,os,sys; M.apply(); print(os.environ.get("RICHOS_SEARCH_DOCUMENTS_ROOT","unset"))'
+   result=subprocess.run([sys.executable,'-c',child],env={**inherited,'PYTHONPATH':sys.argv[1]},capture_output=True,text=True,check=True)
+   self.assertEqual(result.stdout.strip(),'unset')
  def test_shell_quotes_literal_values_and_forward_array(self):
   with tempfile.TemporaryDirectory() as root:
    base=pathlib.Path(root).resolve();source=base/'settings';marker=base/'executed'

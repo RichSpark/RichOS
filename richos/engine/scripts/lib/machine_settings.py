@@ -81,6 +81,9 @@ def load(environment=None, home=None):
 
 def apply():
     os.environ.update(environment())
+    # environment() leaves these out; an inherited copy must not survive either.
+    for key in NOT_FORWARDED:
+        os.environ.pop(key, None)
 
 
 def environment(environment=None, home=None):
@@ -172,6 +175,9 @@ def main():
             values = {key: value for key, value in load().items() if key not in NOT_FORWARDED}
             for key, value in {**values, RESOLVED: '1'}.items():
                 print(f'export {key}={shlex.quote(value)}')
+            # A shell that already exported one of these keeps it unless it is unset here.
+            for key in NOT_FORWARDED:
+                print(f'unset {key}')
             if args.array:
                 print('RICHOS_MACHINE_ENV=(' + ' '.join(shlex.quote(key+'='+value) for key,value in {**values, RESOLVED: '1'}.items()) + ')')
         elif args.command == 'show':
