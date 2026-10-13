@@ -6038,27 +6038,37 @@ fn dictation_offer_shown(state: State<AppState>) -> Result<(), String> {
     })
 }
 
-/// **Dictation was just set up: open the "Dictation feature" conversation** (the CEO,
-/// 2026-10-13, onboarding5.png). Under the company he is in, with Rich's message naming the key
-/// he picked, read from the dictation settings file now, after he picked it. Once only: the
-/// answer is the new conversation's id, or `None` when it was created before.
+/// **Dictation was just set up, or its key changed: the "Dictation feature" conversation** (the
+/// CEO, 2026-10-13, onboarding5.png). Opened once, under the company he is in, with Rich's message
+/// naming the key he picked, read from the dictation settings file now; when he picks another key
+/// later, that message is replaced so it names the new one (`create` false: a key change, which
+/// never opens it). The answer is the conversation's id
+/// when it was opened or its message replaced, `None` when nothing changed.
 #[richos_command::command]
-fn dictation_feature_thread(state: State<AppState>) -> Result<Option<String>, String> {
-    if dictation_offer::feature_thread(&state.data_dir).is_some() {
-        return Ok(None);
-    }
+fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Option<String>, String> {
     let key = dictation_offer::view(&state.data_dir, true).key;
-    let id = {
-        let mut spine = take_the_spine(&state.spine);
-        let entity = spine.active_entity().cloned().ok_or_else(|| ENTITY_UNRESOLVED_MESSAGE.to_string())?;
-        spine
-            .open_conversation_with_message(&entity, dictation_offer::FEATURE_TITLE, &dictation_offer::feature_text(key))
-            .map_err(|e| e.to_string())?
+    let text = dictation_offer::feature_text(key);
+    let record = dictation_offer::feature_record(&state.data_dir);
+    let (thread, message) = match dictation_offer::feature_action(record, key, create) {
+        dictation_offer::FeatureAction::Nothing => return Ok(None),
+        dictation_offer::FeatureAction::Create => {
+            let mut spine = take_the_spine(&state.spine);
+            let entity = spine.active_entity().cloned().ok_or_else(|| ENTITY_UNRESOLVED_MESSAGE.to_string())?;
+            spine
+                .open_conversation_with_message(&entity, dictation_offer::FEATURE_TITLE, &text)
+                .map_err(|e| e.to_string())?
+        }
+        dictation_offer::FeatureAction::Replace { thread, message } => {
+            let new_message = take_the_spine(&state.spine)
+                .replace_app_message(&thread, &message, &text)
+                .map_err(|e| e.to_string())?;
+            (thread, new_message)
+        }
     };
-    dictation_offer::mark_feature_thread(&state.data_dir, &id).inspect_err(|why| {
-        eprintln!("[richos] dictation feature conversation {id}: created and could not be recorded: {why}")
+    dictation_offer::mark_feature(&state.data_dir, &thread, &message, key).inspect_err(|why| {
+        eprintln!("[richos] dictation feature conversation {thread}: written and could not be recorded: {why}")
     })?;
-    Ok(Some(id))
+    Ok(Some(thread))
 }
 
 /// **THE CEO PRESSES "Set it up".** Install what is missing, reporting each step on

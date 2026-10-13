@@ -2069,19 +2069,35 @@ impl Spine {
     /// through the ledger directly rather than [`Self::create_thread`], so a spare front desk
     /// standing ready for his next new conversation is not spent on this one, and the
     /// conversation he is in stays the active one.
+    ///
+    /// Answers `(thread id, message turn id)`; the turn id is what [`Self::replace_app_message`]
+    /// replaces.
     pub fn open_conversation_with_message(
         &mut self,
         entity_id: &EntityId,
         title: &str,
         text: &str,
-    ) -> Result<String, SpineError> {
+    ) -> Result<(String, String), SpineError> {
         if !self.registry.contains(entity_id) {
             return Err(SpineError::UnknownEntity(entity_id.to_string()));
         }
         let id = self.ledger.create_thread(title, entity_id)?;
-        self.raise_proactive(Some(&id), AttentionTier::Digest, text)?;
+        let turn = self.raise_proactive(Some(&id), AttentionTier::Digest, text)?;
         self.publish_read_metadata();
-        Ok(id)
+        Ok((id, turn))
+    }
+
+    /// **Replace a message the app wrote for Rich** (the CEO, 2026-10-13: the "Dictation feature"
+    /// message must name the key he actually picked, also when he picks another one later).
+    /// The new text is a new proactive turn in the same conversation and the old turn is marked
+    /// superseded by it, the ledger's own mechanism (§5.3): the conversation and the re-prime
+    /// tail both leave a superseded turn out, so he sees one message and Rich remembers one.
+    /// Answers the new turn id.
+    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<String, SpineError> {
+        let new_turn = self.raise_proactive(Some(thread_id), AttentionTier::Digest, text)?;
+        self.ledger.mark_turn_superseded(turn_id, &new_turn)?;
+        self.publish_read_metadata();
+        Ok(new_turn)
     }
 
     // ---- threads -----------------------------------------------------------

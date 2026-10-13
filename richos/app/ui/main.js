@@ -1894,9 +1894,23 @@ window.addEventListener("richos:dictation-set-up", async () => {
     dictationOffer.phase = "on";
     scheduleRender();
   }
-  const created = await invokeQuiet("dictation_feature_thread");
-  if (created) await refreshNavigation();
+  await showDictationFeature(await invokeQuiet("dictation_feature_thread", { create: true }));
 });
+
+/// **HE PICKED ANOTHER KEY**: the "Dictation feature" message, if there is one, is replaced so it
+/// names the new key (the CEO: "make sure the correct key is actually within that message").
+/// A key change alone never opens the conversation.
+window.addEventListener("richos:dictation-key-changed", async () => {
+  await showDictationFeature(await invokeQuiet("dictation_feature_thread", { create: false }));
+});
+
+/// The conversation was opened or its message replaced: the rail lists it, and if it is the one
+/// on screen it is drawn again.
+async function showDictationFeature(threadId) {
+  if (!threadId) return;
+  await refreshNavigation();
+  if (threadId === activeThreadId) await loadTimeline();
+}
 
 /// The reload path. Fails closed exactly like `get_messages` did: an unbound thread refuses
 /// rather than returning an empty conversation, and the calm §21 screen takes over.

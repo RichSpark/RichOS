@@ -3300,16 +3300,30 @@
         // the company he is in, with Rich's message naming the key in the settings now. Once.
         case "dictation_feature_thread": {
           dictationCalls.push({ cmd });
-          if (dictationFeatureThread) return null;
+          const key = dictationView.key, at = now(), text = dictationFeatureText(key), turnId = uid("turn");
+          if (dictationFeatureThread) {
+            // A key change replaces the message (`dictation_offer::feature_action`, Replace): the
+            // old turn is superseded, so the conversation shows the new one only.
+            if (dictationFeatureThread.key === key) return null;
+            const old = turnsById.get(dictationFeatureThread.turn);
+            const thread = threads.find((x) => x.id === dictationFeatureThread.thread);
+            turnsById.set(turnId, { threadId: thread.id, entityId: thread.entity_id, userText: null, proactive: true,
+              runs: [{ text, startSeq: 0, at }], state: "completed", createdAt: at, startedAt: at, endedAt: at, activities: [] });
+            if (old) old.supersededBy = turnId;
+            messagesByThread[thread.id] = [{ role: "assistant", text, turn_id: turnId, at }];
+            dictationFeatureThread = { thread: thread.id, turn: turnId, key };
+            return thread.id;
+          }
+          if (!args.create) return null;
           const here = threads.find((x) => x.id === activeThreadId);
           if (!here || !here.entity_id) return Promise.reject("No company is chosen yet, so I won't guess which one this belongs to.");
-          const id = uid("thread"), turnId = uid("turn"), at = now(), text = dictationFeatureText(dictationView.key);
+          const id = uid("thread");
           threads.push({ id, title: "Dictation feature", entity_id: here.entity_id, created_at: at, message_count: 1,
             last_activity: at, last_turn_state: "completed", has_pending_turn: false });
           messagesByThread[id] = [{ role: "assistant", text, turn_id: turnId, at }];
           turnsById.set(turnId, { threadId: id, entityId: here.entity_id, userText: null, proactive: true,
             runs: [{ text, startSeq: 0, at }], state: "completed", createdAt: at, startedAt: at, endedAt: at, activities: [] });
-          dictationFeatureThread = id;
+          dictationFeatureThread = { thread: id, turn: turnId, key };
           return id;
         }
         // API-EQUIVALENT TOKEN SPEND (spend.js): the ledger's snapshot and its live line.

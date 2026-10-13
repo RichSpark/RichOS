@@ -1935,6 +1935,24 @@ async function main() {
       ],
       "his text, word for word, with the key he picked, and nothing else in that conversation"
     );
+    // HE PICKS ANOTHER KEY LATER (second review rv-20261013T183104Z, finding 2; the CEO: "make
+    // sure the correct key is actually within that message"): the message names the new key,
+    // and it is still the one message there.
+    await on.evaluate(() => window.RichDictation.open());
+    await on.waitForSelector("#dictation-sheet:not([hidden])");
+    await on.click('.dict-key[data-k="3"]');
+    await on.click("#dict-close");
+    await on.waitForFunction(() => /tap F3,/.test(document.getElementById("messages").innerText));
+    assertEqual(
+      await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
+      [
+        "Good news! Dictation is set up and enabled.",
+        "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
+        "Click into where you want your words to appear, tap F3, say what you want written, then tap it again. See how your words appear where your cursor is.",
+        "If you have any questions about this, we can discuss it here.",
+      ],
+      "the key changed to F3: the one message names F3"
+    );
     await on.close();
     const later = await finish({ dictationKey: 5, dictationView: { mic: "denied" } });
     await later.waitForSelector("#dictation-offer-yes");

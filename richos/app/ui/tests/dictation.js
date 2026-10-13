@@ -50,7 +50,7 @@ async function main() {
     await page.waitForSelector("#dictation-sheet:not([hidden]) #dict-state");
   }
   const text = (page, sel) => page.locator(sel).innerText().then(t => t.replace(/\s+/g, " ").trim());
-  const calls = page => page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().map(c => c.cmd + (c.on !== undefined ? ":" + c.on : "") + (c.key !== undefined ? ":" + c.key : "") + (c.accuracy ? ":" + c.accuracy : "") + (c.pane ? ":" + c.pane : "") + (c.forward !== undefined ? ":" + c.forward : "")).filter(c => c !== "dictation_status" && c !== "dictation_take_sheet_request"));
+  const calls = page => page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().map(c => c.cmd + (c.on !== undefined ? ":" + c.on : "") + (c.key !== undefined ? ":" + c.key : "") + (c.accuracy ? ":" + c.accuracy : "") + (c.pane ? ":" + c.pane : "") + (c.forward !== undefined ? ":" + c.forward : "")).filter(c => c !== "dictation_status" && c !== "dictation_take_sheet_request" && c !== "dictation_feature_thread"));
   const set = (page, patch) => page.evaluate(p => window.__RICHOS_MOCK__.dictationSet(p), patch);
   const waitText = (page, sel, want) => page.waitForFunction(([s, w]) => {
     const n = document.querySelector(s);

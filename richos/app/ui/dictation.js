@@ -414,6 +414,8 @@
     const v = await call("dictation_set_key", { key: n });
     if (v) view = v;
     paint();
+    // The "Dictation feature" message names the key; a new key replaces it (main.js listens).
+    if (v) window.dispatchEvent(new CustomEvent("richos:dictation-key-changed"));
     const strip = (col && col.querySelector(`[data-act="key"][data-k="${n}"]`)) || $("dict-capture");
     if (strip) strip.focus();
     if (window.RichSettings && window.RichSettings.toast) window.RichSettings.toast(`Dictation now starts and stops with F${n}.`);

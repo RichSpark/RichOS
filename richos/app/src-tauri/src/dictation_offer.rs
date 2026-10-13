@@ -98,28 +98,78 @@ pub fn feature_text(key: u8) -> String {
     )
 }
 
-/// The id of the conversation already created, if it was. An unreadable file answers "created",
-/// for the reason [`view`] answers "offered": a broken file never makes Rich repeat himself.
-pub fn feature_thread(data_dir: &Path) -> Option<String> {
-    match read_object(data_dir) {
-        Ok(map) => map.get("featureThread").and_then(|v| v.as_str()).map(str::to_string),
+/// The conversation that was created, Rich's message in it and the key that message names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureRecord {
+    pub thread: String,
+    /// `None` for a record written before the message was kept: nothing to replace then.
+    pub message: Option<String>,
+    pub key: Option<u8>,
+}
+
+/// The record, `None` when the conversation was never created, an error when the file cannot be
+/// read: the caller then creates nothing, for the reason [`view`] answers "offered" (a broken file
+/// never makes Rich repeat himself).
+pub fn feature_record(data_dir: &Path) -> Result<Option<FeatureRecord>, String> {
+    let map = read_object(data_dir)?;
+    let Some(thread) = map.get("featureThread").and_then(|v| v.as_str()) else { return Ok(None) };
+    Ok(Some(FeatureRecord {
+        thread: thread.to_string(),
+        message: map.get("featureMessage").and_then(|v| v.as_str()).map(str::to_string),
+        key: map.get("featureKey").and_then(|v| v.as_u64()).and_then(|k| u8::try_from(k).ok()),
+    }))
+}
+
+/// What the app does about the "Dictation feature" conversation when dictation is set up or its
+/// key changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeatureAction {
+    /// Never created: open it, with the message naming `key`.
+    Create,
+    /// Created, and its message names another key: replace that message.
+    Replace { thread: String, message: String },
+    /// Created and current, or the file cannot be read: nothing.
+    Nothing,
+}
+
+/// The CEO, 2026-10-13: "make sure the correct key is actually within that message", also when
+/// he picks another key after it was set up (second review rv-20261013T183104Z, finding 2).
+/// `create` is false for a key change: only dictation being set up opens the conversation.
+pub fn feature_action(record: Result<Option<FeatureRecord>, String>, key: u8, create: bool) -> FeatureAction {
+    match record {
+        Ok(None) if create => FeatureAction::Create,
+        Ok(None) => FeatureAction::Nothing,
+        Ok(Some(FeatureRecord { thread, message: Some(message), key: named })) if named != Some(key) => {
+            FeatureAction::Replace { thread, message }
+        }
+        Ok(Some(_)) => FeatureAction::Nothing,
         Err(why) => {
-            eprintln!("[richos] dictation feature conversation: not created, because {why}");
-            Some(String::new())
+            eprintln!("[richos] dictation feature conversation: left as it is, because {why}");
+            FeatureAction::Nothing
         }
     }
 }
 
-/// Record the conversation that was created, every other field kept.
-pub fn mark_feature_thread(data_dir: &Path, thread_id: &str) -> Result<(), String> {
-    set_field(data_dir, "featureThread", serde_json::Value::String(thread_id.to_string()))
+/// Record the conversation, its message and the key the message names, every other field kept.
+pub fn mark_feature(data_dir: &Path, thread_id: &str, message: &str, key: u8) -> Result<(), String> {
+    set_fields(data_dir, vec![
+        ("featureThread", serde_json::Value::String(thread_id.to_string())),
+        ("featureMessage", serde_json::Value::String(message.to_string())),
+        ("featureKey", serde_json::Value::from(key)),
+    ])
 }
 
-/// Set one field of the file, every other field kept, under the writers' shared lock.
 fn set_field(data_dir: &Path, field: &str, value: serde_json::Value) -> Result<(), String> {
+    set_fields(data_dir, vec![(field, value)])
+}
+
+/// Set fields of the file, every other field kept, under the writers' shared lock.
+fn set_fields(data_dir: &Path, fields: Vec<(&str, serde_json::Value)>) -> Result<(), String> {
     let _held = crate::dictation::store::lock(data_dir)?;
     let mut map = read_object(data_dir)?;
-    map.insert(field.to_string(), value);
+    for (field, value) in fields {
+        map.insert(field.to_string(), value);
+    }
     std::fs::create_dir_all(data_dir).map_err(|e| format!("the data folder could not be created: {e}"))?;
     let partial = data_dir.join(format!(".{FILE_NAME}.offer.{}", std::process::id()));
     let body = serde_json::to_vec_pretty(&serde_json::Value::Object(map)).map_err(|e| e.to_string())?;
@@ -217,16 +267,40 @@ mod tests {
     fn the_feature_conversation_is_recorded_once_and_keeps_every_other_setting() {
         let d = dir("feature");
         std::fs::create_dir_all(&d).unwrap();
-        assert_eq!(feature_thread(&d), None);
+        assert_eq!(feature_record(&d), Ok(None));
         std::fs::write(path(&d), br#"{"on":true,"key":2,"offered":true}"#).unwrap();
-        assert_eq!(feature_thread(&d), None);
-        mark_feature_thread(&d, "thr_dictation").unwrap();
-        assert_eq!(feature_thread(&d).as_deref(), Some("thr_dictation"));
+        assert_eq!(feature_record(&d), Ok(None));
+        mark_feature(&d, "thr_dictation", "turn_1", 2).unwrap();
+        assert_eq!(
+            feature_record(&d),
+            Ok(Some(FeatureRecord { thread: "thr_dictation".into(), message: Some("turn_1".into()), key: Some(2) }))
+        );
         let after: serde_json::Value = serde_json::from_slice(&std::fs::read(path(&d)).unwrap()).unwrap();
-        assert_eq!(after, serde_json::json!({"on":true,"key":2,"offered":true,"featureThread":"thr_dictation"}));
+        assert_eq!(
+            after,
+            serde_json::json!({"on":true,"key":2,"offered":true,"featureThread":"thr_dictation","featureMessage":"turn_1","featureKey":2})
+        );
         std::fs::write(path(&d), b"{not json").unwrap();
-        assert!(feature_thread(&d).is_some(), "a broken file is read as created");
+        assert!(feature_record(&d).is_err(), "a broken file is never read as never created");
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// INVARIANT: never created opens it; a message naming another key is replaced; a current one,
+    /// one with no message on record, or an unreadable file leaves it alone.
+    #[test]
+    fn a_changed_key_replaces_the_message_and_nothing_else_does() {
+        let rec = |key| Ok(Some(FeatureRecord { thread: "thr".into(), message: Some("turn_1".into()), key: Some(key) }));
+        assert_eq!(feature_action(Ok(None), 2, true), FeatureAction::Create);
+        assert_eq!(feature_action(Ok(None), 2, false), FeatureAction::Nothing, "a key change alone never opens it");
+        assert_eq!(feature_action(rec(2), 2, true), FeatureAction::Nothing);
+        for create in [true, false] {
+            assert_eq!(feature_action(rec(2), 3, create), FeatureAction::Replace { thread: "thr".into(), message: "turn_1".into() });
+        }
+        assert_eq!(
+            feature_action(Ok(Some(FeatureRecord { thread: "thr".into(), message: None, key: None })), 3, true),
+            FeatureAction::Nothing
+        );
+        assert_eq!(feature_action(Err("unreadable".into()), 3, true), FeatureAction::Nothing);
     }
 
     /// INVARIANT: an ordinary settings write (the switch, the key, the accuracy, through
@@ -236,10 +310,13 @@ mod tests {
     fn a_settings_write_keeps_the_feature_conversation_record() {
         let d = dir("feature-kept");
         std::fs::create_dir_all(&d).unwrap();
-        mark_feature_thread(&d, "thr_dictation").unwrap();
+        mark_feature(&d, "thr_dictation", "turn_1", 2).unwrap();
         crate::dictation::store::update(&d, |s| { s.on = false; s.key = 7; }).unwrap();
         crate::dictation::store::update(&d, |s| s.on = true).unwrap();
-        assert_eq!(feature_thread(&d).as_deref(), Some("thr_dictation"));
+        assert_eq!(
+            feature_record(&d),
+            Ok(Some(FeatureRecord { thread: "thr_dictation".into(), message: Some("turn_1".into()), key: Some(2) }))
+        );
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
