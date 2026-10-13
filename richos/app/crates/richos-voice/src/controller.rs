@@ -486,9 +486,12 @@ pub struct CaptureBrain {
     /// An utterance has ended and [`CapMsg::TurnQuiet`] has not yet been sent for the silence
     /// after it, so it is sent exactly once per silence.
     turn_quiet_armed: bool,
-    /// A fragment of his current turn has been admitted and [`CapMsg::TurnQuiet`] has not been
-    /// sent since: a short fragment now continues his turn and is not thrown away as a cough
-    /// (review rv-20261013T204600Z). Mirrored into the recorder, which applies the minimum.
+    /// A fragment of his current turn has been admitted and Rich has not been audible since: a
+    /// short fragment now continues his turn and is not thrown away as a cough (review
+    /// rv-20261013T204600Z). It stays open past [`CapMsg::TurnQuiet`], because words he says
+    /// after the 2.000 s end of turn and before Rich answers aloud still join that turn
+    /// (`TurnDesk::withdraw_unanswered`; review rv-20261013T210558Z, finding 1). Mirrored into
+    /// the recorder, which applies the minimum.
     turn_open: bool,
 }
 
@@ -697,6 +700,11 @@ impl CaptureBrain {
         // How long since Rich was last audible, in frames. Saturating, and updated BEFORE any
         // decision below reads it, so `quiet_frames == 0` means "he is audible on this frame".
         self.quiet_frames = if speaking { 0 } else { self.quiet_frames.saturating_add(1) };
+        // Rich is answering aloud: what he says next is a new turn, so the 0.304 s minimum is
+        // back. The same moment the supervisor forgets the unanswered turn.
+        if speaking && self.turn_open {
+            self.set_turn_open(false);
+        }
 
         // COLLECTOR-PATH PARITY: `self.vad.last_rms()` is the RMS of THIS frame — the very
         // buffer handed to `self.recorder.push_frame` below and, from there, to whisper. The
@@ -871,7 +879,6 @@ impl CaptureBrain {
             && self.since_speech >= crate::turn::END_OF_TURN_FRAMES
         {
             self.turn_quiet_armed = false;
-            self.set_turn_open(false);
             out.push(CapMsg::TurnQuiet);
         }
     }
@@ -3631,6 +3638,133 @@ mod tests {
                     secs(word_frames)
                 );
             }
+        }
+    }
+
+    /// INVARIANT — review rv-20261013T210558Z, finding 1. "Send the draft ... now" with a
+    /// thinking pause LONGER than the 2.000 s end of turn: 138 or 184 frames (2.208 s, 2.944 s),
+    /// so "Send the draft" was handed over, and then a 14-frame (0.224 s) last word before Rich
+    /// has said anything. That word still continues his turn: it is admitted however short, and
+    /// the request that stands is the whole sentence, with voice on and when voice goes off right
+    /// after it. Once Rich has answered aloud the 0.304 s minimum is back, so the same short
+    /// sound after his answer is still dropped.
+    #[test]
+    fn a_short_last_word_after_the_end_of_turn_joins_his_turn_until_rich_answers() {
+        use crate::endpoint::MIN_SPEECH_FRAMES;
+        use crate::vad::{SAMPLE_RATE, VAD_FRAME_SAMPLES};
+        let secs = |frames: usize| (frames * VAD_FRAME_SAMPLES) as f32 / SAMPLE_RATE as f32;
+        let silent = |frames: usize| vec![0.0f32; frames * VAD_FRAME_SAMPLES];
+        let voice = |frames: usize| synthetic_voice(secs(frames), 190.0, 130.0, -18.1);
+
+        struct Run {
+            brain: CaptureBrain,
+            recognizer: RecognizerDesk,
+            desk: TurnDesk,
+            words_tx: Sender<Option<(String, bool)>>,
+            discards: usize,
+        }
+        impl Run {
+            fn handle(&mut self, msgs: Vec<CapMsg>, words: &str) {
+                for m in msgs {
+                    match m {
+                        CapMsg::Started { tainted: false, .. } => self.desk.assembler.his_utterance_started(),
+                        CapMsg::Started { .. } => self.desk.assembler.utterance_started(),
+                        CapMsg::Utterance(u) => {
+                            self.desk.assembler.utterance_admitted(0);
+                            let mut heard = None;
+                            self.recognizer.handle(
+                                &u,
+                                &Recorder::default(),
+                                |_| Ok((words.to_string(), 300)),
+                                |t, a| heard = Some((t, a)),
+                            );
+                            self.words_tx.send(heard).unwrap();
+                        }
+                        CapMsg::Discarded { .. } => {
+                            self.discards += 1;
+                            self.desk.assembler.utterance_discarded();
+                        }
+                        CapMsg::TurnQuiet => self.desk.assembler.quiet(),
+                        _ => {}
+                    }
+                }
+                // The supervisor's tick: his words that start a turn while the partial one is
+                // still unanswered carry it, and the partial one is withdrawn.
+                if self.desk.collect() {
+                    self.desk.withdraw_unanswered(false);
+                }
+                self.desk.release();
+            }
+            fn feed(&mut self, audio: &[f32], speaking: bool, words: &str) {
+                for f in audio.chunks_exact(VAD_FRAME_SAMPLES) {
+                    let msgs = self.brain.push_frame(f, speaking, false);
+                    self.handle(msgs, words);
+                }
+            }
+        }
+
+        assert!(14 < MIN_SPEECH_FRAMES as usize);
+        for (pause_frames, rich_answered, voice_off) in [
+            (138usize, false, false),
+            (138, false, true),
+            (184, false, false),
+            (184, false, true),
+            (138, true, false),
+        ] {
+            let (words_tx, words_rx) = channel();
+            let (submit_tx, submit_rx) = channel();
+            let withdrawn: Arc<Mutex<HashSet<u64>>> = Default::default();
+            let mut run = Run {
+                brain: CaptureBrain::new(),
+                recognizer: RecognizerDesk::new(),
+                desk: TurnDesk {
+                    assembler: TurnAssembler::new(),
+                    words_rx,
+                    submit_tx,
+                    observer: Arc::new(Recorder::default()),
+                    last_end: None,
+                    sent: 0,
+                    unanswered: None,
+                    withdrawn: withdrawn.clone(),
+                    turns_started: Default::default(),
+                    stop: Default::default(),
+                },
+                words_tx,
+                discards: 0,
+            };
+            run.feed(&silent(64), false, "");
+            run.feed(&voice(64), false, "Send the draft");
+            run.feed(&silent(pause_frames), false, "Send the draft");
+            if rich_answered {
+                // Rich answers aloud (0.512 s), then 1.024 s of quiet before the short sound.
+                run.feed(&silent(32), true, "");
+                run.feed(&silent(64), false, "");
+            }
+            run.feed(&voice(14), false, "now");
+            if voice_off {
+                let msgs = run.brain.finish();
+                run.handle(msgs, "now");
+            } else {
+                run.feed(&silent(180), false, "now");
+            }
+            let discards = run.discards;
+            // Dropping the desk is voice going off: it flushes whatever is still held.
+            drop(run);
+            let mut standing = Vec::new();
+            let mut seq = 0u64;
+            while let Ok((text, _)) = submit_rx.try_recv() {
+                seq += 1;
+                if !withdrawn.lock().unwrap().contains(&seq) {
+                    standing.push(text);
+                }
+            }
+            let expected = if rich_answered { (vec!["Send the draft"], 1) } else { (vec!["Send the draft now"], 0) };
+            assert_eq!(
+                (standing.iter().map(String::as_str).collect::<Vec<_>>(), discards),
+                expected,
+                "pause {:.3} s, Rich answered = {rich_answered}, voice off = {voice_off}",
+                secs(pause_frames)
+            );
         }
     }
 
