@@ -13,9 +13,17 @@ import AudioToolbox
 ///   added to a private **aggregate device**, read via `AudioDeviceCreateIOProcIDWithBlock`. Audio
 ///   keeps playing to the user (the tap reads a COPY of the render stream, pre-output-device — so it
 ///   works on headphones exactly as on speakers). Uses the narrow **"System Audio Recording"** TCC
-///   permission, not Screen Recording.
+///   permission, not Screen Recording. RichOS's own speech is excluded (`excludePids`, Granola PRD
+///   V4: "Exclude RichOS's own spoken output from the system tap so it is not treated as a remote
+///   participant").
 /// - Microphone: `AVAudioEngine.inputNode`, resampled to the tap's sample rate so the two async
 ///   sources stay frame-aligned in `SessionWriter`.
+///
+/// TWO STEPS, ON PURPOSE: `prepare()` makes the tap and reads its REAL format; only then does the
+/// caller make the session (whose WAV header carries the sample rate) and `run(writer:)` start the
+/// audio. Until 2026-10-13 the session was always written as 48 kHz while the microphone was
+/// resampled to the tap's rate, so on an output device at another rate (a Bluetooth headset in call
+/// mode runs at 16 or 24 kHz) the recording would have played at the wrong speed.
 ///
 /// PERMISSION GATE (honest): the first `AudioDeviceStart` on an aggregate containing a tap triggers
 /// the macOS "System Audio Recording" prompt — a HUMAN GUI grant with no non-interactive path and no
@@ -23,7 +31,12 @@ import AudioToolbox
 /// treats sudden all-silence on the system side as a possible revocation and alarms (§6.4).
 @available(macOS 14.4, *)
 final class CoreAudioCapture {
-    private let writer: SessionWriter
+    private var writer: SessionWriter?
+    /// Processes whose output the system tap must NOT record. A process has a Core Audio object
+    /// only once it has used audio, so `refreshExclusions()` re-checks once a second.
+    private let excludePids: [Int32]
+    private var excludedObjects: [AudioObjectID] = []
+    private var tapDescription: CATapDescription?
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
@@ -39,7 +52,7 @@ final class CoreAudioCapture {
     private var micPeak = 0.0, micSumSq = 0.0, micN = 0
     private var sysPeak = 0.0, sysSumSq = 0.0, sysN = 0
 
-    init(writer: SessionWriter) { self.writer = writer }
+    init(excludePids: [Int32] = []) { self.excludePids = excludePids }
 
     /// (micPeak, micRms, sysPeak, sysRms) since the last snapshot; resets accumulators.
     func snapshotLevels() -> (Double, Double, Double, Double) {
@@ -60,27 +73,73 @@ final class CoreAudioCapture {
         levelLock.unlock()
     }
 
-    /// Bring up the tap + aggregate + mic. Throws with an actionable message on Core Audio failure.
-    func start() throws {
-        try startSystemTap()
+    /// Make the tap and its aggregate device and read the tap's real format. Nothing is recorded yet.
+    func prepare() throws {
+        try createSystemTap()
+    }
+
+    /// Start audio into `writer`: the tap's IO and the microphone.
+    func run(writer: SessionWriter) throws {
+        self.writer = writer
+        try startTapIO()
         try startMic()
+    }
+
+    /// The tap's sample rate, known after `prepare()`.
+    var sampleRate: Int { Int(tapSampleRate) }
+
+    // MARK: - Exclusions (RichOS's own speech)
+
+    private func excludedProcessObjects() -> [AudioObjectID] {
+        excludePids.compactMap { pid -> AudioObjectID? in
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+                mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            var qualifier = pid
+            var object = AudioObjectID(kAudioObjectUnknown)
+            var size = UInt32(MemoryLayout<AudioObjectID>.size)
+            let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                                    UInt32(MemoryLayout<Int32>.size), &qualifier, &size, &object)
+            return status == noErr && object != kAudioObjectUnknown ? object : nil
+        }.sorted()
+    }
+
+    /// Re-check the excluded processes: one that started using audio after the tap was made is added
+    /// to the tap's exclusion list. Returns a sentence when something changed (or could not).
+    func refreshExclusions() -> String? {
+        guard let desc = tapDescription, tapID != kAudioObjectUnknown else { return nil }
+        let now = excludedProcessObjects()
+        guard now != excludedObjects else { return nil }
+        desc.processes = now
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioTapPropertyDescription,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var ref: CATapDescription = desc
+        let status = withUnsafeMutablePointer(to: &ref) {
+            AudioObjectSetPropertyData(tapID, &addr, 0, nil, UInt32(MemoryLayout<CATapDescription>.size), $0)
+        }
+        if status == noErr {
+            excludedObjects = now
+            return "system tap now excludes \(now.count) RichOS audio process(es)"
+        }
+        return "could not update the system tap's exclusions (OSStatus \(status))"
     }
 
     // MARK: - System tap
 
-    private func startSystemTap() throws {
-        // Capture ALL system output (empty exclude list) — one code path, Granola parity.
-        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+    private func createSystemTap() throws {
+        excludedObjects = excludedProcessObjects()
+        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: excludedObjects)
         desc.name = "RichOS System Capture"
         desc.isPrivate = true
         desc.muteBehavior = .unmuted // keep audio audible to the user while we tap a copy
+        tapDescription = desc
 
         var status = AudioHardwareCreateProcessTap(desc, &tapID)
         guard status == noErr, tapID != kAudioObjectUnknown else {
             throw err("AudioHardwareCreateProcessTap failed", status)
         }
 
-        // The tap's output stream format (so we downmix/interleave correctly).
+        // The tap's output stream format (so we downmix/interleave correctly, at its own rate).
         if let asbd = tapFormat() { tapSampleRate = asbd.mSampleRate > 0 ? asbd.mSampleRate : 48_000 }
 
         // A private aggregate device holding just the tap. Audio still flows to the real output.
@@ -99,9 +158,11 @@ final class CoreAudioCapture {
         guard status == noErr, aggregateID != kAudioObjectUnknown else {
             throw err("AudioHardwareCreateAggregateDevice failed", status)
         }
+    }
 
+    private func startTapIO() throws {
         let channels = Int(tapFormat()?.mChannelsPerFrame ?? 2)
-        status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) {
+        var status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) {
             [weak self] (_, inInputData, _, _, _) in
             self?.handleTapInput(inInputData, channels: channels)
         }
@@ -125,7 +186,7 @@ final class CoreAudioCapture {
         let interleaved = Array(UnsafeBufferPointer(start: ptr, count: frameCount * ch))
         let mono = ChannelMixer.downmixToMono(interleaved: interleaved, channelCount: ch)
         meter(mono, mic: false)
-        writer.pushSystem(mono)
+        writer?.pushSystem(mono)
     }
 
     private func tapFormat() -> AudioStreamBasicDescription? {
@@ -164,7 +225,7 @@ final class CoreAudioCapture {
             if let ch = out.floatChannelData, out.frameLength > 0 {
                 let mono = Array(UnsafeBufferPointer(start: ch[0], count: Int(out.frameLength)))
                 self.meter(mono, mic: true)
-                self.writer.pushMic(mono)
+                self.writer?.pushMic(mono)
             }
         }
         engine.prepare()
@@ -184,8 +245,6 @@ final class CoreAudioCapture {
         tapRunning = false
         micRunning = false
     }
-
-    var sampleRate: Int { Int(tapSampleRate) }
 
     private func err(_ msg: String, _ status: OSStatus) -> NSError {
         NSError(domain: "CoreAudioCapture", code: Int(status),

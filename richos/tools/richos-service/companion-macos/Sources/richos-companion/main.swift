@@ -157,6 +157,17 @@ func cmdIngest(_ args: [String]) throws {
 }
 
 func cmdCapture(_ args: [String]) {
+    // --json: the app started this capture; it reads state changes and alarms as JSON lines on
+    // stdout (Notifier's APP MODE). --exclude-pid N (repeatable): processes whose OUTPUT the
+    // system tap must not record (RichOS's own speech).
+    Notifier.appMode = args.contains("--json")
+    var excludePids: [Int32] = []
+    for (i, a) in args.enumerated() where a == "--exclude-pid" {
+        guard i + 1 < args.count, let pid = Int32(args[i + 1]) else {
+            FileErr.write("--exclude-pid needs a number\n"); exit(2)
+        }
+        excludePids.append(pid)
+    }
     let zone = resolveZone(flag("--zone", args))
     let startedAt = nowMs()
 
@@ -173,12 +184,17 @@ func cmdCapture(_ args: [String]) {
             FileErr.write("stand down: \(decision.reason)\n")
             if let ex = decision.excludeProcessHint { FileErr.write("  (the extension owns \(ex); it will capture this call with captions/names)\n") }
             FileErr.write("  pass --force to capture anyway (double-capture; the pipeline dedup backstop keeps the richer one).\n")
-            exit(0)
+            // The ownership result is the app's to handle (PRD V4: "handle its ownership result
+            // rather than forcing a duplicate or claiming that an inactive native recorder is
+            // recording"): a distinct line and a distinct exit status, never a quiet 0.
+            Notifier.event("stand-down", [("reason", .string(decision.reason)),
+                                          ("owner", decision.excludeProcessHint.map(JSON.string) ?? .null)])
+            exit(Notifier.appMode ? 3 : 0)
         }
     }
 
     if #available(macOS 14.4, *) {
-        runLiveCapture(zone: zone, startedAt: startedAt)
+        runLiveCapture(zone: zone, startedAt: startedAt, excludePids: excludePids)
     } else {
         FileErr.write("capture requires macOS 14.4+ (Core Audio process taps).\n")
         exit(1)
@@ -192,8 +208,11 @@ func usage() {
     USAGE:
       richos-companion doctor
           Report environment + the permission gate.
-      richos-companion capture [--zone DIR]
+      richos-companion capture [--zone DIR] [--json] [--exclude-pid N]... [--kind K] [--force]
           Live capture: system-audio tap + mic -> 2-channel contract dir (needs the TCC grant).
+          SIGINT or SIGTERM finalizes. --json: state and alarms as JSON lines for the app;
+          a stand-down (another surface owns the call) exits 3. --exclude-pid: keep that
+          process's output (RichOS's own speech) out of the system tap.
       richos-companion ingest --stereo <wav> [--zone DIR] [--started-at MS]
       richos-companion ingest --mic <monoWav> --system <monoWav> [--zone DIR]
           Headless: push a sample through the real contract writer (no grant needed) -> a valid
