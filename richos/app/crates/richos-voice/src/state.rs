@@ -94,6 +94,11 @@ impl VoiceStateMachine {
         self.on
     }
 
+    /// A spine turn is in flight: an answer may still be coming.
+    pub fn turn_active(&self) -> bool {
+        self.turn_active
+    }
+
     /// Barge-in is armed exactly when Rich has audio playing. Nothing else can arm it —
     /// speech during Rich's silence is a normal utterance, not an interruption.
     pub fn barge_in_armed(&self) -> bool {
