@@ -27,6 +27,15 @@ async function openApp(browser, preset) {
   return page;
 }
 
+// A wait that says which fact never arrived, instead of a bare timeout.
+async function waitFor(page, label, fn, arg) {
+  try {
+    await page.waitForFunction(fn, arg);
+  } catch (error) {
+    throw new Error(label + " (" + String(error.message || error).split("\n")[0] + ")");
+  }
+}
+
 async function docTitles(page) {
   return page.evaluate(() => [...document.querySelectorAll("#search-results .srch-doc .srch-title")].map((t) => t.textContent));
 }
@@ -110,9 +119,12 @@ async function main() {
       await page.waitForFunction(() => document.querySelectorAll("#search-results .srch-doc").length === 12);
       for (let i = 0; i < 8; i++) {
         if (await page.evaluate(() => (document.getElementById("srch-tail") || {}).className === "srch-end")) break;
+        // Counted BEFORE the scroll: a page that arrives between the scroll and a later count
+        // would be counted already and the wait would wait for one more that never comes.
+        const shown = await page.evaluate(() => document.querySelectorAll("#search-results .srch-doc").length);
         await page.evaluate(() => { const r = document.getElementById("search-results"); r.scrollTop = r.scrollHeight; });
         await page.waitForFunction((n) => document.querySelectorAll("#search-results .srch-doc").length > n
-          || (document.getElementById("srch-tail") || {}).className === "srch-end", await page.evaluate(() => document.querySelectorAll("#search-results .srch-doc").length));
+          || (document.getElementById("srch-tail") || {}).className === "srch-end", shown);
       }
       const end = await page.evaluate(() => ({ n: document.querySelectorAll("#search-results .srch-doc").length, text: document.getElementById("srch-tail").textContent }));
       assertEqual(end.n, 31, "every document arrived");
@@ -176,6 +188,83 @@ async function main() {
 
     await run.check("no browser errors", () => assertEqual(page.__errors.length, 0, page.__errors.join("\n")));
     await page.close();
+
+    await run.check("a newer index generation restarts the list instead of mixing rankings", async () => {
+      // While the index is built the service's generation moves after every batch, and a newer
+      // generation can rank a newly searchable document first. Here generation N puts N - 1
+      // "Forgotten answer" documents ahead of the folder's own ranking, so a page from one
+      // generation appended to another's would repeat a document and lose one.
+      const p = await openApp(browser);
+      await p.evaluate(() => {
+        const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+        window.__statusGen = 1;
+        window.__resultGen = 1;
+        window.__statusState = "indexing";
+        window.RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "search_documents_status") {
+            const status = await invoke(cmd, args);
+            return { ...status, generation: window.__statusGen, meaning: { ...status.meaning, state: window.__statusState } };
+          }
+          if (cmd !== "search_documents") return invoke(cmd, args);
+          const shift = window.__resultGen - 1;
+          const off = args.request.offset;
+          const reply = await invoke(cmd, { request: { ...args.request, offset: Math.max(0, off - shift), limit: args.request.limit } });
+          const ahead = [];
+          for (let i = Math.max(1, off + 1); i <= shift && ahead.length < args.request.limit; i++) {
+            ahead.push({ ...reply.hits[0], source_id: "forgotten-" + i, title: "Forgotten answer " + i });
+          }
+          const hits = ahead.concat(reply.hits).slice(0, args.request.limit);
+          const dropped = off < shift ? 0 : reply.dropped;
+          return { ...reply, offset: off, total: reply.total + shift, hits, dropped,
+            status: { ...reply.status, generation: window.__resultGen } };
+        };
+      });
+      // Reopen, so the status line is read through the stand-in and keeps being read.
+      await p.keyboard.press("Escape");
+      await p.keyboard.press("Meta+k");
+      await p.waitForSelector("#search-overlay:not([hidden])");
+      await p.fill("#search-input", "subscription pricing");
+      await p.waitForFunction(() => document.querySelectorAll("#search-results .srch-doc").length === 12);
+      assert((await docTitles(p))[0].startsWith("Subscription pricing"), "generation 1 first");
+
+      // Indexing finishes a batch: the next status read carries generation 2, and the list is
+      // asked again from its first page.
+      await p.evaluate(() => { window.__statusGen = 2; window.__resultGen = 2; });
+      await waitFor(p, "generation 2 never redrew the list", () => (document.querySelector("#search-results .srch-doc .srch-title") || {}).textContent === "Forgotten answer 1");
+
+      // The status read lags while a scroll asks for the next page and generation 3 answers:
+      // that page is not appended; the list starts again from generation 3's first page.
+      await p.evaluate(() => { window.__resultGen = 3; });
+      await p.evaluate(() => { const r = document.getElementById("search-results"); r.scrollTop = r.scrollHeight; });
+      // Generation 3 ranks "Forgotten answer 1" and "Forgotten answer 2" first. Wait for either
+      // its first page (the second title is answer 2) or an appended page (24 rows).
+      await waitFor(p, "the generation-3 page was neither appended nor restarted", () => {
+        const titles = [...document.querySelectorAll("#search-results .srch-doc .srch-title")].map((t) => t.textContent);
+        return titles[1] === "Forgotten answer 2" || titles.length >= 24;
+      });
+      const afterScroll = await docTitles(p);
+      assertEqual(afterScroll.slice(0, 2).join(" | "), "Forgotten answer 1 | Forgotten answer 2",
+        "generation 3's first page: " + afterScroll.slice(0, 3).join(" | "));
+
+      // Indexing done; scroll to the end: every document once, and the count is generation 3's.
+      await p.evaluate(() => { window.__statusGen = 3; window.__statusState = "ready"; });
+      for (let i = 0; i < 8; i++) {
+        if (await p.evaluate(() => (document.getElementById("srch-tail") || {}).className === "srch-end")) break;
+        const shown = await p.evaluate(() => document.querySelectorAll("#search-results .srch-doc").length);
+        await p.evaluate(() => { const r = document.getElementById("search-results"); r.scrollTop = r.scrollHeight; });
+        await p.waitForFunction((n) => document.querySelectorAll("#search-results .srch-doc").length > n
+          || (document.getElementById("srch-tail") || {}).className === "srch-end", shown);
+      }
+      const keys = await p.evaluate(() => [...document.querySelectorAll("#search-results .srch-doc")].map((n) => n.dataset.key));
+      const tail = await p.evaluate(() => document.getElementById("srch-tail").textContent);
+      const repeated = keys.filter((k, i) => keys.indexOf(k) !== i);
+      assertEqual(repeated.length, 0, "repeated: " + repeated.join(", "));
+      assertEqual(keys.length, 33, "every document of generation 3");
+      assertEqual(tail, "That’s all 33 documents.", "the end of the list");
+      assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
+      await p.close();
+      return keys.length + " documents, none repeated";
+    });
 
     for (const [preset, line, mode] of [
       ["unavailable", "Super Finder unavailable; showing text matches", "words only, Super Finder unavailable"],

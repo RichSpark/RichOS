@@ -6946,6 +6946,8 @@ const searchState = {
   statusTimer: null,
   /// Where the next page of documents starts in the whole ranked list.
   nextOffset: 0,
+  /// The index generation the shown list was ranked by (the service's `status.generation`).
+  sourceGen: null,
 };
 
 function searchReducedMotion() {
@@ -6966,6 +6968,7 @@ function openSearch() {
   searchState.active = -1;
   searchState.navHits = [];
   searchState.docs = [];
+  searchState.sourceGen = null;
   searchHintEl.hidden = false;
   searchCountEl.textContent = "";
   searchCountEl.classList.add("is-empty");
@@ -7021,6 +7024,13 @@ async function refreshSearchStatus() {
   if (!searchState.open) return;
   searchState.status = status;
   paintSearchStatus();
+  // Each batch the index completes makes a newer generation, which can rank a newly searchable
+  // document first. A list built from an older one is asked again from its first page, never
+  // left as it was or extended with the newer ranking (newer only: a status read can lag the
+  // reply the list was built from).
+  if (status && searchState.sourceGen != null && status.generation > searchState.sourceGen && searchInputEl.value.trim()) {
+    runSearch(true);
+  }
   // While the folder is being read or the index built, the counts move: look again.
   const meaning = status && status.meaning && status.meaning.state;
   const folder = status && status.folder && status.folder.state;
@@ -7425,6 +7435,7 @@ async function runSearch(animate) {
   const before = animate ? searchSnapshot() : null;
   searchState.navHits = nav || [];
   searchState.resp = docs;
+  searchState.sourceGen = docs && docs.status ? docs.status.generation : null;
   searchState.docs = docs ? docs.hits.slice() : [];
   searchState.total = docs ? docs.total : 0;
   searchState.nextOffset = docs ? docs.offset + docs.hits.length + docs.dropped : 0;
@@ -7471,6 +7482,12 @@ function watchSearchTail() {
         // Said where the list stops, rather than a "Loading more…" that never arrives.
         tail.className = "srch-end";
         tail.textContent = "More documents could not be loaded.";
+        return;
+      }
+      // A page ranked by another index generation would repeat some documents and skip
+      // others: the list starts again from that generation's first page instead.
+      if (next.status && next.status.generation !== searchState.sourceGen) {
+        runSearch(true);
         return;
       }
       // A page whose results all left the folder still moves on; an empty page ends the list.
