@@ -132,6 +132,8 @@ struct Inner {
     level: Option<LevelRun>,
     /// The synced calendar's meetings that may prompt, as of the last refresh.
     calendar: Vec<CalendarMeeting>,
+    /// The panel's last reported size, so the log says a size once, not every frame of a fold.
+    last_layout: Option<(i64, i64, bool)>,
 }
 
 /// The level reader: its pid (to end it) and its stdin (dropping it also ends it).
@@ -190,6 +192,7 @@ pub fn start(app: &AppHandle) {
             system_audio_seen,
             level: None,
             calendar: Vec::new(),
+            last_layout: None,
         }),
     });
     app.manage(meetings.clone());
@@ -471,8 +474,18 @@ impl Meetings {
         let Some(window) = self.app.get_webview_window(PANEL) else { return };
         let Ok(ns) = window.ns_window() else { return };
         let win = Win(ns as *mut _);
-        let hidden = w <= 0.0 || h <= 0.0 || self.inner.lock().unwrap().view == PanelView::Hidden;
-        eprintln!("[richos] meeting notes: the panel laid out {w:.0} x {h:.0}{}", if hidden { " (hidden)" } else { "" });
+        let (hidden, changed) = {
+            let mut inner = self.inner.lock().unwrap();
+            let hidden = w <= 0.0 || h <= 0.0 || inner.view == PanelView::Hidden;
+            let now = Some((w.round() as i64, h.round() as i64, hidden));
+            let changed = inner.last_layout != now;
+            inner.last_layout = now;
+            (hidden, changed)
+        };
+        // Said when the size changes, not for every frame of a fold.
+        if changed {
+            eprintln!("[richos] meeting notes: the panel laid out {w:.0} x {h:.0}{}", if hidden { " (hidden)" } else { "" });
+        }
         logged("placing the panel", self.app.run_on_main_thread(move || {
             if hidden {
                 win.hide();
