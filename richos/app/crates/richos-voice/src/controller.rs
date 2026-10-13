@@ -44,6 +44,7 @@ use crate::playout::Playout;
 use crate::state::{VoiceState, VoiceStateMachine};
 use crate::stt::{self, Recognizer};
 use crate::tts::{MacSay, SpeechSynth};
+use crate::turn::TurnAssembler;
 use crate::vad::{frames_to_secs, Vad};
 use crate::voiced::VoiceEvidence;
 use std::path::PathBuf;
@@ -377,6 +378,11 @@ pub enum CapMsg {
     /// the button in silence. Without this the state machine would be told "he is talking"
     /// and, with no utterance to end, would sit in `Hearing` forever.
     BargeIn { mid_utterance: bool },
+    /// **His turn is over**: [`crate::turn::END_OF_TURN_FRAMES`] of silence since the last speech
+    /// frame of the last utterance (125 x 256 / 16000 = 2.000 s), and no onset building. Sent
+    /// once per silence, after an utterance has ended, never once per frame. Counted here, on
+    /// the frames themselves, so the window is exact rather than a supervisor-tick estimate.
+    TurnQuiet,
 }
 
 /// **AN ADMITTED UTTERANCE AND WHAT THE CAPTURE PATH KNEW ABOUT RICH'S OWN VOICE.**
@@ -467,6 +473,10 @@ pub struct CaptureBrain {
     /// [`ECHO_LOOKBACK_FRAMES`] so the pre-roll already sitting in the recorder is judged too,
     /// not just the frame `Started` happens to land on.
     quiet_frames: u32,
+    /// Frames since the last utterance ENDED, counting toward [`crate::turn::TURN_QUIET_FRAMES`].
+    /// `None` while an utterance is open and once [`CapMsg::TurnQuiet`] has been sent for this
+    /// silence, so it is sent exactly once per silence.
+    turn_quiet_run: Option<u32>,
 }
 
 impl Default for CaptureBrain {
@@ -491,6 +501,7 @@ impl CaptureBrain {
             tainted: false,
             barged: false,
             quiet_frames: u32::MAX,
+            turn_quiet_run: None,
         }
     }
 
@@ -768,6 +779,30 @@ impl CaptureBrain {
         } else if !speaking && !recording {
             // Rich has fallen silent and nothing is in flight: forget the interruption.
             self.barged = false;
+        }
+
+        // **THE END OF HIS TURN, counted on the frames.** An utterance ends at 0.800 s of
+        // silence; his TURN ends at 2.000 s (`turn.rs`). The endpointer's hangover is the first
+        // 0.800 s of that silence, so the count starts on the END frame and runs the remaining
+        // 75 frames (1.200 s). An open utterance stops it, and so does an onset still building
+        // when the count is reached: a sound that is about to become his next word is not quiet.
+        if started {
+            self.turn_quiet_run = None;
+        } else if stopped {
+            // Admitted or too short, the utterance is over on this frame either way.
+            self.turn_quiet_run = Some(0);
+        } else if !recording {
+            if let Some(run) = self.turn_quiet_run {
+                let run = run.saturating_add(1);
+                if run >= crate::turn::TURN_QUIET_FRAMES
+                    && self.recorder.endpointer().speech_run_frames() == 0
+                {
+                    self.turn_quiet_run = None;
+                    out.push(CapMsg::TurnQuiet);
+                } else {
+                    self.turn_quiet_run = Some(run);
+                }
+            }
         }
     }
 }
@@ -1403,7 +1438,9 @@ impl RecognizerDesk {
     ///
     /// `transcribe` is only ever called for audio that has already been measured to carry a
     /// voice. `submit` is only ever called for a transcript that survived both that gate and
-    /// the narrow noise-phrase filter, and it is the SAME path typed text takes.
+    /// the narrow noise-phrase filter. Since 2026-10-13 what it receives is one FRAGMENT of his
+    /// turn, which the supervisor's [`crate::turn::TurnAssembler`] joins with the rest before
+    /// the turn takes the SAME path typed text takes.
     pub fn handle<T, S>(
         &mut self,
         admitted: &AdmittedUtterance,
@@ -1483,12 +1520,16 @@ impl RecognizerDesk {
                     b.recovered();
                     None
                 });
-                observer.on_voice_event(&VoiceEvent::Transcript {
-                    text: text.clone(),
-                    duration_ms,
-                    latency_ms,
-                    at: now_millis(),
-                });
+                // **NO `VoiceEvent::Transcript` HERE ANY MORE, and that is half of the 2026-10-13
+                // fix.** These words are one FRAGMENT of his turn (`turn.rs`). The window draws a
+                // user message for every transcript event it receives, so announcing fragments
+                // would draw his one thought as several messages; the turn announces itself once,
+                // whole, when it is handed to the spine (`supervise`). The operator still gets the
+                // fragment and its recognition time.
+                eprintln!(
+                    "[richos-voice] {} fragment recognized — {duration_ms} ms of audio in {latency_ms} ms; held until his turn is over",
+                    wall_clock_utc()
+                );
                 // **THE PROVENANCE TRAVELS WITH THE WORDS, and this is the only place it
                 // can.** `submit` is what becomes a ledger record; by the time anything
                 // downstream sees the text, every fact about the audio it came from is gone.
@@ -1561,6 +1602,11 @@ impl VoiceController {
         // `(text, rich_audible)` rather than `String`: the provenance has to reach the ledger
         // writer, and this serialized hop is the only thing between the recognizer and it.
         let (submit_tx, submit_rx) = channel::<(String, bool)>();
+        // One message per admitted utterance, in admission order: its words, or `None` when the
+        // recognizer refused it. The supervisor's `TurnAssembler` needs the refusals as much as
+        // the words — a turn may not be released while a fragment is still at the recognizer,
+        // and a refusal is how it learns the fragment has come back empty.
+        let (words_tx, words_rx) = channel::<Option<(String, bool)>>();
         let force_barge = Arc::new(AtomicBool::new(false));
         // The canceller's live state, lossless and signed — see `AecShared`. One relaxed store
         // per frame from the audio thread, readable by anyone without a lock.
@@ -1660,14 +1706,25 @@ impl VoiceController {
                 // type so that ordering is testable rather than merely visible.
                 let mut desk = RecognizerDesk::sharing(notices);
                 while let Ok(admitted) = utt_rx.recv() {
+                    let mut words = None;
                     desk.handle(
                         &admitted,
                         observer.as_ref(),
                         |samples| recognizer.transcribe(samples, &scratch),
-                        |text, rich_audible| {
-                            let _ = submit_tx.send((text, rich_audible));
-                        },
+                        |text, rich_audible| words = Some((text, rich_audible)),
                     );
+                    // To the supervisor, which holds it until his turn is over. If the supervisor
+                    // is already gone, voice was switched off while this fragment was at the
+                    // recognizer, and words he said before the toggle have always still reached
+                    // the conversation: they go straight to the submit thread, as they did before
+                    // turns were assembled.
+                    if let Err(unsent) = words_tx.send(words) {
+                        if let Some(fragment) = unsent.0 {
+                            if submit_tx.send(fragment).is_err() {
+                                eprintln!("[richos-voice] a fragment recognized after voice went off could not be handed over: the submit thread has ended");
+                            }
+                        }
+                    }
                 }
             }));
         }
@@ -1733,6 +1790,8 @@ impl VoiceController {
                     observer,
                     cap_rx,
                     utt_tx,
+                    words_rx,
+                    submit_tx,
                     aec_state,
                     input_latency,
                     notices,
@@ -2193,6 +2252,71 @@ impl Drop for SessionLog {
     }
 }
 
+/// **Where a finished turn goes: announced once, whole, then handed to the submit thread.**
+///
+/// The supervisor owns one. A `Drop` guard for the reason [`SessionLog`] is one: [`supervise`]
+/// has two exits, and on both of them a turn he finished speaking but whose end-of-turn quiet had
+/// not yet arrived — voice switched off within 2.000 s of his last word — is still his turn and
+/// still reaches the conversation, as an utterance recognized before the toggle always did.
+struct TurnDesk {
+    assembler: TurnAssembler,
+    /// The recognizer's result for each admitted fragment, in admission order.
+    words_rx: Receiver<Option<(String, bool)>>,
+    submit_tx: Sender<(String, bool)>,
+    observer: Arc<dyn VoiceObserver>,
+    /// When the last admitted utterance ended, to report how long the turn waited after it.
+    last_end: Option<Instant>,
+}
+
+impl TurnDesk {
+    /// What the recognizer made of each fragment since the last look.
+    fn collect(&mut self) {
+        while let Ok(words) = self.words_rx.try_recv() {
+            self.assembler.recognized(words);
+        }
+    }
+
+    /// Hand over the turn if he is finished. Called once per supervisor tick.
+    fn release(&mut self) {
+        self.collect();
+        if let Some(turn) = self.assembler.take_turn() {
+            self.send(turn, "his turn is over");
+        }
+    }
+
+    fn send(&mut self, turn: crate::turn::Turn, why: &str) {
+        let waited_ms = self.last_end.map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+        eprintln!(
+            "[richos-voice] {} TURN to Rich — {why}: {} fragment(s), {:.3} s of audio, handed over {waited_ms} ms after the last one ended (end of turn = {:.3} s of silence)",
+            wall_clock_utc(),
+            turn.fragments,
+            turn.audio_ms as f32 / 1000.0,
+            crate::turn::end_of_turn_secs(),
+        );
+        // ONE transcript event per TURN: the window draws one user message for it, and it is the
+        // message the turn's own ledger record then replaces.
+        self.observer.on_voice_event(&VoiceEvent::Transcript {
+            text: turn.text.clone(),
+            duration_ms: turn.audio_ms,
+            latency_ms: waited_ms,
+            at: now_millis(),
+        });
+        if self.submit_tx.send((turn.text, turn.rich_audible)).is_err() {
+            // Only when the submit thread is already gone, which is voice shutting down.
+            eprintln!("[richos-voice] the turn could not be handed over: the submit thread has ended");
+        }
+    }
+}
+
+impl Drop for TurnDesk {
+    fn drop(&mut self) {
+        self.collect();
+        if let Some(turn) = self.assembler.flush() {
+            self.send(turn, "voice is going off");
+        }
+    }
+}
+
 /// A voice session's length as `M:SS.mmm`, for the closing line.
 ///
 /// Pure, and separate from the guard, so the arithmetic is testable without a thread: the
@@ -2212,6 +2336,8 @@ fn supervise(
     observer: Arc<dyn VoiceObserver>,
     cap_rx: Receiver<CapMsg>,
     utt_tx: Sender<Box<AdmittedUtterance>>,
+    words_rx: Receiver<Option<(String, bool)>>,
+    submit_tx: Sender<(String, bool)>,
     shared_aec: Arc<AecShared>,
     input_latency: crate::capture::InputLatency,
     notices: Arc<Mutex<RefusalNotices>>,
@@ -2219,6 +2345,15 @@ fn supervise(
     // Held for the whole function so that EVERY return from it prints the closing line —
     // see `SessionLog`.
     let _session = SessionLog::open();
+    // His turn, assembled from its fragments (`turn.rs`). Declared AFTER `_session` so it is
+    // dropped first: the turn a toggle-off flushes is logged before the session's closing line.
+    let mut turns = TurnDesk {
+        assembler: TurnAssembler::new(),
+        words_rx,
+        submit_tx,
+        observer: observer.clone(),
+        last_end: None,
+    };
     let mut last_state = VoiceState::Off;
     // Rich's audible window, and the monotonic clock that drives it. `Instant`, never the wall
     // clock: a window that closes early because the system clock stepped is the defect again.
@@ -2247,6 +2382,7 @@ fn supervise(
                             m.utterance_started();
                         }
                     }
+                    turns.assembler.utterance_started();
                 }
                 Ok(CapMsg::Utterance(u)) => {
                     eprintln!(
@@ -2259,6 +2395,12 @@ fn supervise(
                     if let Ok(mut m) = machine.lock() {
                         m.utterance_ended();
                     }
+                    // Recorded BEFORE the recognizer can have it, so its words can never arrive
+                    // ahead of the admission they belong to.
+                    turns.assembler.utterance_admitted(
+                        (u.utterance.duration_secs() * 1000.0).round() as u64,
+                    );
+                    turns.last_end = Some(Instant::now());
                     let _ = utt_tx.send(u);
                 }
                 Ok(CapMsg::Discarded { tainted }) => {
@@ -2270,6 +2412,7 @@ fn supervise(
                     if let Ok(mut m) = machine.lock() {
                         m.utterance_ended();
                     }
+                    turns.assembler.utterance_discarded();
                     if tainted {
                         // **THE OLD TEXT HERE SAID `(no AEC)` AND THAT WAS FALSE.** The
                         // canceller is running on this exact frame — `CaptureBrain::push_frame`
@@ -2379,10 +2522,25 @@ fn supervise(
                         dropped as f32 / playout.device_rate.max(1) as f32
                     );
                 }
+                Ok(CapMsg::TurnQuiet) => {
+                    eprintln!(
+                        "[richos-voice] {} end-of-turn quiet — {:.3} s of silence since his last word; {} fragment(s) held, {} at the recognizer",
+                        wall_clock_utc(),
+                        crate::turn::end_of_turn_secs(),
+                        turns.assembler.fragments_held(),
+                        turns.assembler.awaiting_recognition(),
+                    );
+                    turns.assembler.quiet();
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
         }
+
+        // 1b. What the recognizer made of each fragment, in admission order — then, if he is
+        //     finished, his turn. After the capture messages, so a fragment admitted on this
+        //     tick is already counted as awaiting before its words could be looked for.
+        turns.release();
 
         // 2. Reconcile playout with the state machine, and decide whether Rich is AUDIBLE.
         //
@@ -2598,8 +2756,71 @@ mod tests {
             sent.into_inner().unwrap(),
             vec!["Renegotiate Acme and get me the number by Thursday.".to_string()]
         );
-        assert_eq!(transcripts(&rec).len(), 1, "the CEO's own words must appear in the thread");
+        // A FRAGMENT, not yet his turn: the thread is drawn from the turn's own transcript event,
+        // once, by `TurnDesk` — `one_thought_with_a_pause_is_one_message_and_one_turn` below.
+        assert!(transcripts(&rec).is_empty(), "a fragment was announced as a message of its own");
         assert!(messages(&rec).is_empty(), "a working turn raised a notice");
+    }
+
+    /// INVARIANT — THE 2026-10-13 DEFECT, at the desk where a turn leaves voice. Two recognized
+    /// fragments with a pause between them reach the window as ONE message and the spine as ONE
+    /// turn, and only after the end-of-turn quiet. Before the fix each fragment was announced and
+    /// submitted on its own the moment whisper returned it, which is how his first two words became
+    /// a turn while he was still saying the sentence after them (nightly 54).
+    #[test]
+    fn one_thought_with_a_pause_is_one_message_and_one_turn() {
+        let rec = Arc::new(Recorder::default());
+        let (words_tx, words_rx) = channel();
+        let (submit_tx, submit_rx) = channel();
+        let mut desk = TurnDesk {
+            assembler: TurnAssembler::new(),
+            words_rx,
+            submit_tx,
+            observer: rec.clone(),
+            last_end: None,
+        };
+        desk.assembler.utterance_started();
+        desk.assembler.utterance_admitted(2512);
+        words_tx.send(Some(("So here is the first part".to_string(), false))).unwrap();
+        desk.release();
+        desk.assembler.utterance_started();
+        desk.release();
+        desk.assembler.utterance_admitted(2640);
+        words_tx.send(Some(("and here is the rest of it.".to_string(), false))).unwrap();
+        desk.release();
+        assert!(transcripts(&rec).is_empty(), "a fragment reached the window before he was finished");
+        assert!(submit_rx.try_recv().is_err(), "a fragment became a turn before he was finished");
+
+        desk.assembler.quiet();
+        desk.release();
+        let whole = "So here is the first part and here is the rest of it.".to_string();
+        assert_eq!(transcripts(&rec), vec![whole.clone()]);
+        assert_eq!(submit_rx.try_recv().unwrap(), (whole, false));
+        assert!(submit_rx.try_recv().is_err(), "one thought became more than one turn");
+    }
+
+    /// INVARIANT: switching voice off within the end-of-turn window still delivers what he said,
+    /// as an utterance recognized before the toggle always was.
+    #[test]
+    fn voice_off_before_the_quiet_still_delivers_his_words() {
+        let rec = Arc::new(Recorder::default());
+        let (words_tx, words_rx) = channel();
+        let (submit_tx, submit_rx) = channel();
+        {
+            let mut desk = TurnDesk {
+                assembler: TurnAssembler::new(),
+                words_rx,
+                submit_tx,
+                observer: rec.clone(),
+                last_end: None,
+            };
+            desk.assembler.utterance_started();
+            desk.assembler.utterance_admitted(1800);
+            // Recognized but not yet collected when voice goes off.
+            words_tx.send(Some(("Send the deck to Dana.".to_string(), false))).unwrap();
+        }
+        assert_eq!(submit_rx.try_recv().unwrap(), ("Send the deck to Dana.".to_string(), false));
+        assert_eq!(transcripts(&rec).len(), 1);
     }
 
     /// INVARIANT: a ONE-WORD decision still gets through. `stt.rs` keeps its noise list

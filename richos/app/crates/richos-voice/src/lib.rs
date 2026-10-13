@@ -104,6 +104,10 @@ pub mod state;
 // depends on parsing a subprocess's stdout is the exact shape of "exit 0 while doing the wrong
 // thing", which is also what whisper-cpp 1.8.3 does to `--version`.
 pub mod toolchain;
+// When the CEO has finished his TURN, as opposed to when one stretch of his speech ended: the
+// endpointer's 0.800 s closes a fragment, and fragments are joined into one turn until he has
+// been silent for 2.000 s. Pure; the supervisor feeds it.
+pub mod turn;
 pub mod voiced;
 pub mod wav;
 
