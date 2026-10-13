@@ -36,6 +36,8 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 pub const PANEL: &str = "meeting-panel";
 pub const EVENT_PANEL: &str = "meeting-panel";
 pub const EVENT_STATE: &str = "meeting-state";
+/// The voice bar's level, about 20 a second while the bar is up: `{"rms": .., "peak": ..}`.
+pub const EVENT_LEVEL: &str = "meeting-level";
 
 /// The panel's place on the display (round 25.1: `top:35px;right:14px` under a 25px menu bar):
 /// its right edge 14 points in from the display's visible right, its top 10 below the menu bar.
@@ -95,6 +97,9 @@ struct CaptureRun {
     /// The capture reported `started`: audio is really being written.
     recording: bool,
     stop: Option<EndReason>,
+    /// A side that stalled during the recording, in the capture's own words: the notes must say
+    /// the capture is partial instead of reading as complete (PRD V4).
+    warnings: Vec<String>,
 }
 
 struct Inner {
@@ -105,11 +110,25 @@ struct Inner {
     /// Holding this keeps the watcher's stdin open; dropping it ends the watcher.
     watcher_stdin: Option<ChildStdin>,
     watcher_pid: Option<u32>,
+    /// A capture has shown the System Audio Recording grant exists (sound came through its tap).
+    /// Only then may the voice bar read the call's level: starting a tap before he has decided
+    /// would put the permission dialog up from a prompt he declined.
+    system_audio_seen: bool,
+    /// The voice bar's level reader (`richos-companion level`) while the bar is up.
+    level: Option<LevelRun>,
+}
+
+/// The level reader: its pid (to end it) and its stdin (dropping it also ends it).
+struct LevelRun {
+    pid: u32,
+    _stdin: Option<ChildStdin>,
 }
 
 pub struct Meetings {
     app: AppHandle,
     companion: PathBuf,
+    /// `<app data>/meeting-notes.json`: what this Mac has shown about meeting notes (the grant).
+    marker: PathBuf,
     inner: Mutex<Inner>,
 }
 
@@ -132,9 +151,16 @@ pub fn start(app: &AppHandle) {
         return;
     };
     eprintln!("[richos] meeting notes: companion {}", companion.display());
+    let marker = app.state::<crate::AppState>().data_dir.join("meeting-notes.json");
+    let system_audio_seen = std::fs::read(&marker)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["systemAudioSeen"].as_bool())
+        .unwrap_or(false);
     let meetings = Arc::new(Meetings {
         app: app.clone(),
         companion,
+        marker,
         inner: Mutex::new(Inner {
             monitor: MeetingMonitor::new(),
             view: PanelView::Hidden,
@@ -142,6 +168,8 @@ pub fn start(app: &AppHandle) {
             processing: None,
             watcher_stdin: None,
             watcher_pid: None,
+            system_audio_seen,
+            level: None,
         }),
     });
     app.manage(meetings.clone());
@@ -216,7 +244,9 @@ impl Meetings {
             match action {
                 Action::ShowPrompt(kind) => {
                     let view = match kind {
-                        PromptKind::Unscheduled { app } => PanelView::Prompt { title: format!("Call detected in {app}."), sub: None },
+                        PromptKind::Unscheduled { app } => {
+                            PanelView::Prompt { title: format!("Call detected in {}.", friendly_app(&app)), sub: None }
+                        }
                         PromptKind::Scheduled { title, starts_at, .. } => {
                             PanelView::Prompt { title, sub: Some(starts_line(starts_at, now_millis())) }
                         }
@@ -237,6 +267,9 @@ impl Meetings {
     }
 
     fn show(&self, view: PanelView) {
+        if !matches!(view, PanelView::Prompt { .. } | PanelView::Problem { .. }) {
+            self.set_level(false);
+        }
         self.inner.lock().unwrap().view = view.clone();
         self.ensure_panel();
         // Hidden too: the page fades the panel out and then reports 0 x 0, which hides the window.
@@ -335,6 +368,66 @@ impl Meetings {
         }));
     }
 
+    // ---- the voice bar's level ---------------------------------------------------------------
+
+    /// The bar is up (`on`) or gone. While it is up, and only once the grant has been seen, the
+    /// call's sound level is read live through the system tap and sent to the panel; nothing is
+    /// recorded or kept (CEO, 2026-10-13: "move with the call's sound as designed"). Before the
+    /// grant, or without a reader, the bar rests at the round's resting height.
+    fn set_level(&self, on: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        if !on {
+            if let Some(run) = inner.level.take() {
+                // SAFETY: our own child, not yet reaped (its reader thread reaps it).
+                unsafe {
+                    libc::kill(run.pid as i32, libc::SIGTERM);
+                }
+            }
+            return;
+        }
+        if inner.level.is_some() || !inner.system_audio_seen {
+            return;
+        }
+        let spawned = Command::new(&self.companion)
+            .args(["level", "--exclude-pid", &std::process::id().to_string()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[richos] meeting notes: the voice bar's level did not start: {e}");
+                return;
+            }
+        };
+        let pid = child.id();
+        inner.level = Some(LevelRun { pid, _stdin: child.stdin.take() });
+        drop(inner);
+        let stdout = child.stdout.take();
+        let app = self.app.clone();
+        let me = self.app.state::<Arc<Meetings>>().inner().clone();
+        std::thread::Builder::new()
+            .name("meeting-level".into())
+            .spawn(move || {
+                if let Some(out) = stdout {
+                    for line in BufReader::new(out).lines() {
+                        let Ok(line) = line else { break };
+                        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+                        if v["type"] == "level" {
+                            logged("the level event", app.emit_to(PANEL, EVENT_LEVEL, serde_json::json!({"rms": v["rms"], "peak": v["peak"]})));
+                        }
+                    }
+                }
+                logged("reaping the level reader", child.wait());
+                let mut inner = me.inner.lock().unwrap();
+                if inner.level.as_ref().map(|r| r.pid) == Some(pid) {
+                    inner.level = None;
+                }
+            })
+            .ok();
+    }
+
     // ---- the capture -------------------------------------------------------------------------
 
     fn start_capture(&self, title: Option<String>, event_id: Option<String>, manual: bool) {
@@ -379,6 +472,7 @@ impl Meetings {
                 dir: None,
                 recording: false,
                 stop: None,
+                warnings: Vec::new(),
             });
         }
         let stdout = child.stdout.take();
@@ -402,6 +496,7 @@ impl Meetings {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return };
         let kind = v["type"].as_str().unwrap_or("");
         let mut inner = self.inner.lock().unwrap();
+        let grant_known = inner.system_audio_seen;
         let Some(run) = inner.capture.as_mut().filter(|c| c.pid == pid) else { return };
         match kind {
             "started" => {
@@ -415,6 +510,19 @@ impl Meetings {
             }
             "closed" => {
                 run.dir = v["dir"].as_str().map(PathBuf::from).or(run.dir.take());
+            }
+            "channel" => {
+                let message = v["message"].as_str().unwrap_or("").to_string();
+                eprintln!("[richos] meeting notes: capture: {message}");
+                if v["stalled"].as_bool() == Some(true) && !message.is_empty() {
+                    run.warnings.push(message);
+                }
+            }
+            // Sound came through the system tap: the grant exists. Remembered, so the voice bar may
+            // follow the call's sound from now on (CEO, 2026-10-13).
+            "system-audio" if !grant_known => {
+                inner.system_audio_seen = true;
+                logged("remembering the system-audio grant", std::fs::write(&self.marker, b"{\"systemAudioSeen\": true}\n"));
             }
             "alarm" => eprintln!("[richos] meeting notes: capture alarm: {}", v["message"].as_str().unwrap_or("")),
             "failed" | "stand-down" => {
@@ -499,12 +607,13 @@ impl Meetings {
     /// one brief, Rich's message); for now the session is where the pipeline expects it.
     fn recording_closed(&self, run: CaptureRun) {
         eprintln!(
-            "[richos] meeting notes: recorded {} ({}{}, company {}, conversation {}) into {}",
+            "[richos] meeting notes: recorded {} ({}{}, company {}, conversation {}, partial: {}) into {}",
             run.title.as_deref().unwrap_or("a call"),
             if run.manual { "manual" } else { "prompted" },
             if run.event_id.is_some() { ", calendar" } else { "" },
             run.entity.as_deref().unwrap_or("none"),
             run.thread.as_deref().unwrap_or("none"),
+            if run.warnings.is_empty() { "no".to_string() } else { run.warnings.join(" / ") },
             run.dir.as_deref().unwrap_or(run.zone.as_path()).display()
         );
     }
@@ -547,6 +656,17 @@ pub fn meeting_zone(corpus: &Path, entity: Option<&str>) -> PathBuf {
     }
 }
 
+/// The name a person calls the app. macOS names Zoom's process "zoom.us"; the design says "Call
+/// detected in Zoom." Anything else is its own localized name.
+pub fn friendly_app(name: &str) -> String {
+    match name {
+        "zoom.us" | "us.zoom.xos" => "Zoom".into(),
+        n if n.starts_with("Microsoft Teams") || n == "com.microsoft.teams2" => "Microsoft Teams".into(),
+        "com.google.Chrome" => "Google Chrome".into(),
+        n => n.to_string(),
+    }
+}
+
 /// "Starts in 1 minute." / "Starting now." for a calendar prompt.
 pub fn starts_line(starts_at: u64, now: u64) -> String {
     let secs = starts_at.saturating_sub(now) / 1000;
@@ -578,9 +698,10 @@ pub fn meeting_panel_state(app: AppHandle) -> Option<PanelView> {
 
 /// The panel's page laid out a view: the window it needs, shadow room included.
 #[richos_command::command]
-pub fn meeting_panel_laid_out(app: AppHandle, w: f64, h: f64, #[allow(unused_variables)] aside: bool) {
+pub fn meeting_panel_laid_out(app: AppHandle, w: f64, h: f64, aside: bool) {
     if let Ok(m) = meetings(&app) {
         m.laid_out(w, h);
+        m.set_level(aside && w > 0.0 && h > 0.0);
     }
 }
 
@@ -663,6 +784,15 @@ mod tests {
         let corpus = Path::new("/c");
         assert_eq!(meeting_zone(corpus, Some("acme")), PathBuf::from("/c/companies/acme/evidence/meetings"));
         assert_eq!(meeting_zone(corpus, None), PathBuf::from("/c/ceo/evidence/unfiled/meetings"));
+    }
+
+    #[test]
+    fn the_prompt_names_the_app_as_a_person_does() {
+        assert_eq!(friendly_app("zoom.us"), "Zoom");
+        assert_eq!(friendly_app("Microsoft Teams (work or school)"), "Microsoft Teams");
+        assert_eq!(friendly_app("Google Chrome"), "Google Chrome");
+        assert_eq!(friendly_app("com.google.Chrome"), "Google Chrome");
+        assert_eq!(friendly_app("Webex"), "Webex");
     }
 
     #[test]

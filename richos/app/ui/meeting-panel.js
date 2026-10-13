@@ -15,10 +15,13 @@
 //             seconds and opens while pointed at or reached with Tab.
 //   problem   a sentence, a reason and its actions (permission, nothing recorded), beside the call.
 //
-// THE VOICE BAR'S LEVEL IS AT REST. The design's level "follows the voices on the call"; in the
-// app that would mean reading the call's audio while the CEO has declined to record it, and the PRD
-// says a declined prompt captures nothing. Raised as a question; until it is answered the level
-// column stands still at its resting height (the round's own 6%).
+// THE VOICE BAR'S LEVEL follows the call's sound (the CEO, 2026-10-13, answering
+// esc-20261013T090538Z-8defdf42: "move with the call's sound as designed"). Rust reads it live
+// through the system-audio tap (`richos-companion level`), only while the bar is up and only once a
+// capture has shown he granted that access; nothing is recorded or kept. Its `meeting-level` events
+// (rms, about 20 a second) drive the round's own motion: a quick attack and a slower release for
+// the gold level, a slower glow behind it. Before the grant no event comes and the bar rests at the
+// round's resting height (6%).
 "use strict";
 
 window.RichMeetingPanel = (function () {
@@ -104,6 +107,29 @@ window.RichMeetingPanel = (function () {
   fl.addEventListener("focusout", function (e) { if (!fl.contains(e.relatedTarget) && !fl.matches(":hover")) armFold(5000); });
 
   // ---- the voice bar ----
+  // ---- the bar's level: the call's sound, smoothed as round 25.1's `vbStep` smooths it ----
+  var meter = { want: 0, lvl: 0, ghost: 0, raf: 0 };
+  /// rms (0..1, linear) to the column's 0..1: -50 dBFS and below rests, -10 dBFS fills it.
+  function levelOf(rms) {
+    if (!(rms > 0)) return 0;
+    var db = 20 * Math.log10(rms);
+    return Math.max(0, Math.min(1, (db + 50) / 40));
+  }
+  function meterStep() {
+    var lvlEl = fl.querySelector(".fl-vb-lvl"), ghostEl = fl.querySelector(".fl-vb-ghost");
+    if (!aside || !lvlEl) { meter.raf = 0; meter.lvl = meter.ghost = meter.want = 0; return; }
+    meter.lvl += (meter.want - meter.lvl) * (meter.want > meter.lvl ? 0.38 : 0.11);
+    meter.ghost += (Math.max(meter.want, meter.lvl) - meter.ghost) * (meter.want > meter.ghost ? 0.22 : 0.045);
+    lvlEl.style.height = (6 + meter.lvl * 94).toFixed(1) + "%";
+    ghostEl.style.height = (6 + meter.ghost * 94).toFixed(1) + "%";
+    meter.raf = requestAnimationFrame(meterStep);
+  }
+  function level(payload) {
+    if (!aside || !payload) return;
+    meter.want = levelOf(Number(payload.rms));
+    if (!meter.raf) meter.raf = requestAnimationFrame(meterStep);
+  }
+
   function putAside() {
     if (fl.hidden || aside || state.view !== "prompt" && state.view !== "problem") return;
     var r = fl.getBoundingClientRect();
@@ -183,7 +209,8 @@ window.RichMeetingPanel = (function () {
 
   if (tauri && tauri.event) {
     tauri.event.listen("meeting-panel", function (e) { render(e.payload); });
+    tauri.event.listen("meeting-level", function (e) { level(e.payload); });
     invoke("meeting_panel_state").then(function (s) { if (s) render(s); });
   }
-  return { render: render, putAside: putAside, bringBack: bringBack };
+  return { render: render, putAside: putAside, bringBack: bringBack, levelOf: levelOf };
 })();

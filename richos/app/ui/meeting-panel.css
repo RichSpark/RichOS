@@ -60,6 +60,11 @@ body { font-family: var(--font); }
 /* the hairline sweeps along the foot, turns around and sweeps back, for as long as the prompt waits */
 .fl-life{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--line-soft)}
 .fl-life i{display:block;height:100%;width:100%;background:var(--gold);transform-origin:left center;animation:fllife 15s linear infinite alternate}
+/* LIGHT THEME TRACK, 8% ink instead of the round's --line-soft (12%): the gold measured 2.97:1
+   against its own 12% track (tests/meeting-panel.js, computed), under the 3:1 floor for an
+   indicator; the round audited the gold only against the bare surface (3.60:1). At 8% the gold is
+   3.18:1 against the track and the track still shows (1.13:1 against the surface; decorative). */
+:root[data-theme="light"] #fl .fl-life{background:rgba(60,70,95,.08)}
 @keyframes fllife{to{transform:scaleX(0)}}
 
 /* NOT THIS ONE puts the prompt aside, not away: the voice bar, 8px wide, the card's height */
