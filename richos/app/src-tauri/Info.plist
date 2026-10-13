@@ -30,5 +30,12 @@
   <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>So you can talk instead of typing. I listen only after you tap F1 or press the talk button.</string>
+    <!-- System Audio Recording for meeting notes (Granola PRD V4: "Add the installed system-audio
+         permission path"; Apple's Core Audio tap guide requires this key). The sentence is the
+         one the CEO's chosen design draws in the Mac's dialog (richos-hq round 25 / 25.1, `SYS`),
+         word for word. The capture companion runs as this app's child, so macOS attributes its
+         tap and its microphone to RichOS and shows these strings. -->
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>The other side of your calls is system audio. RichOS captures it only while a meeting is being recorded.</string>
   </dict>
 </plist>

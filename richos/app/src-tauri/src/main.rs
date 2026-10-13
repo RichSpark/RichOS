@@ -153,6 +153,10 @@ mod emission_trace;
 mod dictation;
 #[cfg(target_os = "macos")]
 mod dictation_app;
+// Meeting notes (Granola PRD V4): the watcher, the floating panel and the capture, around
+// `richos_core::meeting`'s one prompt/capture state. macOS only, like `dictation` (its windows).
+#[cfg(target_os = "macos")]
+mod meetings;
 
 /// The live UI sink: forwards each spine turn event to the webview as a Tauri event.
 /// This is the ONLY place spine events become UI events — clean output is guaranteed by
@@ -3698,6 +3702,10 @@ fn main() {
             // one by itself once it can go, from this launch on.
             app.manage(bug_report::BugReports::for_app(&attachments_home, &app.package_info().version.to_string()));
             bug_report::spawn_retry(app.handle().clone());
+            // MEETING NOTES (Granola PRD V4): the microphone watcher, the prompt and the capture.
+            // After AppState exists: a meeting's company is read from the active conversation.
+            #[cfg(target_os = "macos")]
+            meetings::start(app.handle());
             // DICTATION (plan slice 1): when dictation.json says on, the tool starts as this
             // app's child, on a thread of its own so first paint never waits for it.
             #[cfg(target_os = "macos")]
@@ -4052,7 +4060,15 @@ fn main() {
             bug_report::bug_report_open_issue,
             // --- "Let Codex review your team's work" (round 20.2, ruling §114) — appended ---
             codex_reviews_status,
-            codex_reviews_set
+            codex_reviews_set,
+            // --- Meeting notes (Granola PRD V4) — appended ---
+            meetings::meeting_panel_state,
+            meetings::meeting_panel_laid_out,
+            meetings::meeting_panel_drag,
+            meetings::meeting_answer,
+            meetings::meeting_start_or_stop,
+            meetings::meeting_set_paused,
+            meetings::meeting_state
         ])
         .build(context)
         .expect("error while building RichOS")
