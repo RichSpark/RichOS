@@ -249,6 +249,27 @@ impl TurnAssembler {
     }
 }
 
+/// **Is Rich audible, in the sense the capture path's taint rule needs?** His answer's window is
+/// open AND at least one sample of that answer has reached the device.
+///
+/// The window (`controller::AudibleWindow`) opens the moment a sentence is OWED, before `say` has
+/// produced a sample, which is right for the gaps between sentences of an answer he is already
+/// hearing. Before the FIRST sample it is wrong: nothing of Rich is in the room, so speech that
+/// begins then is the CEO's, and calling it Rich's made it tainted, kept it from claiming the floor,
+/// and let the sentence in synthesis play over him (review rv-20261013T173416Z, finding 1: he
+/// resumed 128 ms into a 336 ms synthesis and three words were discarded).
+pub fn rich_audible(window_open: bool, answer_sounded: bool) -> bool {
+    window_open && answer_sounded
+}
+
+/// **May a sentence Rich has finished synthesizing be played now?** Not while the CEO has the
+/// floor. The gate in front of synthesis cannot see speech that starts DURING synthesis, so the
+/// speaker asks again here, after it, and waits; a superseded sentence is then dropped by its
+/// generation.
+pub fn may_sound(his_floor: bool) -> bool {
+    !his_floor
+}
+
 /// **Rich's sentences, held while the CEO has the floor.** See the module documentation.
 ///
 /// Generic over what a sentence is, so the controller can keep its own message type in it and

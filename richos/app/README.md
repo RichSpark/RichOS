@@ -691,13 +691,14 @@ richos/app/
                              (queued OR owed OR within the measured device hold, taint re-evaluated
                              every frame) admits none of it; the CEO after the answer and tap-to-stop
                              mid-answer are still admitted (positive controls).
-    tests/turn_on_the_ceos_rig.rs 4 tests: a sentence with his measured 1.406 s pause in it, on
+    tests/turn_on_the_ceos_rig.rs 5 tests: a sentence with his measured 1.406 s pause in it, on
                               his room at his -18.1 dBFS (a synthetic voice, and his own private
                               near-end recording), is ONE turn handed over 2.010 s after his
                               last speech; the old rule made two, the first inside the pause.
                               And the floor: an answer arriving while he has gone on after a
                               longer pause is held, superseded, and never said; and a stretch
-                              cut at the 30.000 s window is not him stopping
+                              cut at the 30.000 s window is not him stopping; and speech he
+                              resumes while Rich's answer is in synthesis is his, and Rich waits
     tests/echo_path_replay.rs  the CEO's OWN echo path, recorded once and replayed with no
                               device: Mac mini speakers out, Elgato Wave:3 in, the path every
                               synthetic rig here fails to model. Pins that the canceller does
@@ -1233,7 +1234,7 @@ cargo test -p richos-core                       # 2013 tests + 5 doc-tests (2009
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 379 tests (4 live-device tests ignored without a device)
+cargo test -p richos-voice                      # 380 tests (4 live-device tests ignored without a device)
 #     …of which 325 RUN here and 4 report `ignored, LIVE AUDIO: …`, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test

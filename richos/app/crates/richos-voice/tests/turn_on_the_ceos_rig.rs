@@ -30,10 +30,10 @@
 //! No sound is played anywhere. Everything here is samples in memory (CEO §53).
 
 use richos_voice::aec::EchoCanceller;
-use richos_voice::controller::{CapMsg, CaptureBrain};
+use richos_voice::controller::{AudibleWindow, CapMsg, CaptureBrain};
 use richos_voice::endpoint::{EndReason, SILENCE_HANGOVER_FRAMES, SPEECH_ONSET_FRAMES};
 use richos_voice::private_fixtures;
-use richos_voice::turn::{end_of_turn_secs, AnswerGate, Turn, TurnAssembler, END_OF_TURN_FRAMES};
+use richos_voice::turn::{end_of_turn_secs, may_sound, rich_audible, AnswerGate, Turn, TurnAssembler, END_OF_TURN_FRAMES};
 use richos_voice::vad::{frames_to_secs, SAMPLE_RATE, VAD_FRAME_SAMPLES};
 use richos_voice::wav;
 use std::path::{Path, PathBuf};
@@ -438,4 +438,145 @@ fn a_cut_at_the_thirty_second_window_is_not_his_turn_ending() {
     // POSITIVE CONTROL: the long stretch really was cut at the window, not ended by silence.
     assert_eq!(r.cuts, 1, "the long stretch was not cut at the 30.000 s window; this replay shows nothing");
     assert_one_turn_after_he_is_done(&r, b + after.len(), "a 30 s stretch cut at the window");
+}
+
+// ------------------------------------------------------------------------------------------------
+// HE GOES ON WHILE RICH'S FIRST SENTENCE IS STILL BEING SYNTHESIZED (review rv-20261013T173416Z, 1).
+// ------------------------------------------------------------------------------------------------
+
+/// `say` producing one sentence, as the review modeled it: 21 frames = 0.336 s.
+const SYNTH_FRAMES: usize = 21;
+/// One synthesized sentence, once it plays: 2.000 s.
+const SENTENCE_FRAMES: usize = 125;
+
+/// What the synthesis replay saw.
+#[derive(Debug, Default)]
+struct SynthReplay {
+    turns: Vec<(usize, Turn)>,
+    /// Frames at which a sentence reached the device, and which sentence.
+    sounded: Vec<(usize, String)>,
+    tainted_starts: usize,
+    superseded: usize,
+}
+
+/// THE SHIPPED RULES with synthesis in the loop: `CaptureBrain` hears the microphone with the
+/// `speaking` flag the supervisor would publish (`AudibleWindow` over queued/owed, gated by
+/// `rich_audible`), sentences pass the `AnswerGate`, spend `SYNTH_FRAMES` in synthesis, and are
+/// played only if `may_sound`; a superseded sentence is dropped by its generation. The first turn's
+/// first sentence is offered at `first_offer`; every later sentence `MODEL_FRAMES` after its turn.
+fn replay_with_synthesis(mic: &[f32], first_offer: usize) -> SynthReplay {
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let mut gate: AnswerGate<(u64, String)> = AnswerGate::new();
+    let mut window = AudibleWindow::new();
+    let mut r = SynthReplay::default();
+    let mut offers: Vec<(usize, String)> = Vec::new();
+    let mut synthesis: Vec<(usize, u64, String)> = Vec::new(); // (ready frame, generation, text)
+    let mut playing_until = 0usize;
+    let mut sounded = false;
+    let mut speaking = false;
+    let mut generation = 0u64;
+    let mut turn_ends: Vec<usize> = Vec::new();
+    let mut fragments = 0;
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+    for (b, frame) in mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        ring.push(&silence);
+        for m in brain.push_frame(frame, speaking, false) {
+            match m {
+                CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+                CapMsg::Started { tainted: true, .. } => {
+                    r.tainted_starts += 1;
+                    turns.utterance_started();
+                }
+                CapMsg::Utterance(u) => {
+                    fragments += 1;
+                    turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                    let starts = turns.recognized(Some((format!("fragment {fragments}"), false)));
+                    let outstanding = turn_ends.iter().any(|&end| b < end) || gate.held() > 0 || !synthesis.is_empty();
+                    if starts && outstanding {
+                        gate.supersede();
+                        generation += 1;
+                        r.superseded += 1;
+                    }
+                }
+                CapMsg::Discarded { .. } => turns.utterance_discarded(),
+                CapMsg::TurnQuiet => turns.quiet(),
+                _ => {}
+            }
+        }
+        if let Some(t) = turns.take_turn() {
+            let k = r.turns.len() + 1;
+            let at = if k == 1 { first_offer } else { b + MODEL_FRAMES };
+            assert!(at > b, "the first answer was offered before its turn was handed over");
+            r.turns.push((b, t));
+            gate.next_turn();
+            offers.push((at, format!("answer {k} sentence 1")));
+            turn_ends.push(at + 60);
+        }
+        let floor = turns.has_floor();
+        for (_, s) in offers.iter().filter(|(at, _)| *at == b) {
+            if let Some((g, s)) = gate.offer((generation, s.clone()), floor) {
+                synthesis.push((b + SYNTH_FRAMES, g, s));
+            }
+        }
+        for (g, s) in gate.release(floor) {
+            synthesis.push((b + SYNTH_FRAMES, g, s));
+        }
+        // The speaker: drop what was superseded, wait while the floor is his, else play.
+        synthesis.retain(|(_, g, _)| *g == generation);
+        if let Some(pos) = synthesis.iter().position(|(ready, _, _)| *ready <= b) {
+            if may_sound(floor) && b >= playing_until {
+                let (_, _, s) = synthesis.remove(pos);
+                r.sounded.push((b, s));
+                sounded = true;
+                playing_until = b + SENTENCE_FRAMES;
+            }
+        }
+        // The supervisor's `speaking` for the next frame.
+        window.observe(b < playing_until, !synthesis.is_empty(), 0.032, (b * 16) as u64);
+        if !window.is_open() {
+            sounded = false;
+        }
+        speaking = rich_audible(window.is_open(), sounded);
+    }
+    r
+}
+
+/// He thinks for longer than the window, so his first turn is handed over; Rich's first sentence
+/// goes into synthesis; he goes on 128 ms into it with three 0.224 s words and 0.224 s gaps (the
+/// review's case). His words must be his: not tainted, holding the floor, superseding the answer
+/// in synthesis, which is never played. Rich's only sound is the answer to his last turn, after he
+/// is done.
+#[test]
+fn speech_that_resumes_during_synthesis_is_his_and_rich_waits() {
+    let lead = 1.0;
+    let first = synthetic_voice(1.904, 1);
+    let word = synthetic_voice(0.224, 6);
+    let total = lead + 1.904 + LONG_PAUSE_SECS + 1.120 + 6.0;
+    let mut mic = room(total);
+    let a = secs_to_samples(lead);
+    superimpose(&mut mic, a, &first);
+    let resume = a + first.len() + secs_to_samples(LONG_PAUSE_SECS);
+    for i in 0..3 {
+        superimpose(&mut mic, resume + i * secs_to_samples(0.448), &word);
+    }
+    let last_word_end = resume + 2 * secs_to_samples(0.448) + word.len();
+    // The first sentence is offered 8 frames (0.128 s) + its synthesis before he resumes, so he
+    // resumes 128 ms into its synthesis.
+    let first_offer = resume / VAD_FRAME_SAMPLES - 8;
+    let r = replay_with_synthesis(&mic, first_offer);
+    println!("[replay] resumed during synthesis: {r:?}");
+    let secs = |frame: usize| ((frame + 1) * VAD_FRAME_SAMPLES) as f32 / SAMPLE_RATE as f32;
+
+    assert_eq!(r.tainted_starts, 0, "his resumed words were taken for Rich's echo");
+    let texts: Vec<&str> = r.turns.iter().map(|(_, t)| t.text.as_str()).collect();
+    assert_eq!(texts, vec!["fragment 1", "fragment 2"], "his resumed words did not become his turn");
+    assert_eq!(r.superseded, 1, "the answer in synthesis was not superseded by his words");
+    let said: Vec<&str> = r.sounded.iter().map(|(_, s)| s.as_str()).collect();
+    assert_eq!(said, vec!["answer 2 sentence 1"], "Rich said: {said:?}");
+    let first_sound = secs(r.sounded[0].0);
+    let after = first_sound - last_word_end as f32 / SAMPLE_RATE as f32;
+    println!("[measured] Rich's first sound {after:.3} s after the CEO's last word");
+    assert!(after >= end_of_turn_secs(), "Rich sounded {after:.3} s after his last word");
 }

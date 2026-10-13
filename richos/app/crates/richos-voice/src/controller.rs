@@ -44,7 +44,7 @@ use crate::playout::Playout;
 use crate::state::{VoiceState, VoiceStateMachine};
 use crate::stt::{self, Recognizer};
 use crate::tts::{MacSay, SpeechSynth};
-use crate::turn::{AnswerGate, TurnAssembler};
+use crate::turn::{may_sound, rich_audible, AnswerGate, TurnAssembler};
 use crate::vad::{frames_to_secs, Vad};
 use crate::voiced::VoiceEvidence;
 use std::path::PathBuf;
@@ -74,6 +74,11 @@ const TICK: Duration = Duration::from_millis(25);
 /// was audible anywhere in that window, his voice is in the file.
 const ECHO_LOOKBACK_FRAMES: u32 =
     crate::endpoint::PRE_ROLL_FRAMES as u32 + crate::endpoint::SPEECH_ONSET_FRAMES;
+
+/// How often a synthesized sentence held for the floor asks again. Well under one 16.000 ms
+/// frame, so it plays within a frame of his giving the floor back; it is a poll interval, not a
+/// verdict.
+const FLOOR_POLL: Duration = Duration::from_millis(10);
 
 /// Emit a level update at most this often — a 62.5 Hz meter is wasted work in a webview.
 const LEVEL_EMIT_EVERY: Duration = Duration::from_millis(100);
@@ -884,6 +889,10 @@ struct Shared {
     /// supervisor the moment it changes. [`VoiceController::send_speak`] reads it to hold Rich's
     /// sentences instead of saying them over him.
     his_floor: AtomicBool,
+    /// A sample of the current answer has reached the device. Set by the speaker thread at the
+    /// queue, cleared by the supervisor when the answer's window closes. Until it is set nothing of
+    /// Rich is in the room, so [`crate::turn::rich_audible`] is false however much is owed.
+    answer_sounded: AtomicBool,
     running: AtomicBool,
 }
 
@@ -1611,6 +1620,7 @@ impl VoiceController {
             level: AtomicU32::new(0),
             speaking: AtomicBool::new(false),
             his_floor: AtomicBool::new(false),
+            answer_sounded: AtomicBool::new(false),
             pending_speech: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             no_audio: AtomicBool::new(false),
@@ -1777,10 +1787,30 @@ impl VoiceController {
                     }
                     match synth.synthesize(&msg.text, playout.device_rate, &scratch) {
                         Ok(speech) => {
-                            // Synthesis took real time; check again before making a sound.
+                            // **THE FLOOR, ASKED AGAIN AFTER SYNTHESIS.** He may have started talking
+                            // while `say` was working; the gate in front of synthesis could not see
+                            // that. Wait while the floor is his. If his words supersede this answer
+                            // the generation moves and the check below drops it; if he gives the
+                            // floor back without words, it plays unchanged.
+                            let mut held = false;
+                            while !may_sound(shared.his_floor.load(Ordering::Relaxed))
+                                && msg.generation == shared.generation.load(Ordering::Relaxed)
+                                && shared.running.load(Ordering::Relaxed)
+                            {
+                                if !held {
+                                    held = true;
+                                    eprintln!(
+                                        "[richos-voice] {} answer HELD after synthesis — he started talking while it was being prepared",
+                                        wall_clock_utc()
+                                    );
+                                }
+                                std::thread::sleep(FLOOR_POLL);
+                            }
+                            // Synthesis (and any wait) took real time; check again before a sound.
                             if msg.generation != shared.generation.load(Ordering::Relaxed) {
                                 continue;
                             }
+                            shared.answer_sounded.store(true, Ordering::Relaxed);
                             playout.queue(&speech.samples);
                         }
                         Err(e) => {
@@ -2688,7 +2718,11 @@ fn supervise(
         //     or sentences held for him) supersede that answer: it was to a thought he had not
         //     finished. It stays on screen; the rest of it is not spoken.
         if turns.collect() {
-            let outstanding = machine.lock().map(|m| m.turn_active()).unwrap_or(false) || floor.held() > 0;
+            // Outstanding: the turn is still running, sentences are held for him in the gate, or a
+            // sentence is still with the speaker (in synthesis, or synthesized and waiting for him).
+            let outstanding = machine.lock().map(|m| m.turn_active()).unwrap_or(false)
+                || floor.held() > 0
+                || shared.pending_speech.load(Ordering::Relaxed) > 0;
             if outstanding {
                 shared.generation.fetch_add(1, Ordering::Relaxed);
                 let cut = playout.stop_now();
@@ -2719,7 +2753,13 @@ fn supervise(
         let hold = audible_hold_secs(playout.audible_tail_secs(), input_latency.secs());
         let now_ms = started_at.elapsed().as_millis() as u64;
         let (answer_edge, chunk_edge) = audible.observe(queued, owed > 0, hold, now_ms);
-        let playing = audible.is_open();
+        if !audible.is_open() {
+            // The answer is over: the next one has made no sound until its first sample.
+            shared.answer_sounded.store(false, Ordering::Relaxed);
+        }
+        // Audible only once a sample of this answer has reached the device: a sentence still in
+        // synthesis has made no sound, and speech that starts then is his (`turn::rich_audible`).
+        let playing = rich_audible(audible.is_open(), shared.answer_sounded.load(Ordering::Relaxed));
         shared.speaking.store(playing, Ordering::Relaxed);
 
         // **THE BOUNDARIES, WITH A WALL CLOCK.** Ray's candidate-.5 walk could not say from the
