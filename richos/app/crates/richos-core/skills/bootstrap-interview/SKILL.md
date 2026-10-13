@@ -143,10 +143,13 @@ Then tell him three things, in plain words, in this order:
    give the new teammate a first name that is not already on the team or in that list. Put the
    proposed team in the notes too, so it survives the conversation.
 
-**When he says go, hire them at once.** Write it down with the assignment register as one
-task, in his terms: "Hire these AI teammates onto my team:" followed by every name and job
-title from your list, and for each new one a line on what they will do for this company. Say
-the words the register hands you and stop. The team is then hired the way this install hires
+**When he says go, hire them at once.** Write it down with the assignment register as a task
+in his terms: "Hire these AI teammates onto my team:" followed by the names and job titles
+from your list and nothing else, such as "Hire these AI teammates onto my team: Nora
+(Marketing Lead), Mark (Backend Engineer)". The register keeps one line of at most 160
+characters and that line is all the hiring gets, so if the list would run past it, write it
+down as two or more such tasks in the same turn. Say the words the register hands you and
+stop. The team is then hired the way this install hires
 (Dean fits a ready-made teammate or writes a new one), and he is told who joined when that is
 done. If he changes the list first, change it and hire on his go. If he says not now, nobody
 is hired and the list stays in the notes.

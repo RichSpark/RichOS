@@ -614,7 +614,20 @@ mod tests {
             assert!(s.contains(&shown), "{name} is on every team and in his sentence");
         }
         assert!(s.contains("When he says go, hire them at once."));
-        assert!(s.contains("Write it down with the assignment register as one task"));
+        assert!(s.contains("Write it down with the assignment register as a task"));
+        // The hiring task is a TITLE, and the register keeps a title as one line of at most 160
+        // characters (`assignment::sanitize_title`). The walk of 2026-10-13 had Rich write each
+        // hire with a line about them: the title was cut after the first teammate ("…; and…")
+        // and the back end had to ask him who the second one was. So the skill asks for names
+        // and job titles only, and splits a longer list; this ties its number to the code's.
+        assert!(s.contains("names and job titles from your list and nothing else"));
+        assert!(s.contains("one line of at most 160 characters"));
+        let at_cap = "a".repeat(160);
+        assert_eq!(crate::assignment::sanitize_title(&at_cap).unwrap(), at_cap, "160 characters are kept whole");
+        assert!(crate::assignment::sanitize_title(&format!("{} b", "a".repeat(159))).unwrap().ends_with('…'),
+                "161 characters are cut, so the skill's 160 is the register's own limit");
+        let example = "Hire these AI teammates onto my team: Nora (Marketing Lead), Mark (Backend Engineer)";
+        assert!(s.contains(example) && example.chars().count() <= 160, "the skill's own example fits the line");
         assert!(s.contains("Name someone as hired only after the hiring has reported them saved."));
         assert!(!s.contains("cannot hire"), "the old line is gone");
     }
