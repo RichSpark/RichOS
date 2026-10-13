@@ -191,6 +191,18 @@ def delegate_verdict(record, new_rows, name):
 
 
 class HireWalk(command_walk.CommandWalk):
+    def type_into(self, text, *selector, app=None):
+        """One retry when the guest's accessibility read hits its own deadline (exit 124,
+        `guest_deadline`): walk 1 of 2026-10-13 stopped there with the host at 100% CPU. Typing
+        with --replace sets the field's whole value, so a second try cannot type it twice."""
+        try:
+            return super().type_into(text, *selector, app=app)
+        except StepFailed as exc:
+            if 'guest_deadline' not in str(exc):
+                raise
+            time.sleep(5)
+            return super().type_into(text, *selector, app=app)
+
     def ledger(self):
         text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
         rows = []
