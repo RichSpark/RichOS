@@ -1764,6 +1764,11 @@ function renderFirstRun() {
 // ---------------------------------------------------------------------------------------
 
 const DICTATION_OFFER_VOICE = "Voice is ready. Press the round button beside the message box and just talk to me.";
+// The CEO's copy, 2026-10-13 (richos-hq docs/ceo-input/2026-10-13_1, turn-on-dictation-paragraph.png),
+// word for word after the sentence above. "[F1]" in it is the key cap, drawn with the key he has now.
+const DICTATION_OFFER_WHAT = "If you turn on dictation, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)";
+const DICTATION_OFFER_HOW_BEFORE = "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press ";
+const DICTATION_OFFER_HOW_AFTER = " (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊";
 const DICTATION_OFFER_NOT_NOW = "Okay. It's in Settings, under Dictation, whenever you want it.";
 const DICTATION_OFFER_LATER = "It's in Settings, under Dictation.";
 
@@ -1828,15 +1833,14 @@ function renderDictationOffer() {
   first.textContent = DICTATION_OFFER_VOICE;
   const second = document.createElement("p");
   second.className = "tl-prose";
+  second.textContent = DICTATION_OFFER_WHAT;
+  const third = document.createElement("p");
+  third.className = "tl-prose";
   const key = document.createElement("kbd");
   key.className = "dictation-offer-key";
   key.textContent = dictationOffer.key;
-  second.append(
-    "I can also type for you in any other app on your Mac, like Mail, Slack or your browser. Tap ",
-    key,
-    ", say what you want written, then tap it again. Your words appear where your cursor is."
-  );
-  art.append(first, second);
+  third.append(DICTATION_OFFER_HOW_BEFORE, key, DICTATION_OFFER_HOW_AFTER);
+  art.append(first, second, third);
   if (dictationOffer.phase === "open") {
     const acts = document.createElement("div");
     acts.className = "dictation-offer-actions";

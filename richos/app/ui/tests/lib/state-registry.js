@@ -1748,14 +1748,20 @@ module.exports = [
       "button beside the message box exists and works. The control it names is that button.",
   },
   {
-    s: "I can also type for you in any other app on your Mac, like Mail, Slack or your browser. Tap",
-    c: "FRAGMENT",
-    why: "The offer's second paragraph, up to the key's name (`F1`, a key cap). ACTIONABLE as a whole through Turn on dictation beside it.",
+    s: "If you turn on dictation, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)",
+    c: "INFORMATIONAL",
+    fixture: null,
+    why: "The CEO's copy (2026-10-13), the offer's second paragraph: what dictation gives him. Turn on dictation is beside it.",
   },
   {
-    s: ", say what you want written, then tap it again. Your words appear where your cursor is.",
+    s: "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press",
     c: "FRAGMENT",
-    why: "The offer's second paragraph after the key's name.",
+    why: "The CEO's copy (2026-10-13), the offer's third paragraph, up to the key's name (`F1`, a key cap). ACTIONABLE as a whole through Turn on dictation beside it.",
+  },
+  {
+    s: "(or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊",
+    c: "FRAGMENT",
+    why: "The CEO's copy (2026-10-13), the offer's third paragraph after the key's name.",
   },
   {s: "Turn on dictation", c: "CONTROL", why: "The offer's first answer: hands over to the Dictation sheet's turn-on (slice 2)."},
   {

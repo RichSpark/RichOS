@@ -1881,7 +1881,10 @@ async function main() {
     await page.waitForSelector("#dictation-offer");
     const said = await page.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.replace(/\s+/g, " ").trim()));
     assertEqual(said[0], "Voice is ready. Press the round button beside the message box and just talk to me.", "the drawn first paragraph");
-    assertEqual(said[1], "I can also type for you in any other app on your Mac, like Mail, Slack or your browser. Tap F1, say what you want written, then tap it again. Your words appear where your cursor is.", "the drawn second paragraph, the key filled in");
+    // The CEO's copy, 2026-10-13 (turn-on-dictation-paragraph.png), word for word; [F1] is the key.
+    assertEqual(said[1], "If you turn on dictation, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)", "his first new paragraph");
+    assertEqual(said[2], "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press F1 (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊", "his second new paragraph, the key filled in");
+    assertEqual(said.length, 3, "his two paragraphs replace the old one");
     // NO BLANK LINE UNDER "Rich" (seen on the guest, 2026-10-08): the first sentence sits where
     // the greeting's does, right under the name.
     assertEqual(
@@ -1908,7 +1911,7 @@ async function main() {
     await on.close();
     const later = await finish({ dictationKey: 5, dictationView: { mic: "denied" } });
     await later.waitForSelector("#dictation-offer-yes");
-    assert((await later.textContent("#dictation-offer")).includes("Tap F5,"), "the chosen key is named");
+    assert((await later.textContent("#dictation-offer")).includes("press F5 (or another key"), "the chosen key is named");
     await later.click("#dictation-offer-yes");
     await later.waitForSelector("#dictation-offer-after");
     assertEqual((await later.textContent("#dictation-offer-after")).trim(), "It's in Settings, under Dictation.", "not on");
