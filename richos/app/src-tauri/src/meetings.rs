@@ -228,6 +228,11 @@ pub fn start(app: &AppHandle) {
             clock.apply(actions);
         })
         .ok();
+    // Meetings recorded before a quit, an update or a crash whose notes were never said: finished
+    // now, one at a time, on a thread of their own (handover review
+    // rv-20261013T141401Z-390d6bea-2e23 #2).
+    let resume = meetings.clone();
+    std::thread::Builder::new().name("meeting-resume".into()).spawn(move || resume.resume_unfinished()).ok();
     // The calendar: one pass at launch and every five minutes, one at a time (this one thread).
     let calendar = meetings.clone();
     std::thread::Builder::new()
@@ -807,6 +812,33 @@ impl Meetings {
             .ok();
     }
 
+    /// Every meeting a previous launch recorded and never finished ([`meeting_notes::unfinished_sessions`]),
+    /// oldest first: its notes are prepared from where they stopped, exactly as at the call's end.
+    fn resume_unfinished(&self) {
+        for dir in meeting_notes::unfinished_sessions(&self.corpus_root()) {
+            let Some(facts) = meeting_notes::read_facts(&dir) else {
+                eprintln!("[richos] meeting notes: {} has an unreadable meeting.json; left as it is", dir.display());
+                continue;
+            };
+            let Some(zone) = dir.parent().map(Path::to_path_buf) else { continue };
+            eprintln!("[richos] meeting notes: finishing the notes a previous launch left unfinished ({})", dir.display());
+            wait_for_orphaned_transcription(&dir);
+            self.prepare_notes(&dir, &zone, facts);
+        }
+    }
+
+    /// A failure said through Rich finishes the session: the next launch does not say it again.
+    fn failure_said(&self, dir: &Path, said: Result<(), String>) {
+        match said {
+            Ok(()) => {
+                let mut state = meeting_notes::read_state(dir);
+                state.failure_said = true;
+                logged("recording that the failure was said", meeting_notes::write_state(dir, &state));
+            }
+            Err(e) => eprintln!("[richos] meeting notes: saying the failure failed: {e}"),
+        }
+    }
+
     fn set_processing(&self, what: Option<&str>) {
         self.inner.lock().unwrap().processing = what.map(str::to_string);
         self.publish_state();
@@ -819,7 +851,7 @@ impl Meetings {
         if !dir.join(meeting_notes::TRANSCRIPT_FILE).is_file() {
             if let Err(why) = self.transcribe(dir, zone, &facts) {
                 eprintln!("[richos] meeting notes: transcription failed: {why}");
-                logged("saying the transcript failed", self.say(&facts, &meeting_notes::transcript_failed_text(&why), &[]));
+                self.failure_said(dir, self.say(&facts, &meeting_notes::transcript_failed_text(&why), &[]));
                 self.set_processing(Some("transcript-failed"));
                 return;
             }
@@ -836,7 +868,7 @@ impl Meetings {
         let transcript = match std::fs::read_to_string(dir.join(meeting_notes::TRANSCRIPT_FILE)) {
             Ok(t) => t,
             Err(e) => {
-                logged("saying the transcript failed", self.say(&facts, &meeting_notes::transcript_failed_text(&format!("the transcript could not be read: {e}")), &[]));
+                self.failure_said(dir, self.say(&facts, &meeting_notes::transcript_failed_text(&format!("the transcript could not be read: {e}")), &[]));
                 self.set_processing(Some("transcript-failed"));
                 return;
             }
@@ -881,7 +913,7 @@ impl Meetings {
                 }
                 NextStep::GiveUp => {
                     let why = state.last_error.clone().unwrap_or_default();
-                    logged("saying the notes failed", self.say(&facts, &meeting_notes::notes_failed_text(&why), &[]));
+                    self.failure_said(dir, self.say(&facts, &meeting_notes::notes_failed_text(&why), &[]));
                     self.set_processing(Some("notes-failed"));
                     return;
                 }
@@ -919,23 +951,29 @@ impl Meetings {
             None => command.env_remove("RICHOS_ACTIVE_COMPANY"),
         };
         let mut child = command.spawn().map_err(|e| format!("the transcription service did not start: {e}"))?;
+        // Its pid beside the session: a quit or crash of the app does not end it, and the next
+        // launch must not start a second one on the same files ([`wait_for_orphaned_transcription`]).
+        let marker = dir.join(TRANSCRIBING_FILE);
+        logged("noting the transcription's pid", std::fs::write(&marker, child.id().to_string()));
         let started = std::time::Instant::now();
-        loop {
+        let result = loop {
             match child.try_wait() {
-                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) if status.success() => break Ok(()),
                 Ok(Some(status)) => {
                     let tail = std::fs::read_to_string(dir.join("pipeline.log")).unwrap_or_default();
                     let last = tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
-                    return Err(format!("the transcription ended with {status}: {last}"));
+                    break Err(format!("the transcription ended with {status}: {last}"));
                 }
                 Ok(None) if started.elapsed() < TRANSCRIBE_DEADLINE => std::thread::sleep(Duration::from_millis(500)),
                 _ => {
                     logged("stopping the transcription", child.kill());
                     logged("reaping the transcription", child.wait());
-                    return Err("the transcription took longer than an hour".into());
+                    break Err("the transcription took longer than an hour".into());
                 }
             }
-        }
+        };
+        logged("removing the transcription's pid", std::fs::remove_file(&marker));
+        result
     }
 
     /// One attempt at the brief: one tool-free call under the conversation's account (Bust a
@@ -1000,6 +1038,37 @@ pub fn service_cli() -> Option<PathBuf> {
     let engine = richos_voice::stt::delivered_runtime_bin_dir()?.parent()?.parent()?.to_path_buf();
     let p = engine.join(SERVICE_ENTRY);
     p.is_file().then_some(p)
+}
+
+/// The running transcription's pid, beside its session while it runs.
+const TRANSCRIBING_FILE: &str = "transcribing.pid";
+
+/// A transcription a previous launch started may still be running: quitting or a crash of the app
+/// does not end its child, and two runs on one session would write the same files. The next launch
+/// waits for it (at most [`TRANSCRIBE_DEADLINE`]), then goes on from what it left. It is recognized
+/// by the pid it left AND its own command line naming this session, never by a process name.
+fn wait_for_orphaned_transcription(dir: &Path) {
+    let Some(pid) = std::fs::read_to_string(dir.join(TRANSCRIBING_FILE)).ok().and_then(|s| s.trim().parse::<u32>().ok()) else {
+        return;
+    };
+    let started = std::time::Instant::now();
+    let mut waited = false;
+    while transcription_running(pid, dir) && started.elapsed() < TRANSCRIBE_DEADLINE {
+        if !waited {
+            eprintln!("[richos] meeting notes: the previous launch's transcription (pid {pid}) is still running; waiting for it");
+            waited = true;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    if waited {
+        eprintln!("[richos] meeting notes: the previous launch's transcription (pid {pid}) ended after {} s", started.elapsed().as_secs());
+    }
+}
+
+/// Process `pid` is running and is the transcription of this session (`richos-service run <dir>`).
+fn transcription_running(pid: u32, dir: &Path) -> bool {
+    let out = Command::new("/bin/ps").args(["-ww", "-p", &pid.to_string(), "-o", "command="]).stdin(Stdio::null()).stderr(Stdio::null()).output();
+    out.is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains(&*dir.to_string_lossy()))
 }
 
 /// The call-transcription model: the service's default tier ("quantized"), the batch ladder's
@@ -1211,6 +1280,29 @@ mod tests {
         let (new, current) = take_run(&mut capture, &mut draining, 20).unwrap();
         assert_eq!((new.pid, current), (20, true));
         assert!(take_run(&mut capture, &mut draining, 20).is_none());
+    }
+
+    #[test]
+    fn a_previous_launchs_transcription_is_known_by_its_pid_and_its_session() {
+        // Handover review rv-20261013T141401Z-390d6bea-2e23 #2: the next launch resumes the notes,
+        // and must wait for a transcription the killed launch left running on the same session.
+        let dir = std::env::temp_dir().join(format!("richos-orphan-{}", std::process::id()));
+        let other = std::env::temp_dir().join(format!("richos-orphan-other-{}", std::process::id()));
+        // `sh -c CMD NAME`: NAME is on its command line, as `richos-service run <session>` is.
+        let mut child = Command::new("/bin/sh").args(["-c", "sleep 30"]).arg(&dir).spawn().unwrap();
+        let pid = child.id();
+        assert!(transcription_running(pid, &dir));
+        assert!(!transcription_running(pid, &other), "another session's run is not this one");
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!transcription_running(pid, &dir), "an ended run is not waited for");
+        // No pid beside the session, or the pid of a run that has ended: it returns (a wait here
+        // would hang the test, not pass it).
+        wait_for_orphaned_transcription(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(TRANSCRIBING_FILE), pid.to_string()).unwrap();
+        wait_for_orphaned_transcription(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

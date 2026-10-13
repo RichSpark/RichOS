@@ -25,6 +25,13 @@
 //! generated again automatically; a temporary failure is retried up to [`MAX_ATTEMPTS`] times per
 //! session, and after that the failure is reported through Rich ("Your transcript is saved. I
 //! couldn't prepare the notes.") with Try again. Edits and regeneration are ordinary requests to Rich.
+//!
+//! # Never lost to a quit
+//!
+//! A session is finished once its notes, or why there are none, have been said through Rich
+//! ([`BriefState::finished`]). One the app was quit, updated or killed before finishing is found at
+//! the next launch ([`unfinished_sessions`]) and taken up where it stopped: the transcript if there
+//! is none, the brief if there is none, Rich's message if it was never said.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -203,6 +210,40 @@ pub struct BriefState {
     /// Rich's message for this brief has been raised (never raise it twice).
     #[serde(default)]
     pub delivered: bool,
+    /// Rich has said the transcript or the notes could not be prepared: the session is finished
+    /// for the app, and anything more is a request to Rich (never said twice).
+    #[serde(default)]
+    pub failure_said: bool,
+}
+
+impl BriefState {
+    /// What happened to this meeting has been said through Rich, the notes or why there are none.
+    pub fn finished(&self) -> bool {
+        self.delivered || self.failure_said
+    }
+}
+
+/// Every recorded meeting whose notes were never finished, oldest first: the recording closed (the
+/// app wrote `meeting.json`), and neither its notes nor a failure were said through Rich. The app
+/// was quit, updated or killed between capture and notes; the next launch finishes each one
+/// (handover review rv-20261013T141401Z-390d6bea-2e23 #2). Looked for in every meeting zone of the
+/// corpus ([`meeting_zone`]): each company's, and the unfiled one.
+pub fn unfinished_sessions(corpus: &Path) -> Vec<PathBuf> {
+    let mut zones = vec![meeting_zone(corpus, None)];
+    if let Ok(companies) = std::fs::read_dir(corpus.join("companies")) {
+        let mut ids: Vec<String> = companies.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        ids.sort();
+        zones.extend(ids.iter().map(|id| meeting_zone(corpus, Some(id))));
+    }
+    let mut out: Vec<PathBuf> = zones
+        .iter()
+        .filter_map(|zone| std::fs::read_dir(zone).ok())
+        .flat_map(|sessions| sessions.flatten().map(|e| e.path()))
+        .filter(|s| s.join(MEETING_FILE).is_file() && !read_state(s).finished())
+        .collect();
+    // Session folders are named by their UTC start time, so the name orders them.
+    out.sort_by_key(|s| s.file_name().map(|n| n.to_os_string()));
+    out
 }
 
 /// What to do next for a session.
@@ -377,6 +418,52 @@ mod tests {
         write_facts(&dir, &facts()).unwrap();
         assert_eq!(read_facts(&dir), Some(facts()));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_meeting_whose_notes_never_finished_is_found_at_the_next_launch() {
+        // Handover review rv-20261013T141401Z-390d6bea-2e23 #2: quitting while "Preparing your
+        // meeting notes…" lost them; nothing at launch looked for a recording left unfinished.
+        let corpus = std::env::temp_dir().join(format!("richos-notes-resume-{}", std::process::id()));
+        if corpus.exists() {
+            std::fs::remove_dir_all(&corpus).unwrap();
+        }
+        let acme = meeting_zone(&corpus, Some("acme"));
+        let unfiled = meeting_zone(&corpus, None);
+        let session = |zone: &Path, name: &str| {
+            let s = zone.join(name);
+            std::fs::create_dir_all(&s).unwrap();
+            s
+        };
+        // Closed, killed before the transcript: unfinished.
+        let a = session(&acme, "2026-10-13T10-00-00Z--system--call");
+        write_facts(&a, &facts()).unwrap();
+        // Transcribed, killed before the brief: unfinished.
+        let b = session(&acme, "2026-10-13T11-00-00Z--system--call");
+        write_facts(&b, &facts()).unwrap();
+        std::fs::write(b.join(TRANSCRIPT_FILE), "Me: hello").unwrap();
+        // Brief written, killed before Rich said it: unfinished.
+        let c = session(&unfiled, "2026-10-13T09-00-00Z--system--call");
+        write_facts(&c, &facts()).unwrap();
+        write_brief(&c, GOOD).unwrap();
+        // Delivered: finished.
+        let d = session(&acme, "2026-10-13T08-00-00Z--system--call");
+        write_facts(&d, &facts()).unwrap();
+        write_brief(&d, GOOD).unwrap();
+        write_state(&d, &BriefState { delivered: true, ..Default::default() }).unwrap();
+        // Every attempt failed and Rich said so: finished (no second message on every launch).
+        let e = session(&acme, "2026-10-13T07-00-00Z--system--call");
+        write_facts(&e, &facts()).unwrap();
+        write_state(&e, &BriefState { attempts: MAX_ATTEMPTS, failure_said: true, ..Default::default() }).unwrap();
+        // A recording that never closed (no meeting.json): not a meeting the app recorded.
+        session(&acme, "2026-10-13T12-00-00Z--system--call");
+        assert_eq!(unfinished_sessions(&corpus), vec![c.clone(), a.clone(), b.clone()], "oldest first, in every zone");
+        let mut state = read_state(&b);
+        state.failure_said = true;
+        write_state(&b, &state).unwrap();
+        assert_eq!(unfinished_sessions(&corpus), vec![c, a]);
+        assert!(unfinished_sessions(&corpus.join("nothing-here")).is_empty());
+        std::fs::remove_dir_all(&corpus).unwrap();
     }
 
     #[test]
