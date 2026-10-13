@@ -771,7 +771,14 @@ class SetupWalk(adopt_walk.Walk):
         while time.monotonic() < end and not self.present('Talk to Rich'):
             time.sleep(2)
         if self.present('Talk to Rich'):
-            self.press('Talk to Rich')
+            try:
+                self.press('Talk to Rich')
+            except StepFailed as exc:
+                # A click past ax.sh's guest deadline at 99.9% host CPU (walk of a73f7a263,
+                # 22:20Z); "Enter" is the home screen's own key for it.
+                if 'guest_deadline' not in str(exc):
+                    raise
+                guest(self.vm, "osascript -e 'tell application \"System Events\" to key code 36'")
             time.sleep(3)
         if self.shown('memory-setup-later', 'Not now'):
             self.ax('click', '--id', 'memory-setup-later')
@@ -803,6 +810,8 @@ class SetupWalk(adopt_walk.Walk):
         self.wait_boot_setup(self.log)
         time.sleep(20)
         facts['refused_threads'] = self.feature_threads()
+        self.facts['r19_restart'] = facts
+        self.save()
         self.shot('restart-refused.png')
         quit_app(self.vm)
         facts['grants_allowed'] = self.grant('kTCCServiceAccessibility')
@@ -816,8 +825,16 @@ class SetupWalk(adopt_walk.Walk):
         self.enter_desk()
         facts['allowed_listed'] = self.present('Dictation feature')
         facts['feature_thread'] = self.dictation_record().get('featureThread')
+        self.facts['r19_restart'] = facts
+        self.save()
         if facts['allowed_listed']:
-            self.press('Dictation feature')
+            # Scoped to the rail: the whole-window click ran past ax.sh's guest deadline (walk
+            # of a73f7a263, 21:55Z).
+            try:
+                self.ax('click', '--title', 'Dictation feature', '--role', 'AXButton', '--in', 'sidebar',
+                        '--first', '--contains')
+            except StepFailed as exc:
+                facts['press_error'] = str(exc)[:300]
             time.sleep(3)
         facts['feature_text'] = self.shows_text(R19_FEATURE_AX)
         # The business-questions card belongs to onboarding, never this conversation (Ray,
@@ -825,6 +842,8 @@ class SetupWalk(adopt_walk.Walk):
         facts['card_in_feature'] = (self.shows_text("I don't know your business yet.")
                                     or self.shows_text('Your business notes are started.'))
         self.shot('restart-allowed.png')
+        self.facts['r19_restart'] = facts
+        self.save()
         launched = relaunch(self.vm, environment=self.r19_env())
         self.log = launched['log']
         self.wait_boot_setup(self.log)
