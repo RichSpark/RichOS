@@ -37,6 +37,31 @@ class Verdicts(unittest.TestCase):
                         'a saved teammate he was not told about fails')
         self.assertTrue(hire_walk.hired_verdict([], [], 'Everyone joined.'), 'nobody saved fails')
 
+    def test_a_proposal_missing_a_role_he_asked_for_fails(self):
+        # Review rv-20261013T163700Z-d59c8398-4191, finding 2: he asked for a marketing lead and a
+        # bookkeeper, and a proposal of Will alone passed.
+        _, failures = hire_walk.proposal_verdict(OPENING + "- Will (Marketing Director)" + CLOSING)
+        self.assertTrue(any('bookkeeper' in f for f in failures), failures)
+
+    def test_a_hire_he_is_told_about_that_was_not_saved_fails(self):
+        # The same finding's second half: saved=['will'], told "Will and Bea (Bookkeeper) joined".
+        failures = hire_walk.hired_verdict(['will'], ['will'], 'Will (Marketing Director) and Bea (Bookkeeper) joined the team.')
+        self.assertTrue(any('Bea' in f for f in failures), failures)
+        self.assertEqual(hire_walk.hired_verdict(['will'], ['will'], 'Will (Marketing Director) joined; Frank (Expert Advisor) was already here.'), [])
+
+    def test_delegation_needs_this_tasks_own_dispatch_and_answer_and_a_settled_task(self):
+        # Finding 3: an interrupted task told "No work was started", with only an earlier job's
+        # dispatch of the teammate on record, passed.
+        settled = {'state': 'settled', 'notices': [{'text': 'Nora suggests: one, two, three.'}]}
+        pre = {'hook_event_name': 'PreToolUse', 'tool_name': 'Agent', 'tool_input': {'subagent_type': 'richos-app-engine:nora'}}
+        post = dict(pre, hook_event_name='PostToolUse', tool_response='1. Lead through change 2. ...')
+        self.assertEqual(hire_walk.delegate_verdict(settled, [pre, post], 'nora'), [])
+        interrupted = {'state': 'interrupted', 'notices': [{'text': 'No work was started.'}]}
+        failures = hire_walk.delegate_verdict(interrupted, [], 'nora')
+        self.assertTrue(any('interrupted' in f for f in failures) and any('No work was started' in f for f in failures)
+                        and any('did not dispatch' in f for f in failures), failures)
+        self.assertTrue(hire_walk.delegate_verdict(settled, [pre], 'nora'), 'a dispatch with no answer handed back fails')
+
     def test_the_turns_and_the_dispatched_teammates_are_read_off_the_records(self):
         rows = [{'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'a', 'text': 'hi', 'source': 'text'},
                 {'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'x', 'text': 'prime', 'source': 'internal'},

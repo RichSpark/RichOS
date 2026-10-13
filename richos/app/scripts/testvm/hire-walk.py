@@ -22,15 +22,17 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   interview   the answers in ANSWERS typed one per finished turn (stage 4 names a marketing lead
               and a bookkeeper), then "Let's wrap up the interview." until Rich's reply carries
               "Say go and I'll get them hired now." PASS needs that reply to open with the five
-              and list at least one new teammate as a bullet. Evidence: interview.json.
+              and list, as bullets, a teammate for each role he asked for. Evidence: interview.json.
   go          "Go." typed; the assignment it registers is followed until it closes (--hire-within).
-              PASS needs every proposed teammate saved as <app data>/team/<name>.md and every
-              saved one named in what he was told. Evidence: go-observed.json.
+              PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
+              one named in what he was told, and nobody named to him as a teammate who was not
+              saved. Evidence: go-observed.json.
   relaunch    command-walk.py's relaunch: the app stopped by pid and started again
   roster      after the relaunch, the lease's roster holds the five and every hired teammate
-  delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs the back end
-              to dispatch that teammate (an Agent call naming richos-app-engine:<name>) and the
-              assignment to close settled. Evidence: delegate-observed.json.
+  delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs, in the hook
+              records written after that send only: an Agent call naming that teammate and its
+              finished run handing back an answer; and the task closed settled with a result he was
+              told. Evidence: delegate-observed.json.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
@@ -69,6 +71,8 @@ ANSWERS = [
     "Pricing and any spend over $1,000 is my call. Scheduling and drafts you can decide.",
 ]
 WRAP_UP = "Let's wrap up the interview."
+# The roles ANSWERS asks for in stage 4, each with the words a proposed job title may use for it.
+REQUESTED_ROLES = {'marketing lead': ('market',), 'bookkeeper': ('book', 'account', 'financ')}
 DELEGATE_TASK = ('Please ask {Name} to suggest three subject lines for our next newsletter to past '
                  'coaching clients, and tell me what they suggest.')
 
@@ -89,19 +93,25 @@ def turns_of(rows, thread):
     return turns
 
 
-def proposed_names(reply):
-    """The new teammates in the end-of-interview message: one bullet each, "Name (Job title)"."""
+def proposed_teammates(reply):
+    """The new teammates in the end-of-interview message, one bullet each, "Name (Job title)":
+    [(name, the rest of the bullet line)]."""
     tail = reply.split('following AI teammates', 1)[-1]
-    names = []
+    out = []
     for line in tail.splitlines():
-        m = re.match(r'\s*(?:[-*•]|\d+[.)])\s+\**([A-Z][A-Za-z]+)\**\s*[(—:-]', line)
+        m = re.match(r'\s*(?:[-*•]|\d+[.)])\s+\**([A-Z][A-Za-z]+)\**\s*([(—:-].*)', line)
         if m:
-            names.append(m.group(1).lower())
-    return names
+            out.append((m.group(1).lower(), m.group(2)))
+    return out
+
+
+def proposed_names(reply):
+    return [name for name, _ in proposed_teammates(reply)]
 
 
 def proposal_verdict(reply):
-    """(proposed names, failures) for the reply that should end the interview."""
+    """(proposed names, failures) for the reply that should end the interview. Every role he asked
+    for in stage 4 must be one of the proposed teammates' job titles."""
     failures = []
     if GO_WORDS not in reply.replace('’', "'"):
         failures.append(f'the reply does not end with "{GO_WORDS}"')
@@ -110,16 +120,24 @@ def proposal_verdict(reply):
     for name, role in STOCK.items():
         if f'{name.capitalize()} ({role}' not in reply:
             failures.append(f'{name.capitalize()} ({role} ...) is not in the opening five')
-    names = proposed_names(reply)
-    if not names:
+    proposed = proposed_teammates(reply)
+    if not proposed:
         failures.append('no new teammate is listed as a bullet')
-    return names, failures
+    titles = [title.lower() for _, title in proposed]
+    for role, words in REQUESTED_ROLES.items():
+        if not any(w in t for t in titles for w in words):
+            failures.append(f'he asked for a {role} and no proposed teammate is one')
+    return [name for name, _ in proposed], failures
 
 
 def hired_verdict(proposed, saved, told):
-    """Every proposed teammate saved; every saved teammate named in what he was told."""
+    """Every proposed teammate saved; every saved teammate named in what he was told; and nobody
+    he was told about as a teammate ("Name (Job title)") who is neither saved nor one of the five."""
     failures = []
     told_lower = (told or '').lower()
+    for claimed in sorted({m.lower() for m in re.findall(r'\b([A-Z][a-z]+)\s+\(', told or '')}):
+        if claimed not in saved and claimed not in STOCK:
+            failures.append(f'he was told about {claimed.capitalize()} and no such teammate was saved')
     for name in proposed:
         if name not in saved:
             failures.append(f'{name} was proposed and not saved in the team folder')
@@ -139,6 +157,37 @@ def dispatched_teammates(callback_rows):
             kind = (c.get('tool_input') or {}).get('subagent_type', '')
             out.append(kind.split(':', 1)[-1])
     return out
+
+
+def answered_by(callback_rows, name):
+    """The answers `name` handed back: each PostToolUse of an Agent call that named it, non-empty."""
+    out = []
+    for c in callback_rows:
+        kind = ((c.get('tool_input') or {}).get('subagent_type') or '').split(':', 1)[-1]
+        if c.get('hook_event_name') == 'PostToolUse' and c.get('tool_name') == 'Agent' and kind == name:
+            answer = c.get('tool_response')
+            if answer:
+                out.append(answer if isinstance(answer, str) else json.dumps(answer))
+    return out
+
+
+def delegate_verdict(record, new_rows, name):
+    """Why the task sent after the relaunch does NOT show `name` doing it ([] = it does). `new_rows`
+    are only the hook records written after that task was sent, so an earlier job's dispatch of
+    the same teammate cannot count."""
+    failures = []
+    notices = (record or {}).get('notices') or []
+    if not record or record.get('state') != 'settled':
+        failures.append(f"the task ended {(record or {}).get('state')}: {(record or {}).get('detail')}")
+    if any('No work was started' in n.get('text', '') for n in notices):
+        failures.append('he was told "No work was started"')
+    if not notices or not notices[-1].get('text', '').strip():
+        failures.append('he was told nothing about the result')
+    if name not in dispatched_teammates(new_rows):
+        failures.append(f'the back end did not dispatch {name} for this task; it dispatched {dispatched_teammates(new_rows)}')
+    if not answered_by(new_rows, name):
+        failures.append(f'{name} handed back no answer for this task')
+    return failures
 
 
 class HireWalk(command_walk.CommandWalk):
@@ -258,13 +307,19 @@ class HireWalk(command_walk.CommandWalk):
         return {'roster': roster}
 
     def callback_rows(self):
+        """Every Agent hook record in the guest, each keyed by its file and line, so the rows written
+        after a moment can be told from the ones before it."""
         script = ('import json,glob,sys\n'
                   'out=[]\n'
                   'for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):\n'
-                  '    for l in open(p):\n'
+                  '    for i,l in enumerate(open(p)):\n'
                   '        try: c=json.loads(l).get("callback",{})\n'
                   '        except Exception: continue\n'
-                  '        if c.get("tool_name")=="Agent": out.append({k:c.get(k) for k in ("hook_event_name","tool_name","tool_input")})\n'
+                  '        if c.get("tool_name")!="Agent": continue\n'
+                  '        r=c.get("tool_response")\n'
+                  '        out.append({"key":p+":"+str(i),"hook_event_name":c.get("hook_event_name"),"tool_name":"Agent",\n'
+                  '                    "tool_input":{"subagent_type":(c.get("tool_input") or {}).get("subagent_type")},\n'
+                  '                    "tool_response":(r if isinstance(r,str) else json.dumps(r) if r else "")[:4000]})\n'
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
 
@@ -273,18 +328,18 @@ class HireWalk(command_walk.CommandWalk):
         if not hired:
             raise StepFailed('go must have run (nobody hired on record)')
         name = hired[0]
+        before = {r['key'] for r in self.callback_rows()}
         sent = self.send(DELEGATE_TASK.format(Name=name.capitalize()))
         pressed = [0]
         record = self.settled_read(self.until_closed(lambda: self.ours(sent), self.a.within, pressed))
-        dispatched = dispatched_teammates(self.callback_rows())
-        evidence = {'teammate': name, 'assignment': record, 'dispatched': dispatched}
+        new_rows = [r for r in self.callback_rows() if r['key'] not in before]
+        evidence = {'teammate': name, 'assignment': record, 'agent_rows_after_send': new_rows}
         (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
-        if not record or record.get('state') in command_walk.OPEN:
-            raise StepFailed('the task for the hired teammate did not close: ' + json.dumps(record)[:400])
-        if name not in dispatched:
-            raise StepFailed(f'the back end never dispatched {name}; it dispatched {dispatched}')
-        return {'teammate': name, 'state': record.get('state'), 'dispatched': dispatched,
-                'notice': (record.get('notices') or [{}])[-1].get('text', '')}
+        failures = delegate_verdict(record, new_rows, name)
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return {'teammate': name, 'state': record.get('state'), 'answer': answered_by(new_rows, name)[-1][:1000],
+                'notice': record['notices'][-1].get('text', '')}
 
 
 def main():
