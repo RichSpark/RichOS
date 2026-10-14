@@ -27,7 +27,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
               one named in what he was told, nobody named to him as a teammate who was not saved,
               and no Approve card put in front of him along the way, and nothing he was told says
-              the write-up hit a snag or was sent again. Evidence: go-observed.json.
+              the write-up hit a snag or was sent again. Evidence: go-observed.json. A go that fails
+              with somebody saved still lets the later steps walk the ones who were.
   relaunch    command-walk.py's relaunch: the app stopped by pid and started again; before its
               first read the walk waits for the guest's whisper-cli runs to end (--settle-within)
               and then reads with a longer deadline (--after-relaunch-deadline)
@@ -488,10 +489,13 @@ class HireWalk(command_walk.CommandWalk):
         # relaunch, roster and delegation work.
         self.facts['approvals_go'] = pressed[0]
         self.save()
-        if failures:
-            raise StepFailed('; '.join(failures))
+        # Whoever WAS saved is the team the later steps walk, whatever the verdict here, so one
+        # missing hire does not hide whether the relaunch, the roster, a delegated job and Under
+        # the hood work (nightly 56: Beth was not saved in 2 of 3 runs and nothing after go ran).
         self.facts['hired'] = saved
         self.save()
+        if failures:
+            raise StepFailed('; '.join(failures))
         return {'hired': saved, 'states': [r.get('state') for r in records], 'told': told[-1] if told else ''}
 
     def roster(self):
@@ -636,7 +640,8 @@ def main():
         report['steps'].append(row)
         (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(f"{step}: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
-        if not ok:
+        # A go that saved somebody carries on (see go); any other failure ends the walk.
+        if row['outcome'] == 'FAIL' and not (step == 'go' and walk.facts.get('hired')):
             break
     try:
         report['logs_kept'] = walk.keep_logs()
