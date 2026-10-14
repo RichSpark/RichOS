@@ -36,7 +36,9 @@
 //! it has ended. The next call prompts normally. A calendar meeting he answered (Take Notes, Not
 //! this one, Stop) asks once: every call that begins during the meeting's own scheduled time, in
 //! the meeting link's app when the event names one ([`Scheduled::covers`]), is that meeting,
-//! however often he leaves and rejoins; any other call prompts. A browser call is a meeting only
+//! however often he leaves and rejoins; any other call prompts. A rejoin of a meeting he is taking
+//! notes on (Take Notes, not stopped or declined since) records that meeting again without asking;
+//! after Stop or Not this one it records nothing. A browser call is a meeting only
 //! when its link is a browser meeting (Google Meet). While prompts are paused nothing prompts, and
 //! a running recording is left alone.
 //!
@@ -373,6 +375,11 @@ pub struct MeetingMonitor {
     /// prompt erased it). Any other call prompts. Dropped when the meeting is over, canceled or
     /// moved.
     answered: BTreeMap<String, Scheduled>,
+    /// The answered meetings he is taking notes on: Take Notes, or a recording that ran until its
+    /// call ended, and never Stop or Not this one since. A rejoin inside the meeting's time records
+    /// into that meeting again without asking (meet7b's report: a rejoin after notes started
+    /// recorded nothing). Dropped with the answer.
+    taking_notes: BTreeSet<String>,
 }
 
 impl MeetingMonitor {
@@ -505,11 +512,24 @@ impl MeetingMonitor {
         let answered = self.answered.values().filter(|meeting| meeting.covers(&call)).max_by_key(|meeting| meeting.starts_at).map(|meeting| meeting.event_id.clone());
         match &mut self.phase {
             Phase::Idle if answered.is_some() => {
-                // That meeting, joined or rejoined: held as answered until this call ends, like
-                // any declined call, and known to be that meeting.
+                // That meeting, joined or rejoined, known to be that meeting. He is taking notes on
+                // it: they go on, into the same meeting, without asking (not while prompts are
+                // paused). Otherwise it is held as answered until this call ends, like any
+                // declined call.
+                let meeting = answered.as_ref().filter(|id| self.taking_notes.contains(*id) && !self.paused).and_then(|id| self.answered.get(id)).cloned();
                 call.event = answered;
-                self.phase = Phase::Done { call };
-                vec![]
+                match meeting {
+                    Some(meeting) => {
+                        let start = Start { title: Some(meeting.title.clone()), event_id: Some(meeting.event_id.clone()), scheduled: Some(meeting), manual: false };
+                        let action = start.action();
+                        self.phase = Phase::Recording { call: Some(call), start };
+                        vec![action]
+                    }
+                    None => {
+                        self.phase = Phase::Done { call };
+                        vec![]
+                    }
+                }
             }
             Phase::Idle if self.paused => {
                 // Nothing prompts while paused; the call is remembered so it does not prompt the
@@ -554,10 +574,15 @@ impl MeetingMonitor {
             // but a prompt left up) answered that meeting: a rejoin does not ask again.
             let ended_at = c.quiet_since.unwrap_or(now);
             let answered = !matches!(self.phase, Phase::Prompting { .. });
+            // A recording that ran until its call ended: he is taking notes on that meeting.
+            let recorded = matches!(&self.phase, Phase::Recording { start, .. } if !start.manual);
             for meeting in c.meetings.values().filter(|meeting| ended_at >= meeting.starts_at) {
                 self.prompted_events.insert(meeting.event_id.clone());
                 if answered {
                     self.answered.insert(meeting.event_id.clone(), meeting.clone());
+                }
+                if recorded {
+                    self.taking_notes.insert(meeting.event_id.clone());
                 }
             }
         }
@@ -617,6 +642,8 @@ impl MeetingMonitor {
             }
         }
         self.answered.retain(|_, meeting| now < meeting.ends_at);
+        let answered = &self.answered;
+        self.taking_notes.retain(|id| answered.contains_key(id));
         actions
     }
 
@@ -703,6 +730,7 @@ impl MeetingMonitor {
     /// prompts. A prompt with a live call is untouched.
     pub fn retire(&mut self, event_id: &str) -> Vec<Action> {
         self.answered.remove(event_id);
+        self.taking_notes.remove(event_id);
         if self.unjoined_calendar_prompt() == Some(event_id) {
             self.phase = Phase::Idle;
             let mut out = vec![Action::HidePrompt];
@@ -717,6 +745,7 @@ impl MeetingMonitor {
     pub fn withdraw(&mut self, event_id: &str) -> Vec<Action> {
         self.prompted_events.remove(event_id);
         self.answered.remove(event_id);
+        self.taking_notes.remove(event_id);
         if let Phase::Prompting { call: None, scheduled: Some(s) } = &self.phase {
             if s.event_id == event_id {
                 self.phase = Phase::Idle;
@@ -743,6 +772,7 @@ impl MeetingMonitor {
                 // answered: no call in its time and app asks again.
                 if let Some(meeting) = scheduled {
                     self.answered.insert(meeting.event_id.clone(), meeting.clone());
+                    self.taking_notes.insert(meeting.event_id.clone());
                 }
                 let start = Start {
                     title: scheduled.as_ref().map(|s| s.title.clone()),
@@ -758,6 +788,7 @@ impl MeetingMonitor {
                 // Declined (the calendar prompt, or a failed calendar recording's card): the
                 // meeting is answered, so neither its call nor a rejoin prompts.
                 if let Some(meeting) = self.phase.meeting() {
+                    self.taking_notes.remove(&meeting.event_id);
                     self.answered.insert(meeting.event_id.clone(), meeting);
                 }
                 self.phase = Phase::done(call);
@@ -784,9 +815,13 @@ impl MeetingMonitor {
                 self.phase = Phase::Recording { call: declined, start };
                 vec![action]
             }
-            (Input::Stop, Phase::Recording { call, .. }) => {
+            (Input::Stop, Phase::Recording { call, start }) => {
                 // Stopped early: this call does not prompt again until it ends. A calendar
-                // recording's meeting was answered by its Take Notes and stays answered.
+                // recording's meeting was answered by its Take Notes and stays answered, and a
+                // rejoin does not record it again.
+                for id in start.event_id.iter().chain(call.as_ref().and_then(|c| c.event.as_ref())) {
+                    self.taking_notes.remove(id);
+                }
                 self.phase = Phase::done(call);
                 vec![Action::StopCapture(EndReason::StoppedEarly)]
             }
@@ -1594,13 +1629,34 @@ mod tests {
                 (908, Wait, &[], "idle"),
                 (930, On(2, ZOOM), &[], "holding Zoom"),
             ]),
-            ("A's calendar prompt answered in its call with Take Notes, then left and rejoined: no prompt", &[
+            // meet7b's own report: a rejoin after notes started recorded nothing. It records into
+            // that meeting again, without asking.
+            ("A's calendar prompt answered in its call with Take Notes, then left and rejoined: no prompt, it records A again", &[
                 (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
                 (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
                 (61, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' on Zoom"),
                 (900, Off(1, ZOOM), &[], "recording 'A' on Zoom"),
                 (908, Wait, &["stop: call ended"], "idle"),
+                (930, On(2, ZOOM), &["start 'A'"], "recording 'A' on Zoom"),
+                (1000, Off(2, ZOOM), &[], "recording 'A' on Zoom"),
+                (1008, Wait, &["stop: call ended"], "idle"),
+            ]),
+            ("notes on A stopped early, left and rejoined: no prompt and nothing records", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (61, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' on Zoom"),
+                (300, Do(Stop), &["stop: early"], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
                 (930, On(2, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("notes on A, then a Teams call during A's time: its own prompt, A is not recorded on it", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (61, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' on Zoom"),
+                (900, Off(1, ZOOM), &[], "recording 'A' on Zoom"),
+                (908, Wait, &["stop: call ended"], "idle"),
+                (930, On(2, TEAMS), &["prompt Teams"], "prompting on Teams"),
             ]),
             ("A's calendar prompt dismissed in its call, then left and rejoined: no prompt", &[
                 (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
@@ -1610,13 +1666,13 @@ mod tests {
                 (908, Wait, &[], "idle"),
                 (930, On(2, ZOOM), &[], "holding Zoom"),
             ]),
-            ("joined early, notes taken before the meeting was due, left and rejoined: no prompt", &[
+            ("joined early, notes taken before the meeting was due, left and rejoined: no prompt, it records that meeting", &[
                 (0, Cal("Early", 300, 2100), &[], "idle"),
                 (200, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
                 (205, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
                 (900, Off(1, ZOOM), &[], "recording on Zoom"),
                 (908, Wait, &["stop: call ended"], "idle"),
-                (930, On(2, ZOOM), &[], "holding Zoom"),
+                (930, On(2, ZOOM), &["start 'Early'"], "recording 'Early' on Zoom"),
             ]),
             ("a calendar prompt ignored until its call ended: a rejoin asks", &[
                 (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
