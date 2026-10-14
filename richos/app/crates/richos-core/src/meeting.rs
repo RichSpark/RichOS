@@ -31,7 +31,8 @@
 //!
 //! A calendar prompt and the microphone signal for the same meeting are one call: whichever
 //! comes first is the prompt, the other attaches to it (the calendar title replaces "Call
-//! detected in …"). Not this one, and Stop, hold for that call: it does not prompt again until
+//! detected in …"), when the call is in the app the meeting's link opens; a call in any other app
+//! is a different call and waits for its own prompt. Not this one, and Stop, hold for that call: it does not prompt again until
 //! it has ended. The next call prompts normally. A calendar meeting he answered (Take Notes, Not
 //! this one, Stop) asks once: every call that begins during the meeting's own scheduled time, in
 //! the meeting link's app when the event names one ([`Scheduled::covers`]), is that meeting,
@@ -175,7 +176,14 @@ impl Scheduled {
     /// when A was joined 11 minutes late, and took an unrelated Teams call 5 minutes in for A).
     fn covers(&self, call: &Call) -> bool {
         let during = call.since + PROMPT_LEAD_MS >= self.starts_at && call.since < self.ends_at;
-        during && self.app.is_none_or(|app| app.takes(&call.family))
+        during && self.takes(&call.family)
+    }
+
+    /// A call in this app family can be this meeting: any app when the event names no link, else
+    /// the link's app ([`MeetingApp::takes`]). A calendar prompt or recording for a Zoom meeting
+    /// never takes a Teams call as its own (rv-20261014T110606Z-1e6b535c-f031 #1).
+    fn takes(&self, family: &str) -> bool {
+        self.app.is_none_or(|app| app.takes(family))
     }
 }
 
@@ -268,11 +276,12 @@ impl Call {
         self.live.is_empty() && self.quiet_since.is_some_and(|q| now.saturating_sub(q) >= END_GRACE_MS)
     }
     /// This call is that calendar meeting: it is known to be it, or, known to be none, it began no
-    /// earlier than [`SAME_MEETING_MS`] before it. A call known to be another meeting never is.
+    /// earlier than [`SAME_MEETING_MS`] before it in an app the meeting's link opens. A call known
+    /// to be another meeting never is.
     fn is_meeting(&self, meeting: &Scheduled) -> bool {
         match &self.event {
             Some(known) => *known == meeting.event_id,
-            None => self.since + SAME_MEETING_MS >= meeting.starts_at,
+            None => self.since + SAME_MEETING_MS >= meeting.starts_at && meeting.takes(&self.family),
         }
     }
 }
@@ -468,7 +477,26 @@ impl MeetingMonitor {
         if !self.phase.can_take_a_call() {
             return vec![];
         }
-        let next = self.others.iter().filter(|(_, c)| !c.live.is_empty()).min_by_key(|(_, c)| c.since).map(|(f, _)| f.clone());
+        // A calendar prompt or pre-call recording takes only a call in its meeting's app, and,
+        // when its event names no link, not a call a different answered meeting's link names: that
+        // call is the answered meeting rejoined. Any other call waits, and is settled once that
+        // meeting's prompt or recording is over (rv-20261014T110606Z-1e6b535c-f031 #1,
+        // rv-20261014T114658Z-04417671-85c4 #1).
+        let pending = self.phase.meeting();
+        let answered = &self.answered;
+        let fits = |c: &Call| match &pending {
+            None => true,
+            Some(m) => {
+                let other = || answered.values().any(|a| a.event_id != m.event_id && a.app.is_some() && a.covers(c));
+                m.takes(&c.family) && (m.app.is_some() || !other())
+            }
+        };
+        let next = self
+            .others
+            .iter()
+            .filter(|(_, c)| !c.live.is_empty() && fits(c))
+            .min_by_key(|(_, c)| c.since)
+            .map(|(f, _)| f.clone());
         let Some(mut call) = next.and_then(|family| self.others.remove(&family)) else {
             return vec![];
         };
@@ -1703,6 +1731,97 @@ mod tests {
             m.scheduled(meeting("B", Some(MeetingApp::Teams), 600_000, 1_200_000));
             m.input(Input::NotThisOne);
             assert_eq!(on(&mut m, ZOOM, 720_000), vec![], "B's prompt erased A's remembered answer");
+        }
+    }
+
+    /// The handover review's witness (rv-20261014T110606Z-1e6b535c-f031 #1,
+    /// `fixtures/behavior_probes.py`): a calendar prompt or pre-call recording for a Zoom-linked
+    /// meeting took an unrelated Teams call as its own, in both orders.
+    mod review_rv_20261014t110606z {
+        use super::super::*;
+        fn on(pid: i32, family: &str, app: &str) -> WatchLine {
+            WatchLine::Started { pid, family: family.into(), app: Some(app.into()), at: 0 }
+        }
+        fn off(pid: i32, family: &str) -> WatchLine {
+            WatchLine::Stopped { pid, family: family.into(), exited: false, at: 0 }
+        }
+        fn calendar() -> Vec<CalendarMeeting> {
+            vec![CalendarMeeting {
+                event_id: "zoom-A".into(),
+                title: "Zoom customer review".into(),
+                starts_at: 60_000,
+                ends_at: Some(3_660_000),
+                app: Some(MeetingApp::Zoom),
+            }]
+        }
+
+        #[test]
+        fn a_pre_call_recording_is_not_ended_by_another_apps_call() {
+            let cal = calendar();
+            let mut m = MeetingMonitor::new();
+            assert_eq!(m.clock(0, &cal).len(), 1, "the calendar prompt");
+            m.input(Input::TakeNotes);
+            assert_eq!(m.watch(&on(7, "com.microsoft.teams2", "Teams"), 10_000), vec![]);
+            m.watch(&off(7, "com.microsoft.teams2"), 30_000);
+            assert_eq!(m.clock(38_000, &cal), vec![], "Teams ending stopped the Zoom meeting's recording");
+            assert!(m.is_recording());
+            assert_eq!(m.watch(&on(8, "us.zoom.xos", "Zoom"), 60_000), vec![], "the real Zoom join asked again");
+            m.watch(&off(8, "us.zoom.xos"), 900_000);
+            assert_eq!(m.clock(908_000, &cal), vec![Action::StopCapture(EndReason::CallEnded)], "the recording ends with Zoom");
+        }
+
+        #[test]
+        fn a_zoom_meeting_due_during_a_teams_prompt_does_not_take_it_and_prompts_after() {
+            let cal = calendar();
+            let mut m = MeetingMonitor::new();
+            assert_eq!(m.watch(&on(7, "com.microsoft.teams2", "Teams"), 0), vec![Action::ShowPrompt(PromptKind::Unscheduled { app: "Teams".into() })]);
+            assert_eq!(m.clock(1_000, &cal), vec![], "the Zoom reminder replaced the Teams prompt");
+            assert_eq!(m.input(Input::TakeNotes), vec![Action::HidePrompt, Action::StartCapture { title: None, event_id: None, manual: false }]);
+            m.watch(&off(7, "com.microsoft.teams2"), 30_000);
+            assert_eq!(
+                m.clock(38_000, &cal),
+                vec![
+                    Action::StopCapture(EndReason::CallEnded),
+                    Action::ShowPrompt(PromptKind::Scheduled { event_id: "zoom-A".into(), title: "Zoom customer review".into(), starts_at: 60_000 })
+                ],
+                "the Zoom meeting prompts once the Teams call is over"
+            );
+        }
+
+        /// rv-20261014T114658Z-04417671-85c4 #1 (`fixtures/meeting_review.rs`): dismiss Zoom A, let
+        /// the overlapping Teams B prompt, join A: Zoom was attached to B, B's notes were recorded
+        /// from A's call and ended with it, and the real Teams B join was never recorded.
+        #[test]
+        fn an_answered_meeting_rejoined_while_another_meetings_prompt_is_up_stays_that_meeting() {
+            let a = CalendarMeeting { event_id: "A".into(), title: "A".into(), starts_at: 60_000, ends_at: Some(3_660_000), app: Some(MeetingApp::Zoom) };
+            let b = CalendarMeeting { event_id: "B".into(), title: "B".into(), starts_at: 600_000, ends_at: Some(1_200_000), app: Some(MeetingApp::Teams) };
+            let mut m = MeetingMonitor::new();
+            m.clock(0, std::slice::from_ref(&a));
+            m.input(Input::NotThisOne);
+            let cal = vec![a, b];
+            assert_eq!(m.clock(540_000, &cal), vec![Action::ShowPrompt(PromptKind::Scheduled { event_id: "B".into(), title: "B".into(), starts_at: 600_000 })]);
+            assert_eq!(m.watch(&on(1, "us.zoom.xos", "Zoom"), 720_000), vec![]);
+            assert_eq!(m.input(Input::TakeNotes), vec![Action::HidePrompt, Action::StartCapture { title: Some("B".into()), event_id: Some("B".into()), manual: false }]);
+            m.watch(&off(1, "us.zoom.xos"), 900_000);
+            assert_eq!(m.clock(908_000, &cal), vec![], "A's Zoom call ending stopped B's recording");
+            assert!(m.is_recording());
+            assert_eq!(m.watch(&on(2, "com.microsoft.teams2", "Teams"), 930_000), vec![], "B's own call joins its recording");
+            m.watch(&off(2, "com.microsoft.teams2"), 1_100_000);
+            assert_eq!(m.clock(1_108_000, &cal), vec![Action::StopCapture(EndReason::CallEnded)], "B's recording ends with B's Teams call");
+
+            // The same with B naming no link: a call A's Zoom link names is still A rejoined.
+            let a = CalendarMeeting { event_id: "A".into(), title: "A".into(), starts_at: 60_000, ends_at: Some(3_660_000), app: Some(MeetingApp::Zoom) };
+            let b = CalendarMeeting { event_id: "B".into(), title: "B".into(), starts_at: 600_000, ends_at: Some(1_200_000), app: None };
+            let mut m = MeetingMonitor::new();
+            m.clock(0, std::slice::from_ref(&a));
+            m.input(Input::NotThisOne);
+            let cal = vec![a, b];
+            assert_eq!(m.clock(540_000, &cal).len(), 1, "B prompts");
+            assert_eq!(m.watch(&on(1, "us.zoom.xos", "Zoom"), 720_000), vec![]);
+            assert_eq!(m.input(Input::TakeNotes).len(), 2);
+            m.watch(&off(1, "us.zoom.xos"), 900_000);
+            assert_eq!(m.clock(908_000, &cal), vec![], "A's Zoom call was taken for no-link B");
+            assert!(m.is_recording());
         }
     }
 }
