@@ -521,7 +521,8 @@ convention, same camelCase payload, different subject.
 | `rich://voice-model` | Progress and outcome of getting the speech model this machine needs. `phase` is one of `started`, `progress`, `verifying`, `installed`, `failed`. | `{ phase, modelId, received, total, totalLabel, message, askAgain, at }` |
 | `rich://voice-notice` | Voice mode is **running**, but not the way it would on a better machine — today, that it started on a lighter recognizer than the best one, because the more accurate one is too slow here, there is not enough free memory for it, or the machine's speed could not be measured (`hardware.rs`, `Resolution::ceo_message`). Emitted **once**, at voice-mode start, and only when the product made that choice on the CEO's behalf. | `{ message, at }` |
 
-Speech decoder initialization runs silently ahead of capture. Starting capture joins
+Speech decoder initialization starts silently in Rust setup, before frontend state reads.
+Starting capture joins
 that initialization before opening the microphone, so the first transcript does not pay
 the packaged decoder's cold startup. A version probe or cached hardware timing is not
 initialization. See [reply startup and verification](../../docs/development/spoken-reply-latency.md)

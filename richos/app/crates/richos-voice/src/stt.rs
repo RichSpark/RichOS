@@ -757,6 +757,21 @@ pub fn readiness() -> SpeechReadiness {
     }))
 }
 
+/// Start speech initialization as soon as Rust setup publishes the delivered runtime.
+/// The UI does not have to finish reading navigation or history first, and startup is
+/// not blocked. Readiness and capture join the same successful warmup by identity.
+/// Missing first-run models are checked again when readiness later finds them installed.
+pub fn warm_at_startup() {
+    std::thread::spawn(|| {
+        eprintln!("[richos-voice] speech initialization START at app setup");
+        if let SpeechReadiness::Ready(recognizer) = readiness() {
+            if let Err(error) = recognizer.warm(&std::env::temp_dir()) {
+                eprintln!("[richos-voice] speech initialization failed at app setup: {error}");
+            }
+        }
+    });
+}
+
 /// A resolved, ready-to-use recognizer. Resolution happens ONCE at voice-mode start so a
 /// missing model is a calm message at the toggle, not a failure in the middle of a sentence.
 #[derive(Clone)]

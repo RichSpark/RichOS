@@ -136,5 +136,6 @@ The pinned runtime decoder must actually initialize before the first user uttera
 A fresh decoder invocation measured 9.764 seconds versus under one second when warm
 on the physical Mac. Download verification, metadata probes and cached calibration do
 not cover this cost. Read [the startup requirement and regression checks](../development/spoken-reply-latency.md)
-when changing decoder packaging or its initialization path. The app warms it silently
-at readiness and joins the warmup before opening capture.
+when changing decoder packaging or its initialization path. Rust setup starts it silently
+as soon as the delivered runtime is known, before frontend state reads. Readiness shares
+the same warmup, and starting capture joins it before opening the microphone.
