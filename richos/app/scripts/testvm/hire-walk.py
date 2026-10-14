@@ -26,7 +26,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   go          "Go." typed; the assignment it registers is followed until it closes (--hire-within).
               PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
               one named in what he was told, nobody named to him as a teammate who was not saved,
-              and no Approve card put in front of him along the way. Evidence: go-observed.json.
+              and no Approve card put in front of him along the way, and nothing he was told says
+              the write-up hit a snag or was sent again. Evidence: go-observed.json. A go that fails
+              with somebody saved still lets the later steps walk the ones who were.
   relaunch    command-walk.py's relaunch: the app stopped by pid and started again; before its
               first read the walk waits for the guest's whisper-cli runs to end (--settle-within)
               and then reads with a longer deadline (--after-relaunch-deadline)
@@ -41,6 +43,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               closed settled with a result he was told. Evidence: delegate-observed.json, and
               whatever the verdict delegate-ledger.json (the conversation from the send on) and
               delegate-1-before/2-sent/3-end.png.
+  hood        after delegate, "Under the hood" opened as a person opens it (the work summary chip
+              under the conversation): both Output buttons, the stage header's (#out-top) and the
+              composer's (#out-bottom), end at or before the panel's left edge and are shown
+              (the CEO, 2026-10-14: the last card and the Output button belong under the panel, not
+              under its edge). Evidence: hood-observed.json, under-the-hood.png.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
@@ -64,7 +71,7 @@ command_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(command_walk)
 StepFailed = command_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'stock', 'interview', 'go', 'relaunch', 'roster', 'delegate', 'approvals']
+STEPS = ['identity', 'first-run', 'stock', 'interview', 'go', 'relaunch', 'roster', 'delegate', 'hood', 'approvals']
 # The five every install registers (engine_profile.rs ALWAYS_ACTIVE), as the CEO's sentence names them.
 STOCK = {'clark': 'Senior Researcher', 'dean': 'HR Director', 'frank': 'Expert Advisor',
          'pierce': 'Brief Checker', 'reed': 'Source-Reading'}
@@ -157,11 +164,18 @@ TITLE = r'\(\s*[A-Z][A-Za-z]*(?:[ &/-]+[A-Z][A-Za-z]*)*\s*[;,)]'
 def claimed_names(told):
     """Every name he was told about as a teammate: a name before its job title in parentheses
     ("Bea (Bookkeeper)", "**Bea** (Bookkeeper)", "**Bea (Bookkeeper):**"), a bullet that opens with
-    a name and a colon or title, and each name in a list that "joined", "is on" or "are on" the
+    a name and a dash or title, and each name in a list that "joined", "is on" or "are on" the
     team ("Will and Bea joined", "Will, Nora and Bea are now on the team")."""
     text = told or ''
     names = set(re.findall(r'\b([A-Z][a-z]{1,15})\*{0,2}\s*' + TITLE, text))
-    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*(?::|\u2014|' + TITLE + ')', text))
+    # A bullet's bare "Word:" is a label, not a name: nightly 56's walks read the rule lists he was
+    # told ("- **Drafts:** she can draft invoices", "- **Confidentiality:** a client's coaching
+    # notes never leave the company") as teammates. A name in a bullet needs its title or a dash...
+    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*(?:\u2014|' + TITLE + ')', text))
+    # ...unless the rest of its line says the name was hired or joined ("- Bea: hired as your
+    # bookkeeper"): that is a claim about a teammate, and a rule label never says it.
+    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*:\*{0,2}'
+                            r'[^\n]*\b(?:hired|joined|on (?:your|the) team|teammate)\b', text))
     joined = re.compile(r'((?:' + NAME + r'(?:\s*,\s*(?:and\s+)?|\s+and\s+))*' + NAME + r')'
                         r'\s+(?:has\s+|have\s+)?(?:joined|(?:is|are)\s+(?:now\s+)?(?:on|part of))')
     for m in joined.finditer(text):
@@ -185,6 +199,34 @@ def hired_verdict(proposed, saved, told):
             failures.append(f'{name} was saved and not named in what he was told')
     if not saved:
         failures.append('nobody was saved in the team folder')
+    return failures
+
+
+# What he was told when the hiring write-up did not go through on its first send (nightly 55's
+# walk: "Starting the step that writes up Will and Beth hit a technical snag on my end. I'm sending
+# it again in a shorter form."). The CEO, 2026-10-14: the write-up must not fail its first send.
+RETRY_TOLD = re.compile(r'\bsnag\b|\bhiccup\b|\bglitch\b|technical (?:issue|problem|difficult)'
+                        r'|sending it again|send(?:ing)? it again|in a shorter form', re.I)
+
+
+def first_send_verdict(told):
+    """The sentences that tell him the write-up was retried ([] = it went through the first time)."""
+    return [m.group(0) for m in RETRY_TOLD.finditer(told or '')]
+
+
+def hood_verdict(panel, boxes):
+    """Why the open "Under the hood" panel covers something ([] = nothing): `panel` is the panel's
+    node, `boxes` maps a name to its node (None when it is not on screen). Each must end at or
+    before the panel's left edge; one pixel is allowed for rounding."""
+    if not panel:
+        return ['the Under the hood panel is not on screen']
+    edge = panel['x']
+    failures = []
+    for name, node in boxes.items():
+        if not node:
+            failures.append(f'{name} is not on screen')
+        elif node['x'] + node['w'] > edge + 1:
+            failures.append(f"{name} ends at {node['x'] + node['w']}, under the panel's left edge at {edge}")
     return failures
 
 
@@ -333,6 +375,16 @@ class HireWalk(command_walk.CommandWalk):
         return [r.get('text', '') for r in self.ledger() if r.get('event') == 'ProactiveMessage'
                 and r.get('thread_id') == thread and r.get('at', 0) >= since_ms]
 
+    def said_since(self, since_ms):
+        """Rich's own replies on the conversation since `since_ms` (AssistantDelta), joined."""
+        # An AssistantDelta row carries its turn_id and no thread_id (nightly 56 run 4 read nothing),
+        # so the conversation's turns are taken from the rows that name the thread.
+        thread = self.facts.get('thread')
+        rows = self.ledger()
+        turns = {r.get('turn_id') for r in rows if r.get('thread_id') == thread and r.get('turn_id')}
+        return ''.join(r.get('text', '') for r in rows if r.get('event') == 'AssistantDelta'
+                       and r.get('turn_id') in turns and r.get('at', 0) >= since_ms)
+
     def wait_turns_done(self, count, seconds):
         """Wait until at least `count` visible turns exist and the last is finished; return them."""
         end = time.monotonic() + seconds
@@ -424,8 +476,9 @@ class HireWalk(command_walk.CommandWalk):
         records = [self.settled_read(r) for r in records]
         saved = self.team_files()
         told = [n.get('text', '') for r in records for n in r.get('notices', [])] + self.told_since(sent[0])
+        said = self.said_since(sent[0])
         evidence = {'proposed': proposed, 'assignments': records, 'saved': saved, 'told': told,
-                    'approvals_pressed': pressed[0]}
+                    'said': said, 'approvals_pressed': pressed[0]}
         (self.out / 'go-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if not records:
             raise StepFailed('"Go." registered no assignment')
@@ -433,14 +486,20 @@ class HireWalk(command_walk.CommandWalk):
         if still:
             raise StepFailed(f"the hiring was still {still} after {self.a.hire_within:g} s")
         failures = hired_verdict(proposed, saved, '\n'.join(told))
+        retried = first_send_verdict('\n'.join(told + [said]))
+        if retried:
+            failures.append(f'he was told the write-up was retried: {retried}')
         # Counted here and judged in `approvals`, the last step, so one card does not hide whether
         # relaunch, roster and delegation work.
         self.facts['approvals_go'] = pressed[0]
         self.save()
-        if failures:
-            raise StepFailed('; '.join(failures))
+        # Whoever WAS saved is the team the later steps walk, whatever the verdict here, so one
+        # missing hire does not hide whether the relaunch, the roster, a delegated job and Under
+        # the hood work (nightly 56: Beth was not saved in 2 of 3 runs and nothing after go ran).
         self.facts['hired'] = saved
         self.save()
+        if failures:
+            raise StepFailed('; '.join(failures))
         return {'hired': saved, 'states': [r.get('state') for r in records], 'told': told[-1] if told else ''}
 
     def roster(self):
@@ -521,6 +580,36 @@ class HireWalk(command_walk.CommandWalk):
         return {'teammate': name, 'state': record.get('state'), 'answer': answer_of(receipts, record, name)[:1000],
                 'notice': record['notices'][-1].get('text', '')}
 
+    def hood(self):
+        """Under the hood opened from the work summary chip; nothing of the conversation or the
+        composer runs under its left edge (echo-opus-panel55's fix, found on nightly 55's walk)."""
+        if not self.present('back to Rich'):
+            self.ax('click', '--title', 'Open the work summary', '--contains', '--first')
+        end = time.monotonic() + 30
+        while time.monotonic() < end and not self.present('back to Rich'):
+            time.sleep(2)
+
+        def node(dom_id):
+            try:
+                found = [n for n in self.ax('find', '--id', dom_id, '--first') if not n.get('meta')]
+            except StepFailed as exc:
+                if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+                    return None
+                raise
+            return found[0] if found else None
+        panel = node('slideover')
+        # #messages has no node in the guest's accessibility tree (nightly 56 run 4: "not on
+        # screen" with the conversation plainly there), so the boxes are the two Output buttons,
+        # the stage header's and the composer's; the last card is in under-the-hood.png.
+        boxes = {'the top Output button (#out-top)': node('out-top'), 'the Output button (#out-bottom)': node('out-bottom')}
+        self.evidence_shot('under-the-hood.png')
+        evidence = {'panel': panel, 'boxes': boxes}
+        (self.out / 'hood-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        failures = hood_verdict(panel, boxes)
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return {'panel_left': panel['x'], **{k: v['x'] + v['w'] for k, v in boxes.items()}}
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm')
@@ -558,7 +647,8 @@ def main():
         report['steps'].append(row)
         (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(f"{step}: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
-        if not ok:
+        # A go that saved somebody carries on (see go); any other failure ends the walk.
+        if row['outcome'] == 'FAIL' and not (step == 'go' and walk.facts.get('hired')):
             break
     try:
         report['logs_kept'] = walk.keep_logs()
