@@ -59,6 +59,16 @@ fn evidence_lock(folder: &Path, patience: std::time::Duration) -> Option<std::fs
 /// no end has been observed". It is not a liveness syscall — `worker_status.rs`'s `active`
 /// is, from a different source — and the caller that needs the hosting child to be alive
 /// establishes that itself (`native.rs` has just been handed the turn's result by it).
+///
+/// **A `SubagentStop` the provider then contradicts is not an end.** The back end's own turn
+/// end (`Stop`, no `agent_id`) carries the provider's `background_tasks`, and a run it lists
+/// there as `running` AFTER that run's `SubagentStop` was made to go on. Nightly 56's hire
+/// walk (2026-10-14, `walk-1606409b3615`, esc-20261014T202736Z-38bde06b): Dean ended a
+/// consult without handing his answer back, the provider ran him again (his two later
+/// `SubagentStop` rows carry `stop_hook_active: true`), and its very next `Stop` listed him
+/// `running`. Reading the first `SubagentStop` as his end let the hiring settle while Beth
+/// was still being written, and his hand-back was then refused. So such a run is open again,
+/// and `active`, until a `SubagentStop` after it; the provider's word, as everywhere here.
 pub fn status(state: &Path, session: Option<&str>) -> WorkerStatusView {
     status_within(state, session, EVIDENCE_LOCK_PATIENCE)
 }
@@ -81,6 +91,8 @@ fn status_within(state: &Path, session: Option<&str>, patience: std::time::Durat
     // `agent_id`. An open run with this beside it and an open run without it are different
     // facts and this reader used to give them the same answer — see the note on [`status`].
     let mut launched = std::collections::BTreeSet::new();
+    // Every run seen starting, so a provider `Stop` listing one as still running can reopen it.
+    let mut started = BTreeMap::new();
     for line in BufReader::new(file).lines() {
         let Ok(line) = line else {return unavailable(Unattributed::AppEvidenceUnavailable)};
         let Ok(row) = serde_json::from_str::<serde_json::Value>(&line) else {return unavailable(Unattributed::AppEvidenceUnavailable)};
@@ -90,11 +102,24 @@ fn status_within(state: &Path, session: Option<&str>, patience: std::time::Durat
             Some("SubagentStart") => {
                 let Some(id) = callback["agent_id"].as_str().filter(|s|!s.is_empty()) else {return unavailable(Unattributed::AppEvidenceUnavailable)};
                 let label = callback["agent_type"].as_str().unwrap_or(id).to_string();
+                started.insert(id.to_string(), label.clone());
                 open.insert(id.to_string(),label);
             }
             Some("SubagentStop") => {
                 let Some(id) = callback["agent_id"].as_str().filter(|s|!s.is_empty()) else {return unavailable(Unattributed::AppEvidenceUnavailable)};
                 open.remove(id);
+            }
+            // The back end's own turn end, and the provider's list of what it still runs
+            // (see the note on [`status`]).
+            Some("Stop") if callback["agent_id"].as_str().is_none_or(str::is_empty) => {
+                for task in callback["background_tasks"].as_array().into_iter().flatten() {
+                    if task["type"] != "subagent" || task["status"] != "running" { continue; }
+                    let Some(id) = task["id"].as_str() else { continue };
+                    if let Some(label) = started.get(id) {
+                        open.entry(id.to_string()).or_insert_with(|| label.clone());
+                        launched.insert(id.to_string());
+                    }
+                }
             }
             Some("PostToolUse") if callback["tool_name"] == "Agent" => {
                 let response = &callback["tool_response"];
