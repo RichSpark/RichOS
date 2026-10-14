@@ -262,6 +262,32 @@ class AFindIsAskedAgainAClickIsNot(unittest.TestCase):
         self.assertEqual(base.call_count, 1)
 
 
+class InstalledVoiceAfterRelaunch(unittest.TestCase):
+    def test_the_original_installation_receipt_survives_a_relaunch_that_skips_downloading(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        v = walk.VoiceWalk.__new__(walk.VoiceWalk)
+        v.vm, v.payload, v.home = 'vm', '/run', '/home'
+        v.log, v.a = '/run/relaunch.log', SimpleNamespace(voice_within=1)
+
+        def guest(vm, command):
+            if command.startswith('cat '):
+                # The new launch has no download line. Only the original one
+                # holds the real receipt, exactly as walk-78a86f2c78bf did.
+                return walk.VOICE_INSTALLED if '/run/app.log' in command else ''
+            if command.startswith('ls '):
+                return 'peter_yearsley.wav'
+            if command.startswith('shasum '):
+                return 'fixture-digest  peter_yearsley.wav'
+            self.fail(command)
+
+        with mock.patch.object(walk, 'guest', side_effect=guest):
+            self.assertEqual(v.rich_voice()['line'], walk.VOICE_INSTALLED)
+        with mock.patch.object(walk, 'guest', return_value=walk.VOICE_INSTALLED + '\n' + walk.VOICE_NOT_INSTALLED):
+            with self.assertRaises(walk.StepFailed):
+                v.rich_voice()
+
+
 class ReplySplit(unittest.TestCase):
     """Where the seconds between his turn and Rich's first sample go (CEO 2026-10-14)."""
     DAY = 1791936000000  # 2026-10-14T00:00:00Z
@@ -304,6 +330,37 @@ class ReplySplit(unittest.TestCase):
         self.assertIsNone(split['moments_ms_of_day']['hidden_first'])
         self.assertIsNone(split['gaps_ms']['turn_started->hidden_first'])
         self.assertEqual(split['total_ms'], 9510)
+
+    def test_a_cached_brief_reports_preparation_and_the_models_unbuffered_first_text(self):
+        lines = [
+            '[richos-voice] 00:00:10.000Z TURN to Rich',
+            '[richos] 00:00:12.000Z reply timing: a visible turn sent to the model',
+            '[richos] 00:00:14.000Z reply timing: first text from the model',
+            '[richos-voice] 00:00:14.600Z ANSWER AUDIBLE',
+            '[richos-voice] 00:00:14.800Z playout chunk START',
+        ]
+        ledger = [
+            {'event': 'PromptReceived', 'source': 'jam', 'text': 'Hi', 'turn_id': 't', 'at': self.DAY + 10000},
+            {'event': 'TurnStarted', 'turn_id': 't', 'at': self.DAY + 10000},
+            {'event': 'AssistantDelta', 'turn_id': 't', 'text': 'Hello ', 'at': self.DAY + 14500},
+        ]
+        machinery = [{'turnId': 't', 'internal': False, 'at': self.DAY + 12500}]
+        split = walk.reply_split(lines, ledger, machinery)
+        self.assertEqual(split['moments_ms_of_day']['first_text'], 14000)
+        self.assertEqual(split['gaps_ms']['turn_started->words_sent'], 2000)
+        self.assertEqual(sum(g for g in split['gaps_ms'].values() if g is not None), split['total_ms'])
+
+        # An internal context response also logs first text. It cannot be charged to
+        # the visible answer, even though it arrived after the spoken turn began.
+        lines.insert(1, '[richos] 00:00:11.000Z reply timing: first text from the model')
+        split = walk.reply_split(lines, ledger, machinery)
+        self.assertEqual(split['moments_ms_of_day']['first_text'], 14000)
+
+        # Old builds have no model timing line. Retain the ledger fallback, with
+        # the same complete accounting across the absent hidden-turn milestones.
+        split = walk.reply_split([l for l in lines if 'first text from the model' not in l], ledger, machinery)
+        self.assertEqual(split['moments_ms_of_day']['first_text'], 14500)
+        self.assertEqual(sum(g for g in split['gaps_ms'].values() if g is not None), split['total_ms'])
 
 
 if __name__ == '__main__':

@@ -154,7 +154,8 @@ def reply_split(voice_lines, ledger_rows, machinery_rows):
                          from 2026-10-14 on; None before)
       model_first_frame  the first non-internal machinery record of the turn: his words reached
                          the model (`system/init` arrives as the prompt is taken)
-      first_text         the first AssistantDelta: the model's first word of the answer
+      first_text         the native client's first-text timing line, before app word buffering;
+                         the first AssistantDelta is a fallback for builds without that line
       first_sentence     `ANSWER AUDIBLE`: the first complete sentence went to the voice
       speech_started     the first `playout chunk START` after it: the first sample played"""
     def voice(marker, after=None):
@@ -175,15 +176,19 @@ def reply_split(voice_lines, ledger_rows, machinery_rows):
     hidden = sorted(r['at'] for r in mine if r.get('internal'))
     shown = sorted(r['at'] for r in mine if not r.get('internal'))
     sentence = voice('ANSWER AUDIBLE')
+    words_sent = voice('reply timing: a visible turn sent to the model', after=voice('TURN to Rich'))
+    # Context-only turns log their first text too. Only the text after the visible
+    # send belongs to this answer; without that marker use the ledger's scoped delta.
+    first_text = voice('reply timing: first text from the model', after=words_sent) if words_sent is not None else None
     moments = {
         'turn_handed_over': voice('TURN to Rich'),
         'prompt_received': fold(prompt.get('at')) if prompt else None,
         'turn_started': fold(started.get('at')) if started else None,
         'hidden_first': fold(hidden[0]) if hidden else None,
         'hidden_last': fold(hidden[-1]) if hidden else None,
-        'words_sent': voice('reply timing: a visible turn sent to the model', after=voice('TURN to Rich')),
+        'words_sent': words_sent,
         'model_first_frame': fold(shown[0]) if shown else None,
-        'first_text': fold(first_delta.get('at')) if first_delta else None,
+        'first_text': first_text if first_text is not None else fold(first_delta.get('at')) if first_delta else None,
         'first_sentence': sentence,
         'speech_started': voice('playout chunk START', after=sentence) if sentence is not None else None,
     }
@@ -191,6 +196,11 @@ def reply_split(voice_lines, ledger_rows, machinery_rows):
     gaps = {}
     for a, b in zip(order, order[1:]):
         gaps[f'{a}->{b}'] = (moments[b] - moments[a]) if moments[a] is not None and moments[b] is not None else None
+    # A cached context brief omits hidden_first/last. Account for the time between
+    # the surrounding recorded moments, while retaining absent moments as None.
+    available = [name for name in order if moments[name] is not None]
+    for a, b in zip(available, available[1:]):
+        gaps.setdefault(f'{a}->{b}', moments[b] - moments[a])
     start, end = moments['turn_handed_over'], moments['speech_started']
     return {'turn_id': turn, 'moments_ms_of_day': moments, 'gaps_ms': gaps, 'hidden_records': len(hidden),
             'total_ms': (end - start) if start is not None and end is not None else None}
@@ -356,8 +366,14 @@ class VoiceWalk(adopt_walk.Walk):
         fetch_rich_voice_in_background) and says so in its log. Nothing is copied in."""
         end = time.monotonic() + self.a.voice_within
         while time.monotonic() < end:
-            text = guest(self.vm, 'cat ' + shlex.quote(self.log) + ' 2>/dev/null || true')
-            for line in text.splitlines():
+            # First-run may finish the download before relaunch. That relaunch
+            # verifies the installed files and skips downloading them again, so
+            # its log contains no new installation receipt. Retain the original
+            # receipt from this same run; a later fetch or failure supersedes it.
+            logs = dict.fromkeys((self.payload + '/app.log', self.log))
+            text = guest(self.vm, 'cat ' + ' '.join(shlex.quote(p) for p in logs) + ' 2>/dev/null || true')
+            fetch_log = [l for l in text.splitlines() if 'rich voice:' in l]
+            for line in fetch_log[-1:]:
                 if VOICE_NOT_INSTALLED in line:
                     raise StepFailed(line)
                 if VOICE_INSTALLED in line:
@@ -365,7 +381,7 @@ class VoiceWalk(adopt_walk.Walk):
                     listing = guest(self.vm, 'ls -l ' + shlex.quote(folder))
                     voice = guest(self.vm, 'shasum -a 256 ' + shlex.quote(folder + '/peter_yearsley.wav')).split()[0]
                     return {'line': line, 'files': listing.splitlines(), 'peter_yearsley_sha256': voice,
-                            'fetch_log': [l for l in text.splitlines() if 'rich voice' in l]}
+                            'fetch_log': fetch_log}
             time.sleep(2)
         raise StepFailed(f'the app did not install Rich\'s voice within {self.a.voice_within} s')
 

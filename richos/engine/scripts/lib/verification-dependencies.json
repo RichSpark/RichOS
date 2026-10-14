@@ -9817,8 +9817,8 @@
     },
     "ecs/adapters/app.py#load": {
       "source": "ecs/adapters/app.py",
-      "sha256": "807c59f61d562b4f3a89fb79b036b8c173e7be9e5f208ac9b1ec7c5515b3a4d7",
-      "evidence": "Module-load imports and initializers reviewed: stdlib/core/checkpoint/inspect, constants and definitions. No adapter entrypoint runs.",
+      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
+      "evidence": "Module-load imports and initializers reviewed: stdlib/core/checkpoint/inspect, constants and definitions. No adapter entrypoint runs. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
         {
@@ -12863,8 +12863,8 @@
     },
     "ecs/adapters/app.py#answer-operator-fixture": {
       "source": "ecs/adapters/app.py",
-      "sha256": "807c59f61d562b4f3a89fb79b036b8c173e7be9e5f208ac9b1ec7c5515b3a4d7",
-      "evidence": "Only bind/checkpoint/observe(started)/hello/answer-complete/operator-complete from named completion fixtures. Git ancestry uses fixed git commands. Does not enter complete-obligation or verified-work, the only dynamic Mega Lander imports. No config lookup.",
+      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
+      "evidence": "Only bind/checkpoint/observe(started)/hello/answer-complete/operator-complete from named completion fixtures. Git ancestry uses fixed git commands. Does not enter complete-obligation or verified-work, the only dynamic Mega Lander imports. No config lookup. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
         {
@@ -12902,8 +12902,8 @@
     },
     "ecs/tests/test_app.py#answer-operator": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "e97dd329afdb09095d652936ac8cee496da2d11ec73b27540227067653075432",
-      "evidence": "Only AnswerCompleteTests/OperatorCompleteTests and inherited WorkSeatTests call/bind/rows/observe helpers run. Private SQLite and Git fixtures, fixed CLI requests, host-only MCP refusal controls. No complete-obligation/verified-work command or other test class runs. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one.",
+      "sha256": "4c3c0563d91f1c6eb06758ef4a774250f0f300b259a8a1fc6dce5f0e92c4ac76",
+      "evidence": "Only AnswerCompleteTests/OperatorCompleteTests and inherited WorkSeatTests call/bind/rows/observe helpers run. Private SQLite and Git fixtures, fixed CLI requests, host-only MCP refusal controls. No complete-obligation/verified-work command or other test class runs. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
         {
@@ -13925,8 +13925,8 @@
     },
     "ecs/adapters/app.py#desktop-work-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "807c59f61d562b4f3a89fb79b036b8c173e7be9e5f208ac9b1ec7c5515b3a4d7",
-      "evidence": "Finite desktop fixture requests: bind/checkpoint/brief/inspect/observe/verified-work/observation-receipt/seats/release-seat/complete-obligation. Reached dynamic imports return to the bound Mega Lander app for receipt verification. Import-preview/import-apply/sync-loro-receipts are not invoked. Core uses private SQLite/JSON and fixed SQL; no config value is sourced.",
+      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
+      "evidence": "Finite desktop fixture requests: bind/checkpoint/brief/inspect/observe/verified-work/observation-receipt/seats/release-seat/complete-obligation. Reached dynamic imports return to the bound Mega Lander app for receipt verification. Import-preview/import-apply/sync-loro-receipts are not invoked. Core uses private SQLite/JSON and fixed SQL; no config value is sourced. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
         {
@@ -15209,7 +15209,7 @@
     },
     "ecs/adapters/app.py#discovery-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "807c59f61d562b4f3a89fb79b036b8c173e7be9e5f208ac9b1ec7c5515b3a4d7",
+      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
       "keys": [],
       "edges": [
         {
@@ -15249,7 +15249,7 @@
           "to": "ecs/migrations/007_correction_reobservations.sql"
         }
       ],
-      "evidence": "Complete source-bound test_app/test_import/test_loro_receipts request census: core/protocol/seat/checkpoint/receipt/observe-started/answer/operator completion/import/Loro receipt paths. No verified-work or complete-obligation request reaches the dynamic Mega Lander imports. SQL directory membership is fixed.",
+      "evidence": "Complete source-bound test_app/test_import/test_loro_receipts request census: core/protocol/seat/checkpoint/receipt/observe-started/answer/operator completion/import/Loro receipt paths. No verified-work or complete-obligation request reaches the dynamic Mega Lander imports. SQL directory membership is fixed. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "source_inventory": {
         "directory": "ecs/migrations",
         "members": [
@@ -15287,7 +15287,7 @@
     },
     "ecs/tests/test_app.py": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "e97dd329afdb09095d652936ac8cee496da2d11ec73b27540227067653075432",
+      "sha256": "4c3c0563d91f1c6eb06758ef4a774250f0f300b259a8a1fc6dce5f0e92c4ac76",
       "keys": [],
       "edges": [
         {
@@ -15303,7 +15303,7 @@
           "to": "ecs/adapters/loro_receipts.py"
         }
       ],
-      "evidence": "Full fixed unittest module. Only private SQL/JSON/Git fixtures, bound ECS entrypoints and literal migration/receipt mutations. No hook manifest or arbitrary imported script executes. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one."
+      "evidence": "Full fixed unittest module. Only private SQL/JSON/Git fixtures, bound ECS entrypoints and literal migration/receipt mutations. No hook manifest or arbitrary imported script executes. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target."
     },
     "ecs/tests/test_import.py": {
       "source": "ecs/tests/test_import.py",

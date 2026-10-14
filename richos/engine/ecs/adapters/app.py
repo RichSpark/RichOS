@@ -7,9 +7,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sqlite3
 
 from ecs_core import (CEO_SEAT_PREFIX, EventStore, PERSON_ID, ScopeError, ValidationError,
-                      canonical_json, ceo_seat, is_ceo_row)
+                      ECSError, canonical_json, ceo_seat, is_ceo_row)
 from ecs_checkpoint import checkpoint, checkpoint_receipt
 from ecs_inspect import inspect_records
 
@@ -289,7 +290,32 @@ def execute(state_root, request):
         return {"protocol": PROTOCOL_VERSION, "event_schema": 1,
                 "migration_digest": identity.hexdigest(), "state_root": str(root),
                 "ceo_thread_seats": True, "ceo_seat_prefix": CEO_SEAT_PREFIX,
-                "commands": ["current", "bind", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete"]}
+                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete"]}
+    if command == "prepare-turn":
+        # The front desk's existing four requests, in one Python invocation. Keep
+        # their handlers, revision fences, order and receipt-error behavior.
+        scope = request.get("scope")
+        if not isinstance(scope, dict) or scope.get("audience") != "ceo":
+            raise ScopeError("turn preparation belongs to the conversation's own seat")
+        budget = request.get("budget_chars", 6000)
+        if type(budget) is not int or not 900 <= budget <= 24000:
+            raise ValidationError("brief budget must be between 900 and 24000 characters")
+        current = execute(root, {**request, "command": "current"})["binding"]
+        if current is not None and all(current.get(k) == v for k, v in scope.items()) and set(scope) == set(BINDING_FIELDS) - {"revision"}:
+            binding = current
+        else:
+            binding = execute(root, {**request, "command": "bind",
+                "expected_revision": current["revision"] if current else None})["binding"]
+        fields = {**request, "binding": binding}
+        receipts, receipt_error = None, None
+        try:
+            receipts = execute(root, {**fields, "command": "sync-loro-receipts"})
+        except (ECSError, ValueError, TypeError, OSError, sqlite3.Error) as error:
+            # As on the old app path, failed receipt synchronization is disclosed
+            # in the brief; a bind or brief failure still refuses the turn.
+            receipt_error = str(error)
+        brief = execute(root, {**fields, "command": "brief"})["text"]
+        return {"binding": binding, "text": brief, "receipts": receipts, "receipt_error": receipt_error}
     if command == "import-preview":
         from import_records import preview
         return preview(root, request.get("envelope"), request.get("target"))
