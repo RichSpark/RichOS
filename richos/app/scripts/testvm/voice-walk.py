@@ -81,6 +81,32 @@ READY = '[richos] voice: ready on this machine'
 NOT_READY = '[richos] voice: not ready on this machine'
 
 
+def decoder_warm_before_capture(lines):
+    for line in lines:
+        if 'speech decoder initialized before capture in ' in line:
+            return True
+        if 'voice session OPEN' in line:
+            return False
+    return False
+
+
+def tts_timing(lines, completed):
+    """Whole-sentence synthesis and streaming first PCM are different measurements."""
+    match = re.search(r' (synthesized|streamed) in (\d+) ms', completed)
+    if not match:
+        raise StepFailed('unrecognized TTS measurement: ' + completed)
+    total = int(match.group(2))
+    if match.group(1) == 'synthesized':
+        return {'first_audio_ms': total, 'complete_synthesis_ms': total}
+    for line in lines:
+        match = re.search(r'Pocket TTS first PCM in (\d+) ms', line)
+        if match:
+            return {'first_audio_ms': int(match.group(1)), 'complete_synthesis_ms': total}
+        if line == completed:
+            break
+    raise StepFailed('streamed speech has no first-PCM measurement: ' + completed)
+
+
 def spoken_prompts(rows):
     """Every stored prompt that came from voice: a PromptReceived with source "jam" (ledger.rs
     `Source::Jam`) and words in it. A re-prime or any other internal turn is never one (the first
@@ -387,8 +413,8 @@ class VoiceWalk(adopt_walk.Walk):
 
     def spoken(self):
         """Rich answers aloud in Peter Yearsley's voice: the first sentence of his answer is
-        synthesized by Pocket TTS (the app's `[richos-voice] tts:` line names the voice), and its
-        synthesis time is that answer's time to first audio. Played into the guest's muted output."""
+        synthesized by Pocket TTS (the app's `[richos-voice] tts:` line names the voice).
+        Streaming records first PCM separately from completion. Output is muted in the guest."""
         end = time.monotonic() + self.a.within
         lines = []
         while time.monotonic() < end:
@@ -400,7 +426,7 @@ class VoiceWalk(adopt_walk.Walk):
                 if POCKET_LABEL not in first:
                     raise StepFailed(f'Rich\'s first sentence was not spoken by Pocket TTS as Peter Yearsley: {first}\n' +
                                      '\n'.join(lines))
-                ms = int(first.split(' synthesized in ')[1].split(' ms')[0])
+                synthesis = tts_timing(lines, first)
                 time.sleep(5)
                 text = guest(self.vm, 'grep -E "\\[richos-voice\\] (tts:|Pocket TTS|ANSWER AUDIBLE)" ' + shlex.quote(self.log) + ' || true')
                 # The whole voice session, kept: the session's tts= line, every utterance, the
@@ -417,6 +443,8 @@ class VoiceWalk(adopt_walk.Walk):
                 wrong = [l for l in said if POCKET_LABEL not in l]
                 if wrong:
                     raise StepFailed('a sentence Rich spoke was not Pocket TTS as Peter Yearsley: ' + wrong[0])
+                if self.a.expect_warmed_decoder and not decoder_warm_before_capture(lines):
+                    raise StepFailed('the first speech decoder initialization was not completed before capture opened')
                 timing = talk_timing(lines)
                 if timing['spoke_before_done']:
                     raise StepFailed('Rich was audible before his turn was over: ' + json.dumps(timing))
@@ -424,7 +452,7 @@ class VoiceWalk(adopt_walk.Walk):
                     raise StepFailed('Rich synthesized speech but the session never logged ANSWER AUDIBLE: '
                                      + json.dumps(timing))
                 ready = [l for l in lines if 'Pocket TTS ready' in l]
-                return {'first_sentence': first, 'first_audio_ms': ms, 'voice_log': text.splitlines()[-20:],
+                return {'first_sentence': first, **synthesis, 'voice_log': text.splitlines()[-20:],
                         'sentences': len(said), 'session_open': opened, 'pocket_ready': ready,
                         'open_line_names_pocket': all('tts=' + POCKET_LABEL in l for l in opened),
                         'timing': timing}
@@ -636,6 +664,7 @@ def main():
     p.add_argument('--wav', type=Path, required=True, help='a short spoken sample, 16 kHz mono WAV (say -o, then afconvert)')
     p.add_argument('--model', type=Path, required=True, help='the GGML weights to copy in, matching --model-id')
     p.add_argument('--model-id', default='small.en')
+    p.add_argument('--expect-warmed-decoder', action='store_true', help='require real decoder initialization before voice capture, not on the first user utterance')
     p.add_argument('--within', type=float, default=120, help='seconds for the transcript to be stored')
     p.add_argument('--one-turn', action='store_true',
                    help='require the whole sample to become exactly one spoken turn (a pause inside a sentence)')

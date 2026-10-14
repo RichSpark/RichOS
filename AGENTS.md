@@ -21,3 +21,12 @@ It applies to this entire repository, including delegated work and reviews.
 These rules do not authorize bypassing required release gates, changing test
 assertions, weakening safety controls or claiming a single clean invocation
 when the result was reconciled across multiple runs.
+
+# Spoken reply changes
+
+Before changing the voice path, decoder packaging or conversation startup, read
+[the spoken-reply latency record](docs/development/spoken-reply-latency.md).
+A pinned decoder and cached calibration do not prove first-use initialization.
+Keep real decoder startup off the first user utterance and verify the application
+with `voice-walk.py --expect-warmed-decoder`. Preserve complete last-word-to-playback
+evidence and do not substitute a warm-cache benchmark for first-use coverage.

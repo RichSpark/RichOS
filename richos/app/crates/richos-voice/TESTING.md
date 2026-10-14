@@ -4,6 +4,17 @@
 
 The committed echo-path fixture is `tests/fixtures/echo-path/ceo-rig-2026-09-17-{mic,reference}.wav` (captured at the walk's volume; see `tests/echo_path_replay.rs` and `tests/self_voice_replay.rs`). A near-end voice is superimposed on the mic track, never played through the speakers. Full ruling: richos-hq `wiki/ceo-decisions.md` §53.
 
+## First-use speech recognition and reply latency
+
+Read [the startup and diagnosis record](../../../../docs/development/spoken-reply-latency.md)
+before latency work. A fresh packaged decoder measured 9.764 seconds on this Mac, then
+0.932 and 0.879 when warm. Binary metadata and cached calibration are insufficient.
+The application initializes the real decoder silently during readiness and joins it
+before capture. The full application proof uses `voice-walk.py --expect-warmed-decoder`
+and refuses initialization that finishes after capture opens. The dedicated decoder
+warmup unit verifies successful reuse, identity changes, failure recovery and cleanup.
+The existing physical audio limitations below still apply.
+
 ## The three echo-path fixtures, and which question each one answers
 
 ```text

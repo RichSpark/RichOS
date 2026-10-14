@@ -825,9 +825,14 @@ pub fn child_args(session_id: &str) -> Vec<String> {
     .collect()
 }
 
-/// **The effort every lease runs at** — the CEO's §119 (2026-10-10): *"Rich and Stu stay on
-/// Opus high effort in RichOS by default."* Not a setting; his option is the model only.
-pub const LEASE_EFFORT: &str = "high";
+/// The CEO's 2026-10-14 instruction prioritizes instant replies over effort level.
+/// The conversation only answers or hands work over; the work lease retains high effort.
+pub fn lease_effort(role: LeaseRole) -> &'static str {
+    match role {
+        LeaseRole::Conversation => "low",
+        LeaseRole::Work => "high",
+    }
+}
 
 /// **The flags that name the model and the effort for a lease of this role** — appended to
 /// every lease's vector by [`NativeClient::spawn_with_tools`], and the one function the tests
@@ -846,7 +851,7 @@ pub fn lease_model_args(role: LeaseRole, profile: Option<&crate::engine_profile:
         LeaseRole::Conversation => models.rich,
         LeaseRole::Work => models.stu,
     };
-    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), LEASE_EFFORT.into()]
+    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), lease_effort(role).into()]
 }
 
 pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<String> {
@@ -2003,7 +2008,7 @@ impl NativeClient {
             Some((d, s)) => chat_child_args(&session_id, desktop_doctrine.as_deref().unwrap_or(d), s),
             None => child_args(&session_id),
         };
-        // §119: Opus at high effort unless his setting for this role says Fable.
+        // The selected model, with low effort for replies and high effort for work.
         args.extend(lease_model_args(role, profile));
         if let Some((executable, scope, assignments, status)) = onboarding {
             let config = mcp_config(executable, scope, assignments, status, continuity, continuity_tools, profile, role, bin);
@@ -6239,17 +6244,17 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     }
 
     #[test]
-    fn every_lease_is_started_on_opus_at_high_effort_by_default() {
-        // §119 (CEO, 2026-10-10): "Rich and Stu stay on Opus high effort in RichOS by default."
+    fn conversation_starts_at_low_effort_and_work_keeps_high_effort() {
+        // CEO 2026-10-14: "Forget the effort level for now."
         // Read off the argument vector the child actually received, on a real
         // `spawn_with_tools`, one per role. The per-role Fable setting is
-        // `each_role_starts_on_opus_at_high_effort_unless_its_setting_says_fable`
+        // `each_role_keeps_its_model_with_low_effort_for_replies_and_high_for_work`
         // (`tests/engine_profile.rs`), through the same `lease_model_args`.
         let handshake = "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$(dirname \"$0\")/argv\"\n\
              read -r line\n\
              printf '%s\\n' '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"req_init\",\"response\":{}}}'\n\
              sleep 5\n";
-        for (tag, role) in [("models-desk", LeaseRole::Conversation), ("models-work", LeaseRole::Work)] {
+        for (tag, role, effort) in [("models-desk", LeaseRole::Conversation, "low"), ("models-work", LeaseRole::Work, "high")] {
             let script = write_script(tag, handshake);
             let _client = NativeClient::spawn_with_tools(
                 &script, Path::new("/tmp"),
@@ -6260,7 +6265,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
                 .lines().map(String::from).collect();
             let at = argv.iter().position(|a| a == "--model")
                 .unwrap_or_else(|| panic!("{role:?} was started without --model: {argv:?}"));
-            assert_eq!(&argv[at..at + 4], ["--model", "opus", "--effort", "high"], "{role:?}: {argv:?}");
+            assert_eq!(&argv[at..at + 4], ["--model", "opus", "--effort", effort], "{role:?}: {argv:?}");
             assert_eq!(argv.iter().filter(|a| *a == "--model" || *a == "--effort").count(), 2,
                 "{role:?} names a model or an effort twice: {argv:?}");
         }
