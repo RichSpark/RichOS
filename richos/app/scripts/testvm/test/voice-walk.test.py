@@ -85,7 +85,7 @@ class TalkTiming(unittest.TestCase):
         from unittest import mock
         v = walk.VoiceWalk.__new__(walk.VoiceWalk)
         v.vm, v.log = 'vm', '/log'
-        v.a = SimpleNamespace(within=5)
+        v.a = SimpleNamespace(within=5, expect_warmed_decoder=False)
         text = '\n'.join(lines)
         with tempfile.TemporaryDirectory() as out, mock.patch.object(walk, 'guest', return_value=text), \
                 mock.patch.object(walk.time, 'sleep'):
@@ -286,6 +286,15 @@ class InstalledVoiceAfterRelaunch(unittest.TestCase):
         with mock.patch.object(walk, 'guest', return_value=walk.VOICE_INSTALLED + '\n' + walk.VOICE_NOT_INSTALLED):
             with self.assertRaises(walk.StepFailed):
                 v.rich_voice()
+
+
+class DecoderWarmup(unittest.TestCase):
+    def test_initialization_must_finish_before_capture_not_after_his_first_utterance(self):
+        warmed = '[richos-voice] speech decoder initialized before capture in 9800 ms'
+        opened = '[richos-voice] 10:00:00.000Z voice session OPEN'
+        self.assertTrue(walk.decoder_warm_before_capture([warmed, opened]))
+        self.assertFalse(walk.decoder_warm_before_capture([opened, warmed]))
+        self.assertFalse(walk.decoder_warm_before_capture([opened]))
 
 
 class TtsTiming(unittest.TestCase):

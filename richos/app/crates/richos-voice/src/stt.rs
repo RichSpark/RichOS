@@ -759,6 +759,7 @@ pub fn readiness() -> SpeechReadiness {
 
 /// A resolved, ready-to-use recognizer. Resolution happens ONCE at voice-mode start so a
 /// missing model is a calm message at the toggle, not a failure in the middle of a sentence.
+#[derive(Clone)]
 pub struct Recognizer {
     bin: PathBuf,
     model: PathBuf,
@@ -871,6 +872,35 @@ impl Recognizer {
     }
     pub fn binary_path(&self) -> &Path {
         &self.bin
+    }
+
+    /// Initialize the decoder before the first user utterance. The first decoder invocation
+    /// measured 9.8 seconds on a fresh packaged decoder; subsequent recognition was under one
+    /// second. Cache only successful warmups by the verified binary and model identities.
+    /// Concurrent readiness and voice-start callers join the same initialization.
+    pub fn warm(&self, scratch_root: &Path) -> Result<(), SttError> {
+        use std::collections::HashSet;
+        use std::sync::{Mutex, OnceLock};
+        static WARMED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
+        let key = (self.toolchain.bin_sha256.clone(), self.toolchain.model_sha256.clone().unwrap_or_default());
+        let mut warmed = WARMED.get_or_init(|| Mutex::new(HashSet::new())).lock()
+            .map_err(|_| SttError::Io("speech initialization lock poisoned".into()))?;
+        if warmed.contains(&key) { return Ok(()); }
+        std::fs::create_dir_all(scratch_root).map_err(|e| SttError::Io(e.to_string()))?;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| SttError::Io(e.to_string()))?.as_nanos();
+        let dir = scratch_root.join(format!("richos-speech-warm-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&dir).map_err(|e| SttError::Io(e.to_string()))?;
+        // A silent, app-owned file, never microphone audio and never a conversation prompt.
+        // Use the regular pinned decoder and its normal flags; do not change models or threads.
+        let result = self.transcribe_bounded(&vec![0.0; SAMPLE_RATE as usize], &dir, std::time::Duration::from_secs(30));
+        if let Err(error) = std::fs::remove_dir_all(&dir) {
+            eprintln!("[richos-voice] speech initialization scratch cleanup failed: {error}");
+        }
+        let (_, ms) = result?;
+        warmed.insert(key);
+        eprintln!("[richos-voice] speech decoder initialized before capture in {ms} ms");
+        Ok(())
     }
 
     /// Transcribe one utterance (16 kHz mono f32). Returns the text and the MEASURED
@@ -1086,6 +1116,38 @@ pub(crate) fn strip_annotations(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoder_warmup_is_silent_once_per_identity_and_a_failure_is_not_cached() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("richos-warm-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let bin = root.join("decoder");
+        let calls = root.join("calls");
+        let fail = root.join("fail");
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf 'call\\n' >> '{}'\n[ ! -f '{}' ] || exit 7\nprintf 'discard these warmup words\\n'\n", calls.display(), fail.display())).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut recognizer = Recognizer {
+            bin, model: root.join("model"), model_id: "small.en".into(), prompt: None,
+            toolchain: crate::toolchain::Report { findings: Vec::new(), strict: false,
+                provenance: "warmup test".into(), bin_sha256: format!("test-{}", root.display()),
+                bin_version: None, model_sha256: Some("first".into()), model_pinned: true,
+                model_hash_cached: false, first_run: true },
+            resolution: chosen("small.en".into(), crate::hardware::Machine::read()),
+        };
+        std::fs::write(&fail, "fail").unwrap();
+        assert!(recognizer.warm(&root).is_err());
+        std::fs::remove_file(&fail).unwrap();
+        recognizer.warm(&root).unwrap();
+        recognizer.clone().warm(&root).unwrap();
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2, "failed initialization must retry; successful initialization must be joined");
+        recognizer.toolchain.model_sha256 = Some("replacement-model".into());
+        recognizer.warm(&root).unwrap();
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 3, "different verified model bytes require initialization");
+        assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with("richos-speech-warm-")), "warmup output must be removed on success and failure");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
 
     /// INVARIANT: this path never decodes at whisper.cpp's own text-context default.
     ///

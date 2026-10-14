@@ -4656,7 +4656,8 @@ fn ensure_model_fetch_state(app: &AppHandle) -> std::sync::Arc<voice_provision::
 /// engine and the app download does not grow. `stt::readiness` still separates the two gaps, and
 /// only the model gap is offered for download here.
 fn speech_preflight() -> Result<(), String> {
-    richos_voice::stt::Recognizer::resolve().map(|_| ()).map_err(|e| e.ceo_message())
+    let recognizer = richos_voice::stt::Recognizer::resolve().map_err(|e| e.ceo_message())?;
+    recognizer.warm(&std::env::temp_dir()).map_err(|e| e.ceo_message())
 }
 
 /// **The speech model Rich's video skill transcribes with** (media-tools plan section 3): the
@@ -4725,6 +4726,12 @@ fn voice_readiness() -> serde_json::Value {
             // Voice works here, so Rich will speak: fetch his voice now, in the background, if it
             // is not on this Mac yet, rather than at the first answer (he hears `say` until then).
             voice_provision::fetch_rich_voice_in_background();
+            let recognizer = rec.as_ref().clone();
+            std::thread::spawn(move || {
+                if let Err(error) = recognizer.warm(&std::env::temp_dir()) {
+                    eprintln!("[richos] voice: speech decoder initialization failed: {error}");
+                }
+            });
         }
         (_, None) => {}
     }

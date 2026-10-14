@@ -81,6 +81,15 @@ READY = '[richos] voice: ready on this machine'
 NOT_READY = '[richos] voice: not ready on this machine'
 
 
+def decoder_warm_before_capture(lines):
+    for line in lines:
+        if 'speech decoder initialized before capture in ' in line:
+            return True
+        if 'voice session OPEN' in line:
+            return False
+    return False
+
+
 def tts_timing(lines, completed):
     """Whole-sentence synthesis and streaming first PCM are different measurements."""
     match = re.search(r' (synthesized|streamed) in (\d+) ms', completed)
@@ -434,6 +443,8 @@ class VoiceWalk(adopt_walk.Walk):
                 wrong = [l for l in said if POCKET_LABEL not in l]
                 if wrong:
                     raise StepFailed('a sentence Rich spoke was not Pocket TTS as Peter Yearsley: ' + wrong[0])
+                if self.a.expect_warmed_decoder and not decoder_warm_before_capture(lines):
+                    raise StepFailed('the first speech decoder initialization was not completed before capture opened')
                 timing = talk_timing(lines)
                 if timing['spoke_before_done']:
                     raise StepFailed('Rich was audible before his turn was over: ' + json.dumps(timing))
@@ -653,6 +664,7 @@ def main():
     p.add_argument('--wav', type=Path, required=True, help='a short spoken sample, 16 kHz mono WAV (say -o, then afconvert)')
     p.add_argument('--model', type=Path, required=True, help='the GGML weights to copy in, matching --model-id')
     p.add_argument('--model-id', default='small.en')
+    p.add_argument('--expect-warmed-decoder', action='store_true', help='require real decoder initialization before voice capture, not on the first user utterance')
     p.add_argument('--within', type=float, default=120, help='seconds for the transcript to be stored')
     p.add_argument('--one-turn', action='store_true',
                    help='require the whole sample to become exactly one spoken turn (a pause inside a sentence)')

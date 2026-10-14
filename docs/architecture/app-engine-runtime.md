@@ -129,3 +129,12 @@ See the provider's [auto-mode configuration](https://code.claude.com/docs/en/aut
 
 See the [intermediate profile verification](../verification/desktop-engine-profile-2026-09-16.md)
 for the tested scope and remaining integration work.
+
+## Speech decoder startup
+
+The pinned runtime decoder must actually initialize before the first user utterance.
+A fresh decoder invocation measured 9.764 seconds versus under one second when warm
+on the physical Mac. Download verification, metadata probes and cached calibration do
+not cover this cost. Read [the startup requirement and regression checks](../development/spoken-reply-latency.md)
+when changing decoder packaging or its initialization path. The app warms it silently
+at readiness and joins the warmup before opening capture.
