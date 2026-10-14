@@ -32,8 +32,10 @@
 //! A calendar prompt and the microphone signal for the same meeting are one call: whichever
 //! comes first is the prompt, the other attaches to it (the calendar title replaces "Call
 //! detected in …"). Not this one, and Stop, hold for that call: it does not prompt again until
-//! it has ended. The next call prompts normally. While prompts are paused nothing prompts, and
-//! a running recording is left alone.
+//! it has ended. The next call prompts normally. A calendar meeting declined, or its recording
+//! stopped or closed, before anyone joined is held for the call that begins within
+//! [`SAME_MEETING_MS`] of its start; any other call prompts. While prompts are paused nothing
+//! prompts, and a running recording is left alone.
 //!
 //! # Nothing that waits is forgotten
 //!
@@ -162,6 +164,9 @@ pub enum Input {
 struct Start {
     title: Option<String>,
     event_id: Option<String>,
+    /// The calendar meeting's start, so a recording stopped or closed before its call began is
+    /// held as that meeting declined ([`MeetingMonitor::declined_event`]).
+    starts_at: Option<u64>,
     manual: bool,
 }
 
@@ -207,6 +212,12 @@ impl Call {
             Some(known) => *known == meeting.event_id,
             None => self.since + SAME_MEETING_MS >= meeting.starts_at,
         }
+    }
+    /// This call began within [`SAME_MEETING_MS`] of a meeting's start, before or after (joining
+    /// early or late): the only call that can be a meeting declined before anyone joined it. A
+    /// call that begins later is a different call (rv-20261014T095959Z-f7ee40c9-86b6 #2).
+    fn began_near(&self, starts_at: u64) -> bool {
+        self.since + SAME_MEETING_MS >= starts_at && self.since <= starts_at + SAME_MEETING_MS
     }
 }
 
@@ -254,6 +265,15 @@ impl Phase {
         }
     }
 
+    /// The calendar meeting (event id, start) the prompt or recording up is for.
+    fn meeting(&self) -> Option<(String, u64)> {
+        match self {
+            Phase::Prompting { scheduled: Some(s), .. } => Some((s.event_id.clone(), s.starts_at)),
+            Phase::Recording { start, .. } | Phase::Failed { start, .. } => start.event_id.clone().zip(start.starts_at),
+            _ => None,
+        }
+    }
+
     /// Declined or stopped: wait for this call to end, or Idle when there is none.
     fn done(call: &Option<Call>) -> Phase {
         match call {
@@ -280,10 +300,13 @@ pub struct MeetingMonitor {
     /// to wait is not in here, so it prompts when the call ends (rv-20261013T130528Z-361c4090-dbf1
     /// #1).
     prompted_events: BTreeSet<String>,
-    /// A calendar meeting declined before anyone joined it: its call, when it starts, is that
-    /// declined meeting and does not prompt (second review rv-20261013T120455Z-516bb135-67f2 #1).
-    /// Cleared when that call starts, when a later meeting prompts, or when the meeting is over.
-    declined_event: Option<String>,
+    /// A calendar meeting (event id, start) declined, or its recording stopped or closed, before
+    /// anyone joined it: its call, when it starts near the meeting's start ([`Call::began_near`]),
+    /// is that declined meeting and does not prompt (second review
+    /// rv-20261013T120455Z-516bb135-67f2 #1; rv-20261014T095959Z-f7ee40c9-86b6 #1). Any other call
+    /// prompts. Cleared when that call starts, when a later meeting prompts, or when the meeting
+    /// is over.
+    declined_event: Option<(String, u64)>,
 }
 
 impl MeetingMonitor {
@@ -393,10 +416,10 @@ impl MeetingMonitor {
             return vec![];
         };
         match &mut self.phase {
-            Phase::Idle if self.declined_event.is_some() => {
+            Phase::Idle if self.declined_event.as_ref().is_some_and(|(_, starts_at)| call.began_near(*starts_at)) => {
                 // The calendar meeting he declined before joining: this is its call. Held as
                 // declined until it ends, like any declined call, and known to be that meeting.
-                call.event = self.declined_event.take();
+                call.event = self.declined_event.take().map(|(id, _)| id);
                 self.phase = Phase::Done { call };
                 vec![]
             }
@@ -576,14 +599,14 @@ impl MeetingMonitor {
     /// The calendar meeting held without a call: an unjoined prompt, or one declined before
     /// anyone joined. The app retires it once the meeting is over.
     pub fn pending_calendar_event(&self) -> Option<&str> {
-        self.unjoined_calendar_prompt().or(self.declined_event.as_deref())
+        self.unjoined_calendar_prompt().or(self.declined_event.as_ref().map(|(id, _)| id.as_str()))
     }
 
     /// The meeting a calendar prompt was for has ended and nobody joined: the prompt goes, and the
     /// event stays prompted (it never comes back); a declined one is forgotten, so the next call
     /// prompts. A prompt with a live call is untouched.
     pub fn retire(&mut self, event_id: &str) -> Vec<Action> {
-        if self.declined_event.as_deref() == Some(event_id) {
+        if self.declined_event.as_ref().is_some_and(|(id, _)| id == event_id) {
             self.declined_event = None;
         }
         if self.unjoined_calendar_prompt() == Some(event_id) {
@@ -622,19 +645,21 @@ impl MeetingMonitor {
             (Input::TakeNotes | Input::ManualStart, Phase::Prompting { call, scheduled }) => {
                 // Starting from Settings while a prompt (or its bar) is up starts THAT recording
                 // (round 25.1: "removes the bar and starts the recording").
-                let (title, event_id) = match scheduled {
-                    Some(s) => (Some(s.title.clone()), Some(s.event_id.clone())),
-                    None => (None, None),
+                let start = Start {
+                    title: scheduled.as_ref().map(|s| s.title.clone()),
+                    event_id: scheduled.as_ref().map(|s| s.event_id.clone()),
+                    starts_at: scheduled.as_ref().map(|s| s.starts_at),
+                    manual: false,
                 };
-                let start = Start { title, event_id, manual: false };
                 let action = start.action();
                 self.phase = Phase::Recording { call: call.clone(), start };
                 vec![Action::HidePrompt, action]
             }
             (Input::NotThisOne, Phase::Prompting { call, .. } | Phase::Failed { call, .. }) => {
-                // Declined before anyone joined: remember the meeting, so its call does not prompt.
-                if let Phase::Prompting { call: None, scheduled: Some(s) } = &self.phase {
-                    self.declined_event = Some(s.event_id.clone());
+                // Declined before anyone joined (the calendar prompt, or a failed pre-call
+                // recording's card): remember the meeting, so its call does not prompt.
+                if let (None, Some(meeting)) = (call, self.phase.meeting()) {
+                    self.declined_event = Some(meeting);
                 }
                 self.phase = Phase::done(call);
                 vec![Action::HidePrompt]
@@ -661,7 +686,11 @@ impl MeetingMonitor {
                 vec![action]
             }
             (Input::Stop, Phase::Recording { call, .. }) => {
-                // Stopped early: this call does not prompt again until it ends.
+                // Stopped early: this call does not prompt again until it ends. A calendar
+                // recording stopped before its call began holds that meeting the same way.
+                if let (None, Some(meeting)) = (call, self.phase.meeting()) {
+                    self.declined_event = Some(meeting);
+                }
                 self.phase = Phase::done(call);
                 vec![Action::StopCapture(EndReason::StoppedEarly)]
             }
@@ -1340,6 +1369,33 @@ mod tests {
                 (0, Do(ManualStart), &["start manual"], "recording manual"),
                 (10, On(1, ZOOM), &[], "recording manual"),
                 (60, Do(Stop), &["stop: early", "prompt Zoom"], "prompting on Zoom"),
+            ]),
+            ("Take Notes before joining, Stop, then joined: that meeting does not ask again (rv-20261014T095959Z #1)", &[
+                (0, Cal("A", 60, 3660), &["prompt 'A'"], "prompting 'A'"),
+                (5, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' unarmed"),
+                (10, Do(Stop), &["stop: early"], "idle"),
+                (60, On(1, ZOOM), &[], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+            ]),
+            ("a pre-call capture fails and its card is closed, then joined: that meeting does not ask again (rv-20261014T095959Z #1)", &[
+                (0, Cal("A", 60, 3660), &["prompt 'A'"], "prompting 'A'"),
+                (5, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' unarmed"),
+                (6, Do(CaptureEnded), &[], "failed 'A' unarmed"),
+                (7, Do(NotThisOne), &["hide"], "idle"),
+                (60, On(1, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("a meeting dismissed and never joined: an unrelated call 20 minutes after its start asks (rv-20261014T095959Z #2)", &[
+                (0, Cal("A", 60, 3660), &["prompt 'A'"], "prompting 'A'"),
+                (5, Do(NotThisOne), &["hide"], "idle"),
+                (1260, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (1262, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+            ]),
+            ("a meeting dismissed, then joined nine minutes late: still that meeting, no prompt", &[
+                (0, Cal("A", 60, 3660), &["prompt 'A'"], "prompting 'A'"),
+                (5, Do(NotThisOne), &["hide"], "idle"),
+                (600, On(1, ZOOM), &[], "holding Zoom"),
             ]),
         ];
         let wrong: Vec<String> = tables.iter().flat_map(|(name, rows)| walk(name, rows)).collect();
