@@ -5913,7 +5913,7 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
         raise SpecError("a discard records its reason (point 7): give one")
     rec = _resolve(ref, me)
     fin, _pz, why = finished_state(rec)
-    if not fin:
+    if not fin and not never_ran(rec):
         raise SpecError("%s is not finished (%s). Stop it first; a running agent is not discarded."
                         % (rec["name"], why))
     chain = _chain(rec)
@@ -5940,6 +5940,18 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
         event("discarded", key=r["key"], reason=reason, tips=tips, as_part_of=rec["key"])
     _delete_chain(chain, "discarded")
     return {"discarded": True, "tips": tips}
+
+
+def never_ran(rec):
+    """A registration whose spawn never happened: its workspace was created and
+    registered, and its spawn was refused before it was registered
+    (2026-10-14: Pierce refused echo-opus-tap22's spawn, and `discard` answered
+    "is not finished (its run has not ended)" until it was stopped first).
+    Exactly withdraw_cc's test, plus no start or end recorded. A spawn that WAS
+    registered (tool_use_id, spawned_at) is not this: its agent may be running
+    in the foreground, where the platform reports its id only at the end."""
+    return not any(rec.get(f) for f in ("agent_id", "tool_use_id", "spawned_at", "started_at", "end",
+                                        "provisional", "disposition"))
 
 
 def _delete_chain(chain, why, processes=None, deadline=None):

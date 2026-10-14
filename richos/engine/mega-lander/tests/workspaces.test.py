@@ -4643,6 +4643,36 @@ class MergeTakesTheLandLeaseItself(Base):
         self.assertTrue(os.path.isdir(os.path.join(self.env.root, "other-wt", "zach-opus-lo")))
 
 
+class DiscardTakesAWorkspaceWhoseTeammateNeverRan(Base):
+    """2026-10-14: echo-opus-tap22's spawn was refused before its registration
+    (its record has no tool_use_id, no agent id and no start), and `workspaces.sh
+    discard echo-opus-tap22` answered "is not finished (its run has not
+    ended)"; it took `workspaces.sh stop` first. A teammate that never ran has
+    no run to end, so discard takes it directly. A spawn that WAS registered is
+    still refused until its run ends: its agent may be running."""
+
+    def test_a_workspace_whose_spawn_never_happened_is_discarded_directly(self):
+        cc = self.make_cc("zach-opus-nr")
+        r = ws.discard("zach-opus-nr", "never started: its spawn was refused",
+                       not_ceo_ordered="a refused spawn, never an order of his", me=self.sid)
+        self.assertTrue(r["discarded"])
+        self.assertEqual(self.rec("zach-opus-nr")["disposition"]["kind"], "discarded")
+        self.assertFalse(os.path.exists(cc))
+        self.assertNotIn("cc/zach-opus-nr", branches(self.other))
+
+    def test_a_registered_spawn_whose_run_has_not_ended_is_still_refused(self):
+        cc = self.make_cc("zach-opus-ns")
+        payload = {"session_id": self.sid, "tool_use_id": "tu-zach-opus-ns", "tool_name": "Agent",
+                   "tool_input": {"name": "zach-opus-ns", "subagent_type": "zach", "isolation": "worktree",
+                                  "prompt": "do it\ncross-repo-worktree: %s\n" % cc}}
+        ws.register_spawn(payload, self.entity)
+        with self.assertRaises(ws.SpecError) as e:
+            ws.discard("zach-opus-ns", "no longer wanted at all", not_ceo_ordered="not his order, a test",
+                       me=self.sid)
+        self.assertIn("not finished", str(e.exception))
+        self.assertTrue(os.path.isdir(cc))
+
+
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
     """2026-10-11, both in richos from the lead's terminal, each a background
     script that took the lease and then ran `workspaces.sh merge`:
