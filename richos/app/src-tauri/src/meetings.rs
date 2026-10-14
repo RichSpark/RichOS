@@ -115,6 +115,8 @@ struct CaptureRun {
     zone: PathBuf,
     entity: Option<String>,
     thread: Option<String>,
+    /// A rejoin's recording: the meeting's first recording's folder name ([`capture_scope`]).
+    continues: Option<String>,
     /// The session directory, once the capture says where it is writing.
     dir: Option<PathBuf>,
     /// The capture reported `started`: audio is really being written.
@@ -143,8 +145,43 @@ impl CaptureRun {
             entity: self.entity.clone(),
             thread: self.thread.clone(),
             warnings: self.warnings.clone(),
+            continues: self.continues.clone(),
         }
     }
+}
+
+/// A calendar meeting recorded this launch: where its first recording went. A rejoin's recording
+/// goes there too and continues its notes ([`capture_scope`]).
+#[derive(Debug, Clone, PartialEq)]
+struct Continued {
+    /// The first recording's session folder.
+    first: PathBuf,
+    zone: PathBuf,
+    entity: Option<String>,
+    thread: Option<String>,
+}
+
+/// Where a recording goes: its zone, company and conversation, and the first recording's folder
+/// name when it continues a meeting.
+#[derive(Debug, Clone, PartialEq)]
+struct Scope {
+    zone: PathBuf,
+    entity: Option<String>,
+    thread: Option<String>,
+    continues: Option<String>,
+}
+
+/// A rejoin of a meeting already recorded this launch (`known`) goes where its first recording
+/// went, in that company and conversation whatever the conversation is now, and continues that
+/// meeting's notes (rv-20261014T124853Z-b9f32acd-a19d #3: it started new notes, and a company or
+/// conversation switched during the break took the rest of the meeting elsewhere). Any other
+/// recording goes to the conversation's company at its start.
+fn capture_scope(known: Option<&Continued>, active: impl FnOnce() -> (Option<String>, Option<String>), corpus: impl FnOnce() -> PathBuf) -> Scope {
+    if let Some(k) = known {
+        return Scope { zone: k.zone.clone(), entity: k.entity.clone(), thread: k.thread.clone(), continues: k.first.file_name().map(|n| n.to_string_lossy().into_owned()) };
+    }
+    let (entity, thread) = active();
+    Scope { zone: meeting_zone(&corpus(), entity.as_deref()), entity, thread, continues: None }
 }
 
 /// The recorder with this pid, out of the current slot or the ones still finishing after a
@@ -180,6 +217,8 @@ struct Inner {
     calendar: Vec<CalendarMeeting>,
     /// The panel's last reported size, so the log says a size once, not every frame of a fold.
     last_layout: Option<(i64, i64, bool)>,
+    /// Each calendar meeting recorded this launch, by event id: where its first recording went.
+    continued: BTreeMap<String, Continued>,
 }
 
 /// The level reader: its pid (to end it) and its stdin (dropping it also ends it).
@@ -240,6 +279,7 @@ pub fn start(app: &AppHandle) {
             level: None,
             calendar: Vec::new(),
             last_layout: None,
+            continued: BTreeMap::new(),
         }),
     });
     app.manage(meetings.clone());
@@ -619,8 +659,8 @@ impl Meetings {
     // ---- the capture -------------------------------------------------------------------------
 
     fn start_capture(&self, title: Option<String>, event_id: Option<String>, manual: bool) {
-        let (entity, thread) = self.active_scope();
-        let zone = meeting_zone(&self.corpus_root(), entity.as_deref());
+        let known = event_id.as_ref().filter(|_| !manual).and_then(|e| self.inner.lock().unwrap().continued.get(e).cloned());
+        let Scope { zone, entity, thread, continues } = capture_scope(known.as_ref(), || self.active_scope(), || self.corpus_root());
         if let Err(e) = std::fs::create_dir_all(&zone) {
             self.capture_failed(&format!("the meeting folder could not be created: {e}"), false);
             return;
@@ -659,6 +699,7 @@ impl Meetings {
                 zone,
                 entity,
                 thread,
+                continues,
                 dir: None,
                 recording: false,
                 stop: None,
@@ -706,7 +747,15 @@ impl Meetings {
                 if let Some(dir) = &run.dir {
                     logged("writing meeting.json at the start", meeting_notes::write_facts(dir, &run.facts(0)));
                 }
+                // A calendar meeting's first recording: a rejoin's goes where this one went.
+                let first = match (&run.event_id, &run.dir, run.manual) {
+                    (Some(e), Some(dir), false) => Some((e.clone(), Continued { first: dir.clone(), zone: run.zone.clone(), entity: run.entity.clone(), thread: run.thread.clone() })),
+                    _ => None,
+                };
                 let view = PanelView::Recording { started_at: run.started_at, note: None };
+                if let Some((e, first)) = first {
+                    inner.continued.entry(e).or_insert(first);
+                }
                 drop(inner);
                 self.show(view);
                 self.publish_state();
@@ -940,6 +989,9 @@ impl Meetings {
     /// Transcript, then the one brief, then Rich's message. Each failure is said through Rich in
     /// the design's own words; the recording and the transcript are never lost.
     fn prepare_notes(&self, dir: &Path, zone: &Path, facts: MeetingFacts) {
+        // One meeting's notes at a time: a rejoin's notes are written from the earlier recordings'
+        // transcripts, so those are finished first, and never overwritten by an earlier run.
+        let _one_at_a_time = NOTES_RUN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         self.set_processing(Some("preparing"));
         if !dir.join(meeting_notes::TRANSCRIPT_FILE).is_file() {
             if let Err(why) = self.transcribe(dir, zone, &facts) {
@@ -958,6 +1010,18 @@ impl Meetings {
             }
         }
         logged("writing meeting.json", meeting_notes::write_facts(dir, &facts));
+        // A rejoin's recording: the meeting's notes, in its first recording's folder, are written
+        // again from every recording so far, and said again (rv-20261014T124853Z-b9f32acd-a19d #3).
+        if let Some(first) = facts.continues.as_ref().map(|name| zone.join(name)) {
+            let parts: Vec<PathBuf> = meeting_notes::segments(&first).into_iter().take_while(|s| s != dir).chain([dir.to_path_buf()]).collect();
+            let (transcript, missing) = meeting_notes::joined_transcript(&parts);
+            let first_facts = meeting_notes::read_facts(&first).unwrap_or_else(|| facts.clone());
+            let notes = meeting_notes::joined_facts(&first_facts, &facts, missing);
+            let transcripts: Vec<PathBuf> = parts.iter().map(|s| s.join(meeting_notes::TRANSCRIPT_FILE)).filter(|t| t.is_file()).collect();
+            eprintln!("[richos] meeting notes: a rejoin continues the notes of {} ({} recordings)", first.display(), parts.len());
+            self.notes_from(dir, &first, &notes, &transcript, &transcripts, true);
+            return;
+        }
         let transcript = match std::fs::read_to_string(dir.join(meeting_notes::TRANSCRIPT_FILE)) {
             Ok(t) => t,
             Err(e) => {
@@ -966,12 +1030,27 @@ impl Meetings {
                 return;
             }
         };
+        self.notes_from(dir, dir, &facts, &transcript, &[dir.join(meeting_notes::TRANSCRIPT_FILE)], false);
+    }
+
+    /// The one brief, written into `brief_dir`, then Rich's message, with `session`'s attempt
+    /// record. `joined`: a rejoin's recording, whose notes are the first recording's brief written
+    /// again from every recording ([`meeting_notes::next_step_joined`]).
+    fn notes_from(&self, session: &Path, brief_dir: &Path, facts: &MeetingFacts, transcript: &str, transcripts: &[PathBuf], joined: bool) {
+        let dir = session;
         loop {
             let mut state = meeting_notes::read_state(dir);
-            match meeting_notes::next_step(dir, &state) {
+            let step = if joined { meeting_notes::next_step_joined(&state) } else { meeting_notes::next_step(dir, &state) };
+            match step {
                 NextStep::Write(n) => {
-                    match self.write_brief_once(dir, &facts, &transcript) {
-                        Ok(()) => eprintln!("[richos] meeting notes: brief written on attempt {n}"),
+                    match self.write_brief_once(brief_dir, facts, transcript) {
+                        Ok(()) => {
+                            eprintln!("[richos] meeting notes: brief written on attempt {n}");
+                            if joined {
+                                state.written = true;
+                                logged("recording the joined brief", meeting_notes::write_state(dir, &state));
+                            }
+                        }
                         Err(why) => {
                             eprintln!("[richos] meeting notes: brief attempt {n} failed: {why}");
                             state.attempts = n;
@@ -984,9 +1063,9 @@ impl Meetings {
                     }
                 }
                 NextStep::Deliver => {
-                    let brief = std::fs::read_to_string(dir.join(meeting_notes::BRIEF_FILE)).unwrap_or_default();
-                    let files = [dir.join(meeting_notes::BRIEF_FILE), dir.join(meeting_notes::TRANSCRIPT_FILE)];
-                    match self.say(&facts, &meeting_notes::message_text(&brief, &facts), &files) {
+                    let brief = std::fs::read_to_string(brief_dir.join(meeting_notes::BRIEF_FILE)).unwrap_or_default();
+                    let files: Vec<PathBuf> = std::iter::once(brief_dir.join(meeting_notes::BRIEF_FILE)).chain(transcripts.iter().cloned()).collect();
+                    match self.say(facts, &meeting_notes::message_text(&brief, facts), &files) {
                         Ok(()) => {
                             state.delivered = true;
                             eprintln!("[richos] meeting notes: Rich said the notes in the conversation ({})", dir.display());
@@ -1006,7 +1085,7 @@ impl Meetings {
                 }
                 NextStep::GiveUp => {
                     let why = state.last_error.clone().unwrap_or_default();
-                    self.failure_said(dir, self.say(&facts, &meeting_notes::notes_failed_text(&why), &[]));
+                    self.failure_said(dir, self.say(facts, &meeting_notes::notes_failed_text(&why), &[]));
                     self.set_processing(Some("notes-failed"));
                     return;
                 }
@@ -1135,6 +1214,9 @@ pub fn service_cli() -> Option<PathBuf> {
 
 /// The running transcription's pid, beside its session while it runs.
 const TRANSCRIBING_FILE: &str = "transcribing.pid";
+
+/// Held while one meeting's notes are prepared ([`Meetings::prepare_notes`]).
+static NOTES_RUN: Mutex<()> = Mutex::new(());
 
 /// RichOS is quitting: finish every running recording's files and keep what the next launch
 /// needs to make its notes (handover review rv-20261013T145354Z-da4ac5cf-c86a #1). Called from the
@@ -1383,12 +1465,35 @@ mod tests {
             zone: PathBuf::new(),
             entity: None,
             thread: None,
+            continues: None,
             dir: None,
             recording: true,
             stop: None,
             warnings: Vec::new(),
             _stdin: None,
         }
+    }
+
+    #[test]
+    fn a_rejoin_goes_where_the_meetings_first_recording_went() {
+        let corpus = PathBuf::from("/corpus");
+        let known = Continued {
+            first: PathBuf::from("/corpus/companies/acme/evidence/meetings/2026-10-14T10-00-00Z--system--call"),
+            zone: PathBuf::from("/corpus/companies/acme/evidence/meetings"),
+            entity: Some("acme".into()),
+            thread: Some("t1".into()),
+        };
+        // He switched to another company's conversation during the break.
+        let now = || (Some("globex".to_string()), Some("t2".to_string()));
+        assert_eq!(
+            capture_scope(Some(&known), now, || corpus.clone()),
+            Scope { zone: known.zone.clone(), entity: Some("acme".into()), thread: Some("t1".into()), continues: Some("2026-10-14T10-00-00Z--system--call".into()) },
+            "the rejoin's recording went to the conversation he is in now, as a new meeting"
+        );
+        assert_eq!(
+            capture_scope(None, now, || corpus.clone()),
+            Scope { zone: meeting_zone(&corpus, Some("globex")), entity: Some("globex".into()), thread: Some("t2".into()), continues: None }
+        );
     }
 
     #[test]

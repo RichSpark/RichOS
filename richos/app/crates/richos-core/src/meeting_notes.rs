@@ -104,6 +104,11 @@ pub struct MeetingFacts {
     /// Material problems the capture or the pipeline reported (a stalled side, a gap).
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// A rejoin's recording: the folder name of the meeting's first recording, beside it in the
+    /// same zone. Its notes are that meeting's notes, rewritten into the first recording's
+    /// `brief.md` from every recording of the meeting so far ([`segments`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues: Option<String>,
 }
 
 /// The one writer prompt. `transcript` is `transcript.md` as the pipeline wrote it, whole.
@@ -214,6 +219,10 @@ pub struct BriefState {
     /// for the app, and anything more is a request to Rich (never said twice).
     #[serde(default)]
     pub failure_said: bool,
+    /// A rejoin's recording: the meeting's notes have been rewritten from every recording so far
+    /// (the brief is the first recording's, so its presence does not say this one is in it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub written: bool,
 }
 
 impl BriefState {
@@ -267,6 +276,71 @@ pub fn next_step(session: &Path, state: &BriefState) -> NextStep {
         return NextStep::GiveUp;
     }
     NextStep::Write(state.attempts + 1)
+}
+
+/// What to do next for a rejoin's recording, whose notes are the first recording's brief rewritten
+/// ([`BriefState::written`]).
+pub fn next_step_joined(state: &BriefState) -> NextStep {
+    if state.written {
+        return if state.delivered { NextStep::Done } else { NextStep::Deliver };
+    }
+    if state.attempts >= MAX_ATTEMPTS {
+        return NextStep::GiveUp;
+    }
+    NextStep::Write(state.attempts + 1)
+}
+
+/// Between two recordings of one meeting in its joined transcript.
+pub const REJOINED_MARK: &str = "[The CEO left the call here and rejoined. The recording continues below.]";
+
+/// Said in the notes when one recording of the meeting has no transcript.
+pub const PART_MISSING_WARNING: &str = "Part of this meeting could not be transcribed, so these notes leave it out.";
+
+/// Every recording of the meeting whose first recording is `first`: it, then each rejoin's
+/// recording beside it in the same zone ([`MeetingFacts::continues`]), in the order they were made
+/// (rv-20261014T124853Z-b9f32acd-a19d #3: a rejoin made separate, partial notes).
+pub fn segments(first: &Path) -> Vec<PathBuf> {
+    let name = first.file_name().map(|n| n.to_string_lossy().into_owned());
+    let mut rejoins: Vec<PathBuf> = first
+        .parent()
+        .and_then(|zone| std::fs::read_dir(zone).ok())
+        .into_iter()
+        .flat_map(|entries| entries.flatten().map(|e| e.path()))
+        .filter(|s| s != first && name.is_some() && read_facts(s).is_some_and(|f| f.continues == name))
+        .collect();
+    // Session folders are named by their UTC start time, so the name orders them.
+    rejoins.sort_by_key(|s| s.file_name().map(|n| n.to_os_string()));
+    std::iter::once(first.to_path_buf()).chain(rejoins).collect()
+}
+
+/// The meeting's one transcript: each recording's `transcript.md`, in order, with
+/// [`REJOINED_MARK`] between them, and how many recordings had none (their transcription failed).
+pub fn joined_transcript(segments: &[PathBuf]) -> (String, usize) {
+    let mut parts = Vec::new();
+    let mut missing = 0;
+    for s in segments {
+        match std::fs::read_to_string(s.join(TRANSCRIPT_FILE)) {
+            Ok(t) => parts.push(t.trim().to_string()),
+            Err(_) => missing += 1,
+        }
+    }
+    (parts.join(&format!("\n\n{REJOINED_MARK}\n\n")), missing)
+}
+
+/// The facts the meeting's notes are written with: the first recording's (title, day, company and
+/// conversation: the notes stay where the meeting began), ending where the latest recording ends,
+/// with every recording's warnings.
+pub fn joined_facts(first: &MeetingFacts, latest: &MeetingFacts, missing: usize) -> MeetingFacts {
+    let mut facts = first.clone();
+    facts.ended_at = latest.ended_at;
+    facts.stopped_early = latest.stopped_early;
+    facts.continues = None;
+    for w in latest.warnings.iter().cloned().chain((missing > 0).then(|| PART_MISSING_WARNING.to_string())) {
+        if !facts.warnings.contains(&w) {
+            facts.warnings.push(w);
+        }
+    }
+    facts
 }
 
 pub fn read_state(session: &Path) -> BriefState {
@@ -449,6 +523,50 @@ mod tests {
         write_facts(&dir, &facts()).unwrap();
         assert_eq!(read_facts(&dir), Some(facts()));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rejoins_recording_continues_the_first_recordings_notes() {
+        // rv-20261014T124853Z-b9f32acd-a19d #3 (`fixtures/source_audit.py`): leaving and rejoining
+        // made a second, separate set of partial notes instead of continuing the meeting's.
+        let zone = std::env::temp_dir().join(format!("richos-notes-rejoin-{}", std::process::id()));
+        if zone.exists() {
+            std::fs::remove_dir_all(&zone).unwrap();
+        }
+        let session = |name: &str, facts: &MeetingFacts, transcript: Option<&str>| {
+            let s = zone.join(name);
+            std::fs::create_dir_all(&s).unwrap();
+            write_facts(&s, facts).unwrap();
+            if let Some(t) = transcript {
+                std::fs::write(s.join(TRANSCRIPT_FILE), t).unwrap();
+            }
+            s
+        };
+        let first_facts = MeetingFacts { entity: Some("acme".into()), thread: Some("t1".into()), ended_at: 2_000, ..facts() };
+        let first = session("2026-10-14T10-00-00Z--system--call", &first_facts, Some("Me: part one\n"));
+        let name = first.file_name().unwrap().to_string_lossy().into_owned();
+        let rejoin_facts = MeetingFacts { continues: Some(name.clone()), ended_at: 9_000, warnings: vec!["A gap.".into()], ..first_facts.clone() };
+        let rejoin = session("2026-10-14T10-20-00Z--system--call", &rejoin_facts, Some("Me: part two\n"));
+        // Another meeting in the same zone is not part of it.
+        session("2026-10-14T10-10-00Z--system--call", &facts(), Some("Me: elsewhere\n"));
+        let parts = segments(&first);
+        assert_eq!(parts, vec![first.clone(), rejoin.clone()]);
+        let (joined, missing) = joined_transcript(&parts);
+        assert_eq!(missing, 0);
+        assert_eq!(joined, format!("Me: part one\n\n{REJOINED_MARK}\n\nMe: part two"));
+        let notes = joined_facts(&first_facts, &read_facts(&rejoin).unwrap(), 0);
+        assert_eq!((notes.title.as_deref(), notes.entity.as_deref(), notes.thread.as_deref(), notes.ended_at), (Some("Acme pricing review"), Some("acme"), Some("t1"), 9_000));
+        assert_eq!(notes.warnings, vec!["A gap.".to_string()]);
+        assert_eq!(notes.continues, None);
+        assert!(joined_facts(&first_facts, &rejoin_facts, 1).warnings.contains(&PART_MISSING_WARNING.to_string()));
+        // A rejoin's own state says whether the meeting's notes include it yet.
+        assert_eq!(next_step_joined(&BriefState::default()), NextStep::Write(1));
+        assert_eq!(next_step_joined(&BriefState { written: true, ..Default::default() }), NextStep::Deliver);
+        assert_eq!(next_step_joined(&BriefState { written: true, delivered: true, ..Default::default() }), NextStep::Done);
+        // A meeting.json from before (no "continues") still reads.
+        std::fs::write(first.join(MEETING_FILE), r#"{"title":"X","dateLine":"d","startedAt":1,"endedAt":2,"stoppedEarly":false,"manual":false}"#).unwrap();
+        assert_eq!(read_facts(&first).unwrap().continues, None);
+        std::fs::remove_dir_all(&zone).unwrap();
     }
 
     #[test]
