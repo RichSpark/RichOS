@@ -1919,12 +1919,26 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   z-index: 30;
 }
 
+/* The conversation stops at the panel's edge while it is open. The panel is fixed, so without
+   this the conversation kept the whole window and its last card, the header's and the
+   composer's Output buttons ran under the panel's left edge (final walk on main 0a2ae649f,
+   2026-10-14). The stage's own width then drives its narrow reflow (`#stage.narrow`, set by
+   `output-panel.js` from the stage's width), so 1024x700 reflows like any narrow stage.
+   `tests/work-summary.js` measures it at 1400x880 and 1024x700, in both themes. */
+:root {
+  --slideover-width: 320px;
+}
+
+#stage:has(~ #slideover:not([hidden])) {
+  margin-right: var(--slideover-width);
+}
+
 #slideover {
   position: fixed;
   top: 0;
   right: 0;
   height: 100vh;
-  width: 320px;
+  width: var(--slideover-width);
   background: var(--surface);
   border-left: 1px solid var(--line);
   z-index: 31;
