@@ -5514,12 +5514,18 @@ def _take_land_lease(main):
     Still not held after that: SpecError with acquire's own words, and nothing
     is merged."""
     F = _fence_program()
+    # THIS PROCESS COUNTS AS ITS OWN CALLER: a lease held by the process that
+    # runs this merge in-process (the app's library call, a test that is the
+    # session) is held, and git's fence hooks, its descendants, agree. Without
+    # it, acquire RENEWED that lease and this still said "could not take it".
+    me = F.proc(os.getpid())
+    chain = ([(me["pid"], me["start"])] if me else []) + F.ancestors()
     try:
         conf, _paths = F.launcher_for(main)
         if not F.fenced(conf):
             return None
         files = F.Files(conf)
-        held, lease = F.authorized(files)
+        held, lease = F.authorized(files, chain)
     except Exception as exc:    # noqa: BLE001  a check that cannot decide refuses, and says so
         raise SpecError("cannot merge into %s: whether this command holds the land lease could not be read (%s)"
                         % (main, exc))
@@ -5534,7 +5540,7 @@ def _take_land_lease(main):
     said = (r.stdout + r.stderr).strip()
     if said:
         sys.stderr.write(said + "\n")
-    if r.returncode == 0 and F.authorized(F.Files(conf))[0]:
+    if r.returncode == 0 and F.authorized(F.Files(conf), chain)[0]:
         return holder
     raise SpecError("nothing was merged into %s: this command could not take the land lease (exit %d). %s\n"
                     "Run the same command again once it is free."
