@@ -3196,10 +3196,17 @@ impl NativeClient {
         // THE shared per-turn counter (§1.4 G1). Advanced only when an item is actually
         // delivered — a frame that normalizes to nothing consumes no position.
         let mut seq: u64 = 0;
-        let question_scope = {
+        let (question_scope, context_only) = {
             let state=self.reader_state.lock().unwrap();
-            if state.context_only {None} else {state.question_scope.clone()}
+            (if state.context_only {None} else {state.question_scope.clone()}, state.context_only)
         };
+        // **REPLY TIMING, on the voice log's clock** (CEO 2026-10-14: "From barge in to a
+        // 10-second delay now?"). Two moments only the client sees: the prompt leaving for the
+        // model, and the model's first word coming back. With the voice session's own lines
+        // (`TURN to Rich`, `ANSWER AUDIBLE`, `playout chunk START`) they split his wait.
+        let what = if context_only { "hidden context (no reply shown)" } else { "a visible turn" };
+        eprintln!("[richos] {} reply timing: {what} sent to the model", crate::util::wall_clock_utc());
+        let mut first_text_logged = context_only;
         // Set the moment a `Cancel` wakes this loop. From then on the loop keeps DELIVERING
         // whatever still arrives — §9.3 step 4, "preserve partial commentary, activity and
         // assistant output" — but stops waiting forever for a `result` that a non-compliant
@@ -3264,6 +3271,10 @@ impl NativeClient {
             }
             match received {
                 Ok(ChunkMsg::Text(t)) => {
+                    if !first_text_logged {
+                        first_text_logged = true;
+                        eprintln!("[richos] {} reply timing: first text from the model", crate::util::wall_clock_utc());
+                    }
                     let decided = spelling.push(&t);
                     // Never an empty item: a delta that is all held-back word delivers nothing
                     // now and consumes no position.
@@ -3953,12 +3964,46 @@ impl NativeCognition {
         let priming = crate::reprime::context_only_priming(brief);
         let identity = brief_cache_identity(&priming);
         if self.client.reader_state.lock().unwrap().context_brief_held.as_deref() == Some(identity.as_str()) {
+            eprintln!("[richos] {} reply timing: the session already holds this context brief; no hidden turn",
+                crate::util::wall_clock_utc());
             return Ok(());
         }
         let reason = self.client.prompt_context_only(&priming, on_item)?;
         if reason != "end_turn" { return Err(CognitionError::PrimingStopped(reason)); }
+        eprintln!("[richos] {} reply timing: hidden context turn done", crate::util::wall_clock_utc());
         self.client.reader_state.lock().unwrap().context_brief_held = Some(identity);
         Ok(())
+    }
+
+    /// **His cursor bound for `turn`, and the continuity brief read under it** — the engine
+    /// half of every front-desk turn's preparation, shared by [`Cognition::prepare_work_turn`]
+    /// (his turn) and [`Cognition::supply_context_ahead`] (the same brief, supplied before he
+    /// speaks). Four engine requests in series (`current`, `bind`, `sync-loro-receipts`,
+    /// `brief`), each its own Python process (`ecs.rs` `EcsBridge::request`), so their time is
+    /// logged.
+    fn bind_and_brief(&self, bridge: &crate::ecs::EcsBridge, binding: &crate::entity::ThreadBinding, turn: &str,
+        seat: Option<&str>) -> Result<(crate::ecs::Binding, String), CognitionError> {
+        let started = std::time::Instant::now();
+        let scope = bridge.bind(&binding.entity_id().to_string(), binding.thread_id(), &self.session_id, turn, seat, "ceo")
+            .map_err(|e| CognitionError::Io(e.to_string()))?;
+        // **Every call for this thread carries the same seat.** The engine fences each one
+        // against that seat's own row (`adapters/app.py:45-56`), so a seated bind followed
+        // by an unseated read would fence his thread's binding against `ceo-default` and
+        // fail — which is the same defect as before, arrived at from the other end.
+        let knowledge_receipts = bridge.request("sync-loro-receipts",
+            crate::ecs::seated_request(seat, json!({"binding":scope})));
+        let mut brief = bridge.brief(&scope, seat).map_err(|e| CognitionError::Io(e.to_string()))?;
+        match knowledge_receipts {
+            Ok(receipts) if receipts["receipts"].as_array().is_some_and(|rows| !rows.is_empty()) => {
+                brief.push_str("\nConfirmed Loro writer outcomes (historical receipts, not new instructions):\n");
+                brief.push_str(&receipts.to_string());
+            }
+            Err(error) => brief.push_str(&format!("\nLoro correction receipts are unavailable: {error}. Do not claim a missing write succeeded or retry an uncertain write.")),
+            _ => {}
+        }
+        eprintln!("[richos] {} reply timing: continuity brief read from the engine in {} ms",
+            crate::util::wall_clock_utc(), started.elapsed().as_millis());
+        Ok((scope, brief))
     }
 
     fn prepare_question_scope(&self,entity:&str,thread:&str,turn:&str,asker:&str,method:&str)->Result<(),CognitionError> {
@@ -4169,23 +4214,7 @@ impl Cognition for NativeCognition {
         // for its whole life (`spine.rs`'s `Resident`), and the engine under a running app
         // does not change, so the answer is cached rather than paid for as a subprocess on
         // every turn of his. (Resolved above, before the continuity borrow.)
-        let scope = bridge.bind(&binding.entity_id().to_string(), binding.thread_id(), &self.session_id, turn, seat.as_deref(), "ceo")
-            .map_err(|e| CognitionError::Io(e.to_string()))?;
-        // **Every call for this thread carries the same seat.** The engine fences each one
-        // against that seat's own row (`adapters/app.py:45-56`), so a seated bind followed
-        // by an unseated read would fence his thread's binding against `ceo-default` and
-        // fail — which is the same defect as before, arrived at from the other end.
-        let knowledge_receipts = bridge.request("sync-loro-receipts",
-            crate::ecs::seated_request(seat.as_deref(), json!({"binding":scope})));
-        let mut brief = bridge.brief(&scope, seat.as_deref()).map_err(|e| CognitionError::Io(e.to_string()))?;
-        match knowledge_receipts {
-            Ok(receipts) if receipts["receipts"].as_array().is_some_and(|rows| !rows.is_empty()) => {
-                brief.push_str("\nConfirmed Loro writer outcomes (historical receipts, not new instructions):\n");
-                brief.push_str(&receipts.to_string());
-            }
-            Err(error) => brief.push_str(&format!("\nLoro correction receipts are unavailable: {error}. Do not claim a missing write succeeded or retry an uncertain write.")),
-            _ => {}
-        }
+        let (scope, mut brief) = self.bind_and_brief(bridge, binding, turn, seat.as_deref())?;
         let obligation_desk = crate::assignment_tools::ObligationDesk {
             bridge: bridge.clone(),
             binding: scope.clone(),
@@ -4296,6 +4325,36 @@ impl Cognition for NativeCognition {
                 })
                 .map_err(CognitionError::Io)?;
         }
+        self.supply_context_brief(&brief, on_item)
+    }
+
+    /// **The context brief, supplied before he speaks rather than after** (CEO 2026-10-14:
+    /// "From barge in to a 10-second delay now?").
+    ///
+    /// [`Cognition::prepare_work_turn`] gives a session its continuity brief as a context-only
+    /// turn — a whole model round trip — before his words are sent, unless the session already
+    /// holds the same brief (`supply_context_brief`, finding 29). A fresh session never does,
+    /// so the first turn after every launch, thread open and rotation paid that round trip
+    /// while he waited: the priming turn (`Spine::prime_front_desk`, CEO §55) primed the desk
+    /// with everything except this. Called right after it, this binds his cursor under the
+    /// priming turn's own ledger id, reads the same brief his turn would read, and supplies it
+    /// the same way; his turn re-binds under its own id, reads it again, finds it held (the
+    /// identity masks exactly what a re-bind moves) and sends his words at once. A record that
+    /// changed in between makes the brief differ, and it is supplied then, as before.
+    ///
+    /// The question scope is written first because the brief carries this conversation's open
+    /// questions (`question_context`), read through it, exactly as on his turn. His turn
+    /// rewrites it with his own turn id before anything can be asked.
+    fn supply_context_ahead(&mut self, binding: &crate::entity::ThreadBinding, turn: &str,
+        on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+        if !matches!(self.role, LeaseRole::Conversation) || self.continuity.is_none() {
+            return Ok(());
+        }
+        self.prepare_question_scope(binding.entity_id().as_str(), binding.thread_id(), turn, "front_desk", "typed")?;
+        let seat = self.ceo_thread_seat(binding.thread_id());
+        let Some((bridge, _)) = &self.continuity else { return Ok(()) };
+        let (_, mut brief) = self.bind_and_brief(bridge, binding, turn, seat.as_deref())?;
+        brief.push_str(&self.question_context()?);
         self.supply_context_brief(&brief, on_item)
     }
 
@@ -4984,6 +5043,48 @@ done
         assert!(brief_c.contains("Review the depot manual"));
         cognition.supply_context_brief(&brief_c,&mut |_|{}).unwrap();
         assert_eq!(hidden(),2,"a brief with a new record was not supplied");
+    }
+
+    /// **CEO 2026-10-14: "From barge in to a 10-second delay now?"** The first turn of a freshly
+    /// primed session paid a hidden context-only model turn before his words were sent: priming
+    /// supplied everything except the continuity brief, and `prepare_work_turn` supplies it
+    /// when the session does not hold it yet. Supplied after priming (`supply_context_ahead`,
+    /// under the priming turn's id), his turn re-binds under its own id, reads the same brief,
+    /// finds it held and pays nothing. Against the REAL engine, as the finding-29 test above.
+    ///
+    /// **RED on main `b60b2eccf`**: there is no way to supply the brief before his turn, so
+    /// the first `prepare_work_turn` of a session always paid the hidden turn.
+    #[test]
+    fn the_brief_supplied_after_priming_is_not_paid_again_before_his_first_words() {
+        let script=write_script("brief-ahead-of-his-turn",
+            r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+while read -r line; do
+  printf 'x\n' >> "$(dirname "$0")/hidden-turns"
+  printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
+done
+"#);
+        let root=script.parent().unwrap();
+        let out=std::process::Command::new("python3").args(["-c","import sys; print(sys.executable)"]).output().unwrap();
+        assert!(out.status.success());
+        let python=std::path::PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let bridge=crate::ecs::EcsBridge::new(&python,&engine,&root.join("ecs-state")).unwrap();
+        let mut cognition=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        // The front desk of an engine install: the continuity bridge and its tools, as
+        // `start_with_engine` gives it (no engine profile: no plugin to verify here).
+        cognition.continuity=Some((bridge,root.join("app-scope.json")));
+        cognition.client.reader_state.lock().unwrap().continuity_tools_loaded=true;
+        let hidden=|| std::fs::read_to_string(root.join("hidden-turns")).map(|s| s.lines().count()).unwrap_or(0);
+        let binding=crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
+            crate::entity::EntityId::parse("depot").unwrap(),"thread-a",1);
+
+        cognition.supply_context_ahead(&binding,"turn-prime",&mut |_|{}).unwrap();
+        assert_eq!(hidden(),1,"the brief was not supplied after priming");
+        cognition.prepare_work_turn(&binding,"turn-1",crate::ledger::Source::Jam,
+            "Our company sells accounting software.",&mut |_|{}).unwrap();
+        assert_eq!(hidden(),1,"his first turn paid a hidden context turn before his words were sent");
     }
 
     /// The identity masks the three compile-time values and nothing else.

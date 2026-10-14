@@ -12,6 +12,15 @@ pub fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+/// `HH:MM:SS.mmmZ` in UTC: the stamp the voice session's `[richos-voice]` lines carry
+/// (`richos-voice`'s `controller::wall_clock_utc`), so a `[richos] reply timing:` line lines
+/// up with them and with the ledger's epoch milliseconds in one `app.log`.
+pub fn wall_clock_utc() -> String {
+    let ms = now_millis();
+    let secs = ms / 1000;
+    format!("{:02}:{:02}:{:02}.{:03}Z", (secs / 3600) % 24, (secs / 60) % 60, secs % 60, ms % 1000)
+}
+
 /// A fresh random id (uuid v4, hyphen-free) for threads / turns / actions.
 pub fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
