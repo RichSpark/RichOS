@@ -4208,15 +4208,22 @@ fn main() {
             // `applicationShouldHandleReopen` through tao and wry
             // (`tauri-runtime-wry-2.11.4/src/lib.rs:4391-4394`).
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = &event {
-                if !has_visible_windows {
-                    // **OFF THE EVENT-LOOP CALLBACK, deliberately.** Building a window is a
-                    // runtime message, and issuing one from inside the callback the runtime
-                    // is currently dispatching is the shape that deadlocks; a spawned thread
-                    // is the path Tauri documents for window creation from anywhere. The
-                    // Dock click has already happened, so nothing is waiting on this return.
-                    let handle = handle.clone();
-                    std::thread::spawn(move || reopen_window(&handle));
-                }
+                // **OFF THE EVENT-LOOP CALLBACK, deliberately.** Building a window is a
+                // runtime message, and issuing one from inside the callback the runtime
+                // is currently dispatching is the shape that deadlocks; a spawned thread
+                // is the path Tauri documents for window creation from anywhere. The
+                // Dock click has already happened, so nothing is waiting on this return.
+                // A visible meeting panel (a prompt, the voice bar) is a visible window to
+                // macOS too: with the conversation window closed or hidden, the click
+                // brings the conversation back all the same.
+                let visible = *has_visible_windows;
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let shown = conversation_window(&handle).is_some_and(|w| w.is_visible().unwrap_or(false));
+                    if !visible || !shown {
+                        reopen_window(&handle);
+                    }
+                });
             }
             if let tauri::RunEvent::Exit = event {
                 // A meeting being recorded is finished and kept FIRST, before the quit's own
@@ -9914,15 +9921,23 @@ fn ask_before_quitting(app: AppHandle) {
     });
 }
 
+/// **The conversation window**, by the label the app's config gives it, never whichever window
+/// happens to exist first: the meeting panel is a window too, built once and kept hidden between
+/// prompts, and with the conversation window closed a Dock click showed that panel and never
+/// rebuilt the conversation (rv-20261014T102219Z-327302f1-92f6, `fixtures/reopen_panel.py`).
+fn conversation_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    app.config().app.windows.first().and_then(|config| app.get_webview_window(&config.label))
+}
+
 /// **The way back into a window** — the Dock icon (§2.4), and the quit question's own
 /// precondition.
 ///
-/// A window that is merely hidden is shown; otherwise one is built from the same config the
-/// boot path builds from, with the geometry he left it at. It is a `SecondWindow` launch:
-/// nothing begins, no opening screen, no count (`launch.rs:149-151`) — this is a window
-/// coming back on a run that never stopped, which is exactly what that kind is for.
+/// The conversation window ([`conversation_window`]) when it is merely hidden is shown;
+/// otherwise one is built from the same config the boot path builds from, with the geometry he
+/// left it at. It is a `SecondWindow` launch: nothing begins, no opening screen, no count
+/// (`launch.rs:149-151`) — this is a window coming back on a run that never stopped, which is exactly what that kind is for.
 fn reopen_window(app: &AppHandle) {
-    if let Some(window) = app.webview_windows().values().next() {
+    if let Some(window) = conversation_window(app) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -10047,3 +10062,25 @@ mod onboarding_decline_tests;
 
 #[cfg(test)]
 mod turn_boundary_tests;
+
+#[cfg(test)]
+mod reopen_tests {
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::WebviewWindowBuilder;
+
+    #[test]
+    fn a_dock_click_finds_the_conversation_window_and_never_the_meeting_panel() {
+        let mut context = mock_context(noop_assets());
+        // The app's own config declares one window, with the default label ("main").
+        context.config_mut().app.windows = vec![tauri::utils::config::WindowConfig::default()];
+        let app = mock_builder().build(context).expect("the mock app builds");
+        // The conversation window closed; the meeting panel kept, hidden.
+        WebviewWindowBuilder::new(&app, "meeting-panel", Default::default()).visible(false).build().expect("the panel builds");
+        assert!(
+            super::conversation_window(app.handle()).is_none(),
+            "the hidden meeting panel was taken for the conversation window, so it is shown and the conversation is never rebuilt"
+        );
+        WebviewWindowBuilder::new(&app, "main", Default::default()).build().expect("the conversation window builds");
+        assert_eq!(super::conversation_window(app.handle()).map(|w| w.label().to_string()).as_deref(), Some("main"));
+    }
+}
