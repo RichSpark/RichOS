@@ -15,6 +15,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import machine_storage as M
+import github_access
 import re
 import shutil
 import subprocess
@@ -129,8 +130,40 @@ def run(*args, cwd=None, input=None, env=None):
                                    env=env).strip()
 
 
+class GitHubRefused(subprocess.CalledProcessError):
+    """A read GitHub refused on every attempt; a CalledProcessError, as it always was."""
+
+    def __init__(self, message, argv):
+        super().__init__(128, argv)
+        self.message = message
+
+    def __str__(self):
+        return self.message
+
+
 def git(*args, **kwargs):
+    if args and args[0] in github_access.READS:
+        argv = ("git", *args)
+        return github_access.read(
+            lambda: github_read(argv, **kwargs), argv,
+            refuse=lambda message: GitHubRefused(message, argv),
+            notice=lambda text: print(f"nightly: {text}", file=sys.stderr, flush=True))
     return run("git", *args, **kwargs)
+
+
+def github_read(argv, cwd=None, input=None, env=None):
+    """One attempt at a GitHub read, `run()`'s result and refusals, with ssh's error kept."""
+    try:
+        result = subprocess.run(argv, cwd=cwd or ROOT, input=input, text=True, env=env,
+                                capture_output=True, timeout=github_access.TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise github_access.Unreachable(f"no answer in {github_access.TIMEOUT}s") from None
+    sys.stderr.write(result.stderr)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    if github_access.connection_failed(result.stderr):
+        raise github_access.Unreachable(result.stderr)
+    raise subprocess.CalledProcessError(result.returncode, argv, result.stdout, result.stderr)
 
 
 def execute(*args, cwd=None):
