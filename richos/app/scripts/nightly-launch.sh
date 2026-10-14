@@ -3,12 +3,13 @@
 # nightly-launch.sh — run a published nightly beside your own copy of RichOS, in its
 #                     own folder, without touching your own copy or its data.
 #
-#   nightly-launch.sh a|b <RichOS-<version>-macos-aarch64.zip> [--replace] [--roster <page.md>]
-#   nightly-launch.sh a|b --again [--roster <page.md>]
+#   nightly-launch.sh a|b|c <RichOS-<version>-macos-aarch64.zip> [--replace] [--roster <page.md>] [--engine <engine.tar.gz>]
+#   nightly-launch.sh a|b|c --again [--roster <page.md>]
 #   nightly-launch.sh status
 #
 #   a  ~/myrichos-nightly-a   a newborn: empty data, the experience a customer gets
 #   b  ~/myrichos-nightly-b   the same nightly on data carrying the team roster page
+#   c  ~/myrichos-nightly-c   a newborn for a build that is not published yet (with --engine)
 #
 # =========================================================================================
 # WHY THIS EXISTS
@@ -33,6 +34,7 @@
 #     app.noindex/RichOS.app   the app, unpacked from the ZIP
 #     home.noindex/            the app's HOME: its data, its engine, its updater's copy
 #     memory/                  folder b only: wiki/team-roster.md and loro/
+#     engine.noindex/          only with --engine: the engine the app boots instead of its pin
 #     logs/                    the app's output, one file per start
 #     nightly-launch.txt       what was unpacked: version, commit, the ZIP's digest
 #
@@ -68,11 +70,19 @@
 #                                    corpus"): a stray value would point the nightly at a
 #                                    memory that is not the folder's. Empty is unset there.
 #   RICHOS_ENGINE_DIR= and
-#   RICHOS_ENGINE_ROOT=              EMPTY, never set to anything. A pinned nightly boots
-#                                    only the engine installed from its own asset, and an
-#                                    explicit statement outranks the pin (setup.rs,
-#                                    `engine_boot_refusal`), so setting one would put the
-#                                    moving engine back. Empty is unset there too.
+#   RICHOS_ENGINE_ROOT=              EMPTY, unless the folder holds engine.noindex/. A pinned
+#                                    nightly boots only the engine installed from its own
+#                                    asset, and an explicit statement outranks the pin
+#                                    (setup.rs, `engine_boot_refusal`), so setting one would
+#                                    put the moving engine back. Empty is unset there too.
+#                                    --engine <tar.gz> is that statement, made on purpose: a
+#                                    build tested before it is published still carries the
+#                                    LAST nightly's pin, so on its own it would download that
+#                                    nightly's engine. The release tarball (one top-level
+#                                    `engine/`) is unpacked into <folder>/engine.noindex and
+#                                    RICHOS_ENGINE_DIR names it, exactly as the test VM's
+#                                    `run.sh --engine` does; every later start of the folder
+#                                    (--again included) boots that engine too.
 #   RICHOS_CLAUDE_BIN=               explicit and exclusive (setup.rs `find_claude`); the
 #                                    folder's own link below is what the app should find.
 #
@@ -130,7 +140,7 @@ PROG="nightly-launch.sh"
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
 die()  { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
-usage() { sed -n '6,11p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '6,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 OPEN_BIN="${RICHOS_NIGHTLY_OPEN:-/usr/bin/open}"
 PS_BIN="${RICHOS_NIGHTLY_PS:-/bin/ps}"
@@ -266,6 +276,9 @@ status_one() {  # <slot>
       say "  roster page: present ($(wc -c < "$folder/memory/$ROSTER_RELATIVE" | tr -d ' ') bytes)"
     fi
   fi
+  if [ -f "$folder/engine.noindex/VERSION" ]; then
+    say "  engine: $folder/engine.noindex (RICHOS_ENGINE_DIR; VERSION $(head -1 "$folder/engine.noindex/VERSION"))"
+  fi
   if [ -d "$folder/home.noindex/Library/Application Support/RichOS/corpus" ]; then
     say "  note: the app provisioned its own memory at .../RichOS/corpus, which outranks the pointer above"
   fi
@@ -277,22 +290,23 @@ status_one() {  # <slot>
 [ $# -ge 1 ] || usage
 if [ "$1" = "status" ]; then
   [ $# -eq 1 ] || usage
-  status_one a; status_one b
+  status_one a; status_one b; status_one c
   exit 0
 fi
 case "$1" in -h|--help) usage ;; esac
 
 SLOT="$1"; shift
 case "$SLOT" in
-  a|b) ;;
-  *) die "the first word is the folder, a or b (or 'status'); got '$SLOT'." ;;
+  a|b|c) ;;
+  *) die "the first word is the folder, a, b or c (or 'status'); got '$SLOT'." ;;
 esac
-ZIP=""; AGAIN=0; REPLACE=0; ROSTER=""
+ZIP=""; AGAIN=0; REPLACE=0; ROSTER=""; ENGINE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --again)   AGAIN=1; shift ;;
     --replace) REPLACE=1; shift ;;
     --roster)  [ $# -ge 2 ] || die "--roster needs a file."; ROSTER="$2"; shift 2 ;;
+    --engine)  [ $# -ge 2 ] || die "--engine needs the engine's .tar.gz."; ENGINE="$2"; shift 2 ;;
     -h|--help) usage ;;
     -*)        die "unknown option '$1'." ;;
     *)         [ -z "$ZIP" ] || die "one ZIP at a time; got '$ZIP' and '$1'."; ZIP="$1"; shift ;;
@@ -302,6 +316,7 @@ done
 if [ "$AGAIN" -eq 1 ]; then
   [ -z "$ZIP" ] || die "--again starts what the folder already holds; give a ZIP or --again, not both."
   [ "$REPLACE" -eq 0 ] || die "--again replaces nothing."
+  [ -z "$ENGINE" ] || die "--again starts the engine the folder already holds; give --engine with the ZIP."
 else
   [ -n "$ZIP" ] || die "name the nightly ZIP to start (or --again to start what folder $SLOT holds)."
 fi
@@ -373,6 +388,12 @@ if [ "$AGAIN" -eq 0 ]; then
   ZIP_SHA="$(/usr/bin/shasum -a 256 "$ZIP" | cut -d' ' -f1)"
   [ ${#ZIP_SHA} -eq 64 ] || die "could not hash '$ZIP'."
 fi
+if [ -n "$ENGINE" ]; then
+  refuse_daily "engine" "$ENGINE"
+  [ -f "$ENGINE" ] || die "refusing: no such engine file: '$ENGINE'."
+  ENGINE_TOP="$(/usr/bin/tar -tzf "$ENGINE" 2>/dev/null | head -1)"
+  [ "$ENGINE_TOP" = "engine/" ] || die "refusing: '$ENGINE' is not a RichOS engine tarball (its first member is '${ENGINE_TOP:-nothing}', not 'engine/')."
+fi
 
 # ---------------------------------------------------------------------------------------
 # The folder: what it already holds
@@ -429,6 +450,25 @@ if [ "$UNPACK" -eq 1 ]; then
 fi
 VERSION="$(marker_value "$MARKER" version)"
 COMMIT="$(marker_value "$MARKER" commit)"
+
+# ---------------------------------------------------------------------------------------
+# --engine: unpack it into the folder, checked the way the app checks it
+# ---------------------------------------------------------------------------------------
+ENGINE_DIR="$FOLDER/engine.noindex"
+if [ -n "$ENGINE" ]; then
+  STAGE="$FOLDER/.engine-unpacking.$$"
+  rm -rf "$STAGE"; mkdir "$STAGE" || die "cannot create $STAGE."
+  /usr/bin/tar -C "$STAGE" --strip-components 1 -xzf "$ENGINE" || die "could not unpack '$ENGINE'."
+  # Same predicate as the app's `engine_looks_valid` and testvm/run.sh: a wrong shape would
+  # boot to "the RichOS engine isn't on this Mac".
+  [ -d "$STAGE/scripts/hooks" ] && [ -f "$STAGE/VERSION" ] \
+    || die "refusing: '$ENGINE' unpacked without scripts/hooks and VERSION, so the app would not take it as an engine."
+  rm -rf "$ENGINE_DIR" || die "could not remove the old $ENGINE_DIR."
+  mv "$STAGE" "$ENGINE_DIR" || die "could not move the engine into $FOLDER."
+  STAGE=""
+fi
+ENGINE_ENV="RICHOS_ENGINE_DIR="
+[ -f "$ENGINE_DIR/VERSION" ] && ENGINE_ENV="RICHOS_ENGINE_DIR=$ENGINE_DIR"
 
 # ---------------------------------------------------------------------------------------
 # The folder's home: the three sign-in links, the copy, and claude
@@ -514,7 +554,7 @@ LAUNCH_ENV+=("${SETTINGS_ENV[@]+"${SETTINGS_ENV[@]}"}")
   --env "DISABLE_AUTOUPDATER=1" \
   --env "LORO_CORPUS=" \
   --env "LORO_ROOT=" \
-  --env "RICHOS_ENGINE_DIR=" \
+  --env "$ENGINE_ENV" \
   --env "RICHOS_ENGINE_ROOT=" \
   --env "RICHOS_CLAUDE_BIN=" \
   --stdout "$LOG" --stderr "$LOG" \
@@ -537,3 +577,4 @@ say "slot=$SLOT version=$VERSION commit=${COMMIT:-unknown} pid=$PID"
 say "folder=$FOLDER"
 say "home=$NHOME"
 say "log=$LOG"
+[ "$ENGINE_ENV" = "RICHOS_ENGINE_DIR=" ] || say "engine=$ENGINE_DIR"

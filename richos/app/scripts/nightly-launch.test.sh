@@ -293,8 +293,8 @@ if [ ! -e "$H/myrichos-nightly-a" ]; then
 else
   bad "L6 none created the folder" "$(ls -la "$H")"
 fi
-run "$H" c "$ZIPS/v1.zip"
-expect_refusal "L6 a folder other than a or b is refused" "a or b"
+run "$H" d "$ZIPS/v1.zip"
+expect_refusal "L6 a folder other than a, b or c is refused" "a, b or c"
 tmp_clean "L6 refusals leave no scratch behind"
 
 # ---------------------------------------------------------------------------------------
@@ -435,6 +435,33 @@ RICHOS_ENV_FILE="$H/missing selected file" run "$H" a --again
 if grep -qx "RICHOS_ENV_FILE=$H/missing selected file" "$H.state/open.env"; then
   ok "L14 an explicit missing selector is forwarded for the reader's refusal"
 else bad "L14 explicit selector forwarded" "$OUT"; fi
+
+# ---------------------------------------------------------------------------------------
+# L15 — folder c with --engine: the unpacked engine is the one the app is told to boot
+# ---------------------------------------------------------------------------------------
+H="$(new_home h15)"; F="$H/myrichos-nightly-c"
+ENG="$SBOX/eng"; mkdir -p "$ENG/engine/scripts/hooks"; printf '1.2.0\n' > "$ENG/engine/VERSION"
+( cd "$ENG" && /usr/bin/tar -czf "$SBOX/engine.tar.gz" engine )
+mkdir -p "$ENG/wrong/scripts"; ( cd "$ENG" && /usr/bin/tar -czf "$SBOX/wrong.tar.gz" wrong )
+run "$H" c "$ZIPS/v1.zip" --engine "$SBOX/wrong.tar.gz"
+expect_refusal "L15 an engine tarball whose top member is not engine/ is refused" "not a RichOS engine tarball"
+if [ ! -e "$F" ]; then ok "L15 ...before the folder is created"; else bad "L15 refusal created nothing" "$(ls -la "$F")"; fi
+run "$H" c "$ZIPS/v1.zip" --engine "$SBOX/engine.tar.gz"
+A="$H.state/open.args"
+if [ "$RC" -eq 0 ] && [ -d "$F/engine.noindex/scripts/hooks" ] && [ -f "$F/engine.noindex/VERSION" ] \
+   && grep -qx "RICHOS_ENGINE_DIR=$F/engine.noindex" "$A" && grep -qx "RICHOS_ENGINE_ROOT=" "$A"; then
+  ok "L15 folder c unpacks the engine (one level stripped) and starts the app with RICHOS_ENGINE_DIR naming it"
+else bad "L15 folder c with --engine" "exit $RC: $OUT / $(tr '\n' ' ' < "$A" 2>&1)"; fi
+if [ ! -e "$F/memory" ]; then ok "L15 folder c is a newborn: no memory folder"; else bad "L15 folder c is a newborn" "$(ls -la "$F")"; fi
+quit_app "$H"
+run "$H" c --again
+if [ "$RC" -eq 0 ] && grep -qx "RICHOS_ENGINE_DIR=$F/engine.noindex" "$A"; then
+  ok "L15 --again boots the engine the folder holds"
+else bad "L15 --again keeps the engine" "exit $RC: $OUT"; fi
+quit_app "$H"
+run "$H" status
+if grep -q "engine: $F/engine.noindex" <<<"$OUT"; then ok "L15 status names folder c's engine"; else bad "L15 status names the engine" "$OUT"; fi
+tmp_clean "L15 the launcher's scratch is gone"
 
 echo ""
 echo "nightly-launch.test.sh: $PASSES passed, $FAILS failed"
