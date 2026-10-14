@@ -7389,6 +7389,64 @@ mod tests {
         }
     }
 
+    /// **Nightly 56's hire walk (2026-10-14, `walk-1606409b3615`, esc-20261014T202736Z-38bde06b):
+    /// the hiring settled while Beth was still being written.** Dean's consult hit a
+    /// `SubagentStop` without handing his answer back, the provider ran him on, and the back
+    /// end's next turn ended "Dean, who is still writing Beth's profile" with the provider's own
+    /// `Stop` listing Dean `running`. The host read the first `SubagentStop` as his end, settled
+    /// the job "Answered." with only Will saved, and Dean's hand-back was refused.
+    ///
+    /// Now that `Stop` keeps Dean open: the job stays `Running` with its grant, and his real
+    /// end brings the back end the turn in which Beth is saved. On the unfixed host this fails
+    /// at the first assertion: the job is `Settled` before Dean ends.
+    #[test]
+    fn a_helper_the_provider_still_runs_after_its_first_subagent_stop_holds_the_job_open() {
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        let still_running = serde_json::json!({"schema": 1, "callback": {"session_id":"work-session-one",
+            "hook_event_name":"Stop","stop_hook_active":false,
+            "background_tasks":[{"id":"dean-1","type":"subagent","status":"running","description":"Write Beth, Bookkeeper"}]}})
+            .to_string() + "\n";
+        // The journal as the walk left it at that turn's end, in the provider's order.
+        journal(&h, &(helper_started("dean-1") + &helper_stopped("dean-1") + &still_running));
+        h.replies.lock().unwrap().extend([
+            "Clark has finished researching the Bookkeeper role. I've passed that research to Dean, who is \
+             still writing Beth's profile. Beth isn't saved yet, so she isn't on your team yet."
+                .to_string(),
+            "Beth saved. She is on your team now as your Bookkeeper.".to_string(),
+        ]);
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
+
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let now = read();
+            if now.detail == "A helper is doing the work."
+                || !matches!(now.state, AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running)
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "nothing happened: {:?} {}", now.state, now.detail);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let waiting = read();
+        assert_eq!(waiting.state, AssignmentState::Running,
+            "the hiring was settled while a teammate was still being written: {}", waiting.detail);
+        assert_eq!(h.revoked.load(Ordering::SeqCst), 0, "the grant Dean hands back under was taken away");
+
+        // Dean's real end: the back end gets its turn, and the job ends on what it then says.
+        journal(&h, &helper_stopped("dean-1"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
+        let done = read();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
+        let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
+        assert!(told.iter().any(|t| t.contains("Beth saved.")), "{told:?}");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
     // ---- the weekly switch handoff (richos-hq docs/plans/2026-10-07-weekly-switch-handoff.md) --
 
     const DECLARED_WAIT: &str = "I've asked the helper to go on.\n\nstop-declared: waiting-on-teammate — \
