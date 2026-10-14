@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import importlib.util
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -216,13 +217,58 @@ class DesktopWork(unittest.TestCase):
         self.assertIn(brief,ready["agent_payload"]["prompt"])
         self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"hire-dean-call",
                                              "tool_input":ready["agent_payload"]})
-        # The whole call still fits the work tools' 128 KiB request line (ecs/adapters/mcp.py).
-        line=json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"prepare","arguments":
-                         {**ask,"brief":("x"*79+"\n")*(self.app.BRIEF_LIMIT//80)}}},ensure_ascii=False)
-        self.assertLess(len(line.encode()),128*1024)
         # Over the bound, the refusal says by how much, so one shorter send is enough.
-        with self.assertRaisesRegex(ValueError,"brief must be a nonempty bounded string: it is 65,537 characters and the most is 65,536"):
+        with self.assertRaisesRegex(ValueError,"brief must be a nonempty bounded string: it is 65,537 bytes as sent "
+                                    r"\(65,537 characters\) and the most is 65,536 bytes"):
             self.call("prepare",{**ask,"request_id":"hire-dean-over","brief":"x"*(self.app.BRIEF_LIMIT+1)})
+
+    def test_any_brief_the_limit_accepts_gets_through_the_transport(self):
+        """Review rv-20261014T071445Z-2a39eaa8-6d15: the brief limit counted characters, but the work
+        tools' transport refuses a request line over 128 KiB in bytes (ecs/adapters/mcp.py serve), so
+        47,700 characters of Chinese research fitted the limit and came back "Message too large"
+        before the hiring step ran. The limit now counts the brief's bytes as Claude Code sends them,
+        so what it accepts reaches prepare, and what it refuses is refused there, with its size."""
+        transport=self.app.load("work_transport_test",ENGINE/"ecs/adapters/mcp.py")
+        def send(brief,request_id,obligation="fixture-task"):
+            ask={"request_id":request_id,"obligation_id":obligation,"role":"consult","teammate":"dean",
+                 "title":"Write teammate definitions","brief":brief}
+            # The lines as Claude Code writes them (Node's JSON.stringify): UTF-8, and nothing escaped
+            # but quotes, backslashes and control characters.
+            lines=b"".join(json.dumps(message,ensure_ascii=False,separators=(",",":")).encode("utf-8","surrogatepass")+b"\n"
+                           for message in ({"jsonrpc":"2.0","id":1,"method":"initialize"},
+                                           {"jsonrpc":"2.0","id":2,"method":"tools/call",
+                                            "params":{"name":"prepare","arguments":ask}}))
+            out=io.StringIO()
+            transport.serve(str(self.scope_path),io.BytesIO(lines),out,tools=self.app.TOOLS,handler=self.app.call)
+            return json.loads(out.getvalue().splitlines()[-1])
+        # The review's fixture: 47,700 characters, 142,420 bytes on the line, over the transport's
+        # 131,072. The limit accepted it, so it met "Message too large"; the limit now refuses it.
+        paragraph="公司的记账员负责核对每月发票和银行流水，整理客户收款记录，编制费用报表，并将需要批准的支出提交给负责人。\n"
+        self.assertEqual(send(paragraph*900,"hire-chinese")["error"]["message"],"Message too large")
+        with self.assertRaisesRegex(ValueError,r"brief must be a nonempty bounded string: it is 142,\d{3} bytes as sent "
+                                    r"\(47,700 characters\) and the most is 65,536 bytes"):
+            self.call("prepare",{"request_id":"hire-chinese","obligation_id":"fixture-task","role":"consult",
+                                 "teammate":"dean","title":"Write teammate definitions","brief":paragraph*900})
+        # The most the limit accepts, in each kind of character at its costliest as sent (a control
+        # character is six bytes, \u0001), goes through and is prepared.
+        for index,unit in enumerate(("公","😀","\x01","\n",'"',"x")):
+            head="Hire Beth. "
+            body=unit*((self.app.BRIEF_LIMIT-len(head))//len(json.dumps(unit,ensure_ascii=False).encode()[1:-1]))
+            brief=head+body
+            brief+="x"*(self.app.BRIEF_LIMIT-len(json.dumps(brief,ensure_ascii=False).encode())+2)
+            self.assertEqual(len(json.dumps(brief,ensure_ascii=False).encode())-2,self.app.BRIEF_LIMIT)
+            # One hire each: an obligation holds one unresolved preparation.
+            self.app.ECS.execute(self.root/"ecs",{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],
+                "request_id":f"accept-hire-{index}","checkpoint":{"statements":[{"verb":"commitment",
+                "fields":{"id":f"hire-{index}","title":"Hire a fictional teammate"}}]}})
+            reply=send(brief,f"hire-at-limit-{index}",f"hire-{index}")
+            self.assertNotIn("error",reply,repr(unit))
+            self.assertFalse(reply["result"]["isError"],(repr(unit),reply["result"]["content"][0]["text"][:500]))
+            self.assertEqual(json.loads(reply["result"]["content"][0]["text"])["status"],"prepared",repr(unit))
+            # One byte more is the limit's refusal, never the transport's.
+            reply=send(brief+"x",f"hire-over-limit-{index}",f"hire-{index}")
+            self.assertNotIn("error",reply,repr(unit))
+            self.assertIn("65,537 bytes as sent",reply["result"]["content"][0]["text"],repr(unit))
 
     def test_a_consult_needs_no_repository_is_read_only_and_hands_back_its_final_message(self):
         """Slice 3 of the proto-teammate shelf plan (richos-hq

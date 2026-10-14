@@ -256,11 +256,30 @@ def text(args, key, limit=1024):
     return value
 
 
+def sent_bytes(value):
+    """The bytes a string takes in a tool call's request line as Claude Code writes it (Node's
+    JSON.stringify): UTF-8, with quotes, backslashes and control characters escaped, and a lone
+    surrogate as its six-byte escape. The transport (ecs/adapters/mcp.py serve) bounds that line
+    in bytes, so a bound that must fit inside it counts these, never characters: 47,700
+    characters of Chinese are 142,420 bytes on the line (review rv-20261014T071445Z-2a39eaa8-6d15)."""
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8", "backslashreplace")) - 2
+
+
+def sent_text(args, key, limit):
+    """`text`, bounded by its bytes as sent rather than by its characters."""
+    value = args.get(key)
+    if isinstance(value, str) and sent_bytes(value) > limit:
+        raise ValueError(f"{key} must be a nonempty bounded string: it is {sent_bytes(value):,} bytes as sent "
+                         f"({len(value):,} characters) and the most is {limit:,} bytes")
+    return text(args, key, limit)
+
+
 # The most a brief may carry. Hiring puts three things in Dean's: the shelf definition he
 # fits (up to 13,844 bytes), Clark's research for the new roles and the user's facts and rules.
 # Clark's research alone came back at 27,099 characters in a hire walk (hiresnag55), so the
 # old 32,000 refused the brief that carried it in full and he was told of "a technical snag".
-# 64 KiB, as DEFINITION_LIMIT and for the same reason: inside the transport's 128 KiB line.
+# 64 KiB in bytes as sent (sent_text), as DEFINITION_LIMIT: half the transport's 128 KiB line,
+# the other half for the rest of the call, so any brief this accepts reaches prepare.
 BRIEF_LIMIT = 64 * 1024
 
 
@@ -773,7 +792,8 @@ def definition_model(teammate, front):
 # point 3). Nothing here registers a teammate; the next lease does.
 SHELF = ENGINE / "team/shelf"
 # The bound on a saved definition: about four times the largest shelf file (13,844 bytes),
-# and inside the MCP transport's 128 KiB request line once JSON-escaped.
+# counted in bytes as sent (sent_bytes), so it fits inside the MCP transport's 128 KiB
+# request line in any language.
 DEFINITION_LIMIT = 64 * 1024
 
 
@@ -815,8 +835,8 @@ def team(args):
         if not TEAMMATE_NAME.fullmatch(name) or name in DUTIES:
             raise ValueError("name must be a teammate's name: 2 to 16 lowercase letters and digits, never a duty")
         body = args.get("text")
-        if not isinstance(body, str) or not body.strip() or len(body) > DEFINITION_LIMIT:
-            raise ValueError(f"text must be the whole definition, at most {DEFINITION_LIMIT} characters")
+        if not isinstance(body, str) or not body.strip() or sent_bytes(body) > DEFINITION_LIMIT:
+            raise ValueError(f"text must be the whole definition, at most {DEFINITION_LIMIT:,} bytes as sent")
         if not body.startswith("---\n"):
             raise ValueError("text must be the definition itself, starting at its --- line, without a code fence")
         front = front_matter(body)
@@ -970,7 +990,7 @@ def prepare(scope_path, scope, args):
         repo, repos_all = connected_repositories(scope, args)
     teammate = text(args,"teammate",64)
     model = teammate_model(teammate)
-    title, brief = text(args,"title",256), text(args,"brief",BRIEF_LIMIT)
+    title, brief = text(args,"title",256), sent_text(args,"brief",BRIEF_LIMIT)
     normalized = {"obligation_id":obligation,"repo":str(repo) if repo else None,"repos":[str(r) for r in repos_all],"title":title,"brief":brief,"role":role,"teammate":teammate,
         "integration":args.get("integration"),"base":args.get("base"),"review_of":args.get("review_of"),"continue_of":args.get("continue_of")}
     identity = hashlib.sha256(json.dumps([scope["binding"]["entity_id"],scope["binding"]["thread_id"],request_id],separators=(",", ":")).encode()).hexdigest()
