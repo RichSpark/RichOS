@@ -976,7 +976,7 @@ class SetupWalk(adopt_walk.Walk):
         facts['rail_ocr_exact'] = name in ocr
         facts['rail_ocr_upper'] = name.upper() in ocr
         if facts['feature_listed']:
-            self.press('Dictation feature')
+            self.open_feature()
             time.sleep(3)
         facts['feature_text'] = self.shows_text(R19_FEATURE_AX)
         facts['feature_wrong_key'] = self.shows_text('tap F1,')
@@ -1014,6 +1014,23 @@ class SetupWalk(adopt_walk.Walk):
             raise StepFailed('failed: ' + ', '.join(why) + ' — ' + json.dumps(facts))
         return facts
 
+    def open_feature(self):
+        """The "Dictation feature" row clicked in the rail, scoped to the sidebar as r19-restart
+        does. A click that hit ax.sh's guest deadline may have landed, so the row is read before
+        a second click (walk of 0a2ae649f, ray-opus-final55 setup2: the whole-window click
+        exited 124 with the host at 99% CPU)."""
+        for attempt in range(2):
+            try:
+                return self.ax('click', '--title', 'Dictation feature', '--role', 'AXButton', '--in', 'sidebar',
+                               '--first', '--contains')
+            except StepFailed as exc:
+                if '124' not in str(exc) and 'guest_deadline' not in str(exc) or attempt == 1:
+                    raise
+                time.sleep(5)
+                crumb = self.ax('find', '--value', 'Dictation feature', '--contains', '--first')
+                if any(n.get('role') == 'AXStaticText' and n.get('y', 999) < 160 for n in crumb):
+                    return crumb
+
     def r19_key_change(self):
         """After r19-set-up: Settings, Dictation, F3 picked, the sheet closed. The "Dictation
         feature" message names F3 and no longer F2, and Rich, asked there, names F3."""
@@ -1041,8 +1058,8 @@ class SetupWalk(adopt_walk.Walk):
         self.ax('click', '--id', 'dict-close')
         self.mark(f'key F{key} picked in Settings, the sheet closed', pressed=True)
         time.sleep(3)
-        self.press('Dictation feature')
-        new_line = R19_FEATURE_AX.replace(f'tap F{old},', f'tap F{key},')
+        self.open_feature()
+        new_line =R19_FEATURE_AX.replace(f'tap F{old},', f'tap F{key},')
         end = time.monotonic() + 30
         while time.monotonic() < end and not self.shows_text(new_line):
             time.sleep(2)
