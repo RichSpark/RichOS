@@ -6,8 +6,9 @@
 # The CEO, 2026-09-28: "WHERE THE FUCK WAS THAT FUCKING WATCHER BEFORE???"
 # The watcher itself is the engine's plugin monitor `stall-watch`
 # (monitors/monitors.json), which Claude Code starts with every interactive
-# session; this notice tells the lead it is there, that it only reports, and
-# how to check it (stall-watch.sh --alive) and start the fallback if not.
+# session; this notice tells the lead it is there, what it reports, the one
+# thing it ends (a teammate's own idle commands that keep its end waiting),
+# and how to check it (stall-watch.sh --alive) and start the fallback if not.
 #
 # WHO HEARS IT: the lead only (additionalContext), never the CEO
 # (systemMessage), as session-start-quota.sh.
