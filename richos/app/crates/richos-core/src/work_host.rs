@@ -2211,12 +2211,16 @@ impl WorkHost {
         // not, and however many waits it took, a teammate still unsaved means the job goes on.
         // The back end is told who is still unsaved once per stall: a turn answering that with
         // nothing started and nothing saved ends the run, and the hiring is then reported as
-        // not finished, never as done. His Stop, a quit, a question of his and a closed
+        // not finished, never as done. A turn answering it that saved someone, or in which a
+        // helper ran, is progress, and the next stall is told again (handover review
+        // rv-20261014T220435Z-3ec975bc-d575). His Stop, a quit, a question of his and a closed
         // obligation end it as they end every run.
-        let mut nudged = false;
-        let hiring_goes_on = |nudged_last: bool| -> Option<String> {
+        //
+        // Set when the hiring continuation is sent: how many proposed teammates were unsaved.
+        let mut nudged: Option<usize> = None;
+        let hiring_goes_on = |stalled: bool| -> Option<String> {
             let unsaved = self.unsaved_hires(record);
-            if unsaved.is_empty() || nudged_last || matches!(self.outcome(backend, record), Outcome::Settled)
+            if unsaved.is_empty() || stalled || matches!(self.outcome(backend, record), Outcome::Settled)
                 || self.pending_decision(record).is_some()
                 || crate::questions::Store::new(&self.state).list(&record.entity_id, &record.thread_id).is_ok_and(|qs| {
                     qs.iter().any(|q| q.asker == record.obligation_id && !q.delivered && q.state != crate::questions::State::Withdrawn)
@@ -2240,8 +2244,12 @@ impl WorkHost {
             // could wait on forever, and `settlement` below already reads it as unsettled and
             // says so. Only a run this host can see open is worth waiting for.
             let helper_open = view.is_attributed() && view.active + view.liveness_unknown > 0;
-            // Only the turn straight after the hiring continuation can leave this set.
-            let nudged_last = std::mem::take(&mut nudged);
+            // Only the turn straight after the hiring continuation can leave this set. That turn
+            // STALLED only if it saved nobody and no helper run ended since it began; a helper it
+            // left open is waited on below, and the turn after that is not a stall either.
+            let stalled = std::mem::take(&mut nudged).is_some_and(|unsaved_then| {
+                self.unsaved_hires(record).len() >= unsaved_then && ends_now() <= ends_at_turn_start
+            });
             // The bound stops more turns, never a helper still at work ([`WORKER_WAIT_ROUNDS`])
             // and never a hiring with a proposed teammate unsaved.
             if waits >= WORKER_WAIT_ROUNDS && !helper_open && self.unsaved_hires(record).is_empty() {
@@ -2288,8 +2296,8 @@ impl WorkHost {
                     let next = if self.renew_team_between_turns(backend, binding, record, &work, context) {
                         TEAM_CHANGED_CONTINUATION.to_string()
                     } else {
-                        let Some(next) = hiring_goes_on(nudged_last) else { break };
-                        nudged = true;
+                        let Some(next) = hiring_goes_on(stalled) else { break };
+                        nudged = Some(self.unsaved_hires(record).len());
                         next
                     };
                     waits += 1;
@@ -2302,8 +2310,8 @@ impl WorkHost {
                     // **NOTHING IS OPEN AND NOTHING IS DECLARED, ON A HIRING STILL UNFINISHED**:
                     // run 3 of nightly 56's check ended a turn with Will saved and Beth's research
                     // "next", the team renewal above did not happen, and the job closed there.
-                    let Some(next) = hiring_goes_on(nudged_last) else { break };
-                    nudged = true;
+                    let Some(next) = hiring_goes_on(stalled) else { break };
+                    nudged = Some(self.unsaved_hires(record).len());
                     waits += 1;
                     helper_turn = true;
                     chars.set(next.len());
@@ -5224,6 +5232,9 @@ mod tests {
         /// Set, `team_names` reads the digest as the names on the team, separated by spaces;
         /// unset, it cannot say, as every test written before the hiring check.
         named: bool,
+        /// Rows each work turn appends to a journal while it runs, one entry per turn (`None`
+        /// appends nothing): a helper that starts and ends inside the turn.
+        journal_in_turn: VecDeque<Option<(std::path::PathBuf, String)>>,
     }
 
     /// **Fill-first's knobs for the fake back end.** With a quota service set, every lease is
@@ -5368,6 +5379,10 @@ mod tests {
                 let mut team = self.team.lock().unwrap();
                 if let Some(Some(saved)) = team.in_turn.pop_front() {
                     team.digest = Some(saved);
+                }
+                if let Some(Some((path, rows))) = team.journal_in_turn.pop_front() {
+                    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+                    std::io::Write::write_all(&mut file, rows.as_bytes()).unwrap();
                 }
             }
             if !self.silent.load(Ordering::SeqCst) {
@@ -7705,6 +7720,51 @@ mod tests {
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
         assert!(told.iter().any(|t| t.contains("both on your team")), "{told:?}");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A turn answering the hiring continuation that made progress is not a stall** (handover
+    /// review rv-20261014T220435Z-3ec975bc-d575). The first turn ends with nothing open and nobody
+    /// saved, and the back end is told Will and Beth are unsaved. Its answer runs Clark's research
+    /// inside the turn (a helper that starts and ends before the turn does) and saves nobody; the
+    /// next saves Will with the renewal deferred. Each is progress, so each stall is told again,
+    /// and the turn after the last saves Beth. The host used to end the run after the first
+    /// answer, whatever it did, and mark the hiring Failed with both unsaved.
+    #[test]
+    fn a_hiring_that_makes_progress_after_a_turn_with_none_still_finishes() {
+        use crate::cognition::ObligationState;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        let path = h.state.join("evidence").join("work-session-one").join("callbacks.jsonl");
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([None, None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
+            team.journal_in_turn.extend([None, Some((path, helper_started("clark-research") + &helper_stopped("clark-research")))]);
+        }
+        h.replies.lock().unwrap().extend([
+            "I'll start on Will and Beth.".to_string(),
+            "Clark has researched both roles; Dean fits Will next.".to_string(),
+            "Will's definition is saved; ending the turn so the app can register him.".to_string(),
+            "Beth is saved too. Will and Beth are both on your team now.".to_string(),
+        ]);
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 4, "the hiring ended after a turn that made progress: {:?}", read());
+        let both = ["Will".to_string(), "Beth".to_string()];
+        assert_eq!(prompts[1], hiring_unfinished_continuation(&both));
+        assert_eq!(prompts[2], hiring_unfinished_continuation(&both));
+        assert_eq!(prompts[3], hiring_unfinished_continuation(&["Beth".to_string()]));
+        let done = read();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
