@@ -152,6 +152,21 @@ class Slots(unittest.TestCase):
                                        ram_mb=ram)
         self.assertEqual(settled, '', 'a settled guest already counted in the available memory owes little')
 
+    def test_a_refusal_says_how_much_is_missing_and_which_apps_hold_the_most(self):
+        chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+        helper = ('/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/'
+                  'Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=renderer')
+        vm = '/System/Library/Frameworks/Virtualization.framework/x/' + slots.VM_PROCESS
+        processes = [(chrome, 4000), (helper, 5000), (helper, 4100),
+                     ('/Applications/WebStorm.app/Contents/MacOS/webstorm', 5300),
+                     ('/Applications/Slack.app/Contents/MacOS/Slack', 900), (vm, 9000), ('/bin/ls', 5)]
+        self.assertEqual(slots.top_apps(processes), [('Google Chrome', 13100), ('WebStorm', 5300), ('Slack', 900)])
+        text = slots.memory_refusal({'memory_free_percent': 40}, ['walk-a'], resident=[50], total_mb=24576,
+                                    ram_mb=5120, processes=processes)
+        left = 40 / 100 * 24576 - (5120 - 50) - 5120
+        self.assertIn(f'{4096 - left:.0f} MB more must be free', text)
+        self.assertIn('largest apps by memory: Google Chrome 13100 MB, WebStorm 5300 MB, Slack 900 MB', text)
+
     def test_only_a_test_guest_s_own_vm_process_counts_not_docker_s_listed_first(self):
         """2026-10-14: Docker's VM (429 MB, 11 days old) came before the guest (3,562 MB) in `ps`,
         so the guest was charged Docker's size and a second guest was refused every time."""
@@ -166,6 +181,32 @@ class Slots(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr='')
         with patch.object(slots.subprocess, 'run', run):
             self.assertEqual(slots.vm_resident_mb(), [3647488 / 1024])
+
+    def test_docker_s_vm_counts_under_docker_and_system_processes_are_never_named(self):
+        """Review rv-20261014T105153Z-9721e4ac-8690: Docker's 8192 MB VM vanished from the list, and
+        WindowServer displaced Slack."""
+        vm = '/System/Library/Frameworks/Virtualization.framework/x/' + slots.VM_PROCESS
+        shown = ' 1  8192M\n 2  5000M\n 3  3600M\n 4  2500M\n 5  900M\n 6  700M\n'
+        ps = {'-o pid=,rss=,comm=': f'1 8388608 {vm}\n2 5120000 {vm}\n',
+              '-o pid=,uid=,command=': (f'1 {os.getuid()} {vm}\n2 {os.getuid()} {vm}\n'
+                                       f'3 {os.getuid()} /Applications/WebStorm.app/Contents/MacOS/webstorm\n'
+                                       f'4 {os.getuid()} /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer\n'
+                                       f'5 {os.getuid()} /Applications/Slack.app/Contents/MacOS/Slack\n'
+                                       f'6 0 /Applications/Other.app/Contents/MacOS/Other\n')}
+        lsof = ('p1\nn/Users/a/Library/Containers/com.docker.docker/Docker.raw\n'
+                'p2\nn/Users/a/.richos-testvm/tart/vms/walk-x/disk.img\n')
+
+        def run(cmd, **kw):
+            if cmd[0] == 'top':
+                out = shown
+            elif cmd[0] == 'lsof':
+                out = lsof
+            else:
+                out = ps[' '.join(cmd[2:4])]
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr='')
+        with patch.object(slots.subprocess, 'run', run):
+            apps = slots.top_apps(slots.process_memory_mb())
+        self.assertEqual(apps, [('Docker', 8192), ('WebStorm', 3600), ('Slack', 900)])
 
     def test_the_guest_size_is_lib_sh_s_one_declared_default_unless_overridden(self):
         declared = re.search(r'^TESTVM_RAM_MB="\$\{TESTVM_RAM_MB:-(\d+)\}"', (HERE / 'lib.sh').read_text(), re.M)
