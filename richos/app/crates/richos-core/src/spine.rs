@@ -2092,10 +2092,18 @@ impl Spine {
     /// The new text is a new proactive turn in the same conversation and the old turn is marked
     /// superseded by it, the ledger's own mechanism (§5.3): the conversation and the re-prime
     /// tail both leave a superseded turn out, so he sees one message and Rich remembers one.
+    /// A desk already primed for this conversation, in the chair or parked, is un-primed, so
+    /// Rich's next turn there is primed again from the ledger and carries the new text.
     /// Answers the new turn id.
     pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<String, SpineError> {
         let new_turn = self.raise_proactive(Some(thread_id), AttentionTier::Digest, text)?;
         self.ledger.mark_turn_superseded(turn_id, &new_turn)?;
+        if self.lease_primed_thread.as_deref() == Some(thread_id) {
+            self.lease_primed = false;
+        }
+        if let Some(resident) = self.resident.get_mut(thread_id) {
+            resident.primed = false;
+        }
         self.publish_read_metadata();
         Ok(new_turn)
     }

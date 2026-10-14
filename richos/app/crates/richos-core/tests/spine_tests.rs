@@ -189,6 +189,30 @@ fn an_app_message_replaced_is_the_one_message_there_and_the_one_rich_is_primed_w
 }
 
 #[test]
+fn a_replaced_app_message_reaches_the_desk_already_talking_in_that_conversation() {
+    // Review rv-20261014T011702Z-0d2d67f3-d389: set up F2, open "Dictation feature" and talk to
+    // Rich there, pick F3 in Settings, then ask Rich about dictation in that conversation. The
+    // desk was primed with F2 before the replacement; his next turn there must carry F3.
+    let (path, ledger) = tmp_ledger("app-replaced-primed");
+    let mut spine = support::spine(ledger);
+    spine.ensure_active_thread_in(&femcboost()).unwrap();
+    let (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
+    let lease = MockCognition::new("sess-one", vec!["Sure.", "Tap F3."]);
+    let reprimes = lease.reprimes.clone();
+    spine.attach_lease(Box::new(lease));
+    spine.switch_thread(&id).unwrap();
+    spine.submit_prompt("what is this?", Source::Text).unwrap();
+    assert_eq!(reprimes.lock().unwrap().len(), 1, "primed once, with F2");
+    spine.replace_app_message(&id, &first, "tap F3, then").unwrap();
+    spine.submit_prompt("which key do I tap?", Source::Text).unwrap();
+    let primes = reprimes.lock().unwrap().clone();
+    assert_eq!(primes.len(), 2, "the next turn is primed again after the replacement: {primes:?}");
+    assert!(primes[1].contains("tap F3, then"), "Rich's next turn carries the new key: {}", primes[1]);
+    assert!(!primes[1].contains("assistant (unprompted): tap F2, then"), "the replaced message is gone: {}", primes[1]);
+    std::fs::remove_file(&path).expect("the test ledger is removable");
+}
+
+#[test]
 fn threads_are_views_over_one_shared_ledger() {
     let (path, ledger) = tmp_ledger("threads");
     let mut spine = support::spine(ledger);
