@@ -669,7 +669,13 @@ const HIRING_TITLE: &str = "Hire these AI teammates onto my team:";
 /// **The teammates a hiring proposed**, as (team file name, name as written), read off its
 /// title: every name followed by its job title in brackets. A name the register's 160-character
 /// cut left without its job title is not read, and a title of any other shape names nobody.
+///
+/// The file name is the one the team tool can save: it takes only lowercase letters and
+/// digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so the name is lowercased with its
+/// accents folded and everything else dropped: Renée is `renee`, Anne-Marie is `annemarie`
+/// (handover review rv-20261014T223234Z-0c3a1cec-845b).
 fn proposed_hires(title: &str) -> Vec<(String, String)> {
+    use unicode_normalization::UnicodeNormalization;
     let Some(list) = title.strip_prefix(HIRING_TITLE) else { return Vec::new() };
     let (mut hires, mut before, mut depth) = (Vec::new(), String::new(), 0usize);
     for c in list.chars() {
@@ -678,9 +684,7 @@ fn proposed_hires(title: &str) -> Vec<(String, String)> {
                 depth = 1;
                 let item = before.rsplit(',').next().unwrap_or("").trim();
                 let name = item.strip_prefix("and ").unwrap_or(item).trim();
-                let file: String = name.to_lowercase().chars()
-                    .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() { c } else { '-' })
-                    .collect::<String>().split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
+                let file: String = name.nfd().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
                 if !file.is_empty() {
                     hires.push((file, name.to_string()));
                 }
@@ -7810,6 +7814,45 @@ mod tests {
         assert_eq!(prompts[1], hiring_unfinished_continuation(&both));
         assert_eq!(prompts[2], hiring_unfinished_continuation(&both));
         assert_eq!(prompts[3], hiring_unfinished_continuation(&["Beth".to_string()]));
+        let done = read();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A proposed name with an accent or a hyphen counts as saved under the name the team
+    /// tool accepts** (handover review rv-20261014T223234Z-0c3a1cec-845b). The save takes only
+    /// 2 to 16 lowercase letters and digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so
+    /// Renée is saved as `renee` and Anne-Marie as `annemarie`. The check used to look for
+    /// `ren-e` and `anne-marie`, which no save can write, so the hiring never finished.
+    #[test]
+    fn a_hiring_of_renee_and_anne_marie_finishes_once_both_are_saved() {
+        use crate::cognition::ObligationState;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} renee")), Some(format!("{STOCK_TEAM} annemarie renee"))]);
+        }
+        h.replies.lock().unwrap().extend([
+            "I'll start on Renée and Anne-Marie.".to_string(),
+            format!("Saving Renée.{TOOL_CALL}Renée's definition is saved; ending the turn so the app can register her."),
+            format!("Saving Anne-Marie.{TOOL_CALL}Renée and Anne-Marie are both on your team now."),
+        ]);
+        h.host.start();
+        let title = "Hire these AI teammates onto my team: Renée (Office Manager), Anne-Marie (Bookkeeper)";
+        let receipt = h.host.register(&h.binding, &Registration { title: title.into(), ..registration(&h) }).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 3, "the hiring did not finish when both were saved: {:?} {prompts:#?}", read());
+        assert_eq!(prompts[1], hiring_unfinished_continuation(&["Renée".to_string(), "Anne-Marie".to_string()]));
+        assert_eq!(prompts[2], hiring_unfinished_continuation(&["Anne-Marie".to_string()]));
         let done = read();
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         h.host.shutdown();
