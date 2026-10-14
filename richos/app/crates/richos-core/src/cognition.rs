@@ -275,6 +275,13 @@ pub trait Cognition: Send {
     fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
         _source: crate::ledger::Source, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
 
+    /// Give the session the context brief his next turn would otherwise supply first, while
+    /// nobody is waiting: called right after the priming turn, under that turn's own ledger
+    /// id. His turn's [`Self::prepare_work_turn`] then finds the same brief already held and
+    /// sends his words straight away. Adapters without a context brief keep the no-op.
+    fn supply_context_ahead(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
+        _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+
     /// Inject the re-prime payload as an INTERNAL, non-rendered priming turn.
     /// Called once when the lease is (re)spawned, before any CEO-visible turn.
     ///

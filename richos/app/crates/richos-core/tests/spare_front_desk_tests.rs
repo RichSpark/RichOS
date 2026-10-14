@@ -705,3 +705,90 @@ fn a_spare_primed_against_a_world_that_moved_is_kept_but_never_called_primed() {
     );
     let _ = std::fs::remove_file(path);
 }
+
+/// What a desk was asked to do, in order, on every child the factory spawned.
+type Calls = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// A desk that only records: its priming turn, the context brief supplied ahead and the
+/// thread it was supplied for, and his turns.
+struct BriefDesk {
+    session: String,
+    calls: Calls,
+}
+
+impl richos_core::Cognition for BriefDesk {
+    fn session_id(&self) -> &str {
+        &self.session
+    }
+    fn reprime(
+        &mut self,
+        _priming_text: &str,
+        _on_item: &mut dyn FnMut(richos_core::cognition::TurnItem),
+    ) -> Result<(), richos_core::cognition::CognitionError> {
+        self.calls.lock().unwrap().push("reprime".into());
+        Ok(())
+    }
+    fn supply_context_ahead(
+        &mut self,
+        binding: &richos_core::entity::ThreadBinding,
+        _turn: &str,
+        _on_item: &mut dyn FnMut(richos_core::cognition::TurnItem),
+    ) -> Result<(), richos_core::cognition::CognitionError> {
+        self.calls.lock().unwrap().push(format!("brief ahead for {}", binding.thread_id()));
+        Ok(())
+    }
+    fn prompt(
+        &mut self,
+        _text: &str,
+        _on_item: &mut dyn FnMut(richos_core::cognition::TurnItem),
+    ) -> Result<String, richos_core::cognition::CognitionError> {
+        self.calls.lock().unwrap().push("his turn".into());
+        Ok("end_turn".to_string())
+    }
+}
+
+#[derive(Clone)]
+struct BriefFactory {
+    calls: Calls,
+}
+
+impl richos_core::cognition::LeaseFactory for BriefFactory {
+    fn spawn(&self) -> Result<Box<dyn richos_core::Cognition>, richos_core::cognition::CognitionError> {
+        Ok(Box::new(BriefDesk { session: "brief-desk".into(), calls: self.calls.clone() }))
+    }
+    fn duplicate(&self) -> Option<Box<dyn richos_core::cognition::LeaseFactory>> {
+        Some(Box::new(self.clone()))
+    }
+}
+
+/// **THE ADOPTED SPARE HOLDS HIS CONTEXT BRIEF BEFORE HE SPEAKS** (CEO 2026-10-14: "From barge
+/// in to a 10-second delay now?"; review rv-20261014T073429Z-4fd01c4c-58c4). A new conversation
+/// adopts the spare primed at boot, and the adopted desk keeps `primed`, so the chair's priming
+/// returns before it supplies the brief. Unless the spare supplied it while being primed, his
+/// first turn sends it as a hidden model round trip while he waits (1.949 s on main 0a2ae649f).
+/// It is supplied ONCE, for the id the thread is then created with, and before his turn.
+#[test]
+fn an_adopted_spare_was_given_his_context_brief_while_it_was_primed() {
+    let (path, ledger) = tmp_ledger("adopted-spare-brief-ahead");
+    let mut spine = support::spine(ledger);
+    let calls: Calls = Default::default();
+    spine.set_lease_factory(Box::new(BriefFactory { calls: calls.clone() }));
+    let spine = std::sync::Arc::new(std::sync::Mutex::new(spine));
+
+    // The road the app takes (`main.rs` `ready_a_spare_front_desk`).
+    match richos_core::spine::ready_a_spare_front_desk_without_the_spine(&spine, &femcboost()) {
+        SpareReady::Ready { .. } => {}
+        other => panic!("the spare was not made ready: {other:?}"),
+    }
+    let mut spine = spine.lock().unwrap();
+    let thread = spine.create_thread("Pricing", &femcboost()).unwrap();
+    spine.prime_front_desk(&thread);
+    spine.submit_prompt("Land the pricing branch.", Source::Text).unwrap();
+
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        &["reprime".to_string(), format!("brief ahead for {thread}"), "his turn".to_string()],
+        "the adopted spare must be given the brief once, for his thread, before his turn"
+    );
+    let _ = std::fs::remove_file(path);
+}
