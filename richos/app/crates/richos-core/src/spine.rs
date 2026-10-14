@@ -347,6 +347,16 @@ fn run_a_spare_priming_turn(
         }
     };
     lease.reprime(&priming.priming, &mut on_item)?;
+    // **AND THE CONTEXT BRIEF, HERE, because nothing later can supply it before he speaks.** An
+    // adopted spare keeps `primed`, so `prime_lease_if_needed` returns before its own
+    // `supply_context_ahead`, and his first turn paid the hidden round trip the chair no longer
+    // pays (review rv-20261014T073429Z-4fd01c4c-58c4). Later is too late anyway: `ui/main.js`
+    // creates the thread inside the Send handler. The reserved id IS the thread's id, so the
+    // brief read now is the one his turn reads; the turn id is this priming's ledger action,
+    // the only durable id a thread with no record has. A failure costs his turn the round trip.
+    if let Err(e) = lease.supply_context_ahead(&plan.binding, &priming.action, &mut on_item) {
+        eprintln!("[richos] the spare desk's context brief could not be supplied before he speaks ({e}); his turn supplies it");
+    }
     let _ = lease.drain_between_turn();
     Ok(())
 }

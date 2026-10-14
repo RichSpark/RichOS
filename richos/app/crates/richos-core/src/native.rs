@@ -4350,8 +4350,14 @@ impl Cognition for NativeCognition {
         if !matches!(self.role, LeaseRole::Conversation) || self.continuity.is_none() {
             return Ok(());
         }
-        self.prepare_question_scope(binding.entity_id().as_str(), binding.thread_id(), turn, "front_desk", "typed")?;
+        // Only on a cursor of this thread's own. A spare supplies this with the spine's mutex
+        // down, so on an engine with one shared cursor its bind could move that cursor under
+        // a turn running in the chair; there his turn supplies the brief, as before.
         let seat = self.ceo_thread_seat(binding.thread_id());
+        if seat.is_none() {
+            return Ok(());
+        }
+        self.prepare_question_scope(binding.entity_id().as_str(), binding.thread_id(), turn, "front_desk", "typed")?;
         let Some((bridge, _)) = &self.continuity else { return Ok(()) };
         let (_, mut brief) = self.bind_and_brief(bridge, binding, turn, seat.as_deref())?;
         brief.push_str(&self.question_context()?);

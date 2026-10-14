@@ -30,6 +30,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               and nothing is played) and RICHOS_VOICE_WHISPER_MODEL_ID
   ready       the app's own voice-readiness line says ready, and its decoder sha256 is the
               runtime's whisper-cli
+  new-conversation  (ask for it with --steps) once this launch's spare desk is primed, a new
+              conversation is started the only way the app starts one, a typed first message
+              (voice rides the conversation already open: main.rs start_voice_capture), so it
+              adopts that spare; its reply timing lines must say the session already holds the
+              context brief. The spoken turn after it is then in the new conversation
   heard       the guest's own sound output is muted (see mute_guest_output), the home screen's
               door is passed, the talk control (#talk-toggle) is pressed and turns into "Stop
               talking"; the transcript the app stored (PromptReceived) is read from the guest's
@@ -63,14 +68,15 @@ _spec.loader.exec_module(adopt_walk)
 StepFailed = adopt_walk.StepFailed
 command = adopt_walk.command
 
-STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'rich-voice', 'heard',
-         'spoken', 'split']
+STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'rich-voice',
+         'new-conversation', 'heard', 'spoken', 'split']
 # Rich's voice (CEO 2026-10-14, "Pocket TTS: Peter Yearsley"). Not in the default run: the two steps
 # download 166 MB into the guest and wait for a spoken answer. Ask for them with --steps.
 DEFAULT_STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'heard']
 VOICE_INSTALLED = '[richos] rich voice: Pocket TTS and the Peter Yearsley voice are installed and verified'
 VOICE_NOT_INSTALLED = '[richos] rich voice: not installed this time'
 POCKET_LABEL = 'Pocket TTS english_2026-04 INT8 · Peter Yearsley'
+SPARE_READY = '[richos] a front desk is primed and waiting for the next new thread'
 READY = '[richos] voice: ready on this machine'
 NOT_READY = '[richos] voice: not ready on this machine'
 
@@ -534,6 +540,54 @@ class VoiceWalk(adopt_walk.Walk):
         if problem:
             raise StepFailed(problem + '\n' + '\n'.join(timeline))
         return {'turns': len(rows), 'transcript': texts[0], 'timeline': timeline}
+
+    def new_conversation(self):
+        """A new conversation adopts the desk primed at this launch, and that desk holds his context
+        brief already: between his first message and his words reaching the model, the reply timing
+        lines say "already holds this context brief" and never "hidden context ... sent". Waits for
+        that first turn to end, so the spoken turn after it is the conversation's second."""
+        end = time.monotonic() + 300
+        while SPARE_READY not in guest(self.vm, 'cat ' + shlex.quote(self.log) + ' 2>/dev/null || true'):
+            if time.monotonic() > end:
+                raise StepFailed('no spare desk was primed within 300 s of the relaunch')
+            time.sleep(2)
+        end = time.monotonic() + 30
+        while not self.by_id('rail-new-thread'):
+            if time.monotonic() > end:
+                raise StepFailed('the New conversation control (#rail-new-thread) is not on screen within 30 s')
+            if self.by_id('home-enter'):
+                self.press_by_id('home-enter')
+            time.sleep(1)
+        self.press_by_id('rail-new-thread')
+        self.type_into('What is the capital of France? One word.', '--role', 'AXTextArea', '--title', 'Message to Rich')
+        self.press('Send')
+        ledger = self.data + '/conversation-ledger.jsonl'
+        end = time.monotonic() + self.a.within
+        while time.monotonic() < end:
+            rows = [json.loads(r) for r in guest(self.vm, 'cat ' + shlex.quote(ledger), 60).splitlines() if r.strip()]
+            created = [r for r in rows if r.get('event') == 'ThreadCreated' and r.get('thread_id') != self.facts.get('thread')]
+            thread = created[0]['thread_id'] if created else None
+            prompt = next((r for r in rows if r.get('event') == 'PromptReceived' and r.get('thread_id') == thread
+                           and r.get('source') == 'text'), None)
+            turn = prompt and prompt.get('turn_id')
+            done = next((r for r in rows if r.get('turn_id') == turn and r.get('event') in
+                         ('TurnCompleted', 'TurnInterrupted', 'TurnStopped')), None)
+            if done:
+                break
+            time.sleep(2)
+        else:
+            raise StepFailed('the first message of a new conversation got no finished turn within %s s' % self.a.within)
+        sent, ended = prompt['at'] % DAY_MS, done['at'] % DAY_MS
+        log = guest(self.vm, 'grep -F "reply timing:" ' + shlex.quote(self.log) + ' || true').splitlines()
+        window = [line for line in log if (_stamp_ms(line) or -1) >= sent and (_stamp_ms(line) or -1) <= ended]
+        # Decided by the "already holds" line alone: his turn prints it or runs the hidden turn,
+        # once. A "hidden context" line in this window can be the NEXT spare's, primed meanwhile.
+        result = {'thread': thread, 'turn_id': turn, 'ended': done['event'], 'reply_timing': window,
+                  'brief_already_held': any('already holds this context brief' in l for l in window)}
+        (self.out / 'new-conversation.json').write_text(json.dumps(result, indent=2) + '\n')
+        if not result['brief_already_held']:
+            raise StepFailed('the adopted desk did not hold his context brief: ' + json.dumps(window))
+        return result
 
     def heard(self):
         muted = self.mute_guest_output()
