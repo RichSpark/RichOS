@@ -197,16 +197,19 @@ pub fn rank(corpus: &Corpus, query: &ParsedQuery, strict: bool, lexical: &[Lexic
 /// four modes, to the palette and to Rich).
 pub fn best_passage(doc: &Document, query: &ParsedQuery, semantic_passage: Option<usize>) -> usize {
     let semantic = semantic_passage.filter(|p| *p < doc.passages.len());
-    // A span counts when one segment (a heading or the passage text) holds it whole.
+    // A span counts when one segment (a heading or the passage text) holds it whole, or when it
+    // runs from the passage into the next one ([`crosses_into_next`]).
     let spans_in = |segments: &[String]| query.spans.iter().filter(|s| segments.iter().any(|f| has_span(f, s))).count();
     let words_in = |segments: &[String]| query.words.iter().filter(|w| segments.iter().any(|f| has_word(f, w))).count();
-    let most_spans = doc.folded_passages.iter().map(|f| spans_in(f)).max().unwrap_or(0);
+    let loose = loose_spans(doc, query);
+    let spans: Vec<usize> = doc.folded_passages.iter().enumerate().map(|(i, f)| spans_in(f) + across(doc, &loose, i)).collect();
+    let most_spans = spans.iter().copied().max().unwrap_or(0);
     if let (Some(p), 0) = (semantic, most_spans) {
         return p;
     }
     let mut best: Option<(usize, usize)> = None;
     for (i, folded) in doc.folded_passages.iter().enumerate() {
-        if spans_in(folded) < most_spans {
+        if spans[i] < most_spans {
             continue;
         }
         let score = words_in(folded);
@@ -222,6 +225,34 @@ pub fn best_passage(doc: &Document, query: &ParsedQuery, semantic_passage: Optio
         Some((i, score)) if score > 0 || most_spans > 0 => i,
         _ => semantic.unwrap_or(0),
     }
+}
+
+/// The query's quoted spans the document holds that no single passage holds whole: a quote
+/// across the cut of a paragraph longer than [`crate::chunk::MAX_CHARS`]. Strict search finds it
+/// in the document, so the passage it begins in is the evidence (rv-20261014T132419Z-a81de6d6-6891
+/// #3: an unrelated agenda, or half the sentence, was shown instead).
+fn loose_spans<'q>(doc: &Document, query: &'q ParsedQuery) -> Vec<&'q String> {
+    query
+        .spans
+        .iter()
+        .filter(|s| has_span(&doc.folded_text, s) && !doc.folded_passages.iter().any(|f| f.iter().any(|seg| has_span(seg, s))))
+        .collect()
+}
+
+/// How many of `loose` run from passage `i` into the next one.
+fn across(doc: &Document, loose: &[&String], i: usize) -> usize {
+    let (Some(a), Some(b)) = (doc.passages.get(i), doc.passages.get(i + 1)) else { return 0 };
+    if loose.is_empty() {
+        return 0;
+    }
+    let joined = crate::text::fold(&doc.text[a.start..b.end]);
+    loose.iter().filter(|s| has_span(&joined, s)).count()
+}
+
+/// A quoted span of the query runs from passage `p` into the next one, so what is shown for `p`
+/// must take in the start of the next passage to deliver the quote whole.
+pub fn crosses_into_next(doc: &Document, query: &ParsedQuery, p: usize) -> bool {
+    across(doc, &loose_spans(doc, query), p) > 0
 }
 
 #[cfg(test)]

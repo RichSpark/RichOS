@@ -219,6 +219,10 @@ pub enum Action {
     HidePrompt,
     /// Start the capture. `title` is the calendar title when the call matched one.
     StartCapture { title: Option<String>, event_id: Option<String>, manual: bool },
+    /// The recording running, started before its calendar meeting was known, was that meeting:
+    /// it takes the meeting's title and event, and a rejoin continues its notes. Always before
+    /// the [`Action::StopCapture`] that ends it.
+    Recognized { title: String, event_id: String },
     StopCapture(EndReason),
 }
 
@@ -595,6 +599,7 @@ impl MeetingMonitor {
     /// The followed call is over: its grace ran out ([`MeetingMonitor::tick`]), or its app came
     /// back as the next call ([`MeetingMonitor::watch`]).
     fn end_call(&mut self, now: u64) -> Vec<Action> {
+        let mut out = vec![];
         if let Some(c) = self.phase.call() {
             // A meeting this call began close enough to be WAS this call if the call was still on
             // when the meeting started, and never prompts. A call over before the meeting started
@@ -605,14 +610,23 @@ impl MeetingMonitor {
             let answered = !matches!(self.phase, Phase::Prompting { .. });
             // A recording that ran until its call ended: he is taking notes on that meeting.
             let recorded = matches!(&self.phase, Phase::Recording { start, .. } if !start.manual);
-            for meeting in c.meetings.values().filter(|meeting| ended_at >= meeting.starts_at) {
+            let was: Vec<&Scheduled> = c.meetings.values().filter(|meeting| ended_at >= meeting.starts_at).collect();
+            for meeting in &was {
                 self.prompted_events.insert(meeting.event_id.clone());
                 if answered {
-                    self.answered.insert(meeting.event_id.clone(), meeting.clone());
+                    self.answered.insert(meeting.event_id.clone(), (*meeting).clone());
                 }
                 if recorded {
                     self.taking_notes.insert(meeting.event_id.clone());
                 }
+            }
+            // A recording started before its meeting was known (joined early, notes taken before
+            // the reminder was due) is told which meeting it was, before it stops, so a rejoin
+            // continues its notes where it began (rv-20261014T132419Z-a81de6d6-6891 #1). The
+            // latest started, as a rejoin picks it.
+            let untitled = matches!(&self.phase, Phase::Recording { start, .. } if start.event_id.is_none());
+            if let Some(meeting) = was.iter().max_by_key(|meeting| meeting.starts_at).filter(|_| recorded && untitled) {
+                out.push(Action::Recognized { title: meeting.title.clone(), event_id: meeting.event_id.clone() });
             }
         }
         let (said, idle) = match &mut self.phase {
@@ -631,7 +645,8 @@ impl MeetingMonitor {
         if idle {
             self.phase = Phase::Idle;
         }
-        said.into_iter().collect()
+        out.extend(said);
+        out
     }
 
     /// The clock. Ends a call whose app has stayed off the microphone for [`END_GRACE_MS`].
@@ -1258,6 +1273,7 @@ mod tests {
             Action::StartCapture { manual: true, .. } => "start manual".into(),
             Action::StartCapture { title: Some(t), .. } => format!("start '{t}'"),
             Action::StartCapture { title: None, .. } => "start".into(),
+            Action::Recognized { title, .. } => format!("it was '{title}'"),
             Action::StopCapture(EndReason::CallEnded) => "stop: call ended".into(),
             Action::StopCapture(EndReason::StoppedEarly) => "stop: early".into(),
         }
@@ -1532,7 +1548,7 @@ mod tests {
                 (205, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
                 (260, Wait, &[], "recording on Zoom"),
                 (1500, Off(1, ZOOM), &[], "recording on Zoom"),
-                (1508, Wait, &["stop: call ended"], "idle"),
+                (1508, Wait, &["it was 'Early'", "stop: call ended"], "idle"),
                 (1530, Wait, &[], "idle"),
             ]),
             ("paused: nothing prompts, the call is not prompted on resume, the next one is", &[
@@ -1700,7 +1716,7 @@ mod tests {
                 (200, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
                 (205, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
                 (900, Off(1, ZOOM), &[], "recording on Zoom"),
-                (908, Wait, &["stop: call ended"], "idle"),
+                (908, Wait, &["it was 'Early'", "stop: call ended"], "idle"),
                 (930, On(2, ZOOM), &["start 'Early'"], "recording 'Early' on Zoom"),
             ]),
             ("a calendar prompt ignored until its call ended: a rejoin asks", &[

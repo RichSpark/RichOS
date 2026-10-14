@@ -161,6 +161,37 @@ fn the_heading_that_holds_the_quote_is_shown_with_the_passage() {
 }
 
 #[test]
+fn a_quote_cut_between_two_passages_is_shown_whole() {
+    // rv-20261014T132419Z-a81de6d6-6891 #3 (`fixtures/search_review.py`): a long paragraph is cut
+    // at 1,200 characters, and a quote across that cut was in no single passage, so the result
+    // showed an unrelated agenda (or half the sentence) and the quoted answer was not delivered.
+    let base = std::env::temp_dir().join(format!("richos-search-service-boundary-{}", std::process::id()));
+    if let Err(error) = std::fs::remove_dir_all(&base) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("fixture cleanup: {error}");
+        }
+    }
+    let folder = base.join("folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let prefix = "Routine discussion covered the company plans and team updates ".repeat(19);
+    std::fs::write(
+        folder.join("refunds.md"),
+        format!("## Decision\n\n{prefix}The agreed customer refund window is exactly thirty days after purchase.\n\n## Agenda\n\nCustomer refund window exactly thirty days purchase planning.\n"),
+    )
+    .unwrap();
+    let service = start(&folder, &base.join("cache"), Arc::new(AtomicUsize::new(0)));
+    for super_finder in [false, true] {
+        let r = ask(&service, "\"customer refund window is exactly thirty days\"", super_finder, true);
+        assert_eq!(files(&r), vec!["refunds.md"]);
+        let passage = &r.hits[0].passage;
+        assert!(passage.text.contains("customer refund window is exactly thirty days"), "super_finder {super_finder}: {:?} | {}", passage.heading, passage.text);
+        assert_eq!(passage.heading, "Decision");
+    }
+    service.shutdown();
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
 fn text_search_works_when_the_model_is_unavailable_and_says_so() {
     let (folder, cache) = fixture_copy("nomodel");
     let service = SearchService::start(Config {

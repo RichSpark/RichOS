@@ -680,10 +680,33 @@ fn shown_heading(doc: &corpus::Document, p: usize, parsed: &ParsedQuery) -> Stri
     }
 }
 
+/// The bytes shown for passage `p`: the passage, or, when a quote of the query runs from it into
+/// the next passage ([`rank::crosses_into_next`]), the text around that cut, from a word start at
+/// most half of [`MAX_PASSAGE_CHARS`] before it, so the whole quote is delivered
+/// (rv-20261014T132419Z-a81de6d6-6891 #3).
+fn evidence(doc: &corpus::Document, p: usize, parsed: &ParsedQuery) -> (usize, usize) {
+    let passage = &doc.passages[p];
+    let Some(next) = doc.passages.get(p + 1).filter(|_| rank::crosses_into_next(doc, parsed, p)) else {
+        return (passage.start, passage.end);
+    };
+    let tail = doc.text[passage.start..passage.end].char_indices().rev().nth(MAX_PASSAGE_CHARS / 2 - 1).map_or(passage.start, |(i, _)| passage.start + i);
+    let start = if tail > passage.start {
+        doc.text[tail..passage.end].char_indices().find(|(_, c)| c.is_whitespace()).map_or(tail, |(i, c)| tail + i + c.len_utf8())
+    } else {
+        tail
+    };
+    let end = doc.text[start..next.end].char_indices().nth(MAX_PASSAGE_CHARS).map_or(next.end, |(i, _)| start + i);
+    (start, end)
+}
+
 fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery) -> DocHit {
     let p = rank::best_passage(doc, parsed, row.semantic_passage);
     let (heading, text, line) = match doc.passages.get(p) {
-        Some(passage) => (shown_heading(doc, p, parsed), passage.text(&doc.text).to_string(), passage.line),
+        Some(passage) => {
+            let (start, end) = evidence(doc, p, parsed);
+            let line = if start == passage.start { passage.line } else { 1 + doc.text[..start].matches('\n').count() as u32 };
+            (shown_heading(doc, p, parsed), doc.text[start..end].to_string(), line)
+        }
         None => (String::new(), String::new(), 1),
     };
     let text: String = if text.chars().count() > MAX_PASSAGE_CHARS { text.chars().take(MAX_PASSAGE_CHARS).collect::<String>() + "…" } else { text };

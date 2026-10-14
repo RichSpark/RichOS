@@ -148,6 +148,29 @@ impl CaptureRun {
             continues: self.continues.clone(),
         }
     }
+
+    /// A calendar meeting's recording, once it has its session folder: where a rejoin's goes.
+    fn continued(&self) -> Option<(String, Continued)> {
+        match (&self.event_id, &self.dir, self.manual) {
+            (Some(e), Some(dir), false) => Some((e.clone(), Continued { first: dir.clone(), zone: self.zone.clone(), entity: self.entity.clone(), thread: self.thread.clone() })),
+            _ => None,
+        }
+    }
+}
+
+/// The recording running was a calendar meeting it started before it was known
+/// ([`Action::Recognized`]): it takes the meeting's title and event, and is that meeting's first
+/// recording, so a rejoin continues its notes in its company and conversation
+/// (rv-20261014T132419Z-a81de6d6-6891 #1).
+fn recognized(run: &mut CaptureRun, continued: &mut BTreeMap<String, Continued>, title: &str, event_id: &str) {
+    if run.manual || run.event_id.is_some() {
+        return;
+    }
+    run.title.get_or_insert_with(|| title.to_string());
+    run.event_id = Some(event_id.to_string());
+    if let Some((e, first)) = run.continued() {
+        continued.entry(e).or_insert(first);
+    }
 }
 
 /// A calendar meeting recorded this launch: where its first recording went. A rejoin's recording
@@ -476,6 +499,13 @@ impl Meetings {
                     }
                 }
                 Action::StartCapture { title, event_id, manual } => self.start_capture(title, event_id, manual),
+                Action::Recognized { title, event_id } => {
+                    let mut guard = self.inner.lock().unwrap();
+                    let inner = &mut *guard;
+                    if let Some(run) = inner.capture.as_mut() {
+                        recognized(run, &mut inner.continued, &title, &event_id);
+                    }
+                }
                 Action::StopCapture(reason) => self.stop_capture(reason),
             }
         }
@@ -748,10 +778,7 @@ impl Meetings {
                     logged("writing meeting.json at the start", meeting_notes::write_facts(dir, &run.facts(0)));
                 }
                 // A calendar meeting's first recording: a rejoin's goes where this one went.
-                let first = match (&run.event_id, &run.dir, run.manual) {
-                    (Some(e), Some(dir), false) => Some((e.clone(), Continued { first: dir.clone(), zone: run.zone.clone(), entity: run.entity.clone(), thread: run.thread.clone() })),
-                    _ => None,
-                };
+                let first = run.continued();
                 let view = PanelView::Recording { started_at: run.started_at, note: None };
                 if let Some((e, first)) = first {
                     inner.continued.entry(e).or_insert(first);
@@ -1015,8 +1042,7 @@ impl Meetings {
         if let Some(first) = facts.continues.as_ref().map(|name| zone.join(name)) {
             let parts: Vec<PathBuf> = meeting_notes::segments(&first).into_iter().take_while(|s| s != dir).chain([dir.to_path_buf()]).collect();
             let (transcript, missing) = meeting_notes::joined_transcript(&parts);
-            let first_facts = meeting_notes::read_facts(&first).unwrap_or_else(|| facts.clone());
-            let notes = meeting_notes::joined_facts(&first_facts, &facts, missing);
+            let notes = meeting_notes::joined_facts(&parts[..parts.len() - 1], &facts, missing);
             let transcripts: Vec<PathBuf> = parts.iter().map(|s| s.join(meeting_notes::TRANSCRIPT_FILE)).filter(|t| t.is_file()).collect();
             eprintln!("[richos] meeting notes: a rejoin continues the notes of {} ({} recordings)", first.display(), parts.len());
             self.notes_from(dir, &first, &notes, &transcript, &transcripts, true);
@@ -1493,6 +1519,58 @@ mod tests {
         assert_eq!(
             capture_scope(None, now, || corpus.clone()),
             Scope { zone: meeting_zone(&corpus, Some("globex")), entity: Some("globex".into()), thread: Some("t2".into()), continues: None }
+        );
+    }
+
+    #[test]
+    fn an_early_joins_recording_is_the_calendar_meeting_its_rejoin_continues() {
+        // rv-20261014T132419Z-a81de6d6-6891 #1 (`fixtures/rejoin_review.py`): joined 100 s early,
+        // notes started before the calendar reminder was due, so the recording had no event; the
+        // monitor learned at the call's end that it WAS that meeting, but the recording was never
+        // told, and the rejoin started separate notes in whatever conversation was open then.
+        use richos_core::meeting::MeetingApp;
+        let early = CalendarMeeting { event_id: "Early".into(), title: "Early".into(), starts_at: 300_000, ends_at: Some(2_100_000), app: Some(MeetingApp::Zoom) };
+        let calendar = [early];
+        let zoom = |pid: i32, on: bool, at: u64| {
+            if on {
+                WatchLine::Started { pid, family: "us.zoom.xos".into(), app: Some("zoom.us".into()), at }
+            } else {
+                WatchLine::Stopped { pid, family: "us.zoom.xos".into(), exited: false, at }
+            }
+        };
+        let corpus = PathBuf::from("/corpus");
+        let mut continued: BTreeMap<String, Continued> = BTreeMap::new();
+        let mut m = MeetingMonitor::new();
+        m.clock(0, &calendar);
+        m.watch(&zoom(1, true, 200_000), 200_000);
+        let first = m.input(Input::TakeNotes);
+        assert!(first.contains(&Action::StartCapture { title: None, event_id: None, manual: false }), "{first:?}");
+        // The first recording starts in Acme's conversation and names its session folder.
+        let scope = capture_scope(None, || (Some("acme".into()), Some("t1".into())), || corpus.clone());
+        let mut capture = CaptureRun { zone: scope.zone.clone(), entity: scope.entity, thread: scope.thread, dir: Some(scope.zone.join("2026-10-14T09-58-20Z--system--call")), ..run(9) };
+        let mut actions = Vec::new();
+        for t in 201..=908u64 {
+            if t == 900 {
+                actions.extend(m.watch(&zoom(1, false, 900_000), 900_000));
+            }
+            actions.extend(m.clock(t * 1000, &calendar));
+        }
+        let stop = actions.iter().position(|a| *a == Action::StopCapture(EndReason::CallEnded)).expect("the call's end stops the recording");
+        // What the app does with each decision, in order, while the recording is still its own.
+        for action in &actions[..stop] {
+            if let Action::Recognized { title, event_id } = action {
+                recognized(&mut capture, &mut continued, title, event_id);
+            }
+        }
+        assert_eq!((capture.title.as_deref(), capture.event_id.as_deref()), (Some("Early"), Some("Early")), "the first recording was never told it was the meeting: {actions:?}");
+        // He switched to Globex's conversation during the break, then rejoined.
+        let rejoin = m.watch(&zoom(2, true, 930_000), 930_000);
+        assert!(rejoin.contains(&Action::StartCapture { title: Some("Early".into()), event_id: Some("Early".into()), manual: false }), "{rejoin:?}");
+        let resumed = capture_scope(continued.get("Early"), || (Some("globex".into()), Some("t2".into())), || corpus.clone());
+        assert_eq!(
+            (resumed.entity.as_deref(), resumed.thread.as_deref(), resumed.continues.as_deref()),
+            (Some("acme"), Some("t1"), Some("2026-10-14T09-58-20Z--system--call")),
+            "the rejoin started separate notes where he is now"
         );
     }
 

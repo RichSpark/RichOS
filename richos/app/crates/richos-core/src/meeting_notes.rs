@@ -329,13 +329,18 @@ pub fn joined_transcript(segments: &[PathBuf]) -> (String, usize) {
 
 /// The facts the meeting's notes are written with: the first recording's (title, day, company and
 /// conversation: the notes stay where the meeting began), ending where the latest recording ends,
-/// with every recording's warnings.
-pub fn joined_facts(first: &MeetingFacts, latest: &MeetingFacts, missing: usize) -> MeetingFacts {
-    let mut facts = first.clone();
+/// with every recording's warnings. `earlier` are the meeting's recordings before the latest, the
+/// first one first ([`segments`]); each one's `meeting.json` is read for its warnings
+/// (rv-20261014T132419Z-a81de6d6-6891 #2: after a second rejoin only the first's and the latest's
+/// were kept, and the notes read as complete).
+pub fn joined_facts(earlier: &[PathBuf], latest: &MeetingFacts, missing: usize) -> MeetingFacts {
+    let parts: Vec<MeetingFacts> = earlier.iter().filter_map(|s| read_facts(s)).collect();
+    let mut facts = parts.first().unwrap_or(latest).clone();
     facts.ended_at = latest.ended_at;
     facts.stopped_early = latest.stopped_early;
     facts.continues = None;
-    for w in latest.warnings.iter().cloned().chain((missing > 0).then(|| PART_MISSING_WARNING.to_string())) {
+    let every = parts.iter().chain([latest]).flat_map(|f| f.warnings.iter().cloned());
+    for w in every.chain((missing > 0).then(|| PART_MISSING_WARNING.to_string())) {
         if !facts.warnings.contains(&w) {
             facts.warnings.push(w);
         }
@@ -554,11 +559,11 @@ mod tests {
         let (joined, missing) = joined_transcript(&parts);
         assert_eq!(missing, 0);
         assert_eq!(joined, format!("Me: part one\n\n{REJOINED_MARK}\n\nMe: part two"));
-        let notes = joined_facts(&first_facts, &read_facts(&rejoin).unwrap(), 0);
+        let notes = joined_facts(std::slice::from_ref(&first), &read_facts(&rejoin).unwrap(), 0);
         assert_eq!((notes.title.as_deref(), notes.entity.as_deref(), notes.thread.as_deref(), notes.ended_at), (Some("Acme pricing review"), Some("acme"), Some("t1"), 9_000));
         assert_eq!(notes.warnings, vec!["A gap.".to_string()]);
         assert_eq!(notes.continues, None);
-        assert!(joined_facts(&first_facts, &rejoin_facts, 1).warnings.contains(&PART_MISSING_WARNING.to_string()));
+        assert!(joined_facts(std::slice::from_ref(&first), &rejoin_facts, 1).warnings.contains(&PART_MISSING_WARNING.to_string()));
         // A rejoin's own state says whether the meeting's notes include it yet.
         assert_eq!(next_step_joined(&BriefState::default()), NextStep::Write(1));
         assert_eq!(next_step_joined(&BriefState { written: true, ..Default::default() }), NextStep::Deliver);
@@ -566,6 +571,40 @@ mod tests {
         // A meeting.json from before (no "continues") still reads.
         std::fs::write(first.join(MEETING_FILE), r#"{"title":"X","dateLine":"d","startedAt":1,"endedAt":2,"stoppedEarly":false,"manual":false}"#).unwrap();
         assert_eq!(read_facts(&first).unwrap().continues, None);
+        std::fs::remove_dir_all(&zone).unwrap();
+    }
+
+    #[test]
+    fn a_second_rejoins_notes_keep_the_warnings_of_every_recording() {
+        // rv-20261014T132419Z-a81de6d6-6891 #2 (`fixtures/rejoin_review.py`): after two rejoins the
+        // notes took the warnings of the first and the latest recording only, so the middle
+        // recording's missing speech was dropped and the rewritten notes read as complete.
+        let zone = std::env::temp_dir().join(format!("richos-notes-three-parts-{}", std::process::id()));
+        if zone.exists() {
+            std::fs::remove_dir_all(&zone).unwrap();
+        }
+        let session = |name: &str, facts: &MeetingFacts| {
+            let s = zone.join(name);
+            std::fs::create_dir_all(&s).unwrap();
+            write_facts(&s, facts).unwrap();
+            std::fs::write(s.join(TRANSCRIPT_FILE), format!("Me: {name}\n")).unwrap();
+            s
+        };
+        let first_facts = MeetingFacts { entity: Some("acme".into()), thread: Some("t1".into()), ended_at: 2_000, ..facts() };
+        let first = session("2026-10-14T10-00-00Z--system--call", &first_facts);
+        let name = first.file_name().unwrap().to_string_lossy().into_owned();
+        let gap = "Speech from 00:05 to 00:08 is missing from the transcript.".to_string();
+        let middle_facts = MeetingFacts { continues: Some(name.clone()), ended_at: 5_000, warnings: vec![gap.clone()], ..first_facts.clone() };
+        session("2026-10-14T10-20-00Z--system--call", &middle_facts);
+        let latest_facts = MeetingFacts { continues: Some(name), ended_at: 9_000, ..first_facts.clone() };
+        let latest = session("2026-10-14T10-40-00Z--system--call", &latest_facts);
+        let parts = segments(&first);
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts.last(), Some(&latest));
+        let (_, missing) = joined_transcript(&parts);
+        let notes = joined_facts(&parts[..parts.len() - 1], &latest_facts, missing);
+        assert_eq!(notes.warnings, vec![gap], "the middle recording's warning is gone from the meeting's notes");
+        assert_eq!((notes.entity.as_deref(), notes.thread.as_deref(), notes.ended_at, notes.continues), (Some("acme"), Some("t1"), 9_000, None));
         std::fs::remove_dir_all(&zone).unwrap();
     }
 
