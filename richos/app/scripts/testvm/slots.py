@@ -79,6 +79,8 @@ ENV = 'TESTVM_SLOT'
 # 18:56Z measurement above swapped hard with about 3 GB projected to be left, so 4 GB.
 GUEST_MEMORY_FLOOR_MB = 4096
 VM_PROCESS = 'com.apple.Virtualization.VirtualMachine'
+# Docker Desktop's VM runs in a VM process of its own; the app list counts it as Docker's.
+DOCKER_VM_COMMAND = '/Applications/Docker.app/Contents/MacOS/com.docker.virtualization'
 
 
 def _say(message):
@@ -117,10 +119,10 @@ def guest_ram_mb():
     return int(found.group(1))
 
 
-def vm_resident_mb():
-    """Resident memory of each running test guest's own VM process, in MB (read-only `ps`, `lsof`).
-    Every Virtualization VM process is a candidate, Docker Desktop's included; only one holding a
-    tart guest's disk.img open is a test guest, so nothing else is charged to a guest."""
+def _vm_processes():
+    """({pid: MB} of the test guests' own VM processes, {pid: MB} of Docker Desktop's VM processes)
+    by read-only `ps` and `lsof`. Every Virtualization VM process is a candidate; only one holding
+    a tart guest's disk.img open is a test guest, so nothing else is charged to a guest."""
     table = subprocess.run(['ps', '-A', '-o', 'pid=,rss=,comm='], capture_output=True, text=True, timeout=10).stdout
     found = {}
     for line in table.splitlines():
@@ -128,15 +130,23 @@ def vm_resident_mb():
         if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit() and parts[2].endswith('/' + VM_PROCESS):
             found[parts[0]] = int(parts[1]) / 1024
     if not found:
-        return []
+        return {}, {}
     held = subprocess.run(['lsof', '-nP', '-Fpn', '-p', ','.join(found)], capture_output=True, text=True, timeout=20).stdout
-    guests, pid = [], None
+    guests, docker, pid = {}, {}, None
     for line in held.splitlines():
         if line.startswith('p'):
             pid = line[1:]
-        elif line.startswith('n') and pid in found and '/tart/vms/' in line and line.endswith('/disk.img'):
-            guests.append(found.pop(pid))
-    return guests
+        elif line.startswith('n') and pid in found:
+            if '/tart/vms/' in line and line.endswith('/disk.img'):
+                guests[pid] = found[pid]
+            elif 'com.docker.docker' in line:
+                docker[pid] = found[pid]
+    return guests, {pid: mb for pid, mb in docker.items() if pid not in guests}
+
+
+def vm_resident_mb():
+    """Resident memory of each running test guest's own VM process, in MB."""
+    return list(_vm_processes()[0].values())
 
 
 def host_memory_mb():
@@ -144,21 +154,23 @@ def host_memory_mb():
 
 
 def process_memory_mb():
-    """[(full command, MB)] for every process, by `top`'s own memory figure (what the process holds
-    including what is compressed or swapped out; `ps rss` undercounts Chrome and WebStorm badly).
+    """[(full command, MB)] for this user's processes other than the test guests, by `top`'s own
+    memory figure (what the process holds including what is compressed or swapped out; `ps rss`
+    undercounts Chrome and WebStorm badly). Docker Desktop's VM process is listed as Docker's.
     Read-only; [] when `top` cannot answer."""
     try:
         shown = subprocess.run(['top', '-l', '1', '-o', 'mem', '-n', '300', '-stats', 'pid,mem'],
                                capture_output=True, text=True, timeout=30).stdout
-        paths = subprocess.run(['ps', '-A', '-o', 'pid=,command='], capture_output=True, text=True,
+        paths = subprocess.run(['ps', '-A', '-o', 'pid=,uid=,command='], capture_output=True, text=True,
                                timeout=10).stdout
+        guests, docker = _vm_processes()
     except (OSError, subprocess.SubprocessError):
         return []
     path_of = {}
     for line in paths.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2 and parts[0].isdigit():
-            path_of[parts[0]] = parts[1]
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1] == str(os.getuid()) and parts[0] not in guests:
+            path_of[parts[0]] = DOCKER_VM_COMMAND if parts[0] in docker else parts[2]
     units = {'B': 1 / 1048576, 'K': 1 / 1024, 'M': 1, 'G': 1024, 'T': 1024 * 1024}
     found = []
     for line in shown.splitlines():
@@ -170,17 +182,14 @@ def process_memory_mb():
 
 
 def top_apps(processes, count=3):
-    """The `count` apps holding the most memory, [(app name, MB)]. Helper processes are grouped under
-    their app (the first `X.app` in the path, else the program's file name); the test guests' own VM
-    processes and tart are left out."""
+    """The `count` apps holding the most memory, [(app name, MB)]. Only his own apps are named: a
+    process inside an `X.app` under /Applications or ~/Applications, helpers grouped under the app."""
     totals = {}
+    roots = '|'.join(re.escape(r) for r in ('/Applications/', str(Path.home() / 'Applications') + '/'))
     for command, mb in processes:
-        program = command.split(' --')[0]
-        if program.endswith('/' + VM_PROCESS) or Path(program).name == 'tart':
-            continue
-        app = re.search(r'/([^/]+)\.app(?:/|$)', command)
-        name = app.group(1) if app else Path(program).name
-        totals[name] = totals.get(name, 0.0) + mb
+        app = re.match(r'(?:%s)(?:[^/]+/)*?([^/]+)\.app(?:/|$)' % roots, command)
+        if app:
+            totals[app.group(1)] = totals.get(app.group(1), 0.0) + mb
     return sorted(totals.items(), key=lambda item: -item[1])[:count]
 
 

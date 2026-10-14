@@ -182,6 +182,32 @@ class Slots(unittest.TestCase):
         with patch.object(slots.subprocess, 'run', run):
             self.assertEqual(slots.vm_resident_mb(), [3647488 / 1024])
 
+    def test_docker_s_vm_counts_under_docker_and_system_processes_are_never_named(self):
+        """Review rv-20261014T105153Z-9721e4ac-8690: Docker's 8192 MB VM vanished from the list, and
+        WindowServer displaced Slack."""
+        vm = '/System/Library/Frameworks/Virtualization.framework/x/' + slots.VM_PROCESS
+        shown = ' 1  8192M\n 2  5000M\n 3  3600M\n 4  2500M\n 5  900M\n 6  700M\n'
+        ps = {'-o pid=,rss=,comm=': f'1 8388608 {vm}\n2 5120000 {vm}\n',
+              '-o pid=,uid=,command=': (f'1 {os.getuid()} {vm}\n2 {os.getuid()} {vm}\n'
+                                       f'3 {os.getuid()} /Applications/WebStorm.app/Contents/MacOS/webstorm\n'
+                                       f'4 {os.getuid()} /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer\n'
+                                       f'5 {os.getuid()} /Applications/Slack.app/Contents/MacOS/Slack\n'
+                                       f'6 0 /Applications/Other.app/Contents/MacOS/Other\n')}
+        lsof = ('p1\nn/Users/a/Library/Containers/com.docker.docker/Docker.raw\n'
+                'p2\nn/Users/a/.richos-testvm/tart/vms/walk-x/disk.img\n')
+
+        def run(cmd, **kw):
+            if cmd[0] == 'top':
+                out = shown
+            elif cmd[0] == 'lsof':
+                out = lsof
+            else:
+                out = ps[' '.join(cmd[2:4])]
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr='')
+        with patch.object(slots.subprocess, 'run', run):
+            apps = slots.top_apps(slots.process_memory_mb())
+        self.assertEqual(apps, [('Docker', 8192), ('WebStorm', 3600), ('Slack', 900)])
+
     def test_the_guest_size_is_lib_sh_s_one_declared_default_unless_overridden(self):
         declared = re.search(r'^TESTVM_RAM_MB="\$\{TESTVM_RAM_MB:-(\d+)\}"', (HERE / 'lib.sh').read_text(), re.M)
         os.environ.pop('TESTVM_RAM_MB', None)
