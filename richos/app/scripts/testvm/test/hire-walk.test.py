@@ -119,6 +119,17 @@ class ReadTimeout(unittest.TestCase):
         self.assertEqual(hire_walk.read_timeout(120, 20), 120)
 
 
+class FittingTeammate(unittest.TestCase):
+    def test_the_marketing_task_goes_to_the_marketing_hire_not_the_first_one(self):
+        # main 0a2ae649f: hired ['beth', 'will']; Beth the bookkeeper got the newsletter task.
+        defs = {'beth': 'name: beth\ndescription: Bookkeeper for a small US business',
+                'will': 'name: will\ndescription: Marketing Director (B2B SaaS)'}
+        self.assertEqual(hire_walk.fitting_teammate(['beth', 'will'], defs), 'will')
+
+    def test_with_no_marketing_hire_the_first_hire_stands(self):
+        self.assertEqual(hire_walk.fitting_teammate(['beth', 'sam'], {'beth': 'Bookkeeper', 'sam': ''}), 'beth')
+
+
 class EvidenceShot(unittest.TestCase):
     def test_a_failed_evidence_shot_is_recorded_and_never_the_verdict(self):
         import tempfile
