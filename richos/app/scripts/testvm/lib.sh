@@ -77,11 +77,8 @@ TESTVM_DISPLAY="${TESTVM_DISPLAY:-1680x1050}"
 # plus 1.9 GB. At 7 GB the same guest used 3.4-4.1 GB only because macOS
 # spreads out when it has room.
 # 4096 IS THE DEFAULT SINCE 2026-10-14: a full 12-step voice walk (the heaviest
-# walk: app, Pocket voice and whisper; walk-ce528db499a9, report
-# /Volumes/E1TB/ab/richos-evidence/voice-reply-delay-20261014/live/report.json)
-# passed in a 4096 MB guest. Two 4 GB guests fit beside WebStorm and Chrome on
-# this 24 GB Mac with slots.py's 4,096 MB memory floor kept; at 5 GB the second
-# guest was refused once WebStorm reopened (62% available, 58% needed).
+# walk: app, voice and speech recognition) passed in a 4096 MB guest. A smaller
+# guest lets two run side by side, with slots.py's 4,096 MB memory floor kept.
 # tart's defaults (whatever the image baked) are not trusted.
 TESTVM_CPU="${TESTVM_CPU:-4}"
 TESTVM_RAM_MB="${TESTVM_RAM_MB:-4096}"
