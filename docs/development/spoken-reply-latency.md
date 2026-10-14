@@ -2,8 +2,95 @@
 
 Decoder initialization, recognition, turn closure, continuity preparation, model
 output and speech playback are separate stages. Diagnose the stage that actually
-blocks the reply. Keep run records, measurements, recordings and machine details
-in private verification records rather than this public repository.
+blocks the reply. Technical measurements belong here when they contain no personal
+identifiers, quotations or machine details. Keep identifying run records, recordings
+and local evidence paths in private verification records.
+
+## Measured causes and boundaries
+
+The October 14, 2026 investigation measured three distinct delays:
+
+- Explicit high-effort leases introduced by `fb7de54f0` increased model wait.
+  A matched application experiment measured model-send to first text at 5.974 s
+  with high effort versus 3.364 s with the effort flag omitted. Omission does not
+  establish a named effort level or the historical account default. Later
+  low-effort Opus samples reached typed first text in 0.978 s and spoken first
+  text in 1.962 s. Those later samples are separate observations, not the matched
+  experiment. Thinking remains enabled; no app-level benefit from disabling it
+  was measured.
+- A changed continuity brief caused an additional foreground context-only model
+  request. A recorded-input physical-host run measured 3.135 s in that request
+  and 7.907 s from the final admitted fragment end to playback activity. Sending
+  changed continuity inside the visible request removed that extra request;
+  a later changed-context run measured 4.818 s at the same endpoint. Background
+  work and load differed, so the total difference is not a controlled estimate
+  of the fix's effect. The structural extra request is the demonstrated blocker.
+- A fresh packaged decoder took 9.764 s on first use, then 0.932 s and 0.879 s
+  on the same padded recording with unchanged production flags. A separate VM
+  profile measured embedded Metal library loading at 7.844 s cold versus 0.008 s
+  warm. The first-use delay is measured; attributing its entire cost to Metal
+  is an inference from the VM profile. Real initialization must precede capture.
+
+### Live-microphone baseline
+
+Three baseline turns with unchanged continuity produced the following disjoint
+wall-clock intervals. Values are milliseconds. These are warm physical-host
+observations, not cold-start or changed-context coverage.
+
+| Interval | Turn 1 | Turn 2 | Turn 3 |
+| --- | ---: | ---: | ---: |
+| Final decoder execution | 571 | 634 | 599 |
+| Other recognition work | 13 | 23 | 33 |
+| Remaining turn closure after recognition | 603 | 557 | 571 |
+| Continuity brief preparation | 196 | 201 | 224 |
+| Other foreground preparation | 35 | 47 | 38 |
+| Model send to first text | 2057 | 1700 | 1528 |
+| First text to first complete sentence | 25 | 395 | 415 |
+| Sentence handover to playback activity | 137 | 117 | 164 |
+| Final admitted fragment end to playback activity | **3637** | **3674** | **3572** |
+| Handover to playback activity | **2450** | **2460** | **2369** |
+
+The two-second silence rule overlaps recognition and fragment assembly. Add only
+its remaining post-recognition portion when reconstructing the total above.
+The fragment-end marker follows voice activity detection; it is not an
+independently measured final acoustic word. Playback activity is the supervisor
+queue marker, not an acoustic microphone measurement. Separate first-PCM
+stopwatches measured 148/120/163 ms and must not be added to these totals.
+
+### Changed-continuity and first-use coverage
+
+A separate recorded-input physical-host test exercised a real continuity change
+between requests. Its first turn registered work; its second turn recognized
+that existing assignment instead of starting it again. Both had zero hidden
+foreground model requests and visible thinking frames.
+
+| Interval, milliseconds | First turn | Changed continuity |
+| --- | ---: | ---: |
+| Final decoder execution | 639 | 1187 |
+| Other recognition work | 33 | 27 |
+| Remaining turn closure | 534 | 26 |
+| Continuity brief preparation | 196 | 684 |
+| Other foreground preparation | 41 | 52 |
+| Model send to first text | 4952 | 2124 |
+| First text to first complete sentence | 1236 | 313 |
+| Sentence handover to playback activity | 197 | 405 |
+| Final admitted fragment end to playback activity | **7828** | **4818** |
+| Handover to playback activity | **6622** | **3578** |
+
+Cold decoder initialization completed in 9749 ms before capture in that test.
+A fresh packaged-app VM walk separately passed all twelve required steps with
+`--expect-warmed-decoder`: initialization completed in 11935 ms before capture,
+recognition produced one exact transcript, speech used Pocket and the two visible
+thought frames contained no hidden foreground request. Its fragment-end to
+playback interval was 9005 ms and handover to playback was 4252 ms. VM numbers
+are separate observations, not predictions of physical-host latency.
+
+Preserve the original baseline rather than replacing it with slower later
+samples. Compare like conditions: cold versus warm, live microphone versus
+recorded input, unchanged versus changed continuity, speech model, provider flags
+and foreground versus background work. These observations do not guarantee
+identical network response times. A passing isolated app or VM walk does not
+prove the fixed release has been published, installed or accepted end to end.
 
 ## Required startup behavior
 
