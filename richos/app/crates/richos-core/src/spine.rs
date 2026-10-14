@@ -2110,10 +2110,21 @@ impl Spine {
     /// F3. The old key F2 no longer works.", goes into the action ledger digest of every
     /// conversation of the company, which is rendered after the summary and the tail, so the
     /// newest statement wins over the older text.
+    ///
+    /// **`turn_id` is `None` for a record written before the message's turn was kept** (review
+    /// rv-20261014T050558Z-e9854621-0b36): the message replaced is then the turn the
+    /// conversation was opened with ([`Self::open_conversation_with_message`] writes it first),
+    /// and the fact is recorded and the desks retired all the same.
     /// Answers the new turn id.
-    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str, fact: &str) -> Result<String, SpineError> {
+    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: Option<&str>, text: &str, fact: &str) -> Result<String, SpineError> {
+        let old_turn = match turn_id {
+            Some(turn) => Some(turn.to_string()),
+            None => self.ledger.thread_turns(thread_id)?.first().map(|turn| turn.id.clone()),
+        };
         let new_turn = self.raise_proactive(Some(thread_id), AttentionTier::Digest, text)?;
-        self.ledger.mark_turn_superseded(turn_id, &new_turn)?;
+        if let Some(old_turn) = old_turn {
+            self.ledger.mark_turn_superseded(&old_turn, &new_turn)?;
+        }
         let today = time::OffsetDateTime::now_utc().date();
         self.ledger.record_action_with(
             Some(&new_turn),

@@ -6093,7 +6093,7 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
         }
         dictation_offer::FeatureAction::Replace { thread, message } => {
             let new_message = take_the_spine(&state.spine)
-                .replace_app_message(&thread, &message, &text, &dictation_offer::key_change_fact(key, old_key))
+                .replace_app_message(&thread, message.as_deref(), &text, &dictation_offer::key_change_fact(key, old_key))
                 .map_err(|e| e.to_string())?;
             (thread, new_message)
         }
