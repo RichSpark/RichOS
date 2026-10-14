@@ -244,6 +244,56 @@ async function main() {
     return "held: " + JSON.stringify(held.trim()) + "; not held: " + JSON.stringify(fresh.trim());
   });
 
+  // **NOTHING IN THE CONVERSATION HIDES UNDER "UNDER THE HOOD".** Final walk on main 0a2ae649f
+  // (2026-10-14, richos-hq `docs/verification/2026-10-14-final55-walk.md` line 113): with the
+  // panel open, the conversation's last card and the composer's Output button ran under the
+  // panel's left edge, because the panel is `position: fixed` and the conversation kept the
+  // whole window. Measured at the default window (1400x880) and the smallest (1024x700), in
+  // both themes: every box in the conversation, the header and the composer row ends at or
+  // before the panel's left edge, and the conversation never scrolls sideways to get there.
+  await run.check("with Under the hood open, the conversation and the composer stop at the panel's edge, at 1400x880 and 1024x700, light and dark", async () => {
+    const seen = [];
+    for (const [width, height] of [[1400, 880], [1024, 700]]) {
+      for (const colorScheme of ["light", "dark"]) {
+        const where = `${width}x${height} ${colorScheme}`;
+        const page = await browser.newPage({viewport: {width, height}, colorScheme});
+        const errors = []; page.on("pageerror", e => errors.push(String(e)));
+        await page.addInitScript(() => window.__RICHOS_MOCK_PRESET__ = {workSummaries: {
+          hiring: {items:[{title:"Reviewed change", role:"worker", repository:"/fictional/project", state:"integrated", detail:"Reviewed commit integrated locally. Whole assignment remains open."}], omitted:2}
+        }});
+        await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+        await openThread(page,"hiring");
+        await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 saved work record"));
+        await page.click(".drill-chip");
+        await page.waitForFunction(() => !document.getElementById("slideover").hidden);
+        const m = await page.evaluate(() => {
+          const edge = document.getElementById("slideover").getBoundingClientRect().left;
+          const shown = (n) => {
+            const r = n.getBoundingClientRect();
+            const cs = getComputedStyle(n);
+            return r.width > 1 && r.height > 1 && cs.visibility !== "hidden" && cs.display !== "none";
+          };
+          const over = [];
+          for (const n of document.querySelectorAll("#stage-header *, #conversation *, #composer-row, #composer-row *")) {
+            if (!shown(n)) continue;
+            const right = n.getBoundingClientRect().right;
+            if (right > edge + 0.5) over.push((n.id ? "#" + n.id : n.tagName.toLowerCase() + "." + [...n.classList].join(".")) + " ends at " + Math.round(right));
+          }
+          const conv = document.getElementById("conversation");
+          const out = document.getElementById("out-bottom");
+          return {edge: Math.round(edge), over, sideways: conv.scrollWidth - conv.clientWidth,
+            outShown: !!out && !out.hidden && shown(out)};
+        });
+        assert(m.outShown, where + ": the composer's Output button is not on screen to measure");
+        assertEqual(m.over.length, 0, where + ": ran under the panel's left edge at " + m.edge + "px: " + m.over.slice(0, 6).join("; "));
+        assert(m.sideways <= 0, where + ": the conversation scrolls sideways by " + m.sideways + "px to keep inside the panel's edge");
+        assertEqual(errors.length, 0, where + ": renderer errors");
+        seen.push(where + " edge " + m.edge);
+        await page.close();
+      }
+    }
+    return seen.join(", ");
+  });
   await browser.close(); process.exit(run.report()?1:0);
 }
 main().catch(e=>{console.error(e);process.exit(1);});
