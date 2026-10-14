@@ -39,13 +39,10 @@ binary or model requires new initialization. Temporary silence and decoder outpu
 removed on success and failure; none becomes a conversation turn. Use the production model,
 thread count and decoder flags. Do not weaken recognition or turn-taking to hide a wait.
 
-Conversation replies use low effort, as authorized on October 14. Opus conversation leases
-also disable extended thinking through the provider's `alwaysThinkingEnabled=false` setting,
-verified against the installed provider. Background work keeps high effort and its default
-thinking policy. The optional Fable model retains its supported thinking behavior. Model
-choices remain the choices saved by the user. Compose the reply preference into the app's
-single existing settings value; retain every permission, isolation and classifier setting.
-A test launcher that overwrites them is invalid evidence.
+Conversation replies use low effort, as authorized on October 14. Background work keeps
+high effort. Model choices remain the choices saved by the user. Test any further thinking
+preference against the installed provider and preserve the app's complete existing settings,
+including permission boundaries. A test launcher that overwrites them is invalid evidence.
 
 Keep the agreed two-second end-of-turn silence and all fragment assembly and barge-in rules.
 An answer spoken over an unfinished thought is a failure, even if it is quick. Do not add

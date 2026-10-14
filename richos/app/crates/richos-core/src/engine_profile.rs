@@ -547,18 +547,6 @@ impl EngineProfile {
     /// was Claude Code — so the brief check ran `python3 --print` and failed on every dispatch
     /// (nightly 54, 2026-10-13).
     pub fn configure(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path) {
-        self.configure_with_thinking(command, provider, session, scope, None);
-    }
-
-    /// Compose the conversational preference into the app's existing settings. A second
-    /// --settings flag would risk replacing permission and isolation policy.
-    pub fn configure_for_role(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path, role: crate::native::LeaseRole) {
-        let thinking = (role == crate::native::LeaseRole::Conversation
-            && self.lease_models.rich == crate::config::ModelChoice::Opus).then_some(false);
-        self.configure_with_thinking(command, provider, session, scope, thinking);
-    }
-
-    fn configure_with_thinking(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path, thinking: Option<bool>) {
         crate::runtime::isolate_interpreter_environment(command);
         // App bindings replace terminal component roots, test overrides and
         // transcript discovery. The provider's account location is unchanged.
@@ -616,15 +604,13 @@ impl EngineProfile {
         if let Some(files) = &attachments {
             environment.push(format!("Files the user attached to this conversation (screenshots, PDFs, documents) are under {}. Reading them is part of answering the user; they belong to this conversation only.", files.display()));
         }
-        let mut settings = json!({"autoMemoryEnabled":false,
+        command.arg("--plugin-dir").arg(&self.plugin)
+            .args(["--permission-mode", "auto"])
+            .arg("--settings").arg(json!({"autoMemoryEnabled":false,
                 "permissions":{"blockReadsOutsideWorkingDirectories":true},
                 "autoMode":{"classifyAllShell":true,"environment":environment,
                     "soft_deny":["$defaults","Publication, pushes, pull request creation, deployments and outbound messages require the current user to explicitly request that operation and its destination. Connecting a repository or requesting local implementation/integration does not authorize publication."]},
-                "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
-        if let Some(enabled) = thinking { settings["alwaysThinkingEnabled"] = json!(enabled); }
-        command.arg("--plugin-dir").arg(&self.plugin)
-            .args(["--permission-mode", "auto"])
-            .arg("--settings").arg(settings.to_string())
+                "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]}).to_string())
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
             .env("PATH", self.runtime.path()).env_remove("CLAUDECODE")
             // Hooks inherit the runtime-only PATH, which excludes Claude's installer path.

@@ -2010,9 +2010,6 @@ impl NativeClient {
         };
         // The selected model, with low effort for replies and high effort for work.
         args.extend(lease_model_args(role, profile));
-        if profile.is_none() && role == LeaseRole::Conversation {
-            args.extend(["--settings".into(), r#"{"alwaysThinkingEnabled":false}"#.into()]);
-        }
         if let Some((executable, scope, assignments, status)) = onboarding {
             let config = mcp_config(executable, scope, assignments, status, continuity, continuity_tools, profile, role, bin);
             args.extend(["--strict-mcp-config".into(), "--mcp-config".into(), config.to_string()]);
@@ -2047,7 +2044,7 @@ impl NativeClient {
         command.env(retry_name, retry_value);
         if let Some(profile) = profile {
             let scope = continuity.ok_or_else(|| NativeError::Protocol("desktop engine needs a scoped continuity bridge".into()))?.1;
-            profile.configure_for_role(&mut command, bin, &session_id, scope, role);
+            profile.configure(&mut command, bin, &session_id, scope);
         }
         let mut child = command
             .args(args)
@@ -6271,12 +6268,6 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
             assert_eq!(&argv[at..at + 4], ["--model", "opus", "--effort", effort], "{role:?}: {argv:?}");
             assert_eq!(argv.iter().filter(|a| *a == "--model" || *a == "--effort").count(), 2,
                 "{role:?} names a model or an effort twice: {argv:?}");
-            let settings: Vec<_> = argv.windows(2).filter(|pair| pair[0] == "--settings").collect();
-            if role == LeaseRole::Conversation {
-                assert_eq!(settings.len(), 1);
-                let value: Value = serde_json::from_str(&settings[0][1]).unwrap();
-                assert_eq!(value["alwaysThinkingEnabled"], false);
-            } else { assert!(settings.is_empty(), "background work keeps its thinking policy"); }
         }
     }
 
