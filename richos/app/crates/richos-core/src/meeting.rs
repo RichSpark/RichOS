@@ -32,10 +32,11 @@
 //! A calendar prompt and the microphone signal for the same meeting are one call: whichever
 //! comes first is the prompt, the other attaches to it (the calendar title replaces "Call
 //! detected in …"). Not this one, and Stop, hold for that call: it does not prompt again until
-//! it has ended. The next call prompts normally. A calendar meeting declined, or its recording
-//! stopped or closed, before anyone joined is held for its call: the call that begins during the
-//! meeting's own scheduled time, in the meeting link's app when the event names one
-//! ([`Scheduled::covers`]); any other call prompts. While prompts are paused nothing prompts, and
+//! it has ended. The next call prompts normally. A calendar meeting he answered (Take Notes, Not
+//! this one, Stop) asks once: every call that begins during the meeting's own scheduled time, in
+//! the meeting link's app when the event names one ([`Scheduled::covers`]), is that meeting,
+//! however often he leaves and rejoins; any other call prompts. A browser call is a meeting only
+//! when its link is a browser meeting (Google Meet). While prompts are paused nothing prompts, and
 //! a running recording is left alone.
 //!
 //! # Nothing that waits is forgotten
@@ -128,8 +129,8 @@ impl MeetingApp {
         ("webex.com/", MeetingApp::Webex),
     ];
 
-    /// Browsers a meeting link can be opened in instead of the app. Which tab holds the
-    /// microphone is not visible, so a browser call can be any meeting.
+    /// Browsers a Google Meet link opens in (Meet has no desktop app). Which tab holds the
+    /// microphone is not visible, so a browser call can be any browser meeting.
     const BROWSERS: [&'static str; 6] =
         ["com.google.Chrome", "com.apple.Safari", "com.microsoft.edgemac", "org.mozilla.firefox", "company.thebrowser.Browser", "com.brave.Browser"];
 
@@ -139,16 +140,17 @@ impl MeetingApp {
         Self::HOSTS.iter().filter_map(|(host, app)| text.find(host).map(|at| (at, *app))).min_by_key(|(at, _)| *at).map(|(_, app)| app)
     }
 
-    /// A call in this app family can be a meeting with this link: the link's own desktop app, or
-    /// a browser.
+    /// A call in this app family can be a meeting with this link: the link's own desktop app, or,
+    /// for a browser meeting (Google Meet), a browser. A browser call during a Zoom, Teams or Webex
+    /// meeting is a different call and gets its own prompt (rv-20261014T105556Z-71dc7488-f9ab #2).
     fn takes(self, family: &str) -> bool {
         let native: &[&str] = match self {
             MeetingApp::Zoom => &["us.zoom.xos"],
             MeetingApp::Teams => &["com.microsoft.teams2", "com.microsoft.teams"],
-            MeetingApp::Meet => &[],
+            MeetingApp::Meet => &Self::BROWSERS,
             MeetingApp::Webex => &["com.cisco.webexmeetingsapp", "Cisco-Systems.Spark"],
         };
-        native.contains(&family) || Self::BROWSERS.contains(&family)
+        native.contains(&family)
     }
 }
 
@@ -166,12 +168,11 @@ pub struct Scheduled {
 }
 
 impl Scheduled {
-    /// This call can be this meeting, answered or declined before anyone joined it: it began
-    /// during the meeting's own time (from its prompt, [`PROMPT_LEAD_MS`] before the start, to
-    /// its end), in the link's app or a browser when the event names a link. Any other call is a
-    /// different call and prompts (rv-20261014T102622Z-ea367a6c-5c3e: a fixed window around the
-    /// start asked again when A was joined 11 minutes late, and took an unrelated Teams call 5
-    /// minutes in for A).
+    /// This call can be this answered meeting, joined or rejoined: it began during the meeting's
+    /// own time (from its prompt, [`PROMPT_LEAD_MS`] before the start, to its end), in the link's
+    /// app when the event names a link ([`MeetingApp::takes`]). Any other call is a different call
+    /// and prompts (rv-20261014T102622Z-ea367a6c-5c3e: a fixed window around the start asked again
+    /// when A was joined 11 minutes late, and took an unrelated Teams call 5 minutes in for A).
     fn covers(&self, call: &Call) -> bool {
         let during = call.since + PROMPT_LEAD_MS >= self.starts_at && call.since < self.ends_at;
         during && self.app.is_none_or(|app| app.takes(&call.family))
@@ -226,8 +227,7 @@ pub enum Input {
 struct Start {
     title: Option<String>,
     event_id: Option<String>,
-    /// The calendar meeting, so a recording stopped or closed before its call began is held as
-    /// that meeting declined ([`MeetingMonitor::declined_event`]).
+    /// The calendar meeting it records (answered: [`MeetingMonitor::answered`]).
     scheduled: Option<Scheduled>,
     manual: bool,
 }
@@ -248,10 +248,10 @@ struct Call {
     quiet_since: Option<u64>,
     /// When its microphone use was first seen.
     since: u64,
-    /// Calendar meetings (event id, start) that came due while this call was followed and that it
+    /// Calendar meetings, by event id, that came due while this call was followed and that it
     /// began close enough to be ([`Call::is_meeting`]). Only the call's end says whether it WAS
     /// one: see [`MeetingMonitor::end_call`].
-    meetings: BTreeMap<String, u64>,
+    meetings: BTreeMap<String, Scheduled>,
     /// The calendar meeting this call is KNOWN to be: the calendar prompt it joined, the calendar
     /// recording it armed, the declined meeting whose call it is, or the title its prompt took.
     /// Kept when the call is declined or stopped, so a different meeting due while it runs over
@@ -356,12 +356,14 @@ pub struct MeetingMonitor {
     /// to wait is not in here, so it prompts when the call ends (rv-20261013T130528Z-361c4090-dbf1
     /// #1).
     prompted_events: BTreeSet<String>,
-    /// A calendar meeting declined, or its recording stopped or closed, before anyone joined it:
-    /// its call ([`Scheduled::covers`]) is that declined meeting and does not prompt (second review
-    /// rv-20261013T120455Z-516bb135-67f2 #1; rv-20261014T095959Z-f7ee40c9-86b6 #1). Any other call
-    /// prompts. Cleared when that call starts, when a later meeting prompts, or when the meeting
-    /// is over.
-    declined_event: Option<Scheduled>,
+    /// Every calendar meeting he answered (Take Notes, Not this one, Stop), by event id, kept for
+    /// its whole scheduled time: a call that starts during it in its link's app
+    /// ([`Scheduled::covers`]) is that meeting, joined or rejoined, and does not prompt (second
+    /// reviews rv-20261013T120455Z-516bb135-67f2 #1, rv-20261014T095959Z-f7ee40c9-86b6 #1,
+    /// rv-20261014T105556Z-71dc7488-f9ab #1: matching a call used the answer up, and another
+    /// prompt erased it). Any other call prompts. Dropped when the meeting is over, canceled or
+    /// moved.
+    answered: BTreeMap<String, Scheduled>,
 }
 
 impl MeetingMonitor {
@@ -470,11 +472,14 @@ impl MeetingMonitor {
         let Some(mut call) = next.and_then(|family| self.others.remove(&family)) else {
             return vec![];
         };
+        // A calendar meeting he already answered whose time and app this call fits (the latest
+        // started, when meetings overlap). The answer stays for every later rejoin.
+        let answered = self.answered.values().filter(|meeting| meeting.covers(&call)).max_by_key(|meeting| meeting.starts_at).map(|meeting| meeting.event_id.clone());
         match &mut self.phase {
-            Phase::Idle if self.declined_event.as_ref().is_some_and(|meeting| meeting.covers(&call)) => {
-                // The calendar meeting he declined before joining: this is its call. Held as
-                // declined until it ends, like any declined call, and known to be that meeting.
-                call.event = self.declined_event.take().map(|meeting| meeting.event_id);
+            Phase::Idle if answered.is_some() => {
+                // That meeting, joined or rejoined: held as answered until this call ends, like
+                // any declined call, and known to be that meeting.
+                call.event = answered;
                 self.phase = Phase::Done { call };
                 vec![]
             }
@@ -517,10 +522,16 @@ impl MeetingMonitor {
             // A meeting this call began close enough to be WAS this call if the call was still on
             // when the meeting started, and never prompts. A call over before the meeting started
             // was not it: the meeting stays eligible and prompts on the clock's next offer
-            // (handover review rv-20261013T135051Z-1b6ba88a-4002 #2).
+            // (handover review rv-20261013T135051Z-1b6ba88a-4002 #2). A call he answered (anything
+            // but a prompt left up) answered that meeting: a rejoin does not ask again.
             let ended_at = c.quiet_since.unwrap_or(now);
-            let was: Vec<String> = c.meetings.iter().filter(|(_, starts_at)| ended_at >= **starts_at).map(|(id, _)| id.clone()).collect();
-            self.prompted_events.extend(was);
+            let answered = !matches!(self.phase, Phase::Prompting { .. });
+            for meeting in c.meetings.values().filter(|meeting| ended_at >= meeting.starts_at) {
+                self.prompted_events.insert(meeting.event_id.clone());
+                if answered {
+                    self.answered.insert(meeting.event_id.clone(), meeting.clone());
+                }
+            }
         }
         let (said, idle) = match &mut self.phase {
             // The call went before anybody answered: the prompt goes with it.
@@ -554,21 +565,22 @@ impl MeetingMonitor {
     }
 
     /// The app's clock, once a second: [`MeetingMonitor::tick`], then every synced meeting due now
-    /// ([`CalendarMeeting::due`]) offered to [`MeetingMonitor::scheduled`], then a calendar
-    /// meeting held without a call that is over retired. One function, so the sequences the
-    /// tests walk are the ones the app runs.
+    /// ([`CalendarMeeting::due`]) offered to [`MeetingMonitor::scheduled`], then a calendar prompt
+    /// nobody joined whose meeting is over retired, and answered meetings that are over forgotten.
+    /// One function, so the sequences the tests walk are the ones the app runs.
     pub fn clock(&mut self, now: u64, calendar: &[CalendarMeeting]) -> Vec<Action> {
         let mut actions = self.tick(now);
         for meeting in calendar.iter().filter(|m| m.due(now)) {
             actions.extend(self.scheduled(meeting.scheduled()));
         }
         let over = self
-            .pending_calendar_event()
+            .unjoined_calendar_prompt()
             .map(str::to_string)
             .filter(|id| calendar.iter().find(|m| &m.event_id == id).is_none_or(|m| !m.due(now)));
         if let Some(id) = over {
             actions.extend(self.retire(&id));
         }
+        self.answered.retain(|_, meeting| now < meeting.ends_at);
         actions
     }
 
@@ -622,7 +634,7 @@ impl MeetingMonitor {
             }
             Offer::Held => {
                 if let Some(c) = self.phase.call_mut() {
-                    c.meetings.insert(meeting.event_id, meeting.starts_at);
+                    c.meetings.insert(meeting.event_id.clone(), meeting);
                 }
                 vec![]
             }
@@ -636,7 +648,6 @@ impl MeetingMonitor {
             }
             Offer::Show => {
                 self.prompted_events.insert(meeting.event_id.clone());
-                self.declined_event = None;
                 self.phase = Phase::Prompting { call: None, scheduled: Some(meeting) };
                 vec![Action::ShowPrompt(kind)]
             }
@@ -651,19 +662,11 @@ impl MeetingMonitor {
         }
     }
 
-    /// The calendar meeting held without a call: an unjoined prompt, or one declined before
-    /// anyone joined. The app retires it once the meeting is over.
-    pub fn pending_calendar_event(&self) -> Option<&str> {
-        self.unjoined_calendar_prompt().or(self.declined_event.as_ref().map(|meeting| meeting.event_id.as_str()))
-    }
-
     /// The meeting a calendar prompt was for has ended and nobody joined: the prompt goes, and the
-    /// event stays prompted (it never comes back); a declined one is forgotten, so the next call
+    /// event stays prompted (it never comes back); an answered one is forgotten, so the next call
     /// prompts. A prompt with a live call is untouched.
     pub fn retire(&mut self, event_id: &str) -> Vec<Action> {
-        if self.declined_event.as_ref().is_some_and(|meeting| meeting.event_id == event_id) {
-            self.declined_event = None;
-        }
+        self.answered.remove(event_id);
         if self.unjoined_calendar_prompt() == Some(event_id) {
             self.phase = Phase::Idle;
             let mut out = vec![Action::HidePrompt];
@@ -677,6 +680,7 @@ impl MeetingMonitor {
     /// nobody has joined is withdrawn, and a moved meeting may prompt again at its new time.
     pub fn withdraw(&mut self, event_id: &str) -> Vec<Action> {
         self.prompted_events.remove(event_id);
+        self.answered.remove(event_id);
         if let Phase::Prompting { call: None, scheduled: Some(s) } = &self.phase {
             if s.event_id == event_id {
                 self.phase = Phase::Idle;
@@ -699,7 +703,11 @@ impl MeetingMonitor {
         match (input, &self.phase) {
             (Input::TakeNotes | Input::ManualStart, Phase::Prompting { call, scheduled }) => {
                 // Starting from Settings while a prompt (or its bar) is up starts THAT recording
-                // (round 25.1: "removes the bar and starts the recording").
+                // (round 25.1: "removes the bar and starts the recording"). A calendar meeting is
+                // answered: no call in its time and app asks again.
+                if let Some(meeting) = scheduled {
+                    self.answered.insert(meeting.event_id.clone(), meeting.clone());
+                }
                 let start = Start {
                     title: scheduled.as_ref().map(|s| s.title.clone()),
                     event_id: scheduled.as_ref().map(|s| s.event_id.clone()),
@@ -711,10 +719,10 @@ impl MeetingMonitor {
                 vec![Action::HidePrompt, action]
             }
             (Input::NotThisOne, Phase::Prompting { call, .. } | Phase::Failed { call, .. }) => {
-                // Declined before anyone joined (the calendar prompt, or a failed pre-call
-                // recording's card): remember the meeting, so its call does not prompt.
-                if let (None, Some(meeting)) = (call, self.phase.meeting()) {
-                    self.declined_event = Some(meeting);
+                // Declined (the calendar prompt, or a failed calendar recording's card): the
+                // meeting is answered, so neither its call nor a rejoin prompts.
+                if let Some(meeting) = self.phase.meeting() {
+                    self.answered.insert(meeting.event_id.clone(), meeting);
                 }
                 self.phase = Phase::done(call);
                 vec![Action::HidePrompt]
@@ -742,10 +750,7 @@ impl MeetingMonitor {
             }
             (Input::Stop, Phase::Recording { call, .. }) => {
                 // Stopped early: this call does not prompt again until it ends. A calendar
-                // recording stopped before its call began holds that meeting the same way.
-                if let (None, Some(meeting)) = (call, self.phase.meeting()) {
-                    self.declined_event = Some(meeting);
-                }
+                // recording's meeting was answered by its Take Notes and stays answered.
                 self.phase = Phase::done(call);
                 vec![Action::StopCapture(EndReason::StoppedEarly)]
             }
@@ -1003,18 +1008,23 @@ mod tests {
         let mut m = MeetingMonitor::new();
         m.scheduled(meeting);
         assert_eq!(m.input(Input::NotThisOne), vec![Action::HidePrompt]);
-        assert_eq!(m.pending_calendar_event(), Some("e1"));
+        assert!(m.answered.contains_key("e1"));
         assert_eq!(m.watch(&started(10, ZOOM, "zoom.us"), 70_000), vec![], "its call does not prompt");
-        // Held as declined until it ends; the next call prompts.
+        // Held as declined until it ends; a rejoin during the meeting is still it (no link named,
+        // so any call in its time: rv-20261014T105556Z #1), and a call after it ends prompts.
         m.watch(&stopped(10, ZOOM), 90_000);
         m.tick(90_000 + END_GRACE_MS);
-        assert_eq!(m.watch(&started(11, ZOOM, "zoom.us"), 200_000), zoom_prompt());
+        assert_eq!(m.watch(&started(11, ZOOM, "zoom.us"), 200_000), vec![], "a rejoin does not prompt");
+        m.watch(&stopped(11, ZOOM), 300_000);
+        m.tick(300_000 + END_GRACE_MS);
+        m.clock(3_660_000, &[]);
+        assert_eq!(m.watch(&started(12, ZOOM, "zoom.us"), 3_700_000), zoom_prompt());
         // Never joined: once the meeting is over the app retires it, and a later call prompts.
         let mut r = MeetingMonitor::new();
         r.scheduled(Scheduled { event_id: "e2".into(), title: "Sync".into(), starts_at: 60_000, ends_at: 60_000 + 3_600_000, app: None });
         r.input(Input::NotThisOne);
         assert_eq!(r.retire("e2"), vec![]);
-        assert_eq!(r.pending_calendar_event(), None);
+        assert!(r.answered.is_empty());
         assert_eq!(r.watch(&started(10, ZOOM, "zoom.us"), 9_000_000), zoom_prompt());
     }
 
@@ -1304,13 +1314,18 @@ mod tests {
                 (900, Off(1, ZOOM), &[], "recording 'Board' on Zoom"),
                 (908, Wait, &["stop: call ended"], "idle"),
             ]),
-            ("a calendar prompt dismissed, then joined (rv-20261013T120455Z #1)", &[
+            // Rejoining inside the meeting's time is still that meeting (rv-20261014T105556Z #1);
+            // a call after it has ended is a different call and asks.
+            ("a calendar prompt dismissed, then joined, left and rejoined (rv-20261013T120455Z #1)", &[
                 (0, Cal("Standup", 60, 960), &["prompt 'Standup'"], "prompting 'Standup'"),
                 (5, Do(NotThisOne), &["hide"], "idle"),
                 (60, On(1, ZOOM), &[], "holding Zoom"),
                 (900, Off(1, ZOOM), &[], "holding Zoom"),
                 (908, Wait, &[], "idle"),
-                (930, On(2, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+                (940, Off(2, ZOOM), &[], "holding Zoom"),
+                (948, Wait, &[], "idle"),
+                (1000, On(3, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
             ]),
             ("a call dismissed; a second app waits for it to end", &[
                 (10, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
@@ -1440,7 +1455,7 @@ mod tests {
                 (60, On(1, ZOOM), &[], "holding Zoom"),
                 (900, Off(1, ZOOM), &[], "holding Zoom"),
                 (908, Wait, &[], "idle"),
-                (930, On(2, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
             ]),
             ("a pre-call capture fails and its card is closed, then joined: that meeting does not ask again (rv-20261014T095959Z #1)", &[
                 (0, Cal("A", 60, 3660), &["prompt 'A'"], "prompting 'A'"),
@@ -1475,10 +1490,104 @@ mod tests {
                 (0, Do(Stop), &["stop: early"], "idle"),
                 (720, On(1, ZOOM), &[], "holding Zoom"),
             ]),
-            ("a Zoom meeting dismissed, then joined in a browser: that meeting, no prompt", &[
+            // A browser call is a meeting only when the meeting's link is a browser meeting
+            // (rv-20261014T105556Z #2): a Zoom or Teams meeting is joined in its app, and a
+            // browser call during it is a different call with its own prompt.
+            ("a Zoom meeting dismissed: a Google Meet call in Chrome 5 minutes in asks (rv-20261014T105556Z #2)", &[
                 (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
                 (0, Do(NotThisOne), &["hide"], "idle"),
+                (360, On(1, CHROME), &["prompt Chrome"], "prompting on Chrome"),
+            ]),
+            ("a Teams meeting dismissed: a browser call during it asks", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Teams), &["prompt 'A'"], "prompting 'A'"),
+                (0, Do(NotThisOne), &["hide"], "idle"),
+                (360, On(1, CHROME), &["prompt Chrome"], "prompting on Chrome"),
+            ]),
+            ("a Google Meet meeting dismissed, then joined in Chrome: that meeting, no prompt", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Meet), &["prompt 'A'"], "prompting 'A'"),
+                (0, Do(NotThisOne), &["hide"], "idle"),
                 (120, On(1, CHROME), &[], "holding Chrome"),
+                (900, Off(1, CHROME), &[], "holding Chrome"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, CHROME), &[], "holding Chrome"),
+            ]),
+            // rv-20261014T105556Z-71dc7488-f9ab #1: Zoom-linked A (60 s to 3660 s) answered three
+            // ways before anyone joined, joined at 720, left at 900, rejoined at 930. Every
+            // rejoin is still A: no prompt, however often.
+            ("Stop before joining, joined, left and rejoined (rv-20261014T105556Z #1)", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (0, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' unarmed"),
+                (0, Do(Stop), &["stop: early"], "idle"),
+                (720, On(1, ZOOM), &[], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+                (1200, Off(2, ZOOM), &[], "holding Zoom"),
+                (1208, Wait, &[], "idle"),
+                (1500, On(3, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("a failed pre-call capture closed, joined, left and rejoined (rv-20261014T105556Z #1)", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (0, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' unarmed"),
+                (0, Do(CaptureEnded), &[], "failed 'A' unarmed"),
+                (0, Do(NotThisOne), &["hide"], "idle"),
+                (720, On(1, ZOOM), &[], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("dismissed before joining, joined, left and rejoined; after it ends a call asks (rv-20261014T105556Z #1)", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (0, Do(NotThisOne), &["hide"], "idle"),
+                (720, On(1, ZOOM), &[], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+                (3600, Off(2, ZOOM), &[], "holding Zoom"),
+                (3608, Wait, &[], "idle"),
+                (3700, On(3, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+            ]),
+            ("A dismissed, an overlapping B dismissed, then A joined: still A (rv-20261014T105556Z #1)", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (0, Do(NotThisOne), &["hide"], "idle"),
+                (0, CalIn("B", 600, 1200, MeetingApp::Teams), &[], "idle"),
+                (540, Wait, &["prompt 'B'"], "prompting 'B'"),
+                (541, Do(NotThisOne), &["hide"], "idle"),
+                (720, On(1, ZOOM), &[], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("A's calendar prompt answered in its call with Take Notes, then left and rejoined: no prompt", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (61, Do(TakeNotes), &["hide", "start 'A'"], "recording 'A' on Zoom"),
+                (900, Off(1, ZOOM), &[], "recording 'A' on Zoom"),
+                (908, Wait, &["stop: call ended"], "idle"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("A's calendar prompt dismissed in its call, then left and rejoined: no prompt", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (61, Do(NotThisOne), &["hide"], "holding Zoom"),
+                (900, Off(1, ZOOM), &[], "holding Zoom"),
+                (908, Wait, &[], "idle"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("joined early, notes taken before the meeting was due, left and rejoined: no prompt", &[
+                (0, Cal("Early", 300, 2100), &[], "idle"),
+                (200, On(1, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
+                (205, Do(TakeNotes), &["hide", "start"], "recording on Zoom"),
+                (900, Off(1, ZOOM), &[], "recording on Zoom"),
+                (908, Wait, &["stop: call ended"], "idle"),
+                (930, On(2, ZOOM), &[], "holding Zoom"),
+            ]),
+            ("a calendar prompt ignored until its call ended: a rejoin asks", &[
+                (0, CalIn("A", 60, 3660, MeetingApp::Zoom), &["prompt 'A'"], "prompting 'A'"),
+                (60, On(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (900, Off(1, ZOOM), &[], "prompting 'A' on Zoom"),
+                (908, Wait, &["hide"], "idle"),
+                (930, On(2, ZOOM), &["prompt Zoom"], "prompting on Zoom"),
             ]),
             ("a meeting dismissed, then joined nine minutes late: still that meeting, no prompt", &[
                 (0, Cal("A", 60, 3660), &["prompt 'A'"], "prompting 'A'"),
@@ -1527,5 +1636,73 @@ mod tests {
         ];
         let wrong: Vec<String> = tables.iter().flat_map(|(name, rows)| walk(name, rows)).collect();
         assert!(wrong.is_empty(), "{} of {} sequences went wrong:\n{}", wrong.len(), tables.len(), wrong.join("\n"));
+    }
+
+    /// The handover review's own witnesses (rv-20261014T105556Z-71dc7488-f9ab,
+    /// `fixtures/meeting_identity_review.py`), driven through the monitor's API as it wrote them.
+    mod review_rv_20261014t105556z {
+        use super::super::*;
+        const ZOOM: &str = "us.zoom.xos";
+        const TEAMS: &str = "com.microsoft.teams2";
+        fn on(m: &mut MeetingMonitor, family: &str, now: u64) -> Vec<Action> {
+            m.watch(&WatchLine::Started { pid: 1, family: family.into(), app: Some(family.into()), at: now }, now)
+        }
+        fn off(m: &mut MeetingMonitor, family: &str, now: u64) {
+            m.watch(&WatchLine::Stopped { pid: 1, family: family.into(), exited: false, at: now }, now);
+            m.tick(now + END_GRACE_MS);
+        }
+        fn meeting(id: &str, app: Option<MeetingApp>, start: u64, end: u64) -> Scheduled {
+            Scheduled { event_id: id.into(), title: id.into(), starts_at: start, ends_at: end, app }
+        }
+        fn answered(how: &str, app: Option<MeetingApp>) -> MeetingMonitor {
+            let mut m = MeetingMonitor::new();
+            m.scheduled(meeting("A", app, 60_000, 3_660_000));
+            if how != "dismissed" {
+                m.input(Input::TakeNotes);
+            }
+            if how == "failed capture closed" {
+                m.input(Input::CaptureEnded);
+            }
+            m.input(if how == "Stop" { Input::Stop } else { Input::NotThisOne });
+            m
+        }
+
+        #[test]
+        fn earlier_findings_controls() {
+            for how in ["Stop", "failed capture closed", "dismissed"] {
+                for now in [60_000, 720_000] {
+                    let mut m = answered(how, None);
+                    assert_eq!(on(&mut m, ZOOM, now), vec![], "{how}, join at {now}");
+                }
+            }
+            let mut m = answered("dismissed", Some(MeetingApp::Zoom));
+            on(&mut m, TEAMS, 360_000);
+            assert!(m.is_prompting(), "linked Zoom A, unrelated native Teams at 5 min");
+        }
+
+        #[test]
+        fn same_answered_meeting_rejoined_inside_its_time() {
+            for how in ["Stop", "failed capture closed", "dismissed"] {
+                let mut m = answered(how, Some(MeetingApp::Zoom));
+                assert_eq!(on(&mut m, ZOOM, 720_000), vec![], "{how}: first join");
+                off(&mut m, ZOOM, 900_000);
+                assert_eq!(on(&mut m, ZOOM, 930_000), vec![], "{how}: answered A asks again on rejoin");
+            }
+        }
+
+        #[test]
+        fn different_app_browser_call_gets_its_own_prompt() {
+            let mut m = answered("dismissed", Some(MeetingApp::Zoom));
+            on(&mut m, "com.google.Chrome", 360_000);
+            assert!(m.is_prompting(), "different-app call inherited A's dismissal");
+        }
+
+        #[test]
+        fn later_calendar_prompt_keeps_answer_for_earlier_meeting() {
+            let mut m = answered("dismissed", Some(MeetingApp::Zoom));
+            m.scheduled(meeting("B", Some(MeetingApp::Teams), 600_000, 1_200_000));
+            m.input(Input::NotThisOne);
+            assert_eq!(on(&mut m, ZOOM, 720_000), vec![], "B's prompt erased A's remembered answer");
+        }
     }
 }

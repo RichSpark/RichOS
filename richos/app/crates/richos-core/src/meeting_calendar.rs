@@ -123,8 +123,14 @@ fn meeting_of(item: &serde_json::Value) -> Option<CalendarMeeting> {
         title: item["content"]["title"].as_str().unwrap_or("Meeting").to_string(),
         starts_at,
         ends_at: item["temporal"]["validUntil"].as_u64(),
-        // The link is in the location (a Zoom or Teams URL there) or the invite text.
-        app: s["location"].as_str().and_then(MeetingApp::in_text).or_else(|| item["content"]["text"].as_str().and_then(MeetingApp::in_text)),
+        // The link is in the location (a Zoom or Teams URL there), the links the adapter kept
+        // (Google's conference link, an HTML invite's link targets: `meetingLinks`), or the
+        // invite text (rv-20261014T105556Z-71dc7488-f9ab #3).
+        app: s["location"]
+            .as_str()
+            .and_then(MeetingApp::in_text)
+            .or_else(|| s["meetingLinks"].as_array().into_iter().flatten().filter_map(|l| l.as_str()).find_map(MeetingApp::in_text))
+            .or_else(|| item["content"]["text"].as_str().and_then(MeetingApp::in_text)),
     })
 }
 
@@ -216,6 +222,30 @@ mod tests {
         assert_eq!(titles, vec![("Acme pricing review", 4_600_000), ("Partner sync", 5_000_000)]);
         // The meeting link's app, from the location or else the invite text.
         assert_eq!(found.iter().map(|m| m.app).collect::<Vec<_>>(), vec![Some(MeetingApp::Zoom), Some(MeetingApp::Teams)]);
+    }
+
+    #[test]
+    fn the_meeting_link_the_service_kept_names_the_app() {
+        // rv-20261014T105556Z-71dc7488-f9ab #3: what the adapters wrote for a Google Meet event
+        // (its link only in the conference data) and a Teams invite (its link only as an HTML link
+        // target). The adapters keep those links in `meetingLinks`.
+        let z = Zone::new("links");
+        let mut meet = google("google:calendar:x:m", "Google Meet A", 1_000_000, 1, false, &["other@example.com"]);
+        meet["content"]["text"] = json!("");
+        meet["content"]["structured"]["location"] = json!(null);
+        meet["content"]["structured"]["meetingLinks"] = json!(["https://meet.google.com/abc-defg-hij"]);
+        z.revision("google", "m", "rev-1", meet);
+        z.revision("microsoft", "t", "rev-1", json!({
+            "sourceItemId": "microsoft:calendar:z:t", "vendor": "microsoft", "source": "calendar",
+            "provenance": {"fetchedAt": 1},
+            "actors": {"author": {"email": "me@example.com"}, "attendees": [{"email": "other@example.com"}]},
+            "temporal": {"occurredAt": 2_000_000u64, "validUntil": 3_800_000u64},
+            "content": {"title": "Teams B", "text": "Join the meeting now",
+                        "structured": {"location": "Microsoft Teams Meeting", "isAllDay": false, "withdrawn": false,
+                                       "meetingLinks": ["https://teams.microsoft.com/l/meetup-join/fixture"]}}
+        }));
+        let found = meetings(&z.0);
+        assert_eq!(found.iter().map(|m| (m.title.as_str(), m.app)).collect::<Vec<_>>(), vec![("Google Meet A", Some(MeetingApp::Meet)), ("Teams B", Some(MeetingApp::Teams))]);
     }
 
     #[test]
