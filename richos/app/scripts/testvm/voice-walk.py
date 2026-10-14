@@ -47,6 +47,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -86,6 +87,45 @@ def spoken_prompt(rows):
     """The first of spoken_prompts(rows), or None."""
     found = spoken_prompts(rows)
     return found[0] if found else None
+
+
+_STAMP = re.compile(r'\] (\d\d):(\d\d):(\d\d)\.(\d{3})Z ')
+
+
+def _stamp_ms(line):
+    """The app's own HH:MM:SS.mmmZ stamp on a [richos-voice] line, in ms of the day, or None."""
+    m = _STAMP.search(line)
+    if not m:
+        return None
+    h, mi, s, ms = (int(g) for g in m.groups())
+    return ((h * 60 + mi) * 60 + s) * 1000 + ms
+
+
+def talk_timing(lines):
+    """From the voice session's own log lines (controller.rs), for the first answer: when his last
+    word ended (`utterance END`), when his turn was declared over (`end-of-turn quiet`), when Rich
+    became audible (`ANSWER AUDIBLE`), the two gaps, and whether Rich was audible before his last
+    word ended (`spoke_before_done`: an utterance line saying `Rich audible=true`, or any utterance
+    line after the first ANSWER AUDIBLE; the walk feeds a file as the microphone and mutes the
+    guest's output, so speech after that line can only be the rest of his sample). Missing moments
+    are None."""
+    last_end = turn_end = audible = None
+    spoke_before_done = False
+    for line in lines:
+        if 'utterance' in line and ('Rich audible=true' in line or audible is not None):
+            spoke_before_done = True
+        if audible is not None:
+            continue
+        if 'ANSWER AUDIBLE' in line:
+            audible = _stamp_ms(line)
+        elif 'utterance END' in line:
+            last_end = _stamp_ms(line)
+        elif 'end-of-turn quiet' in line:
+            turn_end = _stamp_ms(line)
+    gap = lambda a, b: (b - a) if a is not None and b is not None else None
+    return {'last_word_end_ms': last_end, 'turn_end_ms': turn_end, 'audible_ms': audible,
+            'turn_end_to_audible_ms': gap(turn_end, audible), 'last_word_to_audible_ms': gap(last_end, audible),
+            'spoke_before_done': spoke_before_done}
 
 
 def one_turn_problem(texts, words):
@@ -275,7 +315,31 @@ class VoiceWalk(adopt_walk.Walk):
                 ms = int(first.split(' synthesized in ')[1].split(' ms')[0])
                 time.sleep(5)
                 text = guest(self.vm, 'grep -E "\\[richos-voice\\] (tts:|Pocket TTS|ANSWER AUDIBLE)" ' + shlex.quote(self.log) + ' || true')
-                return {'first_sentence': first, 'first_audio_ms': ms, 'voice_log': text.splitlines()[-20:]}
+                # The whole voice session, kept: the session's tts= line, every utterance, the
+                # end of his turn and the moment Rich became audible, on the app's own clock.
+                session = guest(self.vm, 'grep -F "[richos-voice]" ' + shlex.quote(self.log) + ' || true')
+                (self.out / 'voice-log.txt').write_text(session)
+                lines = session.splitlines()
+                # The session OPEN line names the voice loaded at that instant: on main 0a2ae649f it
+                # reads "macOS say · Daniel ... (Rich's Pocket voice is not installed or loaded yet)"
+                # and Pocket finishes loading about 3 s later, before Rich says anything. What he
+                # hears is every `tts:` line, so those decide; the OPEN line is recorded.
+                opened = [l for l in lines if 'voice session OPEN' in l]
+                said = [l for l in lines if '] tts: ' in l]
+                wrong = [l for l in said if POCKET_LABEL not in l]
+                if wrong:
+                    raise StepFailed('a sentence Rich spoke was not Pocket TTS as Peter Yearsley: ' + wrong[0])
+                timing = talk_timing(lines)
+                if timing['spoke_before_done']:
+                    raise StepFailed('Rich was audible before his turn was over: ' + json.dumps(timing))
+                if timing['audible_ms'] is None:
+                    raise StepFailed('Rich synthesized speech but the session never logged ANSWER AUDIBLE: '
+                                     + json.dumps(timing))
+                ready = [l for l in lines if 'Pocket TTS ready' in l]
+                return {'first_sentence': first, 'first_audio_ms': ms, 'voice_log': text.splitlines()[-20:],
+                        'sentences': len(said), 'session_open': opened, 'pocket_ready': ready,
+                        'open_line_names_pocket': all('tts=' + POCKET_LABEL in l for l in opened),
+                        'timing': timing}
             time.sleep(2)
         raise StepFailed(f'Rich spoke no sentence within {self.a.within} s; voice log:\n' + '\n'.join(lines))
 

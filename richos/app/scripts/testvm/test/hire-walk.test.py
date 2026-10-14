@@ -110,5 +110,39 @@ class Verdicts(unittest.TestCase):
         self.assertEqual([(t['prompt'], t['reply'], t['done']) for t in turns], [('hi', 'Hello', True)])
 
 
+class ReadTimeout(unittest.TestCase):
+    def test_the_host_outwaits_a_longer_guest_deadline(self):
+        # Walk 4 of ray-opus-test55: a 60 s guest deadline under a 40 s host wait failed in go.
+        self.assertEqual(hire_walk.read_timeout(40, 60), 85)
+
+    def test_the_callers_wait_stands_when_it_is_already_longer(self):
+        self.assertEqual(hire_walk.read_timeout(120, 20), 120)
+
+
+class FittingTeammate(unittest.TestCase):
+    def test_the_marketing_task_goes_to_the_marketing_hire_not_the_first_one(self):
+        # main 0a2ae649f: hired ['beth', 'will']; Beth the bookkeeper got the newsletter task.
+        defs = {'beth': 'name: beth\ndescription: Bookkeeper for a small US business',
+                'will': 'name: will\ndescription: Marketing Director (B2B SaaS)'}
+        self.assertEqual(hire_walk.fitting_teammate(['beth', 'will'], defs), 'will')
+
+    def test_with_no_marketing_hire_the_first_hire_stands(self):
+        self.assertEqual(hire_walk.fitting_teammate(['beth', 'sam'], {'beth': 'Bookkeeper', 'sam': ''}), 'beth')
+
+
+class EvidenceShot(unittest.TestCase):
+    def test_a_failed_evidence_shot_is_recorded_and_never_the_verdict(self):
+        import tempfile
+        walk = hire_walk.HireWalk.__new__(hire_walk.HireWalk)
+        with tempfile.TemporaryDirectory() as out:
+            walk.out = Path(out)
+
+            def black(name):
+                raise hire_walk.StepFailed('black frame')
+            walk.shot = black
+            walk.evidence_shot('delegate-2-sent.png')
+            self.assertIn('black frame', (Path(out) / 'delegate-2-sent.png.failed.txt').read_text())
+
+
 if __name__ == '__main__':
     unittest.main()
