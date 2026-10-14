@@ -489,28 +489,36 @@ impl MeetingMonitor {
         // call is the answered meeting rejoined. Any other call waits, and is settled once that
         // meeting's prompt or recording is over (rv-20261014T110606Z-1e6b535c-f031 #1,
         // rv-20261014T114658Z-04417671-85c4 #1).
-        let pending = self.phase.meeting();
-        let answered = &self.answered;
-        let fits = |c: &Call| match &pending {
-            None => true,
-            Some(m) => {
-                let other = || answered.values().any(|a| a.event_id != m.event_id && a.app.is_some() && a.covers(c));
-                m.takes(&c.family) && (m.app.is_some() || !other())
+        let mut pending = self.phase.meeting();
+        let mut out = vec![];
+        // A rejoin of a meeting he is taking notes on resumes even while another meeting's
+        // reminder nobody joined is up, when that reminder takes none of the calls on: the reminder
+        // is put away and offered again by the clock once the rejoined call is over
+        // (rv-20261014T124853Z-b9f32acd-a19d #1: the rejoin waited, unrecorded, behind it).
+        if let Phase::Prompting { call: None, scheduled: Some(reminder) } = &self.phase {
+            let on = || self.others.values().filter(|c| !c.live.is_empty());
+            let taken = on().any(|c| self.fits(Some(reminder), c));
+            let rejoin = !self.paused && on().any(|c| self.answered.values().any(|a| self.taking_notes.contains(&a.event_id) && a.covers(c)));
+            if !taken && rejoin {
+                self.prompted_events.remove(&reminder.event_id);
+                self.phase = Phase::Idle;
+                pending = None;
+                out.push(Action::HidePrompt);
             }
-        };
+        }
         let next = self
             .others
             .iter()
-            .filter(|(_, c)| !c.live.is_empty() && fits(c))
+            .filter(|(_, c)| !c.live.is_empty() && self.fits(pending.as_ref(), c))
             .min_by_key(|(_, c)| c.since)
             .map(|(f, _)| f.clone());
         let Some(mut call) = next.and_then(|family| self.others.remove(&family)) else {
-            return vec![];
+            return out;
         };
         // A calendar meeting he already answered whose time and app this call fits (the latest
         // started, when meetings overlap). The answer stays for every later rejoin.
         let answered = self.answered.values().filter(|meeting| meeting.covers(&call)).max_by_key(|meeting| meeting.starts_at).map(|meeting| meeting.event_id.clone());
-        match &mut self.phase {
+        out.extend(match &mut self.phase {
             Phase::Idle if answered.is_some() => {
                 // That meeting, joined or rejoined, known to be that meeting. He is taking notes on
                 // it: they go on, into the same meeting, without asking (not while prompts are
@@ -559,6 +567,20 @@ impl MeetingMonitor {
             Phase::Done { .. } => {
                 self.others.insert(call.family.clone(), call);
                 vec![]
+            }
+        });
+        out
+    }
+
+    /// A call the pending calendar prompt or pre-call recording (if any) can take: one in its
+    /// meeting's app, and, when its event names no link, not one a different answered meeting's
+    /// link names (that call is the answered meeting rejoined).
+    fn fits(&self, pending: Option<&Scheduled>, c: &Call) -> bool {
+        match pending {
+            None => true,
+            Some(m) => {
+                let other = || self.answered.values().any(|a| a.event_id != m.event_id && a.app.is_some() && a.covers(c));
+                m.takes(&c.family) && (m.app.is_some() || !other())
             }
         }
     }
@@ -1923,6 +1945,50 @@ mod tests {
                 zoom_on(&mut m, 1300),
                 vec![Action::ShowPrompt(PromptKind::Unscheduled { app: "Zoom".into() })],
                 "shortened to 1200 s: a different Zoom call at 1300 s was taken for it"
+            );
+        }
+    }
+
+    /// The mid-job review's witnesses (rv-20261014T124853Z-b9f32acd-a19d,
+    /// `fixtures/rejoin_probes.py`).
+    mod review_rv_20261014t124853z {
+        use super::super::*;
+        fn event(id: &str, start: u64, end: u64, app: MeetingApp) -> CalendarMeeting {
+            CalendarMeeting { event_id: id.into(), title: id.into(), starts_at: start * 1000, ends_at: Some(end * 1000), app: Some(app) }
+        }
+        fn on(m: &mut MeetingMonitor, seconds: u64) -> Vec<Action> {
+            m.watch(&WatchLine::Started { pid: 1, family: "us.zoom.xos".into(), app: Some("Zoom".into()), at: seconds * 1000 }, seconds * 1000)
+        }
+        fn off(m: &mut MeetingMonitor, seconds: u64) {
+            m.watch(&WatchLine::Stopped { pid: 1, family: "us.zoom.xos".into(), exited: false, at: seconds * 1000 }, seconds * 1000);
+        }
+
+        /// #1: a rejoin of the meeting he is taking notes on waited behind another meeting's
+        /// unjoined reminder, unrecorded, until that reminder was answered or retired.
+        #[test]
+        fn a_rejoin_resumes_while_another_meetings_reminder_is_up_and_that_reminder_comes_back_after() {
+            let a = event("A", 60, 3660, MeetingApp::Zoom);
+            let b = event("B", 600, 1200, MeetingApp::Teams);
+            let mut m = MeetingMonitor::new();
+            m.clock(0, std::slice::from_ref(&a));
+            m.input(Input::TakeNotes);
+            on(&mut m, 60);
+            off(&mut m, 500);
+            assert_eq!(m.clock(508_000, std::slice::from_ref(&a)), vec![Action::StopCapture(EndReason::CallEnded)]);
+            let cal = vec![a, b];
+            assert_eq!(m.clock(540_000, &cal), vec![Action::ShowPrompt(PromptKind::Scheduled { event_id: "B".into(), title: "B".into(), starts_at: 600_000 })]);
+            assert_eq!(
+                on(&mut m, 550),
+                vec![Action::HidePrompt, Action::StartCapture { title: Some("A".into()), event_id: Some("A".into()), manual: false }],
+                "A's rejoin waited behind B's reminder"
+            );
+            assert!(m.is_recording());
+            assert_eq!(m.clock(700_000, &cal), vec![], "nothing else while A records");
+            off(&mut m, 800);
+            assert_eq!(
+                m.clock(808_000, &cal),
+                vec![Action::StopCapture(EndReason::CallEnded), Action::ShowPrompt(PromptKind::Scheduled { event_id: "B".into(), title: "B".into(), starts_at: 600_000 })],
+                "B's reminder comes back once A's call is over"
             );
         }
     }
