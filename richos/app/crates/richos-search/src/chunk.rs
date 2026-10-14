@@ -5,8 +5,11 @@
 //! passages. … Do not treat an entire long chat as one vector."*
 //!
 //! The rule, in order:
-//! 1. A heading line (`#` to `######`) closes the passage being built and becomes the heading
-//!    of the passages after it.
+//! 1. A heading closes the passage being built and becomes the heading of the passages after
+//!    it: an ATX line (`#` to `######`) or a Setext heading, a paragraph underlined by a line of
+//!    `=` (level one) or `-` (level two). The underline of a YAML front matter block opened by
+//!    `---` on the first line, and a paragraph holding a list item or quote line over a `---`
+//!    line, stay text.
 //! 2. Blank lines separate paragraphs. A fenced code block (```` ``` ```` or `~~~`) is one
 //!    paragraph however many blank lines it holds.
 //! 3. Paragraphs join into one passage until the next one would take it past
@@ -26,7 +29,7 @@ pub const TARGET_CHARS: usize = 700;
 /// No passage is longer than this.
 pub const MAX_CHARS: usize = 1200;
 /// Changes whenever the rule above or its numbers change; part of every index's identity.
-pub const CHUNKER_IDENTITY: &str = "md-paragraphs-v1-700-1200";
+pub const CHUNKER_IDENTITY: &str = "md-paragraphs-v2-700-1200";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Passage {
@@ -61,6 +64,32 @@ fn heading_of(line: &str) -> Option<(usize, &str)> {
         }
     }
     None
+}
+
+/// A Setext underline's heading level: a line of only `=` (1) or only `-` (2), indented at
+/// most three spaces.
+fn setext_level(line: &str) -> Option<usize> {
+    if line.len() - line.trim_start_matches(' ').len() > 3 {
+        return None;
+    }
+    let t = line.trim();
+    match t.chars().next()? {
+        '=' if t.chars().all(|c| c == '=') => Some(1),
+        '-' if t.chars().all(|c| c == '-') => Some(2),
+        _ => None,
+    }
+}
+
+/// Can this paragraph be underlined into a Setext heading? Not when any of its lines is a list
+/// item or a quote: Markdown reads `- item` or `> quote` over `---` as the item and a rule, and
+/// `Items:\n- one\n---` as a paragraph, a list and a rule.
+fn setext_paragraph(paragraph: &str) -> bool {
+    !paragraph.lines().any(|line| {
+        let line = line.trim_start();
+        let digits = line.chars().take_while(char::is_ascii_digit).count();
+        let ordered = digits > 0 && (line[digits..].starts_with(". ") || line[digits..].starts_with(") "));
+        ordered || ["- ", "* ", "+ ", ">"].iter().any(|m| line.starts_with(m))
+    })
 }
 
 fn is_fence(line: &str) -> bool {
@@ -144,6 +173,8 @@ pub fn passages(text: &str) -> Vec<Passage> {
     let mut offset = 0usize;
     let mut open: Option<Block> = None;
     let mut in_fence = false;
+    // Inside a YAML front matter block (`---` on line 1) until its closing `---` or `...`.
+    let mut front_matter = false;
     for (index, raw) in text.split_inclusive('\n').enumerate() {
         let line_no = index as u32 + 1;
         let line_start = offset;
@@ -159,6 +190,23 @@ pub fn passages(text: &str) -> Vec<Passage> {
                 blocks.extend(open.take());
             }
             continue;
+        }
+        if line_no == 1 && line.trim_end() == "---" {
+            front_matter = true;
+        } else if front_matter && matches!(line.trim_end(), "---" | "...") {
+            front_matter = false;
+        } else if let (Some(level), Some(b)) = (setext_level(line), open.as_ref()) {
+            let paragraph = &text[b.start..b.end];
+            if setext_paragraph(paragraph) {
+                let h = paragraph.lines().map(str::trim).collect::<Vec<_>>().join(" ");
+                open = None;
+                flush(text, &path, &mut blocks, &mut out);
+                while path.last().is_some_and(|(open_level, _)| *open_level >= level) {
+                    path.pop();
+                }
+                path.push((level, h));
+                continue;
+            }
         }
         if let Some((level, h)) = heading_of(line) {
             blocks.extend(open.take());
@@ -262,6 +310,26 @@ mod tests {
         assert_eq!(p.len(), 1);
         assert!(p[0].text(text).contains("# not a heading"));
         assert_eq!(p[0].heading, "");
+    }
+
+    #[test]
+    fn setext_headings_close_the_path_and_front_matter_lists_and_quotes_stay_text() {
+        let text = "# Review\n\n## Refunds\n\nKeep.\n\nSupport cost\n------------\n\nAgenda.\n\nTop\n===\n\nLast.\n";
+        let p = passages(text);
+        let paths: Vec<_> = p.iter().map(|x| (x.headings.clone(), x.text(text))).collect();
+        assert_eq!(
+            paths,
+            vec![
+                (vec!["Review".to_string(), "Refunds".to_string()], "Keep."),
+                (vec!["Review".to_string(), "Support cost".to_string()], "Agenda."),
+                (vec!["Top".to_string()], "Last."),
+            ]
+        );
+        let kept = "---\ntitle: Notes\n---\n\n- item\n---\n\n> quote\n---\n";
+        let p = passages(kept);
+        assert!(p.iter().all(|x| x.heading.is_empty()), "no heading made of front matter, a list item or a quote");
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].text(kept), kept.trim_end(), "every line is still passage text");
     }
 
     #[test]

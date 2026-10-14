@@ -197,7 +197,9 @@ pub fn rank(corpus: &Corpus, query: &ParsedQuery, strict: bool, lexical: &[Lexic
 /// four modes, to the palette and to Rich).
 pub fn best_passage(doc: &Document, query: &ParsedQuery, semantic_passage: Option<usize>) -> usize {
     let semantic = semantic_passage.filter(|p| *p < doc.passages.len());
-    let spans_in = |folded: &str| query.spans.iter().filter(|s| has_span(folded, s)).count();
+    // A span counts when one segment (a heading or the passage text) holds it whole.
+    let spans_in = |segments: &[String]| query.spans.iter().filter(|s| segments.iter().any(|f| has_span(f, s))).count();
+    let words_in = |segments: &[String]| query.words.iter().filter(|w| segments.iter().any(|f| has_word(f, w))).count();
     let most_spans = doc.folded_passages.iter().map(|f| spans_in(f)).max().unwrap_or(0);
     if let (Some(p), 0) = (semantic, most_spans) {
         return p;
@@ -207,7 +209,7 @@ pub fn best_passage(doc: &Document, query: &ParsedQuery, semantic_passage: Optio
         if spans_in(folded) < most_spans {
             continue;
         }
-        let score = count_words(folded, &query.words);
+        let score = words_in(folded);
         let better = match best {
             None => true,
             Some((_, b)) => score > b || (score == b && semantic == Some(i)),
@@ -323,5 +325,53 @@ mod tests {
         assert_eq!(best_passage(&d, &parse("refund days"), Some(2)), 2);
         // A quoted span outranks the meaning passage.
         assert_eq!(best_passage(&d, &parse("\"30 days\""), Some(2)), 1);
+    }
+
+    fn shown(d: &Document, query: &str) -> String {
+        let p = &d.passages[best_passage(d, &parse(query), None)];
+        p.text(&d.text).to_string()
+    }
+
+    /// Review rv-20261013T151528Z-71779eae-6117, finding 1: `## Annual plan` over
+    /// `### Pricing` is not the phrase "annual plan pricing". Only the decision holds it; the
+    /// agenda under the two headings must not count it and win on the other words.
+    #[test]
+    fn a_quoted_span_never_spans_two_headings() {
+        let text = "# Review\n\n## Annual plan\n\n### Pricing\n\nSupport cost is on tomorrow's agenda. No decision has been made.\n\n## Decision\n\nWe approved annual plan pricing at $120 per customer.\n";
+        let d = doc("pricing.md", text, 0);
+        let q = parse("\"annual plan pricing\" support cost");
+        assert!(eligible(&d, &q, true));
+        assert!(shown(&d, "\"annual plan pricing\" support cost").contains("$120"));
+    }
+
+    /// Review rv-20261013T151528Z-71779eae-6117, finding 2: a Setext heading (`Support cost`
+    /// over a `---` line) ends the `## Refunds within 30 days` section, so the agenda under it
+    /// no longer carries that heading's quote and the decision holding it is shown.
+    #[test]
+    fn a_setext_heading_closes_the_heading_path_above_it() {
+        let text = format!(
+            "# Review\n\n## Refunds within 30 days\n\n### Final decision\n\nThis is the final decision for every new customer. {}\n\nSupport cost\n------------\n\nAnnual plan pricing support cost. This is unrelated agenda text.\n",
+            "The implementation remains unchanged. ".repeat(17)
+        );
+        let d = doc("pricing.md", &text, 0);
+        let query = "annual plan pricing support cost \"30 days\"";
+        assert!(eligible(&d, &parse(query), true));
+        assert!(shown(&d, query).contains("final decision for every new customer"));
+    }
+
+    /// Review rv-20261014T102118Z-935c9853-733c: a paragraph and a list over a `---` divider
+    /// is not a Setext heading. The list stays passage text, and the agenda below the divider
+    /// does not inherit "30 days" from it and win over the decision.
+    #[test]
+    fn a_list_over_a_divider_stays_text_and_the_agenda_below_does_not_win() {
+        let text = "# Pricing review\n\n## Decision\n\nAnnual plan pricing is fixed at $120 per customer, with refunds within 30 days.\n\n## Discussion notes\n\nItems to revisit:\n- Check staffing within 30 days.\n---\n\nAnnual plan pricing support cost is on tomorrow's agenda. No decision has been made about staffing. The committee will ask the operations team to bring a breakdown of workload by region and by shift. Each manager should distinguish routine questions from problems that need an engineer. The discussion will cover training materials, response times, escalation routes and the schedule for the next hiring round. Those topics remain open until the team has gathered the missing information. The finance team will prepare a separate worksheet showing the assumptions behind its estimates. The worksheet should include the expected volume of customer requests and the time needed to answer each type. Nobody should treat these preliminary estimates as a new policy or a change to the approved customer terms.\n";
+        let d = doc("pricing.md", text, 0);
+        let query = "annual plan pricing support cost \"30 days\"";
+        assert!(d.passages.iter().all(|p| !p.heading.starts_with("Items to revisit")));
+        assert!(d.passages.iter().any(|p| p.text(&d.text).contains("Items to revisit:\n- Check staffing within 30 days.")));
+        for semantic in [None, Some(0)] {
+            let p = &d.passages[best_passage(&d, &parse(query), semantic)];
+            assert!(p.text(&d.text).contains("$120"), "semantic {semantic:?} chose {:?}", p.heading);
+        }
     }
 }
