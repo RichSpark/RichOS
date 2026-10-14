@@ -111,14 +111,10 @@ if ! vm_running "$VM"; then
   # the host simply never renders a window for it. This one flag is the
   # difference between a proof and an interruption.
   #
-  # `caffeinate -is`, and NOT -dimsu: -i holds off idle SYSTEM sleep, which is
-  # the only thing that would pause a running VM, and -s does the same while on
-  # AC power. -d (keep the DISPLAY awake) and -u (declare the user active) are
-  # deliberately omitted: they would hold the CEO's screen lit and unlocked for
-  # as long as a test ran, which is the very intrusion this harness removes.
-  # A locked or slept host screen does not affect the guest at all — the guest
-  # runs its own WindowServer inside the VM.
-  nohup caffeinate -is "$TART_BIN" run "$VM" --no-graphics > "$TESTVM_LOG/$VM.log" 2>&1 &
+  # Tests must respect the host's power and sleep policy (§65). Launch Tart
+  # directly: even a system-only wake lock is forbidden by the host shield.
+  # The guest has its own WindowServer and needs no host display changes.
+  nohup "$TART_BIN" run "$VM" --no-graphics > "$TESTVM_LOG/$VM.log" 2>&1 &
   echo $! > "$STATE/vm.pid"
 fi
 

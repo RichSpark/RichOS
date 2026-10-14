@@ -83,7 +83,7 @@ fi
 # ONLY THE RECORDED PID, AND ONLY IF IT IS STILL THIS VM'S RUNNER. A run state
 # can outlive its runner (a crashed harness, a reboot), and macOS reuses pids,
 # so by the time this reads vm.pid the number may belong to somebody else's
-# work. run.sh launched `caffeinate -is "$TART_BIN" run "$VM" --no-graphics`,
+# work. run.sh launched `"$TART_BIN" run "$VM" --no-graphics`,
 # so that command line is what the pid must still show; anything else is left
 # alone, the same rule the login keeper below follows. If the real runner were
 # gone and the VM still up, the vm_running check after this block says so.
@@ -95,11 +95,9 @@ case "$VMPID" in
     case "$VMCMD" in
       "") ;;   # the recorded runner has exited
       *"$TART_BIN run $VM --no-graphics"*)
-        # The recorded pid is `caffeinate`, with `tart run` as its CHILD. Killing the
-        # parent alone would leave the VM running and holding its memory, with
-        # nothing pointing at it any more — the worst kind of leftover. So the
-        # children go first, then the parent.
-        log "reaping the host-side VM runner (caffeinate pid $VMPID and its tart child)"
+        # End owned children before the runner. This also covers older recorded
+        # wrapper processes without selecting unrelated processes by name.
+        log "reaping the host-side VM runner (pid $VMPID and its children)"
         CHILDREN="$(pgrep -P "$VMPID" 2>/dev/null || true)"
         for c in $CHILDREN; do kill -TERM "$c" 2>/dev/null; done
         sleep 2
