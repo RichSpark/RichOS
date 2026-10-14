@@ -131,7 +131,10 @@ guaranteed while the worktree exists. (The dirs it collects are configured as
 <engine>/scripts/land-lease.sh acquire --repo <repo root>
 ```
 
-With the operator fence off (its state today) this says so and does nothing.
+`workspaces.sh merge <name>` takes a free lease itself and releases it when it
+is done, so this step is only for a merge typed by hand or for holding the lease
+past the merge (a push or a deploy).
+With the operator fence off this says so and does nothing.
 With it on, several conversations, and Codex, land into the same repositories,
 and the fence refuses a merge, commit, reset or switch in a main checkout by
 anyone who does not hold that repository's lease. **Exit 75 means another holder

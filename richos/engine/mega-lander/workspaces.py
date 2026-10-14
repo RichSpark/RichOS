@@ -5244,42 +5244,124 @@ def merge_and_land(ref, me="", message=""):
     todo = [x for x in todo
             if not any(y[2] == x[2] and y[3] != x[3] and is_ancestor(x[2], x[3], y[3]) for y in todo)]
     reviews = _review_check(todo, _governing_entities(chain))
-    for repo, b, main, t in todo:
-        target, tip, why_not = integration_target(chain, repo)
-        if why_not:
-            raise SpecError("cannot merge %s of %s: %s" % (b, repo, why_not))
-        if is_ancestor(main, t, tip):
-            continue
-        rc, head, _e = git(main, "symbolic-ref", "--quiet", "--short", "HEAD")
-        if rc or head.strip() != target:
-            raise SpecError("cannot merge %s: the main checkout %s is on %s, not on %s, the branch this work "
-                            "integrates on" % (b, main, head.strip() or "a detached HEAD", target))
-        # Git merges the commit read above, never the branch name: a writer
-        # that advances the branch after that read (even while an earlier
-        # repository's merge gate runs) would otherwise land a newer commit
-        # no review saw (review rv-20261009T025426Z-15dae5ca-3cc1, finding 2).
-        # A commit merged by its ID gets Git's default message for its branch.
-        msg = ["-m", message or "Merge branch '%s'%s" % (b, "" if target in ("main", "master")
-                                                         else " into %s" % target)]
-        if reviews.get(t):
-            # The merge commit names the review that let it in (plan §2.4).
-            msg += ["-m", reviews[t]]
-        args = ["merge", "--no-ff", "--no-edit"] + msg + [t]
-        before = git(main, "rev-parse", "HEAD")[1].strip()
-        # The lease this land runs under names this command, so the holder's
-        # turn end keeps it until the command ends (2026-10-11: two merges in
-        # a background script were refused after the lead's turn end released
-        # the lease between their steps; operator_fences.land_process).
-        _fence_program().register_land(main)
-        # git's own checks (pre-merge-commit) run here and may take minutes.
-        r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
-        if r.returncode != 0:
-            raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
-                            % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
-                               _abort_own_merge(main, before, t)))
-        merged.append((repo, b))
-        event("merged", key=rec["key"], repo=repo, branch=b, into=target)
-    return merged, land(rec["key"], me, keep_ignored=True)
+    taken = []                  # [(main, holder args)]: the leases THIS command took, released at its end
+    try:
+        for repo, b, main, t in todo:
+            target, tip, why_not = integration_target(chain, repo)
+            if why_not:
+                raise SpecError("cannot merge %s of %s: %s" % (b, repo, why_not))
+            if is_ancestor(main, t, tip):
+                continue
+            rc, head, _e = git(main, "symbolic-ref", "--quiet", "--short", "HEAD")
+            if rc or head.strip() != target:
+                raise SpecError("cannot merge %s: the main checkout %s is on %s, not on %s, the branch this "
+                                "work integrates on" % (b, main, head.strip() or "a detached HEAD", target))
+            # Git merges the commit read above, never the branch name: a writer
+            # that advances the branch after that read (even while an earlier
+            # repository's merge gate runs) would otherwise land a newer commit
+            # no review saw (review rv-20261009T025426Z-15dae5ca-3cc1, finding 2).
+            # A commit merged by its ID gets Git's default message for its branch.
+            msg = ["-m", message or "Merge branch '%s'%s" % (b, "" if target in ("main", "master")
+                                                             else " into %s" % target)]
+            if reviews.get(t):
+                # The merge commit names the review that let it in (plan §2.4).
+                msg += ["-m", reviews[t]]
+            args = ["merge", "--no-ff", "--no-edit"] + msg + [t]
+            if main not in [m for m, _h in taken]:
+                holder = _take_land_lease(main)
+                if holder is not None:
+                    taken.append((main, holder))
+            before = git(main, "rev-parse", "HEAD")[1].strip()
+            # The lease this land runs under names this command, so the holder's
+            # turn end keeps it until the command ends (2026-10-11: two merges in
+            # a background script were refused after the lead's turn end released
+            # the lease between their steps; operator_fences.land_process).
+            _fence_program().register_land(main)
+            # git's own checks (pre-merge-commit) run here and may take minutes.
+            r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
+            if r.returncode != 0:
+                raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
+                                % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
+                                   _abort_own_merge(main, before, t)))
+            merged.append((repo, b))
+            event("merged", key=rec["key"], repo=repo, branch=b, into=target)
+        return merged, land(rec["key"], me, keep_ignored=True)
+    finally:
+        for main, holder in taken:
+            _release_land_lease(main, holder)
+
+
+def _lease_holder_args(F, conf):
+    """`--holder <kind> --holder-pid <pid>` for a declared non-Claude holder
+    (Codex) behind this command, else []: acquire then finds the Claude session
+    itself, or refuses (review rv-20261011T205852Z-54ae8c6a-eec1)."""
+    try:
+        who = F.caller_identity(conf)
+    except Exception:           # noqa: BLE001  acquire then identifies the caller itself
+        who = None
+    if who and who.get("kind") and who.get("kind") != "claude":
+        return ["--holder", str(who["kind"]), "--holder-pid", str(who["pid"])]
+    return []
+
+
+def _take_land_lease(main):
+    """THE MERGE TAKES THE LAND LEASE ITSELF (2026-10-14). `workspaces.sh merge
+    echo-opus-hiresnag55b` was refused by the operator fence ("this process
+    does not hold the land lease. The land lease for this repository is
+    free."), and the lead then ran `land-lease.sh acquire` by hand before every
+    merge. Called before the first write into `main`:
+
+      * the fence is off or not installed: nothing to take, returns None;
+      * this command's caller already holds the lease: it stays the caller's
+        (it may be holding it for a push or a deploy), returns None;
+      * otherwise the lease is taken through `land-lease.sh acquire`, with
+        every rule of an acquire. A lease another holder has is waited for as
+        acquire waits (LAND_LEASE_WAIT, default 90 s), and that is said first.
+        Returns the holder arguments, so the caller releases it when done.
+
+    Still not held after that: SpecError with acquire's own words, and nothing
+    is merged."""
+    F = _fence_program()
+    try:
+        conf, _paths = F.launcher_for(main)
+        if not F.fenced(conf):
+            return None
+        files = F.Files(conf)
+        held, lease = F.authorized(files)
+    except Exception as exc:    # noqa: BLE001  a check that cannot decide refuses, and says so
+        raise SpecError("cannot merge into %s: whether this command holds the land lease could not be read (%s)"
+                        % (main, exc))
+    if held:
+        return None
+    lease_cmd = os.path.join(engine_root(), "scripts", "land-lease.sh")
+    holder = _lease_holder_args(F, conf)
+    if F.lease_state(lease) in ("live", "expired"):
+        sys.stderr.write("merge: waiting for the land lease of %s: %s holds it. Waiting as land-lease.sh "
+                         "acquire waits.\n" % (main, F.holder_label(lease.get("holder"))))
+    r = subprocess.run(["bash", lease_cmd, "acquire", "--repo", main] + holder, capture_output=True, text=True)
+    said = (r.stdout + r.stderr).strip()
+    if said:
+        sys.stderr.write(said + "\n")
+    if r.returncode == 0 and F.authorized(F.Files(conf))[0]:
+        return holder
+    raise SpecError("nothing was merged into %s: this command could not take the land lease (exit %d). %s\n"
+                    "Run the same command again once it is free."
+                    % (main, r.returncode, said[-800:] or "land-lease.sh acquire said nothing"))
+
+
+def _release_land_lease(main, holder):
+    """Releases a lease `_take_land_lease` took. A release that fails is said,
+    never raised: the land has already happened or been refused by then, and the
+    holder's turn end releases a lease left behind."""
+    lease_cmd = os.path.join(engine_root(), "scripts", "land-lease.sh")
+    r = subprocess.run(["bash", lease_cmd, "release", "--repo", main] + list(holder),
+                       capture_output=True, text=True)
+    said = (r.stdout + r.stderr).strip()
+    if said:
+        sys.stderr.write(said + "\n")
+    if r.returncode != 0:
+        sys.stderr.write("merge: the land lease of %s this command took could not be released (exit %d); "
+                         "%s release --repo %s releases it.\n" % (main, r.returncode, lease_cmd, main))
 
 
 def _fence_program():
@@ -5636,13 +5718,7 @@ def _lease_for_abort(main):
     # The retake is by the holder that started the merge: a declared non-Claude
     # holder (Codex) is named, or acquire finds no Claude session and refuses
     # (review rv-20261011T205852Z-54ae8c6a-eec1).
-    holder = []
-    try:
-        who = F.caller_identity(conf)
-    except Exception:           # noqa: BLE001  acquire then identifies the caller itself
-        who = None
-    if who and who.get("kind") and who.get("kind") != "claude":
-        holder = ["--holder", str(who["kind"]), "--holder-pid", str(who["pid"])]
+    holder = _lease_holder_args(F, conf)
     r = subprocess.run(["bash", lease_cmd, "acquire", "--repo", main, "--wait", "30"] + holder,
                        capture_output=True, text=True)
     said = (r.stdout + r.stderr).strip()

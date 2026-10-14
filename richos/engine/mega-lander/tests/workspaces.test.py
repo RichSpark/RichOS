@@ -4533,6 +4533,116 @@ class MergeGateRefusal_LeavesTheMainCheckoutAsItWas(Base):
         self.assertIn("cc/" + name, branches(self.other))
 
 
+class MergeTakesTheLandLeaseItself(Base):
+    """2026-10-14: `workspaces.sh merge echo-opus-hiresnag55b` was refused by
+    the operator fence, "this process does not hold the land lease. The land
+    lease for this repository is free.", and the lead ran `land-lease.sh
+    acquire` by hand before every merge after it. The merge now takes a free
+    lease itself and releases it when it is done; a lease its caller already
+    holds stays the caller's; a lease another holder has is waited for, and
+    the refusal names that holder."""
+
+    def setUp(self):
+        super().setUp()
+        decl = os.path.join(self.env.root, "fence-entity")
+        os.makedirs(decl)
+        with open(os.path.join(decl, "orchestration.config"), "w") as f:
+            f.write('OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\n')
+        fences = os.path.join(ENGINE, "scripts", "operator-fences.sh")
+        run("bash", fences, "install", "--repo", self.other, "--entity", decl)
+        run("bash", fences, "on", "--repo", self.other, "--entity", decl)
+        self.sessions = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "sessions")
+        os.makedirs(self.sessions, exist_ok=True)
+        self.session_record(os.getpid())            # this test process is the lead's session
+        self.envx = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PID", "CLAUDE_CODE_ENTRYPOINT")}
+        self.lease_cmd = os.path.join(ENGINE, "scripts", "land-lease.sh")
+        self.home = os.path.dirname(ws.land_lock_path(self.other))
+
+    def session_record(self, pid):
+        start = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                               text=True, env=dict(os.environ, TZ="UTC0", LC_ALL="C")).stdout
+        with open(os.path.join(self.sessions, "%d.json" % pid), "w") as f:
+            json.dump({"pid": pid, "sessionId": self.sid, "cwd": self.entity,
+                       "procStart": " ".join(start.split()), "kind": "interactive"}, f)
+
+    def finished(self, name):
+        cc = self.make_cc(name)
+        aid, _npath = self.spawn(name, cc=cc)
+        self.commit(cc)
+        self.finish(aid)
+        return run("git", "-C", cc, "rev-parse", "HEAD").stdout.strip()
+
+    def merge_cmd(self, name, **extra):
+        return subprocess.run([sys.executable, LIB, "--session", self.sid, "merge", name],
+                              capture_output=True, text=True, env=dict(self.envx, **extra))
+
+    def leases(self):
+        return [n for n in os.listdir(self.home) if n.endswith(".lease")]
+
+    def landed(self, tip):
+        return run("git", "-C", self.other, "merge-base", "--is-ancestor", tip, "main",
+                   check=False).returncode == 0
+
+    def test_a_merge_with_the_lease_free_takes_it_lands_and_releases_it(self):
+        tip = self.finished("zach-opus-lf")
+        self.assertEqual(self.leases(), [])
+        r = self.merge_cmd("zach-opus-lf")
+        said = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, said)
+        self.assertNotIn("does not hold the land lease", said)
+        self.assertIn("ACQUIRED", said)
+        self.assertIn("RELEASED", said)
+        self.assertTrue(self.landed(tip), said)
+        self.assertEqual(self.leases(), [], "the lease this merge took was not released")
+        self.assertFalse(os.path.exists(os.path.join(self.home, "fence-refusals.jsonl")))
+
+    def test_a_lease_the_caller_already_holds_stays_its_own(self):
+        tip = self.finished("zach-opus-lh")
+        r = subprocess.run(["bash", self.lease_cmd, "acquire", "--repo", self.other],
+                           capture_output=True, text=True, env=self.envx)
+        self.assertIn("ACQUIRED", r.stdout, r.stdout + r.stderr)
+        r = self.merge_cmd("zach-opus-lh")
+        said = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, said)
+        self.assertTrue(self.landed(tip), said)
+        self.assertNotIn("RELEASED", said)
+        self.assertEqual(len(self.leases()), 1, "the merge released a lease its caller had taken")
+
+    def test_a_lease_another_holder_has_is_waited_for_and_named(self):
+        tip = self.finished("zach-opus-lo")
+        d = os.path.realpath(tempfile.mkdtemp(prefix="lease-other-", dir=self.env.root))
+        took, go = os.path.join(d, "took"), os.path.join(d, "go")
+        # Another Claude session, alive, holding the lease: a process with its
+        # own session record that takes the lease as its child and stays. It
+        # waits for its record to be written before it takes the lease.
+        other = subprocess.Popen([sys.executable, "-c",
+                                  "import os, subprocess, sys, time\n"
+                                  "while not os.path.exists(sys.argv[4]): time.sleep(0.02)\n"
+                                  "r = subprocess.run(['bash', sys.argv[1], 'acquire', '--repo', sys.argv[2]],"
+                                  " capture_output=True, text=True)\n"
+                                  "open(sys.argv[3], 'w').write(r.stdout + r.stderr)\n"
+                                  "time.sleep(600)\n", self.lease_cmd, self.other, took, go],
+                                 env=self.envx)
+        self.env.procs.append(other)
+        time.sleep(0.1)
+        self.session_record(other.pid)
+        open(go, "w").close()
+        guard = time.monotonic() + 30
+        while not os.path.exists(took):
+            self.assertLess(time.monotonic(), guard, "the other holder never ran its acquire")
+            time.sleep(0.05)
+        self.assertIn("ACQUIRED", open(took).read())
+        head = run("git", "-C", self.other, "rev-parse", "main").stdout.strip()
+        r = self.merge_cmd("zach-opus-lo", LAND_LEASE_WAIT="2")
+        said = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0, said)
+        self.assertIn("waiting for the land lease", said)
+        self.assertIn("HELD", said)
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main").stdout.strip(), head)
+        self.assertFalse(self.landed(tip))
+        self.assertTrue(os.path.isdir(os.path.join(self.env.root, "other-wt", "zach-opus-lo")))
+
+
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
     """2026-10-11, both in richos from the lead's terminal, each a background
     script that took the lease and then ran `workspaces.sh merge`:
