@@ -502,9 +502,20 @@ impl RePrimePayload {
         // header calling them authoritative. Scoping is by entity, not by thread, so
         // nothing that was visible within an entity disappears — only the cross-entity
         // leak closes.
+        //
+        // A message the app REPLACED is left out (`Spine::replace_app_message`: the "Dictation
+        // feature" message after he picks another key). Its line here put the old key in every
+        // priming of the company beside the new one, and Rich answered "an earlier one said F2"
+        // (Ray, esc-20261014T041934Z-2acf6aeb). Only a superseded proactive MESSAGE goes: an
+        // action of a turn superseded by a crash replay (§5.3) stays, because what that dead turn
+        // did is exactly what a successor must not do twice.
         let action_ledger_digest: Vec<ActionView> = ledger
             .ceo_facing_actions_for_entity(binding.entity_id())
             .iter()
+            .filter(|a| {
+                !(a.kind == "proactive_message"
+                    && a.turn_id.as_deref().and_then(|t| ledger.turn(t)).is_some_and(|t| t.superseded_by.is_some()))
+            })
             .map(|a| ActionView {
                 kind: a.kind.clone(),
                 detail: a.detail.clone(),

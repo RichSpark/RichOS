@@ -2091,18 +2091,58 @@ impl Spine {
     /// message must name the key he actually picked, also when he picks another one later).
     /// The new text is a new proactive turn in the same conversation and the old turn is marked
     /// superseded by it, the ledger's own mechanism (§5.3): the conversation and the re-prime
-    /// tail both leave a superseded turn out, so he sees one message and Rich remembers one.
-    /// A desk already primed for this conversation, in the chair or parked, is un-primed, so
-    /// Rich's next turn there is primed again from the ledger and carries the new text.
+    /// tail and the action ledger digest all leave a superseded turn out, so he sees one message
+    /// and Rich remembers one.
+    ///
+    /// **Every desk of that company is retired, not un-primed** (Ray,
+    /// esc-20261014T041934Z-2acf6aeb). A desk primed with the old text still holds it however
+    /// often it is primed again: priming adds a turn to its session and takes nothing out, so
+    /// Rich answered "an earlier one said F2". A retired desk's thread starts a fresh session at
+    /// its next turn, primed from the ledger, which holds only the new text. Company-wide,
+    /// because the digest carried the old line into every conversation of the company. Never
+    /// the desk running a turn (continuity §3.1): this takes `&mut self`, which a running turn
+    /// holds, so that desk cannot be the one in the chair here; the check states it anyway.
+    ///
+    /// **`fact` is what changed, recorded dated and primed after everything older** (review
+    /// rv-20261014T044933Z-51176a08-f956): history is not scrubbed, so Rich's own earlier reply
+    /// "Tap F2 to start dictation" stays in the tail and a saved handoff summary naming F2 stays
+    /// in the priming. One CEO-facing action on the new turn, "<date>: The dictation key is now
+    /// F3. The old key F2 no longer works.", goes into the action ledger digest of every
+    /// conversation of the company, which is rendered after the summary and the tail, so the
+    /// newest statement wins over the older text.
+    ///
+    /// **`turn_id` is `None` for a record written before the message's turn was kept** (review
+    /// rv-20261014T050558Z-e9854621-0b36): the message replaced is then the turn the
+    /// conversation was opened with ([`Self::open_conversation_with_message`] writes it first),
+    /// and the fact is recorded and the desks retired all the same.
     /// Answers the new turn id.
-    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<String, SpineError> {
+    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: Option<&str>, text: &str, fact: &str) -> Result<String, SpineError> {
+        let old_turn = match turn_id {
+            Some(turn) => Some(turn.to_string()),
+            None => self.ledger.thread_turns(thread_id)?.first().map(|turn| turn.id.clone()),
+        };
         let new_turn = self.raise_proactive(Some(thread_id), AttentionTier::Digest, text)?;
-        self.ledger.mark_turn_superseded(turn_id, &new_turn)?;
-        if self.lease_primed_thread.as_deref() == Some(thread_id) {
-            self.lease_primed = false;
+        if let Some(old_turn) = old_turn {
+            self.ledger.mark_turn_superseded(&old_turn, &new_turn)?;
         }
-        if let Some(resident) = self.resident.get_mut(thread_id) {
-            resident.primed = false;
+        let today = time::OffsetDateTime::now_utc().date();
+        self.ledger.record_action_with(
+            Some(&new_turn),
+            "settings_change",
+            &format!("{today}: {fact}"),
+            ActionVisibility::CeoFacing,
+            ActionStatus::Completed,
+        )?;
+        let entity = self.ledger.thread_binding(thread_id)?.entity_id().clone();
+        let ledger = &self.ledger;
+        let of_company = |thread: &str| ledger.thread_binding(thread).is_ok_and(|b| b.entity_id() == &entity);
+        let chair = !self.turn_in_progress && self.lease_primed_thread.as_deref().is_some_and(of_company);
+        self.resident.retain(|thread, _| !of_company(thread));
+        if chair {
+            self.clear_lease();
+        }
+        if self.spare.as_ref().is_some_and(|spare| spare.entity == entity) {
+            self.discard_spare();
         }
         self.publish_read_metadata();
         Ok(new_turn)
