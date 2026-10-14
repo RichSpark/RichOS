@@ -357,6 +357,97 @@ else
     bad "the printed payload is complete" "$OUT"
 fi
 
+# 2026-10-14: --integration <repo>=v1.3.0 for one teammate CORRECTED the whole
+# repository's body of work and moved every running main-bound teammate with
+# it, and the appended last step still said to merge main into the release.
+git -C "$TARGET" branch rel "$(git -C "$TARGET" commit-tree -p main -m "rel only" "main^{tree}")"
+run "zach-sonnet-rel1" --repo "$TARGET" --type zach --brief "$BRIEF" --integration "$TARGET=rel"
+RELWT="$SANDBOX/widgets-wt/zach-sonnet-rel1"
+RELCHECK="$(python3 - "$RICHOS_WORKSPACES_DIR" "$TARGET" <<'PY'
+import glob, json, os, sys
+d, target = sys.argv[1], os.path.realpath(sys.argv[2])
+integ = json.load(open(os.path.join(d, "integration.json")))
+cur = integ["works"][integ["current"][target]]["branch"]
+rec = [json.load(open(p)) for p in glob.glob(os.path.join(d, "agents", "*zach-sonnet-rel1.json"))][0]
+mine = integ["works"][rec["integration_work"][target]]["branch"]
+print("%s %s" % (cur, mine))
+PY
+)"
+if [ "$RC" -eq 0 ] && [ "$RELCHECK" = "main rel" ]; then
+    ok "--integration for ONE teammate binds that teammate alone; the repository stays on main"
+else
+    bad "--integration binds the teammate alone" "rc=$RC check='$RELCHECK' $OUT"
+fi
+[ "$(git -C "$RELWT" rev-parse HEAD 2>/dev/null)" = "$(git -C "$TARGET" rev-parse rel)" ] \
+    && ok "and its workspace starts from that branch, not from main" \
+    || bad "the workspace starts from its own branch" "$(git -C "$RELWT" log --oneline -1 2>&1)"
+if printf '%s' "$OUT" | grep -qF "\`git merge rel\` in $TARGET" \
+   && ! printf '%s' "$OUT" | grep -qF "\`git merge main\` in $TARGET"; then
+    ok "and its last step merges rel in that repository, never main"
+else
+    bad "the last step names the teammate's own branch" "$OUT"
+fi
+
+# Review rv-20261014T105153Z-f22eff3f-da5a, P1: a repository whose RECORDED
+# branch is already the release one, its main checkout on main. spawn.sh passed
+# no --base, so the workspace started at HEAD (main), and landing it into the
+# release would have pulled main in.
+GADGETS="$SANDBOX/gadgets"
+mkrepo "$GADGETS"
+git -C "$GADGETS" branch rel "$(git -C "$GADGETS" commit-tree -p main -m "rel only" "main^{tree}")"
+python3 "$WS_PY" integration --repo "$GADGETS" --branch rel --why "the release" >/dev/null
+for case in "zach-sonnet-relrec1:" "zach-sonnet-relrec2:$GADGETS=rel"; do
+    name="${case%%:*}"; integ="${case#*:}"
+    if [ -n "$integ" ]; then
+        run "$name" --repo "$GADGETS" --type zach --brief "$BRIEF" --integration "$integ"
+    else
+        run "$name" --repo "$GADGETS" --type zach --brief "$BRIEF"
+    fi
+    got="$(git -C "$SANDBOX/gadgets-wt/$name" rev-parse HEAD 2>/dev/null)"
+    if [ "$RC" -eq 0 ] && [ "$got" = "$(git -C "$GADGETS" rev-parse rel)" ]; then
+        ok "a workspace in a repository recorded on rel starts from rel (${integ:-no --integration})"
+    else
+        bad "the workspace starts from the recorded branch, not from the main checkout's HEAD" \
+            "rc=$RC head=$got rel=$(git -C "$GADGETS" rev-parse rel) $OUT"
+    fi
+done
+
+# --integration naming another branch for the session's OWN repository (a native
+# workspace only, which cannot start from or carry a branch of its own) is
+# refused before anything is created, and the refusal says to start that
+# teammate from a session in another repository, never to move everybody.
+git -C "$PROJECT" branch rel "$(git -C "$PROJECT" commit-tree -p main -m "rel only" "main^{tree}")"
+run "zach-sonnet-relown1" --repo "$PROJECT" --type zach --brief "$BRIEF" --integration "$PROJECT=rel"
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "from a session in another repository" \
+   && ! printf '%s' "$OUT" | grep -qF -- "--correct" \
+   && ! ls "$RICHOS_WORKSPACES_DIR"/agents/*zach-sonnet-relown1.json >/dev/null 2>&1; then
+    ok "--integration for the session's own repository is refused: start that teammate from another repository's session"
+else
+    bad "a release target in the session's own repository is refused with the other-session remedy" "rc=$RC $OUT"
+fi
+
+# Review rv-20261014T120915Z-3bf392e2-75cb, P1: the session's OWN repository
+# already RECORDED on the release branch, its main checkout on main. The early
+# "recorded and live" returns accepted it, so a native teammate started from
+# main and its land pulled main into the release. Refused the same way, with
+# and without --integration naming that recorded branch.
+python3 "$WS_PY" integration --repo "$PROJECT" --branch rel --correct --why "the release" >/dev/null
+for case in "zach-sonnet-relown2:" "zach-sonnet-relown3:$PROJECT=rel"; do
+    name="${case%%:*}"; integ="${case#*:}"
+    if [ -n "$integ" ]; then
+        run "$name" --repo "$PROJECT" --type zach --brief "$BRIEF" --integration "$integ"
+    else
+        run "$name" --repo "$PROJECT" --type zach --brief "$BRIEF"
+    fi
+    if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "from a session in another repository" \
+       && ! ls "$RICHOS_WORKSPACES_DIR"/agents/*"$name".json >/dev/null 2>&1; then
+        ok "the session's own repository recorded on rel is refused for a native teammate (${integ:-no --integration})"
+    else
+        bad "a recorded release target in the session's own repository is refused" "rc=$RC $OUT"
+    fi
+done
+python3 "$WS_PY" integration --repo "$PROJECT" --branch main --correct --why "the session repo" >/dev/null
+
 run "zach-sonnet-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qi "already"; then
     ok "a REUSED name is refused before anything is created"

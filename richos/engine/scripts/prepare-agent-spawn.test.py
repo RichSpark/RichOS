@@ -60,6 +60,21 @@ class SpawnPreparation(unittest.TestCase):
                 self.assertEqual(good.returncode, 0, good.stderr)
                 self.assertNotIn("ceo-todos-deferred:", prepared["prompt"])
                 self.assertNotIn("main-checkout-run:", prepared["prompt"])
+            # 2026-10-14: a teammate bound to a release branch merges THAT branch
+            # last, never main (the lead cut the merge-main line out of five
+            # v1.3.0 briefs by hand), and the spawn guard accepts it.
+            original = dict(name="dev-opus-t2", subagent_type="dev", prompt="Build the worktree change")
+            for targets, lines in (([("/r/richos", "v1.3.0")], ["run `git merge v1.3.0` inside your own worktree"]),
+                                   ([("/r/femcboost", "main"), ("/r/richos", "v1.3.0")],
+                                    ["`git merge main` in /r/femcboost", "`git merge v1.3.0` in /r/richos"])):
+                prepared = module.prepare(original, targets)
+                for line in lines:
+                    self.assertIn(line, prepared["prompt"])
+                if len(targets) == 1:
+                    self.assertNotIn("git merge main", prepared["prompt"])
+                self.assertEqual(module.prepare(prepared, targets), prepared)
+                good = verify(prepared)
+                self.assertEqual(good.returncode, 0, good.stderr)
 
 
 if __name__ == "__main__":

@@ -4533,6 +4533,267 @@ class MergeGateRefusal_LeavesTheMainCheckoutAsItWas(Base):
         self.assertIn("cc/" + name, branches(self.other))
 
 
+class MergeTakesTheLandLeaseItself(Base):
+    """2026-10-14: `workspaces.sh merge echo-opus-hiresnag55b` was refused by
+    the operator fence, "this process does not hold the land lease. The land
+    lease for this repository is free.", and the lead ran `land-lease.sh
+    acquire` by hand before every merge after it. The merge now takes a free
+    lease itself and releases it when it is done; a lease its caller already
+    holds stays the caller's; a lease another holder has is waited for, and
+    the refusal names that holder."""
+
+    def setUp(self):
+        super().setUp()
+        decl = os.path.join(self.env.root, "fence-entity")
+        os.makedirs(decl)
+        with open(os.path.join(decl, "orchestration.config"), "w") as f:
+            f.write('OPERATOR_FENCES="on"\nLAND_LEASE_HOLDERS=""\nOPERATOR_FENCES_REPOS=""\n')
+        fences = os.path.join(ENGINE, "scripts", "operator-fences.sh")
+        run("bash", fences, "install", "--repo", self.other, "--entity", decl)
+        run("bash", fences, "on", "--repo", self.other, "--entity", decl)
+        self.sessions = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "sessions")
+        os.makedirs(self.sessions, exist_ok=True)
+        self.session_record(os.getpid())            # this test process is the lead's session
+        self.envx = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PID", "CLAUDE_CODE_ENTRYPOINT")}
+        self.lease_cmd = os.path.join(ENGINE, "scripts", "land-lease.sh")
+        self.home = os.path.dirname(ws.land_lock_path(self.other))
+
+    def session_record(self, pid):
+        start = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                               text=True, env=dict(os.environ, TZ="UTC0", LC_ALL="C")).stdout
+        with open(os.path.join(self.sessions, "%d.json" % pid), "w") as f:
+            json.dump({"pid": pid, "sessionId": self.sid, "cwd": self.entity,
+                       "procStart": " ".join(start.split()), "kind": "interactive"}, f)
+
+    def finished(self, name):
+        cc = self.make_cc(name)
+        aid, _npath = self.spawn(name, cc=cc)
+        self.commit(cc)
+        self.finish(aid)
+        return run("git", "-C", cc, "rev-parse", "HEAD").stdout.strip()
+
+    def merge_cmd(self, name, **extra):
+        return subprocess.run([sys.executable, LIB, "--session", self.sid, "merge", name],
+                              capture_output=True, text=True, env=dict(self.envx, **extra))
+
+    def leases(self):
+        return [n for n in os.listdir(self.home) if n.endswith(".lease")]
+
+    def landed(self, tip):
+        return run("git", "-C", self.other, "merge-base", "--is-ancestor", tip, "main",
+                   check=False).returncode == 0
+
+    def test_a_merge_with_the_lease_free_takes_it_lands_and_releases_it(self):
+        tip = self.finished("zach-opus-lf")
+        self.assertEqual(self.leases(), [])
+        r = self.merge_cmd("zach-opus-lf")
+        said = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, said)
+        self.assertNotIn("does not hold the land lease", said)
+        self.assertIn("ACQUIRED", said)
+        self.assertIn("RELEASED", said)
+        self.assertTrue(self.landed(tip), said)
+        self.assertEqual(self.leases(), [], "the lease this merge took was not released")
+        self.assertFalse(os.path.exists(os.path.join(self.home, "fence-refusals.jsonl")))
+
+    def test_a_lease_the_caller_already_holds_stays_its_own(self):
+        tip = self.finished("zach-opus-lh")
+        r = subprocess.run(["bash", self.lease_cmd, "acquire", "--repo", self.other],
+                           capture_output=True, text=True, env=self.envx)
+        self.assertIn("ACQUIRED", r.stdout, r.stdout + r.stderr)
+        r = self.merge_cmd("zach-opus-lh")
+        said = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, said)
+        self.assertTrue(self.landed(tip), said)
+        self.assertNotIn("RELEASED", said)
+        self.assertEqual(len(self.leases()), 1, "the merge released a lease its caller had taken")
+
+    def test_a_lease_another_holder_has_is_waited_for_and_named(self):
+        tip = self.finished("zach-opus-lo")
+        d = os.path.realpath(tempfile.mkdtemp(prefix="lease-other-", dir=self.env.root))
+        took, go = os.path.join(d, "took"), os.path.join(d, "go")
+        # Another Claude session, alive, holding the lease: a process with its
+        # own session record that takes the lease as its child and stays. It
+        # waits for its record to be written before it takes the lease.
+        other = subprocess.Popen([sys.executable, "-c",
+                                  "import os, subprocess, sys, time\n"
+                                  "while not os.path.exists(sys.argv[4]): time.sleep(0.02)\n"
+                                  "r = subprocess.run(['bash', sys.argv[1], 'acquire', '--repo', sys.argv[2]],"
+                                  " capture_output=True, text=True)\n"
+                                  "open(sys.argv[3], 'w').write(r.stdout + r.stderr)\n"
+                                  "time.sleep(600)\n", self.lease_cmd, self.other, took, go],
+                                 env=self.envx)
+        self.env.procs.append(other)
+        time.sleep(0.1)
+        self.session_record(other.pid)
+        open(go, "w").close()
+        guard = time.monotonic() + 30
+        while not os.path.exists(took):
+            self.assertLess(time.monotonic(), guard, "the other holder never ran its acquire")
+            time.sleep(0.05)
+        self.assertIn("ACQUIRED", open(took).read())
+        head = run("git", "-C", self.other, "rev-parse", "main").stdout.strip()
+        r = self.merge_cmd("zach-opus-lo", LAND_LEASE_WAIT="2")
+        said = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0, said)
+        self.assertIn("waiting for the land lease", said)
+        self.assertIn("HELD", said)
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main").stdout.strip(), head)
+        self.assertFalse(self.landed(tip))
+        self.assertTrue(os.path.isdir(os.path.join(self.env.root, "other-wt", "zach-opus-lo")))
+
+
+class DiscardTakesAWorkspaceWhoseTeammateNeverRan(Base):
+    """2026-10-14: echo-opus-tap22's spawn was refused before its registration
+    (its record has no tool_use_id, no agent id and no start), and `workspaces.sh
+    discard echo-opus-tap22` answered "is not finished (its run has not
+    ended)"; it took `workspaces.sh stop` first. A teammate that never ran has
+    no run to end, so discard takes it directly. A spawn that WAS registered is
+    still refused until its run ends: its agent may be running."""
+
+    def test_a_workspace_whose_spawn_never_happened_is_discarded_directly(self):
+        cc = self.make_cc("zach-opus-nr")
+        r = ws.discard("zach-opus-nr", "never started: its spawn was refused",
+                       not_ceo_ordered="a refused spawn, never an order of his", me=self.sid)
+        self.assertTrue(r["discarded"])
+        self.assertEqual(self.rec("zach-opus-nr")["disposition"]["kind"], "discarded")
+        self.assertFalse(os.path.exists(cc))
+        self.assertNotIn("cc/zach-opus-nr", branches(self.other))
+
+    def test_a_registered_spawn_whose_run_has_not_ended_is_still_refused(self):
+        cc = self.make_cc("zach-opus-ns")
+        payload = {"session_id": self.sid, "tool_use_id": "tu-zach-opus-ns", "tool_name": "Agent",
+                   "tool_input": {"name": "zach-opus-ns", "subagent_type": "zach", "isolation": "worktree",
+                                  "prompt": "do it\ncross-repo-worktree: %s\n" % cc}}
+        ws.register_spawn(payload, self.entity)
+        with self.assertRaises(ws.SpecError) as e:
+            ws.discard("zach-opus-ns", "no longer wanted at all", not_ceo_ordered="not his order, a test",
+                       me=self.sid)
+        self.assertIn("not finished", str(e.exception))
+        self.assertTrue(os.path.isdir(cc))
+
+    def lead_transcript(self, tuid, result=None):
+        """The lead's transcript as the platform writes it: the Agent call, and
+        (when given) the platform's answer to it."""
+        path = os.path.join(self.env.root, "lead-%s.jsonl" % tuid)
+        rows = [{"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": tuid, "name": "Agent", "input": {"name": "x"}}]}}]
+        if result is not None:
+            rows.append({"type": "user", "message": {"role": "user", "content": [
+                dict({"type": "tool_result", "tool_use_id": tuid}, **result)]}})
+        with open(path, "w") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in rows))
+        return path
+
+    def registered(self, name, transcript):
+        """The registration guard passes and writes the spawn (tool_use_id,
+        spawned_at). Pierce runs inside it on a real dispatch; it is a separate
+        guard with its own tests and is not what is under test here."""
+        cc = self.make_cc(name)
+        payload = {"session_id": self.sid, "tool_use_id": "tu-" + name, "tool_name": "Agent",
+                   "transcript_path": transcript,
+                   "tool_input": {"name": name, "subagent_type": "zach", "isolation": "worktree",
+                                  "prompt": "do it\ncross-repo-worktree: %s\n" % cc}}
+        with patch.object(ws, "_pierce_before_registration", return_value=None):
+            rec = ws.register_spawn(payload, self.entity)
+        self.assertTrue(rec.get("tool_use_id") and rec.get("spawned_at"))
+        return cc
+
+    def test_a_registered_spawn_another_guard_refused_is_discarded_directly(self):
+        # Review rv-20261014T105153Z-f22eff3f-da5a: the registration guard wrote
+        # the spawn, verify-agent-prompt.sh then refused the same call (as it
+        # did echo-opus-meetland1's first dispatch on 2026-10-14), and discard
+        # still answered "is not finished". The lead's transcript holds the
+        # platform's own answer to that call.
+        tuid = "tu-zach-opus-nf"
+        transcript = self.lead_transcript(tuid, {"is_error": True, "content": (
+            "PreToolUse:Agent hook error: [bash /e/scripts/hooks/verify-agent-prompt.sh]: "
+            "=== Agent prompt verification FAILED ===\n  - subagent-as-spawner")})
+        cc = self.registered("zach-opus-nf", transcript)
+        r = ws.discard("zach-opus-nf", "its dispatch was refused by a guard",
+                       not_ceo_ordered="a refused spawn, never an order of his", me=self.sid)
+        self.assertTrue(r["discarded"])
+        disp = self.rec("zach-opus-nf")["disposition"]
+        self.assertEqual(disp["kind"], "discarded")
+        self.assertIn("verify-agent-prompt.sh", disp["dispatch_refused"])
+        self.assertFalse(os.path.exists(cc))
+        self.assertNotIn("cc/zach-opus-nf", branches(self.other))
+
+    def test_a_registered_spawn_the_platform_has_not_answered_or_launched_is_still_refused(self):
+        for name, result in (("zach-opus-nq", None),
+                             ("zach-opus-nl", {"content": [{"type": "text", "text":
+                                                            "Async agent launched successfully.\nagentId: a1"}]})):
+            cc = self.registered(name, self.lead_transcript("tu-" + name, result))
+            with self.assertRaises(ws.SpecError) as e:
+                ws.discard(name, "no longer wanted at all", not_ceo_ordered="not his order, a test", me=self.sid)
+            self.assertIn("not finished", str(e.exception))
+            self.assertTrue(os.path.isdir(cc))
+
+
+class TeammateBoundToABranchOfItsOwn(Base):
+    """2026-10-14: the meeting and search work goes to the v1.3.0 release
+    branch while fixes go to main. `spawn.sh --integration richos=v1.3.0` for
+    echo-opus-tap22 CORRECTED the repository's body of work richos-001 from
+    main to v1.3.0, moving every running main-bound teammate with it, and
+    `workspaces.sh merge` could only merge into a branch the main checkout has
+    checked out, so every v1.3.0 land was done by hand. Now the teammate gets a
+    body of work of its own, nobody else moves, and its merge lands on v1.3.0
+    in a temporary checkout while the main checkout stays on main."""
+
+    def spawn_lib(self):
+        spec_ = importlib.util.spec_from_file_location(
+            "richos_spawn_lib", os.path.join(ENGINE, "scripts", "lib", "spawn.py"))
+        mod = importlib.util.module_from_spec(spec_)
+        spec_.loader.exec_module(mod)
+        return mod
+
+    def test_a_release_bound_teammate_lands_on_its_branch_and_moves_nobody(self):
+        run("git", "-C", self.other, "branch", "v1.3.0", "main")
+        # A main-bound teammate already running in the same repository.
+        cc_main = self.make_cc("zach-opus-rm")
+        self.spawn("zach-opus-rm", cc=cc_main)
+        work_before = ws.integration_record(self.other)
+        # spawn.sh's step for `--integration <other>=v1.3.0`.
+        SP = self.spawn_lib()
+        out = SP.ensure_integration(self.other, "v1.3.0", "the release", self.sid)
+        self.assertEqual(ws.integration_record(self.other), work_before, "the repository's record moved: %s" % (out,))
+        note, own = out
+        self.assertEqual(own, "v1.3.0", note)
+        self.assertIn("this teammate only", note)
+        self.assertEqual(ws.integration_target([self.rec("zach-opus-rm")], self.other)[0], "main")
+        # create-teammate-worktree.sh's registration, carrying that branch.
+        path = os.path.join(self.env.root, "other-wt", "zach-opus-rv")
+        ws.register_cc(self.sid, "zach-opus-rv", self.other, path, "cc/zach-opus-rv", integration="v1.3.0")
+        run("git", "-C", self.other, "worktree", "add", "-q", path, "-b", "cc/zach-opus-rv", "v1.3.0")
+        ws.confirm_cc(self.sid, "zach-opus-rv", path, True)
+        aid, _npath = self.spawn("zach-opus-rv", cc=path)
+        self.commit(path, "release.txt")
+        tip = run("git", "-C", path, "rev-parse", "HEAD").stdout.strip()
+        self.finish(aid)
+        self.assertEqual(ws.integration_target([self.rec("zach-opus-rv")], self.other)[0], "v1.3.0")
+        self.assertEqual(ws.integration_target([self.rec("zach-opus-rm")], self.other)[0], "main")
+        self.assertEqual(ws.integration_record(self.other)["branch"], "main")
+        main_before = run("git", "-C", self.other, "rev-parse", "main").stdout.strip()
+
+        merged, res = ws.merge_and_land("zach-opus-rv", self.sid)
+
+        self.assertEqual(merged, [(self.other, "cc/zach-opus-rv")])
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "v1.3.0^2").stdout.strip(), tip)
+        self.assertIn("into v1.3.0", run("git", "-C", self.other, "log", "-1", "--format=%s", "v1.3.0").stdout)
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main").stdout.strip(), main_before)
+        self.assertEqual(run("git", "-C", self.other, "symbolic-ref", "--short", "HEAD").stdout.strip(), "main")
+        self.assertEqual(run("git", "-C", self.other, "status", "--porcelain").stdout, "")
+        self.assertEqual(worktrees(self.other), [self.other, cc_main], "a temporary checkout was left behind")
+        self.assertNotIn("cc/zach-opus-rv", branches(self.other))
+        self.assertTrue(os.path.isdir(cc_main))
+        # Its handover's last step names its own branch, never main.
+        prepared = SP.PREPARE.prepare({"name": "zach-opus-rv", "subagent_type": "zach", "prompt": "do it"},
+                                      [(self.other, "v1.3.0")])
+        self.assertIn("run `git merge v1.3.0` inside your own worktree", prepared["prompt"])
+        self.assertNotIn("git merge main", prepared["prompt"])
+
+
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
     """2026-10-11, both in richos from the lead's terminal, each a background
     script that took the lease and then ran `workspaces.sh merge`:

@@ -73,6 +73,11 @@ trap cleanup EXIT
 
 export HOME="$T/home" CLAUDE_CONFIG_DIR="$T/home/.claude"
 mkdir -p "$CLAUDE_CONFIG_DIR"
+# The land's scratch sweep counts every allocation under $TMPDIR/richos-scratch
+# and names the landed agent when that count is not zero, so the host's own
+# allocations made S1.4 depend on what else had run on this Mac (2026-10-14).
+export TMPDIR="$T/tmp"
+mkdir -p "$TMPDIR"
 export GIT_CONFIG_GLOBAL="$T/home/.gitconfig"
 printf '[user]\n\tname = stopped\n\temail = stopped@example.invalid\n[init]\n\tdefaultBranch = main\n' > "$GIT_CONFIG_GLOBAL"
 unset RICHOS_WORKSPACES_DIR RICHOS_SESSION_ID CLAUDE_PROJECT_DIR RICHOS_ENGINE_ROOT CLAUDE_PLUGIN_ROOT RICHOS_SESSION_PID RICHOS_PROJECTS_DIR 2>/dev/null || true

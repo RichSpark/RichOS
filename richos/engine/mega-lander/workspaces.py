@@ -1305,6 +1305,49 @@ def record_integration(repo, branch, why="", by_session="", correct=False):
     return _write_integration(main, branch, "recorded", why, by_session, correct)
 
 
+def teammate_body_of_work(repo, branch, why="", by_session=""):
+    """THE BODY OF WORK OF A TEAMMATE BOUND TO A BRANCH OF ITS OWN (2026-10-14).
+
+    The CEO put the meeting and search work on the v1.3.0 release branch while
+    fixes go to main, so two bodies of work run in one repository at once.
+    `spawn.sh --integration richos=v1.3.0` used to CORRECT the repository's
+    current body of work (richos-001) to v1.3.0, moving every running
+    main-bound teammate with it; the lead found it 23 minutes later.
+
+    This answers the teammate's own body of work instead, and never touches
+    `current`: the repository's current one when it already integrates on
+    `branch`, else the newest teammate body of work for (repository, branch),
+    else a new one (source "teammate") that is not made current. The teammate
+    is bound to its id like any other (register_cc), so a land is proved
+    against `branch` and nobody else moves."""
+    main = main_checkout(repo)
+    if not main:
+        raise SpecError("the repository %s could not be resolved from git" % repo)
+    branch = (branch or "").strip()
+    if not branch or branch.startswith(CC_PREFIX) or branch.startswith(NATIVE_BRANCH_PREFIX):
+        raise SpecError("%r is not a branch a body of work integrates on (point 14)" % branch)
+    if not branch_tip(main, branch):
+        raise SpecError("there is no branch %s in %s to integrate on (point 14)" % (branch, main))
+    with Lock():
+        cur = _integration_file()
+        works = cur.setdefault("works", {})
+        current = works.get((cur.get("current") or {}).get(main) or "")
+        if current and current.get("branch") == branch:
+            return current
+        mine = [w for w in works.values()
+                if w.get("repo") == main and w.get("branch") == branch and w.get("source") == "teammate"]
+        if mine:
+            return max(mine, key=lambda w: w.get("recorded_at") or "")
+        wid = _new_work_id(cur, main)
+        rec = {"id": wid, "repo": main, "branch": branch, "recorded_at": iso(), "source": "teammate",
+               "why": why or "", "by_session": by_session or "", "corrections": []}
+        works[wid] = rec
+        write_json(_integration_path(), cur)
+    event("integration-recorded", repo=main, branch=branch, source="teammate", work=wid, corrected=False,
+          why=why or None)
+    return rec
+
+
 def _add_workspace(rec, kind, repo, path, branch, source):
     path = realpath(path) if path else ""
     for w in rec["workspaces"]:
@@ -1448,10 +1491,12 @@ def _check_workspace_name(path, branch):
     return kind
 
 
-def register_cc(session_id, name, repo, path, branch, identity=None):
+def register_cc(session_id, name, repo, path, branch, identity=None, integration=""):
     """Point 3, event 1, for a cc/ workspace: registered BEFORE it exists.
     create-teammate-worktree.sh calls this first; if it raises, nothing is
-    created and no spawn can name the workspace."""
+    created and no spawn can name the workspace. `integration`: a branch this
+    teammate lands on that is not the repository's current body of work's
+    (teammate_body_of_work); the teammate alone is bound to it."""
     if not session_id:
         raise SpecError("no session id: a registration without one can never be matched to a spawn")
     if not NAME_RE.match(name or ""):
@@ -1472,6 +1517,7 @@ def register_cc(session_id, name, repo, path, branch, identity=None):
     # registered, never-spawned workspace that point 5 cannot see until its
     # session ends. Refusing here leaves nothing behind at all.
     _refuse_unrecorded([repo], "creating %s's workspace" % name)
+    own = teammate_body_of_work(repo, integration, "%s's own branch" % name, session_id) if integration else None
     key = named_key(session_id, name)
     with Lock():
         rec = load_agent(key) or new_record(key, name=name, session_id=session_id)
@@ -1514,6 +1560,8 @@ def register_cc(session_id, name, repo, path, branch, identity=None):
                                 "discarded (points 5, 7). For new work, spawn a fresh teammate - names "
                                 "are used once." % (name, why))
         rec["session_identity"] = ident
+        if own:
+            rec.setdefault("integration_work", {})[_norm_repo(repo)] = own["id"]
         w = _add_workspace(rec, "cc", repo, path, branch, "create-teammate-worktree")
         w["created"] = False
         save_agent(rec)
@@ -1773,6 +1821,7 @@ def register_spawn(payload, entity, dry=False):
                     "ceo_ordered": (ceo_ordered[0] if ceo_ordered else rec.get("ceo_ordered")),
                     "continues": continuation_keys,
                     "lands_pending": lands_pending, "entity": realpath(entity),
+                    "dispatch_transcript": str(payload.get("transcript_path") or ""),
                     "spawned_at": iso()})
         rec.pop("creation_failed", None)
         save_agent(rec)
@@ -5244,42 +5293,198 @@ def merge_and_land(ref, me="", message=""):
     todo = [x for x in todo
             if not any(y[2] == x[2] and y[3] != x[3] and is_ancestor(x[2], x[3], y[3]) for y in todo)]
     reviews = _review_check(todo, _governing_entities(chain))
-    for repo, b, main, t in todo:
-        target, tip, why_not = integration_target(chain, repo)
-        if why_not:
-            raise SpecError("cannot merge %s of %s: %s" % (b, repo, why_not))
-        if is_ancestor(main, t, tip):
-            continue
-        rc, head, _e = git(main, "symbolic-ref", "--quiet", "--short", "HEAD")
-        if rc or head.strip() != target:
-            raise SpecError("cannot merge %s: the main checkout %s is on %s, not on %s, the branch this work "
-                            "integrates on" % (b, main, head.strip() or "a detached HEAD", target))
-        # Git merges the commit read above, never the branch name: a writer
-        # that advances the branch after that read (even while an earlier
-        # repository's merge gate runs) would otherwise land a newer commit
-        # no review saw (review rv-20261009T025426Z-15dae5ca-3cc1, finding 2).
-        # A commit merged by its ID gets Git's default message for its branch.
-        msg = ["-m", message or "Merge branch '%s'%s" % (b, "" if target in ("main", "master")
-                                                         else " into %s" % target)]
-        if reviews.get(t):
-            # The merge commit names the review that let it in (plan §2.4).
-            msg += ["-m", reviews[t]]
-        args = ["merge", "--no-ff", "--no-edit"] + msg + [t]
-        before = git(main, "rev-parse", "HEAD")[1].strip()
-        # The lease this land runs under names this command, so the holder's
-        # turn end keeps it until the command ends (2026-10-11: two merges in
-        # a background script were refused after the lead's turn end released
-        # the lease between their steps; operator_fences.land_process).
-        _fence_program().register_land(main)
+    taken = []                  # [(main, holder args)]: the leases THIS command took, released at its end
+    try:
+        for repo, b, main, t in todo:
+            target, tip, why_not = integration_target(chain, repo)
+            if why_not:
+                raise SpecError("cannot merge %s of %s: %s" % (b, repo, why_not))
+            if is_ancestor(main, t, tip):
+                continue
+            in_main = _merges_in_main_checkout(main, target, b)
+            # Git merges the commit read above, never the branch name: a writer
+            # that advances the branch after that read (even while an earlier
+            # repository's merge gate runs) would otherwise land a newer commit
+            # no review saw (review rv-20261009T025426Z-15dae5ca-3cc1, finding 2).
+            # A commit merged by its ID gets Git's default message for its branch.
+            msg = ["-m", message or "Merge branch '%s'%s" % (b, "" if target in ("main", "master")
+                                                             else " into %s" % target)]
+            if reviews.get(t):
+                # The merge commit names the review that let it in (plan §2.4).
+                msg += ["-m", reviews[t]]
+            args = ["merge", "--no-ff", "--no-edit"] + msg + [t]
+            if main not in [m for m, _h in taken]:
+                holder = _take_land_lease(main)
+                if holder is not None:
+                    taken.append((main, holder))
+            # The lease this land runs under names this command, so the holder's
+            # turn end keeps it until the command ends (2026-10-11: two merges in
+            # a background script were refused after the lead's turn end released
+            # the lease between their steps; operator_fences.land_process).
+            _fence_program().register_land(main)
+            if in_main:
+                before = git(main, "rev-parse", "HEAD")[1].strip()
+                # git's own checks (pre-merge-commit) run here and may take minutes.
+                r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
+                if r.returncode != 0:
+                    raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
+                                    % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
+                                       _abort_own_merge(main, before, t)))
+            else:
+                _merge_in_temporary_checkout(main, target, args, b)
+            merged.append((repo, b))
+            event("merged", key=rec["key"], repo=repo, branch=b, into=target)
+        return merged, land(rec["key"], me, keep_ignored=True)
+    finally:
+        for main, holder in taken:
+            _release_land_lease(main, holder)
+
+
+def _merges_in_main_checkout(main, target, b):
+    """True: the merge into `target` runs in the main checkout, which has it
+    checked out. False: it runs in a temporary checkout of `target`
+    (_merge_in_temporary_checkout), because nothing has `target` checked out.
+
+    A RELEASE BRANCH IS NEVER CHECKED OUT IN THE MAIN CHECKOUT (2026-10-14):
+    the main checkout stays on main while teammates land on v1.3.0, and this
+    refused every such merge, so each was done by hand. main (or master) itself
+    is still merged only in the main checkout, as before; a target another
+    worktree has checked out is refused, because that tree is somebody's."""
+    wl = worktree_list(main)
+    if wl is None:
+        raise SpecError("cannot merge %s: the worktrees of %s cannot be read" % (b, main))
+    if wl and wl[0]["branch"] == target:
+        return True
+    other = [w["path"] for w in wl[1:] if w["branch"] == target]
+    if other:
+        raise SpecError("cannot merge %s into %s: %s has %s checked out, and a merge never runs in somebody "
+                        "else's tree. Free it there, or check %s out in the main checkout %s."
+                        % (b, target, other[0], target, target, main))
+    if target in ("main", "master"):
+        head = wl[0]["branch"] if wl else ""
+        raise SpecError("cannot merge %s: the main checkout %s is on %s, not on %s, the branch this work "
+                        "integrates on" % (b, main, head or "a detached HEAD", target))
+    return False
+
+
+def _merge_in_temporary_checkout(main, target, args, b):
+    """Runs `git merge` (with git's own hooks and checks) in a temporary
+    checkout of `target` under this tool's state directory, then removes that
+    checkout. A refused merge commits nothing, so `target` has not moved; the
+    checkout is removed either way."""
+    _ensure_dirs()
+    parent = _p("merge-checkouts")
+    os.makedirs(parent, exist_ok=True)
+    path = os.path.join(os.path.realpath(parent), "%s-%d" % (_key_segment(target), os.getpid()))
+    _remove_temporary_checkout(main, path)
+    rc, out, err = git(main, "worktree", "add", "--quiet", path, target, timeout=600)
+    if rc != 0:
+        _remove_temporary_checkout(main, path)
+        raise SpecError("cannot merge %s: a temporary checkout of %s could not be made (exit %d); nothing was "
+                        "landed:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
+    try:
         # git's own checks (pre-merge-commit) run here and may take minutes.
-        r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
-        if r.returncode != 0:
-            raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
-                            % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
-                               _abort_own_merge(main, before, t)))
-        merged.append((repo, b))
-        event("merged", key=rec["key"], repo=repo, branch=b, into=target)
-    return merged, land(rec["key"], me, keep_ignored=True)
+        r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True, env=_git_env())
+    finally:
+        left = _remove_temporary_checkout(main, path)
+    if r.returncode != 0:
+        raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed and %s did not move:"
+                        "\n%s%s" % (b, target, main, r.returncode, target, (r.stdout + r.stderr).strip()[-3000:],
+                                    "\n" + left if left else ""))
+    if left:
+        sys.stderr.write(left + "\n")
+
+
+def _remove_temporary_checkout(main, path):
+    """"" once `path` is gone and git no longer lists it, else what is left.
+    Only this path is removed: no `git worktree prune`, which would touch
+    every other worktree's record too."""
+    if os.path.lexists(path):
+        git(main, "worktree", "remove", "--force", path, timeout=300)
+    listed = path in [w["path"] for w in worktree_list(main) or []]
+    if os.path.lexists(path) or listed:
+        return ("the temporary checkout %s could not be removed; git worktree remove --force %s removes it"
+                % (path, path))
+    return ""
+
+
+def _lease_holder_args(F, conf):
+    """`--holder <kind> --holder-pid <pid>` for a declared non-Claude holder
+    (Codex) behind this command, else []: acquire then finds the Claude session
+    itself, or refuses (review rv-20261011T205852Z-54ae8c6a-eec1)."""
+    try:
+        who = F.caller_identity(conf)
+    except Exception:           # noqa: BLE001  acquire then identifies the caller itself
+        who = None
+    if who and who.get("kind") and who.get("kind") != "claude":
+        return ["--holder", str(who["kind"]), "--holder-pid", str(who["pid"])]
+    return []
+
+
+def _take_land_lease(main):
+    """THE MERGE TAKES THE LAND LEASE ITSELF (2026-10-14). `workspaces.sh merge
+    echo-opus-hiresnag55b` was refused by the operator fence ("this process
+    does not hold the land lease. The land lease for this repository is
+    free."), and the lead then ran `land-lease.sh acquire` by hand before every
+    merge. Called before the first write into `main`:
+
+      * the fence is off or not installed: nothing to take, returns None;
+      * this command's caller already holds the lease: it stays the caller's
+        (it may be holding it for a push or a deploy), returns None;
+      * otherwise the lease is taken through `land-lease.sh acquire`, with
+        every rule of an acquire. A lease another holder has is waited for as
+        acquire waits (LAND_LEASE_WAIT, default 90 s), and that is said first.
+        Returns the holder arguments, so the caller releases it when done.
+
+    Still not held after that: SpecError with acquire's own words, and nothing
+    is merged."""
+    F = _fence_program()
+    # THIS PROCESS COUNTS AS ITS OWN CALLER: a lease held by the process that
+    # runs this merge in-process (the app's library call, a test that is the
+    # session) is held, and git's fence hooks, its descendants, agree. Without
+    # it, acquire RENEWED that lease and this still said "could not take it".
+    me = F.proc(os.getpid())
+    chain = ([(me["pid"], me["start"])] if me else []) + F.ancestors()
+    try:
+        conf, _paths = F.launcher_for(main)
+        if not F.fenced(conf):
+            return None
+        files = F.Files(conf)
+        held, lease = F.authorized(files, chain)
+    except Exception as exc:    # noqa: BLE001  a check that cannot decide refuses, and says so
+        raise SpecError("cannot merge into %s: whether this command holds the land lease could not be read (%s)"
+                        % (main, exc))
+    if held:
+        return None
+    lease_cmd = os.path.join(engine_root(), "scripts", "land-lease.sh")
+    holder = _lease_holder_args(F, conf)
+    if F.lease_state(lease) in ("live", "expired"):
+        sys.stderr.write("merge: waiting for the land lease of %s: %s holds it. Waiting as land-lease.sh "
+                         "acquire waits.\n" % (main, F.holder_label(lease.get("holder"))))
+    r = subprocess.run(["bash", lease_cmd, "acquire", "--repo", main] + holder, capture_output=True, text=True)
+    said = (r.stdout + r.stderr).strip()
+    if said:
+        sys.stderr.write(said + "\n")
+    if r.returncode == 0 and F.authorized(F.Files(conf), chain)[0]:
+        return holder
+    raise SpecError("nothing was merged into %s: this command could not take the land lease (exit %d). %s\n"
+                    "Run the same command again once it is free."
+                    % (main, r.returncode, said[-800:] or "land-lease.sh acquire said nothing"))
+
+
+def _release_land_lease(main, holder):
+    """Releases a lease `_take_land_lease` took. A release that fails is said,
+    never raised: the land has already happened or been refused by then, and the
+    holder's turn end releases a lease left behind."""
+    lease_cmd = os.path.join(engine_root(), "scripts", "land-lease.sh")
+    r = subprocess.run(["bash", lease_cmd, "release", "--repo", main] + list(holder),
+                       capture_output=True, text=True)
+    said = (r.stdout + r.stderr).strip()
+    if said:
+        sys.stderr.write(said + "\n")
+    if r.returncode != 0:
+        sys.stderr.write("merge: the land lease of %s this command took could not be released (exit %d); "
+                         "%s release --repo %s releases it.\n" % (main, r.returncode, lease_cmd, main))
 
 
 def _fence_program():
@@ -5636,13 +5841,7 @@ def _lease_for_abort(main):
     # The retake is by the holder that started the merge: a declared non-Claude
     # holder (Codex) is named, or acquire finds no Claude session and refuses
     # (review rv-20261011T205852Z-54ae8c6a-eec1).
-    holder = []
-    try:
-        who = F.caller_identity(conf)
-    except Exception:           # noqa: BLE001  acquire then identifies the caller itself
-        who = None
-    if who and who.get("kind") and who.get("kind") != "claude":
-        holder = ["--holder", str(who["kind"]), "--holder-pid", str(who["pid"])]
+    holder = _lease_holder_args(F, conf)
     r = subprocess.run(["bash", lease_cmd, "acquire", "--repo", main, "--wait", "30"] + holder,
                        capture_output=True, text=True)
     said = (r.stdout + r.stderr).strip()
@@ -5837,9 +6036,10 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
         raise SpecError("a discard records its reason (point 7): give one")
     rec = _resolve(ref, me)
     fin, _pz, why = finished_state(rec)
-    if not fin:
+    if not fin and not never_ran(rec):
         raise SpecError("%s is not finished (%s). Stop it first; a running agent is not discarded."
                         % (rec["name"], why))
+    refused = "" if fin else dispatch_refusal(rec)
     chain = _chain(rec)
     ordered = [r for r in chain if r.get("ceo_ordered")]
     if ordered and not (ceo_word or "").strip():
@@ -5860,10 +6060,69 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
             fresh["disposition"] = {"kind": "discarded", "at": now(), "reason": reason.strip(),
                                     "ceo_word": ceo_word or None, "not_ceo_ordered": not_ceo_ordered or None,
                                     "tips": tips, "by_session": me, "as_part_of": rec["key"]}
+            if refused and r["key"] == rec["key"]:
+                fresh["disposition"]["dispatch_refused"] = refused
             save_agent(fresh)
         event("discarded", key=r["key"], reason=reason, tips=tips, as_part_of=rec["key"])
     _delete_chain(chain, "discarded")
     return {"discarded": True, "tips": tips}
+
+
+def never_ran(rec):
+    """A registration whose spawn never happened: its workspace was created and
+    registered, and its spawn was refused before it was registered
+    (2026-10-14: Pierce refused echo-opus-tap22's spawn, and `discard` answered
+    "is not finished (its run has not ended)" until it was stopped first).
+    Exactly withdraw_cc's test, plus no start or end recorded.
+
+    A spawn that WAS registered (tool_use_id, spawned_at) may have an agent
+    running in the foreground, where the platform reports its id only at the
+    end, so it never ran only when the platform itself says it refused that
+    call (dispatch_refusal): the registration guard writes the spawn before
+    the other Agent guards answer, and one of them can still refuse it (review
+    rv-20261014T105153Z-f22eff3f-da5a)."""
+    if any(rec.get(f) for f in ("agent_id", "started_at", "end", "provisional", "disposition")):
+        return False
+    if not (rec.get("tool_use_id") or rec.get("spawned_at")):
+        return True
+    return bool(dispatch_refusal(rec))
+
+
+def dispatch_refusal(rec):
+    """The platform's own answer to this registered Agent call when a guard
+    refused it, else "". It is read from the lead's transcript (the payload's
+    transcript_path, kept at registration): the tool result for this
+    tool_use_id, an error that starts "PreToolUse:Agent hook error". An Agent
+    call a hook refused never started an agent. No transcript, no result yet,
+    or any other result is "": the agent may be running."""
+    tuid = str(rec.get("tool_use_id") or "")
+    path = str(rec.get("dispatch_transcript") or "")
+    if not tuid or not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if tuid not in line or "tool_result" not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                content = ((row.get("message") or {}).get("content")) if isinstance(row, dict) else None
+                for c in content if isinstance(content, list) else []:
+                    if not (isinstance(c, dict) and c.get("type") == "tool_result"
+                            and c.get("tool_use_id") == tuid):
+                        continue
+                    body = c.get("content")
+                    if isinstance(body, list):
+                        body = "\n".join(str(b.get("text") or "") for b in body if isinstance(b, dict))
+                    text = str(body or "")
+                    if c.get("is_error") and text.startswith("PreToolUse:Agent hook error"):
+                        return text.splitlines()[0][:500]
+                    return ""
+    except OSError:
+        return ""
+    return ""
 
 
 def _delete_chain(chain, why, processes=None, deadline=None):
@@ -7541,6 +7800,8 @@ def main(argv):
     x = sub.add_parser("register-cc")
     for f in ("--name", "--repo", "--path", "--branch"):
         x.add_argument(f, required=True)
+    x.add_argument("--integration", default="",
+                   help="a branch this teammate alone lands on (teammate_body_of_work)")
     x = sub.add_parser("confirm-cc")
     x.add_argument("--name", required=True)
     x.add_argument("--path", required=True)
@@ -7711,7 +7972,8 @@ def main(argv):
                 for wid in sorted(works):
                     w = works[wid]
                     print("%s\t%s\t%s\t%s\t%s\t%s"
-                          % (wid, "current" if wid in cur else "superseded", w.get("repo"),
+                          % (wid, "current" if wid in cur else ("teammate" if w.get("source") == "teammate"
+                                                                else "superseded"), w.get("repo"),
                              w.get("branch"), w.get("recorded_at"), w.get("why") or ""))
                     for c in w.get("corrections") or []:
                         print("\t  corrected from %s at %s: %s"
@@ -7731,7 +7993,7 @@ def main(argv):
             for k, ok in retry_due(budget=60.0):
                 print("%s %s" % ("deleted" if ok else "still failing", k))
         elif a.cmd == "register-cc":
-            register_cc(me, a.name, a.repo, a.path, a.branch)
+            register_cc(me, a.name, a.repo, a.path, a.branch, integration=a.integration)
             print("registered")
         elif a.cmd == "withdraw-cc":
             r = withdraw_cc(me, a.name, a.why)
