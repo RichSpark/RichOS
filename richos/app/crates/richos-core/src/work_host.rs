@@ -600,6 +600,14 @@ const CONTINUATION_REASK_LIMIT: usize = 1;
 /// and a re-review is four, and the two spare are for a second revision. An assignment that
 /// wants a seventh is not a slow one, it is a loop, and the readings after the wait report it
 /// as what could be witnessed rather than spinning.
+///
+/// **It never cuts off a helper the journal shows still at work.** A hiring spends rounds on
+/// research, fitting retries and team renewals, and nightly 56's hire needed exactly six (its
+/// handover review, rv-20261014T210558Z-b7ebe6ad-571c): one more fitting attempt launched in
+/// the sixth continuation used to end the loop, revoke the grant that attempt saves under and
+/// close the job with a promised teammate unsaved. So past the bound an open helper is still
+/// waited for, on its own `SubagentStop` as always, and the back end gets the turn after it;
+/// the bound ends the loop only once nothing is open. His Stop and a quit end it at any time.
 const WORKER_WAIT_ROUNDS: usize = 6;
 
 /// How long ONE wait for a helper lasts before the row says it is taking longer than usual.
@@ -2139,13 +2147,17 @@ impl WorkHost {
         // back end, and he already has its words.
         let mut waits = 0usize;
         // A turn that never took his answer is not waited on: nothing of it ran (D4).
-        while outcome.is_ok() && untaken.is_empty() && waits < WORKER_WAIT_ROUNDS {
+        while outcome.is_ok() && untaken.is_empty() {
             let Some(session) = backend.inner.lock().unwrap().lease_session.clone() else { break };
             let view = crate::app_workers::status(&self.state, Some(&session));
             // Unattributed evidence is NOT a reason to wait: it is the one thing this loop
             // could wait on forever, and `settlement` below already reads it as unsettled and
             // says so. Only a run this host can see open is worth waiting for.
             let helper_open = view.is_attributed() && view.active + view.liveness_unknown > 0;
+            // The bound stops more turns, never a helper still at work ([`WORKER_WAIT_ROUNDS`]).
+            if waits >= WORKER_WAIT_ROUNDS && !helper_open {
+                break;
+            }
             // A helper's continuation adds to the account (below); a declared wait is one.
             let mut helper_turn = helper_open;
             let continuation = if helper_open {
@@ -7439,6 +7451,64 @@ mod tests {
         journal(&h, &helper_stopped("dean-1"));
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
         assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
+        let done = read();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
+        let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
+        assert!(told.iter().any(|t| t.contains("Beth saved.")), "{told:?}");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A hiring that needs more than [`WORKER_WAIT_ROUNDS`] waits stays open while Beth is
+    /// still being fitted** (handover review rv-20261014T210558Z-b7ebe6ad-571c: nightly 56's
+    /// hire needed exactly six). Seven fitting attempts, each launched in the turn after the
+    /// last one ended; the seventh is launched in the sixth continuation. The host used to stop
+    /// there, revoke the grant and close the job with Beth unsaved; now it waits for that
+    /// attempt too, and the job ends on the turn after it, in which Beth is saved.
+    #[test]
+    fn a_hiring_still_fitting_a_teammate_after_six_waits_stays_open_until_she_is_saved() {
+        let attempts = WORKER_WAIT_ROUNDS + 1;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        h.replies.lock().unwrap().extend(
+            (0..attempts).map(|n| format!("Dean is fitting Beth, your Bookkeeper (attempt {}).", n + 1))
+                .chain(["Beth saved. She is on your team now as your Bookkeeper.".to_string()]),
+        );
+        let fitting = |n: usize| format!("dean-fit-{n}");
+        journal(&h, &helper_started(&fitting(0)));
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let turns_reach = |n: usize| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while h.work_prompts.lock().unwrap().len() < n {
+                assert!(std::time::Instant::now() < deadline, "turn {n} never came: {:?} {}", read().state, read().detail);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        for n in 0..attempts {
+            turns_reach(n + 1);
+            if n > 0 {
+                // The turn after the last attempt ended launches the next one.
+                journal(&h, &helper_started(&fitting(n)));
+                h.first_item_gate.release();
+            }
+            // The host reads the journal at once when a turn ends and then every
+            // WORKER_WAIT_POLL (2 s); one second in, it has seen this attempt open.
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let now = read();
+            assert_eq!(now.state, AssignmentState::Running,
+                "the hiring closed while fitting attempt {} was still running: {}", n + 1, now.detail);
+            assert_eq!(h.revoked.load(Ordering::SeqCst), 0,
+                "the grant fitting attempt {} saves under was taken away", n + 1);
+            h.first_item_gate.shut();
+            journal(&h, &helper_stopped(&fitting(n)));
+        }
+        // The turn after the last attempt: Beth is saved, nothing is open, and the job ends.
+        turns_reach(attempts + 1);
+        h.first_item_gate.release();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        assert_eq!(h.work_prompts.lock().unwrap().len(), attempts + 1);
         let done = read();
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
