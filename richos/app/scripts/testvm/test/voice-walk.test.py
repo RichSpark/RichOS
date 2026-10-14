@@ -195,6 +195,18 @@ class WindowUpAsksASlowReadAgain(unittest.TestCase):
         with self.assertRaises(walk.StepFailed):
             w.window_up(seconds=10)
 
+    def test_a_window_not_open_yet_is_read_again(self):
+        # walk-a75c409405c1: relaunch() returns at the pid, and the first read saw windows=0.
+        w = object.__new__(walk.VoiceWalk)
+        answers = [walk.StepFailed('command failed (1): ax.sh find\n{"error":"nowindow","detail":"windows=0"}'), True]
+        w.present = lambda title, role='AXButton', app=None: (lambda a: (_ for _ in ()).throw(a) if isinstance(a, Exception) else a)(answers.pop(0))
+        w.shot = lambda name: None
+        sleep, walk.time.sleep = walk.time.sleep, (lambda s: None)
+        try:
+            self.assertTrue(w.window_up(seconds=10))
+        finally:
+            walk.time.sleep = sleep
+
 
 class WindowUpDeclinesTheSetupSheetOnce(unittest.TestCase):
     """Candidate 43, voice run 2: after the relaunch the setup sheet held the window."""

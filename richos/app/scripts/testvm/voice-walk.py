@@ -304,7 +304,11 @@ class VoiceWalk(adopt_walk.Walk):
                     self.facts['relaunch_setup_sheet_declined'] = True
                     self.save()
             except StepFailed as exc:
-                if 'guest_deadline' not in str(exc):
+                # `nowindow`: the relaunched process exists and has not opened its window yet.
+                # relaunch() returns at the pid, not at a window, so the first read can land in
+                # that instant (walk-a75c409405c1, 2026-10-14: windows=0 at 7.7 s; the same
+                # bundle's first launch had shown its window a minute earlier).
+                if 'guest_deadline' not in str(exc) and '"nowindow"' not in str(exc):
                     raise
                 last = exc
             time.sleep(1)
