@@ -71,6 +71,11 @@ built with one: a nightly's engine-pin.env).
               in the sheet and the sheet closed: a "Dictation feature" conversation naming F2,
               recorded in dictation.json, the dictation text gone from the onboarding conversation,
               no dictation line under the message box, and Rich's reply naming the company exactly
+  r19-key-change after r19-set-up, the key changed the way a person changes it: Settings,
+              Dictation, F3 picked, the sheet closed. dictation.json saves F3; the "Dictation
+              feature" message now says "tap F3," and no longer "tap F2,"; and Rich, asked in that
+              conversation which key starts dictation, names F3 and not F2 (the CEO, 2026-10-13:
+              "make sure the correct key is actually within that message")
   r19-again   the app relaunched: no setup sheet and no offer
   r19-restart instead of r19-set-up, without r19-grants: dictation left on with Accessibility
               refused across a quit (dictation.json as that turn-on leaves it), then allowed while
@@ -101,7 +106,7 @@ StepFailed = adopt_walk.StepFailed
 
 STEPS = ['identity', 'meanwhile', 'arrived', 'voice', 'relaunch']
 # Round 19's states 1 to 4 (dictation plan slice 4); never in the default run.
-R19_STEPS = ['r19-grants', 'r19-sheet', 'r19-offer', 'r19-set-up', 'r19-again', 'r19-restart']
+R19_STEPS = ['r19-grants', 'r19-sheet', 'r19-offer', 'r19-set-up', 'r19-key-change', 'r19-again', 'r19-restart']
 QA = HERE.parent / 'qa'
 # What OCR must read in each state: fragments of his two lines short enough to sit on one line
 # of the sheet (setup.rs MEDIA_TOOLS_WHY, setup_view.rs SETUP_DOWNLOAD_LINE).
@@ -123,6 +128,10 @@ R19_NOT_NOW_AX = "Okay. It's in Settings, under Dictation, whenever you want it.
 # 6c09d61b9, 19:18Z: the sheet said On and 'On. Tap F' was never one AX value).
 R19_ON_AX = 'in any app, talk, and tap it again.'
 R19_FEATURE_AX = 'Click into where you want your words to appear, tap F2, say what you want written'
+# r19-key-change: the key a person changes to afterwards, its key code for the "Press a different
+# key" way in, and the question put to Rich in the "Dictation feature" conversation.
+R19_NEW_KEY, R19_NEW_KEY_CODE = 3, 99
+R19_KEY_QUESTION = 'Which key do I tap to start dictation now? Answer with just the key.'
 # The microphone's stand-in for the voice step (capture.rs RICHOS_VOICE_INPUT_WAV), in the guest.
 SILENCE_WAV = '/Users/admin/voice-silence.wav' # machine-path-exempt: isolated test VM account/path; never a customer default
 # Two seconds of 16 kHz mono silence, written in the guest: nothing is played and nothing is said.
@@ -251,6 +260,21 @@ def r19_verdict(facts):
     elif not facts['all_set'].get('download_done'):
         why.append('"You\'re all set." came up before both models were on disk')
     return '; '.join(why) or None
+
+
+def key_reply_verdict(reply, key, old):
+    """Rich's answer to R19_KEY_QUESTION after the key changed from F<old> to F<key>: None (PASS)
+    or the reason. He must name the new key; naming the old one at all fails, because a person
+    who asks which key to tap and hears the old one taps the wrong key."""
+    new, before = f'F{key}', f'F{old}'
+    words = set(re.findall(r'\bF\d{1,2}\b', reply or ''))
+    if not reply:
+        return 'Rich gave no answer'
+    if new not in words:
+        return f'Rich did not name {new}: {reply!r}'
+    if before in words:
+        return f'Rich still names {before}: {reply!r}'
+    return None
 
 
 class SetupWalk(adopt_walk.Walk):
@@ -988,6 +1012,92 @@ class SetupWalk(adopt_walk.Walk):
             why.append('rich_exact (Rich never wrote the name)')
         if why:
             raise StepFailed('failed: ' + ', '.join(why) + ' — ' + json.dumps(facts))
+        return facts
+
+    def r19_key_change(self):
+        """After r19-set-up: Settings, Dictation, F3 picked, the sheet closed. The "Dictation
+        feature" message names F3 and no longer F2, and Rich, asked there, names F3."""
+        key, old = R19_NEW_KEY, 2
+        facts = {'from': f'F{old}', 'to': f'F{key}'}
+        self.ax('click', '--id', 'set-btn', '--first')
+        end = time.monotonic() + 30
+        while time.monotonic() < end and self.by_id('set-dictation-open') is None:
+            time.sleep(2)
+        self.ax('click', '--id', 'set-dictation-open', '--first')
+        end = time.monotonic() + 30
+        while time.monotonic() < end and self.by_id('dict-switch') is None:
+            time.sleep(2)
+        try:
+            self.ax('click', '--title', f'F{key}', '--role', 'AXRadioButton', '--in', 'dialog')
+            facts['key_picked_by'] = f'the F{key} button in the key strip'
+        except StepFailed:
+            self.ax('click', '--id', 'dict-capture')
+            time.sleep(1)
+            guest(self.vm, f"osascript -e 'tell application \"System Events\" to key code {R19_NEW_KEY_CODE}'")
+            facts['key_picked_by'] = f'"Press a different key", then F{key}'
+        time.sleep(3)
+        facts['key_saved'] = self.dictation_record().get('key')
+        self.shot('key-change-sheet.png')
+        self.ax('click', '--id', 'dict-close')
+        self.mark(f'key F{key} picked in Settings, the sheet closed', pressed=True)
+        time.sleep(3)
+        self.press('Dictation feature')
+        new_line = R19_FEATURE_AX.replace(f'tap F{old},', f'tap F{key},')
+        end = time.monotonic() + 30
+        while time.monotonic() < end and not self.shows_text(new_line):
+            time.sleep(2)
+        facts['message_new_key'] = self.shows_text(new_line)
+        facts['message_old_key'] = self.shows_text(f'tap F{old},')
+        self.shot('key-change-feature.png')
+        thread = self.dictation_record().get('featureThread')
+        thread = thread if isinstance(thread, str) else None
+        facts['thread'] = thread
+        self.type_into(R19_KEY_QUESTION, '--role', 'AXTextArea', '--title', 'Message to Rich')
+        self.press('Send')
+        self.mark('asked Rich which key starts dictation', pressed=True)
+        reply, done = '', False
+        end = time.monotonic() + 240
+        while time.monotonic() < end and not done:
+            rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
+            turn, reply = None, ''
+            for line in rows.splitlines():
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                event = r.get('event')
+                if (event == 'PromptReceived' and R19_KEY_QUESTION in r.get('text', '')
+                        and (not thread or r.get('thread_id') == thread)):
+                    turn, reply, done = r.get('turn_id'), '', False
+                elif turn and r.get('turn_id') == turn and event == 'AssistantDelta':
+                    reply += r.get('text', '')
+                elif turn and r.get('turn_id') == turn and event in ('TurnCompleted', 'TurnInterrupted',
+                                                                       'TurnStopped', 'TurnFailed'):
+                    done = True
+            facts['asked'] = bool(turn)
+            if not done:
+                if self.present('Allow action'):
+                    self.click('Allow action', 'Rich asked for an action: "Allow action"')
+                time.sleep(5)
+        facts['reply'] = reply
+        facts['reply_done'] = done
+        self.shot('key-change-answer.png')
+        self.facts['r19_key_change'] = facts
+        self.save()
+        why = []
+        if facts['key_saved'] != key:
+            why.append(f"key_saved ({facts['key_saved']}, not F{key})")
+        if not facts['message_new_key']:
+            why.append(f'the "Dictation feature" message does not say "tap F{key},"')
+        if facts['message_old_key']:
+            why.append(f'the "Dictation feature" message still says "tap F{old},"')
+        if not done:
+            why.append('Rich did not finish an answer within 240 s')
+        verdict = key_reply_verdict(reply, key, old)
+        if verdict:
+            why.append(verdict)
+        if why:
+            raise StepFailed('; '.join(why) + ' — ' + json.dumps(facts))
         return facts
 
     def r19_again(self):

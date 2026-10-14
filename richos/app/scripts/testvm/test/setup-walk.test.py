@@ -123,9 +123,18 @@ class Round19(unittest.TestCase):
 
     def test_the_round_19_steps_are_never_in_the_default_run(self):
         self.assertFalse(set(walk.R19_STEPS) & set(walk.STEPS))
-        self.assertEqual(walk.R19_STEPS, ['r19-grants', 'r19-sheet', 'r19-offer', 'r19-set-up', 'r19-again', 'r19-restart'])
+        self.assertEqual(walk.R19_STEPS, ['r19-grants', 'r19-sheet', 'r19-offer', 'r19-set-up', 'r19-key-change',
+                                          'r19-again', 'r19-restart'])
         for step in walk.R19_STEPS:
             self.assertTrue(hasattr(walk.SetupWalk, step.replace('-', '_')), step)
+
+    def test_rich_must_name_the_new_key_and_never_the_old_one(self):
+        self.assertIsNone(walk.key_reply_verdict('F3.', 3, 2))
+        self.assertIsNone(walk.key_reply_verdict('Tap **F3**, talk, then tap it again.', 3, 2))
+        self.assertIn('did not name F3', walk.key_reply_verdict('Tap F2.', 3, 2))
+        self.assertIn('still names F2', walk.key_reply_verdict('It was F2; now it is F3.', 3, 2))
+        self.assertIn('did not name F3', walk.key_reply_verdict('F13 is the key.', 3, 2))
+        self.assertEqual(walk.key_reply_verdict('', 3, 2), 'Rich gave no answer')
 
 
 if __name__ == '__main__':
