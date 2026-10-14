@@ -460,14 +460,12 @@ RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-c1 >"$T/create.ou
 CC1="$T/other-wt/zach-opus-c1"
 sub "C1.4 POSITIVE CONTROL: the sanctioned path creates a cc/ workspace, registered (exit $rc)" \
     "[ $rc -eq 0 ] && has_branch '$OTHER' cc/zach-opus-c1 && [ -d '$CC1' ] && [ -n \"\$(agent_rec zach-opus-c1)\" ]" "$(cat "$T/create.out")"
-# It is registered but never spawned into. OBSERVED, not one of the fourteen: such
-# a registration has no end-of-run signal, so it is not finished (point 11) and a
-# discard refuses it until the session ends (point 12) or Rich stops it.
-ws discard zach-opus-c1 --reason "the positive control of check 1 is over" --not-ceo-ordered "a fixture of this suite" >"$T/discard.out" 2>&1; rc0=$?
-ws stop zach-opus-c1 --why "never spawned into; the control is over" >>"$T/discard.out" 2>&1
-ws discard zach-opus-c1 --reason "the positive control of check 1 is over" --not-ceo-ordered "a fixture of this suite" >>"$T/discard.out" 2>&1; rc=$?
-sub "C1.5 the control workspace, registered but never spawned into, is not finished until stopped (discard: $rc0, then stop, then discard: $rc) and is then deleted by the page's own discard" \
-    "[ $rc0 -eq 2 ] && [ $rc -eq 0 ] && [ ! -e '$CC1' ] && ! has_branch '$OTHER' cc/zach-opus-c1" "$(cat "$T/discard.out")"
+# It is registered but never spawned into. Such a registration has no run to end
+# (workspaces.py never_ran, 2026-10-14: a refused spawn's workspace needed a stop
+# before its discard), so the page's own discard takes it directly, with no stop.
+ws discard zach-opus-c1 --reason "the positive control of check 1 is over" --not-ceo-ordered "a fixture of this suite" >"$T/discard.out" 2>&1; rc=$?
+sub "C1.5 the control workspace, registered but never spawned into, is deleted by the page's own discard with no stop first (discard: $rc)" \
+    "[ $rc -eq 0 ] && [ ! -e '$CC1' ] && ! has_branch '$OTHER' cc/zach-opus-c1" "$(cat "$T/discard.out")"
 verdict
 
 # ===========================================================================
