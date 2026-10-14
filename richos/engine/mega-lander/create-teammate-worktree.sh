@@ -52,7 +52,7 @@
 #
 # USAGE
 #   ~/.claude/richos-engine/mega-lander/create-teammate-worktree.sh <repo> <teammate-name> [--dir <path>]
-#       [--base <ref>] [--session <id>]
+#       [--base <ref>] [--session <id>] [--integration <branch>]
 #
 #   <repo>            any path inside the target repository
 #   <teammate-name>   the name the spawn will carry, e.g. echo-opus-bt2
@@ -63,6 +63,10 @@
 #                     --base cc/<old-name>, and spawn with `continues: <old-name>`.
 #   --session <id>    the session the spawn will run in; default the session
 #                     this command runs in (its recorded process is an ancestor)
+#   --integration <b> the branch THIS teammate lands on when it is not the
+#                     repository's recorded one (a release branch such as
+#                     v1.3.0); only this teammate is bound to it, and --base
+#                     defaults to it
 #
 # Environment (test affordances): RICHOS_WORKSPACES_DIR, RICHOS_SESSION_PID,
 # RICHOS_SESSION_ID.
@@ -79,7 +83,7 @@ usage() {
     sed -n '/^# USAGE/,/^# Environment/p' "$0" | sed 's/^# \{0,1\}//' >&2
 }
 
-REPO_ARG=""; NAME=""; DIR=""; BASE=""; SESSION=""
+REPO_ARG=""; NAME=""; DIR=""; BASE=""; SESSION=""; INTEGRATION=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         # No errexit here (set -uo only): a `shift 2` short of a value shifts nothing
@@ -87,6 +91,7 @@ while [ "$#" -gt 0 ]; do
         --dir)     DIR="${2:-}"; shift 2 || { echo "create-teammate-worktree.sh: $1 needs a value" >&2; exit 2; } ;;
         --base)    BASE="${2:-}"; shift 2 || { echo "create-teammate-worktree.sh: $1 needs a value" >&2; exit 2; } ;;
         --session) SESSION="${2:-}"; shift 2 || { echo "create-teammate-worktree.sh: $1 needs a value" >&2; exit 2; } ;;
+        --integration) INTEGRATION="${2:-}"; shift 2 || { echo "create-teammate-worktree.sh: $1 needs a value" >&2; exit 2; } ;;
         -h|--help) usage; exit 2 ;;
         -*)        echo "create-teammate-worktree.sh: unknown option '$1'" >&2; usage; exit 2 ;;
         *)
@@ -179,7 +184,7 @@ BRANCH="cc/$NAME"
 if git -C "$MAIN" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null; then
     refuse "branch '$BRANCH' already exists in $MAIN — a teammate name is used once; pick a fresh identifier"
 fi
-[ -n "$BASE" ] || BASE="HEAD"
+[ -n "$BASE" ] || BASE="${INTEGRATION:-HEAD}"
 git -C "$MAIN" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null \
     || refuse "base ref '$BASE' does not resolve in $MAIN"
 case "$BASE" in
@@ -190,8 +195,10 @@ esac
 # --- 2. register BEFORE anything exists (point 3) ---------------------------
 SESS_ARGS=()
 [ -n "$SESSION" ] && SESS_ARGS=(--session "$SESSION")
+INT_ARGS=()
+[ -n "$INTEGRATION" ] && INT_ARGS=(--integration "$INTEGRATION")
 if ! _reg_err="$(python3 "$WS_PY" ${SESS_ARGS[@]+"${SESS_ARGS[@]}"} register-cc --name "$NAME" --repo "$MAIN" \
-        --path "$DIR" --branch "$BRANCH" 2>&1 >/dev/null)"; then
+        --path "$DIR" --branch "$BRANCH" ${INT_ARGS[@]+"${INT_ARGS[@]}"} 2>&1 >/dev/null)"; then
     refuse "the workspace could not be registered, so it was not created: ${_reg_err#workspaces: REFUSED — }"
 fi
 

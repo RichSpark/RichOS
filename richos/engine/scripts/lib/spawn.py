@@ -270,9 +270,20 @@ def checkout_branch(repo):
     return wl[0]["branch"] if wl else ""
 
 
-def ensure_integration(repo, explicit, why, session):
+def ensure_integration(repo, explicit, why, session, native_only=False):
     """Point 14, as one step of one command instead of a refusal naming a second
-    command. Returns a one-line note for the report.
+    command. Returns (a one-line note for the report, the branch THIS teammate
+    alone is bound to, or "").
+
+    --integration NAMING ANOTHER BRANCH THAN THE RECORDED ONE NEVER MOVES
+    ANYBODY ELSE (2026-10-14). It used to CORRECT the repository's current body
+    of work: `--integration richos=v1.3.0` for echo-opus-tap22 moved richos-001
+    and every running main-bound teammate onto v1.3.0. Now that branch is this
+    teammate's own (workspaces.teammate_body_of_work, bound when its cc/
+    workspace is registered), and the repository's record is untouched; moving
+    the whole repository is `workspaces.sh integration --correct`. A repository
+    this teammate works in only through native isolation (`native_only`, the
+    session's own) has no cc/ registration to carry it, so it is refused there.
 
     THE THREE STATES, and the third is the one that bit us:
       recorded and its branch exists  -> nothing to do
@@ -294,10 +305,10 @@ def ensure_integration(repo, explicit, why, session):
     rec = W.integration_record(repo)
     live = bool(rec and W.branch_tip(repo, rec["branch"]))
     if rec and live and not explicit:
-        return "integration: %s (recorded %s, body of work %s)" % (rec["branch"], rec["recorded_at"],
-                                                                   rec["id"])
+        return ("integration: %s (recorded %s, body of work %s)" % (rec["branch"], rec["recorded_at"],
+                                                                    rec["id"]), "")
     if rec and live and explicit and explicit == rec["branch"]:
-        return "integration: %s (recorded, matches --integration)" % rec["branch"]
+        return "integration: %s (recorded, matches --integration)" % rec["branch"], ""
 
     dflt = default_branch(repo)
     on = checkout_branch(repo)
@@ -329,15 +340,21 @@ def ensure_integration(repo, explicit, why, session):
                 % (rec["branch"], reason))
         W.record_integration(repo, branch, why or note, session, correct=True)
         return ("integration: CORRECTED %s from %s (no such branch) to %s - %s"
-                % (repo, rec["branch"], branch, reason))
+                % (repo, rec["branch"], branch, reason), "")
     if rec and live and explicit and explicit != rec["branch"]:
-        W.record_integration(repo, branch, why or reason, session, correct=True)
-        return ("integration: CORRECTED %s from %s to %s - %s" % (repo, rec["branch"], branch, reason))
+        if native_only:
+            raise Refusal(
+                "%s: --integration %s names another branch than this repository's recorded %s, and this "
+                "teammate works there only in its native workspace, which cannot carry a branch of its own. "
+                "Moving every teammate of %s onto %s is: workspaces.sh integration --repo %s --branch %s "
+                "--correct --why '<why>'" % (repo, branch, rec["branch"], repo, branch, repo, branch))
+        return ("integration: %s for this teammate only; %s stays on %s for everybody else (body of work %s)"
+                % (branch, repo, rec["branch"], rec["id"]), branch)
     W.record_integration(repo, branch, why or reason, session)
     if explicit:
-        return "integration: RECORDED %s for %s - %s" % (branch, repo, reason)
+        return "integration: RECORDED %s for %s - %s" % (branch, repo, reason), ""
     return ("integration: RECORDED %s for %s - %s. If this work must not reach %s yet, re-run with "
-            "--integration <branch>." % (branch, repo, reason, branch))
+            "--integration <branch>." % (branch, repo, reason, branch), "")
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +582,7 @@ def run_guards(guards, envelope, project_dir):
 # 4. THE PAYLOAD
 # ---------------------------------------------------------------------------
 
-def build_payload(args, brief, workspaces):
+def build_payload(args, brief, workspaces, targets=None):
     """ONE `cross-repo-worktree:` LINE PER WORKSPACE, and the guard has always
     been written that way: clause 4c of guard-worktree-isolation.sh reads EVERY
     such line and checks each against the registry, and register_spawn collects
@@ -593,8 +610,13 @@ def build_payload(args, brief, workspaces):
     if args.get("effort"):
         ti["effort"] = args["effort"]
     # The acknowledgement contract is prepare-agent-spawn.py's, and it stays
-    # prepare-agent-spawn.py's: one answer, one place. This calls it.
-    return PREPARE.prepare(ti)
+    # prepare-agent-spawn.py's: one answer, one place. This calls it, with the
+    # branch each repository's work lands on, so its last step merges that
+    # branch (never main into a release branch).
+    try:
+        return PREPARE.prepare(ti, targets)
+    except ValueError as exc:
+        raise Refusal(str(exc))
 
 
 def envelope_for(payload, session, project_dir, planned):
@@ -810,10 +832,16 @@ def _main(argv):
 
         # Point 14 for EVERY repository this teammate will work in - the
         # session's own included, because register_spawn checks the entity too.
+        own = {}                # repository -> the branch this teammate alone lands on there
+        targets = []            # (repository, the branch its work lands on), for the last step
         for r in ([project_dir] if project_dir not in repos else []) + repos:
-            notes.append(ensure_integration(r, integrations.get(r, ""),
+            note, mine = ensure_integration(r, integrations.get(r, ""),
                                             args["integration_why"] if r in integrations else "",
-                                            session))
+                                            session, native_only=(r == project_dir))
+            notes.append(note)
+            if mine:
+                own[r] = mine
+            targets.append((r, mine or (W.integration_record(r) or {}).get("branch") or "main"))
 
         workspaces = []
         planned = []
@@ -831,7 +859,7 @@ def _main(argv):
             planned.append({"path": w, "repo": r, "branch": W.CC_PREFIX + args["name"]})
             notes.append("workspace:   %s  (%s%s in %s)" % (w, W.CC_PREFIX, args["name"], r))
 
-        payload = build_payload(args, brief, workspaces)
+        payload = build_payload(args, brief, workspaces, targets)
         # THE PROVENANCE OF THE BRIEF ITSELF, decided here so the guards evaluate the
         # text that will actually be dispatched. It never refuses: a statement with no
         # source is named to the agent, and the agent re-derives it. On a brief that
@@ -957,6 +985,8 @@ def _main(argv):
                args["name"], "--dir", p["path"], "--session", session]
         if p["repo"] in bases:
             cmd += ["--base", bases[p["repo"]]]
+        if p["repo"] in own:
+            cmd += ["--integration", own[p["repo"]]]
         rc, out, err = sh(cmd, timeout=300)
         if rc != 0:
             report_problems("could not create the workspace in %s" % p["repo"],

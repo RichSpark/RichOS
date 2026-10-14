@@ -1305,6 +1305,49 @@ def record_integration(repo, branch, why="", by_session="", correct=False):
     return _write_integration(main, branch, "recorded", why, by_session, correct)
 
 
+def teammate_body_of_work(repo, branch, why="", by_session=""):
+    """THE BODY OF WORK OF A TEAMMATE BOUND TO A BRANCH OF ITS OWN (2026-10-14).
+
+    The CEO put the meeting and search work on the v1.3.0 release branch while
+    fixes go to main, so two bodies of work run in one repository at once.
+    `spawn.sh --integration richos=v1.3.0` used to CORRECT the repository's
+    current body of work (richos-001) to v1.3.0, moving every running
+    main-bound teammate with it; the lead found it 23 minutes later.
+
+    This answers the teammate's own body of work instead, and never touches
+    `current`: the repository's current one when it already integrates on
+    `branch`, else the newest teammate body of work for (repository, branch),
+    else a new one (source "teammate") that is not made current. The teammate
+    is bound to its id like any other (register_cc), so a land is proved
+    against `branch` and nobody else moves."""
+    main = main_checkout(repo)
+    if not main:
+        raise SpecError("the repository %s could not be resolved from git" % repo)
+    branch = (branch or "").strip()
+    if not branch or branch.startswith(CC_PREFIX) or branch.startswith(NATIVE_BRANCH_PREFIX):
+        raise SpecError("%r is not a branch a body of work integrates on (point 14)" % branch)
+    if not branch_tip(main, branch):
+        raise SpecError("there is no branch %s in %s to integrate on (point 14)" % (branch, main))
+    with Lock():
+        cur = _integration_file()
+        works = cur.setdefault("works", {})
+        current = works.get((cur.get("current") or {}).get(main) or "")
+        if current and current.get("branch") == branch:
+            return current
+        mine = [w for w in works.values()
+                if w.get("repo") == main and w.get("branch") == branch and w.get("source") == "teammate"]
+        if mine:
+            return max(mine, key=lambda w: w.get("recorded_at") or "")
+        wid = _new_work_id(cur, main)
+        rec = {"id": wid, "repo": main, "branch": branch, "recorded_at": iso(), "source": "teammate",
+               "why": why or "", "by_session": by_session or "", "corrections": []}
+        works[wid] = rec
+        write_json(_integration_path(), cur)
+    event("integration-recorded", repo=main, branch=branch, source="teammate", work=wid, corrected=False,
+          why=why or None)
+    return rec
+
+
 def _add_workspace(rec, kind, repo, path, branch, source):
     path = realpath(path) if path else ""
     for w in rec["workspaces"]:
@@ -1448,10 +1491,12 @@ def _check_workspace_name(path, branch):
     return kind
 
 
-def register_cc(session_id, name, repo, path, branch, identity=None):
+def register_cc(session_id, name, repo, path, branch, identity=None, integration=""):
     """Point 3, event 1, for a cc/ workspace: registered BEFORE it exists.
     create-teammate-worktree.sh calls this first; if it raises, nothing is
-    created and no spawn can name the workspace."""
+    created and no spawn can name the workspace. `integration`: a branch this
+    teammate lands on that is not the repository's current body of work's
+    (teammate_body_of_work); the teammate alone is bound to it."""
     if not session_id:
         raise SpecError("no session id: a registration without one can never be matched to a spawn")
     if not NAME_RE.match(name or ""):
@@ -1472,6 +1517,7 @@ def register_cc(session_id, name, repo, path, branch, identity=None):
     # registered, never-spawned workspace that point 5 cannot see until its
     # session ends. Refusing here leaves nothing behind at all.
     _refuse_unrecorded([repo], "creating %s's workspace" % name)
+    own = teammate_body_of_work(repo, integration, "%s's own branch" % name, session_id) if integration else None
     key = named_key(session_id, name)
     with Lock():
         rec = load_agent(key) or new_record(key, name=name, session_id=session_id)
@@ -1514,6 +1560,8 @@ def register_cc(session_id, name, repo, path, branch, identity=None):
                                 "discarded (points 5, 7). For new work, spawn a fresh teammate - names "
                                 "are used once." % (name, why))
         rec["session_identity"] = ident
+        if own:
+            rec.setdefault("integration_work", {})[_norm_repo(repo)] = own["id"]
         w = _add_workspace(rec, "cc", repo, path, branch, "create-teammate-worktree")
         w["created"] = False
         save_agent(rec)
@@ -5252,10 +5300,7 @@ def merge_and_land(ref, me="", message=""):
                 raise SpecError("cannot merge %s of %s: %s" % (b, repo, why_not))
             if is_ancestor(main, t, tip):
                 continue
-            rc, head, _e = git(main, "symbolic-ref", "--quiet", "--short", "HEAD")
-            if rc or head.strip() != target:
-                raise SpecError("cannot merge %s: the main checkout %s is on %s, not on %s, the branch this "
-                                "work integrates on" % (b, main, head.strip() or "a detached HEAD", target))
+            in_main = _merges_in_main_checkout(main, target, b)
             # Git merges the commit read above, never the branch name: a writer
             # that advances the branch after that read (even while an earlier
             # repository's merge gate runs) would otherwise land a newer commit
@@ -5271,24 +5316,95 @@ def merge_and_land(ref, me="", message=""):
                 holder = _take_land_lease(main)
                 if holder is not None:
                     taken.append((main, holder))
-            before = git(main, "rev-parse", "HEAD")[1].strip()
             # The lease this land runs under names this command, so the holder's
             # turn end keeps it until the command ends (2026-10-11: two merges in
             # a background script were refused after the lead's turn end released
             # the lease between their steps; operator_fences.land_process).
             _fence_program().register_land(main)
-            # git's own checks (pre-merge-commit) run here and may take minutes.
-            r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
-            if r.returncode != 0:
-                raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
-                                % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
-                                   _abort_own_merge(main, before, t)))
+            if in_main:
+                before = git(main, "rev-parse", "HEAD")[1].strip()
+                # git's own checks (pre-merge-commit) run here and may take minutes.
+                r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
+                if r.returncode != 0:
+                    raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
+                                    % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
+                                       _abort_own_merge(main, before, t)))
+            else:
+                _merge_in_temporary_checkout(main, target, args, b)
             merged.append((repo, b))
             event("merged", key=rec["key"], repo=repo, branch=b, into=target)
         return merged, land(rec["key"], me, keep_ignored=True)
     finally:
         for main, holder in taken:
             _release_land_lease(main, holder)
+
+
+def _merges_in_main_checkout(main, target, b):
+    """True: the merge into `target` runs in the main checkout, which has it
+    checked out. False: it runs in a temporary checkout of `target`
+    (_merge_in_temporary_checkout), because nothing has `target` checked out.
+
+    A RELEASE BRANCH IS NEVER CHECKED OUT IN THE MAIN CHECKOUT (2026-10-14):
+    the main checkout stays on main while teammates land on v1.3.0, and this
+    refused every such merge, so each was done by hand. main (or master) itself
+    is still merged only in the main checkout, as before; a target another
+    worktree has checked out is refused, because that tree is somebody's."""
+    wl = worktree_list(main)
+    if wl is None:
+        raise SpecError("cannot merge %s: the worktrees of %s cannot be read" % (b, main))
+    if wl and wl[0]["branch"] == target:
+        return True
+    other = [w["path"] for w in wl[1:] if w["branch"] == target]
+    if other:
+        raise SpecError("cannot merge %s into %s: %s has %s checked out, and a merge never runs in somebody "
+                        "else's tree. Free it there, or check %s out in the main checkout %s."
+                        % (b, target, other[0], target, target, main))
+    if target in ("main", "master"):
+        head = wl[0]["branch"] if wl else ""
+        raise SpecError("cannot merge %s: the main checkout %s is on %s, not on %s, the branch this work "
+                        "integrates on" % (b, main, head or "a detached HEAD", target))
+    return False
+
+
+def _merge_in_temporary_checkout(main, target, args, b):
+    """Runs `git merge` (with git's own hooks and checks) in a temporary
+    checkout of `target` under this tool's state directory, then removes that
+    checkout. A refused merge commits nothing, so `target` has not moved; the
+    checkout is removed either way."""
+    _ensure_dirs()
+    parent = _p("merge-checkouts")
+    os.makedirs(parent, exist_ok=True)
+    path = os.path.join(os.path.realpath(parent), "%s-%d" % (_key_segment(target), os.getpid()))
+    _remove_temporary_checkout(main, path)
+    rc, out, err = git(main, "worktree", "add", "--quiet", path, target, timeout=600)
+    if rc != 0:
+        _remove_temporary_checkout(main, path)
+        raise SpecError("cannot merge %s: a temporary checkout of %s could not be made (exit %d); nothing was "
+                        "landed:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
+    try:
+        # git's own checks (pre-merge-commit) run here and may take minutes.
+        r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True, env=_git_env())
+    finally:
+        left = _remove_temporary_checkout(main, path)
+    if r.returncode != 0:
+        raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed and %s did not move:"
+                        "\n%s%s" % (b, target, main, r.returncode, target, (r.stdout + r.stderr).strip()[-3000:],
+                                    "\n" + left if left else ""))
+    if left:
+        sys.stderr.write(left + "\n")
+
+
+def _remove_temporary_checkout(main, path):
+    """"" once `path` is gone and git no longer lists it, else what is left.
+    Only this path is removed: no `git worktree prune`, which would touch
+    every other worktree's record too."""
+    if os.path.lexists(path):
+        git(main, "worktree", "remove", "--force", path, timeout=300)
+    listed = path in [w["path"] for w in worktree_list(main) or []]
+    if os.path.lexists(path) or listed:
+        return ("the temporary checkout %s could not be removed; git worktree remove --force %s removes it"
+                % (path, path))
+    return ""
 
 
 def _lease_holder_args(F, conf):
@@ -7629,6 +7745,8 @@ def main(argv):
     x = sub.add_parser("register-cc")
     for f in ("--name", "--repo", "--path", "--branch"):
         x.add_argument(f, required=True)
+    x.add_argument("--integration", default="",
+                   help="a branch this teammate alone lands on (teammate_body_of_work)")
     x = sub.add_parser("confirm-cc")
     x.add_argument("--name", required=True)
     x.add_argument("--path", required=True)
@@ -7799,7 +7917,8 @@ def main(argv):
                 for wid in sorted(works):
                     w = works[wid]
                     print("%s\t%s\t%s\t%s\t%s\t%s"
-                          % (wid, "current" if wid in cur else "superseded", w.get("repo"),
+                          % (wid, "current" if wid in cur else ("teammate" if w.get("source") == "teammate"
+                                                                else "superseded"), w.get("repo"),
                              w.get("branch"), w.get("recorded_at"), w.get("why") or ""))
                     for c in w.get("corrections") or []:
                         print("\t  corrected from %s at %s: %s"
@@ -7819,7 +7938,7 @@ def main(argv):
             for k, ok in retry_due(budget=60.0):
                 print("%s %s" % ("deleted" if ok else "still failing", k))
         elif a.cmd == "register-cc":
-            register_cc(me, a.name, a.repo, a.path, a.branch)
+            register_cc(me, a.name, a.repo, a.path, a.branch, integration=a.integration)
             print("registered")
         elif a.cmd == "withdraw-cc":
             r = withdraw_cc(me, a.name, a.why)

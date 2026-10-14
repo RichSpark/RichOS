@@ -4673,6 +4673,70 @@ class DiscardTakesAWorkspaceWhoseTeammateNeverRan(Base):
         self.assertTrue(os.path.isdir(cc))
 
 
+class TeammateBoundToABranchOfItsOwn(Base):
+    """2026-10-14: the meeting and search work goes to the v1.3.0 release
+    branch while fixes go to main. `spawn.sh --integration richos=v1.3.0` for
+    echo-opus-tap22 CORRECTED the repository's body of work richos-001 from
+    main to v1.3.0, moving every running main-bound teammate with it, and
+    `workspaces.sh merge` could only merge into a branch the main checkout has
+    checked out, so every v1.3.0 land was done by hand. Now the teammate gets a
+    body of work of its own, nobody else moves, and its merge lands on v1.3.0
+    in a temporary checkout while the main checkout stays on main."""
+
+    def spawn_lib(self):
+        spec_ = importlib.util.spec_from_file_location(
+            "richos_spawn_lib", os.path.join(ENGINE, "scripts", "lib", "spawn.py"))
+        mod = importlib.util.module_from_spec(spec_)
+        spec_.loader.exec_module(mod)
+        return mod
+
+    def test_a_release_bound_teammate_lands_on_its_branch_and_moves_nobody(self):
+        run("git", "-C", self.other, "branch", "v1.3.0", "main")
+        # A main-bound teammate already running in the same repository.
+        cc_main = self.make_cc("zach-opus-rm")
+        self.spawn("zach-opus-rm", cc=cc_main)
+        work_before = ws.integration_record(self.other)
+        # spawn.sh's step for `--integration <other>=v1.3.0`.
+        SP = self.spawn_lib()
+        out = SP.ensure_integration(self.other, "v1.3.0", "the release", self.sid)
+        self.assertEqual(ws.integration_record(self.other), work_before, "the repository's record moved: %s" % (out,))
+        note, own = out
+        self.assertEqual(own, "v1.3.0", note)
+        self.assertIn("this teammate only", note)
+        self.assertEqual(ws.integration_target([self.rec("zach-opus-rm")], self.other)[0], "main")
+        # create-teammate-worktree.sh's registration, carrying that branch.
+        path = os.path.join(self.env.root, "other-wt", "zach-opus-rv")
+        ws.register_cc(self.sid, "zach-opus-rv", self.other, path, "cc/zach-opus-rv", integration="v1.3.0")
+        run("git", "-C", self.other, "worktree", "add", "-q", path, "-b", "cc/zach-opus-rv", "v1.3.0")
+        ws.confirm_cc(self.sid, "zach-opus-rv", path, True)
+        aid, _npath = self.spawn("zach-opus-rv", cc=path)
+        self.commit(path, "release.txt")
+        tip = run("git", "-C", path, "rev-parse", "HEAD").stdout.strip()
+        self.finish(aid)
+        self.assertEqual(ws.integration_target([self.rec("zach-opus-rv")], self.other)[0], "v1.3.0")
+        self.assertEqual(ws.integration_target([self.rec("zach-opus-rm")], self.other)[0], "main")
+        self.assertEqual(ws.integration_record(self.other)["branch"], "main")
+        main_before = run("git", "-C", self.other, "rev-parse", "main").stdout.strip()
+
+        merged, res = ws.merge_and_land("zach-opus-rv", self.sid)
+
+        self.assertEqual(merged, [(self.other, "cc/zach-opus-rv")])
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "v1.3.0^2").stdout.strip(), tip)
+        self.assertIn("into v1.3.0", run("git", "-C", self.other, "log", "-1", "--format=%s", "v1.3.0").stdout)
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main").stdout.strip(), main_before)
+        self.assertEqual(run("git", "-C", self.other, "symbolic-ref", "--short", "HEAD").stdout.strip(), "main")
+        self.assertEqual(run("git", "-C", self.other, "status", "--porcelain").stdout, "")
+        self.assertEqual(worktrees(self.other), [self.other, cc_main], "a temporary checkout was left behind")
+        self.assertNotIn("cc/zach-opus-rv", branches(self.other))
+        self.assertTrue(os.path.isdir(cc_main))
+        # Its handover's last step names its own branch, never main.
+        prepared = SP.PREPARE.prepare({"name": "zach-opus-rv", "subagent_type": "zach", "prompt": "do it"},
+                                      [(self.other, "v1.3.0")])
+        self.assertIn("run `git merge v1.3.0` inside your own worktree", prepared["prompt"])
+        self.assertNotIn("git merge main", prepared["prompt"])
+
+
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
     """2026-10-11, both in richos from the lead's terminal, each a background
     script that took the lease and then ran `workspaces.sh merge`:

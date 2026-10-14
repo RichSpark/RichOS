@@ -357,6 +357,37 @@ else
     bad "the printed payload is complete" "$OUT"
 fi
 
+# 2026-10-14: --integration <repo>=v1.3.0 for one teammate CORRECTED the whole
+# repository's body of work and moved every running main-bound teammate with
+# it, and the appended last step still said to merge main into the release.
+git -C "$TARGET" branch rel "$(git -C "$TARGET" commit-tree -p main -m "rel only" "main^{tree}")"
+run "zach-sonnet-rel1" --repo "$TARGET" --type zach --brief "$BRIEF" --integration "$TARGET=rel"
+RELWT="$SANDBOX/widgets-wt/zach-sonnet-rel1"
+RELCHECK="$(python3 - "$RICHOS_WORKSPACES_DIR" "$TARGET" <<'PY'
+import glob, json, os, sys
+d, target = sys.argv[1], os.path.realpath(sys.argv[2])
+integ = json.load(open(os.path.join(d, "integration.json")))
+cur = integ["works"][integ["current"][target]]["branch"]
+rec = [json.load(open(p)) for p in glob.glob(os.path.join(d, "agents", "*zach-sonnet-rel1.json"))][0]
+mine = integ["works"][rec["integration_work"][target]]["branch"]
+print("%s %s" % (cur, mine))
+PY
+)"
+if [ "$RC" -eq 0 ] && [ "$RELCHECK" = "main rel" ]; then
+    ok "--integration for ONE teammate binds that teammate alone; the repository stays on main"
+else
+    bad "--integration binds the teammate alone" "rc=$RC check='$RELCHECK' $OUT"
+fi
+[ "$(git -C "$RELWT" rev-parse HEAD 2>/dev/null)" = "$(git -C "$TARGET" rev-parse rel)" ] \
+    && ok "and its workspace starts from that branch, not from main" \
+    || bad "the workspace starts from its own branch" "$(git -C "$RELWT" log --oneline -1 2>&1)"
+if printf '%s' "$OUT" | grep -qF "\`git merge rel\` in $TARGET" \
+   && ! printf '%s' "$OUT" | grep -qF "\`git merge main\` in $TARGET"; then
+    ok "and its last step merges rel in that repository, never main"
+else
+    bad "the last step names the teammate's own branch" "$OUT"
+fi
+
 run "zach-sonnet-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qi "already"; then
     ok "a REUSED name is refused before anything is created"
