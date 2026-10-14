@@ -12,7 +12,7 @@
 //! Pure functions over a directory, so the rules are unit tests; the app runs the sync and the
 //! timer (`meetings.rs`).
 
-use crate::meeting::Scheduled;
+use crate::meeting::{MeetingApp, Scheduled};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -47,18 +47,24 @@ pub struct CalendarMeeting {
     pub title: String,
     pub starts_at: u64,
     pub ends_at: Option<u64>,
+    /// The app its meeting link opens, when the location or invite text has one.
+    pub app: Option<MeetingApp>,
 }
 
 impl CalendarMeeting {
+    /// Its end, or, with none, an hour after its start.
+    fn end(&self) -> u64 {
+        self.ends_at.unwrap_or(self.starts_at + 60 * 60_000)
+    }
+
     /// Due to prompt at `now`: from a minute before its start until it ends (or, with no end, for
     /// an hour), so an app opened late in a meeting still offers notes.
     pub fn due(&self, now: u64) -> bool {
-        let end = self.ends_at.unwrap_or(self.starts_at + 60 * 60_000);
-        now + PROMPT_LEAD_MS >= self.starts_at && now < end
+        now + PROMPT_LEAD_MS >= self.starts_at && now < self.end()
     }
 
     pub fn scheduled(&self) -> Scheduled {
-        Scheduled { event_id: self.event_id.clone(), title: self.title.clone(), starts_at: self.starts_at }
+        Scheduled { event_id: self.event_id.clone(), title: self.title.clone(), starts_at: self.starts_at, ends_at: self.end(), app: self.app }
     }
 }
 
@@ -117,6 +123,8 @@ fn meeting_of(item: &serde_json::Value) -> Option<CalendarMeeting> {
         title: item["content"]["title"].as_str().unwrap_or("Meeting").to_string(),
         starts_at,
         ends_at: item["temporal"]["validUntil"].as_u64(),
+        // The link is in the location (a Zoom or Teams URL there) or the invite text.
+        app: s["location"].as_str().and_then(MeetingApp::in_text).or_else(|| item["content"]["text"].as_str().and_then(MeetingApp::in_text)),
     })
 }
 
@@ -180,7 +188,9 @@ mod tests {
         let z = Zone::new("latest");
         z.revision("google", "a", "rev-1", google("google:calendar:x:a", "Acme pricing review", 1_000_000, 1, false, &["maya@acme.example"]));
         // A later revision moved it by an hour.
-        z.revision("google", "a", "rev-2", google("google:calendar:x:a", "Acme pricing review", 4_600_000, 2, false, &["maya@acme.example"]));
+        let mut moved = google("google:calendar:x:a", "Acme pricing review", 4_600_000, 2, false, &["maya@acme.example"]);
+        moved["content"]["structured"]["location"] = json!("https://us02web.zoom.us/j/123");
+        z.revision("google", "a", "rev-2", moved);
         // Canceled since: its latest revision withdraws it.
         z.revision("google", "b", "rev-1", google("google:calendar:x:b", "Standup", 2_000_000, 1, false, &["sam@acme.example"]));
         z.revision("google", "b", "rev-2", google("google:calendar:x:b", "Standup", 2_000_000, 2, true, &["sam@acme.example"]));
@@ -198,16 +208,19 @@ mod tests {
             "provenance": {"fetchedAt": 1},
             "actors": {"author": {"email": "lee@partner.example"}, "attendees": [{"email": "me@example.com"}]},
             "temporal": {"occurredAt": 5_000_000u64, "validUntil": null},
-            "content": {"title": "Partner sync", "structured": {"isAllDay": false, "withdrawn": false}}
+            "content": {"title": "Partner sync", "text": "Join: https://teams.microsoft.com/l/meetup-join/x",
+                        "structured": {"location": "Microsoft Teams Meeting", "isAllDay": false, "withdrawn": false}}
         }));
         let found = meetings(&z.0);
         let titles: Vec<(&str, u64)> = found.iter().map(|m| (m.title.as_str(), m.starts_at)).collect();
         assert_eq!(titles, vec![("Acme pricing review", 4_600_000), ("Partner sync", 5_000_000)]);
+        // The meeting link's app, from the location or else the invite text.
+        assert_eq!(found.iter().map(|m| m.app).collect::<Vec<_>>(), vec![Some(MeetingApp::Zoom), Some(MeetingApp::Teams)]);
     }
 
     #[test]
     fn a_meeting_is_due_from_one_minute_before_its_start_until_it_ends() {
-        let m = CalendarMeeting { event_id: "e".into(), title: "T".into(), starts_at: 10 * 60_000, ends_at: Some(40 * 60_000) };
+        let m = CalendarMeeting { event_id: "e".into(), title: "T".into(), starts_at: 10 * 60_000, ends_at: Some(40 * 60_000), app: None };
         assert!(!m.due(10 * 60_000 - PROMPT_LEAD_MS - 1));
         assert!(m.due(10 * 60_000 - PROMPT_LEAD_MS));
         assert!(m.due(39 * 60_000));
@@ -218,8 +231,8 @@ mod tests {
     fn a_canceled_or_moved_meeting_is_withdrawn_and_an_unchanged_one_is_not() {
         let previous: BTreeMap<String, u64> = [("a".to_string(), 100), ("b".to_string(), 200), ("c".to_string(), 300)].into();
         let now = vec![
-            CalendarMeeting { event_id: "a".into(), title: "A".into(), starts_at: 100, ends_at: None },
-            CalendarMeeting { event_id: "b".into(), title: "B".into(), starts_at: 250, ends_at: None },
+            CalendarMeeting { event_id: "a".into(), title: "A".into(), starts_at: 100, ends_at: None, app: None },
+            CalendarMeeting { event_id: "b".into(), title: "B".into(), starts_at: 250, ends_at: None, app: None },
         ];
         assert_eq!(withdrawn(&previous, &now), vec!["b".to_string(), "c".to_string()]);
     }
