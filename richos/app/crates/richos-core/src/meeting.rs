@@ -608,6 +608,14 @@ impl MeetingMonitor {
         if let Some(id) = over {
             actions.extend(self.retire(&id));
         }
+        // An answer stays; the meeting's time and link are the calendar's latest, so an end the
+        // calendar moved later still covers a rejoin, and one moved earlier stops covering calls
+        // (rv-20261014T114658Z-04417671-85c4 #2).
+        for meeting in calendar {
+            if let Some(kept) = self.answered.get_mut(&meeting.event_id) {
+                *kept = meeting.scheduled();
+            }
+        }
         self.answered.retain(|_, meeting| now < meeting.ends_at);
         actions
     }
@@ -1822,6 +1830,44 @@ mod tests {
             m.watch(&off(1, "us.zoom.xos"), 900_000);
             assert_eq!(m.clock(908_000, &cal), vec![], "A's Zoom call was taken for no-link B");
             assert!(m.is_recording());
+        }
+    }
+
+    /// rv-20261014T114658Z-04417671-85c4 #2 (`fixtures/meeting_review.rs`): an answer kept the
+    /// meeting's end as it was when he answered, though the calendar later moved the end.
+    mod review_rv_20261014t114658z {
+        use super::super::*;
+        fn zoom_on(m: &mut MeetingMonitor, seconds: u64) -> Vec<Action> {
+            m.watch(&WatchLine::Started { pid: 1, family: "us.zoom.xos".into(), app: Some("Zoom".into()), at: seconds * 1000 }, seconds * 1000)
+        }
+        fn a(end: u64) -> CalendarMeeting {
+            CalendarMeeting { event_id: "A".into(), title: "A".into(), starts_at: 60_000, ends_at: Some(end * 1000), app: Some(MeetingApp::Zoom) }
+        }
+        fn dismissed() -> MeetingMonitor {
+            let mut m = MeetingMonitor::new();
+            m.clock(0, &[a(3660)]);
+            m.input(Input::NotThisOne);
+            m
+        }
+
+        #[test]
+        fn an_answered_meeting_extended_by_the_calendar_still_covers_a_rejoin() {
+            let mut m = dismissed();
+            m.clock(3_000_000, &[a(7260)]);
+            m.clock(3_660_000, &[a(7260)]);
+            assert_eq!(zoom_on(&mut m, 4000), vec![], "extended to 7260 s: a join at 4000 s asked again");
+        }
+
+        #[test]
+        fn an_answered_meeting_shortened_by_the_calendar_ends_at_its_new_end() {
+            let mut m = dismissed();
+            m.clock(600_000, &[a(1200)]);
+            m.clock(1_300_000, &[a(1200)]);
+            assert_eq!(
+                zoom_on(&mut m, 1300),
+                vec![Action::ShowPrompt(PromptKind::Unscheduled { app: "Zoom".into() })],
+                "shortened to 1200 s: a different Zoom call at 1300 s was taken for it"
+            );
         }
     }
 }
