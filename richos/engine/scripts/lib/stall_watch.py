@@ -147,6 +147,7 @@ CPU_LINE = 80
 IDLE_END_MINUTES = 10      # a deferred end's own commands idle this long are ended (IDLE END below)
 IDLE_CPU_PERCENT = 1.0     # "idle": under this share of one core between two looks
 IDLE_CPU_FLOOR = 0.05      # CPU seconds always counted as idle between two looks (clock resolution)
+IDLE_LOOK_GAP = 3 * POLL_SECONDS  # a look later than this after the previous one starts the idle count again
 
 
 # ---------------------------------------------------------------------------
@@ -766,7 +767,18 @@ def _silent(src, reg, now, session_id, th, waits):
 # included, shared daemons left out) have together used under IDLE_CPU_PERCENT
 # of one core between every two looks for IDLE_END_MINUTES, has those commands
 # ended here through agent_hold.end_owned(), with every exclusion it keeps (the
-# test VM guest, shared daemons, a held agent's work). Their completion wakes the
+# test VM guest, shared daemons, a held agent's work) and one more: a process whose
+# readable environment carries ANOTHER agent's owner or session tag is left
+# running, with its own tree. What is ended is the agent's recorded shells (pid,
+# start time and parent captured at spawn, start time re-read from the kernel
+# before each signal), their descendants and the processes carrying its own tag.
+# The tag alone cannot be the rule (measured 2026-10-14 on macOS 15): the shell
+# exports the tag after its own exec, and macOS shows no environment at all for
+# /bin/sleep, /bin/bash, /bin/zsh or /usr/bin/grep, so an `until grep; do sleep`
+# loop has no process whose environment shows the tag. Only looks that follow
+# each other count: a look more than IDLE_LOOK_GAP after the previous one (the
+# Mac asleep, a slow look) starts the ten minutes again, because nobody measured
+# the time in between. Their completion wakes the
 # agent and its next SubagentStop records its end, which runs end_owned_work().
 # One line says what was ended. CPU includes exited children (agent_hold.cpu_used),
 # so a loop of short commands is work; a process whose CPU cannot be read makes
@@ -843,8 +855,10 @@ def idle_end(src, now, session_id, prev):
         old = prev.get(key) if isinstance(prev.get(key), dict) else None
         if any(v[1] is None for v in reading.values()):
             continue  # unmeasured is never idle
-        if old is None:
-            state[key] = {"since": now, "real": real, "cpu": reading}
+        before = old.get("at") if old else None
+        if not isinstance(before, (int, float)) or not 0 <= now - before <= IDLE_LOOK_GAP:
+            # The first look, or one after time nobody measured: the count starts here.
+            state[key] = {"since": now, "at": now, "real": real, "cpu": reading}
             continue
         used = 0.0
         for pid, (birth, cpu) in reading.items():
@@ -853,7 +867,7 @@ def idle_end(src, now, session_id, prev):
         limit = max(IDLE_CPU_FLOOR, IDLE_CPU_PERCENT / 100.0 * max(0.0, real - float(old.get("real") or real)))
         since = float(old.get("since") or now) if used <= limit else now
         if now - since < end_after:
-            state[key] = {"since": since, "real": real, "cpu": reading}
+            state[key] = {"since": since, "at": now, "real": real, "cpu": reading}
             continue
         name = str(rec.get("name") or key)
         cmds = []
@@ -861,7 +875,7 @@ def idle_end(src, now, session_id, prev):
             if c["command"] and _short(c["command"], 70) not in cmds:
                 cmds.append(_short(c["command"], 70))
         r = ah.end_owned(sid, aid, name, "ended by stall-watch: its end waited only on its own commands, "
-                                         "idle %s" % span(now - since))
+                                         "idle %s" % span(now - since), spare_foreign=True)
         lines.append("STALL-WATCH %s: %s's turn ended at %s and its end waited only on its own command(s), idle "
                      "(no CPU to speak of) for %s, so they were ended (its run now ends by itself)%s: %s" % (
                          hhmm(now), name, hhmm(at), span(now - since),

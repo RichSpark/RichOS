@@ -48,6 +48,10 @@
 #        however long it runs
 #   T08  a deferred end whose own command waits in line for a shared resource
 #        (a recorded wait, no CPU): never ended
+#   T09  an 11-minute gap between two looks (the Mac asleep) is never counted as
+#        idle: the count starts again after it
+#   T10  a process in the agent's tree carrying ANOTHER agent's owner tag is left
+#        running (and its parent shell); the agent's own idle loop is ended
 #   T04  a long honest run (transcript written 5 min ago, no commit for an
 #        hour), a paused teammate and a finished one: none is SILENT
 #   E01  THE 2026-10-01 INCIDENT: a teammate of this session raises a proceeding,
@@ -480,12 +484,17 @@ wait_cpu() { # <pid> <cpu-seconds>: until it has used that much more CPU (the bo
     local start; start="$(cpu_of "$1")"
     wait_for 120 cpu_past "$1" "$(python3 -c 'import sys; print(float(sys.argv[1]) + float(sys.argv[2]))' "$start" "$2")"
 }
+tick_minutes() { # <from-s> <to-s>: one look a minute, as the monitor looks; all their output in OUT
+    local t="$1" all=""
+    while [ "$t" -le "$2" ]; do tick "$t"; all="$all$OUT"$'\n'; t=$((t + 60)); done
+    OUT="$all"
+}
 new_registry t6; new_state t6
 add_agent romeo-opus-i1 a0000000000fixi "$SID" 3600 3000 1500 deferred
 start_own_call a0000000000fixi toolu_loop1 'until grep -q DONE /nonexistent-deleted-scratch/x.log 2>/dev/null; do sleep 1; done'
 IDLE="$OWNPID"
 tick 0; FIRST="$OUT"
-tick 660; ENDOUT="$OUT"
+tick_minutes 60 660; ENDOUT="$OUT"
 wait_for 10 sh -c "! kill -0 $IDLE 2>/dev/null"; GONE=$?
 tick 720; AFTER="$OUT"
 END_AT="$(python3 - "$ENGINE" a0000000000fixi romeo-opus-i1 <<'PY'
@@ -513,8 +522,12 @@ new_registry t7; new_state t7
 add_agent sierra-opus-b1 a0000000000fixb "$SID" 3600 3000 1500 deferred
 start_own_call a0000000000fixb toolu_loop1 'while :; do :; done'
 BUSY="$OWNPID"
-# Each later look comes once the loop has used another CPU-second: the fact, never a clock.
-tick 0; wait_cpu "$BUSY" 1; tick 660; B1="$OUT"; wait_cpu "$BUSY" 1; tick 1320; B2="$OUT"
+# Each later look, a minute apart, comes once the loop has used more CPU: the fact, never a clock.
+tick 0; B1=""; B2=""
+for t in $(seq 60 60 1320); do
+    wait_cpu "$BUSY" 0.2; tick "$t"
+    if [ "$t" -le 660 ]; then B1="$B1$OUT"; else B2="$B2$OUT"; fi
+done
 alive "$BUSY"; BUSY_ALIVE=$?
 check "T07  a deferred end whose own command is busy in every look: never ended, however long" \
     "$( ! has "$B1" "were ended" && ! has "$B2" "were ended" && [ "$BUSY_ALIVE" -eq 0 ]; echo $?)" \
@@ -527,12 +540,57 @@ start_own_call a0000000000fixw8 toolu_line1 "python3 -c 'import sys, time; sys.p
 with resource_waits.Wait(\"proof-run\", \"fixture: waiting in line\"): time.sleep(900)'"
 INLINE="$OWNPID"
 wait_for 10 sh -c "ls '$RICHOS_WAITS_DIR'/*.json >/dev/null 2>&1"
-tick 0; tick 660; W1="$OUT"
+tick_minutes 0 660; W1="$OUT"
 alive "$INLINE"; INLINE_ALIVE=$?
 check "T08  a deferred end whose own command waits in line for a shared resource (no CPU): never ended" \
     "$( ! has "$W1" "were ended" && [ "$INLINE_ALIVE" -eq 0 ]; echo $?)" "w1=$W1 alive=$INLINE_ALIVE"
 kill "$INLINE" 2>/dev/null
 rm -f "$RICHOS_WAITS_DIR"/*.json
+
+# T09 (second review rv-20261014T104951Z-6aad0306-ace6): the watcher missed its looks for
+# 11 minutes (the Mac asleep, a slow look). Nobody measured that time, so it is never
+# counted as idle: the count starts again at the look after the gap.
+new_registry t9; new_state t9
+add_agent uniform-opus-g1 a0000000000fixg "$SID" 3600 3000 1500 deferred
+start_own_call a0000000000fixg toolu_loop1 'until grep -q DONE /nonexistent-deleted-scratch/g.log 2>/dev/null; do sleep 1; done'
+GAPLOOP="$OWNPID"
+tick 0; tick 660; GAPOUT="$OUT"
+tick_minutes 720 1200; G1="$OUT"
+tick 1260; G2="$OUT"
+wait_for 10 sh -c "! kill -0 $GAPLOOP 2>/dev/null"; GAPGONE=$?
+check "T09  an 11-min gap between looks is never counted as idle: not ended after it, ended 10 looked-at minutes later" \
+    "$( ! has "$GAPOUT" "were ended" && ! has "$G1" "were ended" \
+        && [ "$(count "$G2" "its end waited only on its own command(s)")" -eq 1 ] && has "$G2" "uniform-opus-g1" \
+        && [ "$GAPGONE" -eq 0 ]; echo $?)" "gap=$GAPOUT g1=$G1 g2=$G2 gone=$GAPGONE"
+alive "$GAPLOOP" && kill "$GAPLOOP" 2>/dev/null
+
+# T10 (second review rv-20261014T104951Z-6aad0306-ace6): a process in the agent's tree whose
+# readable environment carries ANOTHER agent's owner tag is not this agent's: the automatic
+# end leaves it (and the shell that is its parent) running, ends the agent's own idle loop,
+# and its one line says what it left.
+new_registry t10; new_state t10
+add_agent victor-opus-f1 a0000000000fixf "$SID" 3600 3000 1500 deferred
+start_own_call a0000000000fixf toolu_loop1 'until grep -q DONE /nonexistent-deleted-scratch/f.log 2>/dev/null; do sleep 1; done'
+FLOOP="$OWNPID"
+start_own_call a0000000000fixf toolu_other1 "RICHOS_AGENT_OWNER=a0000000000zzzz python3 -c 'import os, sys, time; open(sys.argv[1], \"w\").write(\"%d\\n\" % os.getpid()); time.sleep(900)' '$SB/t10-other.pid'"
+FSHELL="$OWNPID"
+wait_for 10 test -s "$SB/t10-other.pid"
+OTHER="$(cat "$SB/t10-other.pid")"
+# The fixture is only a proof where the OS shows that process's environment (Homebrew python does).
+FOREIGN_SEEN="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import agent_hold
+print(int(b"RICHOS_AGENT_OWNER=a0000000000zzzz" in (agent_hold._environment(int(sys.argv[2])) or [])))' \
+    "$ENGINE/scripts/lib" "$OTHER")"
+tick 0; tick_minutes 60 660; FOUT="$OUT"
+wait_for 10 sh -c "! kill -0 $FLOOP 2>/dev/null"; FGONE=$?
+alive "$OTHER"; OTHER_ALIVE=$?
+alive "$FSHELL"; FSHELL_ALIVE=$?
+check "T10  another agent's tagged process inside the tree is left running; the agent's own idle loop is ended" \
+    "$( [ "$FOREIGN_SEEN" = 1 ] && [ "$(count "$FOUT" "its end waited only on its own command(s)")" -eq 1 ] \
+        && has "$FOUT" "carrying another agent's owner or session tag left running" && has "$FOUT" "pid $OTHER" \
+        && [ "$FGONE" -eq 0 ] && [ "$OTHER_ALIVE" -eq 0 ] && [ "$FSHELL_ALIVE" -eq 0 ]; echo $?)" \
+    "seen=$FOREIGN_SEEN out=$FOUT loop_gone=$FGONE other_alive=$OTHER_ALIVE shell_alive=$FSHELL_ALIVE"
+alive "$FLOOP" && kill "$FLOOP" 2>/dev/null
+kill "$OTHER" "$FSHELL" 2>/dev/null; rm -f "$SB/t10-other.pid"
 
 # --- L: slow steps (2026-10-04, isaac-opus-logo1: every step cost ~4.5 minutes) ----
 write_steps() { # <agent-id> <command> <result-text> <step-seconds> <count>: steps ending now-60, spaced 5 min

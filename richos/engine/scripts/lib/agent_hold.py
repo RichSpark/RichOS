@@ -625,6 +625,23 @@ def tagged(agent_id, table, since, session_id=None):
     return hits
 
 
+def foreign(session_id, agent_id, pids, table):
+    """Those of pids whose readable environment carries ANOTHER agent's owner or session tag,
+    with their trees: provably not this agent's, whatever their ancestry. A process whose
+    environment the OS will not show (macOS shows none for its own binaries: /bin/sleep,
+    /bin/zsh) or that carries no tag is not foreign."""
+    own = {TAG.encode(): ("%s=%s" % (TAG, agent_id)).encode(),
+           SESSION_TAG.encode(): ("%s=%s" % (SESSION_TAG, session_id)).encode()}
+    hits = set()
+    for pid in pids:
+        for item in _environment(pid) or []:
+            name = item.split(b"=", 1)[0]
+            if name in own and item != own[name]:
+                hits.add(pid)
+                break
+    return subtree(hits, table) & set(pids)
+
+
 def subtree(roots, table):
     """roots, their descendants and the members of every group one of them leads."""
     found = set(p for p in roots if p in table)
@@ -1690,10 +1707,12 @@ def _signal_same(pid, birth, sig):
     return True
 
 
-def end_owned(session_id, agent_id, name="", why=""):
+def end_owned(session_id, agent_id, name="", why="", spare_foreign=False):
     """End the commands this agent still owns; never a held (paused) agent's work.
 
     The owned tree and its exclusions are owned_tree()'s, exactly as for a hold.
+    spare_foreign (the stall watcher's automatic end): a process whose readable
+    environment carries another agent's owner or session tag is left running, its tree too.
     Each process is signaled only while it is still the process recorded (its start
     time re-read from the kernel immediately before EACH signal): SIGTERM and SIGCONT first, SIGKILL after END_GRACE for any
     that remain. Rounds catch a process forked between the snapshot and the
@@ -1710,6 +1729,8 @@ def end_owned(session_id, agent_id, name="", why=""):
     signaled, excluded, notes, described, unconfirmed = {}, set(), [], {}, {}
     for _ in range(STOP_ROUNDS):
         owned, excl, _protected, found_notes, _parents = owned_tree(session_id, agent_id, table)
+        other = foreign(session_id, agent_id, owned - excl, table) if spare_foreign else set()
+        excl = excl | other
         # What is left running keeps its owned parents too: ending a parent can end its tree
         # (a proc_tree supervisor's cleanup ends the walk it runs; second review
         # rv-20261011T055437Z-792eda49-35e8). Freezing a parent is harmless, so a hold has no
@@ -1723,6 +1744,11 @@ def end_owned(session_id, agent_id, name="", why=""):
         excl = excl | parents_of
         excluded |= excl
         notes = list(found_notes or notes)
+        if other:
+            line = ("process(es) carrying another agent's owner or session tag left running, with "
+                    "their own: pid %s" % ", ".join(map(str, sorted(other))))
+            if line not in notes:
+                notes.append(line)
         if parents_of:
             notes.append("its parent process(es) of what is left running also left running, so ending "
                          "them cannot end it: pid %s" % ", ".join(map(str, sorted(parents_of))))
