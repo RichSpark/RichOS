@@ -70,7 +70,7 @@ impl CalendarMeeting {
 
 /// Every meeting in the zone that may prompt, earliest first.
 pub fn meetings(zone: &Path) -> Vec<CalendarMeeting> {
-    let mut latest: BTreeMap<PathBuf, (u64, serde_json::Value)> = BTreeMap::new();
+    let mut latest: BTreeMap<PathBuf, (u64, serde_json::Value, PathBuf)> = BTreeMap::new();
     for (vendor, _) in VENDORS {
         let Ok(events) = std::fs::read_dir(zone.join(vendor).join("calendar")) else { continue };
         for event in events.flatten() {
@@ -79,23 +79,39 @@ pub fn meetings(zone: &Path) -> Vec<CalendarMeeting> {
                 let Ok(text) = std::fs::read_to_string(revision.path().join("item.json")) else { continue };
                 let Ok(item) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
                 let fetched = item["provenance"]["fetchedAt"].as_u64().unwrap_or(0);
-                let newer = latest.get(&event.path()).is_none_or(|(at, _)| fetched >= *at);
+                let newer = latest.get(&event.path()).is_none_or(|(at, _, _)| fetched >= *at);
                 if newer {
-                    latest.insert(event.path(), (fetched, item));
+                    latest.insert(event.path(), (fetched, item, revision.path()));
                 }
             }
         }
     }
     let mut seen = BTreeSet::new();
-    let mut out: Vec<CalendarMeeting> = latest.into_values().filter_map(|(_, item)| meeting_of(&item)).collect();
+    let mut out: Vec<CalendarMeeting> = latest.into_values().filter_map(|(_, item, dir)| meeting_of(&item, &stored_text(&item, &dir))).collect();
     out.sort_by(|a, b| (a.starts_at, &a.event_id).cmp(&(b.starts_at, &b.event_id)));
     // One meeting on two calendars (or two accounts) is one prompt.
     out.retain(|m| seen.insert((m.starts_at, m.title.clone())));
     out
 }
 
-/// The meeting a revision describes, when it should prompt.
-fn meeting_of(item: &serde_json::Value) -> Option<CalendarMeeting> {
+/// A revision's invite text: `content.text`, or, as the service stores it (`evidence.js`
+/// `writeEvidence` moves the text out of the JSON), the file `content.textFile` names beside
+/// `item.json` (rv-20261014T114658Z-04417671-85c4 #3: a Google invite's Zoom link only in its
+/// HTML description was never read). A bare file name only; empty when there is none.
+fn stored_text(item: &serde_json::Value, revision: &Path) -> String {
+    if let Some(text) = item["content"]["text"].as_str() {
+        return text.to_string();
+    }
+    item["content"]["textFile"]
+        .as_str()
+        .filter(|name| !name.is_empty() && Path::new(name).file_name() == Some(std::ffi::OsStr::new(name)))
+        .and_then(|name| std::fs::read_to_string(revision.join(name)).ok())
+        .unwrap_or_default()
+}
+
+/// The meeting a revision describes, when it should prompt. `text` is its invite text
+/// ([`stored_text`]).
+fn meeting_of(item: &serde_json::Value, text: &str) -> Option<CalendarMeeting> {
     let s = &item["content"]["structured"];
     let flag = |key: &str| s[key].as_bool() == Some(true);
     let withdrawn = flag(GOOGLE_CANCELED_KEY) || flag("withdrawn") || flag("removed");
@@ -130,7 +146,7 @@ fn meeting_of(item: &serde_json::Value) -> Option<CalendarMeeting> {
             .as_str()
             .and_then(MeetingApp::in_text)
             .or_else(|| s["meetingLinks"].as_array().into_iter().flatten().filter_map(|l| l.as_str()).find_map(MeetingApp::in_text))
-            .or_else(|| item["content"]["text"].as_str().and_then(MeetingApp::in_text)),
+            .or_else(|| MeetingApp::in_text(text)),
     })
 }
 
@@ -246,6 +262,22 @@ mod tests {
         }));
         let found = meetings(&z.0);
         assert_eq!(found.iter().map(|m| (m.title.as_str(), m.app)).collect::<Vec<_>>(), vec![("Google Meet A", Some(MeetingApp::Meet)), ("Teams B", Some(MeetingApp::Teams))]);
+    }
+
+    #[test]
+    fn the_invite_text_is_read_from_where_the_service_stores_it() {
+        // rv-20261014T114658Z-04417671-85c4 #3 (`fixtures/calendar_storage.mjs`): the service's
+        // writeEvidence keeps an item's text in content.txt beside item.json, never in the JSON,
+        // so a Google invite whose Zoom link is only in its HTML description named no app.
+        let z = Zone::new("stored-text");
+        let mut zoom = google("google:calendar:x:z", "Google HTML Zoom invite", 1_000_000, 1, false, &["other@example.com"]);
+        zoom["content"]["textFile"] = json!("content.txt");
+        zoom["content"]["structured"]["meetingLinks"] = json!([]);
+        z.revision("google", "z", "rev-1", zoom);
+        let dir = z.0.join("google").join("calendar").join("z").join("rev-1");
+        std::fs::write(dir.join("content.txt"), "<a href=\"https://us02web.zoom.us/j/123\">Join Zoom</a>").unwrap();
+        let found = meetings(&z.0);
+        assert_eq!(found.iter().map(|m| (m.title.as_str(), m.app)).collect::<Vec<_>>(), vec![("Google HTML Zoom invite", Some(MeetingApp::Zoom))]);
     }
 
     #[test]
