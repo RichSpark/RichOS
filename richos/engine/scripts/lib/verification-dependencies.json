@@ -8868,7 +8868,7 @@
     },
     "mega-lander/tests/workspace-spec-fourteen.test.sh": {
       "source": "mega-lander/tests/workspace-spec-fourteen.test.sh",
-      "sha256": "87ac8bd5085d6b92a8e282790a5991a77ce3d5facd5e43591343f5db96c8af7f",
+      "sha256": "f9c3ac6a8b126dcb673dfe51e3859a561297b94a6c326353d4474f360ea8ef84",
       "evidence": "Reviewed suite fixture constructors, complete executable call sites, inline Python and finite eval assertions. Private adopted repository copies real config; settings are retained. Agent/lifecycle events are literal JSON, not actual model dispatch. Creator repositories have no setup hooks. Land invokes the actual scratch sweep. Direct unsourced integration consumers read only environment defaults, while hook children source the copied config. Renewed 2026-10-07: C13 reads deletion.attempts and deletion.deferred from its existing private agent record and follows the same literal SubagentStop hook only for budget deferrals with no new failed attempt. No new configuration key, environment variable or executable reader is introduced; the existing final workspace/branch/record assertions remain mandatory.",
       "keys": [],
       "edges": [
@@ -17797,7 +17797,7 @@
       "sources": {
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/tests/workspace-spec-fourteen.mutation.sh": "bc1212593d178b4b992e399cabcd8e91df7c02a7dcd89efd5cf7517bdcadca78",
-        "mega-lander/tests/workspace-spec-fourteen.test.sh": "87ac8bd5085d6b92a8e282790a5991a77ce3d5facd5e43591343f5db96c8af7f",
+        "mega-lander/tests/workspace-spec-fourteen.test.sh": "f9c3ac6a8b126dcb673dfe51e3859a561297b94a6c326353d4474f360ea8ef84",
         "mega-lander/workspaces.py": "322b96289885d846059115ed8f6438079cadc68aeaa66ca6bf23dd752b7b7637",
         "mega-lander/workspaces.sh": "6d5ddbdf25829d1519727ed230665ce81c63141cf4320274d0a2522b80ceaee1",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",

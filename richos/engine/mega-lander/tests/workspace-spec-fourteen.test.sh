@@ -1280,6 +1280,14 @@ sub "C13.2 the CEO does NOT hear of it yet (no 'TELL THE CEO' at attempt 1)" "! 
 STATED="$(sed -n 's/^RETRY_TELL_CEO_AFTER = int(os.environ.get("RICHOS_WORKSPACES_RETRY_TELL_CEO", "\([0-9]*\)")).*/\1/p' "$ENGINE/mega-lander/workspaces.py")"
 subagent_stop "anothersubrun0001"                          # hook events, no command: each one retries what is due
 subagent_stop "anothersubrun0002"
+# As in C13.6: under load a hook event may defer the retry for its budget,
+# which counts no attempt, so further hook events (still no command) deliver
+# the two retries. An event that neither attempts nor defers ends the wait.
+C13_UNTIL=$((SECONDS + 30))
+while [ "$(jget "$REC" deletion.attempts)" -lt 3 ] && [ "$SECONDS" -lt "$C13_UNTIL" ]; do
+    [ -n "$(jget "$REC" deletion.deferred)" ] || break
+    subagent_stop "anothersubrun0003"
+done
 A3="$(jget "$REC" deletion.attempts)"
 sub "C13.3 retried WITHOUT involvement: two unrelated hook events later the attempt count is $A3 (no command was run)" "[ \"$A3\" -ge 3 ]"
 stop_gate >/dev/null 2>&1
