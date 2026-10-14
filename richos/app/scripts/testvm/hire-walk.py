@@ -27,20 +27,27 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
               one named in what he was told, nobody named to him as a teammate who was not saved,
               and no Approve card put in front of him along the way. Evidence: go-observed.json.
-  relaunch    command-walk.py's relaunch: the app stopped by pid and started again
+  relaunch    command-walk.py's relaunch: the app stopped by pid and started again; before its
+              first read the walk waits for the guest's whisper-cli runs to end (--settle-within)
+              and then reads with a longer deadline (--after-relaunch-deadline)
   roster      after the relaunch, the lease's roster holds the five and every hired teammate
   approvals   last: the Approve cards the hiring put in front of him after his go, counted during
               go and judged here so they do not hide the steps after it. Any fails.
-  delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs a back-end
+  delegate    "Please ask <the hire whose definition speaks of marketing> for three subject lines ..."
+              typed; a question card Rich asks is shot and answered with his recommended option, by
+              click, as a person answers it. PASS needs a back-end
               dispatch receipt for THIS task's obligation naming that teammate, whose run handed back
               an answer (consult_answer, set from the run's own hand-back or stop), and the task
-              closed settled with a result he was told. Evidence: delegate-observed.json.
+              closed settled with a result he was told. Evidence: delegate-observed.json, and
+              whatever the verdict delegate-ledger.json (the conversation from the send on) and
+              delegate-1-before/2-sent/3-end.png.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -75,6 +82,9 @@ ANSWERS = [
 WRAP_UP = "Let's wrap up the interview."
 # The roles ANSWERS asks for in stage 4, each with the words a proposed job title may use for it.
 REQUESTED_ROLES = {'marketing lead': ('market',), 'bookkeeper': ('book', 'account', 'financ')}
+# A question card's recommended option carries this tag (ui/questions.js); a person answers the
+# card by clicking that option.
+RECOMMENDS = 'Rich recommends'
 DELEGATE_TASK = ('Please ask {Name} to suggest three subject lines for our next newsletter to past '
                  'coaching clients, and tell me what they suggest.')
 
@@ -178,6 +188,15 @@ def hired_verdict(proposed, saved, told):
     return failures
 
 
+def fitting_teammate(hired, definitions):
+    """The hire DELEGATE_TASK (newsletter subject lines, a marketing job) fits: the first whose
+    saved definition speaks of marketing; the first hired when none does."""
+    for name in hired:
+        if 'market' in (definitions.get(name) or '').lower():
+            return name
+    return hired[0]
+
+
 def delegate_verdict(record, receipts, name):
     """Why the task sent after the relaunch does NOT show `name` doing it ([] = it does).
 
@@ -218,7 +237,39 @@ def answer_of(receipts, record, name):
     return ''
 
 
+def read_timeout(asked, deadline):
+    """The seconds the host waits for one ax.sh call: what the caller asked, or the guest's read
+    deadline (TESTVM_AX_TIMEOUT) plus 25 s for the transport, whichever is longer. adopt-walk's
+    ax() waits 40 s, so a 60 s guest deadline was cut off by the host first (walk 4 of
+    ray-opus-test55, 2026-10-13: `timed out after 40 seconds` in go)."""
+    return max(asked, deadline + 25)
+
+
 class HireWalk(command_walk.CommandWalk):
+    def ax(self, mode, *args, app=None, timeout=40):
+        deadline = int(os.environ.get('TESTVM_AX_TIMEOUT', '20'))
+        return super().ax(mode, *args, app=app, timeout=read_timeout(timeout, deadline))
+
+    def after_relaunch(self):
+        """After the relaunch the guest is busy before the window can answer a read: the app runs
+        its speech-speed check (2 to 5 whisper-cli at 50-140% CPU each, guest idle 0%) and the home
+        screen animates, so every accessibility read took 16-35 s and the 'Onboarding' click hit
+        the read deadline in 3 of 3 runs (ray-opus-test55, 2026-10-13, runs 1, 3 and 5). Wait,
+        up to --settle-within seconds, until no whisper-cli runs, then give every later read
+        --after-relaunch-deadline seconds. Recorded in relaunch-observed.json as `settled`."""
+        began = time.monotonic()
+        end = began + self.a.settle_within
+        counts = []
+        while time.monotonic() < end:
+            running = guest(self.vm, 'pgrep -x whisper-cli | wc -l', 60).strip()
+            counts.append(running)
+            if running == '0':
+                break
+            time.sleep(5)
+        os.environ['TESTVM_AX_TIMEOUT'] = str(int(self.a.after_relaunch_deadline))
+        return {'whisper_cli_counts': counts, 'seconds': round(time.monotonic() - began, 1),
+                'ax_deadline_s': int(self.a.after_relaunch_deadline)}
+
     def type_into(self, text, *selector, app=None):
         """One retry when the guest's accessibility read hits its own deadline (exit 124,
         `guest_deadline`): walk 1 of 2026-10-13 stopped there with the host at 100% CPU. Typing
@@ -255,6 +306,13 @@ class HireWalk(command_walk.CommandWalk):
             if '(124)' not in str(exc) and 'guest_deadline' not in str(exc):
                 raise
             return False
+
+    def evidence_shot(self, name):
+        """A screenshot kept as evidence only: a shot that fails is recorded, never the step's verdict."""
+        try:
+            self.shot(name)
+        except (StepFailed, subprocess.TimeoutExpired) as exc:
+            (self.out / (name + '.failed.txt')).write_text(str(exc) + '\n')
 
     def ledger(self):
         text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
@@ -426,14 +484,36 @@ class HireWalk(command_walk.CommandWalk):
         hired = self.facts.get('hired') or []
         if not hired:
             raise StepFailed('go must have run (nobody hired on record)')
-        name = hired[0]
+        # The task is a marketing one, so it goes to the hire whose saved definition fits it, as a
+        # person would ask. The walk of main 0a2ae649f gave it to hired[0], Beth the bookkeeper;
+        # Rich rightly asked who should do it, and the walk never answered his card (911 s).
+        definitions = {n: guest(self.vm, 'cat ' + shlex.quote(f'{self.data}/team/{n}.md') + ' 2>/dev/null || true')
+                       for n in hired}
+        name = fitting_teammate(hired, definitions)
+        # The screen and the conversation around the message, kept whatever the verdict.
+        self.evidence_shot('delegate-1-before.png')
         sent = self.send(DELEGATE_TASK.format(Name=name.capitalize()))
-        pressed = [0]
-        record = self.settled_read(self.until_closed(lambda: self.ours(sent), self.a.within, pressed))
+        time.sleep(5)
+        self.evidence_shot('delegate-2-sent.png')
+        pressed, answered = [0], []
+
+        def pick():
+            if not answered and self.present(RECOMMENDS):
+                # Rich asked a question card: it is on screen, and a person answers it with the
+                # option Rich recommends, by click.
+                self.evidence_shot('delegate-question.png')
+                self.press(RECOMMENDS)
+                answered.append(self.clock())
+            return self.ours(sent)
+        record = self.settled_read(self.until_closed(pick, self.a.within, pressed))
+        self.evidence_shot('delegate-3-end.png')
+        since = [r for r in self.ledger() if r.get('at', 0) >= sent[0] - 1000]
+        (self.out / 'delegate-ledger.json').write_text(json.dumps(since, indent=2) + '\n')
         receipts = self.receipts()
         self.facts['approvals_delegate'] = pressed[0]
         self.save()
-        evidence = {'teammate': name, 'assignment': record, 'receipts': receipts, 'approvals_pressed': pressed[0]}
+        evidence = {'teammate': name, 'assignment': record, 'receipts': receipts, 'approvals_pressed': pressed[0],
+                    'question_card_answered_at_guest_ms': answered[0] if answered else None}
         (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         failures = delegate_verdict(record, receipts, name)
         if failures:
@@ -451,6 +531,10 @@ def main():
     p.add_argument('--within', type=float, default=900, help='seconds for the delegated task to close')
     p.add_argument('--approvals', type=int, default=3, help='most Approve presses on one assignment')
     p.add_argument('--relaunch-within', type=float, default=120, help='seconds for the composer to come back')
+    p.add_argument('--settle-within', type=float, default=300,
+                   help='seconds to wait after the relaunch for the guest to stop running whisper-cli')
+    p.add_argument('--after-relaunch-deadline', type=float, default=60,
+                   help='the guest accessibility read deadline (TESTVM_AX_TIMEOUT) after the relaunch')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')

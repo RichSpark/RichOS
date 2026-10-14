@@ -484,6 +484,11 @@ class CommandWalk(adopt_walk.Walk):
         text = guest(self.vm, 'osascript -e ' + shlex.quote(script) + ' 2>&1 || true')
         return int(text) if text.strip().isdigit() else text.strip()[:200]
 
+    def after_relaunch(self):
+        """Called once right after relaunch.py has started the app again, before the first read of
+        its window. Nothing here; a walk whose guest is busy after a relaunch waits in its own."""
+        return None
+
     def relaunch(self):
         """relaunch.py after a first run, observed rather than assumed (bgdone2 item 3: in vm-run-2
         of 2026-09-27 the composer did not come back within 90 s, and that guest was deleted).
@@ -499,6 +504,7 @@ class CommandWalk(adopt_walk.Walk):
         began = time.monotonic()
         launched = relaunch(self.vm)
         observed['relaunched'] = launched
+        observed['settled'] = self.after_relaunch()
         observed['samples'] = []
         back, door = None, None
         end = time.monotonic() + self.a.relaunch_within
