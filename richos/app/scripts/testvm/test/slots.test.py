@@ -152,6 +152,21 @@ class Slots(unittest.TestCase):
                                        ram_mb=ram)
         self.assertEqual(settled, '', 'a settled guest already counted in the available memory owes little')
 
+    def test_a_refusal_says_how_much_is_missing_and_which_apps_hold_the_most(self):
+        chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+        helper = ('/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/'
+                  'Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=renderer')
+        vm = '/System/Library/Frameworks/Virtualization.framework/x/' + slots.VM_PROCESS
+        processes = [(chrome, 4000), (helper, 5000), (helper, 4100),
+                     ('/Applications/WebStorm.app/Contents/MacOS/webstorm', 5300),
+                     ('/Applications/Slack.app/Contents/MacOS/Slack', 900), (vm, 9000), ('/bin/ls', 5)]
+        self.assertEqual(slots.top_apps(processes), [('Google Chrome', 13100), ('WebStorm', 5300), ('Slack', 900)])
+        text = slots.memory_refusal({'memory_free_percent': 40}, ['walk-a'], resident=[50], total_mb=24576,
+                                    ram_mb=5120, processes=processes)
+        left = 40 / 100 * 24576 - (5120 - 50) - 5120
+        self.assertIn(f'{4096 - left:.0f} MB more must be free', text)
+        self.assertIn('largest apps by memory: Google Chrome 13100 MB, WebStorm 5300 MB, Slack 900 MB', text)
+
     def test_only_a_test_guest_s_own_vm_process_counts_not_docker_s_listed_first(self):
         """2026-10-14: Docker's VM (429 MB, 11 days old) came before the guest (3,562 MB) in `ps`,
         so the guest was charged Docker's size and a second guest was refused every time."""

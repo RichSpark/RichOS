@@ -143,7 +143,49 @@ def host_memory_mb():
     return reserve._sysctl('hw.memsize', ctypes.c_uint64()).value / 1048576
 
 
-def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, floor_mb=GUEST_MEMORY_FLOOR_MB):
+def process_memory_mb():
+    """[(full command, MB)] for every process, by `top`'s own memory figure (what the process holds
+    including what is compressed or swapped out; `ps rss` undercounts Chrome and WebStorm badly).
+    Read-only; [] when `top` cannot answer."""
+    try:
+        shown = subprocess.run(['top', '-l', '1', '-o', 'mem', '-n', '300', '-stats', 'pid,mem'],
+                               capture_output=True, text=True, timeout=30).stdout
+        paths = subprocess.run(['ps', '-A', '-o', 'pid=,command='], capture_output=True, text=True,
+                               timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    path_of = {}
+    for line in paths.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            path_of[parts[0]] = parts[1]
+    units = {'B': 1 / 1048576, 'K': 1 / 1024, 'M': 1, 'G': 1024, 'T': 1024 * 1024}
+    found = []
+    for line in shown.splitlines():
+        parts = line.split()
+        match = re.fullmatch(r'(\d+(?:\.\d+)?)([BKMGT])[+-]?', parts[1]) if len(parts) == 2 else None
+        if match and parts[0] in path_of:
+            found.append((path_of[parts[0]], float(match.group(1)) * units[match.group(2)]))
+    return found
+
+
+def top_apps(processes, count=3):
+    """The `count` apps holding the most memory, [(app name, MB)]. Helper processes are grouped under
+    their app (the first `X.app` in the path, else the program's file name); the test guests' own VM
+    processes and tart are left out."""
+    totals = {}
+    for command, mb in processes:
+        program = command.split(' --')[0]
+        if program.endswith('/' + VM_PROCESS) or Path(program).name == 'tart':
+            continue
+        app = re.search(r'/([^/]+)\.app(?:/|$)', command)
+        name = app.group(1) if app else Path(program).name
+        totals[name] = totals.get(name, 0.0) + mb
+    return sorted(totals.items(), key=lambda item: -item[1])[:count]
+
+
+def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, floor_mb=GUEST_MEMORY_FLOOR_MB,
+                   processes=None):
     """'' when one more guest fits, else why not. `sample` is reserve's (memory_free_percent is
     the kernel's own available level); `running` the running guests; `resident` the MB each VM
     process already holds. A running guest with no visible process is owed its whole RAM."""
@@ -156,8 +198,13 @@ def memory_refusal(sample, running, resident=None, total_mb=None, ram_mb=None, f
     left = available - owed - ram_mb
     if left >= floor_mb:
         return ''
-    return (f'a guest needs {ram_mb} MB: {available:.0f} MB available, {owed:.0f} MB still owed to '
-            f'{len(running)} running guest(s), would leave {left:.0f} MB (floor {floor_mb} MB)')
+    text = (f'a guest needs {ram_mb} MB: {available:.0f} MB available, {owed:.0f} MB still owed to '
+            f'{len(running)} running guest(s), would leave {left:.0f} MB (floor {floor_mb} MB); '
+            f'{floor_mb - left:.0f} MB more must be free')
+    apps = top_apps(process_memory_mb() if processes is None else processes)
+    if apps:
+        text += '; largest apps by memory: ' + ', '.join(f'{name} {mb:.0f} MB' for name, mb in apps)
+    return text
 
 
 def root_dir(root=None):
