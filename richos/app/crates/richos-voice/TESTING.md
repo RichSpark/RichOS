@@ -9,7 +9,7 @@ The committed echo-path fixture is `tests/fixtures/echo-path/ceo-rig-2026-09-17-
 Read [the startup and diagnosis record](../../../../docs/development/spoken-reply-latency.md)
 before latency work. A fresh packaged decoder measured 9.764 seconds on this Mac, then
 0.932 and 0.879 when warm. Binary metadata and cached calibration are insufficient.
-Rust setup initializes the real decoder silently before frontend state reads and joins it
+The application initializes the real decoder silently during readiness and joins it
 before capture. The full application proof uses `voice-walk.py --expect-warmed-decoder`
 and refuses initialization that finishes after capture opens. The dedicated decoder
 warmup unit verifies successful reuse, identity changes, failure recovery and cleanup.

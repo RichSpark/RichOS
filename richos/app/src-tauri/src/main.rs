@@ -3109,9 +3109,6 @@ fn main() {
                     .and_then(|dir| richos_core::runtime::verify_engine(dir).ok())
                     .map(|runtime| runtime.root.join("bin")),
             );
-            // Start before the window's navigation, history, company and memory reads.
-            // The worker owns the real initialization; setup itself remains unblocked.
-            richos_voice::stt::warm_at_startup();
             // THE CELL THE LEASE FACTORY READS. Shared, so a successful first-run install can
             // re-point it without a relaunch (`setup_view::run`).
             let engine_cell: Arc<Mutex<PathBuf>> = Arc::new(Mutex::new(engine.clone()));

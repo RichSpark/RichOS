@@ -32,10 +32,8 @@ measurements. These observations do not promise a fixed network latency on every
 
 ## Required startup behavior
 
-Rust setup starts a bounded, silent initialization as soon as it publishes the verified
-runtime decoder, before the frontend reads navigation, history, company or memory state.
-The app start stays unblocked. Readiness joins or starts initialization when first-run
-models arrive later. Starting voice capture joins it before opening the microphone.
+Readiness starts a bounded, silent initialization of the selected pinned decoder in the
+background. Starting voice capture joins that initialization before opening the microphone.
 Only a successful decode counts. A failure is not cached as success. A changed verified
 binary or model requires new initialization. Temporary silence and decoder output are
 removed on success and failure; none becomes a conversation turn. Use the production model,
