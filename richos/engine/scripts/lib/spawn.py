@@ -833,6 +833,7 @@ def _main(argv):
         # Point 14 for EVERY repository this teammate will work in - the
         # session's own included, because register_spawn checks the entity too.
         own = {}                # repository -> the branch this teammate alone lands on there
+        lands_on = {}           # repository -> the branch this teammate's work there lands on
         targets = []            # (repository, the branch its work lands on), for the last step
         for r in ([project_dir] if project_dir not in repos else []) + repos:
             note, mine = ensure_integration(r, integrations.get(r, ""),
@@ -841,7 +842,8 @@ def _main(argv):
             notes.append(note)
             if mine:
                 own[r] = mine
-            targets.append((r, mine or (W.integration_record(r) or {}).get("branch") or "main"))
+            lands_on[r] = mine or (W.integration_record(r) or {}).get("branch") or ""
+            targets.append((r, lands_on[r] or "main"))
 
         workspaces = []
         planned = []
@@ -983,8 +985,14 @@ def _main(argv):
     for p in planned:
         cmd = [os.path.join(ENGINE, "mega-lander", "create-teammate-worktree.sh"), p["repo"],
                args["name"], "--dir", p["path"], "--session", session]
-        if p["repo"] in bases:
-            cmd += ["--base", bases[p["repo"]]]
+        # A WORKSPACE STARTS FROM THE BRANCH ITS WORK LANDS ON, never from
+        # whatever the main checkout has checked out. With the repository
+        # recorded on v1.3.0 and its main checkout on main, no --base used to
+        # be passed, so the workspace started at HEAD (main), and its land
+        # into v1.3.0 would have pulled main in (review
+        # rv-20261014T105153Z-f22eff3f-da5a). An explicit --base still wins.
+        if p["repo"] in bases or lands_on.get(p["repo"]):
+            cmd += ["--base", bases.get(p["repo"]) or lands_on[p["repo"]]]
         if p["repo"] in own:
             cmd += ["--integration", own[p["repo"]]]
         rc, out, err = sh(cmd, timeout=300)

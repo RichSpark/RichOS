@@ -388,6 +388,30 @@ else
     bad "the last step names the teammate's own branch" "$OUT"
 fi
 
+# Review rv-20261014T105153Z-f22eff3f-da5a, P1: a repository whose RECORDED
+# branch is already the release one, its main checkout on main. spawn.sh passed
+# no --base, so the workspace started at HEAD (main), and landing it into the
+# release would have pulled main in.
+GADGETS="$SANDBOX/gadgets"
+mkrepo "$GADGETS"
+git -C "$GADGETS" branch rel "$(git -C "$GADGETS" commit-tree -p main -m "rel only" "main^{tree}")"
+python3 "$WS_PY" integration --repo "$GADGETS" --branch rel --why "the release" >/dev/null
+for case in "zach-sonnet-relrec1:" "zach-sonnet-relrec2:$GADGETS=rel"; do
+    name="${case%%:*}"; integ="${case#*:}"
+    if [ -n "$integ" ]; then
+        run "$name" --repo "$GADGETS" --type zach --brief "$BRIEF" --integration "$integ"
+    else
+        run "$name" --repo "$GADGETS" --type zach --brief "$BRIEF"
+    fi
+    got="$(git -C "$SANDBOX/gadgets-wt/$name" rev-parse HEAD 2>/dev/null)"
+    if [ "$RC" -eq 0 ] && [ "$got" = "$(git -C "$GADGETS" rev-parse rel)" ]; then
+        ok "a workspace in a repository recorded on rel starts from rel (${integ:-no --integration})"
+    else
+        bad "the workspace starts from the recorded branch, not from the main checkout's HEAD" \
+            "rc=$RC head=$got rel=$(git -C "$GADGETS" rev-parse rel) $OUT"
+    fi
+done
+
 run "zach-sonnet-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qi "already"; then
     ok "a REUSED name is refused before anything is created"
