@@ -4672,6 +4672,63 @@ class DiscardTakesAWorkspaceWhoseTeammateNeverRan(Base):
         self.assertIn("not finished", str(e.exception))
         self.assertTrue(os.path.isdir(cc))
 
+    def lead_transcript(self, tuid, result=None):
+        """The lead's transcript as the platform writes it: the Agent call, and
+        (when given) the platform's answer to it."""
+        path = os.path.join(self.env.root, "lead-%s.jsonl" % tuid)
+        rows = [{"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": tuid, "name": "Agent", "input": {"name": "x"}}]}}]
+        if result is not None:
+            rows.append({"type": "user", "message": {"role": "user", "content": [
+                dict({"type": "tool_result", "tool_use_id": tuid}, **result)]}})
+        with open(path, "w") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in rows))
+        return path
+
+    def registered(self, name, transcript):
+        """The registration guard passes and writes the spawn (tool_use_id,
+        spawned_at). Pierce runs inside it on a real dispatch; it is a separate
+        guard with its own tests and is not what is under test here."""
+        cc = self.make_cc(name)
+        payload = {"session_id": self.sid, "tool_use_id": "tu-" + name, "tool_name": "Agent",
+                   "transcript_path": transcript,
+                   "tool_input": {"name": name, "subagent_type": "zach", "isolation": "worktree",
+                                  "prompt": "do it\ncross-repo-worktree: %s\n" % cc}}
+        with patch.object(ws, "_pierce_before_registration", return_value=None):
+            rec = ws.register_spawn(payload, self.entity)
+        self.assertTrue(rec.get("tool_use_id") and rec.get("spawned_at"))
+        return cc
+
+    def test_a_registered_spawn_another_guard_refused_is_discarded_directly(self):
+        # Review rv-20261014T105153Z-f22eff3f-da5a: the registration guard wrote
+        # the spawn, verify-agent-prompt.sh then refused the same call (as it
+        # did echo-opus-meetland1's first dispatch on 2026-10-14), and discard
+        # still answered "is not finished". The lead's transcript holds the
+        # platform's own answer to that call.
+        tuid = "tu-zach-opus-nf"
+        transcript = self.lead_transcript(tuid, {"is_error": True, "content": (
+            "PreToolUse:Agent hook error: [bash /e/scripts/hooks/verify-agent-prompt.sh]: "
+            "=== Agent prompt verification FAILED ===\n  - subagent-as-spawner")})
+        cc = self.registered("zach-opus-nf", transcript)
+        r = ws.discard("zach-opus-nf", "its dispatch was refused by a guard",
+                       not_ceo_ordered="a refused spawn, never an order of his", me=self.sid)
+        self.assertTrue(r["discarded"])
+        disp = self.rec("zach-opus-nf")["disposition"]
+        self.assertEqual(disp["kind"], "discarded")
+        self.assertIn("verify-agent-prompt.sh", disp["dispatch_refused"])
+        self.assertFalse(os.path.exists(cc))
+        self.assertNotIn("cc/zach-opus-nf", branches(self.other))
+
+    def test_a_registered_spawn_the_platform_has_not_answered_or_launched_is_still_refused(self):
+        for name, result in (("zach-opus-nq", None),
+                             ("zach-opus-nl", {"content": [{"type": "text", "text":
+                                                            "Async agent launched successfully.\nagentId: a1"}]})):
+            cc = self.registered(name, self.lead_transcript("tu-" + name, result))
+            with self.assertRaises(ws.SpecError) as e:
+                ws.discard(name, "no longer wanted at all", not_ceo_ordered="not his order, a test", me=self.sid)
+            self.assertIn("not finished", str(e.exception))
+            self.assertTrue(os.path.isdir(cc))
+
 
 class TeammateBoundToABranchOfItsOwn(Base):
     """2026-10-14: the meeting and search work goes to the v1.3.0 release

@@ -1821,6 +1821,7 @@ def register_spawn(payload, entity, dry=False):
                     "ceo_ordered": (ceo_ordered[0] if ceo_ordered else rec.get("ceo_ordered")),
                     "continues": continuation_keys,
                     "lands_pending": lands_pending, "entity": realpath(entity),
+                    "dispatch_transcript": str(payload.get("transcript_path") or ""),
                     "spawned_at": iso()})
         rec.pop("creation_failed", None)
         save_agent(rec)
@@ -6032,6 +6033,7 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
     if not fin and not never_ran(rec):
         raise SpecError("%s is not finished (%s). Stop it first; a running agent is not discarded."
                         % (rec["name"], why))
+    refused = "" if fin else dispatch_refusal(rec)
     chain = _chain(rec)
     ordered = [r for r in chain if r.get("ceo_ordered")]
     if ordered and not (ceo_word or "").strip():
@@ -6052,6 +6054,8 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
             fresh["disposition"] = {"kind": "discarded", "at": now(), "reason": reason.strip(),
                                     "ceo_word": ceo_word or None, "not_ceo_ordered": not_ceo_ordered or None,
                                     "tips": tips, "by_session": me, "as_part_of": rec["key"]}
+            if refused and r["key"] == rec["key"]:
+                fresh["disposition"]["dispatch_refused"] = refused
             save_agent(fresh)
         event("discarded", key=r["key"], reason=reason, tips=tips, as_part_of=rec["key"])
     _delete_chain(chain, "discarded")
@@ -6063,11 +6067,56 @@ def never_ran(rec):
     registered, and its spawn was refused before it was registered
     (2026-10-14: Pierce refused echo-opus-tap22's spawn, and `discard` answered
     "is not finished (its run has not ended)" until it was stopped first).
-    Exactly withdraw_cc's test, plus no start or end recorded. A spawn that WAS
-    registered (tool_use_id, spawned_at) is not this: its agent may be running
-    in the foreground, where the platform reports its id only at the end."""
-    return not any(rec.get(f) for f in ("agent_id", "tool_use_id", "spawned_at", "started_at", "end",
-                                        "provisional", "disposition"))
+    Exactly withdraw_cc's test, plus no start or end recorded.
+
+    A spawn that WAS registered (tool_use_id, spawned_at) may have an agent
+    running in the foreground, where the platform reports its id only at the
+    end, so it never ran only when the platform itself says it refused that
+    call (dispatch_refusal): the registration guard writes the spawn before
+    the other Agent guards answer, and one of them can still refuse it (review
+    rv-20261014T105153Z-f22eff3f-da5a)."""
+    if any(rec.get(f) for f in ("agent_id", "started_at", "end", "provisional", "disposition")):
+        return False
+    if not (rec.get("tool_use_id") or rec.get("spawned_at")):
+        return True
+    return bool(dispatch_refusal(rec))
+
+
+def dispatch_refusal(rec):
+    """The platform's own answer to this registered Agent call when a guard
+    refused it, else "". It is read from the lead's transcript (the payload's
+    transcript_path, kept at registration): the tool result for this
+    tool_use_id, an error that starts "PreToolUse:Agent hook error". An Agent
+    call a hook refused never started an agent. No transcript, no result yet,
+    or any other result is "": the agent may be running."""
+    tuid = str(rec.get("tool_use_id") or "")
+    path = str(rec.get("dispatch_transcript") or "")
+    if not tuid or not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if tuid not in line or "tool_result" not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                content = ((row.get("message") or {}).get("content")) if isinstance(row, dict) else None
+                for c in content if isinstance(content, list) else []:
+                    if not (isinstance(c, dict) and c.get("type") == "tool_result"
+                            and c.get("tool_use_id") == tuid):
+                        continue
+                    body = c.get("content")
+                    if isinstance(body, list):
+                        body = "\n".join(str(b.get("text") or "") for b in body if isinstance(b, dict))
+                    text = str(body or "")
+                    if c.get("is_error") and text.startswith("PreToolUse:Agent hook error"):
+                        return text.splitlines()[0][:500]
+                    return ""
+    except OSError:
+        return ""
+    return ""
 
 
 def _delete_chain(chain, why, processes=None, deadline=None):
