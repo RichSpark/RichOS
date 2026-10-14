@@ -730,6 +730,7 @@ function buildEntityGroup(group) {
     selectLabel: entity.display_name + " overview",
     onAdd: () => showEntityView(entity.id, "new"),
   });
+  section.classList.add("nav-group--entity");
 
   const expanded = expandedEntities.has(entity.id);
   const shown = expanded ? visible : visible.slice(0, THREADS_SHOWN_INITIALLY);
@@ -1782,6 +1783,8 @@ const DICTATION_OFFER_HOW_BEFORE = "So, instead of typing you'll be able to do t
 const DICTATION_OFFER_HOW_AFTER = " (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊";
 const DICTATION_OFFER_NOT_NOW = "Okay. It's in Settings, under Dictation, whenever you want it.";
 const DICTATION_OFFER_LATER = "It's in Settings, under Dictation.";
+/// The conversation dictation opens once set up (`dictation_offer.rs` FEATURE_TITLE).
+const DICTATION_FEATURE_TITLE = "Dictation feature";
 
 /// The note's state: null (not shown), or `{phase, key}` with phase "open", "no", "on" or
 /// "later", and the key's name ("F1").
@@ -1902,8 +1905,24 @@ window.addEventListener("richos:dictation-set-up", async () => {
     dictationOffer.phase = "on";
     scheduleRender();
   }
-  await showDictationFeature(await invokeQuiet("dictation_feature_thread", { create: true }));
+  await createDictationFeature();
 });
+
+/// Set when the conversation could not be made: dictation was set up before his first company
+/// (the app refuses a conversation under no company), so it is made once he chooses or adds
+/// one (`chooseCompany`, `addCompany`; second review rv-20261013T204926Z).
+let dictationFeatureOwed = false;
+async function createDictationFeature() {
+  let threadId;
+  try {
+    threadId = await Bridge.invoke("dictation_feature_thread", { create: true });
+  } catch (_e) {
+    dictationFeatureOwed = true;
+    return;
+  }
+  dictationFeatureOwed = false;
+  await showDictationFeature(threadId);
+}
 
 /// **HE PICKED ANOTHER KEY**: the "Dictation feature" message, if there is one, is replaced so it
 /// names the new key (the CEO: "make sure the correct key is actually within that message").
@@ -5658,6 +5677,7 @@ async function chooseCompany(entityId) {
   await renderFirstRunNotice();
   syncComposerMode();
   inputEl.focus();
+  if (dictationFeatureOwed) await createDictationFeature();
 }
 
 /// HE ADDS ONE OF HIS OWN COMPANIES.
@@ -5702,6 +5722,7 @@ async function addCompany() {
   await renderFirstRunNotice();
   syncComposerMode();
   inputEl.focus();
+  if (dictationFeatureOwed) await createDictationFeature();
 }
 
 entityAddGoEl.addEventListener("click", addCompany);
@@ -6687,6 +6708,14 @@ async function renderFirstRunNotice() {
   const ticket = ++firstRunRead;
   const view = await invokeQuiet("onboarding_view");
   if (ticket !== firstRunRead || context !== firstRunContext()) return;
+  // Never in the "Dictation feature" conversation: it holds Rich's dictation message, and the
+  // business questions belong to onboarding (Ray on the combined build,
+  // esc-20261013T210016Z-20625b89).
+  const row = threadRow(activeThreadId);
+  if (row && row.title === DICTATION_FEATURE_TITLE) {
+    box.hidden = true;
+    return;
+  }
   const entityId = draftEntityId || activeContext && activeContext.entity_id;
   if (view && view.entityId && entityId && view.entityId !== entityId) {
     box.hidden = true;
@@ -7062,7 +7091,9 @@ function renderSearchResults() {
   let flat = 0;
   for (const label of order) {
     const head = document.createElement("div");
-    head.className = "result-group";
+    // "No entity" is `search` label_of's (src-tauri main.rs) word for no company; every other
+    // heading is a company's name, painted exactly as he typed it.
+    head.className = "result-group" + (label === "No entity" ? "" : " result-group--entity");
     head.textContent = label;
     searchResultsEl.appendChild(head);
     for (const hit of byEntity.get(label)) {

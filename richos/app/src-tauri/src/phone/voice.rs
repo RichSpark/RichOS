@@ -1,6 +1,6 @@
 //! Bounded phone audio uses the same offline speech stack as the desktop.
 use std::{path::PathBuf, sync::Mutex};
-use richos_voice::{stt::Recognizer, tts::MacSay, voiced::VoiceEvidence, wav};
+use richos_voice::{stt::Recognizer, tts::RichVoice, voiced::VoiceEvidence, wav};
 
 // Thirty minutes of 16 kHz PCM is 57.6 MB, below the managed edge body ceiling.
 pub const MAX_SECONDS: usize = 30 * 60;
@@ -43,7 +43,8 @@ impl VoiceDesk {
         let _guard = self.busy.try_lock().map_err(|_| "Rich is already processing audio. Try playback again shortly.")?;
         if text.is_empty() || text.chars().count() > 2400 { return Err("This reply is too long for audio playback. The complete reply is in the conversation.".into()); }
         let scratch = self.scratch()?;
-        let speech = MacSay::new().synthesize_bounded(text,16000,&scratch.0,std::time::Duration::from_secs(20)).map_err(|_| "Audio playback is unavailable. The reply remains in the conversation.")?;
+        crate::voice_provision::fetch_rich_voice_in_background();
+        let speech = RichVoice::new().synthesize_bounded(text,16000,&scratch.0,std::time::Duration::from_secs(20)).map_err(|_| "Audio playback is unavailable. The reply remains in the conversation.")?;
         let bytes = wav::encode_pcm16_mono(&speech.samples,16000);
         if bytes.len() > MAX_REPLY { return Err("This reply is too long for audio playback. The complete reply is in the conversation.".into()); }
         Ok(bytes)

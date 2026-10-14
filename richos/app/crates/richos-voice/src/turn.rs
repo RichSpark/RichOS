@@ -277,7 +277,9 @@ pub fn rich_audible(window_open: bool, answer_sounded: bool) -> bool {
 /// speaker asks again here, after it, and waits; a superseded sentence is then dropped by its
 /// generation. It also waits while his onset is building (`CaptureBrain::his_onset_building`):
 /// the floor is only his 0.112 s into a word, and a sentence that sounded inside those 0.112 s
-/// would take the word from him (review rv-20261013T184256Z, finding 2).
+/// would take the word from him (review rv-20261013T184256Z, finding 2). That signal stays up
+/// while his recording is open, so the supervisor's 25 ms publication of the floor leaves no gap
+/// between the two (review rv-20261013T192726Z).
 pub fn may_sound(his_floor: bool, his_onset: bool) -> bool {
     !his_floor && !his_onset
 }

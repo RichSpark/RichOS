@@ -77,6 +77,31 @@ fn main() {
     }
 
     private_fixtures_cfg();
+    pocket_voice_cfg();
+}
+
+/// `cfg(pocket_voice)` when Rich's Pocket TTS bundle is on disk where the app looks for it
+/// (`RICHOS_MODEL_DIR`, else `~/.config/richos/models`, then `pocket-tts-english_2026-04/`).
+/// The 166 MB of weights are downloaded, never committed, so the one test that synthesizes with
+/// them reports `ignored` without them, never `ok`, and says why here. The bytes themselves are
+/// checked against their pinned sha256 by the test, not by this script.
+fn pocket_voice_cfg() {
+    println!("cargo::rustc-check-cfg=cfg(pocket_voice)");
+    println!("cargo::rerun-if-env-changed=RICHOS_MODEL_DIR");
+    let base = match std::env::var("RICHOS_MODEL_DIR") {
+        Ok(d) if !d.trim().is_empty() => std::path::PathBuf::from(d),
+        _ => match std::env::var("HOME") {
+            Ok(h) => std::path::Path::new(&h).join(".config/richos/models"),
+            Err(_) => return,
+        },
+    };
+    let dir = base.join("pocket-tts-english_2026-04");
+    println!("cargo::rerun-if-changed={}", dir.display());
+    if dir.join("peter_yearsley.wav").is_file() && dir.join("flow_lm_main_int8.onnx").is_file() {
+        println!("cargo::rustc-cfg=pocket_voice");
+    } else {
+        println!("cargo::warning=Rich's Pocket TTS voice is not at {}: the test that speaks with it is ignored.", dir.display());
+    }
 }
 
 /// **THE SAME DEFECT, THE SAME FIX, FOR A FILE THAT IS NOT IN THIS REPOSITORY.**

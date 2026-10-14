@@ -107,7 +107,15 @@
     reading = true;
     try {
       const v = await call("dictation_status");
-      if (v) { view = v; lastRead = Date.now(); }
+      if (v) {
+        // The first read of a launch: dictation left on may never have been set up (he turned it
+        // on, Accessibility was refused, and he quit, allowed it and reopened RichOS), so it is
+        // set up once it works. The app opens the "Dictation feature" conversation only when it
+        // never did (`dictation_offer::feature_action`), so this never makes a second one
+        // (second review rv-20261013T193550Z, finding 1).
+        if (!view && v.on) setUpPending = true;
+        view = v; lastRead = Date.now();
+      }
     } finally { reading = false; }
     if (view && view.ready && !registered && window.RichSettings && window.RichSettings.registerDictation) {
       registered = true;

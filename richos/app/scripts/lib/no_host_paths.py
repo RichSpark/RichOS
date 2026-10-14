@@ -92,6 +92,15 @@ HOME_ROOTS = ("/Users/", "/home/", "/var/root/")
 # finding, so a new real name cannot be quietly absorbed.
 DEFAULT_ALLOWED = frozenset({"you", "example", "x", "jordan", "user", "someone"})
 
+# THE BUILD PATHS OF A PREBUILT THIRD-PARTY LIBRARY, which name its builder and never a
+# RichOS machine. Rich's voice (`richos-voice` `pocket.rs`, 2026-10-14) links ONNX Runtime
+# statically from the archive `ort-sys` pins by sha256; that archive was compiled by pyke's
+# `ort-artifacts` GitHub Actions workflow, and ONNX Runtime's error messages carry its
+# source paths under the runner's account (549 strings in the first build that linked it).
+# Exactly this prefix is accepted, so `/Users/runner/anything-else` is still a finding, and
+# the `--home` rule still refuses this machine's own home whatever its name.
+UPSTREAM_BUILD_PREFIXES = ("/Users/runner/work/ort-artifacts/",)  # machine-path-exempt: a third-party CI build path, matched to accept it, never storage
+
 # A printable run, the way `strings` defines one.
 RUN = re.compile(rb"[\x20-\x7e]{6,}")
 
@@ -133,7 +142,7 @@ def scan_bytes(data: bytes, allowed, home: str | None = None):
         for m in VOLUME.finditer(text):
             hits[m.group(0)] = hits.get(m.group(0), 0) + 1
         for m in PATH.finditer(text):
-            if m.group(1) in allowed:
+            if m.group(1) in allowed or text.startswith(UPSTREAM_BUILD_PREFIXES, m.start()):
                 continue
             hits[m.group(0)] = hits.get(m.group(0), 0) + 1
             reported.add(m.start())
@@ -297,6 +306,9 @@ SELF_TEST_CASES = [
     (b"\x00\x01/Us\x00", DEFAULT_ALLOWED, None, False),
     # A real name added to --allow is not a finding; that is what the flag is for.
     (b"/Users/ci-runner/work/x.rs", DEFAULT_ALLOWED | {"ci-runner"}, None, False), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    # ONNX Runtime's own build paths (UPSTREAM_BUILD_PREFIXES) are accepted, and only those.
+    (b"/Users/runner/work/ort-artifacts/ort-artifacts/onnxruntime/core/framework/x.cc", DEFAULT_ALLOWED, None, False), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
+    (b"/Users/runner/work/other/x.cc", DEFAULT_ALLOWED, None, True), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     # THE PRODUCT'S OWN ASSET KEYS. All four files in app/ui/home/ are embedded in the
     # binary under these keys. This check refused a correct release build over them until
     # the child component became a requirement; if these cases ever fail again, the

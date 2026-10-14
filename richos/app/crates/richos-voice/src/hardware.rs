@@ -673,6 +673,53 @@ pub fn load_speeds(key: &str) -> BTreeMap<String, f64> {
 /// whatever else the CEO happened to have open. The minimum converges on what the machine can
 /// actually do and cannot be dragged down by load.
 pub fn record_speed(key: &str, model_id: &str, secs: f64) {
+    update_entry(key, |entry| {
+        if let Some(models) = entry["models"].as_object_mut() {
+            let keep = match models.get(model_id).and_then(|v| v.as_f64()) {
+                Some(prev) if prev <= secs => prev,
+                _ => secs,
+            };
+            models.insert(model_id.to_string(), serde_json::json!(keep));
+        }
+        // Settled: the reps that led here are no longer anything to resume.
+        if let Some(unfinished) = entry.get_mut("unfinished").and_then(|u| u.as_object_mut()) {
+            unfinished.remove(model_id);
+        }
+    });
+}
+
+/// **A REJECTION STILL BEING CORROBORATED**: the best of the reps taken so far for `model_id`,
+/// and how many, when a launch ended in the middle of them. `None` when there is nothing to
+/// resume.
+///
+/// Why it is kept at all (Ray, test55): a measurement that a quit cut short used to be thrown
+/// away whole, so the next launch measured from the beginning, and a test guest that is quit
+/// within half a minute of starting measured on every launch. Each rep is now kept as it is
+/// taken, so the reps of one rung add up across launches to the same at most
+/// [`crate::stt`]'s three, and a quit costs only the rep it interrupted.
+pub fn load_unfinished(key: &str, model_id: &str) -> Option<(f64, usize)> {
+    let text = std::fs::read_to_string(speed_cache_path()).ok()?;
+    let v = serde_json::from_str::<Value>(&text).ok()?;
+    let u = v.get(key)?.get("unfinished")?.get(model_id)?;
+    Some((u.get("best")?.as_f64()?, u.get("reps")?.as_u64()? as usize))
+}
+
+/// Keep an inconclusive rep: see [`load_unfinished`].
+pub fn record_unfinished(key: &str, model_id: &str, best: f64, reps: usize) {
+    update_entry(key, |entry| {
+        let unfinished = entry.entry("unfinished").or_insert_with(|| serde_json::json!({}));
+        if let Some(u) = unfinished.as_object_mut() {
+            u.insert(model_id.to_string(), serde_json::json!({ "best": best, "reps": reps }));
+        }
+    });
+}
+
+/// Read the cache, change this key's entry, write it back.
+///
+/// THE WRITE IS A RENAME, so a reader never meets half a file and a quit in the middle of a
+/// write leaves the previous cache rather than an unreadable one, which would cost the machine
+/// every measurement it had.
+fn update_entry(key: &str, edit: impl FnOnce(&mut serde_json::Map<String, Value>)) {
     let path = speed_cache_path();
     let mut root: Value = std::fs::read_to_string(&path)
         .ok()
@@ -687,18 +734,53 @@ pub fn record_speed(key: &str, model_id: &str, secs: f64) {
             "models": {}
         })
     });
-    let Some(models) = entry["models"].as_object_mut() else { return };
-    let keep = match models.get(model_id).and_then(|v| v.as_f64()) {
-        Some(prev) if prev <= secs => prev,
-        _ => secs,
-    };
-    models.insert(model_id.to_string(), serde_json::json!(keep));
+    let Some(entry) = entry.as_object_mut() else { return };
+    edit(entry);
     if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        std::fs::create_dir_all(dir).ok();
     }
     // Best effort by design. A machine whose config dir is unwritable re-measures every launch,
     // which is a cost; refusing to open voice mode over it would be a defect.
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default());
+    let staged = path.with_extension(format!("json.{}", std::process::id()));
+    if std::fs::write(&staged, serde_json::to_string_pretty(&root).unwrap_or_default()).is_ok()
+        && std::fs::rename(&staged, &path).is_err()
+    {
+        std::fs::remove_file(&staged).ok();
+    }
+}
+
+/// **ONE MEASUREMENT AT A TIME ON THIS MACHINE**, held from reading the cache to recording what
+/// was measured; dropping it lets the next caller in.
+///
+/// THE DEFECT IT CLOSES (Ray, test55, nightly 54 and 55): a launch asks which model this machine
+/// uses from several places at once (the window's readiness, the phone's voice desk, a lease's
+/// video model), and every one of them found the cache empty and ran its own measurement, two
+/// to five `whisper-cli` decodes side by side that held a test guest's CPU for over a minute.
+/// With the turn, the first caller measures and every other one waits, then reads what it wrote.
+///
+/// A file lock beside the cache, so a second RichOS process on the machine waits too, plus a lock
+/// in this process, so the threads of one launch still take turns on a machine whose config
+/// folder cannot be written.
+pub struct MeasuringTurn {
+    _machine: Option<std::fs::File>,
+    _process: std::sync::MutexGuard<'static, ()>,
+}
+
+pub fn measuring_turn() -> MeasuringTurn {
+    static PROCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let process = PROCESS.lock().unwrap_or_else(|e| e.into_inner());
+    let path = speed_cache_path().with_extension("lock");
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    let machine = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .ok()
+        .filter(|f| f.lock().is_ok());
+    MeasuringTurn { _machine: machine, _process: process }
 }
 
 #[cfg(test)]

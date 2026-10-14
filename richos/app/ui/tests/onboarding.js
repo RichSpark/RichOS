@@ -528,7 +528,19 @@ async function main() {
     await page.waitForSelector("#search-results .result-group");
     const group = (await page.innerText("#search-results .result-group")).trim();
     assertEqual(group, NAME, "search names the company exactly as he typed it");
-    bump(2);
+    // And ONLY the company names: the headers that are not a company keep their capitals, as
+    // before 2026-10-13 (the rail's own markup for "Needs an entity", search's for "No entity").
+    const headers = await page.evaluate(() => {
+      const box = document.createElement("div");
+      box.innerHTML = '<section class="nav-group nav-group--unbound"><span class="nav-group-label">Needs an entity</span></section>' +
+        '<div class="result-group">No entity</div>';
+      document.body.appendChild(box);
+      const out = [box.querySelector(".nav-group-label").innerText.trim(), box.querySelector(".result-group").innerText.trim()];
+      box.remove();
+      return out;
+    });
+    assertEqual(headers.join(" | "), "NEEDS AN ENTITY | NO ENTITY", "a header that is not a company stays in capitals");
+    bump(3);
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await page.close();
     return "rail and search both paint " + JSON.stringify(NAME);

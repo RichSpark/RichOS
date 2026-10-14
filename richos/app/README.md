@@ -227,7 +227,7 @@ richos/app/
                               rather than four directory names, including the multi-root
                               proof (`richos` + `richos-hq` -> one entity id) and the
                               string-prefix trap beside it
-    tests/spine_tests.rs     15 spine invariant tests (no live Claude needed). One is the
+    tests/spine_tests.rs     16 spine invariant tests (no live Claude needed). One is the
                               nightly D4 pair: a failed TEXT turn and a failed VOICE turn are
                               classified identically, which is what makes the operator line
                               impossible to write for only one surface
@@ -683,15 +683,21 @@ richos/app/
                               sockets, no async runtime, no dependency. The transport is the
                               shell's (src-tauri/src/voice_provision.rs) and decides nothing
     src/{capture,playout}.rs cpal in/out; playout is one continuous, interruptible stream
-    src/{stt,tts}.rs         local whisper.cpp (small.en) / macOS `say` behind a trait
+    src/{stt,tts}.rs         local whisper.cpp (small.en) / Rich's voice behind a trait:
+                              Pocket TTS as Peter Yearsley, macOS `say` until it is installed
+    src/pocket.rs            Kyutai Pocket TTS (ONNX Runtime, statically linked) with the
+                              Peter Yearsley voice: nine pinned files, downloaded on first need
     src/controller.rs        four threads, CaptureBrain, the half-duplex taint rule
     tests/barge_in_composition.rs  the WIRING: echo defense + real interruptions
+    tests/rich_voice.rs      2 tests: voice mode speaks through RichVoice, and with the pinned
+                              bundle installed a sentence comes out of Pocket TTS as Peter
+                              Yearsley (ignored, never ok, without the bundle)
     tests/self_voice_replay.rs 18 tests replaying the candidate-.5 walk (and the near-end onset control): the shipped rule submitted
                              2.224 s of Rich's own answer as the CEO's message; the audible window
                              (queued OR owed OR within the measured device hold, taint re-evaluated
                              every frame) admits none of it; the CEO after the answer and tap-to-stop
                              mid-answer are still admitted (positive controls).
-    tests/turn_on_the_ceos_rig.rs 7 tests: a sentence with his measured 1.406 s pause in it, on
+    tests/turn_on_the_ceos_rig.rs 8 tests: a sentence with his measured 1.406 s pause in it, on
                               his room at his -18.1 dBFS (a synthetic voice, and his own private
                               near-end recording), is ONE turn handed over 2.010 s after his
                               last speech; the old rule made two, the first inside the pause.
@@ -701,7 +707,10 @@ richos/app/
                               resumes while Rich's answer is in synthesis is his, and Rich waits.
                               every_way_his_turn_ends is the whole contract in one table: 8 ways
                               a turn ends, each held to one turn per thought, nothing he said
-                              lost, Rich silent until he is done
+                              lost, Rich silent until he is done. And the onset-to-floor
+                              handoff on the app's own clocks (16 ms capture, 25 ms supervisor,
+                              10 ms speaker): a sentence ready at any moment of his first word
+                              never sounds over him
     tests/echo_path_replay.rs  the CEO's OWN echo path, recorded once and replayed with no
                               device: Mac mini speakers out, Elgato Wave:3 in, the path every
                               synthetic rig here fails to model. Pins that the canceller does
@@ -1209,7 +1218,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2006 tests + 5 doc-tests (2002 direct, 4 ignored)
+cargo test -p richos-core                       # 2008 tests + 5 doc-tests (2004 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1237,7 +1246,7 @@ cargo test -p richos-core                       # 2006 tests + 5 doc-tests (2002
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 387 tests (4 live-device tests ignored without a device)
+cargo test -p richos-voice                      # 405 tests (4 live-device tests ignored without a device)
 #     …of which 325 RUN here and 4 report `ignored, LIVE AUDIO: …`, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test

@@ -62,8 +62,8 @@
 //!   `aec.rs`'s module docs state the whole finding.
 //! - STT is **utterance-endpointed**, not token-streaming: whisper.cpp runs once per finished
 //!   utterance. There is no live partial transcript.
-//! - TTS is macOS `say` with one fixed voice. It is a [`tts::SpeechSynth`] implementation, so
-//!   a bundled neural voice replaces it without touching the pipeline.
+//! - TTS is Kyutai Pocket TTS speaking as Peter Yearsley (`pocket.rs`, CEO 2026-10-14), behind
+//!   the [`tts::SpeechSynth`] trait; macOS `say` speaks until its pinned files are on the machine.
 
 pub mod aec;
 pub mod bargein;
@@ -114,6 +114,8 @@ pub mod wav;
 pub mod capture;
 pub mod controller;
 pub mod playout;
+// Rich's voice: Pocket TTS (ONNX Runtime, statically linked) with the Peter Yearsley preset.
+pub mod pocket;
 pub mod stt;
 pub mod tts;
 pub mod vad;

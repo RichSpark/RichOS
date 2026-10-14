@@ -611,6 +611,127 @@ fn speech_that_resumes_as_synthesis_ends_is_his_and_rich_waits() {
     assert_eq!(said, vec!["answer 2 sentence 1"], "Rich said: {said:?}");
 }
 
+// ------------------------------------------------------------------------------------------------
+// THE ONSET-TO-FLOOR HANDOFF, ON THE APP'S THREE CLOCKS (review rv-20261013T184256Z finding 2,
+// still open in rv-20261013T192726Z).
+// ------------------------------------------------------------------------------------------------
+
+/// The capture callback's frame period, the supervisor's `TICK` and the speaker's `FLOOR_POLL`,
+/// in ms: 256 / 16000 = 16 ms; 25 ms; 10 ms (`controller.rs`).
+const CAPTURE_MS: usize = 16;
+const SUPERVISOR_MS: usize = 25;
+const SPEAKER_POLL_MS: usize = 10;
+
+/// What one schedule saw.
+#[derive(Debug, PartialEq)]
+struct Handoff {
+    /// When Rich's sentence reached the device, ms after his first speech sample.
+    sounded_at: Option<i64>,
+    tainted_starts: usize,
+    tainted_discards: usize,
+    admitted: usize,
+}
+
+/// THE SHIPPED PIECES ON THEIR OWN CLOCKS, one millisecond at a time. The earlier replays publish
+/// the floor on the same frame as `Started`, which the app does not: the capture callback sends
+/// `Started` and writes `Shared::his_onset` per 16 ms frame, the supervisor drains the channel
+/// and publishes `Shared::his_floor` (and `Shared::speaking`) on its 25 ms tick, and the speaker,
+/// once synthesis is done, asks `may_sound` at once and then every 10 ms. Rich's sentence finishes
+/// synthesis `ready_ms` after he starts talking again (negative: before he does); the supervisor's
+/// tick is offset by `phase_ms`. His words are recognized at once and are never handed over, so
+/// the floor stays his to the end: any sound at all after he resumed is Rich talking over him.
+fn handoff(mic: &[f32], resume: usize, ready_ms: i64, phase_ms: usize) -> Handoff {
+    let (aec, ring) = EchoCanceller::new();
+    let mut brain = CaptureBrain::with_aec(aec);
+    let mut turns = TurnAssembler::new();
+    let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
+    let resume_ms = (resume / VAD_FRAME_SAMPLES * CAPTURE_MS) as i64;
+    let ready = resume_ms + ready_ms;
+    let frames = mic.len() / VAD_FRAME_SAMPLES;
+    let (mut pending, mut onset, mut floor, mut speaking) = (Vec::new(), false, false, false);
+    let mut h = Handoff { sounded_at: None, tainted_starts: 0, tainted_discards: 0, admitted: 0 };
+    let mut sounded = false;
+    for t in 1..=(frames * CAPTURE_MS) {
+        // The capture callback: frame k is delivered when its 16 ms are over.
+        if t.is_multiple_of(CAPTURE_MS) {
+            let k = t / CAPTURE_MS - 1;
+            ring.push(&silence);
+            pending.extend(brain.push_frame(&mic[k * VAD_FRAME_SAMPLES..(k + 1) * VAD_FRAME_SAMPLES], speaking, false));
+            onset = brain.his_onset_building();
+        }
+        // The supervisor: drain, then publish the floor and whether Rich is audible.
+        if (t + phase_ms).is_multiple_of(SUPERVISOR_MS) {
+            for m in pending.drain(..) {
+                match m {
+                    CapMsg::Started { tainted: false, .. } => turns.his_utterance_started(),
+                    CapMsg::Started { tainted: true, .. } => {
+                        h.tainted_starts += 1;
+                        turns.utterance_started();
+                    }
+                    CapMsg::Utterance(u) => {
+                        h.admitted += 1;
+                        turns.utterance_admitted((u.utterance.duration_secs() * 1000.0) as u64);
+                        turns.recognized(Some(("his words".to_string(), false)));
+                    }
+                    CapMsg::Discarded { tainted } => {
+                        h.tainted_discards += tainted as usize;
+                        turns.utterance_discarded();
+                    }
+                    CapMsg::TurnQuiet => turns.quiet(),
+                    _ => {}
+                }
+            }
+            floor = turns.has_floor();
+            speaking = rich_audible(sounded, sounded);
+        }
+        // The speaker: synthesis done at `ready`, asks now and every 10 ms after.
+        let t = t as i64;
+        if !sounded && t >= ready && (t - ready) % SPEAKER_POLL_MS as i64 == 0 && may_sound(floor, onset) {
+            sounded = true;
+            h.sounded_at = Some(t - resume_ms);
+        }
+    }
+    h
+}
+
+/// He resumes talking (three 0.224 s words, 0.224 s apart, the review's case, at his -18.1 dBFS on
+/// his room) while Rich's sentence is in synthesis, and synthesis completes at every moment from
+/// 20 ms into his first word to past his last, under four supervisor phases. Before the fix the
+/// onset signal fell at the onset frame (112 ms) while the floor waited for the next 25 ms tick,
+/// and a sentence ready in that gap sounded over him: his word was then Rich's echo and
+/// discarded (the reviewer: "sounded_at=Some(120)ms, admitted=0, tainted_discards=1").
+#[test]
+fn rich_never_sounds_in_the_gap_between_his_onset_and_the_published_floor() {
+    let lead = 1.024; // 64 whole frames, so his first word starts on a frame edge
+    let word = synthetic_voice(0.224, 3);
+    let mut mic = room(lead + 3.0 * 0.448 + 1.5);
+    let resume = secs_to_samples(lead);
+    for i in 0..3 {
+        superimpose(&mut mic, resume + i * secs_to_samples(0.448), &word);
+    }
+
+    // POSITIVE CONTROL: a sentence ready before he says anything plays at once, so this replay
+    // can see Rich sound at all.
+    let early = handoff(&mic, resume, -200, 0);
+    assert_eq!(early.sounded_at, Some(-200), "the replay never lets Rich sound: {early:?}");
+
+    let mut over_him = Vec::new();
+    for phase in [0, 6, 12, 18] {
+        for ready in (20..=1200).step_by(4) {
+            let h = handoff(&mic, resume, ready, phase);
+            let ok = Handoff { sounded_at: None, tainted_starts: 0, tainted_discards: 0, admitted: 1 };
+            if h != ok {
+                over_him.push(format!("ready {ready} ms, tick phase {phase} ms: {h:?}"));
+            }
+        }
+    }
+    println!("[handoff] {} schedules talked over him", over_him.len());
+    for line in over_him.iter().take(12) {
+        println!("[handoff]   {line}");
+    }
+    assert!(over_him.is_empty(), "Rich sounded over his resumed words in {} schedules, first: {}", over_him.len(), over_him[0]);
+}
+
 // ================================================================================================
 // EVERY WAY HIS TURN ENDS, IN ONE TABLE.
 //

@@ -62,7 +62,14 @@ _spec.loader.exec_module(adopt_walk)
 StepFailed = adopt_walk.StepFailed
 command = adopt_walk.command
 
-STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'heard']
+STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'rich-voice', 'heard',
+         'spoken']
+# Rich's voice (CEO 2026-10-14, "Pocket TTS: Peter Yearsley"). Not in the default run: the two steps
+# download 166 MB into the guest and wait for a spoken answer. Ask for them with --steps.
+DEFAULT_STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'heard']
+VOICE_INSTALLED = '[richos] rich voice: Pocket TTS and the Peter Yearsley voice are installed and verified'
+VOICE_NOT_INSTALLED = '[richos] rich voice: not installed this time'
+POCKET_LABEL = 'Pocket TTS english_2026-04 INT8 · Peter Yearsley'
 READY = '[richos] voice: ready on this machine'
 NOT_READY = '[richos] voice: not ready on this machine'
 
@@ -231,6 +238,47 @@ class VoiceWalk(adopt_walk.Walk):
             time.sleep(1)
         raise StepFailed('the app printed no voice-readiness line within 60 s')
 
+    def rich_voice(self):
+        """Rich's voice reaches this guest the way it reaches a user: the app, finding voice ready,
+        downloads the nine pinned Pocket TTS files in the background (voice_provision.rs
+        fetch_rich_voice_in_background) and says so in its log. Nothing is copied in."""
+        end = time.monotonic() + self.a.voice_within
+        while time.monotonic() < end:
+            text = guest(self.vm, 'cat ' + shlex.quote(self.log) + ' 2>/dev/null || true')
+            for line in text.splitlines():
+                if VOICE_NOT_INSTALLED in line:
+                    raise StepFailed(line)
+                if VOICE_INSTALLED in line:
+                    folder = self.home + '/.config/richos/models/pocket-tts-english_2026-04'
+                    listing = guest(self.vm, 'ls -l ' + shlex.quote(folder))
+                    voice = guest(self.vm, 'shasum -a 256 ' + shlex.quote(folder + '/peter_yearsley.wav')).split()[0]
+                    return {'line': line, 'files': listing.splitlines(), 'peter_yearsley_sha256': voice,
+                            'fetch_log': [l for l in text.splitlines() if 'rich voice' in l]}
+            time.sleep(2)
+        raise StepFailed(f'the app did not install Rich\'s voice within {self.a.voice_within} s')
+
+    def spoken(self):
+        """Rich answers aloud in Peter Yearsley's voice: the first sentence of his answer is
+        synthesized by Pocket TTS (the app's `[richos-voice] tts:` line names the voice), and its
+        synthesis time is that answer's time to first audio. Played into the guest's muted output."""
+        end = time.monotonic() + self.a.within
+        lines = []
+        while time.monotonic() < end:
+            text = guest(self.vm, 'grep -E "\\[richos-voice\\] (tts:|Pocket TTS)" ' + shlex.quote(self.log) + ' || true')
+            lines = text.splitlines()
+            spoken = [l for l in lines if '] tts: ' in l]
+            if spoken:
+                first = spoken[0]
+                if POCKET_LABEL not in first:
+                    raise StepFailed(f'Rich\'s first sentence was not spoken by Pocket TTS as Peter Yearsley: {first}\n' +
+                                     '\n'.join(lines))
+                ms = int(first.split(' synthesized in ')[1].split(' ms')[0])
+                time.sleep(5)
+                text = guest(self.vm, 'grep -E "\\[richos-voice\\] (tts:|Pocket TTS|ANSWER AUDIBLE)" ' + shlex.quote(self.log) + ' || true')
+                return {'first_sentence': first, 'first_audio_ms': ms, 'voice_log': text.splitlines()[-20:]}
+            time.sleep(2)
+        raise StepFailed(f'Rich spoke no sentence within {self.a.within} s; voice log:\n' + '\n'.join(lines))
+
     def ax(self, mode, *args, app=None, timeout=40):
         """adopt-walk's ax(), with a READ that hit ax.sh's guest deadline asked again, up to three
         times. Two runs on 2026-10-07 each lost a step to one such read on a busy host:
@@ -374,7 +422,9 @@ def main():
                    help='with --one-turn: seconds to wait after the first turn for a second one to appear')
     p.add_argument('--expect-words', default='',
                    help='with --one-turn: comma-separated words that must all be in that one turn')
-    p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--voice-within', type=float, default=600,
+                   help="seconds for the app to download and verify Rich's voice (step rich-voice)")
+    p.add_argument('--steps', default=','.join(DEFAULT_STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')
     unknown = [s for s in steps if s not in STEPS]
