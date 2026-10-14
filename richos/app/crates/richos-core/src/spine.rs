@@ -2091,18 +2091,31 @@ impl Spine {
     /// message must name the key he actually picked, also when he picks another one later).
     /// The new text is a new proactive turn in the same conversation and the old turn is marked
     /// superseded by it, the ledger's own mechanism (§5.3): the conversation and the re-prime
-    /// tail both leave a superseded turn out, so he sees one message and Rich remembers one.
-    /// A desk already primed for this conversation, in the chair or parked, is un-primed, so
-    /// Rich's next turn there is primed again from the ledger and carries the new text.
+    /// tail and the action ledger digest all leave a superseded turn out, so he sees one message
+    /// and Rich remembers one.
+    ///
+    /// **Every desk of that company is retired, not un-primed** (Ray,
+    /// esc-20261014T041934Z-2acf6aeb). A desk primed with the old text still holds it however
+    /// often it is primed again: priming adds a turn to its session and takes nothing out, so
+    /// Rich answered "an earlier one said F2". A retired desk's thread starts a fresh session at
+    /// its next turn, primed from the ledger, which holds only the new text. Company-wide,
+    /// because the digest carried the old line into every conversation of the company. Never
+    /// the desk running a turn (continuity §3.1): this takes `&mut self`, which a running turn
+    /// holds, so that desk cannot be the one in the chair here; the check states it anyway.
     /// Answers the new turn id.
     pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<String, SpineError> {
         let new_turn = self.raise_proactive(Some(thread_id), AttentionTier::Digest, text)?;
         self.ledger.mark_turn_superseded(turn_id, &new_turn)?;
-        if self.lease_primed_thread.as_deref() == Some(thread_id) {
-            self.lease_primed = false;
+        let entity = self.ledger.thread_binding(thread_id)?.entity_id().clone();
+        let ledger = &self.ledger;
+        let of_company = |thread: &str| ledger.thread_binding(thread).is_ok_and(|b| b.entity_id() == &entity);
+        let chair = !self.turn_in_progress && self.lease_primed_thread.as_deref().is_some_and(of_company);
+        self.resident.retain(|thread, _| !of_company(thread));
+        if chair {
+            self.clear_lease();
         }
-        if let Some(resident) = self.resident.get_mut(thread_id) {
-            resident.primed = false;
+        if self.spare.as_ref().is_some_and(|spare| spare.entity == entity) {
+            self.discard_spare();
         }
         self.publish_read_metadata();
         Ok(new_turn)

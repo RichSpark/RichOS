@@ -3,11 +3,11 @@
 //! they run green with NO live Claude / network (the live round-trip itself is proven
 //! separately by examples/native_roundtrip.rs).
 
-use richos_core::cognition::{Cognition, CognitionError, TurnItem, MockCognition};
+use richos_core::cognition::{Cognition, CognitionError, TurnItem, MockCognition, MockLeaseFactory};
 use richos_core::ledger::{Ledger, Source, TurnState};
 use richos_core::reprime::RePrimePayload;
 use richos_core::entity::EntityId;
-use richos_core::spine::Spine;
+use richos_core::spine::{FrontDeskReady, Spine};
 
 /// The dogfood entity these tests run under. Every thread now has an immutable entity
 /// home (ECS §3.2) and there is no entity-less path, so the tests NAME one rather than
@@ -182,33 +182,46 @@ fn an_app_message_replaced_is_the_one_message_there_and_the_one_rich_is_primed_w
     spine.prime_front_desk(&id);
     let primed = reprimes.lock().unwrap().join("\n");
     assert!(primed.contains("tap F3, then"), "{primed}");
-    // The conversation he resumes holds the new message only. The action ledger keeps both lines,
-    // because Rich did say both: it is the record of what happened, the newer one last.
-    assert!(!primed.contains("assistant (unprompted): tap F2, then"), "the replaced message is not in the conversation: {primed}");
+    // The conversation and the action ledger digest both hold the new message only: a digest line
+    // for the replaced one made Rich answer "an earlier one said F2" (esc-20261014T041934Z-2acf6aeb).
+    assert!(!primed.contains("tap F2, then"), "the replaced message is not in the priming: {primed}");
     std::fs::remove_file(&path).expect("the test ledger is removable");
 }
 
 #[test]
-fn a_replaced_app_message_reaches_the_desk_already_talking_in_that_conversation() {
-    // Review rv-20261014T011702Z-0d2d67f3-d389: set up F2, open "Dictation feature" and talk to
-    // Rich there, pick F3 in Settings, then ask Rich about dictation in that conversation. The
-    // desk was primed with F2 before the replacement; his next turn there must carry F3.
-    let (path, ledger) = tmp_ledger("app-replaced-primed");
+fn after_a_key_change_the_desk_that_answers_knows_only_the_new_key() {
+    // Ray, esc-20261014T041934Z-2acf6aeb: set up F2, pick F3 in Settings, then ask Rich in
+    // "Dictation feature" which key starts dictation. His first turn there named F3 and added
+    // "an earlier one said F2": the desk opening the conversation had readied was primed with
+    // F2 and only primed again on top of it, and the action ledger digest every priming carries
+    // still listed the replaced message. The CEO: the key he picked is the one named,
+    // everywhere, so the onboarding conversation is asked too.
+    let (path, ledger) = tmp_ledger("app-replaced-only-new-key");
     let mut spine = support::spine(ledger);
-    spine.ensure_active_thread_in(&femcboost()).unwrap();
+    let onboarding = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+    let factory = MockLeaseFactory::new(vec!["F3.", "F3."]);
+    let prompts = factory.spawned_prompts.clone();
+    let primes = factory.spawned.clone();
+    spine.set_lease_factory(Box::new(factory));
     let (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
-    let lease = MockCognition::new("sess-one", vec!["Sure.", "Tap F3."]);
-    let reprimes = lease.reprimes.clone();
-    spine.attach_lease(Box::new(lease));
-    spine.switch_thread(&id).unwrap();
-    spine.submit_prompt("what is this?", Source::Text).unwrap();
-    assert_eq!(reprimes.lock().unwrap().len(), 1, "primed once, with F2");
+    // Opening each conversation readies its desk with what is there now: F2.
+    assert!(matches!(spine.prime_front_desk(&id), FrontDeskReady::Ready { .. }));
+    assert!(matches!(spine.prime_front_desk(&onboarding), FrontDeskReady::Ready { .. }));
     spine.replace_app_message(&id, &first, "tap F3, then").unwrap();
-    spine.submit_prompt("which key do I tap?", Source::Text).unwrap();
-    let primes = reprimes.lock().unwrap().clone();
-    assert_eq!(primes.len(), 2, "the next turn is primed again after the replacement: {primes:?}");
-    assert!(primes[1].contains("tap F3, then"), "Rich's next turn carries the new key: {}", primes[1]);
-    assert!(!primes[1].contains("assistant (unprompted): tap F2, then"), "the replaced message is gone: {}", primes[1]);
+    for thread in [&id, &onboarding] {
+        spine.switch_thread(thread).unwrap();
+        let question = format!("Which key do I tap to start dictation now? ({thread})");
+        spine.submit_prompt(&question, Source::Text).unwrap();
+        // Every priming the desk that answered was ever handed, from its start.
+        let desks = prompts.lock().unwrap().clone();
+        let answering = desks.iter().position(|asked| asked.lock().unwrap().contains(&question))
+            .expect("a desk answered the question");
+        let primed = primes.lock().unwrap()[answering].lock().unwrap().join("\n");
+        assert!(!primed.contains("F2"), "the desk answering in {thread} still holds F2: {primed}");
+        if thread == &id {
+            assert!(primed.contains("tap F3, then"), "Rich's first turn there carries F3: {primed}");
+        }
+    }
     std::fs::remove_file(&path).expect("the test ledger is removable");
 }
 
