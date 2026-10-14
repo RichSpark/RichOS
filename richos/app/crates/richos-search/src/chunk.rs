@@ -87,8 +87,11 @@ fn setext_paragraph(paragraph: &str) -> bool {
     !paragraph.lines().any(|line| {
         let line = line.trim_start();
         let digits = line.chars().take_while(char::is_ascii_digit).count();
-        let ordered = digits > 0 && (line[digits..].starts_with(". ") || line[digits..].starts_with(") "));
-        ordered || ["- ", "* ", "+ ", ">"].iter().any(|m| line.starts_with(m))
+        // A list marker is followed by a space or a tab (rv-20261014T105455Z-47c5ce44-6c38).
+        let spaced = |rest: &str| rest.starts_with([' ', '\t']);
+        let ordered = digits > 0 && (line[digits..].strip_prefix(['.', ')']).is_some_and(spaced));
+        let bullet = line.strip_prefix(['-', '*', '+']).is_some_and(spaced);
+        ordered || bullet || line.starts_with('>')
     })
 }
 
@@ -330,6 +333,18 @@ mod tests {
         assert!(p.iter().all(|x| x.heading.is_empty()), "no heading made of front matter, a list item or a quote");
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].text(kept), kept.trim_end(), "every line is still passage text");
+    }
+
+    #[test]
+    fn a_list_item_with_a_tab_after_its_marker_over_a_divider_stays_text() {
+        // rv-20261014T105455Z-47c5ce44-6c38 (`fixtures/list_forms_probe.py`): `-<tab>item` over
+        // `---` became the heading "Items to revisit: -\tCheck staffing within 30 days.".
+        for marker in ["-\t", "*\t", "+\t", "1.\t", "1)\t"] {
+            let text = format!("## Discussion notes\n\nItems to revisit:\n{marker}Check staffing within 30 days.\n---\n\nAgenda.\n");
+            let p = passages(&text);
+            assert!(p.iter().all(|x| x.heading == "Discussion notes"), "marker {marker:?}: {:?}", p.iter().map(|x| &x.heading).collect::<Vec<_>>());
+            assert!(p.iter().any(|x| x.text(&text).contains("Check staffing")), "marker {marker:?}: the list item is passage text");
+        }
     }
 
     #[test]
