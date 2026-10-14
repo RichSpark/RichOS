@@ -152,6 +152,21 @@ class Slots(unittest.TestCase):
                                        ram_mb=ram)
         self.assertEqual(settled, '', 'a settled guest already counted in the available memory owes little')
 
+    def test_only_a_test_guest_s_own_vm_process_counts_not_docker_s_listed_first(self):
+        """2026-10-14: Docker's VM (429 MB, 11 days old) came before the guest (3,562 MB) in `ps`,
+        so the guest was charged Docker's size and a second guest was refused every time."""
+        vm = '/System/Library/Frameworks/Virtualization.framework/x/com.apple.Virtualization.VirtualMachine'
+        ps = f'  1271  439296 {vm}\n 44996 3647488 {vm}\n   99    1000 /bin/zsh\n'
+        lsof = ('p1271\nn/Users/a/Library/Containers/com.docker.docker/Docker.raw\n'
+                'p44996\nn/Users/a/.richos-testvm/tart/vms/walk-x/nvram.bin\n'
+                'n/Users/a/.richos-testvm/tart/vms/walk-x/disk.img\n')
+
+        def run(cmd, **kw):
+            out = ps if cmd[0] == 'ps' else lsof
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr='')
+        with patch.object(slots.subprocess, 'run', run):
+            self.assertEqual(slots.vm_resident_mb(), [3647488 / 1024])
+
     def test_the_guest_size_is_lib_sh_s_one_declared_default_unless_overridden(self):
         declared = re.search(r'^TESTVM_RAM_MB="\$\{TESTVM_RAM_MB:-(\d+)\}"', (HERE / 'lib.sh').read_text(), re.M)
         os.environ.pop('TESTVM_RAM_MB', None)
