@@ -123,7 +123,7 @@ class Round19(unittest.TestCase):
 
     def test_the_round_19_steps_are_never_in_the_default_run(self):
         self.assertFalse(set(walk.R19_STEPS) & set(walk.STEPS))
-        self.assertEqual(walk.R19_STEPS, ['r19-sheet', 'r19-offer', 'r19-again'])
+        self.assertEqual(walk.R19_STEPS, ['r19-grants', 'r19-sheet', 'r19-offer', 'r19-set-up', 'r19-again', 'r19-restart'])
         for step in walk.R19_STEPS:
             self.assertTrue(hasattr(walk.SetupWalk, step.replace('-', '_')), step)
 
