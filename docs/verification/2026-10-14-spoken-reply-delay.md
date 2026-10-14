@@ -3,8 +3,9 @@
 The app's avoidable waits are repaired. Fast replies are **not fully restored**:
 the measured first sample still arrived 9.955 seconds after the recorded utterance
 ended. Opus, high effort, Peter Yearsley's voice and the 2.0-second end-of-turn
-wait were unchanged. No comparison without high effort was run, so these results
-do not establish that high effort caused the original regression.
+wait were unchanged. The first proof did not compare effort levels. The later
+comparison below identifies an observed contribution from the flag, without
+establishing the complete cause of the historical regression.
 
 ## Changes
 
@@ -69,5 +70,51 @@ development artifacts. Verification is assembled from the individual checks
 above; the final VM walk itself was one clean completed invocation. The normal
 second review and landing gates remain Rich's work.
 
+## Later effort comparison and decoder isolation
+
+Rich requested a measurement-only comparison at 09:26:52Z. Both conditions used
+the same app `261664585`, engine, recording, decoder and 5 GiB guest RAM. Each used
+the same transparent launcher; one preserved `--effort high`, while the other
+removed exactly that flag/value pair. Live audits verified that `--model opus`
+and empty `--setting-sources` remained. No production setting changed.
+
+| Phase | Explicit high | Effort flag omitted |
+| --- | ---: | ---: |
+| Prompt receipt to model send | 0.508 s | 0.604 s |
+| Model send to first text | 5.974 s | 3.364 s |
+| First text to first sentence | 0.274 s | 0.307 s |
+| First sentence to first played sample | 1.504 s | 1.600 s |
+| Handover to first played sample | 8.264 s | 5.876 s |
+| Recorded utterance end to first played sample | 13.261 s | 35.959 s |
+
+Both walks passed all 12 steps, returned 0 and confirmed cleanup. They ran
+sequentially because the audio-capture test held the other VM slot. One sample per
+condition points to the effort flag contributing 2.610 s of observed model wait;
+it does not establish a stable expected improvement or reproduce pre-October-10
+startup, which also omitted the model flag. Omitted effort means the CLI's
+unspecified default, not a named low effort level.
+
+The omitted condition also exposed a **separate recognition stall** before model
+submission: its three fragments took 20.569, 11.759 and 6.636 s, and handover came
+30.080 s after the final recorded utterance. It must not be described as a
+5.876-second full voice response. Its model flag cannot explain work that
+preceded model submission.
+
+The smallest isolated follow-up reproduced the cold-invocation spike with no app
+or provider turn: the first four seconds of the same recording decoded in
+19.356 s, then 3.034 and 3.398 s, with identical text. A second isolated guest,
+omitting only the no-print flag to retain native phase diagnostics, measured
+10.587 s cold and 2.080 s warm. Metal library initialization on its virtual GPU
+took 7.844 s cold and 0.008 s warm; ordinary model loading took 0.293 s, and the
+first native decode total was 2.572 s. This identifies GPU initialization as a
+cold VM cost, not evidence that the effort flag caused the recognizer stall.
+No decoder algorithm, model or thread setting was changed.
+
+The additional evidence is in `effort-comparison-result.json`, `ab-high/`,
+`ab-omitted/`, `launcher-control.json`, `decoder-isolation/` and
+`decoder-phases/` under the retained evidence directory. The test-only launcher
+and diagnostic scripts are retained there for inspection.
+
 The remaining performance issue is the full delay, including the provider's
-time to first text. This change must not be presented as restoring instant replies.
+time to first text and cold decoder initialization. This change must not be
+presented as restoring instant replies.
