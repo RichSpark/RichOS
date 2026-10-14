@@ -234,6 +234,27 @@ class Scope(unittest.TestCase):
         self.assertEqual(len(weights), 1, weights)
         self.assertTrue(0 < weights[0] < 600, weights)
 
+    def test_a_workspaces_change_starts_the_fourteen_point_suites_plain_run_in_the_merge_gate(self):
+        # The merge of c2e47cfb7 changed workspaces.py. Its gate selected this suite, planned it at
+        # the table's 2811.7 s (its run WITH the mutation pass the gate switches off), left it out
+        # as over the 600 s cap, and nightly 20261014T170730Z-784b711e found C1.5 red in its plain run.
+        unit = 'mega-lander/tests/workspace-spec-fourteen.test.sh'
+        result = subprocess.run(['bash', str(TOOLS / 'proof-for.sh'), '--quiet', '--gate', '--paths',
+                                 'richos/engine/mega-lander/workspaces.py'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith('cd ')]
+        self.assertTrue(any(line.endswith('--only-units ' + unit) for line in lines), lines)
+        ac = load('merge_scope_autocheck', 'richos/app/scripts/autocheck/autocheck.py')
+        kept, _moved = ac.for_the_nightly(SimpleNamespace(top=ROOT), lines)
+        pr = load('merge_scope_fourteen', 'richos/app/scripts/proof-run.py')
+        args = SimpleNamespace(deadline=1800, engine_shards=4, fail_fast=False, cap=ac.CHECK_CAP_SECONDS)
+        with tempfile.TemporaryDirectory() as log, mock.patch.dict(os.environ, ac.MUTATION_SWITCH):
+            items = pr.plan(kept, args, log, {})
+            pr.leave_over_cap(items, args)
+        found = [item for item in items if item.label == 'engine ' + unit]
+        self.assertEqual(len(found), 1, [item.label for item in items])
+        self.assertEqual(found[0].state, 'waiting', getattr(found[0], 'not_run', None))
+
 
 # A suite as the two that failed nightly attempt 2 only inside the build: it reads a variable
 # only the build sets (merge-check-scope.test.py and RICHOS_IOS_POOL_WAIT), and it binds a Unix
