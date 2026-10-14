@@ -94,6 +94,14 @@ pub trait LeaseFactory: Send {
         None
     }
 
+    /// **The names on the team the next lease would register** (`engine_profile::active_team`):
+    /// what tells the work host a hiring is finished, every proposed teammate saved. `None` —
+    /// the default, and any reading that fails — means this factory cannot say, and no hiring
+    /// is held open on the strength of it.
+    fn team_names(&self) -> Option<Vec<String>> {
+        None
+    }
+
     /// **The models the next leases would start on** (the CEO's §119): Rich's for a
     /// conversation lease and Stu's for a work lease, as the stored setting says now. Read at
     /// each boundary and compared with the lease in the chair's own
