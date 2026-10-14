@@ -118,10 +118,25 @@ def guest_ram_mb():
 
 
 def vm_resident_mb():
-    """Resident memory of each running Virtualization VM process, in MB (read-only `ps`)."""
-    table = subprocess.run(['ps', '-A', '-o', 'rss=,comm='], capture_output=True, text=True, timeout=10).stdout
-    return [int(line.split(None, 1)[0]) / 1024 for line in table.splitlines()
-            if line.strip().endswith('/' + VM_PROCESS) and line.split(None, 1)[0].isdigit()]
+    """Resident memory of each running test guest's own VM process, in MB (read-only `ps`, `lsof`).
+    Every Virtualization VM process is a candidate, Docker Desktop's included; only one holding a
+    tart guest's disk.img open is a test guest, so nothing else is charged to a guest."""
+    table = subprocess.run(['ps', '-A', '-o', 'pid=,rss=,comm='], capture_output=True, text=True, timeout=10).stdout
+    found = {}
+    for line in table.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit() and parts[2].endswith('/' + VM_PROCESS):
+            found[parts[0]] = int(parts[1]) / 1024
+    if not found:
+        return []
+    held = subprocess.run(['lsof', '-nP', '-Fpn', '-p', ','.join(found)], capture_output=True, text=True, timeout=20).stdout
+    guests, pid = [], None
+    for line in held.splitlines():
+        if line.startswith('p'):
+            pid = line[1:]
+        elif line.startswith('n') and pid in found and '/tart/vms/' in line and line.endswith('/disk.img'):
+            guests.append(found.pop(pid))
+    return guests
 
 
 def host_memory_mb():
