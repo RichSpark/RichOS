@@ -169,7 +169,7 @@ if [ "$(sed -n 1p "$A")" = "-n" ] && [ "$(sed -n 2p "$A")" = "-a" ] && [ "$(sed 
 else bad "L1 opens a NEW instance of the folder's own app" "$(head -3 "$A")"; fi
 ENV_OK=1
 for want in "HOME=$F/home.noindex" "CFFIXED_USER_HOME=$F/home.noindex" "TMPDIR=$F/home.noindex/tmp/" "RICHOS_ACTIVATION=regular" "DISABLE_AUTOUPDATER=1" \
-            "LORO_CORPUS=" "LORO_ROOT=" "RICHOS_ENGINE_DIR=" "RICHOS_ENGINE_ROOT=" "RICHOS_CLAUDE_BIN="; do
+            "LORO_CORPUS=" "LORO_ROOT=" "RICHOS_ENGINE_DIR=" "RICHOS_ENGINE_ROOT=" "RICHOS_CLAUDE_BIN=" "RICHOS_UPDATE_ENDPOINT="; do
   grep -qxF -- "$want" "$A" || { ENV_OK=0; bad "L1 the app is started with $want" "$(tr '\n' ' ' < "$A")"; }
 done
 [ "$ENV_OK" = 1 ] && ok "L1 HOME and CFFIXED_USER_HOME are the folder's home; activation regular; claude pinned; LORO_* and the engine overrides are EMPTY"
@@ -293,8 +293,8 @@ if [ ! -e "$H/myrichos-nightly-a" ]; then
 else
   bad "L6 none created the folder" "$(ls -la "$H")"
 fi
-run "$H" c "$ZIPS/v1.zip"
-expect_refusal "L6 a folder other than a or b is refused" "a or b"
+run "$H" d "$ZIPS/v1.zip"
+expect_refusal "L6 a folder other than a, b or c is refused" "a, b or c"
 tmp_clean "L6 refusals leave no scratch behind"
 
 # ---------------------------------------------------------------------------------------
@@ -435,6 +435,58 @@ RICHOS_ENV_FILE="$H/missing selected file" run "$H" a --again
 if grep -qx "RICHOS_ENV_FILE=$H/missing selected file" "$H.state/open.env"; then
   ok "L14 an explicit missing selector is forwarded for the reader's refusal"
 else bad "L14 explicit selector forwarded" "$OUT"; fi
+
+# ---------------------------------------------------------------------------------------
+# L15 — folder c with --engine: the unpacked engine is the one the app is told to boot
+# ---------------------------------------------------------------------------------------
+H="$(new_home h15)"; F="$H/myrichos-nightly-c"
+ENG="$SBOX/eng"; mkdir -p "$ENG/engine/scripts/hooks"; printf '1.2.0\n' > "$ENG/engine/VERSION"
+( cd "$ENG" && /usr/bin/tar -czf "$SBOX/engine.tar.gz" engine )
+mkdir -p "$ENG/wrong/scripts"; ( cd "$ENG" && /usr/bin/tar -czf "$SBOX/wrong.tar.gz" wrong )
+run "$H" c "$ZIPS/v1.zip" --engine "$SBOX/wrong.tar.gz"
+expect_refusal "L15 an engine tarball whose top member is not engine/ is refused" "not a RichOS engine tarball"
+if [ ! -e "$F" ]; then ok "L15 ...before the folder is created"; else bad "L15 refusal created nothing" "$(ls -la "$F")"; fi
+run "$H" c "$ZIPS/v1.zip" --engine "$SBOX/engine.tar.gz"
+A="$H.state/open.args"
+if [ "$RC" -eq 0 ] && [ -d "$F/engine.noindex/scripts/hooks" ] && [ -f "$F/engine.noindex/VERSION" ] \
+   && grep -qx "RICHOS_ENGINE_DIR=$F/engine.noindex" "$A" && grep -qx "RICHOS_ENGINE_ROOT=" "$A"; then
+  ok "L15 folder c unpacks the engine (one level stripped) and starts the app with RICHOS_ENGINE_DIR naming it"
+else bad "L15 folder c with --engine" "exit $RC: $OUT / $(tr '\n' ' ' < "$A" 2>&1)"; fi
+if [ ! -e "$F/memory" ]; then ok "L15 folder c is a newborn: no memory folder"; else bad "L15 folder c is a newborn" "$(ls -la "$F")"; fi
+NO_UPDATES="RICHOS_UPDATE_ENDPOINT=https://updates.richos.invalid/latest.json"
+if grep -qxF -- "$NO_UPDATES" "$A" && grep -q "updates off" <<<"$OUT"; then
+  ok "L15c with a test engine the app gets the placeholder update endpoint, so no update can carry the engine into a newer build"
+else bad "L15c a test engine turns updates off" "$OUT / $(grep RICHOS_UPDATE "$A" 2>&1)"; fi
+quit_app "$H"
+run "$H" c --again
+if [ "$RC" -eq 0 ] && grep -qx "RICHOS_ENGINE_DIR=$F/engine.noindex" "$A" && grep -qxF -- "$NO_UPDATES" "$A"; then
+  ok "L15 --again boots the engine the folder holds, still with updates off"
+else bad "L15 --again keeps the engine and updates off" "exit $RC: $OUT"; fi
+quit_app "$H"
+run "$H" status
+if grep -q "engine: $F/engine.noindex" <<<"$OUT"; then ok "L15 status names folder c's engine"; else bad "L15 status names the engine" "$OUT"; fi
+tmp_clean "L15 the launcher's scratch is gone"
+
+# L15b — replacing folder c's build without --engine drops the earlier build's engine
+run "$H" c "$ZIPS/v2.zip" --replace
+if [ "$RC" -eq 0 ] && [ ! -e "$F/engine.noindex" ] && grep -qx "RICHOS_ENGINE_DIR=" "$A" \
+   && grep -qx "RICHOS_UPDATE_ENDPOINT=" "$A" \
+   && grep -qx 'version=1.2.0-nightly.20260924.1' "$F/nightly-launch.txt"; then
+  ok "L15b a ZIP without --engine removes engine.noindex, so the replacement boots its own pin and updates from its own channel"
+else bad "L15b replacement without --engine boots its own pin" "exit $RC: $OUT / $(tr '\n' ' ' < "$A" 2>&1)"; fi
+tmp_clean "L15b the launcher's scratch is gone"
+
+# L15d — --engine only on a newborn: a folder whose app ran may hold an update, and that
+# update would boot the test engine instead of its own pin
+quit_app "$H"
+mkdir -p "$F/home.noindex/Applications/RichOS.app"; touch "$F/home.noindex/Applications/RichOS.app/downloaded-update"
+run "$H" c "$ZIPS/v1.zip" --replace --engine "$SBOX/engine.tar.gz"
+expect_refusal "L15d --engine on a folder that already has app data is refused" "start again from an empty folder"
+if [ ! -e "$F/engine.noindex" ] && grep -qx 'version=1.2.0-nightly.20260924.1' "$F/nightly-launch.txt" \
+   && [ -e "$F/home.noindex/Applications/RichOS.app/downloaded-update" ]; then
+  ok "L15d ...before anything changed: no engine unpacked, the build and its update state untouched"
+else bad "L15d refusal changed nothing" "$(ls -la "$F") / $(cat "$F/nightly-launch.txt")"; fi
+tmp_clean "L15d the launcher's scratch is gone"
 
 echo ""
 echo "nightly-launch.test.sh: $PASSES passed, $FAILS failed"
