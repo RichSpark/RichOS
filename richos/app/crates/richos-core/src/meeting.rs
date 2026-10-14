@@ -54,7 +54,7 @@
 //! while it runs over, declined or stopped, prompts when it ends.
 //! Every sequence is one row of `every_call_sequence_gives_the_expected_prompt_and_recording`.
 
-use crate::meeting_calendar::{CalendarMeeting, PROMPT_LEAD_MS};
+use crate::meeting_calendar::{CalendarMeeting, PROMPT_LEAD_MS, REFRESH_MS};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// How long every process of the call's app must have been off the microphone before the call's
@@ -76,6 +76,13 @@ pub const END_GRACE_MS: u64 = 8_000;
 /// the next meeting, and it prompts once the call ends. A chosen value, not a measured one: longer
 /// than any early join, shorter than the shortest meeting of a back-to-back day.
 pub const SAME_MEETING_MS: u64 = 10 * 60_000;
+
+/// How long an answer is kept after its meeting's end: two calendar refreshes ([`REFRESH_MS`]),
+/// so an extension the calendar syncs after the old end still finds the answer to extend
+/// (rv-20261014T124853Z-b9f32acd-a19d #2: dropped at the old end, the extended meeting asked
+/// again on a rejoin). An answer covers only calls that begin before the meeting's end
+/// ([`Scheduled::covers`]), so keeping it longer takes no other call for it.
+pub const ANSWER_KEPT_MS: u64 = 2 * REFRESH_MS;
 
 /// One line of `richos-companion watch` (JSON lines on its stdout).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -663,7 +670,7 @@ impl MeetingMonitor {
                 *kept = meeting.scheduled();
             }
         }
-        self.answered.retain(|_, meeting| now < meeting.ends_at);
+        self.answered.retain(|_, meeting| now < meeting.ends_at + ANSWER_KEPT_MS);
         let answered = &self.answered;
         self.taking_notes.retain(|id| answered.contains_key(id));
         actions
@@ -1990,6 +1997,34 @@ mod tests {
                 vec![Action::StopCapture(EndReason::CallEnded), Action::ShowPrompt(PromptKind::Scheduled { event_id: "B".into(), title: "B".into(), starts_at: 600_000 })],
                 "B's reminder comes back once A's call is over"
             );
+        }
+
+        /// #2: the answer was dropped at the meeting's old end, so an extension the calendar
+        /// synced after that end (the refresh is every five minutes) found nothing to extend.
+        #[test]
+        fn an_extension_synced_after_the_old_end_still_extends_the_answer() {
+            let old = event("A", 60, 3660, MeetingApp::Zoom);
+            let longer = event("A", 60, 7260, MeetingApp::Zoom);
+            let mut m = MeetingMonitor::new();
+            m.clock(0, std::slice::from_ref(&old));
+            m.input(Input::TakeNotes);
+            on(&mut m, 60);
+            m.clock(3_660_000, std::slice::from_ref(&old));
+            m.clock(3_900_000, std::slice::from_ref(&longer));
+            off(&mut m, 4000);
+            assert_eq!(m.clock(4_008_000, std::slice::from_ref(&longer)), vec![Action::StopCapture(EndReason::CallEnded)]);
+            assert_eq!(
+                on(&mut m, 4020),
+                vec![Action::StartCapture { title: Some("A".into()), event_id: Some("A".into()), manual: false }],
+                "the rejoin after the extension asked again instead of resuming A"
+            );
+            // Never extended: once its end and the refresh after it are past, the answer goes, and
+            // a later Zoom call is its own call.
+            let mut m = MeetingMonitor::new();
+            m.clock(0, std::slice::from_ref(&old));
+            m.input(Input::NotThisOne);
+            m.clock(3_660_000 + 2 * crate::meeting_calendar::REFRESH_MS, std::slice::from_ref(&old));
+            assert_eq!(on(&mut m, 4300), vec![Action::ShowPrompt(PromptKind::Unscheduled { app: "Zoom".into() })]);
         }
     }
 }
