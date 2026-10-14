@@ -82,11 +82,15 @@ class Verdicts(unittest.TestCase):
         # Review rv-20261014T205753Z-5a101304-279e, finding 1: the snag can be in his reply to Go.
         walk = object.__new__(hire_walk.HireWalk)
         walk.facts = {'thread': 't1'}
+        # The ledger's shape: PromptReceived names the thread, AssistantDelta only its turn.
         walk.ledger = lambda: [
-            {'event': 'AssistantDelta', 'thread_id': 't1', 'at': 5, 'text': 'Say go.'},
-            {'event': 'AssistantDelta', 'thread_id': 't1', 'at': 20, 'text': 'The write-up hit a technical snag. '},
-            {'event': 'AssistantDelta', 'thread_id': 't2', 'at': 30, 'text': 'Another snag elsewhere.'},
-            {'event': 'AssistantDelta', 'thread_id': 't1', 'at': 40, 'text': "I'm sending it again."}]
+            {'event': 'PromptReceived', 'thread_id': 't1', 'turn_id': 'a', 'at': 1, 'text': 'Tell me more.'},
+            {'event': 'AssistantDelta', 'turn_id': 'a', 'at': 5, 'text': 'Say go.'},
+            {'event': 'PromptReceived', 'thread_id': 't1', 'turn_id': 'b', 'at': 15, 'text': 'Go.'},
+            {'event': 'AssistantDelta', 'turn_id': 'b', 'at': 20, 'text': 'The write-up hit a technical snag. '},
+            {'event': 'PromptReceived', 'thread_id': 't2', 'turn_id': 'c', 'at': 25, 'text': 'Other.'},
+            {'event': 'AssistantDelta', 'turn_id': 'c', 'at': 30, 'text': 'Another snag elsewhere.'},
+            {'event': 'AssistantDelta', 'turn_id': 'b', 'at': 40, 'text': "I'm sending it again."}]
         said = walk.said_since(10)
         self.assertEqual(said, "The write-up hit a technical snag. I'm sending it again.")
         self.assertTrue(hire_walk.first_send_verdict(said))

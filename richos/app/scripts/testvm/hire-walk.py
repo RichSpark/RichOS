@@ -377,9 +377,13 @@ class HireWalk(command_walk.CommandWalk):
 
     def said_since(self, since_ms):
         """Rich's own replies on the conversation since `since_ms` (AssistantDelta), joined."""
+        # An AssistantDelta row carries its turn_id and no thread_id (nightly 56 run 4 read nothing),
+        # so the conversation's turns are taken from the rows that name the thread.
         thread = self.facts.get('thread')
-        return ''.join(r.get('text', '') for r in self.ledger() if r.get('event') == 'AssistantDelta'
-                       and r.get('thread_id') == thread and r.get('at', 0) >= since_ms)
+        rows = self.ledger()
+        turns = {r.get('turn_id') for r in rows if r.get('thread_id') == thread and r.get('turn_id')}
+        return ''.join(r.get('text', '') for r in rows if r.get('event') == 'AssistantDelta'
+                       and r.get('turn_id') in turns and r.get('at', 0) >= since_ms)
 
     def wait_turns_done(self, count, seconds):
         """Wait until at least `count` visible turns exist and the last is finished; return them."""
