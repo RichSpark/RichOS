@@ -2182,6 +2182,12 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   text-overflow: ellipsis;
 }
 
+/* A company's name exactly as he typed it, never re-capitalized (CEO 2026-10-13). Only the
+   company groups: "Pinned", "Needs an entity" and "Archived" keep their capitals. */
+.nav-group--entity .nav-group-label {
+  text-transform: none;
+}
+
 .nav-group-label.is-selectable {
   cursor: pointer;
 }
@@ -2960,6 +2966,11 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   text-transform: uppercase;
   color: var(--ink-faint);
   padding: 8px 10px 4px;
+}
+
+/* A company's name, exactly as he typed it (CEO 2026-10-13); "No entity" keeps its capitals. */
+.result-group--entity {
+  text-transform: none;
 }
 
 .result-item {

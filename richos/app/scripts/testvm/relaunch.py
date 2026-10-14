@@ -18,7 +18,8 @@ def guest(vm, command, timeout=30):
     return r.stdout.strip()
 
 
-def relaunch(vm, app=None, environment=None):
+def quit_app(vm):
+    """Stop the recorded test app and wait until it is gone; answers the guest's payload."""
     state=Path(os.environ.get('TESTVM_ROOT',str(Path.home()/'.richos-testvm')))/'run'/vm
     payload=(state/'payload').read_text().strip()
     if not payload.startswith('/Users/') or '/testvm/' not in payload: raise ValueError('not a guest payload')
@@ -34,6 +35,12 @@ def relaunch(vm, app=None, environment=None):
         time.sleep(.2)
     else:
         guest(vm,'kill -KILL '+old+' 2>/dev/null || true')
+    return payload
+
+
+def relaunch(vm, app=None, environment=None):
+    state=Path(os.environ.get('TESTVM_ROOT',str(Path.home()/'.richos-testvm')))/'run'/vm
+    payload=quit_app(vm)
     if app is None:
         app=guest(vm,'find '+shlex.quote(payload)+' -maxdepth 1 -name "*.app" -type d -print').splitlines()[0]
     home=payload+'/home'

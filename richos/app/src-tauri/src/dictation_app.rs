@@ -1297,7 +1297,7 @@ mod tests {
             serde_json::json!({"ready": false, "on": false, "key": 1, "accuracy": "accurate", "mic": "unknown", "ax": "unknown",
                 "owner": "none", "keyTap": false, "secure": null})
         );
-        let on = store::Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: false };
+        let on = store::Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: false, feature_thread: None, feature_message: None, feature_key: None };
         let v = view_of(&Facts {
             ready: true,
             settings: &on,

@@ -1881,7 +1881,10 @@ async function main() {
     await page.waitForSelector("#dictation-offer");
     const said = await page.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.replace(/\s+/g, " ").trim()));
     assertEqual(said[0], "Voice is ready. Press the round button beside the message box and just talk to me.", "the drawn first paragraph");
-    assertEqual(said[1], "I can also type for you in any other app on your Mac, like Mail, Slack or your browser. Tap F1, say what you want written, then tap it again. Your words appear where your cursor is.", "the drawn second paragraph, the key filled in");
+    // The CEO's copy, 2026-10-13 (turn-on-dictation-paragraph.png), word for word; [F1] is the key.
+    assertEqual(said[1], "If you turn on dictation, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)", "his first new paragraph");
+    assertEqual(said[2], "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press F1 (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊", "his second new paragraph, the key filled in");
+    assertEqual(said.length, 3, "his two paragraphs replace the old one");
     // NO BLANK LINE UNDER "Rich" (seen on the guest, 2026-10-08): the first sentence sits where
     // the greeting's does, right under the name.
     assertEqual(
@@ -1903,16 +1906,100 @@ async function main() {
     const on = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
     await on.waitForSelector("#dictation-offer-yes");
     await on.click("#dictation-offer-yes");
-    await on.waitForSelector("#dictation-offer-after");
-    assertEqual((await on.textContent("#dictation-offer-after")).trim(), "Dictation is on. Tap F1 in any app.", "on, both allowed");
+    // ONCE IT IS SET UP, ITS TEXT MOVES TO ITS OWN CONVERSATION (the CEO, 2026-10-13,
+    // onboarding5.png): this conversation keeps only "Voice is ready.", and he picks his key in
+    // the sheet before closing it (onboarding3.png: he picked F2, the app said F1).
+    await on.waitForSelector("#dictation-sheet:not([hidden])");
+    await on.waitForFunction(() => !document.getElementById("dictation-offer-yes"));
+    assertEqual(
+      await on.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.trim())),
+      ["Voice is ready. Press the round button beside the message box and just talk to me."],
+      "the dictation text left the onboarding conversation"
+    );
+    await on.click('.dict-key[data-k="2"]');
+    await on.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
+    await on.click("#dict-close");
+    const feature = on.locator(".nav-thread", { hasText: "Dictation feature" });
+    await feature.waitFor();
+    assertEqual(await on.locator(".nav-thread", { hasText: "Dictation feature" }).count(), 1, "one conversation, under his company");
+    await feature.click();
+    await on.waitForFunction(() => /Good news!/.test(document.getElementById("messages").innerText));
+    assertEqual(
+      // Rich's prose is one Markdown body; his four paragraphs are its four paragraphs.
+      await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
+      [
+        "Good news! Dictation is set up and enabled.",
+        "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
+        "Click into where you want your words to appear, tap F2, say what you want written, then tap it again. See how your words appear where your cursor is.",
+        "If you have any questions about this, we can discuss it here.",
+      ],
+      "his text, word for word, with the key he picked, and nothing else in that conversation"
+    );
+    // HE PICKS ANOTHER KEY LATER (second review rv-20261013T183104Z, finding 2; the CEO: "make
+    // sure the correct key is actually within that message"): the message names the new key,
+    // and it is still the one message there.
+    await on.evaluate(() => window.RichDictation.open());
+    await on.waitForSelector("#dictation-sheet:not([hidden])");
+    await on.click('.dict-key[data-k="3"]');
+    await on.click("#dict-close");
+    await on.waitForFunction(() => /tap F3,/.test(document.getElementById("messages").innerText));
+    assertEqual(
+      await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
+      [
+        "Good news! Dictation is set up and enabled.",
+        "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
+        "Click into where you want your words to appear, tap F3, say what you want written, then tap it again. See how your words appear where your cursor is.",
+        "If you have any questions about this, we can discuss it here.",
+      ],
+      "the key changed to F3: the one message names F3"
+    );
     await on.close();
     const later = await finish({ dictationKey: 5, dictationView: { mic: "denied" } });
     await later.waitForSelector("#dictation-offer-yes");
-    assert((await later.textContent("#dictation-offer")).includes("Tap F5,"), "the chosen key is named");
+    assert((await later.textContent("#dictation-offer")).includes("press F5 (or another key"), "the chosen key is named");
     await later.click("#dictation-offer-yes");
     await later.waitForSelector("#dictation-offer-after");
     assertEqual((await later.textContent("#dictation-offer-after")).trim(), "It's in Settings, under Dictation.", "not on");
     await later.close();
+
+    // SET UP LATER, FROM SETTINGS (second review rv-20261013T173014Z, finding 2): "Not now" first,
+    // then dictation turned on in its sheet with F2. The dictation text still leaves the
+    // onboarding conversation, and "Dictation feature" names F2.
+    const later2 = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
+    await later2.waitForSelector("#dictation-offer-no");
+    await later2.click("#dictation-offer-no");
+    await later2.waitForSelector("#dictation-offer-after");
+    await later2.evaluate(() => window.RichDictation.open());
+    await later2.waitForSelector("#dictation-sheet:not([hidden])");
+    await later2.click("#dict-switch");
+    await later2.waitForFunction(() => /^On\. Tap/.test((document.getElementById("dict-state") || {}).textContent || ""));
+    await later2.click('.dict-key[data-k="2"]');
+    await later2.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
+    await later2.click("#dict-close");
+    await later2.locator(".nav-thread", { hasText: "Dictation feature" }).waitFor();
+    await later2.waitForFunction(() => document.querySelectorAll("#dictation-offer .tl-prose").length === 1);
+    assertEqual(
+      await later2.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.trim())),
+      ["Voice is ready. Press the round button beside the message box and just talk to me."],
+      "set up later: the dictation text left the onboarding conversation too"
+    );
+    await later2.close();
+
+    // A FRESH INSTALL: Start comes before his first company, so no conversation is open when
+    // the offer is made; it is drawn in the first one, once he has added the company (walked on
+    // the guest 2026-10-13: tying the note to the open conversation hid it when none was open).
+    const fresh = await finish({ chosenEntity: null, memory: "none" });
+    await fresh.waitForSelector("#memory-setup:not([hidden])");
+    await fresh.click("#memory-setup-later");
+    await fresh.waitForSelector("#entity-picker:not([hidden])");
+    await fresh.evaluate(() => {
+      const b = [...document.querySelectorAll("#entity-picker button")].find((x) => /add/i.test(x.textContent));
+      b.click();
+    });
+    await fresh.fill("#entity-add-name", "Brightwave LABS");
+    await fresh.click("#entity-add-go");
+    await fresh.waitForSelector("#dictation-offer-yes");
+    await fresh.close();
 
     // NEVER AGAIN: the offer was made in an earlier run (a relaunch reads `offered`).
     const again = await finish({ dictationOffered: true });

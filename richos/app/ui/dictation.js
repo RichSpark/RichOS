@@ -27,8 +27,9 @@
 // - `window.RichDictation.turnOn`, which Rich's offer calls (main.js `answerDictationOffer`):
 //   opens the sheet, runs the same flow, and answers `{on}` once it has settled.
 // - THE OFF NOTICE: the chosen key pressed in RichOS's own window while dictation is off.
-// - THE COMPOSER'S LINE once dictation works: "Dictation is on: tap F1 and talk, here or in any
-//   app".
+// - NO LINE UNDER THE MESSAGE BOX. Dictation is for other apps; inside RichOS, Talk to Rich is
+//   the way to speak (the CEO, 2026-10-13, onboarding4.png: "Dictation is for other apps only,
+//   not for RichOS"), so the composer's dictation line is gone.
 //
 // Every word is round 19's, quoted from the two mockup files. Every fact is the app's own
 // (`dictation_status`); nothing here invents a state.
@@ -106,7 +107,15 @@
     reading = true;
     try {
       const v = await call("dictation_status");
-      if (v) { view = v; lastRead = Date.now(); }
+      if (v) {
+        // The first read of a launch: dictation left on may never have been set up (he turned it
+        // on, Accessibility was refused, and he quit, allowed it and reopened RichOS), so it is
+        // set up once it works. The app opens the "Dictation feature" conversation only when it
+        // never did (`dictation_offer::feature_action`), so this never makes a second one
+        // (second review rv-20261013T193550Z, finding 1).
+        if (!view && v.on) setUpPending = true;
+        view = v; lastRead = Date.now();
+      }
     } finally { reading = false; }
     if (view && view.ready && !registered && window.RichSettings && window.RichSettings.registerDictation) {
       registered = true;
@@ -118,6 +127,9 @@
       if (!nudged) { nudged = true; call("dictation_permissions_changed", { forward: false }); }
     } else nudged = false;
     paint();
+    // A turn-on that settled short of ready, finished later with the sheet closed (allowed in
+    // System Settings, then back here): set up now (second review rv-20261013T183104Z, finding 1).
+    if (sheet.hidden) announceSetUp();
     return view;
   }
 
@@ -138,23 +150,6 @@
     line.textContent = text;
     line.hidden = false;
     line.classList.toggle("is-attention", attention);
-  }
-
-  // ---- the composer's line ---------------------------------------------------------------
-  function paintComposer() {
-    const zone = document.getElementById("composer-zone"), row = document.getElementById("composer-row");
-    let note = document.getElementById("dictation-composer-note");
-    const on = !!view && view.ready && works();
-    if (!on) { if (note) note.hidden = true; return; }
-    if (!note && zone && row) {
-      note = document.createElement("p");
-      note.id = "dictation-composer-note";
-      note.className = "composer-voice-note";
-      zone.insertBefore(note, row);
-    }
-    if (!note) return;
-    note.textContent = `Dictation is on: tap ${keyName()} and talk, here or in any app`;
-    note.hidden = false;
   }
 
   // ---- the sheet -------------------------------------------------------------------------
@@ -284,7 +279,6 @@
   function paint() {
     paintRow();
     paintSheet();
-    paintComposer();
   }
 
   // ---- the sample bar breathes, while the sheet shows and motion is welcome ---------------
@@ -331,10 +325,21 @@
     paint();
     settle();
     placeCaret();
+    if (sheet.hidden) announceSetUp();
+  }
+  // **SET UP, SAID ONCE** (the CEO, 2026-10-13, onboarding5.png): a turn-on that worked is
+  // announced as `richos:dictation-set-up` when the sheet closes, so the key named in the
+  // "Dictation feature" conversation is the one he picked in the sheet (main.js listens). If it
+  // became ready with the sheet already closed (Accessibility allowed later), it is said then.
+  let setUpPending = false;
+  function announceSetUp() {
+    if (!setUpPending || !ready()) return;
+    setUpPending = false;
+    window.dispatchEvent(new CustomEvent("richos:dictation-set-up"));
   }
   async function turnOn() {
     if (flow) return;
-    flow = true; feedback = null;
+    flow = true; feedback = null; setUpPending = true;
     const v = await call("dictation_set_on", { on: true });
     if (v) view = v;
     await proceed();
@@ -363,7 +368,7 @@
     becameReady();
   }
   async function turnOff() {
-    axWait = null; micWait = null; feedback = null;
+    axWait = null; micWait = null; feedback = null; setUpPending = false;
     const v = await call("dictation_set_on", { on: false });
     if (v) view = v;
     paint();
@@ -398,6 +403,9 @@
   // denied line, with Open System Settings.
   addEventListener("blur", () => { if (axWait) axWait.blurred = true; if (micWait) micWait.blurred = true; });
   addEventListener("focus", () => {
+    // Back from System Settings with a turn-on still pending and the sheet closed: read once, so
+    // a permission allowed there finishes setting dictation up.
+    if (setUpPending && sheet.hidden && !axWait && !micWait) { read(); return; }
     if (!(axWait && axWait.blurred) && !(micWait && micWait.blurred)) return;
     setTimeout(async () => {
       await read();
@@ -414,6 +422,8 @@
     const v = await call("dictation_set_key", { key: n });
     if (v) view = v;
     paint();
+    // The "Dictation feature" message names the key; a new key replaces it (main.js listens).
+    if (v) window.dispatchEvent(new CustomEvent("richos:dictation-key-changed"));
     const strip = (col && col.querySelector(`[data-act="key"][data-k="${n}"]`)) || $("dict-capture");
     if (strip) strip.focus();
     if (window.RichSettings && window.RichSettings.toast) window.RichSettings.toast(`Dictation now starts and stops with F${n}.`);
@@ -527,7 +537,7 @@
     if (capture) stopCapture();
     sheet.hidden = true;
     feedback = null;
-    if (!axWait && !micWait) settle();
+    if (!axWait && !micWait) { settle(); announceSetUp(); }
     queueMicrotask(() => { const btn = document.getElementById("set-btn"); if (btn) btn.focus(); });
   }
 
@@ -542,7 +552,7 @@
     },
   };
 
-  // The row, the composer line and the off notice need the state once at start; while the row
+  // The row and the off notice need the state once at start; while the row
   // or the sheet shows, it is read again every 2 s (another app's hidden keys come and go).
   read();
   setInterval(() => {

@@ -1637,11 +1637,24 @@ impl Spine {
         }
     }
 
-    /// The onboarding contribution to a priming turn: the company's material, the offer of an
-    /// interview, or the honest note that says why there is neither (`onboarding.rs`).
+    /// The company contribution to a priming turn: its name exactly as he typed it, then the
+    /// company's material, the offer of an interview, or the honest note that says why there
+    /// is neither (`onboarding.rs`).
+    ///
+    /// **The name, because the id is not the name** (the CEO, 2026-10-13: he typed a name with
+    /// a word in capitals and Rich wrote it back re-capitalized). Every other line names the
+    /// company by its id, which is lower case, so Rich rebuilt a name from it.
     fn company_block(&self, binding: &ThreadBinding) -> Option<String> {
         let layer = self.company_layer(binding);
-        crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding))
+        let onboarding =
+            crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding));
+        match self.registry.get(binding.entity_id()) {
+            Some(entity) => Some(
+                crate::onboarding::company_name_block(binding.entity_id(), &entity.display_name)
+                    + &onboarding.unwrap_or_default(),
+            ),
+            None => onboarding,
+        }
     }
 
     /// One line per company for the boot log — what this launch will actually do about
@@ -2047,6 +2060,54 @@ impl Spine {
         Ok(turn_id)
     }
 
+    /// **A conversation the app opens on its own, with Rich's first message already in it**
+    /// (the CEO, 2026-10-13: once dictation is set up, a conversation titled "Dictation feature"
+    /// is created under the company, holding Rich's message about it).
+    ///
+    /// The message is a proactive turn ([`Self::raise_proactive`]), so it is Rich's, durable,
+    /// and in the verbatim tail the desk answering there is primed with. The thread is created
+    /// through the ledger directly rather than [`Self::create_thread`], so a spare front desk
+    /// standing ready for his next new conversation is not spent on this one, and the
+    /// conversation he is in stays the active one.
+    ///
+    /// Answers `(thread id, message turn id)`; the turn id is what [`Self::replace_app_message`]
+    /// replaces.
+    pub fn open_conversation_with_message(
+        &mut self,
+        entity_id: &EntityId,
+        title: &str,
+        text: &str,
+    ) -> Result<(String, String), SpineError> {
+        if !self.registry.contains(entity_id) {
+            return Err(SpineError::UnknownEntity(entity_id.to_string()));
+        }
+        let id = self.ledger.create_thread(title, entity_id)?;
+        let turn = self.raise_proactive(Some(&id), AttentionTier::Digest, text)?;
+        self.publish_read_metadata();
+        Ok((id, turn))
+    }
+
+    /// **Replace a message the app wrote for Rich** (the CEO, 2026-10-13: the "Dictation feature"
+    /// message must name the key he actually picked, also when he picks another one later).
+    /// The new text is a new proactive turn in the same conversation and the old turn is marked
+    /// superseded by it, the ledger's own mechanism (§5.3): the conversation and the re-prime
+    /// tail both leave a superseded turn out, so he sees one message and Rich remembers one.
+    /// A desk already primed for this conversation, in the chair or parked, is un-primed, so
+    /// Rich's next turn there is primed again from the ledger and carries the new text.
+    /// Answers the new turn id.
+    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<String, SpineError> {
+        let new_turn = self.raise_proactive(Some(thread_id), AttentionTier::Digest, text)?;
+        self.ledger.mark_turn_superseded(turn_id, &new_turn)?;
+        if self.lease_primed_thread.as_deref() == Some(thread_id) {
+            self.lease_primed = false;
+        }
+        if let Some(resident) = self.resident.get_mut(thread_id) {
+            resident.primed = false;
+        }
+        self.publish_read_metadata();
+        Ok(new_turn)
+    }
+
     // ---- threads -----------------------------------------------------------
 
     /// Replace the entity registry (tests, or a future CEO-configured registry).
@@ -2144,7 +2205,7 @@ impl Spine {
     /// dogfood shell, from deterministic repository-root resolution — ECS §3.3), never
     /// inferred here. If a thread is already active in that entity it is returned; if one
     /// exists in that entity it is activated (most recent first); otherwise a new
-    /// "Running" thread is created bound to it.
+    /// "Onboarding" thread is created bound to it.
     ///
     /// A thread active in a DIFFERENT entity is not reused — that would be a silent
     /// cross-entity switch.
@@ -2168,9 +2229,11 @@ impl Spine {
         match existing {
             Some(id) => self.activate(&id),
             None => {
-                // "Running" per the UX direction doc §2.1: the pinned default thread's real
-                // title, not a placeholder the UI has to cosmetically relabel.
-                let id = self.create_thread("Running", entity_id)?;
+                // "Onboarding" (the CEO, 2026-10-13: the first conversation of the first
+                // company "should be named "Onboarding""; it was "Running" per the UX direction
+                // doc §2.1): the pinned default thread's real title, not a placeholder the UI
+                // has to cosmetically relabel.
+                let id = self.create_thread("Onboarding", entity_id)?;
                 self.activate(&id)
             }
         }
