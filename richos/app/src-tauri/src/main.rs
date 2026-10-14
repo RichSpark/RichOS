@@ -593,11 +593,11 @@ impl LeaseFactory for EngineLeaseFactory {
         richos_core::engine_profile::team_digest(&engine, &self.data_dir).ok()
     }
 
-    /// The names that digest covers, read the same way: what the work host checks a hiring's
-    /// proposed teammates against.
-    fn team_names(&self) -> Option<Vec<String>> {
+    /// The definitions that digest covers, read the same way: the names they record are what
+    /// the work host checks a hiring's proposed teammates against.
+    fn team_definitions(&self) -> Option<Vec<String>> {
         let engine = self.engine_dir.lock().ok()?.clone();
-        richos_core::engine_profile::active_team(&engine, &self.data_dir).ok().map(|team| team.into_keys().collect())
+        richos_core::engine_profile::active_team(&engine, &self.data_dir).ok().map(|team| team.into_values().collect())
     }
 
     /// **The models the next leases would start on** (§119): what `EngineProfile::prepare`

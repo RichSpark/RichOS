@@ -94,11 +94,11 @@ pub trait LeaseFactory: Send {
         None
     }
 
-    /// **The names on the team the next lease would register** (`engine_profile::active_team`):
-    /// what tells the work host a hiring is finished, every proposed teammate saved. `None` —
-    /// the default, and any reading that fails — means this factory cannot say, and no hiring
-    /// is held open on the strength of it.
-    fn team_names(&self) -> Option<Vec<String>> {
+    /// **The definitions on the team the next lease would register**
+    /// (`engine_profile::active_team`): the name each records is what tells the work host a
+    /// hiring is finished, every proposed teammate saved. `None` — the default, and any reading
+    /// that fails — means this factory cannot say, and no hiring is held open on the strength of it.
+    fn team_definitions(&self) -> Option<Vec<String>> {
         None
     }
 

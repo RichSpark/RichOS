@@ -666,16 +666,10 @@ fn declares_waiting_on_a_helper(said: &str) -> bool {
 /// (Backend Engineer)". His go is that task, so it is finished only when each of them is saved.
 const HIRING_TITLE: &str = "Hire these AI teammates onto my team:";
 
-/// **The teammates a hiring proposed**, as (team file name, name as written), read off its
-/// title: every name followed by its job title in brackets. A name the register's 160-character
-/// cut left without its job title is not read, and a title of any other shape names nobody.
-///
-/// The file name is the one the team tool can save: it takes only lowercase letters and
-/// digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so the name is lowercased with its
-/// accents folded and everything else dropped: Renée is `renee`, Anne-Marie is `annemarie`
-/// (handover review rv-20261014T223234Z-0c3a1cec-845b).
-fn proposed_hires(title: &str) -> Vec<(String, String)> {
-    use unicode_normalization::UnicodeNormalization;
+/// **The teammates a hiring proposed**, by name as written, read off its title: every name
+/// followed by its job title in brackets. A name the register's 160-character cut left without
+/// its job title is not read, and a title of any other shape names nobody.
+fn proposed_hires(title: &str) -> Vec<String> {
     let Some(list) = title.strip_prefix(HIRING_TITLE) else { return Vec::new() };
     let (mut hires, mut before, mut depth) = (Vec::new(), String::new(), 0usize);
     for c in list.chars() {
@@ -684,9 +678,8 @@ fn proposed_hires(title: &str) -> Vec<(String, String)> {
                 depth = 1;
                 let item = before.rsplit(',').next().unwrap_or("").trim();
                 let name = item.strip_prefix("and ").unwrap_or(item).trim();
-                let file: String = name.nfd().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
-                if !file.is_empty() {
-                    hires.push((file, name.to_string()));
+                if !name.is_empty() {
+                    hires.push(name.to_string());
                 }
                 before.clear();
             }
@@ -697,6 +690,29 @@ fn proposed_hires(title: &str) -> Vec<(String, String)> {
         }
     }
     hires
+}
+
+/// **The name a saved teammate's definition records**: its `**Name:**` line, as Dean's
+/// definition template writes it under Identity (`engine/agents/dean.md`, `- **Name:** {Name}`)
+/// and every stock definition carries it. This, not the file name, is what a hiring's proposed
+/// names are checked against: the team tool saves a file only as 2 to 16 lowercase letters and
+/// digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so Bjørn, Renée and Anne-Marie are
+/// `bjorn`, `renee` and `annemarie` on disk, and no rule that rebuilds a file name from the
+/// proposed name holds for every name (handover reviews rv-20261014T223234Z-0c3a1cec-845b and
+/// rv-20261014T224455Z-5f5bd3c7-ee90). A definition without that line records no name.
+fn recorded_name(definition: &str) -> Option<&str> {
+    definition.lines().find_map(|line| {
+        let line = line.trim_start();
+        let line = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).unwrap_or(line);
+        line.strip_prefix("**Name:**").map(str::trim).filter(|name| !name.is_empty())
+    })
+}
+
+/// A name as compared: Unicode-composed (so an é typed as e plus an accent is the same é) and
+/// lowercased.
+fn compared_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.trim().nfc().collect::<String>().to_lowercase()
 }
 
 /// **What the back end is told when a hiring is not finished and its last turn left nothing
@@ -3503,15 +3519,17 @@ impl WorkHost {
     }
 
     /// **The teammates a hiring proposed that are not saved yet**, by name as written
-    /// ([`proposed_hires`]). Empty for any other assignment, and when the team cannot be read:
-    /// a hiring is held open only on a team this host could read.
+    /// ([`proposed_hires`]): a proposed name is saved when a definition on the team records it
+    /// ([`recorded_name`]), whatever file it was saved under. Empty for any other assignment,
+    /// and when the team cannot be read: a hiring is held open only on a team this host could read.
     fn unsaved_hires(&self, record: &Assignment) -> Vec<String> {
         let proposed = proposed_hires(&record.title);
         if proposed.is_empty() || record.kind.is_question() {
             return Vec::new();
         }
-        let Some(team) = self.factory.lock().unwrap().team_names() else { return Vec::new() };
-        proposed.into_iter().filter(|(file, _)| !team.contains(file)).map(|(_, name)| name).collect()
+        let Some(team) = self.factory.lock().unwrap().team_definitions() else { return Vec::new() };
+        let saved: Vec<String> = team.iter().filter_map(|definition| recorded_name(definition)).map(compared_name).collect();
+        proposed.into_iter().filter(|name| !saved.contains(&compared_name(name))).collect()
     }
 
     /// The request this assignment is waiting on him for, if one is on the desk — the head
@@ -5237,9 +5255,13 @@ mod tests {
         model: Option<crate::config::ModelChoice>,
         digest: Option<String>,
         in_turn: VecDeque<Option<String>>,
-        /// Set, `team_names` reads the digest as the names on the team, separated by spaces;
+        /// Set, `team_definitions` reads the digest as the file names on the team, separated by
+        /// spaces, each one's definition being `<folder>/<file>.md` when a test wrote it there
+        /// and otherwise a stand-in recording the file name capitalized (`will` is Will);
         /// unset, it cannot say, as every test written before the hiring check.
         named: bool,
+        /// The harness's `<root>/team`, where a test writes the definitions it saves.
+        folder: std::path::PathBuf,
         /// Rows each work turn appends to a journal while it runs, one entry per turn (`None`
         /// appends nothing): a helper that starts and ends inside the turn.
         journal_in_turn: VecDeque<Option<(std::path::PathBuf, String)>>,
@@ -5579,9 +5601,14 @@ mod tests {
         fn team_digest(&self) -> Option<String> {
             self.team.lock().unwrap().digest.clone()
         }
-        fn team_names(&self) -> Option<Vec<String>> {
+        fn team_definitions(&self) -> Option<Vec<String>> {
             let team = self.team.lock().unwrap();
-            team.named.then(|| team.digest.as_deref().unwrap_or("").split_whitespace().map(String::from).collect())
+            team.named.then(|| team.digest.as_deref().unwrap_or("").split_whitespace().map(|file| {
+                std::fs::read_to_string(team.folder.join(format!("{file}.md"))).unwrap_or_else(|_| {
+                    let name = file[..1].to_uppercase() + &file[1..];
+                    format!("---\nname: {file}\n---\n\n# {name}\n\n## Identity\n- **Name:** {name}\n")
+                })
+            }).collect())
         }
         fn lease_models(&self) -> Option<crate::config::LeaseModels> {
             let stu = self.team.lock().unwrap().model?;
@@ -5729,7 +5756,7 @@ mod tests {
         let broken = Arc::new(AtomicBool::new(false));
         let attempts = Arc::new(AtomicUsize::new(0));
         let fill = Arc::new(Mutex::new(FillFirst::default()));
-        let team = Arc::new(Mutex::new(TeamScript::default()));
+        let team = Arc::new(Mutex::new(TeamScript { folder: root.join("team"), ..TeamScript::default() }));
         let factory = WorkFactory {
             signed_out: signed_out.clone(),
             team: team.clone(),
@@ -7820,38 +7847,49 @@ mod tests {
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
-    /// **A proposed name with an accent or a hyphen counts as saved under the name the team
-    /// tool accepts** (handover review rv-20261014T223234Z-0c3a1cec-845b). The save takes only
-    /// 2 to 16 lowercase letters and digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so
-    /// Renée is saved as `renee` and Anne-Marie as `annemarie`. The check used to look for
-    /// `ren-e` and `anne-marie`, which no save can write, so the hiring never finished.
+    /// **A proposed teammate counts as saved by the name its saved definition records, whatever
+    /// its file is called** (handover reviews rv-20261014T223234Z-0c3a1cec-845b and
+    /// rv-20261014T224455Z-5f5bd3c7-ee90). The team tool saves only 2 to 16 lowercase letters
+    /// and digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so Bjørn, Renée and Anne-Marie
+    /// are saved as `bjorn`, `renee` and `annemarie`, each definition saying who it is on its
+    /// `**Name:**` line as Dean's template writes it. The check used to derive a file name from
+    /// the proposed name, and Bjørn's came out `bjrn`, which no save writes: the hiring never
+    /// finished. The three definitions are on disk from the start; the team's digest, as the
+    /// fake back end changes it turn by turn, says which of them are saved.
     #[test]
-    fn a_hiring_of_renee_and_anne_marie_finishes_once_both_are_saved() {
+    fn a_hiring_of_bjorn_renee_and_anne_marie_finishes_once_all_three_are_saved() {
         use crate::cognition::ObligationState;
         let h = harness(5);
         witnessed(&h.state, "work-session-one");
         *h.obligation.lock().unwrap() = Some(ObligationState::Open);
         *h.background.lock().unwrap() = Some(Vec::new());
         *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        let folder = h.root.join("team");
+        std::fs::create_dir_all(&folder).unwrap();
+        for (file, name, role) in [("bjorn", "Bjørn", "Office Manager"), ("renee", "Renée", "Bookkeeper"), ("annemarie", "Anne-Marie", "Copywriter")] {
+            std::fs::write(folder.join(format!("{file}.md")), format!(
+                "---\nname: {file}\ndescription: {role} for the user's company.\nmodel: sonnet\n---\n\n# {name} — {role}\n\n\
+                 You are **{name}**, the team's {role}.\n\n## Identity\n- **Name:** {name}\n- **Role:** {role}\n")).unwrap();
+        }
         {
             let mut team = h.team.lock().unwrap();
             team.named = true;
             team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} renee")), Some(format!("{STOCK_TEAM} annemarie renee"))]);
+            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} bjorn renee")), Some(format!("{STOCK_TEAM} annemarie bjorn renee"))]);
         }
         h.replies.lock().unwrap().extend([
-            "I'll start on Renée and Anne-Marie.".to_string(),
-            format!("Saving Renée.{TOOL_CALL}Renée's definition is saved; ending the turn so the app can register her."),
-            format!("Saving Anne-Marie.{TOOL_CALL}Renée and Anne-Marie are both on your team now."),
+            "I'll start on Bjørn, Renée and Anne-Marie.".to_string(),
+            format!("Saving Bjørn and Renée.{TOOL_CALL}Both are saved; ending the turn so the app can register them."),
+            format!("Saving Anne-Marie.{TOOL_CALL}Bjørn, Renée and Anne-Marie are all on your team now."),
         ]);
         h.host.start();
-        let title = "Hire these AI teammates onto my team: Renée (Office Manager), Anne-Marie (Bookkeeper)";
+        let title = "Hire these AI teammates onto my team: Bjørn (Office Manager), Renée (Bookkeeper), Anne-Marie (Copywriter)";
         let receipt = h.host.register(&h.binding, &Registration { title: title.into(), ..registration(&h) }).unwrap();
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
         let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
         let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), 3, "the hiring did not finish when both were saved: {:?} {prompts:#?}", read());
-        assert_eq!(prompts[1], hiring_unfinished_continuation(&["Renée".to_string(), "Anne-Marie".to_string()]));
+        assert_eq!(prompts.len(), 3, "the hiring did not finish when all three were saved: {:?} {prompts:#?}", read());
+        assert_eq!(prompts[1], hiring_unfinished_continuation(&["Bjørn".to_string(), "Renée".to_string(), "Anne-Marie".to_string()]));
         assert_eq!(prompts[2], hiring_unfinished_continuation(&["Anne-Marie".to_string()]));
         let done = read();
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
