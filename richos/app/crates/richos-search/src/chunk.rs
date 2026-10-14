@@ -8,7 +8,8 @@
 //! 1. A heading closes the passage being built and becomes the heading of the passages after
 //!    it: an ATX line (`#` to `######`) or a Setext heading, a paragraph underlined by a line of
 //!    `=` (level one) or `-` (level two). The underline of a YAML front matter block opened by
-//!    `---` on the first line, and a list item or quote over a `---` line, stay text.
+//!    `---` on the first line, and a paragraph holding a list item or quote line over a `---`
+//!    line, stay text.
 //! 2. Blank lines separate paragraphs. A fenced code block (```` ``` ```` or `~~~`) is one
 //!    paragraph however many blank lines it holds.
 //! 3. Paragraphs join into one passage until the next one would take it past
@@ -79,13 +80,16 @@ fn setext_level(line: &str) -> Option<usize> {
     }
 }
 
-/// Can this paragraph be underlined into a Setext heading? Not when it opens as a list item or
-/// a quote: Markdown reads `- item` or `> quote` over `---` as the item and a rule.
+/// Can this paragraph be underlined into a Setext heading? Not when any of its lines is a list
+/// item or a quote: Markdown reads `- item` or `> quote` over `---` as the item and a rule, and
+/// `Items:\n- one\n---` as a paragraph, a list and a rule.
 fn setext_paragraph(paragraph: &str) -> bool {
-    let first = paragraph.trim_start();
-    let digits = first.chars().take_while(char::is_ascii_digit).count();
-    let ordered = digits > 0 && (first[digits..].starts_with(". ") || first[digits..].starts_with(") "));
-    !(ordered || ["- ", "* ", "+ ", ">"].iter().any(|m| first.starts_with(m)))
+    !paragraph.lines().any(|line| {
+        let line = line.trim_start();
+        let digits = line.chars().take_while(char::is_ascii_digit).count();
+        let ordered = digits > 0 && (line[digits..].starts_with(". ") || line[digits..].starts_with(") "));
+        ordered || ["- ", "* ", "+ ", ">"].iter().any(|m| line.starts_with(m))
+    })
 }
 
 fn is_fence(line: &str) -> bool {
