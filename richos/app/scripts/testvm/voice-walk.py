@@ -144,6 +144,8 @@ def reply_split(voice_lines, ledger_rows, machinery_rows):
       turn_started       the ledger's TurnStarted: the spine is delivering
       hidden_first/last  the turn's INTERNAL machinery (a context-only priming turn sent before
                          his words: native.rs supply_context_brief), first and last record
+      words_sent         `[richos] ... reply timing: a visible turn sent to the model` (builds
+                         from 2026-10-14 on; None before)
       model_first_frame  the first non-internal machinery record of the turn: his words reached
                          the model (`system/init` arrives as the prompt is taken)
       first_text         the first AssistantDelta: the model's first word of the answer
@@ -173,6 +175,7 @@ def reply_split(voice_lines, ledger_rows, machinery_rows):
         'turn_started': fold(started.get('at')) if started else None,
         'hidden_first': fold(hidden[0]) if hidden else None,
         'hidden_last': fold(hidden[-1]) if hidden else None,
+        'words_sent': voice('reply timing: a visible turn sent to the model', after=voice('TURN to Rich')),
         'model_first_frame': fold(shown[0]) if shown else None,
         'first_text': fold(first_delta.get('at')) if first_delta else None,
         'first_sentence': sentence,
@@ -411,7 +414,7 @@ class VoiceWalk(adopt_walk.Walk):
         for source in (self.log, self.data + '/conversation-ledger.jsonl', self.data + '/machinery'):
             command([HERE / 'guest.sh', self.vm, '--pull', source, str(kept)], 300)
         voice_lines = [l for l in (kept / Path(self.log).name).read_text(errors='replace').splitlines()
-                       if '[richos-voice]' in l]
+                       if '[richos-voice]' in l or 'reply timing:' in l]
         ledger = [json.loads(l) for l in (kept / 'conversation-ledger.jsonl').read_text().splitlines() if l.strip()]
         machinery = []
         for shard in sorted((kept / 'machinery').glob('*/*.jsonl')):

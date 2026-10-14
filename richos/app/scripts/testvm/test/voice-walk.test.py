@@ -255,6 +255,7 @@ class ReplySplit(unittest.TestCase):
     DAY = 1791936000000  # 2026-10-14T00:00:00Z
     VOICE = [
         '[richos-voice] 04:22:07.178Z TURN to Rich — his turn is over: 3 fragment(s)',
+        '[richos] 04:22:11.050Z reply timing: a visible turn sent to the model',
         '[richos-voice] 04:22:15.892Z ANSWER AUDIBLE — half-duplex window OPEN',
         '[richos-voice] 04:22:16.688Z playout chunk START — 3.739 s queued',
     ]
@@ -279,7 +280,8 @@ class ReplySplit(unittest.TestCase):
         self.assertEqual(split['gaps_ms'], {
             'turn_handed_over->prompt_received': 1, 'prompt_received->turn_started': 21,
             'turn_started->hidden_first': 1300, 'hidden_first->hidden_last': 2500,
-            'hidden_last->model_first_frame': 100, 'model_first_frame->first_text': 3800,
+            'hidden_last->words_sent': 50, 'words_sent->model_first_frame': 50,
+            'model_first_frame->first_text': 3800,
             'first_text->first_sentence': 992, 'first_sentence->speech_started': 796})
         self.assertEqual(split['total_ms'], 9510)
 
