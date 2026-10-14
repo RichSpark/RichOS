@@ -75,7 +75,8 @@ built with one: a nightly's engine-pin.env).
               Dictation, F3 picked, the sheet closed. dictation.json saves F3; the "Dictation
               feature" message now says "tap F3," and no longer "tap F2,"; and Rich, asked in that
               conversation which key starts dictation, names F3 and not F2 (the CEO, 2026-10-13:
-              "make sure the correct key is actually within that message")
+              "make sure the correct key is actually within that message"); then asked the same
+              in the Onboarding conversation, in the same app session, names F3 and not F2
   r19-again   the app relaunched: no setup sheet and no offer
   r19-restart instead of r19-set-up, without r19-grants: dictation left on with Accessibility
               refused across a quit (dictation.json as that turn-on leaves it), then allowed while
@@ -1031,6 +1032,38 @@ class SetupWalk(adopt_walk.Walk):
                 if any(n.get('role') == 'AXStaticText' and n.get('y', 999) < 160 for n in crumb):
                     return crumb
 
+    def ask_key(self, thread, skip):
+        """R19_KEY_QUESTION typed into the open conversation and sent; Rich's answer read from the
+        ledger: the newest turn asking it that is not in skip (and in thread, when given)."""
+        self.type_into(R19_KEY_QUESTION, '--role', 'AXTextArea', '--title', 'Message to Rich')
+        self.press('Send')
+        self.mark('asked Rich which key starts dictation', pressed=True)
+        reply, done, turn = '', False, None
+        end = time.monotonic() + 240
+        while time.monotonic() < end and not done:
+            rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
+            turn, reply = None, ''
+            for line in rows.splitlines():
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                event = r.get('event')
+                if (event == 'PromptReceived' and R19_KEY_QUESTION in r.get('text', '')
+                        and r.get('turn_id') not in skip
+                        and (not thread or r.get('thread_id') == thread)):
+                    turn, reply, done = r.get('turn_id'), '', False
+                elif turn and r.get('turn_id') == turn and event == 'AssistantDelta':
+                    reply += r.get('text', '')
+                elif turn and r.get('turn_id') == turn and event in ('TurnCompleted', 'TurnInterrupted',
+                                                                       'TurnStopped', 'TurnFailed'):
+                    done = True
+            if not done:
+                if self.present('Allow action'):
+                    self.click('Allow action', 'Rich asked for an action: "Allow action"')
+                time.sleep(5)
+        return reply, done, turn
+
     def r19_key_change(self):
         """After r19-set-up: Settings, Dictation, F3 picked, the sheet closed. The "Dictation
         feature" message names F3 and no longer F2, and Rich, asked there, names F3."""
@@ -1069,36 +1102,20 @@ class SetupWalk(adopt_walk.Walk):
         thread = self.dictation_record().get('featureThread')
         thread = thread if isinstance(thread, str) else None
         facts['thread'] = thread
-        self.type_into(R19_KEY_QUESTION, '--role', 'AXTextArea', '--title', 'Message to Rich')
-        self.press('Send')
-        self.mark('asked Rich which key starts dictation', pressed=True)
-        reply, done = '', False
-        end = time.monotonic() + 240
-        while time.monotonic() < end and not done:
-            rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
-            turn, reply = None, ''
-            for line in rows.splitlines():
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                event = r.get('event')
-                if (event == 'PromptReceived' and R19_KEY_QUESTION in r.get('text', '')
-                        and (not thread or r.get('thread_id') == thread)):
-                    turn, reply, done = r.get('turn_id'), '', False
-                elif turn and r.get('turn_id') == turn and event == 'AssistantDelta':
-                    reply += r.get('text', '')
-                elif turn and r.get('turn_id') == turn and event in ('TurnCompleted', 'TurnInterrupted',
-                                                                       'TurnStopped', 'TurnFailed'):
-                    done = True
-            facts['asked'] = bool(turn)
-            if not done:
-                if self.present('Allow action'):
-                    self.click('Allow action', 'Rich asked for an action: "Allow action"')
-                time.sleep(5)
+        reply, done, turn = self.ask_key(thread, set())
+        facts['asked'] = bool(turn)
         facts['reply'] = reply
         facts['reply_done'] = done
         self.shot('key-change-answer.png')
+        # Everywhere afterwards (the CEO, 2026-10-14: the key changed in the same session must be
+        # named everywhere): the same question in the Onboarding conversation of that company.
+        self.ax('click', '--title', 'Onboarding', '--role', 'AXButton', '--in', 'sidebar', '--first')
+        time.sleep(3)
+        reply2, done2, turn2 = self.ask_key(None, {turn} if turn else set())
+        facts['onboarding_asked'] = bool(turn2)
+        facts['onboarding_reply'] = reply2
+        facts['onboarding_reply_done'] = done2
+        self.shot('key-change-answer-onboarding.png')
         self.facts['r19_key_change'] = facts
         self.save()
         why = []
@@ -1113,6 +1130,11 @@ class SetupWalk(adopt_walk.Walk):
         verdict = key_reply_verdict(reply, key, old)
         if verdict:
             why.append(verdict)
+        if not done2:
+            why.append('Rich did not finish an answer in Onboarding within 240 s')
+        verdict = key_reply_verdict(reply2, key, old)
+        if verdict:
+            why.append('in Onboarding: ' + verdict)
         if why:
             raise StepFailed('; '.join(why) + ' — ' + json.dumps(facts))
         return facts

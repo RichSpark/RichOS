@@ -62,6 +62,55 @@ class Verdicts(unittest.TestCase):
             failures = hire_walk.hired_verdict(['will'], ['will'], told)
             self.assertTrue(any('Bea' in f for f in failures), (told, failures))
 
+    def test_a_write_up_retried_after_a_snag_fails_and_a_first_send_passes(self):
+        # Nightly 55's walk: what he was told while the write-up was sent a second time.
+        told = ('Starting the step that writes up Will and Beth hit a technical snag on my end. '
+                "I'm sending it again in a shorter form.")
+        self.assertTrue(hire_walk.first_send_verdict(told))
+        self.assertEqual(hire_walk.first_send_verdict(
+            'Will (Marketing Director) and Beth (Bookkeeper) joined the team.'), [])
+
+    def test_a_rule_label_in_a_bullet_is_not_a_teammate(self):
+        # Nightly 56's walks: what he was told about the hires' rules, read as teammates.
+        told = ("- **Confidentiality:** a client's coaching notes never leave the company.\n"
+                "- **Drafts:** she can draft invoices, payment reminders and reports.\n"
+                "Will (Marketing Director) and Penny (Bookkeeper) are both saved to your team.")
+        self.assertEqual(hire_walk.claimed_names(told), ['penny', 'will'])
+        self.assertEqual(hire_walk.hired_verdict(['will', 'penny'], ['penny', 'will'], told), [])
+
+    def test_rich_replies_after_go_are_read_for_a_retry(self):
+        # Review rv-20261014T205753Z-5a101304-279e, finding 1: the snag can be in his reply to Go.
+        walk = object.__new__(hire_walk.HireWalk)
+        walk.facts = {'thread': 't1'}
+        # The ledger's shape: PromptReceived names the thread, AssistantDelta only its turn.
+        walk.ledger = lambda: [
+            {'event': 'PromptReceived', 'thread_id': 't1', 'turn_id': 'a', 'at': 1, 'text': 'Tell me more.'},
+            {'event': 'AssistantDelta', 'turn_id': 'a', 'at': 5, 'text': 'Say go.'},
+            {'event': 'PromptReceived', 'thread_id': 't1', 'turn_id': 'b', 'at': 15, 'text': 'Go.'},
+            {'event': 'AssistantDelta', 'turn_id': 'b', 'at': 20, 'text': 'The write-up hit a technical snag. '},
+            {'event': 'PromptReceived', 'thread_id': 't2', 'turn_id': 'c', 'at': 25, 'text': 'Other.'},
+            {'event': 'AssistantDelta', 'turn_id': 'c', 'at': 30, 'text': 'Another snag elsewhere.'},
+            {'event': 'AssistantDelta', 'turn_id': 'b', 'at': 40, 'text': "I'm sending it again."}]
+        said = walk.said_since(10)
+        self.assertEqual(said, "The write-up hit a technical snag. I'm sending it again.")
+        self.assertTrue(hire_walk.first_send_verdict(said))
+
+    def test_a_colon_bullet_that_says_hired_is_still_a_claim(self):
+        # Review rv-20261014T205753Z-5a101304-279e, finding 2.
+        told = "Will (Marketing Director) joined the team.\n- Bea: hired as your bookkeeper."
+        failures = hire_walk.hired_verdict(['will'], ['will'], told)
+        self.assertTrue(any('Bea' in f for f in failures), failures)
+
+    def test_a_box_under_the_panel_edge_fails_and_one_beside_it_passes(self):
+        panel = {'x': 1080, 'w': 320}
+        beside = {'conversation': {'x': 440, 'w': 640}, 'output': {'x': 980, 'w': 90}}
+        self.assertEqual(hire_walk.hood_verdict(panel, beside), [])
+        # Nightly 55's frame: the Output button ran under the panel's left edge.
+        under = {'conversation': {'x': 440, 'w': 640}, 'output': {'x': 1165, 'w': 90}}
+        self.assertTrue(any('output' in f for f in hire_walk.hood_verdict(panel, under)))
+        self.assertTrue(hire_walk.hood_verdict(panel, {'output': None}), 'a hidden Output button fails')
+        self.assertTrue(hire_walk.hood_verdict(None, beside), 'no panel fails')
+
     def test_an_honest_report_of_what_was_saved_passes(self):
         for told in ['Will (Marketing Director) and Penny (Bookkeeper) joined the team.',
                      '**Will** (Marketing Director) and **Penny** (Bookkeeper) are now on your team. '
