@@ -3,11 +3,11 @@
 //! they run green with NO live Claude / network (the live round-trip itself is proven
 //! separately by examples/native_roundtrip.rs).
 
-use richos_core::cognition::{Cognition, CognitionError, TurnItem, MockCognition};
+use richos_core::cognition::{Cognition, CognitionError, TurnItem, MockCognition, MockLeaseFactory};
 use richos_core::ledger::{Ledger, Source, TurnState};
 use richos_core::reprime::RePrimePayload;
 use richos_core::entity::EntityId;
-use richos_core::spine::Spine;
+use richos_core::spine::{FrontDeskReady, Spine};
 
 /// The dogfood entity these tests run under. Every thread now has an immutable entity
 /// home (ECS §3.2) and there is no entity-less path, so the tests NAME one rather than
@@ -172,7 +172,7 @@ fn an_app_message_replaced_is_the_one_message_there_and_the_one_rich_is_primed_w
     let mut spine = support::spine(ledger);
     spine.ensure_active_thread_in(&femcboost()).unwrap();
     let (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
-    let second = spine.replace_app_message(&id, &first, "tap F3, then").unwrap();
+    let second = spine.replace_app_message(&id, Some(&first), "tap F3, then", "The dictation key is now F3.").unwrap();
     assert_ne!(first, second);
     let said: Vec<String> = spine.messages(&id).unwrap().into_iter().map(|m| m.text).collect();
     assert_eq!(said, vec!["tap F3, then".to_string()], "one message, naming the new key");
@@ -182,33 +182,91 @@ fn an_app_message_replaced_is_the_one_message_there_and_the_one_rich_is_primed_w
     spine.prime_front_desk(&id);
     let primed = reprimes.lock().unwrap().join("\n");
     assert!(primed.contains("tap F3, then"), "{primed}");
-    // The conversation he resumes holds the new message only. The action ledger keeps both lines,
-    // because Rich did say both: it is the record of what happened, the newer one last.
-    assert!(!primed.contains("assistant (unprompted): tap F2, then"), "the replaced message is not in the conversation: {primed}");
+    // The conversation and the action ledger digest both hold the new message only: a digest line
+    // for the replaced one made Rich answer "an earlier one said F2" (esc-20261014T041934Z-2acf6aeb).
+    assert!(!primed.contains("tap F2, then"), "the replaced message is not in the priming: {primed}");
     std::fs::remove_file(&path).expect("the test ledger is removable");
 }
 
 #[test]
-fn a_replaced_app_message_reaches_the_desk_already_talking_in_that_conversation() {
-    // Review rv-20261014T011702Z-0d2d67f3-d389: set up F2, open "Dictation feature" and talk to
-    // Rich there, pick F3 in Settings, then ask Rich about dictation in that conversation. The
-    // desk was primed with F2 before the replacement; his next turn there must carry F3.
-    let (path, ledger) = tmp_ledger("app-replaced-primed");
+fn an_app_message_with_no_turn_on_record_is_replaced_and_the_new_key_recorded() {
+    // Review rv-20261014T050558Z-e9854621-0b36: a "Dictation feature" record written before the
+    // message's turn was kept names only the conversation. The message replaced is the one the
+    // conversation was opened with, and the dated new-key fact is recorded all the same.
+    let (path, ledger) = tmp_ledger("app-replaced-legacy");
     let mut spine = support::spine(ledger);
     spine.ensure_active_thread_in(&femcboost()).unwrap();
-    let (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
-    let lease = MockCognition::new("sess-one", vec!["Sure.", "Tap F3."]);
+    let (id, _) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
+    spine.replace_app_message(&id, None, "tap F3, then", "The dictation key is now F3.").unwrap();
+    let said: Vec<String> = spine.messages(&id).unwrap().into_iter().map(|m| m.text).collect();
+    assert_eq!(said, vec!["tap F3, then".to_string()], "one message, naming the new key");
+    let today = time::OffsetDateTime::now_utc().date();
+    let fact = format!("{today}: The dictation key is now F3.");
+    let lease = MockCognition::new("sess-one", vec!["On it!"]);
     let reprimes = lease.reprimes.clone();
     spine.attach_lease(Box::new(lease));
-    spine.switch_thread(&id).unwrap();
-    spine.submit_prompt("what is this?", Source::Text).unwrap();
-    assert_eq!(reprimes.lock().unwrap().len(), 1, "primed once, with F2");
-    spine.replace_app_message(&id, &first, "tap F3, then").unwrap();
-    spine.submit_prompt("which key do I tap?", Source::Text).unwrap();
-    let primes = reprimes.lock().unwrap().clone();
-    assert_eq!(primes.len(), 2, "the next turn is primed again after the replacement: {primes:?}");
-    assert!(primes[1].contains("tap F3, then"), "Rich's next turn carries the new key: {}", primes[1]);
-    assert!(!primes[1].contains("assistant (unprompted): tap F2, then"), "the replaced message is gone: {}", primes[1]);
+    spine.prime_front_desk(&id);
+    let primed = reprimes.lock().unwrap().join("\n");
+    assert!(primed.contains(&fact), "Rich is told the new key: {primed}");
+    std::fs::remove_file(&path).expect("the test ledger is removable");
+}
+
+#[test]
+fn after_a_key_change_the_desk_that_answers_knows_only_the_new_key() {
+    // Ray, esc-20261014T041934Z-2acf6aeb: set up F2, pick F3 in Settings, then ask Rich in
+    // "Dictation feature" which key starts dictation. His first turn there named F3 and added
+    // "an earlier one said F2": the desk opening the conversation had readied was primed with
+    // F2 and only primed again on top of it, and the action ledger digest every priming carries
+    // still listed the replaced message. The CEO: the key he picked is the one named,
+    // everywhere, so the onboarding conversation is asked too.
+    //
+    // History is KEPT on purpose (review rv-20261014T044933Z-51176a08-f956): Rich's own earlier
+    // reply naming F2 stays in the conversation and a saved handoff summary naming F2 stays in
+    // the priming. What wins is one dated fact recorded at the change, primed AFTER every older
+    // mention: "The dictation key is now F3. The old key F2 no longer works."
+    let (path, ledger) = tmp_ledger("app-replaced-only-new-key");
+    let (onboarding, id, first);
+    {
+        let mut spine = support::spine(ledger);
+        onboarding = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+        (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
+        spine.attach_lease(Box::new(MockCognition::new("sess-before", vec!["Tap F2 to start dictation."])));
+        spine.switch_thread(&id).unwrap();
+        spine.submit_prompt("Which key starts dictation?", Source::Text).unwrap();
+    } // the app quits; what it said is in the ledger
+    let mut ledger = Ledger::open(&path).unwrap();
+    for thread in [&id, &onboarding] {
+        ledger.record_handoff_summary(thread, "The start/stop key is F2.").unwrap();
+    }
+    let mut spine = support::spine(ledger);
+    let factory = MockLeaseFactory::new(vec!["F3.", "F3."]);
+    let prompts = factory.spawned_prompts.clone();
+    let primes = factory.spawned.clone();
+    spine.set_lease_factory(Box::new(factory));
+    // Opening each conversation readies its desk with what is there now: F2.
+    assert!(matches!(spine.prime_front_desk(&id), FrontDeskReady::Ready { .. }));
+    assert!(matches!(spine.prime_front_desk(&onboarding), FrontDeskReady::Ready { .. }));
+    spine.replace_app_message(&id, Some(&first), "tap F3, then", "The dictation key is now F3. The old key F2 no longer works.").unwrap();
+    let fact = "The dictation key is now F3. The old key F2 no longer works.";
+    for thread in [&id, &onboarding] {
+        spine.switch_thread(thread).unwrap();
+        let question = format!("Which key do I tap to start dictation now? ({thread})");
+        spine.submit_prompt(&question, Source::Text).unwrap();
+        // Every priming the desk that answered was ever handed, from its start.
+        let desks = prompts.lock().unwrap().clone();
+        let answering = desks.iter().position(|asked| asked.lock().unwrap().contains(&question))
+            .expect("a desk answered the question");
+        let primed = primes.lock().unwrap()[answering].lock().unwrap().join("\n");
+        let fact_at = primed.rfind(fact).unwrap_or_else(|| panic!("the desk answering in {thread} is not told the key changed: {primed}"));
+        let today = time::OffsetDateTime::now_utc().date().to_string();
+        assert!(primed[..fact_at].ends_with(&format!("{today}: ")), "the fact is dated: {primed}");
+        assert!(primed[..fact_at].contains("The start/stop key is F2."), "the saved summary is kept: {primed}");
+        assert_eq!(primed[fact_at..].matches("F2").count(), 1, "the fact comes after every older F2 mention in {thread}: {primed}");
+        if thread == &id {
+            assert!(primed[..fact_at].contains("Tap F2 to start dictation."), "Rich's earlier reply is kept: {primed}");
+            assert!(primed.contains("tap F3, then"), "Rich's first turn there carries F3: {primed}");
+        }
+    }
     std::fs::remove_file(&path).expect("the test ledger is removable");
 }
 

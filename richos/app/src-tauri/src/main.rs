@@ -6073,14 +6073,15 @@ fn dictation_offer_shown(state: State<AppState>) -> Result<(), String> {
 /// **Dictation was just set up, or its key changed: the "Dictation feature" conversation** (the
 /// CEO, 2026-10-13, onboarding5.png). Opened once, under the company he is in, with Rich's message
 /// naming the key he picked, read from the dictation settings file now; when he picks another key
-/// later, that message is replaced so it names the new one (`create` false: a key change, which
-/// never opens it). The answer is the conversation's id
+/// later, that message is replaced so it names the new one and Rich is primed with one dated fact
+/// naming both keys (`create` false: a key change, which never opens it). The answer is the conversation's id
 /// when it was opened or its message replaced, `None` when nothing changed.
 #[richos_command::command]
 fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Option<String>, String> {
     let key = dictation_offer::view(&state.data_dir, true).key;
     let text = dictation_offer::feature_text(key);
     let record = dictation_offer::feature_record(&state.data_dir);
+    let old_key = record.as_ref().ok().and_then(Option::as_ref).and_then(|r| r.key);
     let (thread, message) = match dictation_offer::feature_action(record, key, create) {
         dictation_offer::FeatureAction::Nothing => return Ok(None),
         dictation_offer::FeatureAction::Create => {
@@ -6092,7 +6093,7 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
         }
         dictation_offer::FeatureAction::Replace { thread, message } => {
             let new_message = take_the_spine(&state.spine)
-                .replace_app_message(&thread, &message, &text)
+                .replace_app_message(&thread, message.as_deref(), &text, &dictation_offer::key_change_fact(key, old_key))
                 .map_err(|e| e.to_string())?;
             (thread, new_message)
         }

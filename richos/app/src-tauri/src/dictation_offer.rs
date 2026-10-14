@@ -98,11 +98,22 @@ pub fn feature_text(key: u8) -> String {
     )
 }
 
+/// What Rich is told when the key changes (review rv-20261014T044933Z-51176a08-f956): his
+/// earlier replies and saved summaries still name the old key, and this newer fact wins over
+/// them. `old` is the key the replaced message named, when the record kept it.
+pub fn key_change_fact(key: u8, old: Option<u8>) -> String {
+    match old {
+        Some(old) if old != key => format!("The dictation key is now F{key}. The old key F{old} no longer works."),
+        _ => format!("The dictation key is now F{key}. Any other key named before no longer works."),
+    }
+}
+
 /// The conversation that was created, Rich's message in it and the key that message names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeatureRecord {
     pub thread: String,
-    /// `None` for a record written before the message was kept: nothing to replace then.
+    /// `None` for a record written before the message was kept: the message is then the
+    /// conversation's first turn and the key it named is not known, so it is replaced once.
     pub message: Option<String>,
     pub key: Option<u8>,
 }
@@ -126,8 +137,9 @@ pub fn feature_record(data_dir: &Path) -> Result<Option<FeatureRecord>, String> 
 pub enum FeatureAction {
     /// Never created: open it, with the message naming `key`.
     Create,
-    /// Created, and its message names another key: replace that message.
-    Replace { thread: String, message: String },
+    /// Created, and its message names another key, or the record is from before the message and
+    /// its key were kept (`message` `None`): replace that message.
+    Replace { thread: String, message: Option<String> },
     /// Created and current, or the file cannot be read: nothing.
     Nothing,
 }
@@ -139,7 +151,7 @@ pub fn feature_action(record: Result<Option<FeatureRecord>, String>, key: u8, cr
     match record {
         Ok(None) if create => FeatureAction::Create,
         Ok(None) => FeatureAction::Nothing,
-        Ok(Some(FeatureRecord { thread, message: Some(message), key: named })) if named != Some(key) => {
+        Ok(Some(FeatureRecord { thread, message, key: named })) if named != Some(key) => {
             FeatureAction::Replace { thread, message }
         }
         Ok(Some(_)) => FeatureAction::Nothing,
@@ -285,8 +297,8 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    /// INVARIANT: never created opens it; a message naming another key is replaced; a current one,
-    /// one with no message on record, or an unreadable file leaves it alone.
+    /// INVARIANT: never created opens it; a message naming another key, or a record from before
+    /// the message was kept, is replaced; a current one or an unreadable file leaves it alone.
     #[test]
     fn a_changed_key_replaces_the_message_and_nothing_else_does() {
         let rec = |key| Ok(Some(FeatureRecord { thread: "thr".into(), message: Some("turn_1".into()), key: Some(key) }));
@@ -294,13 +306,32 @@ mod tests {
         assert_eq!(feature_action(Ok(None), 2, false), FeatureAction::Nothing, "a key change alone never opens it");
         assert_eq!(feature_action(rec(2), 2, true), FeatureAction::Nothing);
         for create in [true, false] {
-            assert_eq!(feature_action(rec(2), 3, create), FeatureAction::Replace { thread: "thr".into(), message: "turn_1".into() });
+            assert_eq!(feature_action(rec(2), 3, create), FeatureAction::Replace { thread: "thr".into(), message: Some("turn_1".into()) });
+            assert_eq!(
+                feature_action(Ok(Some(FeatureRecord { thread: "thr".into(), message: None, key: None })), 3, create),
+                FeatureAction::Replace { thread: "thr".into(), message: None }
+            );
         }
-        assert_eq!(
-            feature_action(Ok(Some(FeatureRecord { thread: "thr".into(), message: None, key: None })), 3, true),
-            FeatureAction::Nothing
-        );
         assert_eq!(feature_action(Err("unreadable".into()), 3, true), FeatureAction::Nothing);
+    }
+
+    /// INVARIANT: a record written before the message and its key were kept (only
+    /// `featureThread`) is replaced at a key change like any other, so Rich is told the new key
+    /// and the company's desks are retired (review rv-20261014T050558Z-e9854621-0b36, fixture
+    /// legacy_key_change: settings F3, featureThread present, featureMessage absent, nothing done).
+    #[test]
+    fn a_key_change_replaces_the_message_of_a_record_from_before_it_was_kept() {
+        let d = dir("feature-legacy");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(path(&d), br#"{"on":true,"key":3,"offered":true,"featureThread":"thr_dictation"}"#).unwrap();
+        let record = feature_record(&d);
+        assert_eq!(record, Ok(Some(FeatureRecord { thread: "thr_dictation".into(), message: None, key: None })));
+        let action = feature_action(record, view(&d, true).key, false);
+        assert!(
+            matches!(&action, FeatureAction::Replace { thread, .. } if thread == "thr_dictation"),
+            "a key change on an older record records the new key: {action:?}"
+        );
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     /// INVARIANT: an ordinary settings write (the switch, the key, the accuracy, through
