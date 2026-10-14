@@ -44,8 +44,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               whatever the verdict delegate-ledger.json (the conversation from the send on) and
               delegate-1-before/2-sent/3-end.png.
   hood        after delegate, "Under the hood" opened as a person opens it (the work summary chip
-              under the conversation): the conversation (#messages) and the composer's Output button
-              (#out-bottom) end at or before the panel's left edge, and the Output button is shown
+              under the conversation): both Output buttons, the stage header's (#out-top) and the
+              composer's (#out-bottom), end at or before the panel's left edge and are shown
               (the CEO, 2026-10-14: the last card and the Output button belong under the panel, not
               under its edge). Evidence: hood-observed.json, under-the-hood.png.
 
@@ -594,7 +594,10 @@ class HireWalk(command_walk.CommandWalk):
                 raise
             return found[0] if found else None
         panel = node('slideover')
-        boxes = {'the conversation (#messages)': node('messages'), 'the Output button (#out-bottom)': node('out-bottom')}
+        # #messages has no node in the guest's accessibility tree (nightly 56 run 4: "not on
+        # screen" with the conversation plainly there), so the boxes are the two Output buttons,
+        # the stage header's and the composer's; the last card is in under-the-hood.png.
+        boxes = {'the top Output button (#out-top)': node('out-top'), 'the Output button (#out-bottom)': node('out-bottom')}
         self.evidence_shot('under-the-hood.png')
         evidence = {'panel': panel, 'boxes': boxes}
         (self.out / 'hood-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
