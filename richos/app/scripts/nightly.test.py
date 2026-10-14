@@ -1325,6 +1325,58 @@ class StableChannelTests(GitFixture):
         self.assertEqual((out / "keep.txt").read_text(), "not a stable attempt\n")
 
 
+class GitHubAccessTests(unittest.TestCase):
+    """Run 20261014T135757Z-c7955224 passed every gate, then refused at plan-recheck because
+    GitHub refused ONE `git ls-remote --tags origin`; a minute later it worked from a shell."""
+    DENIED = ("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote "
+              "repository.\n\nPlease make sure you have the correct access rights\nand the "
+              "repository exists.\n")
+
+    def reads(self, call, *outcomes):
+        """`call()` with GitHub giving `outcomes` in turn: (exit, stdout, stderr) or "timeout"."""
+        argvs = []
+
+        def fake(argv, **kwargs):
+            argvs.append(argv)
+            outcome = outcomes[len(argvs) - 1]
+            if outcome == "timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            return subprocess.CompletedProcess(argv, *outcome)
+        with patch.object(n.subprocess, "run", side_effect=fake), \
+                patch.object(n.github_access, "sleep") as slept, \
+                contextlib.redirect_stderr(io.StringIO()) as said:
+            try:
+                return call(), argvs, [c.args[0] for c in slept.call_args_list], said.getvalue()
+            except subprocess.CalledProcessError as error:
+                return error, argvs, [c.args[0] for c in slept.call_args_list], said.getvalue()
+
+    def test_a_refusal_or_a_timeout_that_passes_is_tried_again(self):
+        tags, argvs, slept, said = self.reads(
+            n.remote_tags, (128, "", self.DENIED), "timeout", (0, "abc\trefs/tags/v1.0.0\n", ""))
+        self.assertEqual(tags, {"v1.0.0"})
+        self.assertEqual(argvs, [("git", "ls-remote", "--tags", "origin")] * 3)
+        self.assertEqual(slept, list(n.github_access.WAITS[:2]))
+        self.assertIn("GitHub access failed", said)
+
+    def test_a_refusal_that_lasts_says_github_access_with_sshs_own_error(self):
+        attempts = len(n.github_access.WAITS) + 1
+        error, argvs, slept, _ = self.reads(n.remote_tags, *[(128, "", self.DENIED)] * attempts)
+        self.assertEqual(len(argvs), attempts)
+        self.assertTrue(45 <= sum(slept) <= 90, slept)          # about a minute
+        self.assertIsInstance(error, subprocess.CalledProcessError)
+        self.assertIn("GitHub access refused: `git ls-remote --tags origin`", str(error))
+        self.assertIn("git@github.com: Permission denied (publickey).", str(error))
+
+    def test_github_answering_is_not_tried_again(self):
+        missing = "fatal: couldn't find remote ref refs/tags/v9\n"
+        error, argvs, slept, said = self.reads(
+            lambda: n.git("fetch", "--no-tags", "origin", "refs/tags/v9"), (128, "", missing))
+        self.assertEqual((len(argvs), slept), (1, []))
+        self.assertNotIsInstance(error, n.GitHubRefused)
+        self.assertEqual(error.returncode, 128)
+        self.assertIn(missing, said)
+
+
 class RepositoryRuleTests(unittest.TestCase):
     """The publisher reads the branch ruleset back before it publishes anything.
 
@@ -1432,7 +1484,8 @@ class ReleaseScriptTests(unittest.TestCase):
         # lib/cargo-target.sh in turn sources lib/cargo-cache-env.sh and names the bundle
         # directory through ../bin/cargo (lib/cargo_identity.py). Without them the output
         # lock resolves to "/release" and `app` refuses before packaging.
-        for rel in ('lib/cargo-cache-env.sh', 'lib/cargo_identity.py', 'lib/machine_storage.py', 'bin/cargo'):
+        for rel in ('lib/cargo-cache-env.sh', 'lib/cargo_identity.py', 'lib/machine_storage.py',
+                    'lib/github_access.py', 'bin/cargo'):
             (self.scripts / rel).parent.mkdir(exist_ok=True)
             shutil.copy2(Path(__file__).parent / rel, self.scripts / rel)
         self.config = root / n.CONFIG

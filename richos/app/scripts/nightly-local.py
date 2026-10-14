@@ -20,6 +20,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import machine_storage as M
+import github_access
 import platform
 import pwd
 import re
@@ -1298,7 +1299,7 @@ class Runner:
         self.announce(f"  {'total'.ljust(width)} : {time.time() - self.started:7.1f}s")
 
     def command(self, *args, cwd=None, capture=False, timeout=None, credentials=False,
-                env_extra=None, cleanup=False, release_build=False, nested_wait=None):
+                env_extra=None, cleanup=False, release_build=False, nested_wait=None, stderr=None):
         if self.groups.stopping and not cleanup:
             raise GateStopped(f"{self.active_phase or Path(str(args[0])).name} was stopped: "
                               "another gate already refused this build")
@@ -1311,7 +1312,7 @@ class Runner:
             result = owned_run([str(a) for a in args], cwd=cwd or self.source,
                                env=env, stdin=subprocess.DEVNULL, text=True,
                                stdout=subprocess.PIPE if capture else self.log,
-                               stderr=self.log, timeout=timeout,
+                               stderr=stderr or self.log, timeout=timeout,
                                groups=self.groups, cleanup=cleanup,
                                **({"release_build": True} if release_build else {}),
                                **({"nested_wait": nested_wait} if nested_wait is not None else {}))
@@ -1359,7 +1360,7 @@ class Runner:
         `stable` is the only caller that names one: it rebuilds the commit a published
         nightly was built from, which is by definition not the tip.
         """
-        self.command("git", "fetch", "origin", "main", cwd=self.repo, timeout=120)
+        self.fetch("main")
         if sha is None:
             sha = self.command("git", "rev-parse", "FETCH_HEAD", cwd=self.repo, capture=True)
         if self.source.exists():
@@ -1368,6 +1369,35 @@ class Runner:
         else:
             self.command("git", "worktree", "add", "--detach", self.source, sha, cwd=self.repo)
         return sha
+
+    def fetch(self, ref):
+        """`git fetch origin REF` in the repository, tried again while GitHub cannot be reached."""
+        argv = ("git", "fetch", "origin", ref)
+
+        def once():
+            with tempfile.TemporaryFile("w+") as errors:
+                try:
+                    self.command(*argv, cwd=self.repo, timeout=github_access.TIMEOUT, stderr=errors)
+                    failure = None
+                except GateTimedOut as error:
+                    failure = error
+                except RuntimeError as error:
+                    # Stopped, never admitted or not cleaned up are this run's own refusals.
+                    if type(error) is not RuntimeError:
+                        raise
+                    failure = error
+                errors.seek(0)
+                said = errors.read()
+            self.log.write(said)
+            if failure is None:
+                return None
+            if isinstance(failure, GateTimedOut):
+                raise github_access.Unreachable(f"no answer in {github_access.TIMEOUT}s") from None
+            if github_access.connection_failed(said):
+                raise github_access.Unreachable(said)
+            raise failure
+
+        return github_access.read(once, argv, refuse=RuntimeError, notice=self.announce)
 
     def require_clean_dedicated_source(self):
         """Refuse unless `self.source` is this repository's dedicated worktree, unchanged.
@@ -1405,7 +1435,7 @@ class Runner:
         # still this commit before anything is published.
         ref = info.get("candidate_ref") or info.get("reservation_ref")
         if not self._has_commit(commit) and ref:
-            self.command("git", "fetch", "origin", ref, cwd=self.repo, timeout=120)
+            self.fetch(ref)
         if not self._has_commit(commit):
             raise ValueError(f"{commit}, the commit run {info.get('run_id')} was built from, is not "
                              f"in this repository{' or on ' + ref if ref else ''}, so it cannot "
@@ -2735,6 +2765,11 @@ class Runner:
         after = outer[len(outer) - 1 - outer[::-1].index("=== phase plan-recheck begins ==="):]
         grade = ("release" if any(l.startswith("Building and publishing v") for l in after) else
                  "build" if any(re.fullmatch(r"Building v\S+\.\.\.", l) for l in after) else None)
+        if grade is None and command == "build":
+            # Every gate passed and the run then stopped AT plan-recheck, before it said which
+            # build it was (run 20261014T135757Z-c7955224: GitHub refused one `ls-remote`). Its
+            # gates are what a finished build's are, so a candidate may reuse them.
+            grade = "build"
         if grade is None or (command == "release" and grade != "release"):
             raise ValueError(f"run {run_id} was a {grade or 'unknown'} run; `release` reuses only the "
                              "gates of a release or stable run, which never skip a suite over "

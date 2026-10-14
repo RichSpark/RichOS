@@ -1184,9 +1184,10 @@ while True: time.sleep(.02)
         if dependencies:
             lines.append(f"Installed dependencies: {dependencies}")
         if reached_recheck:
-            lines += ["=== phase plan-recheck begins ===", "=== phase plan-recheck ends: 5.0s ===",
-                      "Building and publishing v1.2.0-nightly.20260928.28..." if grade == "release"
-                      else "Building v1.2.0-nightly.20260928.28..."]
+            # grade None: the run stopped AT plan-recheck, before it said which build it was.
+            lines += ["=== phase plan-recheck begins ===", "=== phase plan-recheck ends: 5.0s ==="]
+            lines += (["Building and publishing v1.2.0-nightly.20260928.28..."] if grade == "release"
+                      else ["Building v1.2.0-nightly.20260928.28..."] if grade == "build" else [])
         logs = self.root / "state" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         (logs / f"{self.RESUMED}.log").write_text(
@@ -1286,6 +1287,79 @@ while True: time.sleep(.02)
         for bad in ("", "../x", "20260928T190111Z-40a1616"):
             with self.assertRaisesRegex(ValueError, "run id"):
                 r.accept_passed_gates(bad, "release")
+
+    def test_a_build_reuses_a_run_whose_gates_all_passed_and_which_stopped_at_plan_recheck(self):
+        # Run 20261014T135757Z-c7955224: every gate passed on 4f80e5322, then GitHub refused one
+        # `ls-remote` in plan-recheck, and `build --gates-passed-in` called it "a unknown run".
+        self.recorded_run(grade=None)
+        r = self.runner()
+        self.assertEqual(r.accept_passed_gates(self.RESUMED, "build")["source_commit"], self.SOURCE)
+        r.checkout = Mock(return_value=self.SOURCE)
+        (self.root / "plan.json").write_text("{}")
+        (self.root / "state" / "releases" / "v1.2.0-nightly.20260916.1").mkdir(parents=True)
+        (self.root / "state" / "releases" / "v1.2.0-nightly.20260916.1" / "candidate.json").write_text(
+            json.dumps({"info": {}}))
+        r.record_run, r.needs_gui_proof, r.print_candidate = Mock(), Mock(return_value=False), Mock()
+        r.env["RICHOS_NIGHTLY_RUN_ID"] = "20261014T160000Z-00000000"
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("build", gates_passed_in=self.RESUMED)
+        r.gates.assert_not_called()
+        r.checkout.assert_called_once_with(self.SOURCE)
+        self.assertEqual(r.command.call_args_list[-1].args[2], "build")
+        # `release` still reuses only a run that said it was a release.
+        with self.assertRaisesRegex(ValueError, "unknown run"):
+            r.accept_passed_gates(self.RESUMED, "release")
+        # And a run that stopped at plan-recheck with a gate that did not pass is still refused.
+        self.recorded_run(grade=None, verdicts={"gates/privacy-sweep": None})
+        with self.assertRaisesRegex(ValueError, "no pass recorded"):
+            r.accept_passed_gates(self.RESUMED, "build")
+
+    DENIED = ("git@github.com: Permission denied (publickey).\n"
+              "fatal: Could not read from remote repository.\n")
+
+    def fetching(self, *outcomes):
+        """A Runner whose `git fetch` meets `outcomes` in turn: ssh's error text, or None for it working."""
+        r = m.Runner(self.root, self.root / "state", {}, io.StringIO())
+        fetches = []
+
+        def command(*args, **kwargs):
+            if args[:2] != ("git", "fetch"):
+                return None
+            fetches.append(args)
+            outcome = outcomes[len(fetches) - 1]
+            if isinstance(outcome, Exception):
+                raise outcome
+            if outcome is not None:
+                kwargs["stderr"].write(outcome)
+                raise RuntimeError("git failed (exit 128); see the run log")
+        r.command = Mock(side_effect=command)
+        return r, fetches
+
+    def test_a_github_refusal_in_the_fetch_is_tried_again_and_a_lasting_one_says_so(self):
+        r, fetches = self.fetching(self.DENIED, None)
+        with patch.object(m.github_access, "sleep") as slept, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(r.checkout("abc123"), "abc123")
+        self.assertEqual(fetches, [("git", "fetch", "origin", "main")] * 2)
+        self.assertEqual([c.args[0] for c in slept.call_args_list], [m.github_access.WAITS[0]])
+        self.assertIn("Permission denied (publickey)", r.log.getvalue())   # ssh's words stay in the log
+        # Refused on every attempt over about a minute: GitHub access, with ssh's own error.
+        r, fetches = self.fetching(*[self.DENIED] * (len(m.github_access.WAITS) + 1))
+        with patch.object(m.github_access, "sleep") as slept, contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(RuntimeError) as caught:
+            r.checkout("abc123")
+        self.assertEqual(len(fetches), len(m.github_access.WAITS) + 1)
+        self.assertTrue(45 <= sum(c.args[0] for c in slept.call_args_list) <= 90)
+        self.assertIn("GitHub access refused", str(caught.exception))
+        self.assertIn("git@github.com: Permission denied (publickey).", str(caught.exception))
+        # GitHub ANSWERING, and the run's own refusals, are not tried again.
+        for outcome in ("fatal: couldn't find remote ref refs/candidates/9\n",
+                        m.GateStopped("fetch was stopped: another gate already refused this build")):
+            r, fetches = self.fetching(outcome)
+            with patch.object(m.github_access, "sleep") as slept, self.assertRaises(RuntimeError) as caught:
+                r.checkout("abc123")
+            self.assertEqual(len(fetches), 1)
+            slept.assert_not_called()
+            self.assertNotIn("GitHub access", str(caught.exception))
 
     def test_a_resume_is_refused_for_any_other_command_or_beside_other_gate_options(self):
         r = self.runner()
