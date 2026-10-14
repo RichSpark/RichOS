@@ -1529,6 +1529,12 @@
   // the Mac reports about Codex later.
   const codexReviews = Object.assign({ on: false, codex: "ready" }, preset.codexReviews || {});
   const codexReviewCalls = [];
+  // MEETING NOTES (round 25, src-tauri meetings.rs): `meeting_state` in the app's shape. Available,
+  // not paused, nothing recording, as a fresh install opens; `preset.meetingNotes` overrides any
+  // fact, `__RICHOS_MOCK__.meetingSet` changes them later and sends `meeting-state`, as the app does.
+  const meetingNotes = Object.assign({ available: true, paused: false, recording: false, startedAt: null, processing: null },
+    preset.meetingNotes || {});
+  const meetingCalls = [];
   // API-EQUIVALENT TOKEN SPEND (round 22.1, `spend.js`): `spend_view` and `spend_live`, in the shape
   // richos-core's spend ledger answers them (`spend::ledger::Totals`). A seeded record of 47 days
   // ANCHORED TO THE FIRST OF THIS MONTH (30 days before it, 17 from it), so this month's figure is
@@ -3372,6 +3378,21 @@
         case "codex_reviews_status":
           codexReviewCalls.push({ cmd });
           return structuredClone(codexReviews);
+        // MEETING NOTES (meetings.rs): the main window's view, the manual start/stop and the pause.
+        case "meeting_state":
+          meetingCalls.push({ cmd });
+          return structuredClone(meetingNotes);
+        case "meeting_start_or_stop":
+          meetingCalls.push({ cmd });
+          if (meetingNotes.recording) Object.assign(meetingNotes, { recording: false, startedAt: null });
+          else Object.assign(meetingNotes, { recording: true, startedAt: Date.now() });
+          emit("meeting-state", structuredClone(meetingNotes));
+          return structuredClone(meetingNotes);
+        case "meeting_set_paused":
+          meetingCalls.push({ cmd, paused: !!args.paused });
+          meetingNotes.paused = !!args.paused;
+          emit("meeting-state", structuredClone(meetingNotes));
+          return structuredClone(meetingNotes);
         case "codex_reviews_set":
           codexReviewCalls.push({ cmd, on: !!args.on });
           if (!(args.on && !codexReviews.on && codexReviews.codex !== "ready")) codexReviews.on = !!args.on;
@@ -5149,6 +5170,11 @@
     codexSet(codex) { codexReviews.codex = codex; },
     /// The Codex switch's calls, in order, each with its arguments.
     codexReviewCalls() { return codexReviewCalls.slice(); },
+    /// Meeting notes: change what the app reports (recording, paused, processing) and send
+    /// `meeting-state`, as meetings.rs does on every change.
+    meetingSet(patch) { Object.assign(meetingNotes, patch || {}); emit("meeting-state", structuredClone(meetingNotes)); },
+    /// The meeting-notes calls, in order, each with its arguments.
+    meetingCalls() { return meetingCalls.slice(); },
     /// Token spend (spend.js): a request on record now; the first count done; the agents working.
     spendLand(r) { spendMock.land(r); },
     spendReady() { spendMock.state.ready = true; },

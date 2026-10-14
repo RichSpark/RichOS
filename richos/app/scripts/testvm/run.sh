@@ -3,8 +3,14 @@
 #          caller how to drive it.
 #
 #   testvm/run.sh --bundle <RichOS.app.zip|RichOS.app> --home <fixture-home-dir>
-#                 [--vm <name>] [--keep] [--engine <engine.tar.gz>] [--no-tailnet]
-#   testvm/run.sh --no-app --home <fixture-home-dir> [--vm <name>] [--keep] [--no-tailnet]
+#                 [--vm <name>] [--keep] [--engine <engine.tar.gz>] [--no-tailnet] [--no-audio]
+#   testvm/run.sh --no-app --home <fixture-home-dir> [--vm <name>] [--keep] [--no-tailnet] [--no-audio]
+#
+# --no-audio: boot the guest with no sound device at all (tart's --no-audio). Without it the
+# guest's sound device passes audio through to the HOST: a guest app that opens its microphone
+# reads the host's microphone (the CEO's room, and a permission prompt on his screen), and what it
+# plays comes out of the host's speakers. A walk that runs a real call in the guest boots with
+# this and gives the guest its own virtual audio devices (the Mac call lab).
 #
 # --no-app: the same guest (the host's claude synced in, the host's login pushed
 # into the fixture home, a login keychain ready) and NO app launched, for a proof
@@ -24,7 +30,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
 
-BUNDLE=""; FIXTURE_HOME=""; VM="richos-test-1"; ENGINE=""; KEEP=0; TAILNET=1; NOAPP=0
+BUNDLE=""; FIXTURE_HOME=""; VM="richos-test-1"; ENGINE=""; KEEP=0; TAILNET=1; NOAPP=0; AUDIO=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --bundle) BUNDLE="$2"; shift 2 ;;
@@ -39,6 +45,7 @@ while [ $# -gt 0 ]; do
     # --no-tailnet is for a proof that has nothing to do with the phone and
     # would rather not spend twenty seconds and a node on one.
     --no-tailnet) TAILNET=0; shift ;;
+    --no-audio) AUDIO=0; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -105,7 +112,13 @@ fi
 tart set "$VM" --cpu "$TESTVM_CPU" --memory "$TESTVM_RAM_MB" --display "$TESTVM_DISPLAY"
 
 # --- 2. boot headless ---------------------------------------------------------
-if ! vm_running "$VM"; then
+WANT_AUDIO=on
+[ "$AUDIO" -eq 1 ] || WANT_AUDIO=off
+if vm_running "$VM"; then
+  # A running guest keeps the audio mode it booted with; never hand it to a run that asked for
+  # another (lib.sh guest_audio_reusable).
+  why="$(guest_audio_reusable "$STATE" "$WANT_AUDIO")" || die "refusing to reuse $VM: $why"
+else
   log "booting $VM headless..."
   # --no-graphics: the guest keeps a full virtual display and WindowServer;
   # the host simply never renders a window for it. This one flag is the
@@ -118,8 +131,11 @@ if ! vm_running "$VM"; then
   # as long as a test ran, which is the very intrusion this harness removes.
   # A locked or slept host screen does not affect the guest at all — the guest
   # runs its own WindowServer inside the VM.
-  nohup caffeinate -is "$TART_BIN" run "$VM" --no-graphics > "$TESTVM_LOG/$VM.log" 2>&1 &
+  AUDIO_ARGS=()
+  [ "$AUDIO" -eq 1 ] || AUDIO_ARGS=(--no-audio)
+  nohup caffeinate -is "$TART_BIN" run "$VM" --no-graphics ${AUDIO_ARGS[@]+"${AUDIO_ARGS[@]}"} > "$TESTVM_LOG/$VM.log" 2>&1 &
   echo $! > "$STATE/vm.pid"
+  echo "$WANT_AUDIO" > "$STATE/audio"
 fi
 
 log "waiting for $VM to report an IP..."

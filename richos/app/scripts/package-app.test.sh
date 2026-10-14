@@ -55,6 +55,8 @@
 #   D3  a missing shipped icon fails
 #   D4  a shipped icon that is not this repository's fails
 #   D5  a missing NSMicrophoneUsageDescription fails
+#   D5b a missing NSAudioCaptureUsageDescription fails (meeting notes, Granola PRD V4)
+#   D5c a bundle without Contents/MacOS/richos-companion fails
 #   D6  a bundle whose signature was removed fails
 #   D7  --expect-notarized fires the stapled-ticket check
 #   D8  a bundle with no CFBundleShortVersionString fails — it cannot say which version
@@ -296,6 +298,8 @@ make_bundle() {   # make_bundle <dir>
   local b="$1"
   rm -rf "$b"; mkdir -p "$b/Contents/MacOS" "$b/Contents/Resources"
   cp "$TMP/fixture" "$b/Contents/MacOS/RichOS"
+  cp "$TMP/fixture" "$b/Contents/MacOS/richos-companion"
+  codesign --force --sign - --timestamp=none "$b/Contents/MacOS/richos-companion" >/dev/null 2>&1
   cp "$SB/src-tauri/icons/icon.icns" "$b/Contents/Resources/icon.icns"
   printf '# Third-party notices\n\n## Bundled data compiled into the application\n' \
     > "$b/Contents/Resources/THIRD-PARTY-NOTICES.md"
@@ -309,6 +313,7 @@ make_bundle() {   # make_bundle <dir>
 <key>RichOSSourceCommit</key><string>0123456789abcdef0123456789abcdef01234567</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>NSMicrophoneUsageDescription</key><string>Rich listens when you tap the talk button.</string>
+<key>NSAudioCaptureUsageDescription</key><string>RichOS records the other side of a call you take notes on.</string>
 <key>CFBundleShortVersionString</key><string>9.9.9</string>
 </dict></plist>
 PLIST
@@ -364,6 +369,17 @@ make_bundle "$BUNDLE"
 codesign --force --sign - --timestamp=none "$BUNDLE" >/dev/null 2>&1
 run bash "$SBS" --verify-only "$BUNDLE"
 expect "D5 no NSMicrophoneUsageDescription fails" 1 "voice mode cannot even ask for the microphone"
+
+make_bundle "$BUNDLE"
+/usr/libexec/PlistBuddy -c 'Delete :NSAudioCaptureUsageDescription' "$BUNDLE/Contents/Info.plist" >/dev/null 2>&1
+codesign --force --sign - --timestamp=none "$BUNDLE" >/dev/null 2>&1
+run bash "$SBS" --verify-only "$BUNDLE"
+expect "D5b no NSAudioCaptureUsageDescription fails" 1 "meeting notes cannot ask to record the other side of a call"
+
+make_bundle "$BUNDLE"; rm -f "$BUNDLE/Contents/MacOS/richos-companion"
+codesign --force --sign - --timestamp=none "$BUNDLE" >/dev/null 2>&1
+run bash "$SBS" --verify-only "$BUNDLE"
+expect "D5c a bundle without the capture companion fails" 1 "Contents/MacOS/richos-companion is missing"
 
 make_bundle "$BUNDLE"; codesign --remove-signature "$BUNDLE" >/dev/null 2>&1
 run bash "$SBS" --verify-only "$BUNDLE"

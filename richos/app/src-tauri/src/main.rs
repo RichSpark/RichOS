@@ -156,6 +156,10 @@ mod emission_trace;
 mod dictation;
 #[cfg(target_os = "macos")]
 mod dictation_app;
+// Meeting notes (Granola PRD V4): the watcher, the floating panel and the capture, around
+// `richos_core::meeting`'s one prompt/capture state. macOS only, like `dictation` (its windows).
+#[cfg(target_os = "macos")]
+mod meetings;
 
 /// The live UI sink: forwards each spine turn event to the webview as a Tauri event.
 /// This is the ONLY place spine events become UI events — clean output is guaranteed by
@@ -509,6 +513,15 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
 ///
 /// That is the same shape as the `lease_ready` snapshot fixed earlier the same day: an answer
 /// cached before the thing it describes existed. `run_setup` writes both cells.
+/// The corpus meeting notes are kept in: the corpus install's root, else `~/RichOS/corpus` (the
+/// service's own default). One rule for capture (`meetings.rs`) and for Rich's read access.
+fn meetings_corpus_root(install: Option<&richos_core::loro::LoroInstall>) -> PathBuf {
+    match install {
+        Some(install) => install.root().path().to_path_buf(),
+        None => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("RichOS/corpus"),
+    }
+}
+
 struct EngineLeaseFactory {
     quota: Arc<richos_core::quota::Service>,
     permissions: Arc<richos_core::permissions::PermissionDesk>,
@@ -547,6 +560,11 @@ struct EngineLeaseFactory {
     /// §7 item 2). Given to the CONVERSATION lease only (`spawn_chat`); `None` everywhere else,
     /// which leaves the front desk's tools exactly what they were.
     operator_desk: Option<richos_core::operator_desk_tools::DeskAccess>,
+    /// **The corpus install, for the company meeting folder Rich may read** (Granola PRD V4,
+    /// "Notes and history through Rich"): the SAME cell as `AppState::loro_install`, read in
+    /// `spawn_chat` under the spine's mutex, the order `provision_memory` already takes them in
+    /// (spine, then this). Given to the CONVERSATION lease only.
+    loro_install: Arc<Mutex<Option<richos_core::loro::LoroInstall>>>,
 }
 
 impl LeaseFactory for EngineLeaseFactory {
@@ -579,6 +597,7 @@ impl LeaseFactory for EngineLeaseFactory {
             data_dir: self.data_dir.clone(),
             explicit_engine: self.explicit_engine,
             operator_desk: self.operator_desk.clone(),
+            loro_install: Arc::clone(&self.loro_install),
         }))
     }
 
@@ -751,6 +770,16 @@ impl EngineLeaseFactory {
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.permissions = self.permissions.clone();
         profile.operator_desk = self.operator_desk.clone();
+        // This company's meeting notes (Granola PRD V4): the folder is made here when the corpus
+        // exists, so a meeting recorded later in this lease is already readable.
+        let corpus = meetings_corpus_root(self.loro_install.lock().unwrap().as_ref());
+        if let (Some(binding), true) = (binding, corpus.is_dir()) {
+            let zone = richos_core::meeting_notes::meeting_zone(&corpus, Some(binding.entity_id().as_str()));
+            if let Err(e) = std::fs::create_dir_all(&zone) {
+                eprintln!("[richos] meeting notes: {} could not be made for Rich to read: {e}", zone.display());
+            }
+        }
+        profile.meetings_corpus = Some(corpus);
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
@@ -965,7 +994,10 @@ struct AppState {
     ///
     /// `None` on every install with no corpus, which is an ordinary state and not an error:
     /// the home screen then keeps drawing the demonstration, with its banner up.
-    loro_install: Mutex<Option<richos_core::loro::LoroInstall>>,
+    ///
+    /// An `Arc` since the meeting folder grant (Granola PRD V4): the lease factory reads the
+    /// corpus root through the same cell when it scopes Rich to a company's meeting folder.
+    loro_install: Arc<Mutex<Option<richos_core::loro::LoroInstall>>>,
     /// The same `Arc` the spine holds. Kept here so provisioning can re-run
     /// `wire_company_memory` with the provenance sink the correction desk reads from — a
     /// second `SliceProvenance` would mean the desk could not propose against a slice the
@@ -3070,7 +3102,7 @@ fn main() {
             let memory_status = wired.status;
             // AND THE RESOLUTION, kept whole. `home_field_data` compiles the home screen's
             // picture out of this and must not lock the spine to reach it.
-            let loro_install = wired.install;
+            let loro_install = Arc::new(Mutex::new(wired.install));
 
             // Attach the compute lease. A boot with no Claude auth, no `claude` binary, or a
             // binary that rejects our flags does NOT silently degrade: no lease is attached
@@ -3246,6 +3278,7 @@ fn main() {
                 data_dir: data_dir.clone(),
                 explicit_engine,
                 operator_desk: operator_access.clone(),
+                loro_install: Arc::clone(&loro_install),
             };
             spine.set_lease_factory(Box::new(lease_factory()));
             // **THE WORK HOST — the background-work spec §2.1's second lease, and a SECOND
@@ -3693,7 +3726,7 @@ fn main() {
                 feedback,
                 launch: Mutex::new(launch_store),
                 memory: Mutex::new(memory_status),
-                loro_install: Mutex::new(loro_install),
+                loro_install: Arc::clone(&loro_install),
                 loro_provenance,
                 // KEPT, not re-derived. `provision_memory` opens the correction desk's log
                 // beside the ledger, and it must be the SAME directory this boot used —
@@ -3731,6 +3764,10 @@ fn main() {
             // one by itself once it can go, from this launch on.
             app.manage(bug_report::BugReports::for_app(&attachments_home, &app.package_info().version.to_string()));
             bug_report::spawn_retry(app.handle().clone());
+            // MEETING NOTES (Granola PRD V4): the microphone watcher, the prompt and the capture.
+            // After AppState exists: a meeting's company is read from the active conversation.
+            #[cfg(target_os = "macos")]
+            meetings::start(app.handle());
             // DICTATION (plan slice 1): when dictation.json says on, the tool starts as this
             // app's child, on a thread of its own so first paint never waits for it.
             #[cfg(target_os = "macos")]
@@ -4090,6 +4127,14 @@ fn main() {
             search_documents,
             search_documents_status,
             open_search_document,
+            // --- Meeting notes (Granola PRD V4) — appended ---
+            meetings::meeting_panel_state,
+            meetings::meeting_panel_laid_out,
+            meetings::meeting_panel_drag,
+            meetings::meeting_answer,
+            meetings::meeting_start_or_stop,
+            meetings::meeting_set_paused,
+            meetings::meeting_state
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -4174,6 +4219,10 @@ fn main() {
                 }
             }
             if let tauri::RunEvent::Exit = event {
+                // A meeting being recorded is finished and kept FIRST, before the quit's own
+                // two-second bound below starts: its files and its notes are his data
+                // (handover review rv-20261013T145354Z-da4ac5cf-c86a #1).
+                meetings::quit(handle);
                 if let Some(state) = handle.try_state::<AppState>() {
                     // ONE bound for the whole quit, shared by the work lease's runners below and
                     // every lease's supervisor after them (reap gap 1.3(c)).
@@ -6834,6 +6883,7 @@ mod operator_gate_tests {
             data_dir: data,
             explicit_engine: false,
             operator_desk: None,
+            loro_install: Default::default(),
         };
         (root, binding, factory)
     }

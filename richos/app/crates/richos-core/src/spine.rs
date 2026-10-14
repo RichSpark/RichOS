@@ -1033,6 +1033,30 @@ impl Spine {
         self.output = Some((store, evidence_root));
     }
 
+    /// Witness (e): files the app itself wrote for `thread_id` and named in the turn
+    /// `turn_id` (meeting notes' brief and transcript, Granola PRD V4). Recorded as Rich's,
+    /// under that turn, so the Output record holds them and the message's code span links.
+    /// Without an output store (a test spine) this records nothing.
+    pub fn witness_app_files(&self, thread_id: &str, turn_id: &str, paths: &[PathBuf]) -> std::io::Result<()> {
+        let Some((store, _)) = &self.output else { return Ok(()) };
+        let rows: Vec<crate::output::WriteRow> = paths
+            .iter()
+            .map(|p| {
+                let path = p.to_string_lossy();
+                crate::output::WriteRow::witnessed(
+                    format!("app:{turn_id}:{path}"),
+                    thread_id,
+                    Some(turn_id),
+                    &path,
+                    crate::output::Actor::Rich,
+                    crate::output::WriteSource::App,
+                    now_millis(),
+                )
+            })
+            .collect();
+        store.append(thread_id, &rows).map(|_| ())
+    }
+
     /// Witnesses (b) and (c) for the lease that just ran a turn of `thread_id`: its session's
     /// `writes.jsonl`, joined through the ledger's `TurnStarted` rows (one lease serves one
     /// thread). A failure is logged and never fails the turn (§4.7).

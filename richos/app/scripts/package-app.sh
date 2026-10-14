@@ -311,6 +311,9 @@ verify_bundle() {
     exe="$app/Contents/MacOS/$exe_name"
     [ -x "$exe" ] || failures+=("Contents/MacOS/$exe_name is missing or not executable")
   fi
+  # Meeting notes' capture companion: without it the app runs with no meeting prompts at all.
+  [ -x "$app/Contents/MacOS/richos-companion" ] \
+    || failures+=("Contents/MacOS/richos-companion is missing or not executable (meeting notes would be off)")
 
   # 1. The signature verifies at all. --deep so a broken sidecar or nested
   #    framework counts, --strict so a sealed-resource mismatch is not waved through.
@@ -447,6 +450,14 @@ verify_bundle() {
            "$app/Contents/Info.plist" 2>/dev/null || true)"
   if [ -z "$mic" ]; then
     failures+=("Contents/Info.plist has no NSMicrophoneUsageDescription — voice mode cannot even ask for the microphone")
+  fi
+  #    And the system-audio one: meeting notes' capture records the other side of a call through a
+  #    Core Audio tap, which macOS refuses to ask for without it (Granola PRD V4).
+  local sysaudio
+  sysaudio="$(/usr/libexec/PlistBuddy -c 'Print :NSAudioCaptureUsageDescription' \
+                "$app/Contents/Info.plist" 2>/dev/null || true)"
+  if [ -z "$sysaudio" ]; then
+    failures+=("Contents/Info.plist has no NSAudioCaptureUsageDescription — meeting notes cannot ask to record the other side of a call")
   fi
 
   # 5. THE VERSION THIS BUNDLE WILL CALL ITSELF, and whether any release is that version.
@@ -1399,7 +1410,13 @@ fi
 # The exact pinned connector is included by every packaged Mac build. Preparation is
 # cache-backed on the external SSD and refuses an unexpected published asset digest.
 connect_overlay="$(python3 "$here/prepare-connect-helper.py")" || exit 1
-build_args+=(--config "$connect_overlay")
+# The meeting-notes capture companion (Granola PRD V4: "Build the Swift companion in the Mac
+# release process and sign it inside the app bundle"), built the same way: outside the checkout,
+# cached by its source hash. ONE overlay carries both helpers, because tauri-cli merges --config
+# overlays as JSON merge patches and a second `externalBin` list would REPLACE the first.
+companion_overlay="$(python3 "$here/prepare-companion.py")" || exit 1
+helpers_overlay="$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); a["bundle"]["externalBin"]=a["bundle"]["externalBin"]+b["bundle"]["externalBin"]; print(json.dumps(a))' "$connect_overlay" "$companion_overlay")" || exit 1
+build_args+=(--config "$helpers_overlay")
 
 # ---------------------------------------------------------------------------
 # THE SOURCE COMMIT, DERIVED BEFORE THE BUILD so it can be compiled INTO it.
@@ -1550,6 +1567,7 @@ if [ "$sign_mode" = "adhoc" ]; then
   say ""
   say "ad-hoc signing the bundle (the bundler does not: it signs only with a real identity)..."
   codesign --force --sign - --timestamp=none "$app_bundle/Contents/MacOS/cloudflared" || exit 1
+  codesign --force --sign - --timestamp=none "$app_bundle/Contents/MacOS/richos-companion" || exit 1
   if ! codesign --force --sign - --timestamp=none "$app_bundle" 2>&1; then
     warn "ad-hoc signing failed — refusing to report a bundle as signed when it is not."
     exit 1
@@ -1589,6 +1607,10 @@ if [ "$sign_mode" = "developer-id" ]; then
   say ""
   say "re-signing the bundle with the full argv (adds --timestamp, which the bundler omits)..."
   codesign --force --sign "$wanted" --options runtime --timestamp "$app_bundle/Contents/MacOS/cloudflared" || exit 1
+  # The capture companion opens the microphone itself, so under the hardened runtime it carries
+  # the app's audio-input entitlement too (Entitlements.plist).
+  codesign --force --sign "$wanted" --options runtime --timestamp \
+           --entitlements "$src_tauri/Entitlements.plist" "$app_bundle/Contents/MacOS/richos-companion" || exit 1
   if ! codesign --force --sign "$wanted" --options runtime --timestamp \
                 --entitlements "$src_tauri/Entitlements.plist" "$app_bundle"; then
     warn ""

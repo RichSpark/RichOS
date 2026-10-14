@@ -2,33 +2,61 @@ import Foundation
 import RichOSCompanionCore
 
 /// The live capture loop: wire the Core Audio engine to the SessionWriter, run a 10 Hz mix pump and
-/// a 1 Hz health tick + watchdog, and finalize cleanly on Ctrl-C. This is the outside-the-browser
-/// watchdog made real (§6.3) — it holds its own timer and alarms on stalls the capture can't hide.
+/// a 1 Hz health tick + watchdog, and finalize cleanly on SIGINT (or SIGTERM). This is the
+/// outside-the-browser watchdog made real (§6.3) — it holds its own timer and alarms on stalls the
+/// capture can't hide.
+///
+/// ORDER (2026-10-13): the tap is made first and its real sample rate read; only then is the
+/// session written, so the WAV header states the rate the audio was recorded at. A tap that cannot
+/// be made therefore leaves NO session directory: there is nothing recorded to be loud about, and
+/// the failure is reported (stderr, and a `failed` line to the app in `--json` mode).
 @available(macOS 14.4, *)
-func runLiveCapture(zone: String, startedAt: Int64) {
-    // session.json is written at START (§6.1) — a call that captures nothing leaves a loud
-    // open/empty session on disk, never an absence.
-    let params = makeParams(startedAt: startedAt, sampleRate: 48_000)
+func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32], endWithStdin: Bool = false) {
+    // The app that reads our stdout may be gone before we finish (it quit or crashed): a write to
+    // the closed pipe must fail quietly, never end this process before session.json is closed.
+    signal(SIGPIPE, SIG_IGN)
+    let capture = CoreAudioCapture(excludePids: excludePids)
+    capture.onInfo = { Notifier.info($0) }
+    do {
+        try capture.prepare()
+    } catch {
+        let message = "capture failed to start: \(error.localizedDescription). If this is the first run, "
+            + "grant \"System Audio Recording\" and Microphone in System Settings > Privacy & Security, then retry."
+        Notifier.alarm(message)
+        Notifier.event("failed", [("message", .string(message)), ("dir", .null)])
+        exit(1)
+    }
+
+    // session.json is written at START (§6.1) — a call that captures nothing after this point
+    // leaves a loud open/empty session on disk, never an absence.
+    let params = makeParams(startedAt: startedAt, sampleRate: capture.sampleRate)
     let writer = SessionWriter(rootZone: zone, params: params, clock: nowMs)
     do { try writer.start() } catch {
-        Notifier.alarm("could not create the session directory: \(error.localizedDescription)")
+        let message = "could not create the session directory: \(error.localizedDescription)"
+        Notifier.alarm(message)
+        Notifier.event("failed", [("message", .string(message)), ("dir", .null)])
+        capture.stop()
         exit(1)
     }
     let dir = (zone as NSString).appendingPathComponent(params.sessionId)
     Notifier.info("session (open) written: \(dir)")
 
-    let capture = CoreAudioCapture(writer: writer)
     do {
-        try capture.start()
-        Notifier.info("capturing system audio + mic. Press Ctrl-C to stop.")
+        try capture.run(writer: writer)
+        Notifier.info("capturing system audio + mic at \(capture.sampleRate) Hz. Send SIGINT to stop.")
+        Notifier.event("started", [("dir", .string(dir)), ("sessionId", .string(params.sessionId)),
+                                   ("sampleRate", .int(capture.sampleRate))])
     } catch {
         // The open session.json stays on disk as the anomaly; we exit loud, not silent.
-        Notifier.alarm("""
+        let message = """
         capture failed to start: \(error.localizedDescription). \
         If this is the first run, grant "System Audio Recording" and Microphone in \
         System Settings > Privacy & Security, then retry. The open session at \(dir) is the on-disk \
         record that this call was NOT captured.
-        """)
+        """
+        Notifier.alarm(message)
+        Notifier.event("failed", [("message", .string(message)), ("dir", .string(dir))])
+        capture.stop()
         exit(1)
     }
 
@@ -40,9 +68,12 @@ func runLiveCapture(zone: String, startedAt: Int64) {
     pump.setEventHandler { _ = try? writer.pump() }
     pump.resume()
 
-    // 1 Hz health tick + fsync + watchdog escalation.
+    // 1 Hz health tick + fsync + watchdog escalation + RichOS's own speech kept out of the tap.
     var lastBytes = 0
     var stalledSeconds = 0
+    var systemAudioSeen = false
+    var channels = ChannelWatch()
+    var micSilence = MicSilence()
     let health = DispatchSource.makeTimerSource(queue: timerQueue)
     health.schedule(deadline: .now() + 1.0, repeating: 1.0)
     health.setEventHandler {
@@ -51,6 +82,31 @@ func runLiveCapture(zone: String, startedAt: Int64) {
             micPeak: mp, micRms: mr, sysPeak: sp, sysRms: sr,
             tapRunning: capture.tapRunning, micRunning: capture.micRunning)
         try? writer.flush() // durable to disk each second (§6.5)
+        if let change = capture.refreshExclusions() { Notifier.info(change) }
+        // A side that stalls (or comes back) is said once, to stderr and to the app: the byte
+        // watchdog below cannot see it, because the live side keeps the recording growing.
+        let decision = writer.lastDecision
+        for change in channels.update(micDown: (decision?.micStarved ?? false) || !capture.micRunning,
+                                      systemDown: (decision?.systemStarved ?? false) || !capture.tapRunning) {
+            if change.stalled { Notifier.alarm(change.message) } else { Notifier.info(change.message) }
+            Notifier.event("channel", [("channel", .string(change.channel.rawValue)),
+                                       ("stalled", .bool(change.stalled)),
+                                       ("message", .string(change.message))])
+        }
+        // A microphone that delivers exact digital silence: its access is most likely off.
+        if let said = micSilence.update(micPeak: mp, micRunning: capture.micRunning) {
+            let silent = said == MicSilence.silent
+            if silent { Notifier.alarm(said) } else { Notifier.info(said) }
+            Notifier.event("channel", [("channel", .string(CaptureChannel.microphone.rawValue)),
+                                       ("stalled", .bool(silent)),
+                                       ("message", .string(said))])
+        }
+        // Sound arrived through the system tap: the System Audio Recording grant exists (macOS
+        // has no API to ask). Said once; the app may now show the voice bar's live level.
+        if !systemAudioSeen && sp > 0 {
+            systemAudioSeen = true
+            Notifier.event("system-audio", [("flowing", .bool(true))])
+        }
 
         // Watchdog: byte growth is the ground-truth liveness signal (§6.2 "no growth > 15 s").
         let bytes = writer.pumpedBytesTotal
@@ -63,21 +119,43 @@ func runLiveCapture(zone: String, startedAt: Int64) {
     }
     health.resume()
 
-    // Clean finalize on SIGINT: drain, flush, rewrite session.json as closed -> triggers P1.
-    signal(SIGINT, SIG_IGN)
-    let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: timerQueue)
-    sigint.setEventHandler {
-        pump.cancel(); health.cancel()
-        capture.stop()
-        do {
-            try writer.close()
-            Notifier.info("session (closed) written: \(dir) — the P1 watcher will now transcribe it.")
-        } catch {
-            Notifier.alarm("failed to finalize session: \(error.localizedDescription)")
+    // Clean finalize on SIGINT (the app's stop) or SIGTERM: drain, flush, rewrite session.json as
+    // closed -> the pipeline may transcribe it.
+    var sources: [DispatchSourceSignal] = []
+    for sig in [SIGINT, SIGTERM] {
+        signal(sig, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: sig, queue: timerQueue)
+        source.setEventHandler {
+            pump.cancel(); health.cancel()
+            capture.stop()
+            _ = try? writer.pump()
+            do {
+                try writer.close()
+                Notifier.info("session (closed) written: \(dir) — the pipeline may now transcribe it.")
+                Notifier.event("closed", [("dir", .string(dir))])
+                exit(0)
+            } catch {
+                let message = "failed to finalize session: \(error.localizedDescription)"
+                Notifier.alarm(message)
+                Notifier.event("failed", [("message", .string(message)), ("dir", .string(dir))])
+                exit(1)
+            }
         }
-        exit(0)
+        source.resume()
+        sources.append(source)
     }
-    sigint.resume()
 
-    RunLoop.main.run()
+    // --end-with-stdin: the app holds this pipe for as long as the recording runs. When it closes
+    // (Quit, an update's relaunch, a crash: the kernel closes it however the app ends), finish
+    // exactly as on the app's SIGINT. Before this a Quit left the recorder writing with nobody
+    // to stop it (handover review rv-20261013T145354Z-da4ac5cf-c86a #1).
+    if endWithStdin {
+        DispatchQueue.global(qos: .utility).async {
+            while !FileHandle.standardInput.availableData.isEmpty {}
+            Notifier.info("the app that started this recording has closed; finishing the recording")
+            kill(getpid(), SIGINT)
+        }
+    }
+
+    withExtendedLifetime(sources) { RunLoop.main.run() }
 }
