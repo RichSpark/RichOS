@@ -26,7 +26,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   go          "Go." typed; the assignment it registers is followed until it closes (--hire-within).
               PASS needs every proposed teammate saved as <app data>/team/<name>.md, every saved
               one named in what he was told, nobody named to him as a teammate who was not saved,
-              and no Approve card put in front of him along the way. Evidence: go-observed.json.
+              and no Approve card put in front of him along the way, and nothing he was told says
+              the write-up hit a snag or was sent again. Evidence: go-observed.json.
   relaunch    command-walk.py's relaunch: the app stopped by pid and started again; before its
               first read the walk waits for the guest's whisper-cli runs to end (--settle-within)
               and then reads with a longer deadline (--after-relaunch-deadline)
@@ -186,6 +187,18 @@ def hired_verdict(proposed, saved, told):
     if not saved:
         failures.append('nobody was saved in the team folder')
     return failures
+
+
+# What he was told when the hiring write-up did not go through on its first send (nightly 55's
+# walk: "Starting the step that writes up Will and Beth hit a technical snag on my end. I'm sending
+# it again in a shorter form."). The CEO, 2026-10-14: the write-up must not fail its first send.
+RETRY_TOLD = re.compile(r'\bsnag\b|\bhiccup\b|\bglitch\b|technical (?:issue|problem|difficult)'
+                        r'|sending it again|send(?:ing)? it again|in a shorter form', re.I)
+
+
+def first_send_verdict(told):
+    """The sentences that tell him the write-up was retried ([] = it went through the first time)."""
+    return [m.group(0) for m in RETRY_TOLD.finditer(told or '')]
 
 
 def fitting_teammate(hired, definitions):
@@ -433,6 +446,9 @@ class HireWalk(command_walk.CommandWalk):
         if still:
             raise StepFailed(f"the hiring was still {still} after {self.a.hire_within:g} s")
         failures = hired_verdict(proposed, saved, '\n'.join(told))
+        retried = first_send_verdict('\n'.join(told))
+        if retried:
+            failures.append(f'he was told the write-up was retried: {retried}')
         # Counted here and judged in `approvals`, the last step, so one card does not hide whether
         # relaunch, roster and delegation work.
         self.facts['approvals_go'] = pressed[0]

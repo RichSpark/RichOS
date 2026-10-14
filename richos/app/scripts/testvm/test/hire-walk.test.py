@@ -62,6 +62,14 @@ class Verdicts(unittest.TestCase):
             failures = hire_walk.hired_verdict(['will'], ['will'], told)
             self.assertTrue(any('Bea' in f for f in failures), (told, failures))
 
+    def test_a_write_up_retried_after_a_snag_fails_and_a_first_send_passes(self):
+        # Nightly 55's walk: what he was told while the write-up was sent a second time.
+        told = ('Starting the step that writes up Will and Beth hit a technical snag on my end. '
+                "I'm sending it again in a shorter form.")
+        self.assertTrue(hire_walk.first_send_verdict(told))
+        self.assertEqual(hire_walk.first_send_verdict(
+            'Will (Marketing Director) and Beth (Bookkeeper) joined the team.'), [])
+
     def test_an_honest_report_of_what_was_saved_passes(self):
         for told in ['Will (Marketing Director) and Penny (Bookkeeper) joined the team.',
                      '**Will** (Marketing Director) and **Penny** (Bookkeeper) are now on your team. '
