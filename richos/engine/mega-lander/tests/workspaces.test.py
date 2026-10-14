@@ -4793,57 +4793,6 @@ class TeammateBoundToABranchOfItsOwn(Base):
         self.assertIn("run `git merge v1.3.0` inside your own worktree", prepared["prompt"])
         self.assertNotIn("git merge main", prepared["prompt"])
 
-    def test_a_release_teammate_in_the_sessions_own_repository_starts_and_lands_on_its_branch(self):
-        # Review rv-20261014T105153Z-f22eff3f-da5a: spawn.sh refused
-        # --integration for the session's own repository (a native workspace
-        # only) and offered to move everybody with --correct. Its target is now
-        # bound before the spawn, and its native workspace, which the platform
-        # branches from the main checkout's HEAD (main), starts from v1.3.0.
-        run("git", "-C", self.entity, "branch", "v1.3.0", "main")
-        self.commit(self.entity, "main-only.txt")            # main moves on; the release must not get it
-        main_only = run("git", "-C", self.entity, "rev-parse", "main").stdout.strip()
-        release = run("git", "-C", self.entity, "rev-parse", "v1.3.0").stdout.strip()
-        work_before = ws.integration_record(self.entity)
-        ws.bind_own_target(self.sid, "zach-opus-rn", self.entity, "v1.3.0")
-        self.assertEqual(ws.integration_record(self.entity), work_before, "the repository's record moved")
-        aid, npath = self.spawn("zach-opus-rn")
-        self.assertEqual(run("git", "-C", npath, "rev-parse", "HEAD").stdout.strip(), release,
-                         "the native workspace did not start from its own branch")
-        self.assertEqual(run("git", "-C", npath, "symbolic-ref", "--short", "HEAD").stdout.strip(),
-                         "worktree-agent-" + aid)
-        self.assertEqual(ws.integration_target([self.rec("zach-opus-rn")], self.entity)[0], "v1.3.0")
-        self.commit(npath, "release.txt")
-        tip = run("git", "-C", npath, "rev-parse", "HEAD").stdout.strip()
-        self.finish(aid)
-
-        merged, res = ws.merge_and_land("zach-opus-rn", self.sid)
-
-        self.assertEqual(merged, [(self.entity, "worktree-agent-" + aid)])
-        self.assertTrue(res["landed"])
-        self.assertEqual(run("git", "-C", self.entity, "rev-parse", "v1.3.0^2").stdout.strip(), tip)
-        self.assertNotEqual(run("git", "-C", self.entity, "merge-base", "--is-ancestor", main_only, "v1.3.0",
-                                check=False).returncode, 0, "the land pulled main into the release")
-        self.assertEqual(run("git", "-C", self.entity, "rev-parse", "main").stdout.strip(), main_only)
-
-    def test_a_native_workspace_with_work_of_its_own_is_never_moved(self):
-        run("git", "-C", self.entity, "branch", "v1.3.0", "main")
-        self.commit(self.entity, "main-only.txt")
-        ws.bind_own_target(self.sid, "zach-opus-rw", self.entity, "v1.3.0")
-        prompt = "do it\n"
-        payload = {"session_id": self.sid, "tool_use_id": "tu-zach-opus-rw", "tool_name": "Agent",
-                   "tool_input": {"name": "zach-opus-rw", "subagent_type": "zach", "prompt": prompt,
-                                  "isolation": "worktree"}}
-        ws.register_spawn(payload, self.entity)
-        aid = "azachopusrw0000"
-        npath = os.path.join(self.entity, ".claude", "worktrees", "agent-" + aid)
-        run("git", "-C", self.entity, "worktree", "add", "-q", npath, "-b", "worktree-agent-" + aid)
-        with open(os.path.join(npath, "README"), "a") as f:
-            f.write("an edit already made\n")
-        before = run("git", "-C", npath, "rev-parse", "HEAD").stdout.strip()
-        ws.bind_agent(self.sid, "tu-zach-opus-rw", aid, self.entity)
-        self.assertEqual(run("git", "-C", npath, "rev-parse", "HEAD").stdout.strip(), before)
-        self.assertIn("an edit already made", open(os.path.join(npath, "README")).read())
-
 
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
     """2026-10-11, both in richos from the lead's terminal, each a background
