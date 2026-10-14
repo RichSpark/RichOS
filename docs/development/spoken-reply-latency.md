@@ -25,7 +25,7 @@ optimizing a 1.38-second synthesis as the main problem. Restore responsive conve
   actually run before the first user utterance. Otherwise the first reply pays startup.
 
 Evidence and exact identities: [the investigation record](../verification/2026-10-14-spoken-reply-delay.md)
-and the follow-up record `2026-10-14-instant-replies.md` when its final app proof is recorded.
+and [the follow-up record](../verification/2026-10-14-instant-replies.md).
 The retained raw evidence is outside disposable scratch under the external SSD's
 `richos-evidence` directories. Preserve failed attempts and distinguish VM and physical-host
 measurements. These observations do not promise a fixed network latency on every request.
@@ -40,9 +40,11 @@ removed on success and failure; none becomes a conversation turn. Use the produc
 thread count and decoder flags. Do not weaken recognition or turn-taking to hide a wait.
 
 Conversation replies use low effort, as authorized on October 14. Background work keeps
-high effort. Model choices remain the choices saved by the user. Test any further thinking
-preference against the installed provider and preserve the app's complete existing settings,
-including permission boundaries. A test launcher that overwrites them is invalid evidence.
+high effort. Keep Opus thinking enabled. The user rejected disabling thinking as a latency
+fix on October 14: fast replies still need to be capable. No app-level benefit from disabling
+thinking was measured. Model choices remain the choices saved by the user. Preserve the
+app's complete existing settings, including permission boundaries. A test launcher that
+overwrites them is invalid evidence.
 
 Keep the agreed two-second end-of-turn silence and all fragment assembly and barge-in rules.
 An answer spoken over an unfinished thought is a failure, even if it is quick. Do not add

@@ -74,13 +74,14 @@ TESTVM_DISPLAY="${TESTVM_DISPLAY:-1680x1050}"
 # swap-out. A real walk (spelling-walk: first run, then a real model turn) at
 # 5120 MB peaked at 3218 MB Memory Used (app 102 MB, claude 698 MB in all),
 # with ZERO guest swap-outs and a 70 s boot (68 s at 7 GB). 5120 is that peak
-# plus 1.9 GB: room for a second claude worker (about 260 MB each, measured)
-# and the rest. At 7 GB the same guest used 3.4-4.1 GB only because macOS
-# spreads out when it has room. Two 5 GB guests need 58% of this Mac available
-# (slots.py's memory admission adds a 4 GB floor), which it usually is.
+# plus 1.9 GB. At 7 GB the same guest used 3.4-4.1 GB only because macOS
+# spreads out when it has room.
+# 4096 IS THE DEFAULT SINCE 2026-10-14: a full 12-step voice walk (the heaviest
+# walk: app, voice and speech recognition) passed in a 4096 MB guest. A smaller
+# guest lets two run side by side, with slots.py's 4,096 MB memory floor kept.
 # tart's defaults (whatever the image baked) are not trusted.
 TESTVM_CPU="${TESTVM_CPU:-4}"
-TESTVM_RAM_MB="${TESTVM_RAM_MB:-5120}"
+TESTVM_RAM_MB="${TESTVM_RAM_MB:-4096}"
 
 # The guest account the app runs as. It must be the console (auto-login) user:
 # a window only exists inside the GUI session, and screencapture over ssh can
