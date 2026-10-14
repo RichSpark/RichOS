@@ -64,7 +64,7 @@ StepFailed = adopt_walk.StepFailed
 command = adopt_walk.command
 
 STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'rich-voice', 'heard',
-         'spoken']
+         'spoken', 'split']
 # Rich's voice (CEO 2026-10-14, "Pocket TTS: Peter Yearsley"). Not in the default run: the two steps
 # download 166 MB into the guest and wait for a spoken answer. Ask for them with --steps.
 DEFAULT_STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'heard']
@@ -126,6 +126,65 @@ def talk_timing(lines):
     return {'last_word_end_ms': last_end, 'turn_end_ms': turn_end, 'audible_ms': audible,
             'turn_end_to_audible_ms': gap(turn_end, audible), 'last_word_to_audible_ms': gap(last_end, audible),
             'spoke_before_done': spoke_before_done}
+
+
+DAY_MS = 86_400_000
+
+
+def reply_split(voice_lines, ledger_rows, machinery_rows):
+    """Where the time between his turn being handed over and Rich being heard went, for the first
+    spoken turn (CEO 2026-10-14: "From barge in to a 10-second delay now?").
+
+    Each moment is in ms of the UTC day, the clock the [richos-voice] lines print; the ledger's and
+    the machinery journal's epoch-ms `at` are folded onto it. A moment the sources do not hold is
+    None, never guessed.
+
+      turn_handed_over   controller.rs `TURN to Rich`
+      prompt_received    the ledger's PromptReceived (source jam): his words are durable
+      turn_started       the ledger's TurnStarted: the spine is delivering
+      hidden_first/last  the turn's INTERNAL machinery (a context-only priming turn sent before
+                         his words: native.rs supply_context_brief), first and last record
+      model_first_frame  the first non-internal machinery record of the turn: his words reached
+                         the model (`system/init` arrives as the prompt is taken)
+      first_text         the first AssistantDelta: the model's first word of the answer
+      first_sentence     `ANSWER AUDIBLE`: the first complete sentence went to the voice
+      speech_started     the first `playout chunk START` after it: the first sample played"""
+    def voice(marker, after=None):
+        for line in voice_lines:
+            if marker in line:
+                at = _stamp_ms(line)
+                if at is not None and (after is None or at >= after):
+                    return at
+        return None
+
+    fold = lambda at: at % DAY_MS if isinstance(at, int) else None
+    prompt = next((r for r in ledger_rows if r.get('event') == 'PromptReceived' and r.get('source') == 'jam'
+                   and (r.get('text') or '').strip()), None)
+    turn = prompt.get('turn_id') if prompt else None
+    started = next((r for r in ledger_rows if r.get('event') == 'TurnStarted' and r.get('turn_id') == turn), None)
+    first_delta = next((r for r in ledger_rows if r.get('event') == 'AssistantDelta' and r.get('turn_id') == turn), None)
+    mine = [r for r in machinery_rows if r.get('turnId') == turn and isinstance(r.get('at'), int)]
+    hidden = sorted(r['at'] for r in mine if r.get('internal'))
+    shown = sorted(r['at'] for r in mine if not r.get('internal'))
+    sentence = voice('ANSWER AUDIBLE')
+    moments = {
+        'turn_handed_over': voice('TURN to Rich'),
+        'prompt_received': fold(prompt.get('at')) if prompt else None,
+        'turn_started': fold(started.get('at')) if started else None,
+        'hidden_first': fold(hidden[0]) if hidden else None,
+        'hidden_last': fold(hidden[-1]) if hidden else None,
+        'model_first_frame': fold(shown[0]) if shown else None,
+        'first_text': fold(first_delta.get('at')) if first_delta else None,
+        'first_sentence': sentence,
+        'speech_started': voice('playout chunk START', after=sentence) if sentence is not None else None,
+    }
+    order = list(moments)
+    gaps = {}
+    for a, b in zip(order, order[1:]):
+        gaps[f'{a}->{b}'] = (moments[b] - moments[a]) if moments[a] is not None and moments[b] is not None else None
+    start, end = moments['turn_handed_over'], moments['speech_started']
+    return {'turn_id': turn, 'moments_ms_of_day': moments, 'gaps_ms': gaps, 'hidden_records': len(hidden),
+            'total_ms': (end - start) if start is not None and end is not None else None}
 
 
 def one_turn_problem(texts, words):
@@ -342,6 +401,27 @@ class VoiceWalk(adopt_walk.Walk):
                         'timing': timing}
             time.sleep(2)
         raise StepFailed(f'Rich spoke no sentence within {self.a.within} s; voice log:\n' + '\n'.join(lines))
+
+    def split(self):
+        """After `spoken`: the app log, the ledger and the machinery journal are copied out of the
+        guest into OUT/guest/, and reply_split() says where the seconds between his turn and Rich's
+        first sample went (reply-split.json)."""
+        kept = self.out / 'guest'
+        kept.mkdir(parents=True, exist_ok=True)
+        for source in (self.log, self.data + '/conversation-ledger.jsonl', self.data + '/machinery'):
+            command([HERE / 'guest.sh', self.vm, '--pull', source, str(kept)], 300)
+        voice_lines = [l for l in (kept / Path(self.log).name).read_text(errors='replace').splitlines()
+                       if '[richos-voice]' in l]
+        ledger = [json.loads(l) for l in (kept / 'conversation-ledger.jsonl').read_text().splitlines() if l.strip()]
+        machinery = []
+        for shard in sorted((kept / 'machinery').glob('*/*.jsonl')):
+            if not shard.name.endswith('.raw.jsonl'):
+                machinery += [json.loads(l) for l in shard.read_text().splitlines() if l.strip()]
+        result = reply_split(voice_lines, ledger, machinery)
+        (self.out / 'reply-split.json').write_text(json.dumps(result, indent=2) + '\n')
+        if result['total_ms'] is None:
+            raise StepFailed('the split is missing a moment: ' + json.dumps(result['moments_ms_of_day']))
+        return result
 
     def ax(self, mode, *args, app=None, timeout=40):
         """adopt-walk's ax(), with a READ that hit ax.sh's guest deadline asked again, up to three

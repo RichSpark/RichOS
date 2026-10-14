@@ -250,5 +250,47 @@ class AFindIsAskedAgainAClickIsNot(unittest.TestCase):
         self.assertEqual(base.call_count, 1)
 
 
+class ReplySplit(unittest.TestCase):
+    """Where the seconds between his turn and Rich's first sample go (CEO 2026-10-14)."""
+    DAY = 1791936000000  # 2026-10-14T00:00:00Z
+    VOICE = [
+        '[richos-voice] 04:22:07.178Z TURN to Rich — his turn is over: 3 fragment(s)',
+        '[richos-voice] 04:22:15.892Z ANSWER AUDIBLE — half-duplex window OPEN',
+        '[richos-voice] 04:22:16.688Z playout chunk START — 3.739 s queued',
+    ]
+
+    def at(self, clock):
+        h, m, s = clock.split(':')
+        return self.DAY + ((int(h) * 60 + int(m)) * 60) * 1000 + round(float(s) * 1000)
+
+    def test_every_moment_and_gap_is_read_from_its_own_source(self):
+        ledger = [{'event': 'PromptReceived', 'source': 'internal', 'text': '[re-prime]', 'turn_id': 'p', 'at': 1},
+                  {'event': 'PromptReceived', 'source': 'jam', 'text': 'Our company', 'turn_id': 't',
+                   'at': self.at('04:22:07.179')},
+                  {'event': 'TurnStarted', 'turn_id': 't', 'at': self.at('04:22:07.200')},
+                  {'event': 'AssistantDelta', 'turn_id': 't', 'text': 'Hi', 'at': self.at('04:22:14.900')}]
+        machinery = [{'turnId': 't', 'internal': True, 'at': self.at('04:22:08.500')},
+                     {'turnId': 't', 'internal': True, 'at': self.at('04:22:11.000')},
+                     {'turnId': 't', 'internal': False, 'at': self.at('04:22:11.100')},
+                     {'turnId': 'p', 'internal': True, 'at': 2}]
+        split = walk.reply_split(self.VOICE, ledger, machinery)
+        self.assertEqual(split['turn_id'], 't')
+        self.assertEqual(split['hidden_records'], 2)
+        self.assertEqual(split['gaps_ms'], {
+            'turn_handed_over->prompt_received': 1, 'prompt_received->turn_started': 21,
+            'turn_started->hidden_first': 1300, 'hidden_first->hidden_last': 2500,
+            'hidden_last->model_first_frame': 100, 'model_first_frame->first_text': 3800,
+            'first_text->first_sentence': 992, 'first_sentence->speech_started': 796})
+        self.assertEqual(split['total_ms'], 9510)
+
+    def test_a_moment_the_sources_do_not_hold_is_none_never_guessed(self):
+        ledger = [{'event': 'PromptReceived', 'source': 'jam', 'text': 'Our company', 'turn_id': 't',
+                   'at': self.at('04:22:07.179')}]
+        split = walk.reply_split(self.VOICE, ledger, [])
+        self.assertIsNone(split['moments_ms_of_day']['hidden_first'])
+        self.assertIsNone(split['gaps_ms']['turn_started->hidden_first'])
+        self.assertEqual(split['total_ms'], 9510)
+
+
 if __name__ == '__main__':
     unittest.main()
