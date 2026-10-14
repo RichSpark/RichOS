@@ -85,7 +85,13 @@
 #                                    A ZIP named without --engine removes engine.noindex, so
 #                                    that build boots its own pin, never an earlier build's
 #                                    engine.
-#   RICHOS_CLAUDE_BIN=               explicit and exclusive (setup.rs `find_claude`); the
+#   RICHOS_UPDATE_ENDPOINT=          EMPTY (the build's own channel), unless the folder boots
+#                                    engine.noindex/: then the committed placeholder
+#                                    (updates.rs, `PLACEHOLDER_ENDPOINT_HOST`), so the app
+#                                    offers no update. RICHOS_ENGINE_DIR lives through an
+#                                    in-app update, and the updated app would boot this test
+#                                    engine instead of its own pin.
+#   RICHOS_CLAUDE_BIN=              explicit and exclusive (setup.rs `find_claude`); the
 #                                    folder's own link below is what the app should find.
 #
 #   TMPDIR=<home>/tmp/               the app's own temporary files stay in the folder.
@@ -279,7 +285,7 @@ status_one() {  # <slot>
     fi
   fi
   if [ -f "$folder/engine.noindex/VERSION" ]; then
-    say "  engine: $folder/engine.noindex (RICHOS_ENGINE_DIR; VERSION $(head -1 "$folder/engine.noindex/VERSION"))"
+    say "  engine: $folder/engine.noindex (RICHOS_ENGINE_DIR; VERSION $(head -1 "$folder/engine.noindex/VERSION"); updates off)"
   fi
   if [ -d "$folder/home.noindex/Library/Application Support/RichOS/corpus" ]; then
     say "  note: the app provisioned its own memory at .../RichOS/corpus, which outranks the pointer above"
@@ -475,7 +481,14 @@ elif [ "$AGAIN" -eq 0 ] && [ -e "$ENGINE_DIR" ]; then
   say "removed $ENGINE_DIR: no --engine was given, so the app boots the engine its own build pins."
 fi
 ENGINE_ENV="RICHOS_ENGINE_DIR="
-[ -f "$ENGINE_DIR/VERSION" ] && ENGINE_ENV="RICHOS_ENGINE_DIR=$ENGINE_DIR"
+UPDATE_ENV="RICHOS_UPDATE_ENDPOINT="
+if [ -f "$ENGINE_DIR/VERSION" ]; then
+  ENGINE_ENV="RICHOS_ENGINE_DIR=$ENGINE_DIR"
+  # No updates while a test engine boots: the override would outlive the update, and the
+  # updated app would boot this engine instead of its own pin. The placeholder host reads as
+  # "unconfigured" in the app (updates.rs), so it checks nothing and offers nothing.
+  UPDATE_ENV="RICHOS_UPDATE_ENDPOINT=https://updates.richos.invalid/latest.json"
+fi
 
 # ---------------------------------------------------------------------------------------
 # The folder's home: the three sign-in links, the copy, and claude
@@ -562,6 +575,7 @@ LAUNCH_ENV+=("${SETTINGS_ENV[@]+"${SETTINGS_ENV[@]}"}")
   --env "LORO_CORPUS=" \
   --env "LORO_ROOT=" \
   --env "$ENGINE_ENV" \
+  --env "$UPDATE_ENV" \
   --env "RICHOS_ENGINE_ROOT=" \
   --env "RICHOS_CLAUDE_BIN=" \
   --stdout "$LOG" --stderr "$LOG" \
@@ -584,4 +598,4 @@ say "slot=$SLOT version=$VERSION commit=${COMMIT:-unknown} pid=$PID"
 say "folder=$FOLDER"
 say "home=$NHOME"
 say "log=$LOG"
-[ "$ENGINE_ENV" = "RICHOS_ENGINE_DIR=" ] || say "engine=$ENGINE_DIR"
+[ "$ENGINE_ENV" = "RICHOS_ENGINE_DIR=" ] || say "engine=$ENGINE_DIR (updates off; a ZIP started without --engine turns them back on)"

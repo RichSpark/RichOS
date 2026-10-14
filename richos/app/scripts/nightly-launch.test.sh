@@ -169,7 +169,7 @@ if [ "$(sed -n 1p "$A")" = "-n" ] && [ "$(sed -n 2p "$A")" = "-a" ] && [ "$(sed 
 else bad "L1 opens a NEW instance of the folder's own app" "$(head -3 "$A")"; fi
 ENV_OK=1
 for want in "HOME=$F/home.noindex" "CFFIXED_USER_HOME=$F/home.noindex" "TMPDIR=$F/home.noindex/tmp/" "RICHOS_ACTIVATION=regular" "DISABLE_AUTOUPDATER=1" \
-            "LORO_CORPUS=" "LORO_ROOT=" "RICHOS_ENGINE_DIR=" "RICHOS_ENGINE_ROOT=" "RICHOS_CLAUDE_BIN="; do
+            "LORO_CORPUS=" "LORO_ROOT=" "RICHOS_ENGINE_DIR=" "RICHOS_ENGINE_ROOT=" "RICHOS_CLAUDE_BIN=" "RICHOS_UPDATE_ENDPOINT="; do
   grep -qxF -- "$want" "$A" || { ENV_OK=0; bad "L1 the app is started with $want" "$(tr '\n' ' ' < "$A")"; }
 done
 [ "$ENV_OK" = 1 ] && ok "L1 HOME and CFFIXED_USER_HOME are the folder's home; activation regular; claude pinned; LORO_* and the engine overrides are EMPTY"
@@ -453,11 +453,15 @@ if [ "$RC" -eq 0 ] && [ -d "$F/engine.noindex/scripts/hooks" ] && [ -f "$F/engin
   ok "L15 folder c unpacks the engine (one level stripped) and starts the app with RICHOS_ENGINE_DIR naming it"
 else bad "L15 folder c with --engine" "exit $RC: $OUT / $(tr '\n' ' ' < "$A" 2>&1)"; fi
 if [ ! -e "$F/memory" ]; then ok "L15 folder c is a newborn: no memory folder"; else bad "L15 folder c is a newborn" "$(ls -la "$F")"; fi
+NO_UPDATES="RICHOS_UPDATE_ENDPOINT=https://updates.richos.invalid/latest.json"
+if grep -qxF -- "$NO_UPDATES" "$A" && grep -q "updates off" <<<"$OUT"; then
+  ok "L15c with a test engine the app gets the placeholder update endpoint, so no update can carry the engine into a newer build"
+else bad "L15c a test engine turns updates off" "$OUT / $(grep RICHOS_UPDATE "$A" 2>&1)"; fi
 quit_app "$H"
 run "$H" c --again
-if [ "$RC" -eq 0 ] && grep -qx "RICHOS_ENGINE_DIR=$F/engine.noindex" "$A"; then
-  ok "L15 --again boots the engine the folder holds"
-else bad "L15 --again keeps the engine" "exit $RC: $OUT"; fi
+if [ "$RC" -eq 0 ] && grep -qx "RICHOS_ENGINE_DIR=$F/engine.noindex" "$A" && grep -qxF -- "$NO_UPDATES" "$A"; then
+  ok "L15 --again boots the engine the folder holds, still with updates off"
+else bad "L15 --again keeps the engine and updates off" "exit $RC: $OUT"; fi
 quit_app "$H"
 run "$H" status
 if grep -q "engine: $F/engine.noindex" <<<"$OUT"; then ok "L15 status names folder c's engine"; else bad "L15 status names the engine" "$OUT"; fi
@@ -466,8 +470,9 @@ tmp_clean "L15 the launcher's scratch is gone"
 # L15b — replacing folder c's build without --engine drops the earlier build's engine
 run "$H" c "$ZIPS/v2.zip" --replace
 if [ "$RC" -eq 0 ] && [ ! -e "$F/engine.noindex" ] && grep -qx "RICHOS_ENGINE_DIR=" "$A" \
+   && grep -qx "RICHOS_UPDATE_ENDPOINT=" "$A" \
    && grep -qx 'version=1.2.0-nightly.20260924.1' "$F/nightly-launch.txt"; then
-  ok "L15b a ZIP without --engine removes engine.noindex, so the replacement boots its own pin"
+  ok "L15b a ZIP without --engine removes engine.noindex, so the replacement boots its own pin and updates from its own channel"
 else bad "L15b replacement without --engine boots its own pin" "exit $RC: $OUT / $(tr '\n' ' ' < "$A" 2>&1)"; fi
 tmp_clean "L15b the launcher's scratch is gone"
 
