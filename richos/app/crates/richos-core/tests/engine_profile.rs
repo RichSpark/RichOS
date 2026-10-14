@@ -671,10 +671,31 @@ fn each_role_keeps_its_model_with_low_effort_for_replies_and_high_for_work() {
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_opus, "Rich's default");
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_opus, "Stu's default");
 
+    // Product command composition preserves the complete app policy in ONE settings value.
+    let settings = |command: &std::process::Command| {
+        let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy().to_string()).collect();
+        let values: Vec<_> = args.windows(2).filter(|pair| pair[0] == "--settings").collect();
+        assert_eq!(values.len(), 1, "duplicate settings could replace the app's permission policy");
+        serde_json::from_str::<serde_json::Value>(&values[0][1]).unwrap()
+    };
+    let mut standard = std::process::Command::new("claude");
+    profile.configure(&mut standard, Path::new("/provider"), "session", &f.0);
+    let original = settings(&standard);
+    for role in [LeaseRole::Conversation, LeaseRole::Work] {
+        let mut command = std::process::Command::new("claude");
+        profile.configure_for_role(&mut command, Path::new("/provider"), "session", &f.0, role);
+        let mut actual = settings(&command);
+        if role == LeaseRole::Conversation { assert_eq!(actual.as_object_mut().unwrap().remove("alwaysThinkingEnabled"), Some(serde_json::json!(false))); }
+        assert_eq!(actual, original, "all permissions, isolation and classifier settings must be retained");
+    }
+
     // Rich switched to Fable; Stu stays on Opus. Read at the next spawn's `prepare`.
     ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Fable).unwrap();
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_fable, "Rich set to Fable");
+    let mut fable_command = std::process::Command::new("claude");
+    profile.configure_for_role(&mut fable_command, Path::new("/provider"), "session", &f.0, LeaseRole::Conversation);
+    assert!(settings(&fable_command).get("alwaysThinkingEnabled").is_none(), "the optional Fable model retains its supported default thinking behavior");
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_opus, "Stu was not switched");
 
     // Both on Fable.
