@@ -36,7 +36,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   delegate    "Please ask <first hired> for three subject lines ..." typed; PASS needs a back-end
               dispatch receipt for THIS task's obligation naming that teammate, whose run handed back
               an answer (consult_answer, set from the run's own hand-back or stop), and the task
-              closed settled with a result he was told. Evidence: delegate-observed.json.
+              closed settled with a result he was told. Evidence: delegate-observed.json, and
+              whatever the verdict delegate-ledger.json (the conversation from the send on) and
+              delegate-1-before/2-sent/3-end.png.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
@@ -291,6 +293,13 @@ class HireWalk(command_walk.CommandWalk):
                 raise
             return False
 
+    def evidence_shot(self, name):
+        """A screenshot kept as evidence only: a shot that fails is recorded, never the step's verdict."""
+        try:
+            self.shot(name)
+        except (StepFailed, subprocess.TimeoutExpired) as exc:
+            (self.out / (name + '.failed.txt')).write_text(str(exc) + '\n')
+
     def ledger(self):
         text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
         rows = []
@@ -462,9 +471,18 @@ class HireWalk(command_walk.CommandWalk):
         if not hired:
             raise StepFailed('go must have run (nobody hired on record)')
         name = hired[0]
+        # The screen and the conversation around the message, kept whatever the verdict: the walk
+        # of main 0a2ae649f (ray-opus-final55) found no task after this send and a post-relaunch
+        # log silent for 15 minutes, and nothing showed whether the message ever left the composer.
+        self.evidence_shot('delegate-1-before.png')
         sent = self.send(DELEGATE_TASK.format(Name=name.capitalize()))
+        time.sleep(5)
+        self.evidence_shot('delegate-2-sent.png')
         pressed = [0]
         record = self.settled_read(self.until_closed(lambda: self.ours(sent), self.a.within, pressed))
+        self.evidence_shot('delegate-3-end.png')
+        since = [r for r in self.ledger() if r.get('at', 0) >= sent[0] - 1000]
+        (self.out / 'delegate-ledger.json').write_text(json.dumps(since, indent=2) + '\n')
         receipts = self.receipts()
         self.facts['approvals_delegate'] = pressed[0]
         self.save()

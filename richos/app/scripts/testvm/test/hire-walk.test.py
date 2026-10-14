@@ -119,5 +119,19 @@ class ReadTimeout(unittest.TestCase):
         self.assertEqual(hire_walk.read_timeout(120, 20), 120)
 
 
+class EvidenceShot(unittest.TestCase):
+    def test_a_failed_evidence_shot_is_recorded_and_never_the_verdict(self):
+        import tempfile
+        walk = hire_walk.HireWalk.__new__(hire_walk.HireWalk)
+        with tempfile.TemporaryDirectory() as out:
+            walk.out = Path(out)
+
+            def black(name):
+                raise hire_walk.StepFailed('black frame')
+            walk.shot = black
+            walk.evidence_shot('delegate-2-sent.png')
+            self.assertIn('black frame', (Path(out) / 'delegate-2-sent.png.failed.txt').read_text())
+
+
 if __name__ == '__main__':
     unittest.main()
