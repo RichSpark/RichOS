@@ -663,10 +663,27 @@ fn still_current(root: &Path, doc: &corpus::Document) -> bool {
     std::fs::read(&path).map(|bytes| corpus::content_hash(&bytes) == doc.hash).unwrap_or(false)
 }
 
+/// The heading a result shows with its passage: the nearest heading, and, when an outer heading
+/// it sits under holds a quoted span or a word of the query, the path from the outermost such
+/// heading down to it ("Refunds within 30 days › Final decision"). Ranking matches the whole
+/// heading path ([`rank::best_passage`]), so the words that chose the passage are in what the
+/// palette and Rich are given (rv-20261014T110606Z-1e6b535c-f031 #2: only "Final decision" was
+/// shown, and the quoted "30 days" was nowhere in the result).
+fn shown_heading(doc: &corpus::Document, p: usize, parsed: &ParsedQuery) -> String {
+    let passage = &doc.passages[p];
+    let Some(folded) = doc.folded_passages.get(p) else { return passage.heading.clone() };
+    let outer = passage.headings.len().saturating_sub(1);
+    let matches = |f: &String| parsed.spans.iter().any(|s| crate::text::has_span(f, s)) || parsed.words.iter().any(|w| crate::text::has_word(f, w));
+    match folded.iter().take(outer).position(matches) {
+        Some(first) => passage.headings[first..].join(" › "),
+        None => passage.heading.clone(),
+    }
+}
+
 fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery) -> DocHit {
     let p = rank::best_passage(doc, parsed, row.semantic_passage);
     let (heading, text, line) = match doc.passages.get(p) {
-        Some(passage) => (passage.heading.clone(), passage.text(&doc.text).to_string(), passage.line),
+        Some(passage) => (shown_heading(doc, p, parsed), passage.text(&doc.text).to_string(), passage.line),
         None => (String::new(), String::new(), 1),
     };
     let text: String = if text.chars().count() > MAX_PASSAGE_CHARS { text.chars().take(MAX_PASSAGE_CHARS).collect::<String>() + "…" } else { text };
