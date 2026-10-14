@@ -412,6 +412,32 @@ for case in "zach-sonnet-relrec1:" "zach-sonnet-relrec2:$GADGETS=rel"; do
     fi
 done
 
+# Review rv-20261014T105153Z-f22eff3f-da5a, P2: --integration for the session's
+# OWN repository (a native workspace only) was refused, and the remedy offered
+# was moving every teammate there with --correct. Its target is bound to it.
+git -C "$PROJECT" branch rel "$(git -C "$PROJECT" commit-tree -p main -m "rel only" "main^{tree}")"
+run "zach-sonnet-relown1" --repo "$PROJECT" --type zach --brief "$BRIEF" --integration "$PROJECT=rel"
+OWNCHECK="$(python3 - "$RICHOS_WORKSPACES_DIR" "$PROJECT" <<'PY'
+import glob, json, os, sys
+d, project = sys.argv[1], os.path.realpath(sys.argv[2])
+integ = json.load(open(os.path.join(d, "integration.json")))
+cur = integ["works"][integ["current"][project]]["branch"]
+recs = [json.load(open(p)) for p in glob.glob(os.path.join(d, "agents", "*zach-sonnet-relown1.json"))]
+mine = integ["works"][recs[0]["integration_work"][project]]["branch"] if recs else "no-registration"
+print("%s %s" % (cur, mine))
+PY
+)"
+if [ "$RC" -eq 0 ] && [ "$OWNCHECK" = "main rel" ] && ! printf '%s' "$OUT" | grep -qF -- "--correct"; then
+    ok "--integration for the session's own repository binds that teammate alone; nobody else moves"
+else
+    bad "--integration for the session's own repository is carried, not refused" "rc=$RC check='$OWNCHECK' $OUT"
+fi
+if printf '%s' "$OUT" | grep -qF "git merge rel" && ! printf '%s' "$OUT" | grep -qF "git merge main"; then
+    ok "and its last step merges rel, never main"
+else
+    bad "the last step names the teammate's own branch in the session's repository" "$OUT"
+fi
+
 run "zach-sonnet-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qi "already"; then
     ok "a REUSED name is refused before anything is created"

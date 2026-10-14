@@ -1348,6 +1348,41 @@ def teammate_body_of_work(repo, branch, why="", by_session=""):
     return rec
 
 
+def bind_own_target(session_id, name, repo, branch):
+    """A BRANCH OF ITS OWN IN THE SESSION'S OWN REPOSITORY (2026-10-14).
+
+    There the teammate works only in its native workspace, which has no cc/
+    registration (register_cc) to carry `branch`, so spawn.sh refused it and
+    offered to move every teammate there with --correct (review
+    rv-20261014T105153Z-f22eff3f-da5a). This registers the teammate before its
+    spawn with its own body of work (teammate_body_of_work) for `repo`;
+    register_spawn keeps that binding, and the native workspace is moved onto
+    `branch` when the agent starts (_seat_native). Nobody else moves."""
+    if not session_id:
+        raise SpecError("no session id: a registration without one can never be matched to a spawn")
+    if not NAME_RE.match(name or ""):
+        raise SpecError("%r is not a usable agent name" % name)
+    main = main_checkout(repo)
+    if not main:
+        raise SpecError("the repository %s could not be resolved from git" % repo)
+    ident = identity_for(session_id)
+    if not ident:
+        raise SpecError("the session's process identity could not be read from the operating system, "
+                        "so its end could never be told (point 12); registration refused")
+    _refuse_unrecorded([main], "binding %s to %s" % (name, branch))
+    own = teammate_body_of_work(main, branch, "%s's own branch" % name, session_id)
+    key = named_key(session_id, name)
+    with Lock():
+        rec = load_agent(key) or new_record(key, name=name, session_id=session_id)
+        if rec.get("agent_id") or rec.get("disposition"):
+            raise SpecError("agent %s already ran in this session; names are used once" % name)
+        rec["session_identity"] = ident
+        rec.setdefault("integration_work", {})[_norm_repo(main)] = own["id"]
+        save_agent(rec)
+    event("bound-own-target", key=key, repo=main, branch=branch, work=own["id"])
+    return rec
+
+
 def _add_workspace(rec, kind, repo, path, branch, source):
     path = realpath(path) if path else ""
     for w in rec["workspaces"]:
@@ -2029,6 +2064,7 @@ def bind_agent(session_id, tuid, agent_id, entity, name="", isolation=""):
             return None
         prov_key = _provisional_key(session_id, agent_id)
         rec["agent_id"] = agent_id
+        npath = ""
         if rec.get("isolation") == "worktree" and entity:
             main = main_checkout(entity) or realpath(entity)
             npath = os.path.join(main, ".claude", "worktrees", "agent-" + agent_id)
@@ -2037,8 +2073,45 @@ def bind_agent(session_id, tuid, agent_id, entity, name="", isolation=""):
         _absorb_provisional(rec, prov_key)
         save_agent(rec)
     event("bound", key=rec["key"], agent_id=agent_id, **({"reconciled": reconciled} if reconciled else {}))
+    if npath:
+        _seat_native(rec, realpath(npath))
     _on_start(rec)
     return rec
+
+
+def _seat_native(rec, native):
+    """A NATIVE WORKSPACE STARTS FROM ITS OWN BRANCH (2026-10-14). The platform
+    branches it from the main checkout's HEAD (worktree.baseRef "head"), which
+    is main; a teammate bound to a branch of its own there (bind_own_target)
+    would then start from main, and its land into that branch would pull main
+    in. So when this agent's body of work in that repository is not the
+    repository's current one, its workspace is moved onto that branch's tip:
+    only while it has nothing of its own (its commit is still on the main
+    checkout's branch and no tracked file is changed), with `reset --keep`,
+    which refuses rather than overwrite anything. Otherwise it is left alone
+    and the event log says why."""
+    if not os.path.isdir(native):
+        return
+    main = main_checkout(native)
+    wid = (rec.get("integration_work") or {}).get(_norm_repo(main)) if main else ""
+    if not wid or wid == (_integration_file().get("current") or {}).get(_norm_repo(main)):
+        return
+    target, tip, why_not = integration_target([rec], main)
+    if why_not or not tip:
+        event("native-not-seated", key=rec["key"], path=native, why=why_not or "no tip")
+        return
+    rc, head, _ = git(native, "rev-parse", "HEAD")
+    head = head.strip()
+    if rc != 0 or not head or head == tip or is_ancestor(native, head, tip):
+        return
+    rc, changed, _ = git(native, "status", "--porcelain", "--untracked-files=no")
+    if not is_ancestor(main, head, "HEAD") or rc != 0 or changed.strip():
+        event("native-not-seated", key=rec["key"], path=native, branch=target,
+              why="it already has work of its own; it lands on %s as it is" % target)
+        return
+    rc, out, err = git(native, "reset", "--keep", tip)
+    event("native-seated" if rc == 0 else "native-not-seated", key=rec["key"], path=native, branch=target,
+          tip=tip, was=head, **({} if rc == 0 else {"why": (out + err).strip()[-500:]}))
 
 
 def record_start(session_id, agent_id, cwd, agent_type):
@@ -2075,6 +2148,8 @@ def record_start(session_id, agent_id, cwd, agent_type):
         rec["started_at"] = rec.get("started_at") or iso()
         save_agent(rec)
     event("start", key=rec["key"], agent_id=agent_id, cwd=realpath(cwd))
+    if native and not rec.get("provisional"):
+        _seat_native(rec, native)
     _on_start(rec)
     return rec
 

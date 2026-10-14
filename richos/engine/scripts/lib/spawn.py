@@ -281,9 +281,10 @@ def ensure_integration(repo, explicit, why, session, native_only=False):
     and every running main-bound teammate onto v1.3.0. Now that branch is this
     teammate's own (workspaces.teammate_body_of_work, bound when its cc/
     workspace is registered), and the repository's record is untouched; moving
-    the whole repository is `workspaces.sh integration --correct`. A repository
-    this teammate works in only through native isolation (`native_only`, the
-    session's own) has no cc/ registration to carry it, so it is refused there.
+    the whole repository is `workspaces.sh integration --correct`. In the
+    session's own repository (`native_only`: a native workspace, no cc/
+    registration) it is bound by workspaces.bind_own_target before the spawn,
+    and the native workspace is moved onto it when the agent starts.
 
     THE THREE STATES, and the third is the one that bit us:
       recorded and its branch exists  -> nothing to do
@@ -342,14 +343,9 @@ def ensure_integration(repo, explicit, why, session, native_only=False):
         return ("integration: CORRECTED %s from %s (no such branch) to %s - %s"
                 % (repo, rec["branch"], branch, reason), "")
     if rec and live and explicit and explicit != rec["branch"]:
-        if native_only:
-            raise Refusal(
-                "%s: --integration %s names another branch than this repository's recorded %s, and this "
-                "teammate works there only in its native workspace, which cannot carry a branch of its own. "
-                "Moving every teammate of %s onto %s is: workspaces.sh integration --repo %s --branch %s "
-                "--correct --why '<why>'" % (repo, branch, rec["branch"], repo, branch, repo, branch))
-        return ("integration: %s for this teammate only; %s stays on %s for everybody else (body of work %s)"
-                % (branch, repo, rec["branch"], rec["id"]), branch)
+        return ("integration: %s for this teammate only; %s stays on %s for everybody else (body of work %s)%s"
+                % (branch, repo, rec["branch"], rec["id"],
+                   "; its native workspace starts from %s" % branch if native_only else ""), branch)
     W.record_integration(repo, branch, why or reason, session)
     if explicit:
         return "integration: RECORDED %s for %s - %s" % (branch, repo, reason), ""
@@ -978,6 +974,17 @@ def _main(argv):
     _CREATING.update(session=session, name=args["name"], mine=mine,
                      quiet=args["audience"] == APP)
     _arm_interrupt()
+    # A BRANCH OF ITS OWN IN THE SESSION'S OWN REPOSITORY has no cc/ workspace to
+    # carry it, so it is registered here, before the spawn, as register_cc does
+    # for a cc/ workspace; the rollback below withdraws it with the rest.
+    if project_dir in own:
+        try:
+            W.bind_own_target(session, args["name"], project_dir, own[project_dir])
+        except W.SpecError as exc:
+            report_problems("could not bind %s to %s" % (args["name"], own[project_dir]),
+                            [{"headline": str(exc), "detail": ""}])
+            _rollback(session, args["name"], mine)
+            return 1
     # EVERY WORKSPACE, UNDER THE ONE NAME, AND A FAILURE OF ANY OF THEM UNDOES
     # ALL OF THEM. `withdraw_cc` withdraws the whole registration - every
     # workspace on it, its branches and the record - so a half-created teammate
