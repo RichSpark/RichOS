@@ -169,8 +169,12 @@ def claimed_names(told):
     names = set(re.findall(r'\b([A-Z][a-z]{1,15})\*{0,2}\s*' + TITLE, text))
     # A bullet's bare "Word:" is a label, not a name: nightly 56's walks read the rule lists he was
     # told ("- **Drafts:** she can draft invoices", "- **Confidentiality:** a client's coaching
-    # notes never leave the company") as teammates. A name in a bullet needs its title or a dash.
+    # notes never leave the company") as teammates. A name in a bullet needs its title or a dash...
     names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*(?:\u2014|' + TITLE + ')', text))
+    # ...unless the rest of its line says the name was hired or joined ("- Bea: hired as your
+    # bookkeeper"): that is a claim about a teammate, and a rule label never says it.
+    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*:\*{0,2}'
+                            r'[^\n]*\b(?:hired|joined|on (?:your|the) team|teammate)\b', text))
     joined = re.compile(r'((?:' + NAME + r'(?:\s*,\s*(?:and\s+)?|\s+and\s+))*' + NAME + r')'
                         r'\s+(?:has\s+|have\s+)?(?:joined|(?:is|are)\s+(?:now\s+)?(?:on|part of))')
     for m in joined.finditer(text):
@@ -370,6 +374,12 @@ class HireWalk(command_walk.CommandWalk):
         return [r.get('text', '') for r in self.ledger() if r.get('event') == 'ProactiveMessage'
                 and r.get('thread_id') == thread and r.get('at', 0) >= since_ms]
 
+    def said_since(self, since_ms):
+        """Rich's own replies on the conversation since `since_ms` (AssistantDelta), joined."""
+        thread = self.facts.get('thread')
+        return ''.join(r.get('text', '') for r in self.ledger() if r.get('event') == 'AssistantDelta'
+                       and r.get('thread_id') == thread and r.get('at', 0) >= since_ms)
+
     def wait_turns_done(self, count, seconds):
         """Wait until at least `count` visible turns exist and the last is finished; return them."""
         end = time.monotonic() + seconds
@@ -461,8 +471,9 @@ class HireWalk(command_walk.CommandWalk):
         records = [self.settled_read(r) for r in records]
         saved = self.team_files()
         told = [n.get('text', '') for r in records for n in r.get('notices', [])] + self.told_since(sent[0])
+        said = self.said_since(sent[0])
         evidence = {'proposed': proposed, 'assignments': records, 'saved': saved, 'told': told,
-                    'approvals_pressed': pressed[0]}
+                    'said': said, 'approvals_pressed': pressed[0]}
         (self.out / 'go-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if not records:
             raise StepFailed('"Go." registered no assignment')
@@ -470,7 +481,7 @@ class HireWalk(command_walk.CommandWalk):
         if still:
             raise StepFailed(f"the hiring was still {still} after {self.a.hire_within:g} s")
         failures = hired_verdict(proposed, saved, '\n'.join(told))
-        retried = first_send_verdict('\n'.join(told))
+        retried = first_send_verdict('\n'.join(told + [said]))
         if retried:
             failures.append(f'he was told the write-up was retried: {retried}')
         # Counted here and judged in `approvals`, the last step, so one card does not hide whether

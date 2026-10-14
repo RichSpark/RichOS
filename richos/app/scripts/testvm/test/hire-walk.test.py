@@ -78,6 +78,25 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(hire_walk.claimed_names(told), ['penny', 'will'])
         self.assertEqual(hire_walk.hired_verdict(['will', 'penny'], ['penny', 'will'], told), [])
 
+    def test_rich_replies_after_go_are_read_for_a_retry(self):
+        # Review rv-20261014T205753Z-5a101304-279e, finding 1: the snag can be in his reply to Go.
+        walk = object.__new__(hire_walk.HireWalk)
+        walk.facts = {'thread': 't1'}
+        walk.ledger = lambda: [
+            {'event': 'AssistantDelta', 'thread_id': 't1', 'at': 5, 'text': 'Say go.'},
+            {'event': 'AssistantDelta', 'thread_id': 't1', 'at': 20, 'text': 'The write-up hit a technical snag. '},
+            {'event': 'AssistantDelta', 'thread_id': 't2', 'at': 30, 'text': 'Another snag elsewhere.'},
+            {'event': 'AssistantDelta', 'thread_id': 't1', 'at': 40, 'text': "I'm sending it again."}]
+        said = walk.said_since(10)
+        self.assertEqual(said, "The write-up hit a technical snag. I'm sending it again.")
+        self.assertTrue(hire_walk.first_send_verdict(said))
+
+    def test_a_colon_bullet_that_says_hired_is_still_a_claim(self):
+        # Review rv-20261014T205753Z-5a101304-279e, finding 2.
+        told = "Will (Marketing Director) joined the team.\n- Bea: hired as your bookkeeper."
+        failures = hire_walk.hired_verdict(['will'], ['will'], told)
+        self.assertTrue(any('Bea' in f for f in failures), failures)
+
     def test_a_box_under_the_panel_edge_fails_and_one_beside_it_passes(self):
         panel = {'x': 1080, 'w': 320}
         beside = {'conversation': {'x': 440, 'w': 640}, 'output': {'x': 980, 'w': 90}}
