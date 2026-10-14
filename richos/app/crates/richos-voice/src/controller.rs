@@ -43,7 +43,7 @@ use crate::noaudio::{no_audio_window_secs, NoAudioDetector};
 use crate::playout::Playout;
 use crate::state::{VoiceState, VoiceStateMachine};
 use crate::stt::{self, Recognizer};
-use crate::tts::{MacSay, SpeechSynth};
+use crate::tts::{RichVoice, SpeechSynth};
 use crate::turn::{may_sound, rich_audible, AnswerGate, TurnAssembler};
 use crate::vad::{frames_to_secs, Vad};
 use crate::voiced::VoiceEvidence;
@@ -1717,7 +1717,8 @@ impl VoiceController {
         let (aec, reference_ring) = EchoCanceller::new();
         let playout =
             Arc::new(Playout::start(Some(reference_ring)).map_err(VoiceStartError::Playout)?);
-        let synth: Arc<dyn SpeechSynth> = Arc::new(MacSay::new());
+        // Rich's voice: Pocket TTS as Peter Yearsley once installed, `say` until then (tts.rs).
+        let synth: Arc<dyn SpeechSynth> = Arc::new(RichVoice::new());
 
         let shared = Arc::new(Shared {
             level: AtomicU32::new(0),

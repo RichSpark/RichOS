@@ -683,9 +683,15 @@ richos/app/
                               sockets, no async runtime, no dependency. The transport is the
                               shell's (src-tauri/src/voice_provision.rs) and decides nothing
     src/{capture,playout}.rs cpal in/out; playout is one continuous, interruptible stream
-    src/{stt,tts}.rs         local whisper.cpp (small.en) / macOS `say` behind a trait
+    src/{stt,tts}.rs         local whisper.cpp (small.en) / Rich's voice behind a trait:
+                              Pocket TTS as Peter Yearsley, macOS `say` until it is installed
+    src/pocket.rs            Kyutai Pocket TTS (ONNX Runtime, statically linked) with the
+                              Peter Yearsley voice: nine pinned files, downloaded on first need
     src/controller.rs        four threads, CaptureBrain, the half-duplex taint rule
     tests/barge_in_composition.rs  the WIRING: echo defense + real interruptions
+    tests/rich_voice.rs      2 tests: voice mode speaks through RichVoice, and with the pinned
+                              bundle installed a sentence comes out of Pocket TTS as Peter
+                              Yearsley (ignored, never ok, without the bundle)
     tests/self_voice_replay.rs 18 tests replaying the candidate-.5 walk (and the near-end onset control): the shipped rule submitted
                              2.224 s of Rich's own answer as the CEO's message; the audible window
                              (queued OR owed OR within the measured device hold, taint re-evaluated
@@ -1240,7 +1246,7 @@ cargo test -p richos-core                       # 2004 tests + 5 doc-tests (2000
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 398 tests (4 live-device tests ignored without a device)
+cargo test -p richos-voice                      # 405 tests (4 live-device tests ignored without a device)
 #     …of which 325 RUN here and 4 report `ignored, LIVE AUDIO: …`, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test
