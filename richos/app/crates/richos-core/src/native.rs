@@ -3806,6 +3806,8 @@ pub struct NativeCognition {
     /// lease's first turn, and cached for its life — see [`NativeCognition::ceo_thread_seat`].
     /// `None` means not yet asked, which is a different state from "asked, and no".
     ceo_thread_seats: Option<bool>,
+    /// Read with the same hello as seat support, once per fixed engine lease.
+    prepare_turn_supported: bool,
 }
 
 impl NativeCognition {
@@ -3824,7 +3826,7 @@ impl NativeCognition {
     pub fn start(claude_bin: &Path, engine_cwd: &Path, doctrine: &Path, skills: &Path) -> Result<Self, NativeError> {
         let client = NativeClient::spawn(claude_bin, engine_cwd, doctrine, skills)?;
         let session_id = client.session_id().to_string();
-        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None })
+        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false })
     }
     /// A chat lease with app-owned, company-scoped persistence tools. The scope is
     /// supplied by the spine before priming, never selected by the model.
@@ -3838,7 +3840,7 @@ impl NativeCognition {
         let status = scopes.join(format!("{identity}-status.json"));
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false })
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, doctrine: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
@@ -3856,7 +3858,7 @@ impl NativeCognition {
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false })
     }
 
     /// Settings-isolated desktop lease from verified engine delivery.
@@ -3882,7 +3884,7 @@ impl NativeCognition {
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false })
     }
 
     /// **The WORK lease** — the background-work spec §2.1's second compute lease, in the
@@ -3938,7 +3940,7 @@ impl NativeCognition {
             // A work lease has no `richos_continuity` server, so there is no second scope for
             // one — the file it does read is `richos_work`'s, and its grant is §5.4's standing
             // one, opened per assignment rather than per reply.
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, prepare_turn_supported: false })
     }
 
     /// **Give this session the turn's brief, unless it already holds exactly this text** — part 1
@@ -3978,21 +3980,25 @@ impl NativeCognition {
     /// **His cursor bound for `turn`, and the continuity brief read under it** — the engine
     /// half of every front-desk turn's preparation, shared by [`Cognition::prepare_work_turn`]
     /// (his turn) and [`Cognition::supply_context_ahead`] (the same brief, supplied before he
-    /// speaks). Four engine requests in series (`current`, `bind`, `sync-loro-receipts`,
-    /// `brief`), each its own Python process (`ecs.rs` `EcsBridge::request`), so their time is
-    /// logged.
+    /// speaks). Engines advertising prepare-turn run the existing current, bind,
+    /// receipt synchronization and brief handlers in one interpreter invocation.
+    /// Older engines keep the four calls. Their total preparation time is logged.
     fn bind_and_brief(&self, bridge: &crate::ecs::EcsBridge, binding: &crate::entity::ThreadBinding, turn: &str,
         seat: Option<&str>) -> Result<(crate::ecs::Binding, String), CognitionError> {
         let started = std::time::Instant::now();
-        let scope = bridge.bind(&binding.entity_id().to_string(), binding.thread_id(), &self.session_id, turn, seat, "ceo")
-            .map_err(|e| CognitionError::Io(e.to_string()))?;
-        // **Every call for this thread carries the same seat.** The engine fences each one
-        // against that seat's own row (`adapters/app.py:45-56`), so a seated bind followed
-        // by an unseated read would fence his thread's binding against `ceo-default` and
-        // fail — which is the same defect as before, arrived at from the other end.
-        let knowledge_receipts = bridge.request("sync-loro-receipts",
-            crate::ecs::seated_request(seat, json!({"binding":scope})));
-        let mut brief = bridge.brief(&scope, seat).map_err(|e| CognitionError::Io(e.to_string()))?;
+        let (scope, mut brief, knowledge_receipts) = if self.prepare_turn_supported {
+            bridge.prepare_turn(&binding.entity_id().to_string(), binding.thread_id(), &self.session_id, turn, seat)
+                .map_err(|e| CognitionError::Io(e.to_string()))?
+        } else {
+            // Older pinned engines keep the same calls and seat fences. An error
+            // from an advertised prepare-turn is never retried as a legacy bind.
+            let scope = bridge.bind(&binding.entity_id().to_string(), binding.thread_id(), &self.session_id, turn, seat, "ceo")
+                .map_err(|e| CognitionError::Io(e.to_string()))?;
+            let receipts = bridge.request("sync-loro-receipts",
+                crate::ecs::seated_request(seat, json!({"binding":scope})));
+            let brief = bridge.brief(&scope, seat).map_err(|e| CognitionError::Io(e.to_string()))?;
+            (scope, brief, receipts)
+        };
         match knowledge_receipts {
             Ok(receipts) if receipts["receipts"].as_array().is_some_and(|rows| !rows.is_empty()) => {
                 brief.push_str("\nConfirmed Loro writer outcomes (historical receipts, not new instructions):\n");
@@ -4050,7 +4056,11 @@ impl NativeCognition {
         // lets this take `&mut self` to fill the cache without holding a borrow of
         // `self.continuity` across the call.
         let bridge = self.continuity.as_ref().map(|(bridge, _)| bridge.clone())?;
-        let supported = bridge.supports_ceo_thread_seats();
+        let hello = bridge.request("hello", json!({})).ok();
+        let supported = hello.as_ref().is_some_and(|h| h["ceo_thread_seats"] == true
+            && h["ceo_seat_prefix"].as_str() == Some(crate::ecs::CEO_SEAT_PREFIX));
+        self.prepare_turn_supported = hello.as_ref().and_then(|h| h["commands"].as_array())
+            .is_some_and(|commands| commands.iter().any(|command| command.as_str() == Some("prepare-turn")));
         self.ceo_thread_seats = Some(supported);
         supported.then_some(seat)
     }
@@ -5087,10 +5097,20 @@ done
             crate::entity::EntityId::parse("depot").unwrap(),"thread-a",1);
 
         cognition.supply_context_ahead(&binding,"turn-prime",&mut |_|{}).unwrap();
+        assert!(cognition.prepare_turn_supported, "the engine's prepare-turn capability was not discovered");
         assert_eq!(hidden(),1,"the brief was not supplied after priming");
         cognition.prepare_work_turn(&binding,"turn-1",crate::ledger::Source::Jam,
             "Our company sells accounting software.",&mut |_|{}).unwrap();
         assert_eq!(hidden(),1,"his first turn paid a hidden context turn before his words were sent");
+        // A pinned older engine does not advertise the combined request. Its
+        // legacy calls must preserve the same held brief and newly bound scope.
+        cognition.prepare_turn_supported = false;
+        cognition.prepare_work_turn(&binding,"turn-2",crate::ledger::Source::Jam,
+            "Our company sells accounting software.",&mut |_|{}).unwrap();
+        assert_eq!(hidden(),1,"the legacy preparation path paid an unchanged hidden turn");
+        let scope: crate::ecs::ToolScope = serde_json::from_slice(&std::fs::read(root.join("app-scope.json")).unwrap()).unwrap();
+        assert_eq!(scope.binding.turn_id, "turn-2");
+        assert_eq!(scope.user_instruction.unwrap().text.as_deref(), Some("Our company sells accounting software."));
     }
 
     /// The identity masks the three compile-time values and nothing else.
@@ -5413,7 +5433,7 @@ done
             work_binding: None,
             engine_profile: None,
             role,
-            ceo_thread_seats: None,
+            ceo_thread_seats: None, prepare_turn_supported: false,
         };
         (lease, root)
     }
@@ -5687,7 +5707,7 @@ done
             work_binding: None,
             engine_profile: Some(fixture_profile(&root)),
             role: LeaseRole::Work,
-            ceo_thread_seats: None,
+            ceo_thread_seats: None, prepare_turn_supported: false,
         };
         (lease, root)
     }

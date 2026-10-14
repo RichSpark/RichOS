@@ -14,7 +14,7 @@ from unittest.mock import patch
 COMPONENT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(COMPONENT / "core"), str(COMPONENT / "adapters")]
 from app import execute
-from ecs_core import EventStore, ValidationError
+from ecs_core import EventStore, ValidationError, ScopeError
 from mcp import call as tool_call
 
 
@@ -59,6 +59,59 @@ class AppProtocolTests(unittest.TestCase):
         self.assertIn("depot manual", self.call("brief")["text"])
         changed = {"verb": "commitment", "fields": {"id": "ship-manual", "title": "Changed content"}}
         self.assertIn("different content", self.checkpoint([changed], ok=False)["message"])
+
+    def test_prepared_turn_preserves_obligations_and_a_retry_does_not_rebind(self):
+        self.checkpoint([{"verb": "commitment", "fields": {"id": "manual", "title": "Draft the depot manual"}}])
+        scope = {**{k: v for k, v in self.binding.items() if k != "revision"}, "turn_id": "turn-2"}
+        fields = dict(scope=scope, request_id="session-a:turn-2", source_ref="ledger:thread-a:turn-2")
+        prepared = self.call("prepare-turn", **fields)
+        self.assertIn("Draft the depot manual", prepared["text"])
+        self.assertIsNone(prepared["receipt_error"])
+        self.assertIsInstance(prepared["receipts"], dict)
+        self.binding = prepared["binding"]
+        before = EventStore(self.store).current_context()["revision"]
+        repeated = self.call("prepare-turn", **fields)
+        self.assertEqual(repeated["binding"], self.binding)
+        self.assertEqual(EventStore(self.store).current_context()["revision"], before)
+        self.assertEqual(self.call("inspect", query={"item_id": "manual"})["item"]["status"], "active")
+
+    def test_prepared_turn_discloses_a_receipt_failure_and_still_fences_the_brief(self):
+        fields = {"protocol": 1, "command": "prepare-turn",
+            "scope": {k: v for k, v in self.binding.items() if k != "revision"},
+            "request_id": "session-a:turn-1", "source_ref": "ledger:thread-a:turn-1"}
+        with patch('loro_receipts.synchronize', side_effect=OSError('fixture receipt unreadable')):
+            result = execute(self.store, fields)
+        self.assertEqual(result['receipt_error'], 'fixture receipt unreadable')
+        self.assertIsNone(result['receipts'])
+
+        def supersede(store, binding, person):
+            self.bind('studio', 'thread-b', 'session-b', 'turn-2', binding['revision'])
+            return {'receipts': []}
+        with patch('loro_receipts.synchronize', side_effect=supersede), self.assertRaises(ScopeError):
+            execute(self.store, fields)
+
+    def test_prepared_turn_refuses_a_worker_before_creating_any_state(self):
+        absent = self.root / 'absent'
+        with self.assertRaises(ScopeError):
+            execute(absent, {'protocol': 1, 'command': 'prepare-turn',
+                'scope': {'entity_id': 'depot', 'thread_id': 'worker', 'session_id': 'worker',
+                          'turn_id': 'work', 'audience': 'worker'},
+                'seat': 'work-seat:work', 'request_id': 'work', 'source_ref': 'fixture'})
+        self.assertFalse(absent.exists())
+
+    def test_prepared_turn_keeps_concurrent_conversation_seats_separate(self):
+        def prepared(thread):
+            return self.call('prepare-turn', seat=f'ceo-thread:{thread}',
+                scope={'entity_id': 'depot', 'thread_id': thread, 'session_id': thread,
+                       'turn_id': 'turn-1', 'audience': 'ceo'},
+                request_id=f'{thread}:turn-1', source_ref=f'ledger:{thread}:turn-1')
+        first = prepared('first')['binding']
+        second = prepared('second')['binding']
+        self.assertEqual(self.call('current', seat='ceo-thread:first')['binding'], first)
+        self.assertEqual(self.call('current', seat='ceo-thread:second')['binding'], second)
+        self.call('brief', seat='ceo-thread:first', binding=first)
+        error = self.call('brief', seat='ceo-thread:second', binding=first, ok=False)
+        self.assertEqual(error['kind'], 'ScopeError')
 
     def test_stale_and_cross_entity_bindings_are_rejected(self):
         old = self.binding
