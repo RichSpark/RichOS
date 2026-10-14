@@ -518,6 +518,112 @@ pub(crate) fn ensure_crypto_provider() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Rich's voice: Pocket TTS + the Peter Yearsley recording (CEO, 2026-10-14).
+// ---------------------------------------------------------------------------------------------
+
+/// One background fetch of the voice files at a time.
+static RICH_VOICE_FETCH: AtomicBool = AtomicBool::new(false);
+
+/// A transfer that delivers no byte for this long has stalled; the attempt ends and is retried.
+const RICH_VOICE_STALL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// **Fetch Rich's voice in the background if any of its pinned files is missing.** Returns at
+/// once and never blocks a screen: until the files are in and verified Rich speaks with `say`.
+/// Loading them is `richos_voice::tts::RichVoice`'s, when a sentence is next spoken, so a Mac
+/// that never talks never holds the model in memory. Called when voice is found ready on this
+/// Mac, when voice mode starts, when a phone reply is spoken, and after first-run setup has
+/// installed the speech models.
+pub fn fetch_rich_voice_in_background() {
+    let Some(dir) = richos_voice::pocket::bundle_dir() else { return };
+    if richos_voice::pocket::missing_files(&dir).is_empty() {
+        return;
+    }
+    if RICH_VOICE_FETCH.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let done = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())
+            .and_then(|rt| rt.block_on(fetch_rich_voice(&dir)));
+        RICH_VOICE_FETCH.store(false, Ordering::SeqCst);
+        match done {
+            Ok(()) => eprintln!("[richos] rich voice: Pocket TTS and the Peter Yearsley voice are installed and verified"),
+            Err(e) => eprintln!("[richos] rich voice: not installed this time, speaking with say: {e}"),
+        }
+    });
+}
+
+/// Every missing pinned file, each with at most [`provision::MAX_ATTEMPTS`] attempts.
+async fn fetch_rich_voice(dir: &std::path::Path) -> Result<(), String> {
+    let missing = richos_voice::pocket::missing_files(dir);
+    let need: u64 = missing.iter().map(|f| f.bytes).sum();
+    if let Some(finding) = provision::disk_preflight(provision::free_bytes_for(dir), need.saturating_mul(11).div_ceil(10)) {
+        return Err(finding.describe("Rich's voice", false));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    eprintln!("[richos] rich voice: fetching {} file(s), {} bytes, into {}", missing.len(), need, dir.display());
+    for pin in missing {
+        let mut last = String::new();
+        for attempt in 1..=provision::MAX_ATTEMPTS {
+            match fetch_rich_voice_file(dir, &pin).await {
+                Ok(()) => {
+                    last.clear();
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("[richos] rich voice: {} attempt {attempt} failed: {e}", pin.name);
+                    last = e;
+                }
+            }
+        }
+        if !last.is_empty() {
+            return Err(format!("{}: {last}", pin.name));
+        }
+    }
+    Ok(())
+}
+
+/// One file: stream it to `<name>.part`, check its size and sha256 against the pin, and only then
+/// give it its real name, so the loader can never see a half-written or substituted file.
+async fn fetch_rich_voice_file(dir: &std::path::Path, pin: &richos_voice::pocket::PinnedFile) -> Result<(), String> {
+    use std::io::Write;
+    let part = dir.join(format!("{}.part", pin.name));
+    let dest = dir.join(pin.name);
+    ensure_crypto_provider();
+    let client = reqwest::Client::builder().build().map_err(|e| e.to_string())?;
+    let res = tokio::time::timeout(RICH_VOICE_STALL, client.get(pin.url).send())
+        .await
+        .map_err(|_| "no answer from the server".to_string())?
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        return Err(format!("the server answered {}", res.status()));
+    }
+    let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+    let mut stream = res.bytes_stream();
+    let mut got: u64 = 0;
+    loop {
+        let next = tokio::time::timeout(RICH_VOICE_STALL, stream.next()).await.map_err(|_| "the transfer stalled".to_string())?;
+        let Some(chunk) = next else { break };
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        got += chunk.len() as u64;
+        if got > pin.bytes {
+            std::fs::remove_file(&part).ok();
+            return Err(format!("more than the pinned {} bytes arrived", pin.bytes));
+        }
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+    }
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    if let Err(e) = richos_voice::pocket::verify_file(&part, pin) {
+        std::fs::remove_file(&part).ok();
+        return Err(e);
+    }
+    std::fs::rename(&part, &dest).map_err(|e| e.to_string())
+}
+
 /// How often a network wait looks at the stop flag.
 const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 

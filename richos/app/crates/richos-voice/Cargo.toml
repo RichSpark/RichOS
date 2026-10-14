@@ -31,6 +31,17 @@ sha2 = "0.10"
 # `sysctl -n` for the same reason toolchain.rs hashes in-process: a machine fact parsed out of a
 # subprocess's stdout fails as a plausible number rather than as an error.
 libc = "0.2"
+# RICH'S VOICE: Kyutai Pocket TTS with the Peter Yearsley preset (`pocket.rs`, CEO 2026-10-14).
+# The engine is lifted from Buzz's `crates/buzz-voice/src/pocket_april.rs` (block/buzz,
+# Apache-2.0), which runs the KevinAHM/pocket-tts-onnx INT8 graphs through ONNX Runtime with
+# exactly these three crates and these versions. `ort` keeps its default `download-binaries`, so
+# ONNX Runtime is linked STATICALLY into the app binary: no dylib to ship or sign beside it and
+# no Python on the user's Mac. `tokenizers` + `sentencepiece-model` are the bundle's
+# SentencePiece frontend. `serde` derives the bundle.json manifest.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "api-24", "download-binaries", "tls-native"] }
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+sentencepiece-model = "0.1"
+serde = { version = "1", features = ["derive"] }
 
 # The end-to-end example wires the REAL spine (stream-json stdio -> Claude). Dev-only, so
 # the shipped crate stays spine-agnostic: richos-voice knows nothing about ledgers or leases.

@@ -26,9 +26,11 @@
 //! register the design lead's direction asks for. `RICHOS_TTS_VOICE` overrides it for an operator; it
 //! is deliberately NOT surfaced in the UI.
 
+use crate::pocket::{self, PocketSynth};
 use crate::wav;
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// The bundled Rich voice, in preference order. The first three are the SAME voice at
@@ -193,6 +195,134 @@ impl SpeechSynth for MacSay {
     }
     fn voice_label(&self) -> String {
         format!("macOS say · {} · {} wpm", self.voice, self.rate_wpm)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rich's voice as shipped: Pocket TTS as Peter Yearsley, `say` until it is on this machine.
+// ---------------------------------------------------------------------------------------------
+
+/// Where the process-wide Pocket engine has got to. One per process: the graphs are ~165 MB and
+/// loading them is seconds, so a second voice-mode start must not pay it again.
+enum PocketState {
+    /// Not loaded, and no load running. The files may or may not be on disk.
+    Idle,
+    Loading,
+    Ready(Arc<PocketSynth>),
+    /// The load failed. Not retried per sentence; [`warm_rich_voice`] tries again.
+    Failed,
+}
+
+static POCKET: Mutex<PocketState> = Mutex::new(PocketState::Idle);
+
+/// Start loading Pocket TTS in the background if its files are all present and it is not loaded.
+/// Returns at once. Called at voice-mode start and after the download finishes, so the first
+/// sentence usually finds the engine ready; until it is, Rich speaks with `say`.
+pub fn warm_rich_voice() {
+    let Some(dir) = pocket::bundle_dir() else { return };
+    let mut state = POCKET.lock().unwrap_or_else(|p| p.into_inner());
+    if !matches!(*state, PocketState::Idle | PocketState::Failed) || !pocket::missing_files(&dir).is_empty() {
+        return;
+    }
+    *state = PocketState::Loading;
+    drop(state);
+    std::thread::spawn(move || {
+        let loaded = PocketSynth::load(&dir);
+        let mut state = POCKET.lock().unwrap_or_else(|p| p.into_inner());
+        *state = match loaded {
+            Ok(synth) => {
+                eprintln!("[richos-voice] Pocket TTS ready ({}), loaded and verified in {} ms", synth.voice_label(), synth.load_ms);
+                PocketState::Ready(Arc::new(synth))
+            }
+            Err(e) => {
+                eprintln!("[richos-voice] Pocket TTS could not load, speaking with say instead: {e}");
+                PocketState::Failed
+            }
+        };
+    });
+}
+
+/// True when the last Pocket TTS load failed (its reason is on stderr). Rich is speaking with `say`.
+pub fn rich_voice_load_failed() -> bool {
+    matches!(*POCKET.lock().unwrap_or_else(|p| p.into_inner()), PocketState::Failed)
+}
+
+/// The loaded Pocket engine, if there is one. Starts a load when the files have just arrived.
+fn ready_pocket() -> Option<Arc<PocketSynth>> {
+    if let PocketState::Ready(p) = &*POCKET.lock().unwrap_or_else(|p| p.into_inner()) {
+        return Some(p.clone());
+    }
+    if matches!(*POCKET.lock().unwrap_or_else(|p| p.into_inner()), PocketState::Idle) {
+        warm_rich_voice();
+    }
+    None
+}
+
+/// Rich's voice: Pocket TTS speaking as Peter Yearsley (CEO, 2026-10-14) once its pinned files are
+/// on this machine and loaded, and macOS `say` until then — or for any one sentence Pocket fails
+/// on, so a fault costs that sentence its voice and never costs him the answer.
+pub struct RichVoice {
+    fallback: MacSay,
+}
+
+impl RichVoice {
+    pub fn new() -> RichVoice {
+        warm_rich_voice();
+        RichVoice { fallback: MacSay::new() }
+    }
+
+    /// A whole reply for a caller that bounds a hung `say` (the phone channel). Pocket runs in this
+    /// process and cannot hang the way a child can, so the bound applies to the fallback.
+    pub fn synthesize_bounded(&self, text: &str, target_rate: u32, scratch_dir: &Path, timeout: std::time::Duration) -> Result<Speech, TtsError> {
+        if let Some(pocket) = ready_pocket() {
+            match pocket.synthesize(text, target_rate, scratch_dir) {
+                Ok(speech) => return Ok(speech),
+                Err(e) => eprintln!("[richos-voice] Pocket TTS failed on a reply, speaking it with say: {e}"),
+            }
+        }
+        self.fallback.synthesize_bounded(text, target_rate, scratch_dir, timeout)
+    }
+
+    /// True when the next sentence will be spoken by Pocket TTS.
+    pub fn pocket_ready(&self) -> bool {
+        ready_pocket().is_some()
+    }
+}
+
+impl Default for RichVoice {
+    fn default() -> Self {
+        RichVoice::new()
+    }
+}
+
+impl SpeechSynth for RichVoice {
+    fn synthesize(&self, text: &str, target_rate: u32, scratch_dir: &Path) -> Result<Speech, TtsError> {
+        let (speech, label) = match ready_pocket() {
+            Some(pocket) => match pocket.synthesize(text, target_rate, scratch_dir) {
+                Ok(speech) => (speech, pocket.voice_label()),
+                Err(e) => {
+                    eprintln!("[richos-voice] Pocket TTS failed on a sentence, speaking it with say: {e}");
+                    (self.fallback.synthesize(text, target_rate, scratch_dir)?, self.fallback.voice_label())
+                }
+            },
+            None => (self.fallback.synthesize(text, target_rate, scratch_dir)?, self.fallback.voice_label()),
+        };
+        // THE TIME TO AUDIO, per sentence, measured. For the first sentence of an answer this is
+        // the time from the sentence reaching the speaker to its audio being ready to play.
+        eprintln!(
+            "[richos-voice] tts: {:.2} s of speech synthesized in {} ms (rtf {:.3}) by {label}",
+            speech.duration_secs(),
+            speech.synth_ms,
+            speech.realtime_factor()
+        );
+        Ok(speech)
+    }
+
+    fn voice_label(&self) -> String {
+        match ready_pocket() {
+            Some(p) => p.voice_label(),
+            None => format!("{} (Rich's Pocket voice is not installed or loaded yet)", self.fallback.voice_label()),
+        }
     }
 }
 

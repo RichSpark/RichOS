@@ -461,6 +461,28 @@ Vendoring anything means three things in the same commit:
 A dependency whose own license forbids combination with the AGPL cannot be
 bundled, however convenient it is.
 
+## Rich's voice: Pocket TTS speaking as Peter Yearsley
+
+Rich speaks with Kyutai's Pocket TTS and its Peter Yearsley voice (CEO,
+2026-10-14). The engine code and ONNX Runtime are compiled into the application.
+The model and the voice recording are NOT shipped in it: the app downloads them
+on first need from the pinned URLs in `richos/app/crates/richos-voice/src/pocket.rs`,
+and checks each file's size and SHA-256 before using it.
+
+| Work | Upstream | Revision / version | License | How it reaches the user |
+|---|---|---|---|---|
+| Pocket TTS engine in Rust (`richos/app/crates/richos-voice/src/pocket.rs`) | Buzz, <https://github.com/block/buzz>, `crates/buzz-voice/src/pocket_april.rs` | commit `8599efb6a3cfbd3d4bc4534f6de766b4481c7fca` | Apache-2.0; `richos/app/crates/richos-voice/third_party/buzz-voice/LICENSE` | compiled in; **modified version**, the changes are listed in that directory's `README.md` |
+| ONNX Runtime, statically linked through the `ort` crate | Microsoft, prebuilt by pyke (`ort-sys` 2.0.0-rc.12 `dist.txt`) | 1.24.2, archive sha256 `612739f75438dc0a075461e1fb454226b4a1eb175e60a7271ba966bbbb972cd4` | MIT | compiled in |
+| Pocket TTS model and the Mimi codec | Kyutai, <https://huggingface.co/kyutai/pocket-tts>; code <https://github.com/kyutai-labs/pocket-tts> | `english_2026-04` | weights CC-BY-4.0, code MIT | downloaded |
+| ONNX export of that model, INT8 | KevinAHM, <https://huggingface.co/KevinAHM/pocket-tts-onnx> | `58a6d00cf13d239b6748cb0769f35c580a8f606c` | CC-BY-4.0 | downloaded |
+| Voice recording `peter_yearsley.wav` | Kyutai, <https://huggingface.co/kyutai/tts-voices>, `voice-zero/`, from Voice-Zero's LibriVox selection | `323332d33f997de8394f24a193e1a76df720e01a` | CC0 | downloaded |
+
+**Attribution, as CC-BY-4.0 asks.** Pocket TTS and Mimi are © Kyutai. The ONNX
+export is by KevinAHM. Neither Kyutai, KevinAHM, Voice-Zero nor Peter Yearsley
+endorses RichOS. Kyutai's terms forbid cloning a voice without consent; the
+Peter Yearsley recording is a public-domain LibriVox reading released as CC0,
+and it is one of Kyutai's own Pocket TTS preset voices.
+
 ## Copywriting regression test fixture
 
 `richos/engine/scripts/hooks/fixtures/third_party/copywriting/natural-transitions.md`

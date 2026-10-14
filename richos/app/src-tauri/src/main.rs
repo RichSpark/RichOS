@@ -4716,11 +4716,16 @@ fn voice_readiness() -> serde_json::Value {
     // on with the weakest recognizer this machine could have taken" are different facts.
     match (&readiness, &reason) {
         (_, Some(r)) => eprintln!("[richos] voice: not ready on this machine ({}) — {r}", readiness.tag()),
-        (richos_voice::stt::SpeechReadiness::Ready(rec), None) => eprintln!(
-            "[richos] voice: ready on this machine ({}) — {}",
-            readiness.tag(),
-            rec.provenance_full()
-        ),
+        (richos_voice::stt::SpeechReadiness::Ready(rec), None) => {
+            eprintln!(
+                "[richos] voice: ready on this machine ({}) — {}",
+                readiness.tag(),
+                rec.provenance_full()
+            );
+            // Voice works here, so Rich will speak: fetch his voice now, in the background, if it
+            // is not on this Mac yet, rather than at the first answer (he hears `say` until then).
+            voice_provision::fetch_rich_voice_in_background();
+        }
         (_, None) => {}
     }
     // THE OFFER IS PART OF THE READINESS ANSWER, not a second command the window has to know to
@@ -4776,6 +4781,9 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
     // guarantee is local and structural: no permission dialog, no orange indicator, no
     // "listening…" panel in a build with no speech model.
     speech_preflight()?;
+    // FIRST NEED of Rich's voice: fetch Pocket TTS + Peter Yearsley in the background if it is not
+    // here yet (he hears `say` until it is). Loading it is RichVoice's, when voice starts below.
+    voice_provision::fetch_rich_voice_in_background();
     ensure_voice_state(&app);
     // A dictation listening right now is written first, as if its key had been tapped, so voice
     // mode and dictation never hold the microphone at once (dictation plan section 2). A
