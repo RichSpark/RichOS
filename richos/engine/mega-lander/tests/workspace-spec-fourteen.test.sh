@@ -460,14 +460,12 @@ RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-c1 >"$T/create.ou
 CC1="$T/other-wt/zach-opus-c1"
 sub "C1.4 POSITIVE CONTROL: the sanctioned path creates a cc/ workspace, registered (exit $rc)" \
     "[ $rc -eq 0 ] && has_branch '$OTHER' cc/zach-opus-c1 && [ -d '$CC1' ] && [ -n \"\$(agent_rec zach-opus-c1)\" ]" "$(cat "$T/create.out")"
-# It is registered but never spawned into. OBSERVED, not one of the fourteen: such
-# a registration has no end-of-run signal, so it is not finished (point 11) and a
-# discard refuses it until the session ends (point 12) or Rich stops it.
-ws discard zach-opus-c1 --reason "the positive control of check 1 is over" --not-ceo-ordered "a fixture of this suite" >"$T/discard.out" 2>&1; rc0=$?
-ws stop zach-opus-c1 --why "never spawned into; the control is over" >>"$T/discard.out" 2>&1
-ws discard zach-opus-c1 --reason "the positive control of check 1 is over" --not-ceo-ordered "a fixture of this suite" >>"$T/discard.out" 2>&1; rc=$?
-sub "C1.5 the control workspace, registered but never spawned into, is not finished until stopped (discard: $rc0, then stop, then discard: $rc) and is then deleted by the page's own discard" \
-    "[ $rc0 -eq 2 ] && [ $rc -eq 0 ] && [ ! -e '$CC1' ] && ! has_branch '$OTHER' cc/zach-opus-c1" "$(cat "$T/discard.out")"
+# It is registered but never spawned into. Such a registration has no run to end
+# (workspaces.py never_ran, 2026-10-14: a refused spawn's workspace needed a stop
+# before its discard), so the page's own discard takes it directly, with no stop.
+ws discard zach-opus-c1 --reason "the positive control of check 1 is over" --not-ceo-ordered "a fixture of this suite" >"$T/discard.out" 2>&1; rc=$?
+sub "C1.5 the control workspace, registered but never spawned into, is deleted by the page's own discard with no stop first (discard: $rc)" \
+    "[ $rc -eq 0 ] && [ ! -e '$CC1' ] && ! has_branch '$OTHER' cc/zach-opus-c1" "$(cat "$T/discard.out")"
 verdict
 
 # ===========================================================================
@@ -1282,6 +1280,14 @@ sub "C13.2 the CEO does NOT hear of it yet (no 'TELL THE CEO' at attempt 1)" "! 
 STATED="$(sed -n 's/^RETRY_TELL_CEO_AFTER = int(os.environ.get("RICHOS_WORKSPACES_RETRY_TELL_CEO", "\([0-9]*\)")).*/\1/p' "$ENGINE/mega-lander/workspaces.py")"
 subagent_stop "anothersubrun0001"                          # hook events, no command: each one retries what is due
 subagent_stop "anothersubrun0002"
+# As in C13.6: under load a hook event may defer the retry for its budget,
+# which counts no attempt, so further hook events (still no command) deliver
+# the two retries. An event that neither attempts nor defers ends the wait.
+C13_UNTIL=$((SECONDS + 30))
+while [ "$(jget "$REC" deletion.attempts)" -lt 3 ] && [ "$SECONDS" -lt "$C13_UNTIL" ]; do
+    [ -n "$(jget "$REC" deletion.deferred)" ] || break
+    subagent_stop "anothersubrun0003"
+done
 A3="$(jget "$REC" deletion.attempts)"
 sub "C13.3 retried WITHOUT involvement: two unrelated hook events later the attempt count is $A3 (no command was run)" "[ \"$A3\" -ge 3 ]"
 stop_gate >/dev/null 2>&1
