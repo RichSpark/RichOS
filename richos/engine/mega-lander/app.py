@@ -248,9 +248,20 @@ def run(command, *, body=None, cwd=None):
 
 def text(args, key, limit=1024):
     value = args.get(key)
-    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+    if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} must be a nonempty bounded string")
+    if len(value) > limit:
+        raise ValueError(f"{key} must be a nonempty bounded string: it is {len(value):,} characters "
+                         f"and the most is {limit:,}")
     return value
+
+
+# The most a brief may carry. Hiring puts three things in Dean's: the shelf definition he
+# fits (up to 13,844 bytes), Clark's research for the new roles and the user's facts and rules.
+# Clark's research alone came back at 27,099 characters in a hire walk (hiresnag55), so the
+# old 32,000 refused the brief that carried it in full and he was told of "a technical snag".
+# 64 KiB, as DEFINITION_LIMIT and for the same reason: inside the transport's 128 KiB line.
+BRIEF_LIMIT = 64 * 1024
 
 
 def target_workspace(record):
@@ -959,7 +970,7 @@ def prepare(scope_path, scope, args):
         repo, repos_all = connected_repositories(scope, args)
     teammate = text(args,"teammate",64)
     model = teammate_model(teammate)
-    title, brief = text(args,"title",256), text(args,"brief",32000)
+    title, brief = text(args,"title",256), text(args,"brief",BRIEF_LIMIT)
     normalized = {"obligation_id":obligation,"repo":str(repo) if repo else None,"repos":[str(r) for r in repos_all],"title":title,"brief":brief,"role":role,"teammate":teammate,
         "integration":args.get("integration"),"base":args.get("base"),"review_of":args.get("review_of"),"continue_of":args.get("continue_of")}
     identity = hashlib.sha256(json.dumps([scope["binding"]["entity_id"],scope["binding"]["thread_id"],request_id],separators=(",", ":")).encode()).hexdigest()

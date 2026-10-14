@@ -195,6 +195,35 @@ class DesktopWork(unittest.TestCase):
             self.assertIn(name,exception.group(1))
         self.assertIn("No other file",duty[exception.end():])
 
+    def test_a_hiring_brief_for_dean_goes_through_the_first_time(self):
+        """hiresnag55 (final walk of 0a2ae649f, run 3): after his go, Rich told him the step that
+        writes up Will and Beth "hit a technical snag" and was sent again "in a shorter form".
+        Dean's brief carries the shelf definition he fits, Clark's research and the user's facts
+        and rules; Clark's research alone came back at 27,099 characters in a hire walk, and with
+        will.md (6,750) that is over the old 32,000 before a single fact is added."""
+        shelf=(ENGINE/"team/shelf/will.md").read_text()
+        research="The fictional bookkeeper keeps the books for a fictional coaching company. "*362
+        self.assertGreaterEqual(len(research),27099)
+        rules=("Never share a client's coaching notes with anyone outside the company.\n"
+               "Pricing and any spend over $1,000 is my call. Scheduling and drafts you can decide.\n")
+        brief=("Write two teammate definitions. Fit Will from his shelf text:\n\n"+shelf
+               +"\n\nWrite Beth from Clark's research:\n\n"+research+"\n\nBoth carry these rules word for word:\n"+rules)
+        self.assertGreater(len(brief),32000)
+        ask={"request_id":"hire-dean","obligation_id":"fixture-task","role":"consult","teammate":"dean",
+             "title":"Write teammate definitions for Will and Beth","brief":brief}
+        ready=self.call("prepare",ask)
+        self.assertEqual(ready["status"],"prepared")
+        self.assertIn(brief,ready["agent_payload"]["prompt"])
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"hire-dean-call",
+                                             "tool_input":ready["agent_payload"]})
+        # The whole call still fits the work tools' 128 KiB request line (ecs/adapters/mcp.py).
+        line=json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"prepare","arguments":
+                         {**ask,"brief":("x"*79+"\n")*(self.app.BRIEF_LIMIT//80)}}},ensure_ascii=False)
+        self.assertLess(len(line.encode()),128*1024)
+        # Over the bound, the refusal says by how much, so one shorter send is enough.
+        with self.assertRaisesRegex(ValueError,"brief must be a nonempty bounded string: it is 65,537 characters and the most is 65,536"):
+            self.call("prepare",{**ask,"request_id":"hire-dean-over","brief":"x"*(self.app.BRIEF_LIMIT+1)})
+
     def test_a_consult_needs_no_repository_is_read_only_and_hands_back_its_final_message(self):
         """Slice 3 of the proto-teammate shelf plan (richos-hq
         docs/plans/2026-10-06-proto-teammate-shelf.md §3): a third duty, `consult`, with no
