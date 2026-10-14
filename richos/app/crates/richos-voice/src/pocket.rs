@@ -135,7 +135,7 @@ pub fn missing_files(dir: &Path) -> Vec<PinnedFile> {
 // ---------------------------------------------------------------------------------------------
 // The engine. Lifted from Buzz `pocket_april.rs` (Apache-2.0); changes: no sherpa-onnx (the voice
 // WAV is read and resampled with this crate's `wav`), no `rand` (a local PRNG draws the flow
-// noise), and only the whole-chunk path RichOS uses (its sentence pipeline already streams).
+// noise), and PCM delivery while the rest of the sentence is still being generated.
 // ---------------------------------------------------------------------------------------------
 
 const FILE_BUNDLE: &str = "bundle.json";
@@ -624,25 +624,32 @@ impl Engine {
 
     /// One sentence (any length) to 24 kHz audio.
     fn synthesize(&mut self, text: &str) -> Result<Vec<f32>, String> {
-        let Some((prepared, _)) = prepare_prompt(text) else { return Ok(Vec::new()) };
+        let mut audio = Vec::new();
+        self.synthesize_stream(text, &mut |chunk| { audio.extend_from_slice(chunk); true })?;
+        Ok(audio)
+    }
+
+    /// Decode and deliver each codec block before generating the rest of the sentence.
+    /// A false return from the sink cancels the remaining generation.
+    fn synthesize_stream(&mut self, text: &str, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<bool, String> {
+        let Some((prepared, _)) = prepare_prompt(text) else { return Ok(true) };
         let max = self.bundle.max_token_per_chunk;
         let chunks = if self.prepared_token_count(&prepared)? <= max {
             vec![prepared]
         } else {
             split_at_natural_boundaries(&prepared, max, |t| self.prepared_token_count(t))?
         };
-        let mut audio = Vec::new();
         for chunk in chunks {
             let Some((chunk, frames_after_eos)) = prepare_prompt(&chunk) else { continue };
-            audio.extend(self.synth_chunk(&chunk, frames_after_eos)?);
+            if !self.synth_chunk_stream(&chunk, frames_after_eos, emit)? { return Ok(false); }
         }
-        Ok(audio)
+        Ok(true)
     }
 
-    fn synth_chunk(&mut self, prepared: &str, frames_after_eos: usize) -> Result<Vec<f32>, String> {
+    fn synth_chunk_stream(&mut self, prepared: &str, frames_after_eos: usize, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<bool, String> {
         let token_ids = self.token_ids(prepared)?;
         if token_ids.is_empty() {
-            return Ok(Vec::new());
+            return Ok(true);
         }
         if token_ids.len() > self.bundle.max_token_per_chunk {
             return Err(format!("prompt has {} tokens; the limit is {}", token_ids.len(), self.bundle.max_token_per_chunk));
@@ -652,8 +659,7 @@ impl Engine {
         let text = self.text_embeddings(token_ids)?;
         self.run_flow_main_prefix(&text, &mut state)?;
         let max_frames = estimate_max_frames(token_count, self.bundle.frame_rate);
-        let latents = self.generate_latents(max_frames, frames_after_eos, &mut state)?;
-        self.decode_latents(&latents)
+        self.generate_audio(max_frames, frames_after_eos, &mut state, emit)
     }
 
     fn voice_embeddings(&mut self, samples: Vec<f32>) -> Result<Vec<f32>, String> {
@@ -711,10 +717,11 @@ impl Engine {
         replace_state_from_outputs(state, &mut outputs)
     }
 
-    fn generate_latents(&mut self, max_frames: usize, frames_after_eos: usize, state: &mut [StateValue]) -> Result<Vec<f32>, String> {
+    fn generate_audio(&mut self, max_frames: usize, frames_after_eos: usize, state: &mut [StateValue], emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<bool, String> {
         let dim = self.bundle.latent_dim;
         let mut current = vec![f32::NAN; dim];
-        let mut latents = Vec::with_capacity(max_frames * dim);
+        let mut latents = Vec::with_capacity(DECODER_CHUNK_FRAMES * dim);
+        let mut decoder_state = initialize_state(&self.bundle.mimi_state_manifest)?;
         let mut eos_step = None;
         for step in 0..max_frames {
             let sequence = Tensor::from_array((vec![1_i64, 1, dim as i64], current.clone().into_boxed_slice()))
@@ -760,28 +767,29 @@ impl Engine {
             drop(outputs);
             current.clone_from(&noise);
             latents.extend_from_slice(&noise);
+            if latents.len() == DECODER_CHUNK_FRAMES * dim {
+                let audio = self.decode_block(&latents, &mut decoder_state)?;
+                if !emit(&audio) { return Ok(false); }
+                latents.clear();
+            }
         }
-        Ok(latents)
+        if !latents.is_empty() {
+            let audio = self.decode_block(&latents, &mut decoder_state)?;
+            if !emit(&audio) { return Ok(false); }
+        }
+        Ok(true)
     }
 
-    fn decode_latents(&mut self, latents: &[f32]) -> Result<Vec<f32>, String> {
+    fn decode_block(&mut self, latents: &[f32], state: &mut [StateValue]) -> Result<Vec<f32>, String> {
         let dim = self.bundle.latent_dim;
-        if latents.is_empty() {
-            return Ok(Vec::new());
-        }
         let frames = latents.len() / dim;
-        let mut state = initialize_state(&self.bundle.mimi_state_manifest)?;
-        let mut audio = Vec::with_capacity(frames * self.bundle.samples_per_frame);
-        for start in (0..frames).step_by(DECODER_CHUNK_FRAMES) {
-            let end = (start + DECODER_CHUNK_FRAMES).min(frames);
-            let latent = Tensor::from_array((vec![1_i64, (end - start) as i64, dim as i64], latents[start * dim..end * dim].to_vec().into_boxed_slice()))
-                .map_err(ort_error("create Mimi latent tensor"))?;
-            let mut inputs = vec![(Cow::Borrowed("latent"), SessionInputValue::from(latent))];
-            append_state_inputs(&mut inputs, &state);
-            let mut outputs = self.mimi_decoder.run(inputs).map_err(ort_error("run Mimi decoder"))?;
-            audio.extend_from_slice(outputs[0].try_extract_tensor::<f32>().map_err(ort_error("extract Mimi audio"))?.1);
-            replace_state_from_outputs(&mut state, &mut outputs)?;
-        }
+        let latent = Tensor::from_array((vec![1_i64, frames as i64, dim as i64], latents.to_vec().into_boxed_slice()))
+            .map_err(ort_error("create Mimi latent tensor"))?;
+        let mut inputs = vec![(Cow::Borrowed("latent"), SessionInputValue::from(latent))];
+        append_state_inputs(&mut inputs, state);
+        let mut outputs = self.mimi_decoder.run(inputs).map_err(ort_error("run Mimi decoder"))?;
+        let audio = outputs[0].try_extract_tensor::<f32>().map_err(ort_error("extract Mimi audio"))?.1.to_vec();
+        replace_state_from_outputs(state, &mut outputs)?;
         Ok(audio)
     }
 }
@@ -835,6 +843,27 @@ impl SpeechSynth for PocketSynth {
         Ok(Speech { samples, sample_rate: target_rate, synth_ms: started.elapsed().as_millis() as u64 })
     }
 
+    fn synthesize_stream(&self, text: &str, target_rate: u32, _scratch_dir: &Path, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<(), TtsError> {
+        let started = Instant::now();
+        let mut converter = wav::RateConverter::new(SAMPLE_RATE, target_rate);
+        let mut first = true;
+        let mut samples = 0;
+        self.engine.lock().map_err(|_| TtsError::Io("Pocket TTS engine lock poisoned".into()))?
+            .synthesize_stream(text, &mut |audio| {
+                let mut pcm = Vec::new();
+                converter.push(audio, &mut pcm);
+                if pcm.is_empty() { return true; }
+                if first {
+                    first = false;
+                    eprintln!("[richos-voice] Pocket TTS first PCM in {} ms", started.elapsed().as_millis());
+                }
+                samples += pcm.len();
+                emit(&pcm)
+            }).map_err(TtsError::Decode)?;
+        eprintln!("[richos-voice] tts: {:.2} s of speech streamed in {} ms by {}", samples as f64 / target_rate as f64, started.elapsed().as_millis(), self.voice_label());
+        Ok(())
+    }
+
     fn voice_label(&self) -> String {
         format!("Pocket TTS {MODEL_LANGUAGE} INT8 · Peter Yearsley · {} threads", threads())
     }
@@ -843,6 +872,42 @@ impl SpeechSynth for PocketSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real pinned inference, silent. Opt in with RICHOS_POCKET_TEST_DIR and --ignored.
+    #[test]
+    #[ignore = "requires the nine pinned Pocket TTS files; produces PCM without using an audio device"]
+    fn pinned_voice_streams_audio_before_sentence_completion_and_cancels_generation() {
+        let dir = std::path::PathBuf::from(std::env::var("RICHOS_POCKET_TEST_DIR").expect("set the pinned model directory"));
+        let synth = PocketSynth::load(&dir).expect("pinned voice loads");
+        let text = "Start with the dental practices you already serve. Ask their owners which nearby practices have the same accounting problems, then offer those practices a short demonstration.";
+        let started = Instant::now();
+        let mut first_ms = None;
+        let mut blocks = Vec::new();
+        synth.synthesize_stream(text, SAMPLE_RATE, &dir, &mut |pcm| {
+            first_ms.get_or_insert_with(|| started.elapsed().as_millis());
+            blocks.push(pcm.to_vec());
+            true
+        }).unwrap();
+        assert!(blocks.len() > 2, "a long sentence was buffered instead of streamed");
+        assert!(blocks.iter().all(|pcm| !pcm.is_empty() && pcm.iter().all(|v| v.is_finite())));
+        assert!(blocks.iter().flatten().any(|v| v.abs() > 0.01), "voice must contain actual speech");
+        let total_ms = started.elapsed().as_millis();
+        // The same seeded inference must preserve the waveform across 48 kHz PCM blocks.
+        synth.engine.lock().unwrap().noise = Noise(42);
+        let buffered = synth.synthesize(text, 48_000, &dir).unwrap();
+        synth.engine.lock().unwrap().noise = Noise(42);
+        let mut converted = Vec::new();
+        synth.synthesize_stream(text, 48_000, &dir, &mut |pcm| { converted.extend_from_slice(pcm); true }).unwrap();
+        assert_eq!(converted, buffered.samples[..converted.len()], "block boundaries must not change the speech waveform");
+        assert!(buffered.samples.len() - converted.len() <= 4, "only converter lookahead at the silent tail can be withheld");
+        let mut accepted = 0;
+        synth.synthesize_stream(text, SAMPLE_RATE, &dir, &mut |_| { accepted += 1; false }).unwrap();
+        assert_eq!(accepted, 1, "generation must stop as soon as playback rejects an obsolete answer");
+        let after_cancel = synth.synthesize("On it!", SAMPLE_RATE, &dir).unwrap();
+        assert!(!after_cancel.samples.is_empty(), "a canceled sentence must not poison the next answer");
+        eprintln!("POCKET_STREAM_PROOF first_pcm_ms={} complete_ms={total_ms} blocks={} samples={} canceled_blocks={accepted}", first_ms.unwrap(), blocks.len(), blocks.iter().map(Vec::len).sum::<usize>());
+    }
+
 
     /// INVARIANT: the download is exactly the nine pinned files, the voice is Peter Yearsley's,
     /// and every hash is a full sha256. A tenth file or a different voice is a commit, not drift.

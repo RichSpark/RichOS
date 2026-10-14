@@ -7,6 +7,8 @@
 // screen. Closing the preferences panel IS the confirmation that the settings chosen there
 // now need to be saved and implemented."
 //
+// CEO 2026-10-14 prioritizes instant replies over effort; the conversation now uses low effort.
+//
 // WHAT THIS SUITE PROVES is the browser half, through the real renderer and mock.js's stand-in
 // for config.rs:
 //   1. the rows show the stored choice, first in Preferences (the rail gear), not in the quick
@@ -150,7 +152,7 @@ async function main() {
     await rowsShow(fresh, { rich: "opus", stu: "opus" });
     const r0 = await rows(fresh);
     assertEqual([r0.rich, r0.stu], [{ chosen: "opus", state: "default" }, { chosen: "opus", state: "default" }], "fresh install");
-    assert(r0.note.startsWith("Opus at high effort is the default for both."), "the line under the rows: " + r0.note);
+    assert(r0.note.startsWith("Opus is the default for both."), "the line under the rows: " + r0.note);
     // First in Preferences: the first section title in the popover is this one.
     const firstTitle = await fresh.$eval("#assertiveness-popover .popover-title", (n) => n.textContent);
     assertEqual(firstTitle, "Rich's model", "the first section in Preferences");
@@ -218,7 +220,7 @@ async function main() {
     await page.click('#md-rich .seg-opt[data-v="opus"]');
     await page.click('#md-stu .seg-opt[data-v="fable"]');
     await page.keyboard.press("Escape");
-    const both = "Rich talks with you on Opus at high effort again, the default. Rich now directs your team on Fable.";
+    const both = "Rich talks with you on Opus again, the default. Rich now directs your team on Fable.";
     await toastSays(page, both);
     assertEqual(await isOpen(page), false, "Escape closed Preferences");
     assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after Escape");

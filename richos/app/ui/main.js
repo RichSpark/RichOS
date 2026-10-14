@@ -4935,7 +4935,7 @@ async function syncAssertivenessFromBackend() {
 // ---------------------------------------------------------------------------------------
 // RICH'S MODEL (CEO §119; round 23). Two rows: "talks with you" (the conversation, Rich) and
 // "directs your team" (the team's back end, Stu in the record, never named in the app, §110),
-// each Opus at high effort (the default) or Fable. Backed by `get_lease_models` /
+// each Opus (the default) or Fable. Conversation effort prioritizes quick replies. Backed by `get_lease_models` /
 // `set_lease_models` (main.rs -> richos-core's config.rs).
 //
 // HELD WHILE PREFERENCES IS OPEN, SAVED AND APPLIED WHEN IT CLOSES. The CEO's addendum, his
@@ -4954,7 +4954,7 @@ const MODEL_ROWS = [
 ];
 const MODEL_NOTE = {
   "opus,opus":
-    "Opus at high effort is the default for both. Fable is more capable than Opus and uses up your Claude limits faster.",
+    "Opus is the default for both. Fable is more capable than Opus and uses up your Claude limits faster.",
   "fable,opus":
     "<strong>Rich talks with you on Fable.</strong> Fable is more capable than Opus and uses up your Claude limits faster.",
   "opus,fable":
@@ -4965,7 +4965,7 @@ const MODEL_NOTE = {
 const MODEL_TOAST = {
   rich: {
     fable: "Rich now talks with you on Fable.",
-    opus: "Rich talks with you on Opus at high effort again, the default.",
+    opus: "Rich talks with you on Opus again, the default.",
   },
   stu: {
     fable: "Rich now directs your team on Fable.",

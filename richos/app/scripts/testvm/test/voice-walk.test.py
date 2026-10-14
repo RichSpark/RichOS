@@ -288,6 +288,18 @@ class InstalledVoiceAfterRelaunch(unittest.TestCase):
                 v.rich_voice()
 
 
+class TtsTiming(unittest.TestCase):
+    def test_streaming_measures_first_pcm_not_sentence_completion(self):
+        prefix = '[richos-voice] '
+        done = prefix + 'tts: 9.12 s of speech streamed in 1383 ms by Pocket TTS'
+        self.assertEqual(walk.tts_timing([prefix + 'Pocket TTS first PCM in 169 ms', done], done),
+                         {'first_audio_ms': 169, 'complete_synthesis_ms': 1383})
+        with self.assertRaises(walk.StepFailed):
+            walk.tts_timing([done, prefix + 'Pocket TTS first PCM in 169 ms'], done)
+        old = prefix + 'tts: 2.10 s of speech synthesized in 640 ms (rtf 0.305) by Pocket TTS'
+        self.assertEqual(walk.tts_timing([old], old), {'first_audio_ms': 640, 'complete_synthesis_ms': 640})
+
+
 class ReplySplit(unittest.TestCase):
     """Where the seconds between his turn and Rich's first sample go (CEO 2026-10-14)."""
     DAY = 1791936000000  # 2026-10-14T00:00:00Z

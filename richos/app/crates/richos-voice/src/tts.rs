@@ -106,6 +106,13 @@ pub trait SpeechSynth: Send + Sync {
     /// Synthesize one sentence as mono f32 at `target_rate` (the output device's rate, so
     /// playout never resamples Rich's voice).
     fn synthesize(&self, text: &str, target_rate: u32, scratch_dir: &Path) -> Result<Speech, TtsError>;
+    /// Deliver PCM as it becomes available. Returning false cancels further generation.
+    /// The default keeps whole-sentence synthesizers compatible.
+    fn synthesize_stream(&self, text: &str, target_rate: u32, scratch_dir: &Path, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<(), TtsError> {
+        let speech = self.synthesize(text, target_rate, scratch_dir)?;
+        emit(&speech.samples);
+        Ok(())
+    }
     /// Honest identity for logs and the brief — never shown to the CEO.
     fn voice_label(&self) -> String;
 }
@@ -316,6 +323,22 @@ impl SpeechSynth for RichVoice {
             speech.realtime_factor()
         );
         Ok(speech)
+    }
+
+    fn synthesize_stream(&self, text: &str, target_rate: u32, scratch_dir: &Path, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<(), TtsError> {
+        if let Some(pocket) = ready_pocket() {
+            let mut delivered = false;
+            let result = pocket.synthesize_stream(text, target_rate, scratch_dir, &mut |pcm| {
+                delivered = true;
+                emit(pcm)
+            });
+            match result {
+                Ok(()) => return Ok(()),
+                Err(e) if delivered => return Err(e),
+                Err(e) => eprintln!("[richos-voice] Pocket TTS failed before playback, speaking with say: {e}"),
+            }
+        }
+        self.fallback.synthesize_stream(text, target_rate, scratch_dir, emit)
     }
 
     fn voice_label(&self) -> String {

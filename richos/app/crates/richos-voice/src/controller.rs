@@ -1916,44 +1916,28 @@ impl VoiceController {
                     if msg.generation != shared.generation.load(Ordering::Relaxed) {
                         continue;
                     }
-                    match synth.synthesize(&msg.text, playout.device_rate, &scratch) {
-                        Ok(speech) => {
-                            // **THE FLOOR, ASKED AGAIN AFTER SYNTHESIS.** He may have started talking
-                            // while `say` was working; the gate in front of synthesis could not see
-                            // that. Wait while the floor is his. If his words supersede this answer
-                            // the generation moves and the check below drops it; if he gives the
-                            // floor back without words, it plays unchanged.
-                            let mut held = false;
-                            while !may_sound(
-                                shared.his_floor.load(Ordering::Relaxed),
-                                shared.his_onset.load(Ordering::Relaxed),
-                            )
-                                && msg.generation == shared.generation.load(Ordering::Relaxed)
-                                && shared.running.load(Ordering::Relaxed)
-                            {
-                                if !held {
-                                    held = true;
-                                    eprintln!(
-                                        "[richos-voice] {} answer HELD after synthesis — he started talking while it was being prepared",
-                                        wall_clock_utc()
-                                    );
-                                }
-                                std::thread::sleep(FLOOR_POLL);
+                    let mut held = false;
+                    let result = synth.synthesize_stream(&msg.text, playout.device_rate, &scratch, &mut |samples| {
+                        // Every PCM block must still belong to this answer and wait for his floor.
+                        while !may_sound(shared.his_floor.load(Ordering::Relaxed), shared.his_onset.load(Ordering::Relaxed))
+                            && msg.generation == shared.generation.load(Ordering::Relaxed)
+                            && shared.running.load(Ordering::Relaxed)
+                        {
+                            if !held {
+                                held = true;
+                                eprintln!("[richos-voice] {} answer HELD after synthesis — he started talking while it was being prepared", wall_clock_utc());
                             }
-                            // Synthesis (and any wait) took real time; check again before a sound.
-                            if msg.generation != shared.generation.load(Ordering::Relaxed) {
-                                continue;
-                            }
-                            shared.answer_sounded.store(true, Ordering::Relaxed);
-                            playout.queue(&speech.samples);
+                            std::thread::sleep(FLOOR_POLL);
                         }
-                        Err(e) => {
-                            eprintln!("[richos-voice] tts failed: {e}");
-                            observer.on_voice_event(&VoiceEvent::Error {
-                                message: e.ceo_message(),
-                                at: now_millis(),
-                            });
-                        }
+                        if !shared.running.load(Ordering::Relaxed)
+                            || msg.generation != shared.generation.load(Ordering::Relaxed) { return false; }
+                        shared.answer_sounded.store(true, Ordering::Relaxed);
+                        playout.queue(samples);
+                        true
+                    });
+                    if let Err(e) = result {
+                        eprintln!("[richos-voice] tts failed: {e}");
+                        observer.on_voice_event(&VoiceEvent::Error { message: e.ceo_message(), at: now_millis() });
                     }
                 }
             }));

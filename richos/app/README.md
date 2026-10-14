@@ -686,7 +686,8 @@ richos/app/
     src/{stt,tts}.rs         local whisper.cpp (small.en) / Rich's voice behind a trait:
                               Pocket TTS as Peter Yearsley, macOS `say` until it is installed
     src/pocket.rs            Kyutai Pocket TTS (ONNX Runtime, statically linked) with the
-                              Peter Yearsley voice: nine pinned files, downloaded on first need
+                              Peter Yearsley voice: nine pinned files, downloaded on first need; audio streams
+                              at each codec block while the rest of the sentence is generated
     src/controller.rs        four threads, CaptureBrain, the half-duplex taint rule
     tests/barge_in_composition.rs  the WIRING: echo defense + real interruptions
     tests/rich_voice.rs      2 tests: voice mode speaks through RichVoice, and with the pinned
@@ -1246,8 +1247,8 @@ cargo test -p richos-core                       # 2011 tests + 5 doc-tests (2007
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 405 tests (4 live-device tests ignored without a device)
-#     …of which 325 RUN here and 4 report `ignored, LIVE AUDIO: …`, each naming its own
+cargo test -p richos-voice                      # 406 tests (405 direct, 1 ignored; 4 live-device tests also ignored without a device)
+#     The 326 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test
 #     that returns is reported `ok`, so they were four green lines asserting nothing on every
