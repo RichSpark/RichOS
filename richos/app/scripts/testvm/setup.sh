@@ -101,9 +101,8 @@ tart set "$TESTVM_BASE_VM" --cpu "$TESTVM_CPU" --memory "$TESTVM_RAM_MB" --displ
 boot_base() {
   if vm_running "$TESTVM_BASE_VM"; then log "base VM already running"; return; fi
   log "booting base VM headless (no window on the host)..."
-  # caffeinate -is: hold off idle SYSTEM sleep only. See run.sh for why -d and
-  # -u are deliberately excluded (they would keep the CEO's screen awake).
-  nohup caffeinate -is "$TART_BIN" run "$TESTVM_BASE_VM" --no-graphics \
+  # Respect the host's power and sleep policy, including during provisioning.
+  nohup "$TART_BIN" run "$TESTVM_BASE_VM" --no-graphics \
     > "$TESTVM_LOG/$TESTVM_BASE_VM.log" 2>&1 &
   echo $! > "$TESTVM_RUN/$TESTVM_BASE_VM.pid"
 }

@@ -1176,13 +1176,23 @@ t_done
 # ===========================================================================
 # stop.sh — the host-side runner, by its recorded pid AND its own command line
 # ===========================================================================
-# run.sh records the pid of `caffeinate -is <tart> run <vm> --no-graphics`. A run
+# run.sh records the pid of `<tart> run <vm> --no-graphics`. A run
 # state can outlive that process (a crashed harness, a reboot), and macOS reuses
 # pids, so a recorded pid alone may name somebody else's work by the time stop.sh
 # reads it. Both cases run stop.sh against their own root and their own processes,
 # started here; nothing else on this Mac is signaled.
 STOP_ROOT="$TMP/stoproot"; STOP_VM="richos-test-stoppid"
 STOP_TART="$STOP_ROOT/bin/tart.app/Contents/MacOS/tart"
+
+t "host power: both VM launchers run Tart directly without a wake lock"
+  for launcher in run.sh setup.sh; do
+    src="$(cat "$TESTVM_DIR/$launcher")"
+    has "$src" "nohup \"\$TART_BIN\" run "
+    if printf '%s\n' "$src" | grep -E '^[[:space:]]*[^#[:space:]].*caffeinate'; then
+      ok 1 "$launcher must not hold the host awake"
+    fi
+  done
+t_done
 
 t "stop: a recorded runner pid that now belongs to other work is left alone"
   mkdir -p "$STOP_ROOT/run/$STOP_VM"
@@ -1199,7 +1209,7 @@ t "stop: the recorded runner, identified by its command line, is ended with its 
   mkdir -p "$(dirname "$STOP_TART")" "$STOP_ROOT/run/$STOP_VM"
   cat > "$STOP_TART" <<'EOF'
 #!/usr/bin/env bash
-# A stand-in tart: lists no VMs, and `run` holds one child, the way caffeinate holds tart.
+# A stand-in tart: lists no VMs, and `run` holds one owned child.
 case "${1:-}" in
   list) echo '[]' ;;
   run)  sleep 60 & echo $! > "$STUB_RUNNER_CHILD"; wait ;;
