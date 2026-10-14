@@ -314,6 +314,28 @@ class CommandWalk(adopt_walk.Walk):
         text = guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60)
         (self.out / 'callbacks.txt').write_text(text + '\n')
         kept['callbacks.txt'] = len(text)
+        # Why a tool call was refused, word for word, and every Pierce verdict with its wall time:
+        # the callbacks show what Rich sent, never what came back (hiresnag55: the cause of a
+        # "technical snag" was gone with the guest).
+        script = ('import glob,json,os,sys\n'
+                  'for p in sorted(glob.glob(sys.argv[2]+"/.claude/projects/*/*.jsonl")):\n'
+                  '    for line in open(p, errors="replace"):\n'
+                  '        if \'"is_error":true\' not in line.replace(" ", ""): continue\n'
+                  '        row = json.loads(line)\n'
+                  '        for part in (row.get("message") or {}).get("content") or []:\n'
+                  '            if isinstance(part, dict) and part.get("is_error"):\n'
+                  '                print("=== " + str(row.get("timestamp")) + " " + os.path.basename(p))\n'
+                  '                print(json.dumps(part.get("content"), ensure_ascii=False)[:6000])\n'
+                  'for p in sorted(glob.glob(sys.argv[1]+"/engine-state/pierce/*.json")):\n'
+                  '    v = json.load(open(p))\n'
+                  '    if "verdict" in v:\n'
+                  '        print("=== pierce " + os.path.basename(p) + " " + str(v.get("verdict")) + " at "\n'
+                  '              + str(v.get("at")) + " " + str(v.get("review_mode")))\n'
+                  '        print(str(v.get("report"))[:3000])\n')
+        text = guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data) + ' '
+                     + shlex.quote(self.home) + ' 2>&1 || true', 60)
+        (self.out / 'refusals.txt').write_text(text + '\n')
+        kept['refusals.txt'] = len(text)
         return kept
 
     def settled_read(self, record):
