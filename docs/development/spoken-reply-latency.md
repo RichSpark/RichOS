@@ -26,6 +26,10 @@ optimizing a 1.38-second synthesis as the main problem. Restore responsive conve
 
 Evidence and exact identities: [the investigation record](../verification/2026-10-14-spoken-reply-delay.md)
 and [the follow-up record](../verification/2026-10-14-instant-replies.md).
+The [accepted real Mac microphone benchmark](../verification/2026-10-14-real-mac-voice-benchmark.md)
+preserves the three live turns Alex judged to work well, their component timings,
+hardware, models and thinking witnesses. Use its original observations for future
+comparisons, keeping cold launch, changed briefs, VM runs and different speech models separate.
 The retained raw evidence is outside disposable scratch under the external SSD's
 `richos-evidence` directories. Preserve failed attempts and distinguish VM and physical-host
 measurements. These observations do not promise a fixed network latency on every request.

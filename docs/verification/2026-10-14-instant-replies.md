@@ -4,7 +4,10 @@ The decoder now initializes before capture opens. Conversation replies use Opus 
 low effort under the user's October 14 instruction; background work keeps high
 effort. Thinking remains enabled. These changes repair confirmed delays, but the
 final VM run's 10.573-second full spoken wait does **not** prove instant replies
-are restored. Physical app end-to-end latency remains unmeasured.
+are restored. A subsequent [real Mac microphone benchmark](2026-10-14-real-mac-voice-benchmark.md)
+records three live turns Alex accepted as working well, with thinking enabled.
+Its handover-to-playback markers were 2.450, 2.460 and 2.369 seconds. The
+separate recorded-input run's changed-brief hidden wait remains documented there.
 
 ## Final implementation
 
@@ -146,4 +149,5 @@ The original `live/` result and failed exploratory attempts remain separately.
 
 Landing and installation are distinct from these passing checks. Rich owns the
 normal landing gate. Do not claim the user has the fix installed or that physical
-end-to-end instant replies are proven by this record.
+end-to-end instant replies are proven by the VM evidence. The later accepted
+physical benchmark is separate, with its own conditions and measurement boundaries.
