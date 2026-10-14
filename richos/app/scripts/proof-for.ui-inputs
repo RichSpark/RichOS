@@ -115,6 +115,7 @@ waiting-lifecycle.js    @shell richos/app/ui/mock.js
 second-mouth.js         @shell richos/app/ui/mock.js
 dialect.js              @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs @allui richos/app/src-tauri/src/ richos/app/crates/
 dictation-overlay.js    richos/app/ui/dictation-bar.html richos/app/ui/dictation-bar.js richos/app/ui/dictation-menu.html richos/app/ui/dictation-menu.js richos/app/ui/dictation-overlay.css richos/app/ui/style.css richos/app/ui/theme-boot.js richos/app/ui/index.html
+meeting-panel.js        richos/app/ui/meeting-panel.html richos/app/ui/meeting-panel.js richos/app/ui/meeting-panel.css richos/app/ui/style.css richos/app/ui/theme-boot.js
 retention.js            @shell richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js richos/app/crates/richos-core/src/config.rs richos/app/crates/richos-core/src/journal.rs
 rich-model.js           @shell richos/app/ui/mock.js richos/app/ui/settings-button.js
 onboarding.js           @shell richos/app/ui/mock.js richos/app/src-tauri/src/main.rs
@@ -125,6 +126,7 @@ quota.js                @shell richos/app/ui/quota.js richos/app/ui/settings-but
 accounts.js             @shell richos/app/ui/accounts.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js
 dictation.js            @shell richos/app/ui/dictation.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 bug-report.js           @shell richos/app/ui/bug-report.js richos/app/ui/settings-button.js richos/app/ui/timeline.js richos/app/ui/mock.js @allui
+meeting-notes.js        @shell richos/app/ui/meeting-notes.js richos/app/ui/settings-button.js richos/app/ui/mock.js
 codex-reviews.js        @shell richos/app/ui/codex-reviews.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/spend.js
 spend.js                @shell richos/app/ui/spend.js richos/app/ui/settings-button.js richos/app/ui/mock.js richos/app/ui/home.js richos/app/src-tauri/src/main.rs
 provider-auth.js        @shell

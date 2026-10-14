@@ -942,6 +942,26 @@ test('toSourceItem normalizes an event → SourceItem (actors, times, provenance
   assert.deepEqual(validateSourceItem(item), []);
 });
 
+test('toSourceItem keeps the Google Meet link from the conference data (rv-20261014T105556Z #3)', () => {
+  // The meeting-notes prompt reads the call app from the link; Google puts a Meet link only in
+  // `hangoutLink` and `conferenceData`, never in the description or location.
+  const a = new GoogleCalendarAdapter({ accountId: 'fixture-account', client: null, now });
+  const item = a.toSourceItem({
+    ...EVENT_ORG, description: '', location: undefined,
+    hangoutLink: 'https://meet.google.com/abc-defg-hij',
+    conferenceData: { entryPoints: [
+      { entryPointType: 'video', uri: 'https://meet.google.com/abc-defg-hij' },
+      { entryPointType: 'phone', uri: 'tel:+1-555-0100' },
+    ] },
+  });
+  assert.deepEqual(item.content.structured.meetingLinks, ['https://meet.google.com/abc-defg-hij']);
+  // A conference elsewhere (a Zoom add-on) is kept from its entry point alone.
+  const zoom = a.toSourceItem({ ...EVENT_ORG, conferenceData: { entryPoints: [{ entryPointType: 'video', uri: 'https://us02web.zoom.us/j/123' }] } });
+  assert.deepEqual(zoom.content.structured.meetingLinks, ['https://us02web.zoom.us/j/123']);
+  // POSITIVE CONTROL: no conference, no links.
+  assert.deepEqual(a.toSourceItem(EVENT_ORG).content.structured.meetingLinks, []);
+});
+
 test('toSourceItem marks a cancelled event as a supersede signal (temporal memory, not delete)', () => {
   const a = new GoogleCalendarAdapter({ accountId: 'fixture-account', client: null, now });
   const item = a.toSourceItem(EVENT_CANCELLED);
@@ -5236,6 +5256,23 @@ test('a withdrawn event supersedes rather than deletes, in both of Graph\'s two 
 
   // POSITIVE CONTROL: an ordinary event supersedes nothing.
   assert.equal(a.toSourceItem(MS_EVENT_ORG).temporal.supersedes, null);
+});
+
+test('toSourceItem keeps the HTML invite\'s link targets as meetingLinks (rv-20261014T105556Z #3)', () => {
+  // A Teams invite's join link is only an HTML link target: the stripped text says "Join the
+  // meeting now" and the location "Microsoft Teams Meeting", neither of which names the link.
+  const item = msCalendar().toSourceItem({
+    ...MS_EVENT_ORG, location: { displayName: 'Microsoft Teams Meeting' },
+    body: { contentType: 'html', content: '<p><a href="https://teams.microsoft.com/l/meetup-join/fixture?a=1&amp;b=2">Join the meeting now</a>'
+      + ' <a href=\'https://teams.microsoft.com/l/meetup-join/fixture?a=1&amp;b=2\'>again</a> <a href="mailto:x@acme.com">mail</a></p>' },
+  });
+  assert.equal(item.content.text, 'Join the meeting now again mail', 'the stored text is unchanged');
+  assert.deepEqual(item.content.structured.meetingLinks, ['https://teams.microsoft.com/l/meetup-join/fixture?a=1&b=2']);
+  // POSITIVE CONTROL: no links in the body, none kept; a plain-text body keeps its URL in the text.
+  assert.deepEqual(msCalendar().toSourceItem(MS_EVENT_ORG).content.structured.meetingLinks, []);
+  const plain = msCalendar().toSourceItem({ ...MS_EVENT_ORG, body: { contentType: 'text', content: 'Join: https://zoom.us/j/1' } });
+  assert.deepEqual(plain.content.structured.meetingLinks, []);
+  assert.match(plain.content.text, /zoom\.us\/j\/1/);
 });
 
 test('eventBodyText prefers the body, falls back to bodyPreview, and survives neither', () => {

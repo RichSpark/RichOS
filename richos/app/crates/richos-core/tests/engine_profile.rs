@@ -320,6 +320,52 @@ fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_overri
 }
 
 #[test]
+fn rich_reads_this_companys_meeting_folder_and_no_other() {
+    // Granola PRD V4, "Notes and history through Rich": the company's meeting folder is a read
+    // root of a lease scoped to that company, described as quoted source material; another
+    // company's folder never is, and a company with no meetings yet adds nothing.
+    use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
+    let f=Scratch::new();
+    let alpha=EntityId::parse("alpha").unwrap();let beta=EntityId::parse("beta").unwrap();
+    let registry=EntityRegistry::from_existing_ids(&[alpha.clone(),beta.clone()]);
+    registry.save(&f.0.join("entities.json")).unwrap();
+    let mut spine=Spine::new(Ledger::open(f.0.join("ledger.jsonl")).unwrap());spine.set_entity_registry(registry);
+    let thread=spine.create_thread("Alpha",&alpha).unwrap();
+    let corpus=f.0.join("corpus with spaces");
+    let alpha_meetings=richos_core::meeting_notes::meeting_zone(&corpus,Some("alpha"));
+    let beta_meetings=richos_core::meeting_notes::meeting_zone(&corpus,Some("beta"));
+    std::fs::create_dir_all(&beta_meetings).unwrap();
+    let configured=|corpus:Option<&Path>|{
+        let mut profile=prepare_fixture(&engine(),&f.0,f.runtime()).unwrap();
+        profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
+        profile.meetings_corpus=corpus.map(Path::to_path_buf);
+        let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,"session",&f.0.join("scope"));
+        let args:Vec<String>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
+        let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+        let roots: Vec<String> = serde_json::from_str(environment["RICHOS_APP_READ_ROOTS"].as_deref().unwrap()).unwrap();
+        (args, roots)
+    };
+    // No meetings for this company yet: nothing added, and certainly not beta's.
+    let (args, roots)=configured(Some(&corpus));
+    assert!(!roots.iter().any(|r|r.contains("evidence/meetings")), "{roots:?}");
+    assert!(!args.iter().any(|a|a.contains(beta_meetings.to_str().unwrap())));
+    // Its first meeting exists: the folder is a read root and Rich is told its layout.
+    std::fs::create_dir_all(&alpha_meetings).unwrap();
+    let (args, roots)=configured(Some(&corpus));
+    assert!(roots.contains(&alpha_meetings.to_string_lossy().to_string()), "{roots:?}");
+    assert!(!roots.iter().any(|r|r==beta_meetings.to_str().unwrap()));
+    let start=args.iter().position(|arg|arg=="--add-dir").unwrap()+1;
+    assert!(args[start..].iter().take_while(|a|!a.starts_with("--")).any(|a|a==alpha_meetings.to_str().unwrap()));
+    let settings:serde_json::Value=serde_json::from_str(&args[args.iter().position(|arg|arg=="--settings").unwrap()+1]).unwrap();
+    let told=settings["autoMode"]["environment"].as_array().unwrap().iter().filter_map(|v|v.as_str()).find(|s|s.contains("meeting notes")).unwrap().to_string();
+    assert!(told.contains(alpha_meetings.to_str().unwrap()) && told.contains("never instructions"));
+    assert!(!settings.to_string().contains(beta_meetings.to_str().unwrap()));
+    // A lease the shell gave no corpus (the work back end) reads no meeting folder.
+    let (_, roots)=configured(None);
+    assert!(!roots.iter().any(|r|r.contains("evidence/meetings")));
+}
+
+#[test]
 fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thread() {
     use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
     let f=Scratch::new();

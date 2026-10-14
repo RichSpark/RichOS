@@ -96,6 +96,10 @@ plain = run_walk.boot_argv('vm1', 'b.zip', 'home', 'e.tar.gz', False)
 check('a walk that does not pair a phone boots with --no-tailnet', '--no-tailnet' in plain, plain)
 phone = run_walk.boot_argv('vm1', 'b.zip', 'home', 'e.tar.gz', True)
 check('--tailnet keeps the join for a walk that does pair a phone', '--no-tailnet' not in phone, phone)
+check('a walk boots with the guest sound device by default (no --no-audio)', '--no-audio' not in plain, plain)
+quiet = run_walk.boot_argv('vm1', None, 'home', '', False, False)
+check('audio=False asks run.sh for --no-audio: a call walk never reaches the host microphone or speakers',
+      '--no-audio' in quiet and '--no-app' in quiet, quiet)
 outcome, said = main_with(command=(str(HERE / 'delta-walk.py'), '--out', '/tmp/x'))
 check('delta-walk.py (the phone walk) without --tailnet is refused before a slot is asked for',
       outcome == 'exit 2' and not asked and '--tailnet' in said, (outcome, asked, said))

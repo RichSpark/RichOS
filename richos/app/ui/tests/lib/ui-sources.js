@@ -69,7 +69,7 @@ const ENTRY = "index.html";
 /// Named here rather than discovered, because "this HTML file is a window the app opens" is a
 /// claim about Rust code no scanner here reads; step 3 still refuses an HTML file that is
 /// neither, so a stray page cannot hide.
-const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html"];
+const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html", "meeting-panel.html"];
 
 /// What each shipped file is. Every row says WHY, because every row is a claim about
 /// whether a gate needs to look at the file, and an undeclared claim is the defect above.
@@ -111,6 +111,7 @@ const ROLES = {
   "dictation.js": { role: "ui", why: "Dictation (round 19, dictation plan slice 2): the Settings row, the Dictation sheet, the off notice and the composer's line once dictation is on" },
   "codex-reviews.js": { role: "ui", why: "Let Codex review your team's work (round 20.2): the Settings row below Technical view, its five states, the ⓘ's tooltip and the nudge" },
   "spend.js": { role: "ui", why: "API-equivalent token spend (round 22.1): its own screen, the Meter with its periods, Refresh and the live line, and its Token spend row in quick settings" },
+  "meeting-notes.js": { role: "ui", why: "meeting notes in the main window (round 25, Granola PRD V4): the Settings rows Start meeting notes and Pause meeting prompts, the paused chip and the quiet Preparing status" },
   "settings-button.js": { role: "ui", why: "the universal settings button — CEO ruling §15" },
   "splash.js": { role: "ui", why: "the opening curtain's renderer" },
   "splash-library.js": { role: "ui", why: "the two approved splash compositions — data, with prose in it" },
@@ -171,6 +172,15 @@ const ROLES = {
     role: "ui",
     why: "the menu bar menu's rows and Iris's line 4 for Secure Event Input",
   },
+  "meeting-panel.html": {
+    role: "ui",
+    why: "meeting notes' floating panel, a window over the meeting app (Granola PRD V4; round 25.1; src-tauri/src/meetings.rs)",
+  },
+  "meeting-panel.js": {
+    role: "ui",
+    why: "the panel's states: the prompt, the voice bar, the recording indicator and a problem beside the call (round 25.1)",
+  },
+  "meeting-panel.css": { role: "style", why: "the meeting panel's stylesheet (round 25.1's `#fl`, ported as drawn)" },
   "dictation-overlay.css": { role: "style", why: "the bar's, the flight's and the menu bar menu's stylesheet" },
   "style.css": { role: "style", why: "the shell's stylesheet" },
   "home.css": { role: "style", why: "the home screen's stylesheet" },

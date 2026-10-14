@@ -71,8 +71,8 @@
 # files named, because a helper moving between them must not be invisible to this line.
 # The line lives here, not in run-tests.sh, because a suite is the only thing that knows
 # what it reads, and a second place to edit is the defect run-tests.sh counts five of.
-# run-tests: inputs richos/app/scripts richos/engine LICENSE docs/legal
-# run-tests: covers richos/app/scripts/lib/no_host_paths.py richos/app/scripts/make-engine-asset.sh richos/app/scripts/verify-engine-asset-members.sh
+# run-tests: inputs richos/app/scripts richos/engine richos/tools/richos-service richos/tools/richos-extension LICENSE docs/legal
+# run-tests: covers richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/service-imports.mjs richos/app/scripts/make-engine-asset.sh richos/app/scripts/verify-engine-asset-members.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -149,6 +149,23 @@ make_fixture() {
     printf -- '---\nname: demo-skill\nlicense: MIT\n---\n\nbody\n' > "$r/richos/engine/skills/demo-skill/SKILL.md"
     printf 'MIT License\n\nCopyright (c) 2026 Somebody Else\n' > "$r/richos/engine/skills/demo-skill/LICENSE"
     printf 'MIT License\n\nCopyright (c) 2026 Somebody Else\n' > "$r/richos/engine/tools/demo-tool/LICENSE"
+    # The meeting-notes service in miniature: the same three relative reaches as the real one
+    # (into engine/voice, engine/loro and the extension), and a CLI that answers `tiers`.
+    cp "$DIR/lib/service-imports.mjs" "$r/richos/app/scripts/lib/service-imports.mjs"
+    mkdir -p "$r/richos/tools/richos-service/bin" "$r/richos/tools/richos-service/lib/workspace" \
+             "$r/richos/tools/richos-extension/sync" "$r/richos/engine/voice/provisioning" "$r/richos/engine/loro/lib"
+    for p in tools/richos-service tools/richos-extension engine/voice engine/loro; do
+        printf '{"type":"module"}\n' > "$r/richos/$p/package.json"
+    done
+    printf 'export const pin = 1;\n' > "$r/richos/engine/voice/provisioning/model-catalog.js"
+    printf 'export const privacy = 1;\n' > "$r/richos/engine/loro/lib/privacy.js"
+    printf 'export const decide = 1;\n' > "$r/richos/tools/richos-extension/sync/reconcile.js"
+    printf "import { pin } from '../../../engine/voice/provisioning/model-catalog.js';\nimport { decide } from '../../richos-extension/sync/reconcile.js';\nexport const ready = pin + decide;\n" \
+        > "$r/richos/tools/richos-service/lib/pipeline.js"
+    printf "import { privacy } from '../../../../engine/loro/lib/privacy.js';\nexport const scoped = privacy;\n" \
+        > "$r/richos/tools/richos-service/lib/workspace/privacy.js"
+    printf "import { ready } from '../lib/pipeline.js';\nif (process.argv[2] !== 'tiers') process.exit(2);\nconsole.log('quantized', ready);\n" \
+        > "$r/richos/tools/richos-service/bin/richos-service.js"
 
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
         git -c init.defaultBranch=main init -q "$r" >/dev/null 2>&1
@@ -355,6 +372,12 @@ fi
 if [ -n "$REAL_TARBALL" ] && [ -d "$RX/engine" ]; then
     ( cd "$ROOT/richos/engine" && git ls-files ) | LC_ALL=C sort > "$WORK/real-expected"
     printf 'LICENSE\nTHIRD-PARTY-NOTICES.md\n' >> "$WORK/real-expected"
+    # The meeting-notes service's product layout, derived here from git rather than read off
+    # the script (Granola PRD V4; `SERVICE_SOURCES` in make-engine-asset.sh).
+    ( cd "$ROOT/richos" && git ls-files -- tools/richos-service/package.json tools/richos-service/bin \
+        tools/richos-service/lib tools/richos-extension/package.json tools/richos-extension/sync/reconcile.js \
+        engine/voice engine/loro/package.json engine/loro/lib ) \
+        | grep -v '^engine/voice/tests/' | sed 's|^|service/|' >> "$WORK/real-expected"
     if [ -n "${RICHOS_RUNTIME_DIR:-}" ]; then
         ( cd "$RICHOS_RUNTIME_DIR" && find . \( -type f -o -type l \) -print ) | sed 's|^\./|runtime/|' >> "$WORK/real-expected"
     fi
@@ -467,6 +490,34 @@ if [ -x "$VOICE_NODE" ]; then
     fi
 else
     bad "L19 extracted voice core runs with the delivered Node runtime" "no delivered Node"
+fi
+
+# L27 — THE MEETING-NOTES SERVICE LOADS FROM THE REAL ARCHIVE ALONE (Granola PRD V4: "Verify
+# service imports from the installed payload with the checkout unavailable"). Every service
+# module, imported from the extracted archive's own copy with the delivered Node, from `/`.
+if [ -x "$VOICE_NODE" ] && [ -f "$RX/engine/service/tools/richos-service/bin/richos-service.js" ]; then
+    SERVICE_OUT="$(cd / && "$VOICE_NODE" "$DIR/lib/service-imports.mjs" "$RX/engine/service" 2>&1)"; SERVICE_RC=$?
+    if [ "$SERVICE_RC" -eq 0 ]; then
+        ok "L27 the real archive's meeting-notes service loads from its own copy:${SERVICE_OUT#*service}"
+    else
+        bad "L27 the real archive's meeting-notes service loads from its own copy" "$SERVICE_OUT"
+    fi
+else
+    bad "L27 the real archive's meeting-notes service loads from its own copy" \
+        "no delivered Node, or no engine/service/tools/richos-service/bin/richos-service.js in the archive"
+fi
+
+# L28 — A SERVICE MISSING ONE OF ITS IMPORTS IS REFUSED, by the module that needs it. The
+# extension module leaves the tracked set; the build must not publish a service that cannot load.
+F28="$WORK/no-reconcile"; make_fixture "$F28"
+rm -f "$F28/richos/tools/richos-extension/sync/reconcile.js"; fixture_commit "$F28"
+OUT="$(run_fixture "$F28")"; CODE=$?
+if [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'pipeline.js does not load' \
+    && printf '%s' "$OUT" | grep -q 'meeting-notes service does not load'; then
+    ok "L28 a service missing an imported module is REFUSED, naming the module that needs it"
+else
+    bad "L28 a service missing an imported module is REFUSED, naming the module that needs it" \
+        "exit $CODE: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
 fi
 
 # ---------------------------------------------------------------------------------------

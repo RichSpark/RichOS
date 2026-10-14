@@ -43,6 +43,7 @@ window.RichSettings = (function () {
   var phonePairing = null; // { open() } — "Use Rich from your phone" (plan §4.1)
   var home = null; // { open() } — the home screen's company buttons: their labels and which show
   var codexReviews = null; // { render(container), onOpen() }, "Let Codex review your team's work" (round 20.2, codex-reviews.js)
+  var meetingNotes = null; // { render(container), onOpen() }, "Start meeting notes" and "Pause meeting prompts" (round 25, meeting-notes.js)
   var spend = null; // { render(container), onOpen() }, "Token spend" (round 22.1, spend.js)
 
   var wrap = null;
@@ -483,6 +484,14 @@ window.RichSettings = (function () {
       codexReviews.render(cxSlot);
       menu.appendChild(cxSlot);
     }
+    // MEETING NOTES (round 25, approved with round 25.1; Granola PRD V4): two rows under the Codex
+    // row, "Start meeting notes" and "Pause meeting prompts", then a rule. A slot its owner fills
+    // (`meeting-notes.js`), registered only when the app has meeting notes.
+    if (meetingNotes) {
+      var mnSlot = elem("div", "set-meeting-slot", { id: "set-meeting" });
+      meetingNotes.render(mnSlot);
+      menu.appendChild(mnSlot);
+    }
     if (quota) menu.appendChild(buildDisclosureRow("set-quota-open", "Claude Code quota", function () { quota.open(); }, "set-quota-state"));
     if (company) menu.appendChild(buildCompanyRow()); // ...then which company this copy is for
     if (home) menu.appendChild(buildHomeRow()); // ...and directly under it, the home screen's buttons
@@ -669,6 +678,8 @@ window.RichSettings = (function () {
     // shut, so whether the switch can be turned on is read when the menu opens (one
     // `codex_reviews_status`: Codex's own `login status`, a few milliseconds, no network).
     if (codexReviews && codexReviews.onOpen) codexReviews.onOpen();
+    // AND MEETING NOTES: whether a recording runs and for how long, read when the menu opens.
+    if (meetingNotes && meetingNotes.onOpen) meetingNotes.onOpen();
     // AND THE SPEND ROW'S FIGURE, taken when the menu opens, so the menu holds no ticking number
     // either (round 22.1): one `spend_view` for this month.
     if (spend && spend.onOpen) spend.onOpen();
@@ -946,6 +957,10 @@ window.RichSettings = (function () {
      *  `codex-reviews.js` registers it once the app answers `codex_reviews_status`, so a page with
      *  no shell behind it carries no switch it cannot save. */
     registerCodexReviews: function (host) { codexReviews = host || null; rebuild(); },
+    /** Meeting notes (round 25): `host.render(container)` fills the two rows' slot under the Codex
+     *  row, `host.onOpen()` reads `meeting_state` when the menu opens. `meeting-notes.js`
+     *  registers it only when the app answers that meeting notes are available. */
+    registerMeetingNotes: function (host) { meetingNotes = host || null; rebuild(); },
     /** "Token spend" (round 22.1): `host.render(container)` fills the row's slot under Technical
      *  view, `host.onOpen()` takes this month's figure when the menu opens. `spend.js` registers it
      *  when the app is there, so a page with no shell behind it carries no row to a screen it

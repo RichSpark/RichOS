@@ -349,6 +349,7 @@ export class GoogleCalendarAdapter {
           start: ev.start || null,
           end: ev.end || null,
           recurringEventId: ev.recurringEventId || null,
+          meetingLinks: conferenceLinks(ev),
           cancelled,
         },
         attachmentsRefs: Array.isArray(ev.attachments)
@@ -357,6 +358,19 @@ export class GoogleCalendarAdapter {
       },
     });
   }
+}
+
+/**
+ * The event's video-call links: `hangoutLink` and the conference's web entry points. Google keeps a
+ * Meet link (and a conferencing add-on's) only there, never in the description or location, and the
+ * meeting-notes prompt reads the call app from it (richos-core `meeting_calendar.rs`). Phone and
+ * SIP entry points are not links to a call app and are left out.
+ */
+function conferenceLinks(ev) {
+  const entryPoints = ev.conferenceData && Array.isArray(ev.conferenceData.entryPoints) ? ev.conferenceData.entryPoints : [];
+  const links = [ev.hangoutLink, ...entryPoints.map((p) => p && p.uri)]
+    .filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u));
+  return [...new Set(links)];
 }
 
 /** Parse a Calendar start/end (dateTime or all-day date) into epoch ms, or null. */
