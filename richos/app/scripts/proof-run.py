@@ -360,6 +360,16 @@ def uses_gradle(path):
 # both in the lanes (ci-units.sh packs with it) and in the start order.
 MEDIAN_SAMPLES = 9
 
+# THE FOURTEEN-POINT SUITE WITHOUT ITS MUTATION PASS (2026-10-14). lib/ci-unit-weights.tsv has it
+# at 2811.7 s, its run WITH the 86-mutant pass: nightly-engine.py runs it that way and ci-shard.sh
+# derives that run's deadline from the row, so the row stays. Unless RICHOS_FOURTEEN_MUTANTS=1 the
+# suite skips the pass (the merge gate sets 0), and this Mac measured that run at 166.9-217.3 s,
+# median 172.0 (five checkouts' weights.tsv). Planned at 2811.7 s under the gate's 600 s cap it was
+# never started (leave_over_cap): the merge of c2e47cfb7 changed workspaces.py, the gate selected
+# this suite and left it to the nightly, and nightly 20261014T170730Z-784b711e found C1.5 red in
+# its plain run. This checkout's own measured median still wins over this figure.
+FOURTEEN_UNIT, FOURTEEN_WITHOUT_PASS = "mega-lander/tests/workspace-spec-fourteen.test.sh", 172.0
+
 
 def history_samples(state):
     """{label: [seconds, ...]} from weights.tsv: `label <TAB> median [<TAB> s1,s2,...]`."""
@@ -538,6 +548,8 @@ def plan(lines, args, logdir, hist):
             f = row.split("\t")
             if len(f) >= 4:
                 weight[f[0]] = float(f[3] or 0)
+        if FOURTEEN_UNIT in weight and os.environ.get("RICHOS_FOURTEEN_MUTANTS") != "1":
+            weight[FOURTEEN_UNIT] = FOURTEEN_WITHOUT_PASS
         # A unit this checkout has measured is planned at its measured median, not at the dated
         # table's row (MEDIAN_SAMPLES above): in the lanes ci-units.sh packs and in the start order.
         measured = {unit: hist["engine " + unit] for unit in weight if "engine " + unit in hist}
