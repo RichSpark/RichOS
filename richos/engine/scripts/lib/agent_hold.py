@@ -774,6 +774,53 @@ def owned_tree(session_id, agent_id, table):
     return owned, excluded, protected, notes, parents
 
 
+def work_tree(session_id, agent_id, table):
+    """The processes whose CPU says whether this agent's commands still work: its owned
+    tree, test VM work included (a walk is work, never idleness), the shared daemons it
+    started left out (other agents' work keeps them busy, not this agent's)."""
+    owned = owned_tree(session_id, agent_id, table)[0]
+    if not owned:
+        return set()
+    vm = subtree(testvm_exclusions(table)[0], table) & owned
+    shells = {p for p, _pp, _a in owned_shells(session_id, agent_id, table)}
+    shared = subtree(daemons(owned - vm, shells, table), table) & owned
+    return owned - (shared - vm)
+
+
+_TIMEBASE = []
+
+
+def cpu_used(pid):
+    """CPU seconds this process has used, user and system time, its exited and reaped
+    children's included (so a loop of short commands counts all of them), or None when
+    the OS will not say. ps's TIME column leaves the children out (measured 2026-10-14:
+    a shell that ran 100 short python3 processes read 0:00.04 with and without -S)."""
+    if sys.platform == "darwin":
+        try:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            if not _TIMEBASE:
+                class _Timebase(ctypes.Structure):
+                    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+                tb = _Timebase()
+                if ctypes.CDLL(None).mach_timebase_info(ctypes.byref(tb)) or not tb.denom:
+                    return None
+                _TIMEBASE.append(tb.numer / tb.denom / 1e9)
+            buf = ctypes.create_string_buffer(256)
+            if libproc.proc_pid_rusage(int(pid), 2, buf):                   # RUSAGE_INFO_V2
+                return None
+            user, system = struct.unpack_from("QQ", buf.raw, 16)            # ri_user_time, ri_system_time
+            cuser, csystem = struct.unpack_from("QQ", buf.raw, 96)          # ri_child_user/system_time
+        except (OSError, ValueError, AttributeError, struct.error):
+            return None
+        return (user + system + cuser + csystem) * _TIMEBASE[0]
+    try:
+        with open("/proc/%d/stat" % int(pid)) as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return sum(int(v) for v in fields[11:15]) / float(os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # hold and release
 # ---------------------------------------------------------------------------

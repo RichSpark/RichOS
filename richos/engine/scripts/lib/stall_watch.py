@@ -52,6 +52,8 @@ WHAT IS A STALL (every threshold, and why)
    command still runs (workspaces.py record_end; 2026-10-11, four endless wait
    loops of echo-opus-walk49fix1), the notice says so and names the one
    command that ends its own commands (agent_hold.py end), never a pid hunt.
+   Once those commands have sat idle for 10 minutes the watcher runs that end
+   itself (IDLE END below).
 
 3. A SELF-WAIT: a teammate process waiting for a proof-run slot or a test VM
    slot that another process of the SAME teammate holds, reported after 2
@@ -83,13 +85,16 @@ block. What was announced is kept in its session's state directory, so a
 restarted monitor does not repeat itself.
 
 ===========================================================================
-IT ONLY REPORTS
+IT REPORTS, AND ENDS ONE THING
 ===========================================================================
-It never kills, stops, pauses, signals or messages anything, and it takes no
-lock that anything else waits for (the slot library's own status probe is a
-shared, non-blocking lock dropped at once). Each notice names the teammate,
-what it waits on, who holds it, since when, and what the lead can do. The lead
-acts.
+It never stops, pauses or messages a teammate, and it takes no lock that
+anything else waits for (the slot library's own status probe is a shared,
+non-blocking lock dropped at once). Each notice names the teammate, what it
+waits on, who holds it, since when, and what the lead can do. The lead acts.
+The one exception (2026-10-14, IDLE END below): a teammate whose turn ended
+but whose end its own commands defer, when those commands have used no CPU to
+speak of for 10 minutes (STALL_WATCH_IDLE_END_MINUTES), has them ended through
+agent_hold.py's own ownership record, and one line says what was ended.
 
 ===========================================================================
 COMMANDS (stall-watch.sh passes --engine-root, --config and --command)
@@ -139,6 +144,9 @@ PROOF_SLOT_REASON = "proof-run: waiting for a proof-run slot"
 OWNER_TAG = "RICHOS_AGENT_OWNER"
 GIT_SECONDS = 5
 CPU_LINE = 80
+IDLE_END_MINUTES = 10      # a deferred end's own commands idle this long are ended (IDLE END below)
+IDLE_CPU_PERCENT = 1.0     # "idle": under this share of one core between two looks
+IDLE_CPU_FLOOR = 0.05      # CPU seconds always counted as idle between two looks (clock resolution)
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +731,10 @@ def _silent(src, reg, now, session_id, th, waits):
             lines.insert(0, "its turn ended at %s, but its end waits on its own command(s) still "
                             "running (below); they end only by themselves or by the command below" % hhmm(deferred))
             what = "its turn ended; its end waits on its own still-running command(s)"
-            action = ["end its own commands (its run then ends by itself; shared daemons and the test VM "
+            action = ["leave it: once they have used no CPU to speak of for %.0f min this watcher ends them "
+                      "itself and says so in one line; a command still working is never ended that way" % (
+                          _env_float("STALL_WATCH_IDLE_END_MINUTES", IDLE_END_MINUTES)),
+                      "end its own commands now (its run then ends by itself; shared daemons and the test VM "
                       "guest are left running): %s" % src.agent_hold.end_command(
                           str(rec["session_id"]), str(rec["agent_id"]), name)]
             out.append(Stall("silent:%s" % rec.get("key"), "SILENT", name, last, what, lines, action))
@@ -736,6 +747,127 @@ def _silent(src, reg, now, session_id, th, waits):
                          "no commit and no transcript activity" if not own_waits else
                          "no commit and no transcript activity (it has a recorded wait)", lines, action))
     return out, ""
+
+
+# ---------------------------------------------------------------------------
+# IDLE END (2026-10-14): a deferred end's own idle commands are ended here
+# ---------------------------------------------------------------------------
+# THE FAILURE: echo-opus-tap22b's turn ended at 10:14:43Z, but three of its own
+# background `until grep ...; do sleep 20; done` loops kept its end deferred
+# (workspaces.py record_end), so it was never finished, never landable, and its
+# loops ran until the lead looked up their pids. The same class on 2026-10-11
+# (echo-opus-walk49fix1) and twice on 2026-10-14 (echo-opus-pocketvoice1,
+# ray-opus-test55), each ended by hand with `agent_hold.py end`. The CEO: "how
+# many more times will this type of shit keep happening?"
+#
+# THE RULE: an agent of this session whose last SubagentStop was deferred by its
+# own commands, which has done nothing since (no commit, no transcript write),
+# and whose own commands (agent_hold.work_tree: its owned tree, test VM work
+# included, shared daemons left out) have together used under IDLE_CPU_PERCENT
+# of one core between every two looks for IDLE_END_MINUTES, has those commands
+# ended here through agent_hold.end_owned(), with every exclusion it keeps (the
+# test VM guest, shared daemons, a held agent's work). Their completion wakes the
+# agent and its next SubagentStop records its end, which runs end_owned_work().
+# One line says what was ended. CPU includes exited children (agent_hold.cpu_used),
+# so a loop of short commands is work; a process whose CPU cannot be read makes
+# the whole look busy. A build, a test run or a walk that uses CPU in any look
+# starts the ten minutes again, so it is never ended this way however long it runs.
+
+def _last_activity(src, rec):
+    """Epoch of the agent's latest commit or transcript write, or None."""
+    marks = []
+    for w in rec.get("workspaces") or []:
+        if not w.get("deleted_at"):
+            c = _git_last_commit(w.get("path"))
+            if c:
+                marks.append(c[0])
+    path = _transcript(src, rec)
+    if path:
+        try:
+            marks.append(os.path.getmtime(path))
+        except OSError:
+            pass
+    return max(marks) if marks else None
+
+
+def _deferred_at(src, rec):
+    fact = getattr(src.ws, "END_DEFERRED_FACT", None)
+    at = None
+    for h in (rec.get("history") or []) if fact else []:
+        if isinstance(h, dict) and h.get("fact") == fact:
+            t = parse_iso(h.get("at"))
+            if t is not None and (at is None or t > at):
+                at = t
+    return at
+
+
+def idle_end(src, now, session_id, prev):
+    """(lines, new idle state): ends the idle own commands of agents whose end they defer.
+    The state keeps, per agent, when its commands were first seen idle and the last CPU
+    reading of each of them (pid -> [start time, CPU seconds]) at a real-clock time."""
+    ah = src.agent_hold
+    if src.ws is None or ah is None or not session_id:
+        return [], {}
+    prev = prev if isinstance(prev, dict) else {}
+    state, lines, cache = {}, [], {}
+    end_after = _env_float("STALL_WATCH_IDLE_END_MINUTES", IDLE_END_MINUTES) * 60
+    # A command waiting in line for a shared resource (a proof-run slot, CPU admission,
+    # the test VM, a device) uses no CPU and is still work: its waiter record names its pid.
+    records, _bad = resource_waits.read_records()
+    if records is None:
+        return [], {}
+    in_line = set()
+    for _path, w in records:
+        try:
+            in_line.add(int(w.get("pid")))
+        except (TypeError, ValueError):
+            pass
+    for rec in src.ws.all_agents():
+        sid, aid = str(rec.get("session_id") or ""), str(rec.get("agent_id") or "")
+        if sid != session_id or not aid or rec.get("disposition"):
+            continue
+        at = _deferred_at(src, rec)
+        if at is None:
+            continue
+        fin, paused, _why = src.ws.finished_state(rec, cache)
+        last = _last_activity(src, rec)
+        if fin or paused or (last is not None and last > at + 60) or os.path.lexists(ah._held_path(sid, aid)):
+            continue
+        table = ah.snapshot()
+        work = ah.work_tree(sid, aid, table)
+        if not work or work & in_line:
+            continue
+        real = time.time()
+        reading = {str(p): [table[p]["birth"], ah.cpu_used(p)] for p in sorted(work)}
+        key = str(rec.get("key"))
+        old = prev.get(key) if isinstance(prev.get(key), dict) else None
+        if any(v[1] is None for v in reading.values()):
+            continue  # unmeasured is never idle
+        if old is None:
+            state[key] = {"since": now, "real": real, "cpu": reading}
+            continue
+        used = 0.0
+        for pid, (birth, cpu) in reading.items():
+            before = (old.get("cpu") or {}).get(pid)
+            used += cpu - before[1] if before and before[0] == birth and cpu >= before[1] else cpu
+        limit = max(IDLE_CPU_FLOOR, IDLE_CPU_PERCENT / 100.0 * max(0.0, real - float(old.get("real") or real)))
+        since = float(old.get("since") or now) if used <= limit else now
+        if now - since < end_after:
+            state[key] = {"since": since, "real": real, "cpu": reading}
+            continue
+        name = str(rec.get("name") or key)
+        cmds = []
+        for c in sorted(ah.calls(sid, aid, table), key=lambda c: c["at"]):
+            if c["command"] and _short(c["command"], 70) not in cmds:
+                cmds.append(_short(c["command"], 70))
+        r = ah.end_owned(sid, aid, name, "ended by stall-watch: its end waited only on its own commands, "
+                                         "idle %s" % span(now - since))
+        lines.append("STALL-WATCH %s: %s's turn ended at %s and its end waited only on its own command(s), idle "
+                     "(no CPU to speak of) for %s, so they were ended (its run now ends by itself)%s: %s" % (
+                         hhmm(now), name, hhmm(at), span(now - since),
+                         (" [" + "; ".join("`%s`" % c for c in cmds[:3]) + "]") if cmds else "",
+                         ah.describe_end(r)))
+    return lines, state
 
 
 # ---------------------------------------------------------------------------
@@ -904,7 +1036,7 @@ def announce(state, stalls, problems, now, th):
     lines = []
     if new or again:
         n = len(new) + len(again)
-        lines.append("STALL-WATCH %s: %d stall%s%s (this only reports: nothing was paused, stopped or killed)" % (
+        lines.append("STALL-WATCH %s: %d stall%s%s (reported only: nothing of these was paused, stopped or killed)" % (
             hhmm(now), n, "" if n == 1 else "s",
             "" if not again else ", %d still going since an earlier notice" % len(again)))
         for s, no, first in new + again:
@@ -1316,6 +1448,13 @@ def tick(src, sd, sid, now=None, out=None):
     path = os.path.join(sd, "announced.json")
     state = _read_json(path)
     esc_prev = state.get("esc")
+    idle_prev = state.get("idle")
+    try:
+        # Before the look, so a stall it ends is never also announced as one.
+        idle_lines, idle_state = idle_end(src, now, sid, idle_prev)
+    except Exception as exc:  # noqa: BLE001: a failed idle look is reported, never the end of watching
+        idle_lines, idle_state = ["STALL-WATCH %s: the idle-command look failed (%s: %s); nothing was ended" % (
+            hhmm(now), exc.__class__.__name__, str(exc)[:160])], {}
     try:
         esc_lines, esc_state, esc_problems = escalation_watch(src, now, sid, esc_prev, th)
     except Exception as exc:  # noqa: BLE001: a failed escalation look is reported, never the end of watching
@@ -1340,10 +1479,11 @@ def tick(src, sd, sid, now=None, out=None):
         lines, state = announce(state, stalls, problems, now, th)
     if esc_state is not None:
         state["esc"] = esc_state
+    state["idle"] = idle_state
     # The ESCALATION-WATCH block goes FIRST: a monitor event counts as having
     # told the lead only when its <event> body starts with ESCALATION-WATCH
     # (escalations.monitor_event_keys).
-    lines = esc_lines + lines
+    lines = esc_lines + idle_lines + lines
     _write_json(path, state)
     if lines:
         out.write("\n".join(lines) + "\n")
@@ -1451,8 +1591,10 @@ def mode_notice(a):
         "  a teammate waiting %.0f min on a slot its own other process holds. Each stall reaches you ONCE as a" % (
             th["self"] / 60),
         "  notification naming the teammate, what it waits on, who holds it, since when and what you can do; again only",
-        "  after another %.0f min; and in one line when it clears. It only reports: it never pauses, stops or kills." % (
+        "  after another %.0f min; and in one line when it clears. It never pauses or stops a teammate. The one thing it" % (
             th["repeat"] / 60),
+        "  ends: a teammate's own commands that keep its end waiting after its turn ended and have used no CPU to speak",
+        "  of for %.0f min; one line says what it ended." % _env_float("STALL_WATCH_IDLE_END_MINUTES", IDLE_END_MINUTES),
         "  It also wakes you within a minute when a teammate raises an escalation in this session (an",
         "  ESCALATION-WATCH block, by state, never by wording), again every 10 min while one that needs the CEO",
         "  at a device (needs=ceo-hands) or every 30 min while a stopped one is unacknowledged; an ack ends it.",
