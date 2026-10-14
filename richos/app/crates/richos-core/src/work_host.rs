@@ -1895,6 +1895,9 @@ impl WorkHost {
         // session consumed is not the new one's.
         let chars = std::cell::Cell::new(prompt.len());
         let measured: std::cell::Cell<Option<crate::machinery::ContextUsage>> = std::cell::Cell::new(None);
+        // How many tool calls the back end itself (not a helper inside it) made in the latest
+        // continuation turn: zero is the only stall a hiring continuation has (step 3b).
+        let tool_calls = std::cell::Cell::new(0usize);
         // **THE ANSWER TO A QUESTION, KEPT — the CEO's ruling §58, 2026-09-18.**
         //
         // The back end's assistant text has always come past this closure and has only ever
@@ -2000,6 +2003,9 @@ impl WorkHost {
                         // run of prose in front of it, as the ledger's `text_runs` fold does.
                         if record.kind != crate::machinery::MachineryKind::Unknown {
                             between_notices = true;
+                        }
+                        if record.kind == crate::machinery::MachineryKind::ToolCall && record.parent_tool_use_id.is_none() {
+                            tool_calls.set(tool_calls.get() + 1);
                         }
                         // **The one machinery record that is READ rather than retained**,
                         // same as `spine.rs:2034`. The back end's own machinery is not
@@ -2209,15 +2215,15 @@ impl WorkHost {
         // rv-20261014T212111Z-1a81cf94-9653). The back end saves a teammate and ends its turn so
         // the app registers him, with nothing open; whether its connection is then renewed or
         // not, and however many waits it took, a teammate still unsaved means the job goes on.
-        // The back end is told who is still unsaved once per stall: a turn answering that with
-        // nothing started and nothing saved ends the run, and the hiring is then reported as
-        // not finished, never as done. A turn answering it that saved someone, or in which a
-        // helper ran, is progress, and the next stall is told again (handover review
-        // rv-20261014T220435Z-3ec975bc-d575). His Stop, a quit, a question of his and a closed
-        // obligation end it as they end every run.
+        // The back end is told who is still unsaved once per stall: a turn answering that in
+        // which it made no tool call at all ends the run, and the hiring is then reported as
+        // not finished, never as done. Any tool call is progress (fetching a definition,
+        // starting a helper, saving someone), and the next stall is told again (handover
+        // reviews rv-20261014T220435Z-3ec975bc-d575, rv-20261014T222015Z-4e627aa2-62b3). His
+        // Stop, a quit, a question of his and a closed obligation end it as they end every run.
         //
-        // Set when the hiring continuation is sent: how many proposed teammates were unsaved.
-        let mut nudged: Option<usize> = None;
+        // Set when the hiring continuation is sent.
+        let mut nudged = false;
         let hiring_goes_on = |stalled: bool| -> Option<String> {
             let unsaved = self.unsaved_hires(record);
             if unsaved.is_empty() || stalled || matches!(self.outcome(backend, record), Outcome::Settled)
@@ -2245,11 +2251,8 @@ impl WorkHost {
             // says so. Only a run this host can see open is worth waiting for.
             let helper_open = view.is_attributed() && view.active + view.liveness_unknown > 0;
             // Only the turn straight after the hiring continuation can leave this set. That turn
-            // STALLED only if it saved nobody and no helper run ended since it began; a helper it
-            // left open is waited on below, and the turn after that is not a stall either.
-            let stalled = std::mem::take(&mut nudged).is_some_and(|unsaved_then| {
-                self.unsaved_hires(record).len() >= unsaved_then && ends_now() <= ends_at_turn_start
-            });
+            // STALLED only if the back end made no tool call at all in it.
+            let stalled = std::mem::take(&mut nudged) && tool_calls.get() == 0;
             // The bound stops more turns, never a helper still at work ([`WORKER_WAIT_ROUNDS`])
             // and never a hiring with a proposed teammate unsaved.
             if waits >= WORKER_WAIT_ROUNDS && !helper_open && self.unsaved_hires(record).is_empty() {
@@ -2297,7 +2300,7 @@ impl WorkHost {
                         TEAM_CHANGED_CONTINUATION.to_string()
                     } else {
                         let Some(next) = hiring_goes_on(stalled) else { break };
-                        nudged = Some(self.unsaved_hires(record).len());
+                        nudged = true;
                         next
                     };
                     waits += 1;
@@ -2311,7 +2314,7 @@ impl WorkHost {
                     // run 3 of nightly 56's check ended a turn with Will saved and Beth's research
                     // "next", the team renewal above did not happen, and the job closed there.
                     let Some(next) = hiring_goes_on(stalled) else { break };
-                    nudged = Some(self.unsaved_hires(record).len());
+                    nudged = true;
                     waits += 1;
                     helper_turn = true;
                     chars.set(next.len());
@@ -2414,6 +2417,7 @@ impl WorkHost {
                 let mut items = 0usize;
                 let mut said = String::new();
                 ends_at_turn_start = ends_now();
+                tool_calls.set(0);
                 outcome = {
                     let mut lease = backend.lease.lock().unwrap();
                     match lease.as_mut() {
@@ -7749,9 +7753,9 @@ mod tests {
         }
         h.replies.lock().unwrap().extend([
             "I'll start on Will and Beth.".to_string(),
-            "Clark has researched both roles; Dean fits Will next.".to_string(),
-            "Will's definition is saved; ending the turn so the app can register him.".to_string(),
-            "Beth is saved too. Will and Beth are both on your team now.".to_string(),
+            format!("Asking Clark.{TOOL_CALL}Clark has researched both roles; Dean fits Will next."),
+            format!("Saving Will.{TOOL_CALL}Will's definition is saved; ending the turn so the app can register him."),
+            format!("Saving Beth.{TOOL_CALL}Beth is saved too. Will and Beth are both on your team now."),
         ]);
         h.host.start();
         let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
@@ -7759,6 +7763,49 @@ mod tests {
         let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
         let prompts = h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 4, "the hiring ended after a turn that made progress: {:?}", read());
+        let both = ["Will".to_string(), "Beth".to_string()];
+        assert_eq!(prompts[1], hiring_unfinished_continuation(&both));
+        assert_eq!(prompts[2], hiring_unfinished_continuation(&both));
+        assert_eq!(prompts[3], hiring_unfinished_continuation(&["Beth".to_string()]));
+        let done = read();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A turn answering the hiring continuation that only prepares a hire is not a stall**
+    /// (handover review rv-20261014T222015Z-4e627aa2-62b3). The first turn ends with nothing
+    /// open and nobody saved. Its answer fetches Will's shelf definition (one tool call) and
+    /// ends before Dean is dispatched: nobody saved, no helper run ended. It made a tool call,
+    /// so it is progress and the next stall is told again; the next turn saves Will with the
+    /// renewal deferred, and the last saves Beth. The host used to end the run after the fetch
+    /// and mark the hiring Failed with both unsaved.
+    #[test]
+    fn a_hiring_whose_continuation_only_fetches_a_definition_still_finishes() {
+        use crate::cognition::ObligationState;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([None, None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
+        }
+        h.replies.lock().unwrap().extend([
+            "I'll start on Will and Beth.".to_string(),
+            format!("Fetching Will's definition from the shelf.{TOOL_CALL}Dean fits him next."),
+            format!("Saving Will.{TOOL_CALL}Will's definition is saved; ending the turn so the app can register him."),
+            format!("Saving Beth.{TOOL_CALL}Beth is saved too. Will and Beth are both on your team now."),
+        ]);
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 4, "the hiring ended after a turn that fetched a definition: {:?}", read());
         let both = ["Will".to_string(), "Beth".to_string()];
         assert_eq!(prompts[1], hiring_unfinished_continuation(&both));
         assert_eq!(prompts[2], hiring_unfinished_continuation(&both));
