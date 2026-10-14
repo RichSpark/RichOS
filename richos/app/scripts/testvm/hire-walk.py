@@ -42,6 +42,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               closed settled with a result he was told. Evidence: delegate-observed.json, and
               whatever the verdict delegate-ledger.json (the conversation from the send on) and
               delegate-1-before/2-sent/3-end.png.
+  hood        after delegate, "Under the hood" opened as a person opens it (the work summary chip
+              under the conversation): the conversation (#messages) and the composer's Output button
+              (#out-bottom) end at or before the panel's left edge, and the Output button is shown
+              (the CEO, 2026-10-14: the last card and the Output button belong under the panel, not
+              under its edge). Evidence: hood-observed.json, under-the-hood.png.
 
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
@@ -65,7 +70,7 @@ command_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(command_walk)
 StepFailed = command_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'stock', 'interview', 'go', 'relaunch', 'roster', 'delegate', 'approvals']
+STEPS = ['identity', 'first-run', 'stock', 'interview', 'go', 'relaunch', 'roster', 'delegate', 'hood', 'approvals']
 # The five every install registers (engine_profile.rs ALWAYS_ACTIVE), as the CEO's sentence names them.
 STOCK = {'clark': 'Senior Researcher', 'dean': 'HR Director', 'frank': 'Expert Advisor',
          'pierce': 'Brief Checker', 'reed': 'Source-Reading'}
@@ -199,6 +204,22 @@ RETRY_TOLD = re.compile(r'\bsnag\b|\bhiccup\b|\bglitch\b|technical (?:issue|prob
 def first_send_verdict(told):
     """The sentences that tell him the write-up was retried ([] = it went through the first time)."""
     return [m.group(0) for m in RETRY_TOLD.finditer(told or '')]
+
+
+def hood_verdict(panel, boxes):
+    """Why the open "Under the hood" panel covers something ([] = nothing): `panel` is the panel's
+    node, `boxes` maps a name to its node (None when it is not on screen). Each must end at or
+    before the panel's left edge; one pixel is allowed for rounding."""
+    if not panel:
+        return ['the Under the hood panel is not on screen']
+    edge = panel['x']
+    failures = []
+    for name, node in boxes.items():
+        if not node:
+            failures.append(f'{name} is not on screen')
+        elif node['x'] + node['w'] > edge + 1:
+            failures.append(f"{name} ends at {node['x'] + node['w']}, under the panel's left edge at {edge}")
+    return failures
 
 
 def fitting_teammate(hired, definitions):
@@ -536,6 +557,33 @@ class HireWalk(command_walk.CommandWalk):
             raise StepFailed('; '.join(failures))
         return {'teammate': name, 'state': record.get('state'), 'answer': answer_of(receipts, record, name)[:1000],
                 'notice': record['notices'][-1].get('text', '')}
+
+    def hood(self):
+        """Under the hood opened from the work summary chip; nothing of the conversation or the
+        composer runs under its left edge (echo-opus-panel55's fix, found on nightly 55's walk)."""
+        if not self.present('back to Rich'):
+            self.ax('click', '--title', 'Open the work summary', '--contains', '--first')
+        end = time.monotonic() + 30
+        while time.monotonic() < end and not self.present('back to Rich'):
+            time.sleep(2)
+
+        def node(dom_id):
+            try:
+                found = [n for n in self.ax('find', '--id', dom_id, '--first') if not n.get('meta')]
+            except StepFailed as exc:
+                if 'notfound' in str(exc) or 'nothing matched' in str(exc):
+                    return None
+                raise
+            return found[0] if found else None
+        panel = node('slideover')
+        boxes = {'the conversation (#messages)': node('messages'), 'the Output button (#out-bottom)': node('out-bottom')}
+        self.evidence_shot('under-the-hood.png')
+        evidence = {'panel': panel, 'boxes': boxes}
+        (self.out / 'hood-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        failures = hood_verdict(panel, boxes)
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return {'panel_left': panel['x'], **{k: v['x'] + v['w'] for k, v in boxes.items()}}
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

@@ -70,6 +70,16 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(hire_walk.first_send_verdict(
             'Will (Marketing Director) and Beth (Bookkeeper) joined the team.'), [])
 
+    def test_a_box_under_the_panel_edge_fails_and_one_beside_it_passes(self):
+        panel = {'x': 1080, 'w': 320}
+        beside = {'conversation': {'x': 440, 'w': 640}, 'output': {'x': 980, 'w': 90}}
+        self.assertEqual(hire_walk.hood_verdict(panel, beside), [])
+        # Nightly 55's frame: the Output button ran under the panel's left edge.
+        under = {'conversation': {'x': 440, 'w': 640}, 'output': {'x': 1165, 'w': 90}}
+        self.assertTrue(any('output' in f for f in hire_walk.hood_verdict(panel, under)))
+        self.assertTrue(hire_walk.hood_verdict(panel, {'output': None}), 'a hidden Output button fails')
+        self.assertTrue(hire_walk.hood_verdict(None, beside), 'no panel fails')
+
     def test_an_honest_report_of_what_was_saved_passes(self):
         for told in ['Will (Marketing Director) and Penny (Bookkeeper) joined the team.',
                      '**Will** (Marketing Director) and **Penny** (Bookkeeper) are now on your team. '
