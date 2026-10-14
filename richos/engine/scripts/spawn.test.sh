@@ -426,6 +426,28 @@ else
     bad "a release target in the session's own repository is refused with the other-session remedy" "rc=$RC $OUT"
 fi
 
+# Review rv-20261014T120915Z-3bf392e2-75cb, P1: the session's OWN repository
+# already RECORDED on the release branch, its main checkout on main. The early
+# "recorded and live" returns accepted it, so a native teammate started from
+# main and its land pulled main into the release. Refused the same way, with
+# and without --integration naming that recorded branch.
+python3 "$WS_PY" integration --repo "$PROJECT" --branch rel --correct --why "the release" >/dev/null
+for case in "zach-sonnet-relown2:" "zach-sonnet-relown3:$PROJECT=rel"; do
+    name="${case%%:*}"; integ="${case#*:}"
+    if [ -n "$integ" ]; then
+        run "$name" --repo "$PROJECT" --type zach --brief "$BRIEF" --integration "$integ"
+    else
+        run "$name" --repo "$PROJECT" --type zach --brief "$BRIEF"
+    fi
+    if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "from a session in another repository" \
+       && ! ls "$RICHOS_WORKSPACES_DIR"/agents/*"$name".json >/dev/null 2>&1; then
+        ok "the session's own repository recorded on rel is refused for a native teammate (${integ:-no --integration})"
+    else
+        bad "a recorded release target in the session's own repository is refused" "rc=$RC $OUT"
+    fi
+done
+python3 "$WS_PY" integration --repo "$PROJECT" --branch main --correct --why "the session repo" >/dev/null
+
 run "zach-sonnet-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qi "already"; then
     ok "a REUSED name is refused before anything is created"

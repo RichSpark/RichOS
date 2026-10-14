@@ -306,13 +306,26 @@ def ensure_integration(repo, explicit, why, session, native_only=False):
     onto agents already in flight."""
     rec = W.integration_record(repo)
     live = bool(rec and W.branch_tip(repo, rec["branch"]))
+    # A RELEASE TARGET IN THE SESSION'S OWN REPOSITORY is refused BEFORE the
+    # early returns below, whether --integration names it or it is already
+    # recorded: the native workspace starts from the main checkout, so landing it
+    # there would carry main-only history into the release.
+    target = explicit or (rec["branch"] if live else "")
+    dflt = default_branch(repo)
+    if native_only and target and dflt and target != dflt:
+        raise Refusal(
+            "%s: %s is this teammate's target there (%s), not %s, and this teammate works there only "
+            "in its native workspace, which cannot carry a branch of its own. Start this teammate from a "
+            "session in another repository: there spawn.sh --repo %s --integration %s=%s gives it a "
+            "workspace of its own that starts from %s and lands there"
+            % (repo, target, "named with --integration" if explicit else "recorded", dflt,
+               repo, repo, target, target))
     if rec and live and not explicit:
         return ("integration: %s (recorded %s, body of work %s)" % (rec["branch"], rec["recorded_at"],
                                                                     rec["id"]), "")
     if rec and live and explicit and explicit == rec["branch"]:
         return "integration: %s (recorded, matches --integration)" % rec["branch"], ""
 
-    dflt = default_branch(repo)
     on = checkout_branch(repo)
     branch = explicit
     reason = "named with --integration"
