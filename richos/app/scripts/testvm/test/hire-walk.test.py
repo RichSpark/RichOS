@@ -70,6 +70,14 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(hire_walk.first_send_verdict(
             'Will (Marketing Director) and Beth (Bookkeeper) joined the team.'), [])
 
+    def test_a_rule_label_in_a_bullet_is_not_a_teammate(self):
+        # Nightly 56's walks: what he was told about the hires' rules, read as teammates.
+        told = ("- **Confidentiality:** a client's coaching notes never leave the company.\n"
+                "- **Drafts:** she can draft invoices, payment reminders and reports.\n"
+                "Will (Marketing Director) and Penny (Bookkeeper) are both saved to your team.")
+        self.assertEqual(hire_walk.claimed_names(told), ['penny', 'will'])
+        self.assertEqual(hire_walk.hired_verdict(['will', 'penny'], ['penny', 'will'], told), [])
+
     def test_a_box_under_the_panel_edge_fails_and_one_beside_it_passes(self):
         panel = {'x': 1080, 'w': 320}
         beside = {'conversation': {'x': 440, 'w': 640}, 'output': {'x': 980, 'w': 90}}

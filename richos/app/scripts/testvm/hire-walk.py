@@ -163,11 +163,14 @@ TITLE = r'\(\s*[A-Z][A-Za-z]*(?:[ &/-]+[A-Z][A-Za-z]*)*\s*[;,)]'
 def claimed_names(told):
     """Every name he was told about as a teammate: a name before its job title in parentheses
     ("Bea (Bookkeeper)", "**Bea** (Bookkeeper)", "**Bea (Bookkeeper):**"), a bullet that opens with
-    a name and a colon or title, and each name in a list that "joined", "is on" or "are on" the
+    a name and a dash or title, and each name in a list that "joined", "is on" or "are on" the
     team ("Will and Bea joined", "Will, Nora and Bea are now on the team")."""
     text = told or ''
     names = set(re.findall(r'\b([A-Z][a-z]{1,15})\*{0,2}\s*' + TITLE, text))
-    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*(?::|\u2014|' + TITLE + ')', text))
+    # A bullet's bare "Word:" is a label, not a name: nightly 56's walks read the rule lists he was
+    # told ("- **Drafts:** she can draft invoices", "- **Confidentiality:** a client's coaching
+    # notes never leave the company") as teammates. A name in a bullet needs its title or a dash.
+    names |= set(re.findall(r'(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\*{0,2}([A-Z][a-z]{1,15})\*{0,2}\s*(?:\u2014|' + TITLE + ')', text))
     joined = re.compile(r'((?:' + NAME + r'(?:\s*,\s*(?:and\s+)?|\s+and\s+))*' + NAME + r')'
                         r'\s+(?:has\s+|have\s+)?(?:joined|(?:is|are)\s+(?:now\s+)?(?:on|part of))')
     for m in joined.finditer(text):
