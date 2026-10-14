@@ -330,6 +330,11 @@ class VoiceWalk(adopt_walk.Walk):
                 if wrong:
                     raise StepFailed('a sentence Rich spoke was not Pocket TTS as Peter Yearsley: ' + wrong[0])
                 timing = talk_timing(lines)
+                if timing['spoke_before_done']:
+                    raise StepFailed('Rich was audible before his turn was over: ' + json.dumps(timing))
+                if timing['audible_ms'] is None:
+                    raise StepFailed('Rich synthesized speech but the session never logged ANSWER AUDIBLE: '
+                                     + json.dumps(timing))
                 ready = [l for l in lines if 'Pocket TTS ready' in l]
                 return {'first_sentence': first, 'first_audio_ms': ms, 'voice_log': text.splitlines()[-20:],
                         'sentences': len(said), 'session_open': opened, 'pocket_ready': ready,

@@ -79,6 +79,27 @@ class TalkTiming(unittest.TestCase):
         marked = [self.SAMPLE[0].replace('Rich audible=false', 'Rich audible=true')]
         self.assertTrue(walk.talk_timing(marked)['spoke_before_done'])
 
+    def _spoken(self, lines):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest import mock
+        v = walk.VoiceWalk.__new__(walk.VoiceWalk)
+        v.vm, v.log = 'vm', '/log'
+        v.a = SimpleNamespace(within=5)
+        text = '\n'.join(lines)
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(walk, 'guest', return_value=text), \
+                mock.patch.object(walk.time, 'sleep'):
+            v.out = Path(out)
+            return v.spoken()
+
+    def test_spoken_passes_only_when_rich_waited_and_was_heard(self):
+        self.assertEqual(self._spoken(self.SAMPLE)['timing']['turn_end_to_audible_ms'], 8205)
+        early = self.SAMPLE[:2] + [self.SAMPLE[6]] + self.SAMPLE[2:4] + [self.SAMPLE[5]]
+        with self.assertRaisesRegex(walk.StepFailed, 'before his turn was over'):
+            self._spoken(early)
+        with self.assertRaisesRegex(walk.StepFailed, 'never logged ANSWER AUDIBLE'):
+            self._spoken(self.SAMPLE[:6])
+
     def test_no_answer_leaves_the_gaps_unknown(self):
         t = walk.talk_timing(self.SAMPLE[:5])
         self.assertIsNone(t['audible_ms'])
