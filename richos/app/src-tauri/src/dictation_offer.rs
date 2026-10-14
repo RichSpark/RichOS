@@ -98,6 +98,16 @@ pub fn feature_text(key: u8) -> String {
     )
 }
 
+/// What Rich is told when the key changes (review rv-20261014T044933Z-51176a08-f956): his
+/// earlier replies and saved summaries still name the old key, and this newer fact wins over
+/// them. `old` is the key the replaced message named, when the record kept it.
+pub fn key_change_fact(key: u8, old: Option<u8>) -> String {
+    match old {
+        Some(old) if old != key => format!("The dictation key is now F{key}. The old key F{old} no longer works."),
+        _ => format!("The dictation key is now F{key}. Any other key named before no longer works."),
+    }
+}
+
 /// The conversation that was created, Rich's message in it and the key that message names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeatureRecord {

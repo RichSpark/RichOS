@@ -172,7 +172,7 @@ fn an_app_message_replaced_is_the_one_message_there_and_the_one_rich_is_primed_w
     let mut spine = support::spine(ledger);
     spine.ensure_active_thread_in(&femcboost()).unwrap();
     let (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
-    let second = spine.replace_app_message(&id, &first, "tap F3, then").unwrap();
+    let second = spine.replace_app_message(&id, &first, "tap F3, then", "The dictation key is now F3.").unwrap();
     assert_ne!(first, second);
     let said: Vec<String> = spine.messages(&id).unwrap().into_iter().map(|m| m.text).collect();
     assert_eq!(said, vec!["tap F3, then".to_string()], "one message, naming the new key");
@@ -196,18 +196,35 @@ fn after_a_key_change_the_desk_that_answers_knows_only_the_new_key() {
     // F2 and only primed again on top of it, and the action ledger digest every priming carries
     // still listed the replaced message. The CEO: the key he picked is the one named,
     // everywhere, so the onboarding conversation is asked too.
+    //
+    // History is KEPT on purpose (review rv-20261014T044933Z-51176a08-f956): Rich's own earlier
+    // reply naming F2 stays in the conversation and a saved handoff summary naming F2 stays in
+    // the priming. What wins is one dated fact recorded at the change, primed AFTER every older
+    // mention: "The dictation key is now F3. The old key F2 no longer works."
     let (path, ledger) = tmp_ledger("app-replaced-only-new-key");
+    let (onboarding, id, first);
+    {
+        let mut spine = support::spine(ledger);
+        onboarding = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+        (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
+        spine.attach_lease(Box::new(MockCognition::new("sess-before", vec!["Tap F2 to start dictation."])));
+        spine.switch_thread(&id).unwrap();
+        spine.submit_prompt("Which key starts dictation?", Source::Text).unwrap();
+    } // the app quits; what it said is in the ledger
+    let mut ledger = Ledger::open(&path).unwrap();
+    for thread in [&id, &onboarding] {
+        ledger.record_handoff_summary(thread, "The start/stop key is F2.").unwrap();
+    }
     let mut spine = support::spine(ledger);
-    let onboarding = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
     let factory = MockLeaseFactory::new(vec!["F3.", "F3."]);
     let prompts = factory.spawned_prompts.clone();
     let primes = factory.spawned.clone();
     spine.set_lease_factory(Box::new(factory));
-    let (id, first) = spine.open_conversation_with_message(&femcboost(), "Dictation feature", "tap F2, then").unwrap();
     // Opening each conversation readies its desk with what is there now: F2.
     assert!(matches!(spine.prime_front_desk(&id), FrontDeskReady::Ready { .. }));
     assert!(matches!(spine.prime_front_desk(&onboarding), FrontDeskReady::Ready { .. }));
-    spine.replace_app_message(&id, &first, "tap F3, then").unwrap();
+    spine.replace_app_message(&id, &first, "tap F3, then", "The dictation key is now F3. The old key F2 no longer works.").unwrap();
+    let fact = "The dictation key is now F3. The old key F2 no longer works.";
     for thread in [&id, &onboarding] {
         spine.switch_thread(thread).unwrap();
         let question = format!("Which key do I tap to start dictation now? ({thread})");
@@ -217,8 +234,13 @@ fn after_a_key_change_the_desk_that_answers_knows_only_the_new_key() {
         let answering = desks.iter().position(|asked| asked.lock().unwrap().contains(&question))
             .expect("a desk answered the question");
         let primed = primes.lock().unwrap()[answering].lock().unwrap().join("\n");
-        assert!(!primed.contains("F2"), "the desk answering in {thread} still holds F2: {primed}");
+        let fact_at = primed.rfind(fact).unwrap_or_else(|| panic!("the desk answering in {thread} is not told the key changed: {primed}"));
+        let today = time::OffsetDateTime::now_utc().date().to_string();
+        assert!(primed[..fact_at].ends_with(&format!("{today}: ")), "the fact is dated: {primed}");
+        assert!(primed[..fact_at].contains("The start/stop key is F2."), "the saved summary is kept: {primed}");
+        assert_eq!(primed[fact_at..].matches("F2").count(), 1, "the fact comes after every older F2 mention in {thread}: {primed}");
         if thread == &id {
+            assert!(primed[..fact_at].contains("Tap F2 to start dictation."), "Rich's earlier reply is kept: {primed}");
             assert!(primed.contains("tap F3, then"), "Rich's first turn there carries F3: {primed}");
         }
     }

@@ -2102,10 +2102,26 @@ impl Spine {
     /// because the digest carried the old line into every conversation of the company. Never
     /// the desk running a turn (continuity §3.1): this takes `&mut self`, which a running turn
     /// holds, so that desk cannot be the one in the chair here; the check states it anyway.
+    ///
+    /// **`fact` is what changed, recorded dated and primed after everything older** (review
+    /// rv-20261014T044933Z-51176a08-f956): history is not scrubbed, so Rich's own earlier reply
+    /// "Tap F2 to start dictation" stays in the tail and a saved handoff summary naming F2 stays
+    /// in the priming. One CEO-facing action on the new turn, "<date>: The dictation key is now
+    /// F3. The old key F2 no longer works.", goes into the action ledger digest of every
+    /// conversation of the company, which is rendered after the summary and the tail, so the
+    /// newest statement wins over the older text.
     /// Answers the new turn id.
-    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<String, SpineError> {
+    pub fn replace_app_message(&mut self, thread_id: &str, turn_id: &str, text: &str, fact: &str) -> Result<String, SpineError> {
         let new_turn = self.raise_proactive(Some(thread_id), AttentionTier::Digest, text)?;
         self.ledger.mark_turn_superseded(turn_id, &new_turn)?;
+        let today = time::OffsetDateTime::now_utc().date();
+        self.ledger.record_action_with(
+            Some(&new_turn),
+            "settings_change",
+            &format!("{today}: {fact}"),
+            ActionVisibility::CeoFacing,
+            ActionStatus::Completed,
+        )?;
         let entity = self.ledger.thread_binding(thread_id)?.entity_id().clone();
         let ledger = &self.ledger;
         let of_company = |thread: &str| ledger.thread_binding(thread).is_ok_and(|b| b.entity_id() == &entity);
