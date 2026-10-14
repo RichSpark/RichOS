@@ -55,6 +55,36 @@ class OneTurn(unittest.TestCase):
                          ['Let me think about the onboarding', 'and the questions you asked.'])
 
 
+class TalkTiming(unittest.TestCase):
+    """The voice session's own lines (controller.rs), as the walk of test55 recorded them."""
+    SAMPLE = [
+        '[richos-voice] 22:51:47.695Z utterance START tainted=false heard-rich=false (Rich audible=false)',
+        '[richos-voice] 22:51:50.612Z utterance END ADMITTED — 2.944 s, heard-rich=false, on to the recognizer (Rich audible=false)',
+        '[richos-voice] 22:51:56.282Z utterance START tainted=false heard-rich=false (Rich audible=false)',
+        '[richos-voice] 22:51:59.561Z utterance END ADMITTED — 3.440 s, heard-rich=false, on to the recognizer (Rich audible=false)',
+        '[richos-voice] 22:52:00.795Z end-of-turn quiet — 2.000 s of silence since his last word; 0 fragment(s) held, 3 at the recognizer',
+        '[richos-voice] tts: 2.10 s of speech synthesized in 640 ms (rtf 0.305) by Pocket TTS english_2026-04 INT8 · Peter Yearsley · 4 threads',
+        '[richos-voice] 22:52:09.000Z ANSWER AUDIBLE — half-duplex window OPEN (hold after the last sample 120 ms = out 40.0 + in 40.0 + slicer 40.0)',
+    ]
+
+    def test_the_gaps_are_read_off_the_apps_own_clock(self):
+        t = walk.talk_timing(self.SAMPLE)
+        self.assertEqual(t['turn_end_to_audible_ms'], 8205)
+        self.assertEqual(t['last_word_to_audible_ms'], 9439)
+        self.assertFalse(t['spoke_before_done'])
+
+    def test_rich_audible_while_he_speaks_is_caught(self):
+        lines = self.SAMPLE[:2] + [self.SAMPLE[6]] + self.SAMPLE[2:4]
+        self.assertTrue(walk.talk_timing(lines)['spoke_before_done'])
+        marked = [self.SAMPLE[0].replace('Rich audible=false', 'Rich audible=true')]
+        self.assertTrue(walk.talk_timing(marked)['spoke_before_done'])
+
+    def test_no_answer_leaves_the_gaps_unknown(self):
+        t = walk.talk_timing(self.SAMPLE[:5])
+        self.assertIsNone(t['audible_ms'])
+        self.assertIsNone(t['turn_end_to_audible_ms'])
+
+
 class DecoderIdentity(unittest.TestCase):
     def test_the_readiness_line_names_the_decoder_by_sha(self):
         line = ('[richos] voice: ready on this machine (ready) — whisper.cpp 1.9.1 bin:fe7b744a4b31 '
