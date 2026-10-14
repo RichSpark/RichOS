@@ -463,6 +463,14 @@ run "$H" status
 if grep -q "engine: $F/engine.noindex" <<<"$OUT"; then ok "L15 status names folder c's engine"; else bad "L15 status names the engine" "$OUT"; fi
 tmp_clean "L15 the launcher's scratch is gone"
 
+# L15b — replacing folder c's build without --engine drops the earlier build's engine
+run "$H" c "$ZIPS/v2.zip" --replace
+if [ "$RC" -eq 0 ] && [ ! -e "$F/engine.noindex" ] && grep -qx "RICHOS_ENGINE_DIR=" "$A" \
+   && grep -qx 'version=1.2.0-nightly.20260924.1' "$F/nightly-launch.txt"; then
+  ok "L15b a ZIP without --engine removes engine.noindex, so the replacement boots its own pin"
+else bad "L15b replacement without --engine boots its own pin" "exit $RC: $OUT / $(tr '\n' ' ' < "$A" 2>&1)"; fi
+tmp_clean "L15b the launcher's scratch is gone"
+
 echo ""
 echo "nightly-launch.test.sh: $PASSES passed, $FAILS failed"
 [ "$FAILS" -eq 0 ]

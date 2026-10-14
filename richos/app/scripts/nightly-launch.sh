@@ -81,8 +81,10 @@
 #                                    nightly's engine. The release tarball (one top-level
 #                                    `engine/`) is unpacked into <folder>/engine.noindex and
 #                                    RICHOS_ENGINE_DIR names it, exactly as the test VM's
-#                                    `run.sh --engine` does; every later start of the folder
-#                                    (--again included) boots that engine too.
+#                                    `run.sh --engine` does; --again boots that engine too.
+#                                    A ZIP named without --engine removes engine.noindex, so
+#                                    that build boots its own pin, never an earlier build's
+#                                    engine.
 #   RICHOS_CLAUDE_BIN=               explicit and exclusive (setup.rs `find_claude`); the
 #                                    folder's own link below is what the app should find.
 #
@@ -466,6 +468,11 @@ if [ -n "$ENGINE" ]; then
   rm -rf "$ENGINE_DIR" || die "could not remove the old $ENGINE_DIR."
   mv "$STAGE" "$ENGINE_DIR" || die "could not move the engine into $FOLDER."
   STAGE=""
+elif [ "$AGAIN" -eq 0 ] && [ -e "$ENGINE_DIR" ]; then
+  # A ZIP named without --engine boots its own pin: an engine left from an earlier
+  # --engine belongs to that build, not this one. Only --again keeps it.
+  rm -rf "$ENGINE_DIR" || die "could not remove $ENGINE_DIR, the engine an earlier --engine left."
+  say "removed $ENGINE_DIR: no --engine was given, so the app boots the engine its own build pins."
 fi
 ENGINE_ENV="RICHOS_ENGINE_DIR="
 [ -f "$ENGINE_DIR/VERSION" ] && ENGINE_ENV="RICHOS_ENGINE_DIR=$ENGINE_DIR"
