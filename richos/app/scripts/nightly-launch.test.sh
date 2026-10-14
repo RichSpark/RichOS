@@ -476,6 +476,18 @@ if [ "$RC" -eq 0 ] && [ ! -e "$F/engine.noindex" ] && grep -qx "RICHOS_ENGINE_DI
 else bad "L15b replacement without --engine boots its own pin" "exit $RC: $OUT / $(tr '\n' ' ' < "$A" 2>&1)"; fi
 tmp_clean "L15b the launcher's scratch is gone"
 
+# L15d — --engine only on a newborn: a folder whose app ran may hold an update, and that
+# update would boot the test engine instead of its own pin
+quit_app "$H"
+mkdir -p "$F/home.noindex/Applications/RichOS.app"; touch "$F/home.noindex/Applications/RichOS.app/downloaded-update"
+run "$H" c "$ZIPS/v1.zip" --replace --engine "$SBOX/engine.tar.gz"
+expect_refusal "L15d --engine on a folder that already has app data is refused" "start again from an empty folder"
+if [ ! -e "$F/engine.noindex" ] && grep -qx 'version=1.2.0-nightly.20260924.1' "$F/nightly-launch.txt" \
+   && [ -e "$F/home.noindex/Applications/RichOS.app/downloaded-update" ]; then
+  ok "L15d ...before anything changed: no engine unpacked, the build and its update state untouched"
+else bad "L15d refusal changed nothing" "$(ls -la "$F") / $(cat "$F/nightly-launch.txt")"; fi
+tmp_clean "L15d the launcher's scratch is gone"
+
 echo ""
 echo "nightly-launch.test.sh: $PASSES passed, $FAILS failed"
 [ "$FAILS" -eq 0 ]

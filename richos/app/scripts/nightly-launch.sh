@@ -82,6 +82,10 @@
 #                                    `engine/`) is unpacked into <folder>/engine.noindex and
 #                                    RICHOS_ENGINE_DIR names it, exactly as the test VM's
 #                                    `run.sh --engine` does; --again boots that engine too.
+#                                    --engine is refused once the folder has app data
+#                                    (home.noindex/): an update it already downloaded or
+#                                    installed would boot the test engine, so only a newborn,
+#                                    with updates off from its first start, takes one.
 #                                    A ZIP named without --engine removes engine.noindex, so
 #                                    that build boots its own pin, never an earlier build's
 #                                    engine.
@@ -397,6 +401,9 @@ if [ "$AGAIN" -eq 0 ]; then
   [ ${#ZIP_SHA} -eq 64 ] || die "could not hash '$ZIP'."
 fi
 if [ -n "$ENGINE" ]; then
+  # Only a newborn takes --engine: a folder whose app has run may hold a downloaded or
+  # installed update, and that update would boot this test engine instead of its own pin.
+  [ ! -e "$NHOME" ] || die "refusing: --engine needs a folder with no app data yet, and $FOLDER already has some; move it to the Trash and start again from an empty folder."
   refuse_daily "engine" "$ENGINE"
   [ -f "$ENGINE" ] || die "refusing: no such engine file: '$ENGINE'."
   ENGINE_TOP="$(/usr/bin/tar -tzf "$ENGINE" 2>/dev/null | head -1)"
