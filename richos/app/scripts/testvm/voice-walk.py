@@ -320,12 +320,21 @@ class VoiceWalk(adopt_walk.Walk):
                 session = guest(self.vm, 'grep -F "[richos-voice]" ' + shlex.quote(self.log) + ' || true')
                 (self.out / 'voice-log.txt').write_text(session)
                 lines = session.splitlines()
+                # The session OPEN line names the voice loaded at that instant: on main 0a2ae649f it
+                # reads "macOS say · Daniel ... (Rich's Pocket voice is not installed or loaded yet)"
+                # and Pocket finishes loading about 3 s later, before Rich says anything. What he
+                # hears is every `tts:` line, so those decide; the OPEN line is recorded.
                 opened = [l for l in lines if 'voice session OPEN' in l]
-                wrong = [l for l in opened if 'tts=' + POCKET_LABEL not in l]
+                said = [l for l in lines if '] tts: ' in l]
+                wrong = [l for l in said if POCKET_LABEL not in l]
                 if wrong:
-                    raise StepFailed('the voice session did not open on Pocket TTS as Peter Yearsley: ' + wrong[0])
+                    raise StepFailed('a sentence Rich spoke was not Pocket TTS as Peter Yearsley: ' + wrong[0])
+                timing = talk_timing(lines)
+                ready = [l for l in lines if 'Pocket TTS ready' in l]
                 return {'first_sentence': first, 'first_audio_ms': ms, 'voice_log': text.splitlines()[-20:],
-                        'session_open': opened, 'timing': talk_timing(lines)}
+                        'sentences': len(said), 'session_open': opened, 'pocket_ready': ready,
+                        'open_line_names_pocket': all('tts=' + POCKET_LABEL in l for l in opened),
+                        'timing': timing}
             time.sleep(2)
         raise StepFailed(f'Rich spoke no sentence within {self.a.within} s; voice log:\n' + '\n'.join(lines))
 
