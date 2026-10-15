@@ -624,3 +624,56 @@ impl UnwrapErrTurn for Result<String, richos_core::spine::SpineError> {
         }
     }
 }
+
+/// **A job's result is in the conversation, and still there after a relaunch** (nightly 57's
+/// product hunt, finding 6). "Will and Beth have both joined your team" was a card the window
+/// drew from the assignment's notice, marked told as it was handed over and gone after a
+/// relaunch, so the conversation ended at "On it!". Now a result is written into the
+/// conversation as Rich's message, once; a notice that says where a job stands now (here, a
+/// held one) stays on its assignment for the window's card.
+#[test]
+fn a_jobs_result_is_written_into_the_conversation_once_and_is_there_after_a_relaunch() {
+    use richos_core::assignment::{self, NoticeKind, Registration};
+    let (path, ledger) = tmp_ledger("work-result");
+    let mut spine = support::spine(ledger);
+    let thread = spine.create_thread("General", &femcboost()).unwrap();
+    let state = std::env::temp_dir().join(format!(
+        "richos-test-work-result-{}-{}",
+        std::process::id(),
+        richos_core::util::now_millis()
+    ));
+    std::fs::create_dir_all(&state).unwrap();
+    let receipt = assignment::register(&state, &Registration {
+        entity_id: "femcboost".into(),
+        thread_id: thread.clone(),
+        obligation_id: "obligation-1".into(),
+        instruction_ledger_ref: format!("ledger:{thread}:turn-1"),
+        instruction_sha256: "0".repeat(64),
+        title: "Hire these AI teammates onto my team: Will (Marketing Director), Beth (Bookkeeper)".into(),
+        repositories: Vec::new(),
+        needs_screen: false,
+    })
+    .unwrap();
+    let joined = "Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work.";
+    let held = "Your request is waiting until you sign in to Claude again.";
+    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Held, held).unwrap();
+    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, joined).unwrap();
+
+    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), 1, "the result was not written");
+    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), 0, "the result was written twice");
+    let cards = assignment::take_pending_notices(&state, "femcboost", &thread).unwrap();
+    assert_eq!(cards.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), [held], "the held line is still a card");
+
+    drop(spine);
+    let relaunched = Ledger::open(&path).unwrap();
+    let said: Vec<String> = relaunched
+        .messages(&thread)
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.role == "assistant")
+        .map(|m| m.text)
+        .collect();
+    assert_eq!(said, [joined], "after a relaunch the conversation does not hold the result");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir_all(&state).unwrap();
+}

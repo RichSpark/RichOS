@@ -67,6 +67,10 @@ pub enum SpineError {
     /// swallowed: an undrained record is the CEO's words still waiting to be delivered.
     #[error("steering intake: {0}")]
     Steering(String),
+    /// A job's result could not be taken off its assignment to be written into the
+    /// conversation ([`Spine::say_work_results`]); it stays pending there.
+    #[error("assignments: {0}")]
+    Assignments(String),
 }
 
 /// A prompt accepted while a turn was in flight, awaiting delivery at the next turn
@@ -2068,6 +2072,32 @@ impl Spine {
             self.emit_proactive_live(&binding, &turn_id, tier, text);
         }
         Ok(turn_id)
+    }
+
+    /// **A job's result, written into the conversation it was asked in, as Rich's message**
+    /// (nightly 57's hunt, finding 6). "Will and Beth have both joined your team" was a card the
+    /// window drew from the assignment's notice, marked told as it was handed over, and gone
+    /// after a relaunch: the conversation ended at "On it!" and he never saw his team hired.
+    ///
+    /// Takes this conversation's waiting results off their assignments
+    /// ([`crate::assignment::NoticeKind::is_result`]), oldest first, and raises each as a
+    /// proactive message ([`Self::raise_proactive`], `Digest`): durable, in the timeline after
+    /// a relaunch, in the tail the front desk is primed with, and drawn at once by the window's
+    /// `rich://proactive-message`. The notices that say where a job stands now stay on their
+    /// assignments for the window's cards. Answers how many were written.
+    ///
+    /// Called with the spine held and no turn running, so a result never lands inside a turn.
+    pub fn say_work_results(&mut self, engine_state: &std::path::Path, thread_id: &str) -> Result<usize, SpineError> {
+        let binding = self.ledger.thread_binding(thread_id)?;
+        let entity = binding.entity_id().as_str().to_string();
+        let results = crate::assignment::take_pending_notices_of(engine_state, &entity, thread_id, |kind| kind.is_result())
+            .map_err(|e| SpineError::Assignments(e.to_string()))?;
+        let mut written = 0;
+        for notice in results.iter().filter(|notice| !notice.text.trim().is_empty()) {
+            self.raise_proactive(Some(thread_id), AttentionTier::Digest, &notice.text)?;
+            written += 1;
+        }
+        Ok(written)
     }
 
     /// **A conversation the app opens on its own, with Rich's first message already in it**

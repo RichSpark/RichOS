@@ -4387,18 +4387,52 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
 /// Spec §3.4: the notice is durable, so it survives him being away and it survives a
 /// relaunch; this is the read the surface does on launch as well as on the pushed event,
 /// and the durable flag is what stops him hearing the same thing twice.
+///
+/// **A job's result is not handed back here: it is written into his conversation as Rich's
+/// message** (nightly 57's hunt, finding 6: "Will and Beth have both joined your team" was a
+/// card in the window and was gone after a relaunch). With the conversation free it is written
+/// now; while a turn holds it, one waiter writes it the moment the turn lets go. Either way the
+/// window hears `rich://proactive-message` and draws it from the conversation. What is handed
+/// back is the rest, which says where a job stands now and stays a card.
 #[richos_command::command]
 fn take_work_notices(
+    app: AppHandle,
     state: State<AppState>,
     thread_id: String,
 ) -> Result<Vec<richos_core::assignment::PendingNotice>, String> {
     let entity = assignment_scope(&state, &thread_id)?;
-    richos_core::assignment::take_pending_notices(
-        &state.data_dir.join("engine-state"),
-        entity.as_str(),
-        &thread_id,
-    )
-    .map_err(|e| e.to_string())
+    let engine_state = state.data_dir.join("engine-state");
+    say_work_results(&app, &state, &engine_state, &thread_id);
+    richos_core::assignment::take_pending_notices_of(&engine_state, entity.as_str(), &thread_id, |kind| !kind.is_result())
+        .map_err(|e| e.to_string())
+}
+
+/// Write this conversation's waiting job results into it ([`take_work_notices`]): now, when no
+/// turn holds the conversation, or else on one waiter per conversation that takes it when the
+/// turn lets go. Nothing is taken off the assignment until it is being written.
+fn say_work_results(app: &AppHandle, state: &AppState, engine_state: &Path, thread_id: &str) {
+    if let Ok(mut spine) = state.spine.try_lock() {
+        if let Err(e) = spine.say_work_results(engine_state, thread_id) {
+            eprintln!("[richos] work: a result could not be written into the conversation ({e}); it waits on its assignment");
+        }
+        return;
+    }
+    static WAITING: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    let waiting = WAITING.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    if !waiting.lock().unwrap().insert(thread_id.to_string()) {
+        return;
+    }
+    let app = app.clone();
+    let (engine_state, thread_id) = (engine_state.to_path_buf(), thread_id.to_string());
+    std::thread::spawn(move || {
+        if let Some(state) = app.try_state::<AppState>() {
+            let mut spine = take_the_spine(&state.spine);
+            if let Err(e) = spine.say_work_results(&engine_state, &thread_id) {
+                eprintln!("[richos] work: a result could not be written into the conversation ({e}); it waits on its assignment");
+            }
+        }
+        waiting.lock().unwrap().remove(&thread_id);
+    });
 }
 
 /// **What his team said on this conversation that the window has not shown yet** — the seam
