@@ -978,6 +978,66 @@ fn keep_words(answer: &mut String, said: &str) {
     answer.push_str(said);
 }
 
+/// The words that say a teammate is still at work on something and its result will follow.
+/// Matched in lower case, with a typographic apostrophe read as a plain one.
+const WAITING_WORDS: &[&str] = &[
+    "working on it", "working on them", "working on that", "working on this",
+    "pass along what", "pass it along", "pass them along",
+    "as soon as they're done", "as soon as he's done", "as soon as she's done", "as soon as it's done",
+    "hasn't come back", "haven't come back",
+];
+
+/// **A turn that waited on a teammate, without its waiting sentences**: every sentence that
+/// says the teammate is still at work ([`WAITING_WORDS`]) and the engine's own
+/// `stop-declared:` line go, and everything else that turn said stays as written, an answer it
+/// delivered included. Used once that teammate's answer has arrived, when those sentences are no
+/// longer true.
+fn without_waiting_sentences(text: &str) -> String {
+    let waiting = |sentence: &str| {
+        let lower = sentence.to_lowercase().replace('\u{2019}', "'");
+        WAITING_WORDS.iter().any(|w| lower.contains(w))
+    };
+    let mut kept: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("stop-declared:") {
+            continue;
+        }
+        // A sentence ends at `.`, `!` or `?` followed by a space or the end of the line; each
+        // keeps its own trailing space, so a line with nothing removed is rebuilt unchanged.
+        let (mut rebuilt, mut sentence, mut removed) = (String::new(), String::new(), false);
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            sentence.push(c);
+            let ends = matches!(c, '.' | '!' | '?') && chars.peek().is_none_or(|n| n.is_whitespace());
+            if ends || chars.peek().is_none() {
+                while chars.peek().is_some_and(|n| n.is_whitespace()) {
+                    sentence.push(chars.next().unwrap());
+                }
+                if waiting(&sentence) {
+                    removed = true;
+                } else {
+                    rebuilt.push_str(&sentence);
+                }
+                sentence.clear();
+            }
+        }
+        if removed && rebuilt.trim().is_empty() {
+            continue;
+        }
+        kept.push(rebuilt.trim_end().to_string());
+    }
+    // A paragraph break left doubled by a removed line is said once.
+    let mut out = String::new();
+    for line in kept {
+        if line.is_empty() && (out.is_empty() || out.ends_with("\n\n")) {
+            continue;
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
 /// Add one streamed piece of a turn's prose to what the turn said.
 ///
 /// **Different notices are their own paragraphs** (video-finish walks on `ec12621f8`: his
@@ -2489,17 +2549,20 @@ impl WorkHost {
                 // A helper's continuation adds to the account; a command's report REPLACES
                 // "it has started", which is no longer true and which he already has.
                 //
-                // **AND A CONSULT'S ANSWER REPLACES THE TURN THAT WAITED FOR IT** (Ray's check
-                // of nightly 57, 2026-10-15, `team/hire4-delegate-3-end.png`). That turn said
+                // **AND A CONSULT'S ANSWER RETIRES THE WAITING WORDS OF THE TURN BEFORE IT** (Ray's
+                // check of nightly 57, 2026-10-15, `team/hire4-delegate-3-end.png`). That turn said
                 // "They're working on it now, and I'll pass along what they suggest as soon as
                 // they're done."; the answer has arrived, so the sentence is no longer true, and
-                // he was shown it above the answer it promised. Only that turn's words go:
-                // whatever was said before it stays.
+                // he was shown it above the answer it promised. Only its waiting sentences go
+                // ([`without_waiting_sentences`]): an answer that turn delivered stays (second
+                // review rv-20261015T074838Z-1c744187-1e06, finding 1: a turn can give Will's
+                // answer and start Beth's consult).
                 last_said = said.clone();
                 if said.trim().is_empty() {
                     // Nothing said: the account, and where its last turn began, stay as they are.
                 } else if consult_answered {
-                    answer.truncate(before_last_turn);
+                    let waited = answer.split_off(before_last_turn);
+                    keep_words(&mut answer, &without_waiting_sentences(&waited));
                     before_last_turn = answer.trim_end().len();
                     keep_words(&mut answer, &said);
                 } else if helper_turn {
@@ -8348,6 +8411,61 @@ mod tests {
             !told.iter().any(|t| t.contains("working on it now")),
             "the answer arrived and he was still told they are working on it: {told:?}"
         );
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Two teammates consulted one after the other: both answers reach him, and neither
+    /// "working on it"** (second review rv-20261015T074838Z-1c744187-1e06, finding 1). The turn
+    /// after Will's run gives Will's answer and starts Beth's consult in the same paragraph;
+    /// when Beth's answer arrives only that turn's waiting sentence goes, never Will's answer.
+    #[test]
+    fn two_consults_one_after_another_keep_both_answers_and_drop_only_the_waiting_sentences() {
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        let consult = |id: &str, at: f64| {
+            engine_receipt(&h, id, "obligation-7", "consult", None, None);
+            use sha2::{Digest, Sha256};
+            let path = h.state.join("work-receipts")
+                .join(format!("{:x}", Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join(format!("{id}.json"));
+            let mut row: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            row["request"]["repo"] = serde_json::Value::Null;
+            row["end_observation"] = serde_json::json!({"at": at, "signal": "SubagentStop"});
+            row["consult_answer"] = serde_json::json!({"message": "answered", "answered": true});
+            std::fs::write(&path, serde_json::to_vec(&row).unwrap()).unwrap();
+        };
+        consult("consult-will", 100.0);
+        journal(&h, &helper_started("will-1"));
+        h.replies.lock().unwrap().extend([
+            "I've asked Will for subject lines. They're working on it now.".to_string(),
+            "Will suggests: Fresh start, Your next chapter, Make it happen. I've asked Beth for the budget. \
+             She's working on it now."
+                .to_string(),
+            "Beth recommends a budget of 500.".to_string(),
+        ]);
+        h.host.start();
+        let receipt = h.host
+            .register(&h.binding, &Registration { repositories: Vec::new(), ..registration(&h) })
+            .unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        until("the host never waited for Will", || read().detail == "A helper is doing the work.");
+        h.first_item_gate.shut();
+        journal(&h, &helper_stopped("will-1"));
+        until("no turn after Will's answer", || h.work_prompts.lock().unwrap().len() == 2);
+        consult("consult-beth", 200.0);
+        journal(&h, &helper_started("beth-1"));
+        h.first_item_gate.release();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        journal(&h, &helper_stopped("beth-1"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert_eq!(prompts[2], CONSULT_ENDED_CONTINUATION);
+        let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
+        let all = told.join("\n");
+        assert!(all.contains("Fresh start, Your next chapter, Make it happen."), "Will's answer was lost: {told:?}");
+        assert!(all.contains("Beth recommends a budget of 500."), "Beth's answer was lost: {told:?}");
+        assert!(!all.contains("working on it"), "he was told a teammate is still working on it: {told:?}");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
