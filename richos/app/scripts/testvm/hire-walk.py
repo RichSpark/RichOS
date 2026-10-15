@@ -114,6 +114,7 @@ def turns_of(rows, thread):
             by_id[r['turn_id']]['reply'] += r.get('text', '')
         elif event in ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed') and r.get('turn_id') in by_id:
             by_id[r['turn_id']]['done'] = True
+            by_id[r['turn_id']]['end'] = event
     return turns
 
 
@@ -279,10 +280,11 @@ def delegate_verdict(record, receipts, name):
 
 
 def answered_in_turn(turns, asked):
-    """Rich's reply to the message `asked`, once that turn is done with words in it, else None:
-    a job asked of Rich (--ask-rich) may be answered in his own turn, with no assignment at all."""
+    """Rich's reply to the message `asked`, once that turn COMPLETED with words in it, else None:
+    a job asked of Rich (--ask-rich) may be answered in his own turn, with no assignment at all.
+    An interrupted, stopped or failed turn is no answer, whatever partial text it carries."""
     mine = [t for t in turns if t['prompt'].strip() == asked.strip()]
-    if mine and mine[-1]['done'] and mine[-1]['reply'].strip():
+    if mine and mine[-1].get('end') == 'TurnCompleted' and mine[-1]['reply'].strip():
         return mine[-1]['reply']
     return None
 
@@ -594,7 +596,9 @@ class HireWalk(command_walk.CommandWalk):
                 if reply is None:
                     time.sleep(3)
             time.sleep(10)  # an assignment the turn registers is written as the turn ends
-            if reply is not None and not self.ours(sent):
+            # A question card he has not answered means the job is not done: it is answered
+            # below (pick) as a person answers it, and the walk follows what comes after.
+            if reply is not None and not self.ours(sent) and not self.present(RECOMMENDS):
                 self.evidence_shot('delegate-3-end.png')
                 since = [r for r in self.ledger() if r.get('at', 0) >= sent[0] - 1000]
                 (self.out / 'delegate-ledger.json').write_text(json.dumps(since, indent=2) + '\n')

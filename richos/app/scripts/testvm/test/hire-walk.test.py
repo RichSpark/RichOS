@@ -161,9 +161,19 @@ class Verdicts(unittest.TestCase):
 
     def test_a_job_rich_answers_in_his_own_turn_is_his_answer(self):
         asked = 'Suggest three subject lines.'
-        done = [{'turn': 'a', 'prompt': asked, 'reply': 'Here are three: one, two, three.', 'done': True}]
+        done = [{'turn': 'a', 'prompt': asked, 'reply': 'Here are three: one, two, three.', 'done': True,
+                 'end': 'TurnCompleted'}]
         self.assertEqual(hire_walk.answered_in_turn(done, asked), 'Here are three: one, two, three.')
-        running = [dict(done[0], done=False)]
+        interrupted = [dict(done[0], end='TurnInterrupted', reply='Here are three subject lines: 1. Grow')]
+        self.assertIsNone(hire_walk.answered_in_turn(interrupted, asked), 'partial text of an interrupted turn is no answer')
+        rows = [{'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'a', 'text': asked, 'source': 'text'},
+                {'event': 'AssistantDelta', 'turn_id': 'a', 'text': 'Here are three: one, two, three.'},
+                {'event': 'TurnStopped', 'turn_id': 'a'}]
+        self.assertIsNone(hire_walk.answered_in_turn(hire_walk.turns_of(rows, 't'), asked),
+                          'a stopped turn read off the ledger is no answer')
+        rows[-1] = {'event': 'TurnCompleted', 'turn_id': 'a'}
+        self.assertEqual(hire_walk.answered_in_turn(hire_walk.turns_of(rows, 't'), asked), 'Here are three: one, two, three.')
+        running = [dict(done[0], done=False, end=None)]
         self.assertIsNone(hire_walk.answered_in_turn(running, asked), 'a turn still running is no answer yet')
         empty = [dict(done[0], reply='  ')]
         self.assertIsNone(hire_walk.answered_in_turn(empty, asked), 'a finished turn with no words is no answer')
