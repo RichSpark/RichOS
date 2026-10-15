@@ -1394,13 +1394,9 @@ fn a_turn_cut_by_a_usage_limit_is_re_served_under_the_next_account() {
     drop(std::fs::remove_dir_all(dir));
 }
 
-/// **Plan §15 answer 9: the alert, once, when very high speed is first detected.** The lease
-/// streams its five-hour window at 50%, then 54% a minute later (4 points a minute, the speed
-/// the 2026-09-29 run measured: fast), then 58% another minute later (still fast). Exactly one
-/// alert reaches the conversation, and it says what the speed is; the next fast reading adds
-/// none. In that run the first alarm came at 98%; here it comes at the second reading.
+/// Fast and normal readings change meter cadence without posting into the conversation.
 #[test]
-fn a_fast_burn_alerts_once_when_the_high_speed_is_first_detected() {
+fn fast_and_normal_usage_checks_do_not_interrupt_the_conversation() {
     let (dir, quota) = two_accounts("alert", 50.);
     let (path, ledger) = tmp_ledger("fill-first-alert");
     let mut spine = support::spine(ledger);
@@ -1419,11 +1415,16 @@ fn a_fast_burn_alerts_once_when_the_high_speed_is_first_detected() {
     assert!(alerts(&spine).is_empty(), "one reading is no speed");
     *streamed.lock().unwrap() = Some(streamed_five_hour(54., start + 60_000));
     spine.submit_prompt("two", Source::Text).unwrap();
-    assert_eq!(alerts(&spine), vec!["Usage is climbing fast: Account 1's five-hour window went from 50% to 54% in 1 minute. I'm checking every minute now and will pause them at 93%, so it never reaches 100%.".to_string()]);
+    assert!(alerts(&spine).is_empty(), "fast usage stays out of the conversation");
     assert_eq!(quota.view().refresh_interval_ms, richos_core::quota::FAST_REFRESH_INTERVAL_MS);
     *streamed.lock().unwrap() = Some(streamed_five_hour(58., start + 120_000));
     spine.submit_prompt("three", Source::Text).unwrap();
-    assert_eq!(alerts(&spine).len(), 1, "still fast: no second alert");
+    assert!(alerts(&spine).is_empty());
+    *streamed.lock().unwrap() = Some(streamed_five_hour(58.1, start + 180_000));
+    spine.submit_prompt("four", Source::Text).unwrap();
+    assert_eq!(quota.view().refresh_interval_ms, richos_core::quota::REFRESH_INTERVAL_MS);
+    assert!(spine.messages(&thread).unwrap().iter().all(|m|
+        !m.text.starts_with("Usage is ")), "normal readings stay out of the conversation too");
     drop(std::fs::remove_file(&path));
     drop(std::fs::remove_dir_all(dir));
 }

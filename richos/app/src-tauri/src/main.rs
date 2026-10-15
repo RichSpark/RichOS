@@ -328,7 +328,7 @@ fn ensure_app_review_watch(engine: &Path, data_dir: &Path, claude: &Path, at_lau
         },
     };
     match richos_core::review_watch::ensure(&launch) {
-        Ok(pid) if at_launch => eprintln!("[richos] second review: the app's review-watch runs as pid {pid}"),
+        Ok(pid) if at_launch => eprintln!("[richos] second review: monitoring started (process {pid})"),
         Ok(_) => {}
         Err(e) => eprintln!("[richos] second review: the app's review-watch could not start ({e})"),
     }
@@ -1230,9 +1230,8 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
         adopt_at_the_turn_boundary(spine, &state.work);
         match verdict {
             richos_core::spine::FrontDeskReady::Ready { millis, spawned } => eprintln!(
-                "[richos] the front desk is ready before he types: {millis} ms{} — that is what his \
-                 first message used to wait through (CEO §55)",
-                if spawned { ", including the lease's own start" } else { "" }
+                "[richos] conversation preparation finished in {millis} ms{}",
+                if spawned { ", including connection startup" } else { "" }
             ),
             richos_core::spine::FrontDeskReady::AlreadyReady => {}
             // Both of these are ordinary and neither is a failure of anything: a turn may be in
@@ -1309,7 +1308,7 @@ fn ready_a_spare_front_desk(app: &AppHandle, entity: richos_core::EntityId) {
         let verdict = richos_core::spine::ready_a_spare_front_desk_without_the_spine(&state.spine, &entity);
         match verdict {
             richos_core::spine::SpareReady::Ready { millis } => eprintln!(
-                "[richos] a front desk is primed and waiting for the next new thread in {entity}:                  {millis} ms — that is what his first message into it used to wait through (CEO §55)"
+                "[richos] next conversation ready for {entity}: preparation took {millis} ms"
             ),
             richos_core::spine::SpareReady::AlreadyReady => {}
             other => eprintln!("[richos] no spare front desk was made ready for {entity}: {other:?}"),
@@ -1375,10 +1374,9 @@ fn spawn_media_tools_refresh() {
 fn spine_wait_notice(site: &str, waited: std::time::Duration) -> Option<String> {
     let millis = waited.as_millis();
     (millis > 0).then(|| format!(
-        "[richos] a window command waited {millis} ms for the spine at {site} — that wait is \
-         HIS, it is spent in front of the turn's clock, and it is charged to \u{a7}55. While it \
-         runs the screen reads \"Sending your message / Waiting for Rich to accept it\" or \
-         \"Opening conversation\", depending which hop this is."
+        "[richos] a window command waited {millis} ms for the conversation at {site}. \
+         The screen shows \"Sending your message / Waiting for Rich to accept it\" or \
+         \"Opening conversation\" during this wait."
     ))
 }
 
@@ -2452,6 +2450,12 @@ fn main() {
             let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir());
             std::fs::create_dir_all(&data_dir).ok();
 
+            // Synthesis is independent of recognition and video transcription. Start it before
+            // the window and the rest of setup, even when no speech model is installed yet.
+            if updates::selftest_mode().is_none() {
+                voice_provision::fetch_rich_voice_in_background();
+            }
+
             // =====================================================================
             // WHETHER THIS LAUNCH MAY TAKE THE SCREEN — BEFORE THE WINDOW EXISTS
             // =====================================================================
@@ -2916,16 +2920,11 @@ fn main() {
                 // would be an instruction he cannot follow.
                 None if registry.is_empty() => eprintln!(
                     "[richos] no company is registered on this install yet — RichOS will ask in \
-                     the window and write the answer to {}.\n\
-                     [richos] operator: the file's format and an example are in \
-                     docs/entity-registry.md. RICHOS_ENTITY overrides once a company exists.",
+                     the window and save the company details to {}.",
                     registry_path.display()
                 ),
                 None => eprintln!(
-                    "[richos] no company resolved — RichOS will ask in the window and \
-                     remember the answer.\n\
-                     [richos] operator: RICHOS_ENTITY (one of {}) still overrides, as does \
-                     launching from that entity's repository root.",
+                    "[richos] choose a company in the window. Available companies: {}.",
                     registry.entities().iter().map(|e| e.id.to_string()).collect::<Vec<_>>().join(", ")
                 ),
             }
@@ -6938,7 +6937,7 @@ mod send_wait_tests {
         let line = super::spine_wait_notice("src/main.rs:1780", Duration::from_millis(4412))
             .expect("a four-second wait is his, and it has to be written down");
         assert!(line.contains("4412 ms"), "{line}");
-        assert!(line.contains("§55"), "the ruling it is measured against: {line}");
+        assert!(!line.contains("§55"), "internal rulings do not belong in the log: {line}");
         // WHICH HOP PAID IT. This is the half candidate .12 did not have: the wait was real
         // and the line that would have named it was wired to one call site out of nine.
         assert!(line.contains("src/main.rs:1780"), "the site has to be in it: {line}");

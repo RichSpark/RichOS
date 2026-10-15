@@ -531,15 +531,10 @@ const RICH_VOICE_STALL: std::time::Duration = std::time::Duration::from_secs(60)
 /// **Make Rich's voice ready, in the background: install it if any pinned file is missing, then
 /// load it, and load it at once when it is already here.** Returns at once and never blocks a
 /// screen; a sentence Rich says meanwhile waits for it (no other voice). Loaded when the app is
-/// up, never first at a Talk press (CEO, 2026-10-15). Called when voice is found ready on this
-/// Mac (the window asks at launch), after first-run setup has installed the speech models, when
-/// voice mode starts and when a phone reply is spoken; the last two find it loaded already.
+/// up, never first at a Talk press. Started at app setup independently of speech models.
+/// Readiness, voice mode and phone replies can call again to retry a failed install.
 pub fn fetch_rich_voice_in_background() {
     let Some(dir) = richos_voice::pocket::bundle_dir() else { return };
-    if richos_voice::pocket::missing_files(&dir).is_empty() {
-        richos_voice::tts::warm_rich_voice();
-        return;
-    }
     if RICH_VOICE_FETCH.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -547,6 +542,7 @@ pub fn fetch_rich_voice_in_background() {
     // install and waits for Rich's voice instead of finding it missing.
     richos_voice::tts::rich_voice_installing();
     std::thread::spawn(move || {
+        // Hashing installed weights also stays off the startup thread.
         let done = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
