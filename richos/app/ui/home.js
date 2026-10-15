@@ -1247,6 +1247,40 @@ window.RichHome = (function () {
     if (loading) loading.classList.add("gone");
   }
 
+  /// HIS FIRST HIRE WHILE THE DEMONSTRATION IS UP: it comes down without a reload. The loop is
+  /// stopped, the picture and its last ticker line are taken off the screen, and the dataset
+  /// leaves the page, so `show()` has nothing of it to resume and the banner reads "not a
+  /// demonstration". His own loro, if it qualifies, is drawn from the next launch on.
+  function dropDemonstration() {
+    if (fieldDataIsCustomers()) return;
+    if (window.__loro && window.__loro.pause) window.__loro.pause();
+    delete window.__loro;
+    delete window.MATURE_LORO;
+    if (root) {
+      var stage = root.querySelector("#home-stage");
+      if (stage) stage.hidden = true;
+      var ticker = root.querySelector("#home-ticker");
+      if (ticker) {
+        ticker.textContent = "";
+        ticker.classList.remove("on");
+      }
+    }
+    noPicture();
+    refreshNote();
+  }
+
+  /// THE TEAM AS IT IS NOW, every time the screen comes back (handover review
+  /// rv-20261015T114726Z-23f8c364-1623): `startField` runs once per page, so a hire made since
+  /// then was not on the screen until a reload. A picture still loading takes the demonstration
+  /// down itself when it finishes (see `startField`).
+  function refreshTeam() {
+    return askForTeam().then(function (team) {
+      if (!team) return;
+      showTeam(team);
+      if (state.field === "live") dropDemonstration();
+    });
+  }
+
   function startField() {
     if (fieldStarted) return;
     // The surface may already be gone: this runs on an idle callback, and a page that has
@@ -1318,6 +1352,11 @@ window.RichHome = (function () {
           return;
         }
         state.field = "live";
+        // He hired while the demonstration was still loading (`refreshTeam`).
+        if (state.team && !fieldDataIsCustomers()) {
+          dropDemonstration();
+          return;
+        }
         // The signal block is only now carrying its five lines, so the left column has a real
         // bottom edge for the first time and the door can sit on it rather than on the
         // fallback.
@@ -1496,8 +1535,11 @@ window.RichHome = (function () {
 
     // NOTHING IS REBUILT. If the picture was already up it resumes; if the CEO never waited
     // for it the first time, the load is still in flight and finishes on its own.
+    var started = fieldStarted;
     if (window.__loro && window.__loro.resume) window.__loro.resume();
     else startField();
+    // ...but his team is re-read: a hire since the screen was last shown belongs on it.
+    if (started) refreshTeam();
 
     // ...and fade in on the next frame, so the transition has a start state to run from.
     requestAnimationFrame(function () {

@@ -5127,6 +5127,14 @@
       homeField = field ? { ...field } : null;
       return homeField;
     },
+    /// A hire lands on disk mid-session: what `home_team` answers from now on, the way
+    /// `preset.homeTeam` sets it before launch (product hunt 2026-10-15, finding 7).
+    ///
+    ///     __RICHOS_MOCK__.homeTeamSet([{ name: "Will", role: "Marketing Director" }]);
+    homeTeamSet(team) {
+      homeTeam = Array.isArray(team) ? team.map((t) => ({ ...t })) : [];
+      return homeTeam.map((t) => ({ ...t }));
+    },
     /// ---- the first-run notice (2026-09-06) --------------------------------------------
     /// Put onboarding into a state. The default is `described`, so a suite that wants the
     /// offer on screen has to ask for it — the surface can never be shown to be working by

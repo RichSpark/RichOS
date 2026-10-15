@@ -208,6 +208,58 @@ async function main() {
     return `his loro drawn; the list and the numbers stay his: ${seen.rows.join(", ")}; "${seen.signals}"`;
   });
 
+  // THE HIRE MADE IN THIS SESSION (handover review rv-20261015T114726Z-23f8c364-1623): the
+  // first-run demonstration is up, he leaves for the app, hires, and comes back home; then he
+  // hires again and comes back again. Each time the screen shows the team as it is now, with no
+  // reload. Before the fix `home_team` was read once per page, so he came back to the
+  // demonstration after his first hire and to the old team after the next.
+  await run.check("a hire made since the home screen was last shown is on it when he comes back, no reload", async () => {
+    const page = await openApp(browser, "dark", {});
+    await page.waitForFunction("window.RichHome.state.field === 'live' && !!window.__loro", null, { timeout: 90000 });
+    const homeAfter = async (team) => {
+      await page.evaluate((t) => {
+        window.RichHome.hide("enter-app");
+        window.__RICHOS_MOCK__.homeTeamSet(t);
+        window.RichHome.show("wordmark");
+      }, team);
+      const want = team.map((t) => t.name + " " + t.role);
+      await page
+        .waitForFunction(
+          (w) => JSON.stringify(Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim())) === JSON.stringify(w),
+          want,
+          { timeout: 90000 }
+        )
+        .catch(() => {});
+      const seen = await page.evaluate(() => ({
+        rows: Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim()),
+        cap: document.querySelector("#home-live .cap").textContent.trim(),
+        demo: !!(window.MATURE_LORO && window.MATURE_LORO.meta && window.MATURE_LORO.meta.synthetic),
+        drawing: !!(window.__loro && window.__loro.running),
+        stageShown: !document.getElementById("home-stage").hidden,
+        note: !document.getElementById("home-note").hidden,
+        field: window.RichHome.state.field,
+      }));
+      seen.signals = await signalsOf(page);
+      const text = await screenText(page);
+      seen.madeUp = MADE_UP.filter((w) => text.includes(w.toLowerCase()));
+      assertEqual(seen.rows, want, "the home screen does not show the team as it is now");
+      assertEqual(seen.cap, "Your team", "the list's heading claims something about them");
+      assertEqual(seen.signals, team.length + (team.length === 1 ? " AI specialist" : " AI specialists"), "the numbers are not his");
+      assertEqual(seen.demo, false, "the demonstration's dataset is still on the page");
+      assertEqual(seen.drawing, false, "the demonstration is still being drawn");
+      assertEqual(seen.stageShown, false, "the demonstration's picture is still on screen");
+      assertEqual(seen.note, false, "the banner calling the screen a demonstration is up over his own team");
+      assertEqual(seen.field, "none", "a user with a team and no picture of his own must get no picture");
+      assertEqual(seen.madeUp, [], "the demonstration's numbers or names are still on his screen");
+      return `${seen.rows.join(", ")}; "${seen.signals}"`;
+    };
+    const first = await homeAfter([{ name: "Will", role: "Marketing Director" }]);
+    const next = await homeAfter([{ name: "Will", role: "Marketing Director" }, { name: "Beth", role: "Bookkeeper" }]);
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return `after the first hire: ${first}; after the next: ${next}`;
+  });
+
   await run.check("NEGATIVE CONTROL: a user with no team still gets the demonstration (CEO 2026-09-06)", async () => {
     const page = await openApp(browser, "dark", {});
     await page.waitForFunction("window.RichHome.state.field === 'live'", null, { timeout: 90000 });
