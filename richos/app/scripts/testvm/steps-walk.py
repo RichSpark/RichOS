@@ -25,7 +25,7 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        point twice is a click, the way a hand clicks; `ax click --at` is
                                        System Events' accessibility press at a point and does not focus
                                        a text box (candidate 50 rewalk, run K)
-  relaunch                             relaunch.py VM: the recorded app stopped by its captured PID and
+  relaunch [env[]]                     relaunch.py VM [--env KEY=VALUE ...]: the recorded app stopped by its captured PID and
                                        started again with its fixture environment (a choice that must
                                        survive a relaunch is checked after this step)
 
@@ -97,7 +97,10 @@ def step_run(vm, step, out):
     if op == 'handfile':
         return run([str(HERE / 'hand-file.sh'), vm, step['mode'], step['path']] + (['--to', step['to']] if step.get('to') else []))
     if op == 'relaunch':
-        return run([str(HERE / 'relaunch.py'), vm], timeout=90)
+        # `env` (KEY=VALUE strings) is added to the fixture environment, as relaunch.py --env: a
+        # launch's TESTVM_APP_ENV (the voice WAV standing in for the microphone) is not carried over.
+        extra = [x for pair in step.get('env', []) for x in ('--env', pair)]
+        return run([str(HERE / 'relaunch.py'), vm] + extra, timeout=90)
     if op == 'pointer':
         return run([str(HERE / 'pointer-drag.sh'), vm] + step['points'] + (['--right'] if step.get('right') else []))
     if op == 'wait':
@@ -127,6 +130,7 @@ REQUIRED = {
     'pointer': {'points': list},
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool},
+            'relaunch': {'env': list},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
 
