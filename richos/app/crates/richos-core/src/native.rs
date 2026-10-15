@@ -2921,8 +2921,11 @@ impl NativeClient {
     /// (`adapters/mcp.py` answers `"isError": True` for a refusal), so anything else is a
     /// checkpoint that succeeded and the closing line after it is the duplicate to withhold.
     ///
-    /// Returns whether THIS frame settled it as written, which is the moment his answer is
-    /// complete ([`ReaderState::tail_after_the_checkpoint`]).
+    /// Returns whether THIS frame settled it as ACCEPTED, which is the moment his answer is
+    /// complete ([`ReaderState::tail_after_the_checkpoint`]). Not `is_error` alone: the engine
+    /// answers a checkpoint it rejected (a commitment with no title) without `isError` and with
+    /// `"accepted": false` in its receipt (`ecs_checkpoint.py` `receipt_result`), and the turn
+    /// must stay open for the model to repair it.
     fn settle_the_checkpoint(msg: &Value, state: &Arc<Mutex<ReaderState>>) -> bool {
         let mut st = state.lock().unwrap();
         let Some(pending) = st.checkpoint_call_id.clone() else { return false };
@@ -2934,12 +2937,29 @@ impl NativeClient {
                 st.checkpoint_call_id = None;
                 if block.get("is_error").and_then(|v| v.as_bool()) != Some(true) {
                     st.checkpoint_after_his_words = true;
-                    return true;
+                    return Self::checkpoint_accepted(block);
                 }
                 return false;
             }
         }
         false
+    }
+
+    /// Whether a checkpoint's `tool_result` carries the engine's receipt with
+    /// `"accepted": true`. The content is a plain string or an array of `{type:"text", text}`
+    /// blocks (both observed, `machinery::block_text`); anything unreadable is not accepted.
+    fn checkpoint_accepted(block: &Value) -> bool {
+        let text = match block.get("content") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => {
+                parts.iter().filter_map(|p| p.get("text").and_then(|t| t.as_str())).collect::<Vec<_>>().join("")
+            }
+            _ => return false,
+        };
+        serde_json::from_str::<Value>(text.trim())
+            .ok()
+            .and_then(|receipt| receipt.get("accepted").and_then(Value::as_bool))
+            == Some(true)
     }
 
     /// **HIS ANSWER IS COMPLETE: THE TURN ENDS AT THE CHECKPOINT** (product hunt 2026-10-15,
@@ -7448,7 +7468,7 @@ printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"stat
 printf '%s\n' '{"type":"stream_event","event":{"type":"message_start"}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
-printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":"checkpoint written"}]}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":"{\"accepted\":true,\"applied\":1,\"rejected\":0}"}]}}'
 sleep 1
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three subject line ideas."}}}'
 printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":1}'
@@ -7490,6 +7510,67 @@ read -r keep_alive
                 BetweenItem::Frame(f) if f.get("type").and_then(Value::as_str) == Some("result")
                     && f.get("queued_turn_count").and_then(Value::as_u64) == Some(1))),
             "the tail's own result ended the turn: the turn waited for the tail after its checkpoint",
+        );
+    }
+
+    #[test]
+    fn a_rejected_checkpoint_never_ends_the_turn() {
+        // The handover review of 24668df27: the engine answers a checkpoint it REJECTED (a
+        // commitment with no title) with `"isError": false` and a receipt saying
+        // `"accepted": false, "rejected": 1`. Ending the turn there closed the tool grants, so
+        // the model's repair could no longer save it. Only an ACCEPTED checkpoint completes
+        // the answer. The verdict is the same fact as the test above: the turn's own `result`
+        // reaches the between-turn lane only if the turn had already ended without it.
+        let script = write_script("rejected-checkpoint-keeps-the-turn", r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
+test -n "$ours" || exit 9
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
+printf '%s\n' '{"type":"stream_event","event":{"type":"message_start"}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":[{"type":"text","text":"{\"accepted\":false,\"applied\":0,\"rejected\":1,\"rejections\":[\"commitment needs a title\"]}"}]}]}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP2","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP2","content":[{"type":"text","text":"{\"accepted\":true,\"applied\":1,\"rejected\":0,\"rejections\":[]}"}]}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":1}'
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+read -r prompt
+ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
+test -n "$ours" || exit 9
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"The second answer."}}}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+read -r keep_alive
+"#);
+        let client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
+        let said = |client: &NativeClient, prompt: &str| {
+            let mut said = String::new();
+            let reason = client
+                .prompt(prompt, &mut |item| {
+                    if let TurnItem::Text { text, .. } = item {
+                        said.push_str(text);
+                    }
+                })
+                .unwrap();
+            (reason, said)
+        };
+
+        let (reason, first) = said(&client, "Suggest three subject lines.");
+        assert_eq!(reason, "end_turn");
+        assert_eq!(first, "Here are three.");
+        // The second prompt is read by the child only after the first turn's `result`, so by
+        // the time it is answered the reader has routed that `result` one way or the other.
+        let (reason, second) = said(&client, "Thanks.");
+        assert_eq!(reason, "end_turn");
+        assert_eq!(second, "The second answer.");
+        assert!(
+            !client.between.lock().unwrap().queue.iter().any(|i| matches!(i,
+                BetweenItem::Frame(f) if f.get("type").and_then(Value::as_str) == Some("result")
+                    && f.get("queued_turn_count").and_then(Value::as_u64) == Some(1))),
+            "the turn ended at a checkpoint the engine rejected, before the model could repair it",
         );
     }
 
