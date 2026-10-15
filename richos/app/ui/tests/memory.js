@@ -88,6 +88,10 @@ async function openApp(browser, preset, resolveOverrides, opts) {
       window.__RICHOS_LAUNCH__ = Object.freeze(v);
     }, opts.launch);
   }
+  // `declined`: an earlier launch's "Not now" on the memory question (`MEMORY_DECLINED_KEY`).
+  if (opts && opts.declined) {
+    await page.addInitScript(() => window.localStorage.setItem("richos.memorySetupDeclined", "true"));
+  }
   await page.goto(APP);
   page.__errors = errors;
   // `stayHome`: the launch as he sees it, the opening curtain gone and nothing else touched.
@@ -423,6 +427,39 @@ async function main() {
     assertEqual(first.__errors, [], "the shell logged errors on the first start");
     await first.close();
     return "the relaunch stays on the home screen with the question owed; \"Talk to Rich\" asks it; the first start asks at once";
+  });
+
+  await run.check("5e every other question a relaunch owes waits for the home screen too", async () => {
+    // Second review rv-20261015T074838Z-1c744187-1e06, finding 2: the setup sheet (an update that
+    // needs a different engine is one) and the company question, after "Not now" to the memory
+    // question, still took a relaunch off the home screen.
+    const relaunch = { kind: "fresh", ordinal: 2, splashEnabled: true };
+    const cases = [
+      { what: "the setup sheet", preset: { setup: "missing-both", memory: "ready", chosenEntity: "northwind" },
+        sheet: "#setup-sheet", opts: {} },
+      { what: "the company question", preset: { memory: "none", chosenEntity: null },
+        sheet: "#entity-picker", opts: { declined: true } },
+    ];
+    const seen = [];
+    for (const c of cases) {
+      const page = await openApp(browser, c.preset, null, { stayHome: true, launch: relaunch, ...c.opts });
+      await page.waitForFunction(() => (window.__calls || []).some((x) => x.cmd === "setup_status"), null, { timeout: 30000 });
+      await pastTheQuestion(page);
+      const landed = await page.evaluate((sel) => ({
+        homeOpen: !!(window.RichHome && window.RichHome.isOpen()),
+        leftFor: window.RichHome && window.RichHome.state.lastLeaveReason,
+        asked: !document.querySelector(sel).hidden,
+      }), c.sheet);
+      assert(landed.homeOpen && !landed.asked,
+        `a relaunch owing ${c.what} did not open on the home screen: ${JSON.stringify(landed)}`);
+      await page.click("#home-enter");
+      await page.waitForSelector(`${c.sheet}:not([hidden])`, { timeout: 30000 });
+      assertEqual(page.__errors, [], `the shell logged errors (${c.what})`);
+      await page.close();
+      seen.push(c.what);
+      bump(3);
+    }
+    return `the home screen stays for ${seen.join(" and ")}, and "Talk to Rich" asks each`;
   });
 
   await run.check("6  an install that is already set up is never asked", async () => {
