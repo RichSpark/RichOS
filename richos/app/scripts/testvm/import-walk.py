@@ -113,7 +113,7 @@ def name_on_screen(vm, out, label):
 
 
 def loro_lines(vm, log):
-    _, text = run_in_guest(vm, 'grep -a "\\[richos\\] loro Tier C" ' + shlex.quote(log) + ' 2>/dev/null || true')
+    _, text = run_in_guest(vm, 'grep -a "\\[richos\\] memory:" ' + shlex.quote(log) + ' 2>/dev/null || true')
     return [line for line in text.splitlines() if line.strip()]
 
 

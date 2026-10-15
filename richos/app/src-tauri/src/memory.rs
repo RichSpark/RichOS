@@ -112,16 +112,15 @@ pub fn wire_company_memory(
         // is the honest state of a fresh install until `BLOCKED.md`'s question is answered.
         Err(richos_core::loro::LoroError::CompilerNotInstalled { root, tried }) => {
             eprintln!(
-                "[richos] loro Tier C: corpus at {root} — but the memory compiler is not installed, \
-                 so re-primes carry no company memory. Looked in: {tried}"
+                "[richos] memory: saved at {root}, but its reading tools are missing. \
+                 Conversation memory is unavailable. Looked in: {tried}"
             );
             // NO WRITER EITHER, and for the same reason: `loro-write.mjs` is one of the two
             // entry points `LoroTools::locate` requires, so a corpus with no compiler has no
             // writer to reach. The desk refuses rather than accepting a confirmation it
             // cannot carry out.
             eprintln!(
-                "[richos] loro Tier C: the correction desk is unavailable for the same reason — \
-                 loro-write.mjs is in the same directory that was not found."
+                "[richos] memory: corrections are unavailable because the writing tools are missing."
             );
             return WiredMemory {
                 status: MemoryStatus {
@@ -136,7 +135,7 @@ pub fn wire_company_memory(
             };
         }
         Err(e) => {
-            eprintln!("[richos] loro Tier C: configured but unusable, continuing without it: {e}");
+            eprintln!("[richos] memory: could not read saved information; continuing without it: {e}");
             return WiredMemory {
                 status: MemoryStatus { state: "unusable".into(), detail: Some(e.to_string()), ..Default::default() },
                 writer: None,
@@ -146,19 +145,18 @@ pub fn wire_company_memory(
     };
 
     let Some(install) = install else {
-        eprintln!("[richos] loro Tier C: no corpus configured — re-primes carry no company memory");
+        eprintln!("[richos] memory: no saved memory folder is configured.");
         // WHAT WAS LOOKED FOR, not merely that it failed. This is the line that
         // would have turned "no corpus configured" from a shrug into an
         // instruction the first time anyone read it on a double-click.
         for t in &tried {
-            eprintln!("[richos] loro Tier C: tried {t}");
+            eprintln!("[richos] memory: looked in {t}");
         }
         // AND WHAT WILL HAPPEN ABOUT IT, which is the line this branch was missing on
         // 2026-09-01: until this pass, nothing anywhere created any of the candidates
         // above, so a reader who got this far had a list and no next step.
         eprintln!(
-            "[richos] loro Tier C: RichOS will offer to set one up in the window, and will not \
-             pick a location on its own."
+            "[richos] memory: RichOS will offer to set up a memory folder in the window."
         );
         return WiredMemory {
             status: MemoryStatus { state: "none".into(), tried, ..Default::default() },
@@ -180,10 +178,9 @@ pub fn wire_company_memory(
     let mut compiler = match CliContextCompiler::from_install(&install, registry) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[richos] loro Tier C: configured but unusable, continuing without it: {e}");
+            eprintln!("[richos] memory: could not read saved information; continuing without it: {e}");
             eprintln!(
-                "[richos] loro Tier C: the correction desk stays OPEN at {} — this failure is about \
-                 what a slice may contain, not about where a write goes.",
+                "[richos] memory: corrections can still be saved to {}.",
                 install.root().path().display()
             );
             return WiredMemory {
@@ -201,7 +198,7 @@ pub fn wire_company_memory(
     };
 
     eprintln!(
-        "[richos] loro Tier C: compiling from {} (via {}), node {}",
+        "[richos] memory: reading from {} (via {}), runtime {}",
         compiler.root().path().display(),
         install.source().as_str(),
         compiler.tools().node()
@@ -211,8 +208,7 @@ pub fn wire_company_memory(
     // false would print two different paths here rather than looking identical and being
     // wrong.
     eprintln!(
-        "[richos] loro correction desk: writing to {} via {} (the same install the compiler above \
-         resolved)",
+        "[richos] memory: saving corrections to {} via {}",
         install.root().path().display(),
         install.tools().write_bin().display()
     );
@@ -263,8 +259,7 @@ pub fn wire_company_memory(
             }
             if compiler.lanes().is_empty() {
                 eprintln!(
-                    "[richos] loro lane: no lane narrowing in force — every company \
-                     reads the CEO layer, which is the whole of an unpartitioned corpus."
+                    "[richos] memory: this folder has no company partitions; all companies read the same saved information."
                 );
             }
             // WHOSE RECORD IS THIS, when the corpus is one repository's own
@@ -330,22 +325,17 @@ pub fn wire_company_memory(
     match richos_core::evidence::CliEvidenceLookup::from_env(compiler.root()) {
         Ok(Some(lookup)) => {
             eprintln!(
-                "[richos] loro Tier E: the evidence lookup is wired — {} over {} (the CEO's own \
-                 files, consulted ONLY when a compiled slice reports coverage none/adjacent, and \
-                 never compiled into company memory)",
+                "[richos] file lookup: ready via {} in {}; used when saved memory cannot answer a question.",
                 lookup.tools().bin().display(),
                 lookup.zone().path().display()
             );
             spine.set_evidence_lookup(Box::new(lookup));
         }
         Ok(None) => eprintln!(
-            "[richos] loro Tier E: no evidence lookup for this install — a turn memory cannot \
-             answer will say so and stop there, rather than looking in the CEO's files. \
-             RICHOS_EVIDENCE_BIN names the entry point."
+            "[richos] file lookup: not configured; questions that saved memory cannot answer will say so."
         ),
         Err(e) => eprintln!(
-            "[richos] loro Tier E: the evidence lookup was configured and could not be used \
-             ({e}) — the turn is unaffected and his files are simply not consulted."
+            "[richos] file lookup: unavailable ({e}); continuing without searching files."
         ),
     }
     spine.set_loro_context_compiler(Box::new(compiler));
