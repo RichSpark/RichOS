@@ -1095,11 +1095,13 @@ fn words_for_him(said: &str) -> String {
 /// ([`keep_words`]); a command's report REPLACES "it has started", which is no longer true and
 /// which he already has. Either way the declared wait stays out of his answer (second review
 /// rv-20261015T110858Z-a5f8a28b-a1ab: a command's report turn that starts a consult kept "Will
-/// is working on the outreach recommendation now." above Will's answer).
+/// is working on the outreach recommendation now." above Will's answer). A report that holds
+/// ONLY its declared wait still replaces it (handover review rv-20261015T120013Z-7ade25c4-de05:
+/// "The analysis is running." stayed above Will's answer); a turn that said nothing does not.
 fn fold_turn(answer: &mut String, said: &str, adds: bool) {
     if adds {
         keep_words(answer, said);
-    } else if !words_for_him(said).is_empty() {
+    } else if !words_for_him(said).is_empty() || declares_waiting_on_a_helper(said) {
         answer.clear();
         keep_words(answer, said);
     }
@@ -8886,6 +8888,22 @@ mod tests {
             "a command's report kept its waiting sentence above the answer");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A command's report that holds ONLY its declared wait still replaces "it has started"**
+    /// (handover review rv-20261015T120013Z-7ade25c4-de05, fixture declaration_only_report.py:
+    /// his answer read "The analysis is running." above Will's answer). A turn that said
+    /// nothing at all still leaves the account as it was.
+    #[test]
+    fn a_report_that_only_declares_its_wait_replaces_the_command_kickoff() {
+        let mut account = "The analysis is running.".to_string();
+        fold_turn(&mut account, "stop-declared: waiting-on-teammate — Will is working on the outreach recommendation now.", false);
+        fold_turn(&mut account, "Will recommends starting with the three largest leads.", true);
+        assert_eq!(account, "Will recommends starting with the three largest leads.",
+            "a finished command is still reported as running above the answer");
+        let mut account = "The analysis is running.".to_string();
+        fold_turn(&mut account, "  \n", false);
+        assert_eq!(account, "The analysis is running.", "a turn that said nothing emptied the account");
     }
 
     /// **A work receipt as the ENGINE writes it**, in the partition the engine writes it to
