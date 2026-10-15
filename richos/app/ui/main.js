@@ -4314,9 +4314,10 @@ function receiveWorkNotice(text, raisedAt, model = timelineModel, team = null, k
 /// rv-20261015T122526Z-558b93b7). The result is written into the conversation as Rich's message
 /// and drawn from `rich://proactive-message`, which speaks nothing, so "Will is on your team now"
 /// was silent to a CEO who was listening. `rich://work-result` carries its words to the speaker
-/// the way a question's are (`voice_speak_delta`, then `voice_speak_end`). Held only while a
-/// turn runs, which shares the speaker's sentence chunker; the speaker itself queues it behind
-/// Rich's own sentences and holds it while he is talking.
+/// whole (`voice_speak_result`), as words of their own rather than part of an answer, so a Stop
+/// he gave an earlier reply does not silence them (review rv-20261015T125238Z-37f970a3).
+/// Held while a turn runs; the speaker itself queues it behind Rich's own sentences and holds it
+/// while he is talking.
 let heldWorkResults = [];
 let workResultsSaid = Promise.resolve();
 
@@ -4331,10 +4332,9 @@ function receiveWorkResult(text) {
 
 function speakWorkResult(text) {
   if (!voiceMode) return;
-  // One after another, so two results are never run together in the chunker.
+  // One after another, in the order they arrived.
   workResultsSaid = workResultsSaid
-    .then(() => Bridge.invoke("voice_speak_delta", { text }))
-    .then(() => Bridge.invoke("voice_speak_end"))
+    .then(() => Bridge.invoke("voice_speak_result", { text }))
     .catch(() => {});
 }
 

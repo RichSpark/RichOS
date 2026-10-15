@@ -754,8 +754,10 @@ every turn boundary.
 |---|---|---|
 | `rich://work-result` | A job's result (`answer`, `settled`, `failed`, `interrupted`) was just written into this conversation as Rich's message. Once per message written. | `{ threadId, text }` |
 
-The window already draws the message; this event is for voice mode, which says `text` the way it
-says a question (`ui/main.js` `receiveWorkResult`), held while a turn runs.
+The window already draws the message; this event is for voice mode, which says `text` whole
+through `voice_speak_result` (`ui/main.js` `receiveWorkResult`), held while a turn runs. It is
+said as words of its own, not as part of an answer, so a Stop he gave an earlier reply does not
+silence it; it still waits while he is talking.
 
 ## His team, on an operator install: `rich://operator-notice`
 

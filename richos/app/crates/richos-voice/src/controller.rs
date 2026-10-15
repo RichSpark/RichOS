@@ -2060,10 +2060,17 @@ impl VoiceController {
     /// while the CEO is still talking; the supervisor sends it when he gives the floor back. A
     /// superseded or interrupted answer's sentences are dropped here.
     fn send_speak(&self, generation: u64, text: String) {
+        self.send_to_speaker(generation, text, false);
+    }
+
+    /// [`VoiceController::send_speak`] for a sentence that belongs to no answer
+    /// ([`AnswerGate::offer_announcement`]).
+    fn send_to_speaker(&self, generation: u64, text: String, announcement: bool) {
         let Some(tx) = &self.speak_tx else { return };
         let his_floor = self.shared.his_floor.load(Ordering::Relaxed);
         let msg = SpeakMsg { generation, text };
         let now = match self.gate.lock() {
+            Ok(mut gate) if announcement => gate.offer_announcement(msg, his_floor),
             Ok(mut gate) => gate.offer(msg, his_floor),
             // A poisoned gate must not silence Rich for the rest of the session.
             Err(_) => Some(msg),
@@ -2095,6 +2102,22 @@ impl VoiceController {
         };
         if let Some(text) = tail {
             self.send_speak(generation, text);
+        }
+    }
+
+    /// **A job's result, said on its own** ("Will is on your team now"; `rich://work-result`).
+    /// It is not part of any answer, so it does not use the answer's chunker, and a Stop he gave
+    /// an earlier reply does not silence it (review rv-20261015T125238Z-37f970a3, finding 1:
+    /// after tap-to-stop no turn starts, so the mute stayed and the result was dropped). It still
+    /// waits while he has the floor, queues behind Rich's own sentences, and a Stop while it is
+    /// being said stops it, by the generation like any sentence.
+    pub fn speak_result(&self, text: &str) {
+        let generation = self.shared.generation.load(Ordering::Relaxed);
+        let mut chunker = SentenceChunker::new();
+        let mut sentences = chunker.push(text);
+        sentences.extend(chunker.flush());
+        for sentence in sentences {
+            self.send_to_speaker(generation, sentence, true);
         }
     }
 

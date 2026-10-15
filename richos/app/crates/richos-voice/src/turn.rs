@@ -314,6 +314,16 @@ impl<T> AnswerGate<T> {
         if self.muted {
             return None;
         }
+        self.offer_announcement(sentence, his_floor)
+    }
+
+    /// A sentence that belongs to no answer: a job's result, said on its own ("Will is on your
+    /// team now"). The mute is about the answer he stopped or went on past, and this is not part
+    /// of it, so it is spoken even after he stopped Rich and no turn has started since (review
+    /// rv-20261015T125238Z-37f970a3, finding 1). Everything else is [`AnswerGate::offer`]: held
+    /// while he has the floor, and behind sentences already held, so it never talks over him and
+    /// never jumps ahead of Rich.
+    pub fn offer_announcement(&mut self, sentence: T, his_floor: bool) -> Option<T> {
         if his_floor || !self.held.is_empty() {
             self.held.push_back(sentence);
             return None;
@@ -538,6 +548,29 @@ mod tests {
         assert_eq!(g.offer("late", false), None, "the rest of a superseded answer was said");
         g.next_turn();
         assert_eq!(g.offer("next turn", false), Some("next turn"));
+    }
+
+    /// INVARIANT — the review's case (rv-20261015T125238Z-37f970a3, finding 1, fixture
+    /// `work-result-gate.rs`). He tapped Stop on a spoken reply and waited; no turn started. A
+    /// job's result that arrives then is still said; the stopped answer is still not; and the
+    /// result waits while he has the floor.
+    #[test]
+    fn a_result_after_he_stopped_rich_is_still_said_and_never_over_him() {
+        let mut g = AnswerGate::new();
+        g.supersede(); // `force_barge_in`: tap-to-stop. No `next_turn` follows.
+        let joined = "Will (Marketing Director) is on your team now, ready to take work.";
+        assert_eq!(g.offer_announcement(joined, false), Some(joined), "the joined notice was dropped");
+        assert_eq!(g.offer("rest of the stopped reply", false), None, "the stopped reply was said");
+
+        assert_eq!(g.offer_announcement(joined, true), None, "the notice talked over him");
+        assert!(g.release(true).is_empty(), "released while he still had the floor");
+        assert_eq!(g.release(false), vec![joined], "the held notice was lost");
+
+        // Behind a sentence of Rich's that is waiting for him, never ahead of it.
+        let mut g = AnswerGate::new();
+        assert_eq!(g.offer("Rich's sentence", true), None);
+        assert_eq!(g.offer_announcement(joined, false), None, "the notice jumped ahead of Rich");
+        assert_eq!(g.release(false), vec!["Rich's sentence", joined]);
     }
 
     /// INVARIANT: an earlier turn carried into his continuation comes first, and the turn that

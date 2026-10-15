@@ -413,7 +413,7 @@ async function main() {
     vm.runInContext("voiceBusy = true", context);
     events["rich://work-result"]({payload: {threadId: "hiring", text: joined}});
     await settle();
-    assertEqual(calls, [`voice_speak_delta: ${joined}`, "voice_speak_end"], "the result was not said");
+    assertEqual(calls, [`voice_speak_result: ${joined}`], "the result was not said");
 
     // Inside a turn it waits for the boundary and is then said once, in order.
     calls.length = 0;
@@ -423,7 +423,7 @@ async function main() {
     assertEqual(calls, [], "a result was said inside a turn");
     vm.runInContext("busy = false; flushWorkNotices(); flushWorkNotices()", context);
     await settle();
-    assertEqual(calls, [`voice_speak_delta: ${beth}`, "voice_speak_end"], "the held result was not said once at the boundary");
+    assertEqual(calls, [`voice_speak_result: ${beth}`], "the held result was not said once at the boundary");
 
     // Not in voice mode, or about another conversation: nothing is said.
     calls.length = 0;
@@ -441,6 +441,12 @@ async function main() {
     assertEqual((writer.match(/tell_work_results\(/g) || []).length, 2, "a path that writes results does not tell the window");
     assert(/fn tell_work_results[\s\S]{0,400}?emit\(EVENT_WORK_RESULT, serde_json::json!\(\{"threadId": thread_id, "text": text\}\)\)/.test(shell),
       "the shell does not emit each written result's words");
+    // ...and its speaker command says them as words of their own, which a Stop he gave an
+    // earlier reply does not silence (review rv-20261015T125238Z-37f970a3; the gate's rule is
+    // `richos-voice` turn.rs a_result_after_he_stopped_rich_is_still_said_and_never_over_him).
+    assert(/fn voice_speak_result\(app: AppHandle, text: String\)[\s\S]{0,300}?ctl\.speak_result\(&text\)/.test(shell),
+      "voice_speak_result does not reach the controller's speak_result");
+    assert(/\n\s+voice_speak_result\n\s+\]\)/.test(shell), "voice_speak_result is not registered");
     return "said in voice mode while listening; held through a turn and said once after; silent with voice off or elsewhere";
   });
 

@@ -4060,7 +4060,9 @@ fn main() {
             bug_report::bug_report_open_issue,
             // --- "Let Codex review your team's work" (round 20.2, ruling §114) — appended ---
             codex_reviews_status,
-            codex_reviews_set
+            codex_reviews_set,
+            // --- a job's result said on its own (2026-10-15) — appended ---
+            voice_speak_result
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -5039,6 +5041,19 @@ fn voice_speak_end(app: AppHandle) {
         if let Ok(slot) = handle.controller.lock() {
             if let Some(ctl) = slot.as_ref() {
                 ctl.speak_end();
+            }
+        }
+    }
+}
+
+/// A job's result (`rich://work-result`), said whole and on its own, not as part of any answer:
+/// a Stop he gave an earlier reply does not silence it (`VoiceController::speak_result`).
+#[richos_command::command]
+fn voice_speak_result(app: AppHandle, text: String) {
+    if let Some(handle) = app.try_state::<VoiceHandle>() {
+        if let Ok(slot) = handle.controller.lock() {
+            if let Some(ctl) = slot.as_ref() {
+                ctl.speak_result(&text);
             }
         }
     }
