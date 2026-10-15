@@ -4527,6 +4527,9 @@ impl Spine {
                 Ok(())
             })();
             if let Err(error) = prepared {
+                if matches!(error, SpineError::Cognition(CognitionError::Io(_) | CognitionError::Protocol(_))) {
+                    self.clear_lease();
+                }
                 self.ledger.interrupt_turn(&turn_id, &error.to_string())?;
                 return Err(error);
             }
@@ -4556,9 +4559,16 @@ impl Spine {
             if read_only { lease.prompt_read_only(prompt, &mut on_item) } else { lease.prompt_context_only(prompt, &mut on_item) }
         };
 
+        // A failed provider connection cannot serve the next scheduled retry.
+        if read_only && result.is_err() { self.clear_lease(); }
         if read_only && control.report_interrupted(&turn_id) {
             self.ledger.interrupt_turn(&turn_id, "Report yielded to user input")?;
             return Err(SpineError::Assignments("Report yielded to user input".into()));
+        }
+        if let Some(failure) = self.detect_upstream_failure(&turn_id, &result) {
+            let reason = failure.summary();
+            self.ledger.interrupt_turn(&turn_id, &reason)?;
+            return Err(CognitionError::Protocol(reason).into());
         }
         if let Some(error) = persist_error {
             self.ledger.interrupt_turn(&turn_id, &error.to_string())?;

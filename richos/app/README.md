@@ -227,7 +227,7 @@ richos/app/
                               rather than four directory names, including the multi-root
                               proof (`richos` + `richos-hq` -> one entity id) and the
                               string-prefix trap beside it
-    tests/spine_tests.rs     20 spine invariant tests (no live Claude needed). One is the
+    tests/spine_tests.rs     21 spine invariant tests (no live Claude needed). One is the
                               nightly D4 pair: a failed TEXT turn and a failed VOICE turn are
                               classified identically, which is what makes the operator line
                               impossible to write for only one surface
@@ -1226,7 +1226,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2034 tests + 5 doc-tests (2030 direct, 4 ignored)
+cargo test -p richos-core                       # 2035 tests + 5 doc-tests (2031 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

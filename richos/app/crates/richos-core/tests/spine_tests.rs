@@ -820,3 +820,81 @@ fn a_user_message_preempts_an_offscreen_report_and_the_report_survives_for_retry
     std::fs::remove_dir_all(state).unwrap();
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn report_failures_keep_the_notice_and_recover_without_publishing_diagnostics() {
+    use richos_core::{assignment::{self, NoticeKind, Registration}, cognition::LeaseFactory, steering::TurnCancel};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Clone, Copy)]
+    enum Failure { Closed, ErrorText, ErrorResult, Preparation }
+    struct Cancel;
+    impl TurnCancel for Cancel { fn cancel(&self) -> bool { true } }
+    struct Desk { failure: Option<Failure>, calls: Arc<AtomicUsize> }
+    impl Cognition for Desk {
+        fn session_id(&self) -> &str { "report-recovery" }
+        fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> { Some(Arc::new(Cancel)) }
+        fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+        fn prepare_work_turn(&mut self, _: &richos_core::entity::ThreadBinding, _: &str,
+            _: Source, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+            if matches!(self.failure, Some(Failure::Preparation)) {
+                return Err(CognitionError::Io("provider binding connection closed".into()));
+            }
+            Ok(())
+        }
+        fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            panic!("report authoring must stay read-only")
+        }
+        fn prompt_read_only(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let text = match self.failure {
+                Some(Failure::Closed) => return Err(CognitionError::Io("Claude channel closed (child exited?)".into())),
+                Some(Failure::ErrorResult) => return Err(CognitionError::Protocol("API Error: 529 Overloaded.".into())),
+                Some(Failure::ErrorText) => {
+                    self.failure = None; // The connection survives this provider refusal.
+                    "API Error: 529 Overloaded."
+                }
+                Some(Failure::Preparation) => panic!("a failed preparation cannot run the model"),
+                None => "Your research is complete.",
+            };
+            on(TurnItem::Text { seq: 0, text });
+            Ok("end_turn".into())
+        }
+    }
+    struct Factory { spawns: Arc<AtomicUsize>, calls: Arc<AtomicUsize> }
+    impl LeaseFactory for Factory {
+        fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
+            self.spawns.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(Desk { failure: None, calls: self.calls.clone() }))
+        }
+    }
+    for (tag, failure, replaces) in [("closed", Failure::Closed, 1), ("text", Failure::ErrorText, 0),
+        ("error", Failure::ErrorResult, 1), ("preparation", Failure::Preparation, 1)] {
+        let (path, ledger) = tmp_ledger(tag);
+        let state = path.with_extension("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let mut spine = support::spine(ledger);
+        let thread = spine.create_thread("Research", &femcboost()).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let spawns = Arc::new(AtomicUsize::new(0));
+        spine.set_lease_factory(Box::new(Factory { spawns: spawns.clone(), calls: calls.clone() }));
+        spine.attach_lease(Box::new(Desk { failure: Some(failure), calls: calls.clone() }));
+        let receipt = assignment::register(&state, &Registration {
+            entity_id: "femcboost".into(), thread_id: thread.clone(), obligation_id: "research".into(),
+            instruction_ledger_ref: format!("ledger:{thread}:original"), instruction_sha256: "a".repeat(64),
+            title: "Research the market".into(), repositories: Vec::new(), needs_screen: false,
+        }).unwrap();
+        assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, "Stu's actual work result").unwrap();
+        assert!(spine.say_work_results(&state, &thread).is_err(), "{tag}: failure must not become a reply");
+        assert!(spine.has_pending_work_results(&state, &thread).unwrap(), "{tag}: notice lost");
+        assert!(spine.messages(&thread).unwrap().is_empty(), "{tag}: provider diagnostic leaked");
+        assert_eq!(spine.say_work_results(&state, &thread).unwrap(), ["Your research is complete."], "{tag}");
+        assert_eq!(spawns.load(Ordering::SeqCst), replaces, "{tag}: use a healthy connection");
+        assert_eq!(calls.load(Ordering::SeqCst), if matches!(failure, Failure::Preparation) { 1 } else { 2 }, "{tag}");
+        assert!(!spine.has_pending_work_results(&state, &thread).unwrap(), "{tag}: missing acknowledgment");
+        assert!(spine.say_work_results(&state, &thread).unwrap().is_empty(), "{tag}: duplicate report");
+        assert_eq!(spine.messages(&thread).unwrap().len(), 1);
+        drop(spine);
+        std::fs::remove_dir_all(state).unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+}
