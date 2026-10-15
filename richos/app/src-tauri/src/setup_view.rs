@@ -937,9 +937,17 @@ impl ModelProgressLog {
                 self.milestone = Some(milestone);
                 Some(format!("[richos] speech model {model}: downloading {milestone}%"))
             }
-            "verifying" if !self.checking => {
+            "verifying" => {
+                let complete = payload.get("total").and_then(|v| v.as_u64()).is_some_and(|total|
+                    total > 0 && payload.get("received").and_then(|v| v.as_u64()) == Some(total));
+                let needs_completion = complete && self.milestone != Some(100);
+                if self.checking && !needs_completion { return None; }
                 self.checking = true;
-                Some(format!("[richos] speech model {model}: checking download"))
+                let completion = if needs_completion {
+                    self.milestone = Some(100);
+                    "downloaded 100%; "
+                } else { "" };
+                Some(format!("[richos] speech model {model}: {completion}checking download"))
             }
             _ => None,
         }
@@ -1024,9 +1032,28 @@ mod tests {
             assert_eq!(lines.len(), 11);
             assert!(lines[0].ends_with("downloading 0%"));
             assert!(lines[10].ends_with("downloading 100%"));
-            let checking = serde_json::json!({"modelId": id, "phase": "verifying"});
-            assert!(log.line(&checking).unwrap().ends_with("checking download"));
+            let checking = serde_json::json!({"modelId": id, "phase": "verifying", "received": 100, "total": 100});
+            let line = log.line(&checking).unwrap();
+            assert!(line.ends_with("checking download"));
+            assert!(!line.contains("100%"), "already logged completion: {line}");
             assert!(log.line(&checking).is_none());
+        }
+        // A chunked transfer may jump from 99% straight to verification without a final
+        // progress callback. Log completion once, but never invent it for incomplete bytes.
+        for (received, total) in [(0, 0), (0, 1000), (999, 1000), (1000, 1000), (1001, 1000)] {
+            let mut log = ModelProgressLog::default();
+            let progress = serde_json::json!({"modelId": "small.en", "phase": "progress", "received": 999, "total": 1000});
+            assert!(log.line(&progress).unwrap().contains("90%"));
+            let checking = serde_json::json!({"modelId": "small.en", "phase": "verifying", "received": received, "total": total});
+            let line = log.line(&checking).unwrap();
+            assert_eq!(line.contains("100%"), total > 0 && received == total, "{line}");
+            assert!(line.ends_with("checking download"));
+            assert!(log.line(&checking).is_none());
+            if total == 0 || received != total {
+                let retried = serde_json::json!({"modelId": "small.en", "phase": "verifying", "received": 1000, "total": 1000});
+                assert!(log.line(&retried).unwrap().contains("100%"), "a completed retry still logs completion");
+                assert!(log.line(&retried).is_none());
+            }
         }
         let empty = serde_json::json!({"modelId": "empty", "phase": "progress", "received": 0, "total": 0});
         assert!(log.line(&empty).is_none());
