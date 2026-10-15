@@ -159,6 +159,17 @@ class Verdicts(unittest.TestCase):
         self.assertTrue(any('interrupted' in f for f in failures) and any('No work was started' in f for f in failures),
                         failures)
 
+    def test_a_job_rich_answers_in_his_own_turn_is_his_answer(self):
+        asked = 'Suggest three subject lines.'
+        done = [{'turn': 'a', 'prompt': asked, 'reply': 'Here are three: one, two, three.', 'done': True}]
+        self.assertEqual(hire_walk.answered_in_turn(done, asked), 'Here are three: one, two, three.')
+        running = [dict(done[0], done=False)]
+        self.assertIsNone(hire_walk.answered_in_turn(running, asked), 'a turn still running is no answer yet')
+        empty = [dict(done[0], reply='  ')]
+        self.assertIsNone(hire_walk.answered_in_turn(empty, asked), 'a finished turn with no words is no answer')
+        other = [dict(done[0], prompt='Go.')]
+        self.assertIsNone(hire_walk.answered_in_turn(other, asked), 'another message\'s reply is not this one')
+
     def test_the_turns_are_read_off_the_ledger(self):
         rows = [{'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'a', 'text': 'hi', 'source': 'text'},
                 {'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'x', 'text': 'prime', 'source': 'internal'},

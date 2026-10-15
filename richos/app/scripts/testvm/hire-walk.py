@@ -45,8 +45,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               delegate-1-before/2-sent/3-end.png.
               With --ask-rich TEXT the job is TEXT, asked of Rich naming no teammate, as a user asks
               (a user never hands a job to a teammate and never needs to know who does it): PASS
-              needs the task closed settled with a result he was told; whoever Rich dispatched is
-              recorded (`dispatched`), never required.
+              when Rich answers it in his own turn with no assignment (`answered_in_turn`), or when
+              the assignment he registers closes settled with a result he was told; whoever Rich
+              dispatched is recorded (`dispatched`), never required.
   hood        after delegate, "Under the hood" opened as a person opens it (the work summary chip
               under the conversation): both Output buttons, the stage header's (#out-top) and the
               composer's (#out-bottom), end at or before the panel's left edge and are shown
@@ -275,6 +276,15 @@ def delegate_verdict(record, receipts, name):
     if runs and not answered:
         failures.append(f'{name} was dispatched for this task and its run handed back no answer')
     return failures
+
+
+def answered_in_turn(turns, asked):
+    """Rich's reply to the message `asked`, once that turn is done with words in it, else None:
+    a job asked of Rich (--ask-rich) may be answered in his own turn, with no assignment at all."""
+    mine = [t for t in turns if t['prompt'].strip() == asked.strip()]
+    if mine and mine[-1]['done'] and mine[-1]['reply'].strip():
+        return mine[-1]['reply']
+    return None
 
 
 def answer_of(receipts, record, name):
@@ -573,6 +583,26 @@ class HireWalk(command_walk.CommandWalk):
         time.sleep(5)
         self.evidence_shot('delegate-2-sent.png')
         pressed, answered = [0], []
+        if self.a.ask_rich:
+            # Asked of Rich, naming nobody: he may answer in his own turn and register nothing.
+            # The turn is followed first; only when it ends registering an assignment is that
+            # assignment followed below (ask-rich walk of nightly 57: he answered in 7.8 s, and
+            # the walk then waited 942 s for an assignment that never existed).
+            end, reply = time.monotonic() + self.a.turn_within, None
+            while time.monotonic() < end and reply is None:
+                reply = answered_in_turn(turns_of(self.ledger(), self.facts.get('thread')), self.a.ask_rich)
+                if reply is None:
+                    time.sleep(3)
+            time.sleep(10)  # an assignment the turn registers is written as the turn ends
+            if reply is not None and not self.ours(sent):
+                self.evidence_shot('delegate-3-end.png')
+                since = [r for r in self.ledger() if r.get('at', 0) >= sent[0] - 1000]
+                (self.out / 'delegate-ledger.json').write_text(json.dumps(since, indent=2) + '\n')
+                evidence = {'teammate': None, 'asked': self.a.ask_rich, 'dispatched': [], 'assignment': None,
+                            'answered_in_turn': reply}
+                (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+                return {'teammate': None, 'dispatched': [], 'state': 'answered in the turn', 'answer': reply[:1000],
+                        'notice': ''}
 
         def pick():
             if not answered and self.present(RECOMMENDS):
