@@ -905,6 +905,13 @@ pub fn tells_him_what_to_do(detail: &str) -> bool {
     [HELD_FOR_SIGN_IN, HELPER_TAKING_LONGER_DETAIL, WAITING_FOR_YOUR_ANSWER].contains(&detail)
 }
 
+/// **Does his row show its recorded detail in the ordinary view** (`get_assignments`'
+/// `forYou`)? A line that tells him what to do, or Rich's waiting sentence while a teammate
+/// works ([`Assignment::waiting_sentence`]; the review of 3b91f1223, finding 1).
+pub fn for_him(row: &Assignment) -> bool {
+    row.waiting_sentence || tells_him_what_to_do(&row.detail)
+}
+
 /// **How often the host looks again at the cause of a held queue**, with no model turn: the
 /// sign-in reading the shell installs ([`WorkHost::set_sign_in`]), or one attempt to open the
 /// back end. Sage's check §1.1: *"checking the sign-in state at most every few minutes, without
@@ -2203,6 +2210,7 @@ impl WorkHost {
                             measured.set(Some(usage));
                         }
                     }
+                    TurnItem::AnswerComplete => {}
                     }
                 });
                 // The failed turn's own words, or the words it streamed (the two shapes the
@@ -2445,7 +2453,12 @@ impl WorkHost {
                     .is_ok_and(|trail| trail.consults > 0 && trail.workers == 0)
             });
             if waits == 0 || waiting.is_some() || shows_waiting {
-                advance(AssignmentState::Running, waiting.as_deref().unwrap_or("A helper is doing the work."));
+                match waiting.as_deref() {
+                    Some(sentence) => {
+                        let _shown = assignment::advance_waiting(&self.state, &scope.0, &scope.1, &scope.2, sentence);
+                    }
+                    None => advance(AssignmentState::Running, "A helper is doing the work."),
+                }
                 shows_waiting = waiting.is_some();
             }
         };
@@ -7543,6 +7556,7 @@ mod tests {
             work_session: None,
             repository_pins: Vec::new(),
             needs_screen: false,
+            waiting_sentence: false,
         };
         let brief = brief_for(&record, false, &record.title);
         assert!(brief.contains("landing the three branches"));
@@ -8860,12 +8874,15 @@ mod tests {
         let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
         // What his row says while a teammate works: the sentence, or after ten seconds whatever
         // it says instead, read once the host is waiting either way and judged at the end.
+        // His row shows that sentence in both views, for a task and a question alike: the
+        // shell's `forYou` is [`for_him`] (the review of 3b91f1223, finding 1, whose fixture
+        // read `waitingSentenceShown:false`).
         let shown_while_working = |sentence: &str| {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             loop {
-                let detail = read().detail;
-                if detail == sentence || std::time::Instant::now() > deadline {
-                    return detail;
+                let row = read();
+                if row.detail == sentence || std::time::Instant::now() > deadline {
+                    return (row.detail.clone(), for_him(&row));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
@@ -8889,9 +8906,10 @@ mod tests {
         let all = told.join("\n");
         assert!(!all.contains("working on it now") && !all.contains("stop-declared"),
             "a waiting sentence is in his answer: {told:?}");
-        assert_eq!(while_will, WILL_WORKS, "Rich's sentence was not shown while Will worked");
-        assert_eq!(while_beth, BETH_WORKS, "Rich's sentence was not shown while Beth worked");
+        assert_eq!(while_will, (WILL_WORKS.to_string(), true), "Rich's sentence was not shown while Will worked");
+        assert_eq!(while_beth, (BETH_WORKS.to_string(), true), "Rich's sentence was not shown while Beth worked");
         let done = read();
+        assert!(!for_him(&done), "the settled row's own record is shown as his: {}", done.detail);
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         assert!(done.detail != WILL_WORKS && done.detail != BETH_WORKS, "the waiting sentence outlived the answer: {}", done.detail);
         // And when a background command's report turn starts the consult, that turn REPLACES the
@@ -10556,6 +10574,7 @@ mod tests {
             notices: Vec::new(),
             work_session: None,
             repository_pins: Vec::new(),
+            waiting_sentence: false,
         };
         let brief = brief_for(&record, false, &record.title);
         assert!(brief.contains("This is a QUESTION from the CEO"));

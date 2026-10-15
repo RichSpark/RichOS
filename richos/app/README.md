@@ -451,7 +451,7 @@ richos/app/
     tests/spoken_trigger_tests.rs 9 tests for the completion criterion — speaking a
                               correction records it with no command typed, ordinary
                               conversation stages nothing, internal traffic is never mined
-    tests/timeline_tests.rs  15 typed-timeline tests: the cross-entity machinery NEGATIVE
+    tests/timeline_tests.rs  16 typed-timeline tests: the cross-entity machinery NEGATIVE
                               CONTROL (both clauses proven failing when removed — one leaks
                               a row, one leaks THROUGH the toolCallId merge), the one shared
                               per-turn sequence live and after a restart, the visibility
@@ -462,11 +462,12 @@ richos/app/
                               Mac drew the greeting twice where the phone drew it once). Both
                               runs are retained; the repeat renders in no mode.
                               with its session clause
-    tests/live_event_tests.rs 20 additive-family tests (§13): the four original events
+    tests/live_event_tests.rs 23 additive-family tests (§13): the four original events
                               asserted BYTE-IDENTICAL with and without the new family, the
                               wire and the reload agreeing field by field, phase honestly
-                              `unknown`, the states that are never emitted, and the
-                              cross-entity fence on every payload
+                              `unknown`, the states that are never emitted, the
+                              cross-entity fence on every payload, and a pressed button's
+                              words never drawn as his
     tests/company_layer_tests.rs 7 tests driving a REAL spine and asserting on what the
                               lease was actually primed with, never on the renderer: what the
                               CEO said about a company reaches the priming turn, another
@@ -1222,7 +1223,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2033 tests + 5 doc-tests (2029 direct, 4 ignored)
+cargo test -p richos-core                       # 2041 tests + 5 doc-tests (2037 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
