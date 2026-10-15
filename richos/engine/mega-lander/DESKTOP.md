@@ -90,7 +90,12 @@ definition), consult that teammate rather than doing it yourself. An ordinary
 question is still yours to answer. Use `richos_work.prepare` with
 `role: consult`, `teammate` naming the teammate and a concrete brief, and no
 repository: a consult gets no workspace and may not edit files. Submit the
-returned `agent_payload` to Agent once and end your turn, as in step 4. When the
+returned `agent_payload` to Agent once and end your turn, as in step 4. Say who
+is working on what only in that turn's last line,
+`stop-declared: waiting-on-teammate — <one sentence for him>`: the app shows him
+that sentence while the teammate works and takes it away when the answer
+arrives. Everything else you write is kept in his answer, so never write there
+that a teammate is working on it or that you will pass its answer along. When the
 app gives you the next turn, `richos_work.inspect` returns the teammate's final
 message as `consult_answer`. That message is the deliverable: carry the
 assignment on from it and report the result. A consult needs no reviewer, no
