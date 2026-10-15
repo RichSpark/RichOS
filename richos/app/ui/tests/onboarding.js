@@ -77,8 +77,17 @@ async function openApp(browser, preset, theme) {
           window.__calls.push({ cmd, args });
           return orig(cmd, args);
         };
+        // The window's own turn-status listeners, so a check can drive a turn the way the
+        // spine does (check 4c).
+        const listen = v.listen.bind(v);
+        window.__turnStatusListeners = [];
+        v.listen = function (name, cb) {
+          if (name === "rich://turn-status") window.__turnStatusListeners.push(cb);
+          return listen(name, cb);
+        };
       },
     });
+    window.__emitTurnStatus = (payload) => window.__turnStatusListeners.forEach((cb) => cb({ payload }));
   });
   await page.addInitScript((p) => {
     window.__RICHOS_MOCK_PRESET__ = p;
@@ -298,6 +307,43 @@ async function main() {
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await page.close();
     return "refused, and the setting up is offered again";
+  });
+
+  // The handover review of 742df82c1 (P2): a pressed Start that was ACCEPTED (queued) and then
+  // failed (an expired sign-in) made `send()` return before its pressed branch, so the offer
+  // never came back. The turn has no message of his, so its failure card has no retry either:
+  // he was left with neither. On a terminal failure the offer comes back, and his box stays
+  // empty because he never typed those words.
+  await run.check("4c a Start that was accepted and then failed puts the offer back", async () => {
+    const page = await openApp(browser, { onboarding: "not-yet" });
+    await page.waitForSelector("#first-run:not([hidden])");
+    await page.evaluate(() => {
+      const bridge = window.RichBridge;
+      const inner = bridge.invoke;
+      bridge.invoke = async (cmd, args) => {
+        if (cmd !== "send_message") return inner(cmd, args);
+        window.__calls.push({ cmd, args });
+        const threads = await inner("list_threads");
+        const thread = threads.find((t) => t.id === args.threadId);
+        const fence = { entityId: thread.entity_id, threadId: args.threadId, bindingRevision: 1, turnId: "turn_start", visibility: "ceo" };
+        for (const status of ["queued", "working", "failed"]) {
+          window.__emitTurnStatus(Object.assign({}, fence, { status, startedAt: status === "queued" ? null : Date.now(), activeDurationMs: null, at: Date.now() }));
+        }
+        throw "I'm not signed in to my thinking right now.";
+      };
+    });
+    await page.click("#first-run-start");
+    await page.waitForFunction(() => window.__calls.some((c) => c.cmd === "send_message"));
+    // The fact the fix produces; before it, the offer never came back and this waited out the
+    // harness's own hang bound.
+    await page.waitForSelector("#first-run:not([hidden])");
+    assert(await page.isVisible("#first-run-start"), "Start is back on screen");
+    assert(!(await page.isDisabled("#first-run-start")), "and it can be pressed");
+    assertEqual(await page.inputValue("#input"), "", "the sentence he never typed is not put in his box");
+    bump(3);
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    await page.close();
+    return "accepted, failed, and Start is offered again";
   });
 
   // -------------------------------------------------------------------------------------

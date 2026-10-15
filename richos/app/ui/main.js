@@ -2353,19 +2353,27 @@ async function send(explicitText, opts) {
   renderWaitBand();
   followBottom = true;
   scheduleRender();
+  // A pressed button's turn that was accepted and then FAILED (an expired sign-in, say) has no
+  // message of his, so its failure card offers no retry: `false` tells the button's owner to
+  // offer the button again (handover review of 742df82c1). His box stays empty either way.
+  const pressedTurnFailed = () => {
+    const turn = pressed && request.turnId ? sentModel.turns.get(request.turnId) : null;
+    return !!turn && turn.status === "failed";
+  };
 
   try {
     await Bridge.invoke(
       "send_message",
       pressed ? { text, threadId: sentThreadId, pressed: true } : { text, threadId: sentThreadId }
     );
+    if (pressedTurnFailed()) return false;
   } catch (e) {
     // A terminal event already explains this attempt. If the command rejected without
     // one, end only this invocation's local live state. A queued turn is not proof that
     // the operation survived its rejection, nor is another thread's live turn relevant.
     if (request.turnId) {
       const turn = sentModel.turns.get(request.turnId);
-      if (turn && !turn.live) return;
+      if (turn && !turn.live) return pressedTurnFailed() ? false : undefined;
       window.RichTimeline.markSendRejected(sentModel, request.turnId);
       sessionLiveTurns.delete(request.turnId);
       waitHistory.delete(request.turnId);
@@ -2375,7 +2383,7 @@ async function send(explicitText, opts) {
         scheduleRender();
         announce("Rich stopped before finishing.");
       }
-      return;
+      return pressedTurnFailed() ? false : undefined;
     }
     window.RichTimeline.dropPendingUserMessage(sentModel, pendingId);
     if (pressed) {
