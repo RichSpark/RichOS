@@ -43,12 +43,44 @@ async function main() {
     assertEqual(await page.locator("#slideover-body img").count(),0,"receipt rendered as markup");
     await page.click("#slideover-close"); await openThread(page,"acme");
     assert(!(await page.textContent("#drill-chip-zone")).includes("2 team jobs"),"old-company receipt leaked");
-    await page.evaluate(() => window.__RICHOS_MOCK_PRESET__.workSummaryError = "Synthetic damaged receipt");
-    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("Saved work unavailable"));
+    // A read that fails keeps this conversation's last reading, and says why only in Technical
+    // view (hunt 57, finding 12).
+    await openThread(page,"hiring");
+    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("2 team jobs"));
+    await page.evaluate(async () => { window.__RICHOS_MOCK_PRESET__.workSummaryError = "Synthetic damaged receipt"; await pollWorkerStatus(); });
+    const kept = await page.textContent("#drill-chip-zone");
+    assert(kept.includes("2 team jobs") && !/unavailable/i.test(kept), "a failed read replaced the last reading: " + JSON.stringify(kept.trim()));
     await page.click(".drill-chip");
-    assert((await page.textContent("#slideover-body")).includes("Synthetic damaged receipt"),"damaged receipt looked empty");
+    assert(!(await page.textContent("#slideover-body")).includes("Synthetic damaged receipt"), "the failed read's reason is shown outside Technical view");
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    assert((await page.textContent("#slideover-body")).includes("Synthetic damaged receipt"),"with Technical view on, the failed read is not explained");
     assertEqual(errors.length,0,"renderer errors"); await page.close();
-    return "scoped receipts, explicit outcomes, escaped content and visible read failure";
+    return "scoped receipts, explicit outcomes, escaped content; a failed read keeps the last reading and says why in Technical view";
+  });
+  // **HUNT 57, FINDING 12 (2026-10-15): A BRAND-NEW CONVERSATION SAYS NOTHING ABOUT SAVED WORK.**
+  // Nightly 57 showed "Saved work unavailable" under the very first conversation of 2 fresh
+  // installs: `get_work_status` refuses while Rich's session is being started ("Work status is
+  // changing. Please try again.", `main.rs` `get_work_status`), and the status line printed that
+  // refusal as if something were wrong. A read that fails now keeps what this conversation last
+  // read, which for a new one is nothing, so nothing about saved work is shown.
+  await run.check("a brand-new conversation whose saved-work read is refused while Rich gets ready says nothing about saved work", async () => {
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript(() => window.__RICHOS_MOCK_PRESET__ = {workSummaryError: "Work status is changing. Please try again."});
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    // The read is made and refused here, rather than left to the 3,000 ms refill.
+    const read = await page.evaluate(async () => { await pollWorkerStatus(); return savedWork.error || null; });
+    assert(read && read.includes("Work status is changing"), "the refused read never happened, so this check proves nothing: " + JSON.stringify(read));
+    const chip = (await page.textContent("#drill-chip-zone")) || "";
+    assert(!/unavailable/i.test(chip), "a brand-new conversation's status line reads " + JSON.stringify(chip.trim()));
+    assert(!/team job|saved work/i.test(chip), "the status line speaks of saved work with nothing saved: " + JSON.stringify(chip.trim()));
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "refused read (" + JSON.stringify(read) + "); the status line reads " + JSON.stringify(chip.trim());
   });
   // **HUNT 57, FINDING 11 (2026-10-15): THE WORK PANELS SPEAK TO A BUSINESS OWNER.** Nightly 57's
   // hiring job showed "consult · no repository" under every row of Under the hood and "4 saved

@@ -7,10 +7,13 @@
   // `opts.technical` is `main.js`'s `techyOn()`.
   function render(summary, parent, opts) {
     const technical = !!(opts && opts.technical);
-    if (summary.error) {
+    // A read that failed (hunt 57, finding 12) keeps the rows last read, and says why only in
+    // Technical view: "Work status is changing" while Rich gets ready is nothing a business
+    // owner needs to hear.
+    if (summary.error && technical) {
       const note = document.createElement("p"); note.className = "overlay-note";
       note.textContent = "Saved work is unavailable: " + summary.error;
-      parent.appendChild(note); return;
+      parent.appendChild(note);
     }
     for (const item of summary.items || []) {
       const row = document.createElement("section"); row.className = "slide-item";

@@ -3757,7 +3757,14 @@ async function pollWorkerStatus() {
       savedWork = summary;
     } catch (error) {
       if (!current()) return;
-      savedWork = {items: [], error: String(error)};
+      // **A READ THAT FAILS KEEPS WHAT THIS CONVERSATION LAST READ** (hunt 57, finding 12,
+      // 2026-10-15). `get_work_status` refuses while Rich's session is being started ("Work
+      // status is changing. Please try again.") and while another conversation is working, and
+      // nightly 57 printed that refusal as "Saved work unavailable" under the very first
+      // conversation of a fresh install, where nothing has been saved. `openThread` empties
+      // `savedWork` on every switch, so what is kept is only ever this conversation's own last
+      // reading: nothing at all for a new one. The reason stays for Technical view.
+      savedWork = {items: savedWork.items || [], omitted: savedWork.omitted || 0, error: String(error)};
     }
     // The ASSIGNMENTS he gave — a different thing from the receipts above, and the only
     // surface that can show background work at all. `get_worker_status` returns an empty
@@ -3843,7 +3850,8 @@ function renderDrillChip() {
   // "Team jobs", never "saved work records" (hunt 57, finding 11): each saved record is one job
   // handed to a teammate, and a business owner has no use for the word "record".
   if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "team job", "team jobs"));
-  if (savedWork.error) parts.push("Saved work unavailable");
+  // A read that failed is not on this line (hunt 57, finding 12): it keeps the last reading,
+  // and the reason is shown under Technical view in the panel this line opens.
   // THE ASSIGNMENTS, AND THE REASON THEY ARE ON THIS CHIP AT ALL (background-work spec §7's
   // observability note, §7.8). This chip is the only way to open the pane the assignments
   // live in, and every other part of it is fed by `get_worker_status`, which is EMPTY

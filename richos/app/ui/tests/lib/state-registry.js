@@ -3739,11 +3739,6 @@ module.exports = [
     "why": "Prefix joined to the native error describing why saved receipts cannot be read."
   },
   {
-    "s": "Saved work unavailable",
-    "c": "INFORMATIONAL",
-    "why": "Labels an unavailable saved-work observation without claiming a successful read."
-  },
-  {
     "s": "Sign-in could not be canceled. Try again.",
     "c": "ACTIONABLE",
     "why": "Cancellation remains available while the provider is still connecting.",
