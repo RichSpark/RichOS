@@ -915,14 +915,15 @@ const SURFACES = [
     preset: { chosenEntity: null },
   },
   // THE FIRST-RUN MEMORY DIALOG, IN BOTH OF ITS STATES, because they paint different ink:
-  // the ask carries the location line (`--ink` monospace, computed 11.81:1 dark and
-  // 18.27:1 light before it was written) and the confirm button on the accent; the
-  // no-compiler state carries neither and paints only the plain button. Neither is
+  // the ask carries the confirm button on the accent and, since the product hunt of
+  // 2026-10-15 (finding 15), no location line; the no-compiler state carries the location
+  // line (`--ink` monospace, computed 11.81:1 dark and 18.27:1 light before it was written)
+  // and only the plain button. Neither is
   // reachable from any surface above — a machine that has been set up once renders neither
   // — so without these two walks the whole dialog would be uncovered.
   {
     name: "memory-setup",
-    what: "the first-run memory question: its note, the location it offers, and the two buttons",
+    what: "the first-run memory question: its note and the two buttons",
     drive: async (p) => {
       await p.waitForSelector("#memory-setup:not([hidden])");
       await overlaySettled(p, "#memory-setup");
