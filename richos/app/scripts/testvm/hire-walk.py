@@ -232,19 +232,12 @@ def hood_verdict(panel, boxes):
 
 def fitting_teammate(hired, definitions):
     """The hire DELEGATE_TASK (newsletter subject lines, a marketing job) fits: the first whose
-    saved definition speaks of marketing; the first hired when none does. A definition whose
-    description line (its job title) says marketing comes first: nightly 57's Beth the bookkeeper
-    mentioned marketing in her body, was saved first, and got the newsletter task."""
-    def description(text):
-        return next((line for line in text.lower().splitlines() if line.startswith('description:')), '')
-
-    for name in hired:
-        if 'market' in description(definitions.get(name) or ''):
-            return name
-    for name in hired:
-        if 'market' in (definitions.get(name) or '').lower():
-            return name
-    return hired[0]
+    saved definition speaks of marketing most; the first hired when none does. Most, not first:
+    nightly 57's Beth the bookkeeper mentioned marketing (spend) once, was saved first, and got the
+    newsletter task, while a marketing hire's definition speaks of it throughout."""
+    counts = {name: (definitions.get(name) or '').lower().count('market') for name in hired}
+    best = max(hired, key=lambda name: counts[name])
+    return best if counts[best] else hired[0]
 
 
 def delegate_verdict(record, receipts, name):

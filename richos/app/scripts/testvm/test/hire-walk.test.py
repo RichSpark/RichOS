@@ -175,10 +175,10 @@ class FittingTeammate(unittest.TestCase):
                 'will': 'name: will\ndescription: Marketing Director (B2B SaaS)'}
         self.assertEqual(hire_walk.fitting_teammate(['beth', 'will'], defs), 'will')
 
-    def test_a_marketing_title_wins_over_a_body_that_mentions_marketing(self):
-        # nightly 57 hire run 2: Beth's body mentioned marketing and she was saved first.
-        defs = {'beth': 'name: beth\ndescription: Bookkeeper for Acme\n\nNot a marketing role.',
-                'will': 'name: will\ndescription: Marketing Director for Acme'}
+    def test_the_hire_who_speaks_of_marketing_most_wins_over_one_who_mentions_it(self):
+        # nightly 57 hire run 2: Beth mentioned marketing and was saved first.
+        defs = {'beth': 'name: beth\ndescription: Bookkeeper for Acme; tracks marketing spend.',
+                'will': 'name: will\ndescription: Marketing Director for Acme\n\nOwns the marketing plan.'}
         self.assertEqual(hire_walk.fitting_teammate(['beth', 'will'], defs), 'will')
 
     def test_with_no_marketing_hire_the_first_hire_stands(self):
