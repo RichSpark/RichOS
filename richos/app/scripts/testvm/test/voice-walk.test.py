@@ -27,6 +27,40 @@ class SpokenPrompt(unittest.TestCase):
         self.assertEqual(walk.spoken_prompt(rows)['text'], 'Ship the new build tomorrow morning.')
 
 
+class SpareReadyMarker(unittest.TestCase):
+    CURRENT = '[richos] next conversation ready for depot: preparation took 917 ms'
+    RETIRED = '[richos] a front desk is primed and waiting for the next new thread in depot: 917 ms'
+
+    class ControlsReached(Exception):
+        pass
+
+    def probe(self, log):
+        from unittest import mock
+        v = walk.VoiceWalk.__new__(walk.VoiceWalk)
+        v.vm, v.log = 'vm', '/log'
+        v.by_id = mock.Mock(side_effect=self.ControlsReached)
+        # Controlled time makes a missing marker reach the existing deadline at once.
+        # Reaching by_id proves the actual readiness poll accepted the producer's line.
+        with mock.patch.object(walk, 'guest', return_value=log), \
+                mock.patch.object(walk.time, 'monotonic', side_effect=[0.0, 301.0]), \
+                mock.patch.object(walk.time, 'sleep', side_effect=AssertionError('unexpected wait')):
+            v.new_conversation()
+
+    def test_the_current_producer_line_opens_the_conversation_controls(self):
+        with self.assertRaises(self.ControlsReached):
+            self.probe('another log line\n' + self.CURRENT + '\n')
+
+    def test_the_retired_marker_does_not_qualify_readiness(self):
+        with self.assertRaisesRegex(walk.StepFailed, 'no spare desk was primed'):
+            self.probe(self.RETIRED)
+
+    def test_the_old_reader_would_refuse_the_current_producer_line(self):
+        from unittest import mock
+        with mock.patch.object(walk, 'SPARE_READY', self.RETIRED.split(' in depot:')[0]), \
+                self.assertRaisesRegex(walk.StepFailed, 'no spare desk was primed'):
+            self.probe(self.CURRENT)
+
+
 class OneTurn(unittest.TestCase):
     """2026-10-13, nightly 54: two stretches of one thought, said 1.406 s apart, were stored as two
     spoken turns. The --one-turn verdict is what refuses that."""

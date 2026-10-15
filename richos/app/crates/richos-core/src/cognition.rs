@@ -283,6 +283,13 @@ pub trait Cognition: Send {
         _record_path: &std::path::Path,
     ) -> Result<(), CognitionError> { Ok(()) }
 
+    /// Stage current host-owned company material as data for the next visible request.
+    /// Returning false keeps the separate priming fallback for adapters that cannot carry
+    /// context separately from the original user instruction.
+    fn set_company_context(&mut self, _context: Option<&str>) -> Result<bool, CognitionError> {
+        Ok(false)
+    }
+
     /// Host-issued visible-turn scope. Hidden preparation records are retained as
     /// internal machinery and never receive a mutation grant.
     fn set_input_channel(&mut self, _channel: Option<&str>) -> Result<(), CognitionError> { Ok(()) }
@@ -295,6 +302,18 @@ pub trait Cognition: Send {
     /// sends his words straight away. Adapters without a context brief keep the no-op.
     fn supply_context_ahead(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
         _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+
+    /// Prepare session history and continuity together before the visible request.
+    /// Adapters can combine both into one hidden request. The fallback preserves the
+    /// older two-step adapter contract and leaves a failed prefetch to visible preparation.
+    fn prime_with_continuity(&mut self, binding: &crate::entity::ThreadBinding, turn: &str,
+        priming: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+        self.reprime(priming, on_item)?;
+        if let Err(error) = self.supply_context_ahead(binding, turn, on_item) {
+            eprintln!("[richos] continuity prefetch failed ({error}); visible preparation will retry");
+        }
+        Ok(())
+    }
 
     /// Inject the re-prime payload as an INTERNAL, non-rendered priming turn.
     /// Called once when the lease is (re)spawned, before any CEO-visible turn.

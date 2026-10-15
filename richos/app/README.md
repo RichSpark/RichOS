@@ -1223,7 +1223,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2031 tests + 5 doc-tests (2027 direct, 4 ignored)
+cargo test -p richos-core                       # 2033 tests + 5 doc-tests (2029 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1251,7 +1251,7 @@ cargo test -p richos-core                       # 2031 tests + 5 doc-tests (2027
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 409 tests (408 direct, 1 ignored; 4 live-device tests also ignored without a device)
+cargo test -p richos-voice                      # 410 tests (409 direct, 1 ignored; 4 live-device tests also ignored without a device)
 #     The 327 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test

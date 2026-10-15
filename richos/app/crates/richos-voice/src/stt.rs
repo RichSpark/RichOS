@@ -1330,7 +1330,7 @@ mod tests {
         assert_eq!(fast.basis, Basis::TopRung);
         assert_eq!(fast.ceo_message(), None, "the product working is not a notification");
 
-        // A machine that does not clear it on the top rung is stepped down, and is told.
+        // A machine that does not clear it on the top rung is stepped down silently.
         let slow = resolve_live(&costs, &machine, |id| {
             if id == costs.live_ladder[0] {
                 Some(costs.live_ceiling_secs + 0.302)
@@ -1340,9 +1340,7 @@ mod tests {
         });
         assert_ne!(slow.model_id, costs.live_ladder[0], "the rung it could not afford");
         assert_eq!(slow.basis, Basis::TooSlow);
-        let told = slow.ceo_message().expect("a machine that lost the better model is told so");
-        assert!(!told.contains('/'), "no paths reach him: {told}");
-        assert!(!told.contains(".en") && !told.contains("q5_0"), "no model filenames reach him: {told}");
+        assert_eq!(slow.ceo_message(), None, "automatic model selection stays out of the conversation");
     }
 
     /// INVARIANT: the two env overrides still win outright, and they win in the two different

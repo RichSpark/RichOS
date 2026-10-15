@@ -346,17 +346,8 @@ fn run_a_spare_priming_turn(
             machinery.push(record);
         }
     };
-    lease.reprime(&priming.priming, &mut on_item)?;
-    // **AND THE CONTEXT BRIEF, HERE, because nothing later can supply it before he speaks.** An
-    // adopted spare keeps `primed`, so `prime_lease_if_needed` returns before its own
-    // `supply_context_ahead`, and his first turn paid the hidden round trip the chair no longer
-    // pays (review rv-20261014T073429Z-4fd01c4c-58c4). Later is too late anyway: `ui/main.js`
-    // creates the thread inside the Send handler. The reserved id IS the thread's id, so the
-    // brief read now is the one his turn reads; the turn id is this priming's ledger action,
-    // the only durable id a thread with no record has. A failure costs his turn the round trip.
-    if let Err(e) = lease.supply_context_ahead(&plan.binding, &priming.action, &mut on_item) {
-        eprintln!("[richos] the spare desk's context brief could not be supplied before he speaks ({e}); his turn supplies it");
-    }
+    lease.set_company_context(priming.onboarding_block.as_deref())?;
+    lease.prime_with_continuity(&plan.binding, &priming.action, &priming.priming, &mut on_item)?;
     let _ = lease.drain_between_turn();
     Ok(())
 }
@@ -4808,7 +4799,16 @@ impl Spine {
     /// Assemble + inject the re-prime payload once per lease (before its first turn).
     fn prime_lease_if_needed(&mut self, binding: &ThreadBinding) -> Result<(), SpineError> {
         let onboarding_block = self.company_block(binding);
-        if onboarding_block != self.onboarding_primed_block { self.lease_primed = false; }
+        // Updated interview answers are host context for the visible request. Native
+        // leases carry it with the continuity brief, without a separate model turn.
+        let inline_company = match self.lease.as_mut() {
+            Some(lease) => lease.set_company_context(onboarding_block.as_deref())?,
+            None => false,
+        };
+        if onboarding_block != self.onboarding_primed_block {
+            if inline_company { self.onboarding_primed_block = onboarding_block.clone(); }
+            else { self.lease_primed = false; }
+        }
         if (self.lease_primed && self.lease_primed_thread.as_deref() == Some(binding.thread_id())) || self.lease.is_none() {
             return Ok(());
         }
@@ -4865,7 +4865,8 @@ impl Spine {
                     }
                     // Priming TEXT is discarded exactly as before — never rendered.
                 };
-                scoped.and_then(|_| lease.reprime(&priming, &mut on_item))
+                scoped.and_then(|_| lease.prime_with_continuity(binding,
+                    reprime_turn.as_deref().unwrap_or(&reprime_action), &priming, &mut on_item))
             }
             None => Ok(()),
         };
@@ -4874,25 +4875,6 @@ impl Spine {
             return Err(e.into());
         }
         self.ledger.update_action(&reprime_action, ActionStatus::Completed)?;
-        // **AND THE CONTEXT BRIEF HIS FIRST TURN WOULD OTHERWISE SEND FIRST** (CEO 2026-10-14:
-        // "From barge in to a 10-second delay now?"). `prepare_work_turn` gives a session its
-        // continuity brief as a hidden model turn before his words unless the session already
-        // holds it, and a freshly primed one never did — so his first turn after every launch
-        // and thread open paid a whole round trip before his words left. Supplied here under
-        // this priming turn's own ledger id, it is held when he speaks. An optimization of WHEN:
-        // a failure is said on the machinery channel and his turn supplies it as before.
-        if let (Ok(turn), Some(lease)) = (reprime_turn.as_ref(), self.lease.as_mut()) {
-            let journal = self.machinery_journal.as_ref();
-            let machinery_observer = self.machinery_observer.as_deref();
-            let mut on_item = |item: TurnItem| {
-                if let TurnItem::Machinery(record) = item {
-                    Self::retain_and_emit_machinery(journal, machinery_observer, record.stamp(thread_id, None, true));
-                }
-            };
-            if let Err(e) = lease.supply_context_ahead(binding, turn, &mut on_item) {
-                eprintln!("[richos] the context brief could not be supplied before he speaks ({e}); his turn supplies it");
-            }
-        }
         // The priming turn's RESIDUE. Whatever the lease says once the priming response has
         // returned lands in the between-turn lane with no turn to own it, so it is drained
         // HERE and stamped `internal: true` — the aftermath of a turn the CEO never saw is

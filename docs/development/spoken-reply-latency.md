@@ -130,6 +130,33 @@ held only after a completed request. Cancellation, refusal and disconnection
 must not qualify the brief as received. Ahead-of-time priming remains separate
 from visible request handling.
 
+## Startup and onboarding preparation
+
+Begin preparing the selected conversation during launch and immediately after a
+company is confirmed. Preparing only a spare for a future thread leaves the
+conversation actually restored on screen cold. An already active conversation
+can reopen from its reader snapshot while its own preparation holds the spine;
+switching to a different conversation still follows the serialized binding path.
+Do not guess a company or reuse a provider spawned with another company's
+permissions to start earlier.
+
+Deliver initial session history and continuity in one hidden priming request.
+Keep all mutation grants closed and qualify the held brief only after completion.
+A cancelled or failed prime must not populate the context cache. Adapters that
+cannot combine these inputs retain their explicit preparation fallback.
+
+Saved interview answers update company material. Carry that current snapshot
+with the continuity data in the next visible request instead of invalidating the
+session and issuing another foreground re-prime. Keep the original user message,
+ledger text and permission instruction exact. Removing obsolete company material
+must replace its previous snapshot rather than append contradictory facts.
+
+Automatic recognizer selection is recorded in provenance rather than announced
+as a conversation card. Readiness logs describe the observed state and must not
+predict a future download offer when setup may already be downloading the model.
+A top available model can exceed the time budget when no faster installed model
+is available; log the actual comparison rather than declaring it within budget.
+
 ## Diagnose by milestones
 
 Read the current voice log, conversation ledger and machinery before more tests.
