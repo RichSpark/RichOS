@@ -2238,6 +2238,60 @@ while True: time.sleep(.02)
             f"gui-boot_commit={info['source_commit']}\n--- output ---"))
         self.assertEqual(r.require_gui_proof(info, proof)["gui-boot_exit"], "0")
 
+    def test_a_gui_boot_commit_that_only_fixes_the_suite_is_accepted_and_nothing_wider(self):
+        """Nightly 58: a stale A2 self-test failed a candidate that passed everything else.
+
+        A descendant of the candidate's commit that changes only gui-boot.test.sh boots the
+        same product source, so its proof stands. A descendant that also changes product
+        code, and a commit that does not descend from the candidate, are both refused.
+        """
+        repo = self.root / "repo"
+        repo.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(["git", *args], cwd=repo, text=True,
+                                           stderr=subprocess.DEVNULL).strip()
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "Fixture")
+        git("config", "user.email", "fixture@example.invalid")
+        git("config", "core.hooksPath", "/dev/null")
+        suite = repo / m.GUI_BOOT_SUITE
+        product = repo / "richos/app/src-tauri/src/main.rs"
+        for path in (suite, product):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "candidate source")
+        candidate = git("rev-parse", "HEAD")
+        suite.write_text("two\n")
+        git("commit", "-q", "-am", "fix the suite only")
+        checker_only = git("rev-parse", "HEAD")
+        product.write_text("two\n")
+        git("commit", "-q", "-am", "and the product")
+        with_product = git("rev-parse", "HEAD")
+        git("checkout", "-q", "--orphan", "elsewhere")
+        git("commit", "-q", "-m", "unrelated")
+        unrelated = git("rev-parse", "HEAD")
+
+        r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
+        r.repo = repo
+        info["screen_suites_required"] = True
+        info["source_commit"] = candidate
+
+        def proof_at(gui_commit):
+            proof = self.proof(suite="shipped-bundle-boot", commit=candidate)
+            proof.write_text(proof.read_text().replace("--- output ---",
+                "front-door_exit=0\ngui-boot_exit=0\n"
+                f"gui-boot_commit={gui_commit}\n--- output ---"))
+            return proof
+
+        self.assertEqual(r.require_gui_proof(info, proof_at(checker_only))["gui-boot_commit"],
+                         checker_only)
+        for refused in (with_product, unrelated, checker_only[:12]):
+            with self.subTest(gui_commit=refused):
+                with self.assertRaisesRegex(ValueError, "gui-boot source"):
+                    r.require_gui_proof(info, proof_at(refused))
+
     def test_a_candidate_whose_gui_boot_did_not_run_is_refused_without_a_proof(self):
         """THE CASE THE WHOLE MODE TURNS ON.
 

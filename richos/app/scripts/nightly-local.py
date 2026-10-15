@@ -178,6 +178,7 @@ def owned_run(args, **kwargs):
 ROOT = Path(__file__).resolve().parents[3]
 REPO = "WebDevBooster/richos"
 SCRIPTS = Path("richos/app/scripts")
+GUI_BOOT_SUITE = SCRIPTS / "gui-boot.test.sh"
 
 # THE ONLY DECLARED HOST GAP OF THIS BUILD. `run-tests.sh` discovers every *.test.sh beside
 # it from disk and runs each with no arguments; a suite that answers "this host cannot
@@ -2667,9 +2668,42 @@ class Runner:
                 f"--gui-proof was taken against {seen or '<no commit>'}, and this candidate is "
                 f"{' / '.join(accepted)}. The proof is about a different tree, so it proves "
                 "nothing about this one; take it again against this candidate.")
-        if info.get("screen_suites_required") and fields.get("gui-boot_commit") not in accepted:
-            raise ValueError("--gui-proof gui-boot source is not this candidate's source or build commit")
+        if (info.get("screen_suites_required") and fields.get("gui-boot_commit") not in accepted
+                and not self.only_the_checker_changed(fields.get("gui-boot_commit", ""), accepted)):
+            raise ValueError("--gui-proof gui-boot source is not this candidate's source or build "
+                             f"commit, nor a descendant of one that changes only {GUI_BOOT_SUITE}")
         return fields
+
+    def only_the_checker_changed(self, sha, accepted):
+        """True when `sha` descends from one of `accepted` and changed nothing but the suite.
+
+        gui-boot boots a debug binary compiled from the commit it ran at. A commit that adds
+        only a fix to `gui-boot.test.sh` itself compiles the candidate's product source
+        unchanged, so its verdict is about this candidate; without this, a wrong self-test
+        could be fixed only by rebuilding a candidate that had passed everything else
+        (nightly 58, 2026-10-15). Any other changed file, or no ancestry, is refused.
+        """
+        if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+            return False
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+        def git(*args):
+            try:
+                return subprocess.run(["git", "-C", str(self.repo), *args], env=env,
+                                      capture_output=True, text=True,
+                                      stdin=subprocess.DEVNULL, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                return None
+
+        for base in accepted:
+            ancestry = git("merge-base", "--is-ancestor", base, sha)
+            if ancestry is None or ancestry.returncode != 0:
+                continue
+            changed = git("diff", "--name-only", base, sha)
+            if changed is not None and changed.returncode == 0 \
+                    and set(changed.stdout.split()) <= {str(GUI_BOOT_SUITE)}:
+                return True
+        return False
 
     def accept_land_proof(self, sha, source):
         """Return the sha to record, or refuse. Never a bare boolean.
