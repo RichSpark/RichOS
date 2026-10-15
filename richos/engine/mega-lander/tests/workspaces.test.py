@@ -5176,7 +5176,7 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         real = os.path.realpath(os.path.join(repo, common))
         return real
 
-    def verdict(self, tip, verdict="passed", trigger="handover", findings=(), repo=None, legacy=False):
+    def verdict(self, tip, verdict="passed", trigger="handover", findings=(), repo=None, legacy=False, work=None):
         rid = "rv-test-%s-%d" % (tip[:8], len(open(self.ledger).readlines()) if os.path.exists(self.ledger) else 0)
         record = os.path.join(os.path.dirname(self.ledger), "reviews", rid)
         os.makedirs(record)
@@ -5190,6 +5190,8 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         if not legacy:
             row["repo_id"] = self.repo_identity(repo or self.other)
+        if work:
+            row["work"] = work
         with open(self.ledger, "a") as f:
             f.write(json.dumps(row) + "\n")
         return rid
@@ -5257,6 +5259,35 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         self.assertIn("Second review: passed, %s" % rid, body)
         self.assertIn("P3 a comment could name the ruling", body)
         self.assertFalse(os.path.exists(cc))
+
+    def test_second_review_another_branchs_open_finding_never_refuses_a_passed_tip(self):
+        # 2026-10-15: cc/echo-opus-words58c passed its own review and was refused
+        # with cc/echo-opus-hood57b's P2. Manual reviews of two branches cut from
+        # the same main commit share one work key (range:<repo>:<base>).
+        base = self.head()
+        work = "range:%s:%s" % (self.other, base)
+        _sib, (sibling,) = self.finished("zach-opus-rvsib", "sibling\n")
+        _cc, (_older, tip) = self.finished("zach-opus-rvown", "one\n", "two\n")
+        self.verdict(sibling, "changes-requested", trigger="manual", work=work,
+                     findings=[(2, "the sibling branch's own defect")])
+        rid = self.verdict(tip, "passed", trigger="manual", work=work)
+        _merged, res = ws.merge_and_land("zach-opus-rvown", self.sid, "Merge cc/zach-opus-rvown: the work")
+        self.assertTrue(res["landed"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "main^2").stdout.strip(), tip)
+        body = run("git", "-C", self.other, "log", "-1", "--format=%B").stdout
+        self.assertIn("Second review: passed, %s" % rid, body)
+        self.assertNotIn("sibling branch's own defect", body)
+        # The branch's OWN earlier tip still counts: an open finding there refuses.
+        _cc2, (own_old, own_tip) = self.finished("zach-opus-rvown2", "three\n", "four\n")
+        work2 = "range:%s:%s" % (self.other, self.head())
+        self.verdict(own_old, "changes-requested", trigger="manual", work=work2,
+                     findings=[(2, "this branch's earlier defect")])
+        self.verdict(own_tip, "passed", trigger="manual", work=work2)
+        before = self.head()
+        with self.assertRaises(ws.SpecError) as e:
+            ws.merge_and_land("zach-opus-rvown2", self.sid)
+        self.assertIn("this branch's earlier defect", str(e.exception))
+        self.assertEqual(self.head(), before)
 
     FOREIGN = "/independent-clones/foreign"
 
