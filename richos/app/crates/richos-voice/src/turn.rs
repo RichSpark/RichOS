@@ -365,6 +365,15 @@ impl<T> AnswerGate<T> {
         before - self.held.len()
     }
 
+    /// Announcements that had already left the gate and were cut before he heard them (see
+    /// [`Unheard::reclaim`]) are held again, at the front and in their order: they were sent
+    /// before anything held now. Not dropped by the mute, like any announcement.
+    pub fn hold_again(&mut self, announcements: Vec<T>) {
+        for sentence in announcements.into_iter().rev() {
+            self.held.push_front((sentence, true));
+        }
+    }
+
     /// A new turn started: its answer is his to hear.
     pub fn next_turn(&mut self) {
         self.muted = false;
@@ -382,6 +391,102 @@ impl<T> AnswerGate<T> {
 
     pub fn muted(&self) -> bool {
         self.muted
+    }
+}
+
+/// **Announcements past the gate that he has not heard yet** (a job's result, "Will is on your
+/// team now"). [`AnswerGate`] keeps one only while it waits for him; once sent it is with the
+/// speaker (queued, being synthesized, or queued at the device), and an interruption there used
+/// to lose it: the generation that ends Rich's answer ended the announcement behind it too
+/// (review rv-20261015T132600Z-fdc3dafb, finding 1). This keeps each one until its last sample has
+/// actually played, so an interruption can hand it back to be said again.
+///
+/// Positions are the device's own count of samples: a block queued at the device ends at
+/// "samples played so far + samples queued", and it has been heard once that many have played.
+/// Only an interruption empties the device queue, and every interruption calls
+/// [`Unheard::reclaim`], so a position is never compared across one.
+#[derive(Debug)]
+pub struct Unheard<T> {
+    next_id: u64,
+    sent: Vec<Sent<T>>,
+}
+
+#[derive(Debug)]
+struct Sent<T> {
+    id: u64,
+    item: T,
+    /// Where its first sample sits in the device's count, once it is queued there.
+    start: Option<u64>,
+    /// Where its last sample queued so far ends.
+    through: u64,
+    /// Its last block is queued: once `through` has played, he has heard all of it.
+    complete: bool,
+}
+
+impl<T> Default for Unheard<T> {
+    fn default() -> Self {
+        Unheard { next_id: 1, sent: Vec::new() }
+    }
+}
+
+impl<T> Unheard<T> {
+    /// It goes to the speaker now. Returns its id, which the speaker reports against.
+    pub fn sent(&mut self, item: T) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.sent.push(Sent { id, item, start: None, through: 0, complete: false });
+        id
+    }
+
+    /// A block of it reached the device queue, from `start` to `end` in the device's count.
+    pub fn queued(&mut self, id: u64, start: u64, end: u64) {
+        if let Some(s) = self.sent.iter_mut().find(|s| s.id == id) {
+            s.start.get_or_insert(start);
+            s.through = end;
+        }
+    }
+
+    /// Its last block is queued at the device.
+    pub fn complete(&mut self, id: u64) {
+        if let Some(s) = self.sent.iter_mut().find(|s| s.id == id) {
+            s.complete = true;
+        }
+    }
+
+    /// It will never reach the device (the speaker is gone, or synthesis failed and he was told).
+    pub fn forget(&mut self, id: u64) {
+        self.sent.retain(|s| s.id != id);
+    }
+
+    /// Forget every one that has played to its last sample.
+    pub fn heard(&mut self, played: u64) {
+        self.sent.retain(|s| !(s.complete && played >= s.through));
+    }
+
+    /// **The device queue was just cut** (he talked over Rich, his words started a new turn, or he
+    /// pressed Stop). Every announcement not fully played is returned, in order, to be held and
+    /// said again; the rest are forgotten. `he_stopped`: the one that was SOUNDING when he pressed
+    /// Stop is what he stopped, so it is not said again, or Stop could never end it.
+    pub fn reclaim(&mut self, played: u64, he_stopped: bool) -> Vec<T> {
+        let mut again = Vec::new();
+        for s in self.sent.drain(..) {
+            let heard = s.complete && played >= s.through;
+            let sounding = s.start.is_some_and(|start| played > start);
+            let stopped_by_him = he_stopped && sounding;
+            if !heard && !stopped_by_him {
+                again.push(s.item);
+            }
+        }
+        again
+    }
+
+    /// How many are with the speaker or the device and not yet heard.
+    pub fn len(&self) -> usize {
+        self.sent.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sent.is_empty()
     }
 }
 
