@@ -3279,6 +3279,11 @@ fn main() {
             work.set_answered_close(Arc::new(richos_core::operator_runtime::EcsAnsweredClose::with(
                 engine_store_call(Arc::clone(&engine_cell), &data_dir),
             )));
+            // A hiring is briefed with his company notes, read from the folder the interview
+            // saves them in (the same root the conversation is primed from, above).
+            if let Some(root) = richos_core::company::install_central_root() {
+                work.set_central_root(root);
+            }
             if let Some(desk) = &operator_desk {
                 work.set_operator(desk.clone());
             }

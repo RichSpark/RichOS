@@ -394,6 +394,22 @@ class DesktopWork(unittest.TestCase):
         for args in ({},{"action":"delete","name":"sage"},{"action":"list","name":"sage"}):
             with self.assertRaises(ValueError):self.call("team",args)
 
+    def test_deans_name_rule_is_the_rule_the_team_tool_saves(self):
+        """Nightly 57's follow-up: Dean's template said `name` is a "lowercase kebab slug", so
+        Anne-Marie came back as `anne-marie`, and the team tool refuses a hyphen (TEAMMATE_NAME:
+        2 to 16 lowercase letters and digits). Dean's rule now shows how a name is written, and
+        every example it gives is a name the tool saves; the tool's own description says the same."""
+        dean=(ENGINE/"agents/dean.md").read_text(encoding="utf-8")
+        rule=next(line for line in dean.splitlines() if line.startswith("- **`name`:**"))
+        examples=dict(re.findall(r"([A-Z][\w'-]*) is `([^`]+)`",rule))
+        self.assertIn("Anne-Marie",examples,"Dean's name rule shows no hyphenated name: "+rule)
+        for name,saved_as in examples.items():
+            text=f"---\nname: {saved_as}\ndescription: Fictional {name}.\nmodel: sonnet\n---\n\n# {name}\n"
+            self.assertEqual(self.call("team",{"action":"save","name":saved_as,"text":text})["name"],saved_as)
+        team=next(tool for tool in self.app.TOOLS if tool["name"]=="team")
+        for name,saved_as in examples.items():
+            self.assertIn(f"{name} is {saved_as}",team["description"])
+
     def test_preflight_refusal_allows_a_corrected_request_without_claiming_a_start(self):
         subprocess.run(["git", "-C", str(self.repo), "branch", "-m", "integration"], check=True)
         missing = {k:v for k,v in self.args.items() if k != "integration"}
