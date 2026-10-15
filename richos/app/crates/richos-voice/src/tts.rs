@@ -5,9 +5,9 @@
 //! per-thread voice.
 //!
 //! **Rich's voice is Pocket TTS ([`RichVoice`], `pocket.rs`) and nothing else** (CEO, 2026-10-15:
-//! *"It's Rich's voice. Why the fuck would there be any other names in any log lines???"*). No
-//! macOS voice stands in for it: while it is being installed or loaded a sentence waits for it
-//! ([`VoiceGate`]), and every log line names it as Rich's voice.
+//! Rich speaks only in his own voice, and no log line names or describes it). No macOS voice
+//! stands in for it: while it is being installed or loaded a sentence waits for it
+//! ([`VoiceGate`]).
 //!
 //! [`MacSay`] stays for the echo-path measuring tools (`examples/aec_*.rs`), which need a
 //! loudspeaker signal and are never Rich speaking to anyone. Measured on this M4 when it was v1's

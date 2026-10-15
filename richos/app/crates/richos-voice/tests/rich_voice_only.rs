@@ -1,6 +1,5 @@
-//! **Rich speaks only in his own voice** (CEO, 2026-10-15: "It's Rich's voice. Why the fuck would
-//! there be any other names in any log lines???", and "if the voice isn't installed at all, it
-//! needs to be fucking installed").
+//! **Rich speaks only in his own voice** (CEO, 2026-10-15: no log line names another voice, and
+//! a voice that is not installed gets installed).
 //!
 //! No macOS `say` voice stands in while Rich's voice is being installed or loaded: the sentence
 //! waits for it, and is spoken by the voice the install brought. Nothing names another voice.

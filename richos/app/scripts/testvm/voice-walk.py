@@ -81,8 +81,7 @@ VOICE_FOLDER = '/.config/richos/models/pocket-tts-english_2026-04'
 VOICE_FILES = ('bos_before_voice.npy', 'bundle.json', 'flow_lm_flow_int8.onnx', 'flow_lm_main_int8.onnx',
                'mimi_decoder_int8.onnx', 'mimi_encoder.onnx', 'peter_yearsley.wav', 'text_conditioner.onnx',
                'tokenizer.model')
-# CEO 2026-10-15: "It's Rich's voice. Why the fuck would there be any other names in any log lines???"
-# and "So, then there's no fucking need for any fucking log lines about the voice, is there???"
+# CEO 2026-10-15: Rich speaks only in his own voice, and no log line names or describes it.
 # No app log line may name, describe or report loading a voice; only the `tts:` timing figures
 # (which name none) remain.
 VOICE_LINE_MARKERS = ('macOS say', 'with say', 'Daniel', 'Samantha', 'Reed (English', 'Yearsley', 'Pocket',
