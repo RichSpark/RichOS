@@ -928,9 +928,23 @@ fi
 
 # A2 — the shape all three historical defects actually had: not a bad sentence, an ABSENT
 # good one. `c6cf4ea` printed no write-half line at all.
-healthy_log | grep -v 'correction desk: writing to' > "$TMP/a2.log"
+#
+# The line is removed by the `loro write half` rule's OWN regex, never by a retyped phrase.
+# A retyped phrase went stale on 2026-10-15 (9a6ff39eb reworded the boot line to `memory:
+# saving corrections to`, the rule and the fixture with it, and A2 kept grepping out `correction
+# desk: writing to`): it removed nothing, the log it fed the checker was the healthy one, and
+# A2 failed nightly 58's boot proof for a checker that was working. The line count is asserted
+# too, so the case cannot again quietly test an unchanged log.
+A2_RE=""
+for i in "${!RESOLVED_ID[@]}"; do
+  [ "${RESOLVED_ID[$i]}" = 'loro write half' ] && A2_RE="${RESOLVED_RE[$i]}"
+done
+healthy_log | grep -Ev -- "$A2_RE" > "$TMP/a2.log"
+A2_REMOVED=$(( $(healthy_log | wc -l) - $(wc -l < "$TMP/a2.log") ))
 OUT="$(gui_account "$TMP/a2.log" 2>&1)"; CODE=$?
-if [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'NOT RESOLVED  loro write half'; then
+if [ "$A2_REMOVED" -ne 1 ]; then
+  bad "A2 a missing success line fails" "the fixture lost $A2_REMOVED line(s), not exactly the one write-half line, so A2 tested nothing"
+elif [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'NOT RESOLVED  loro write half'; then
   ok "A2 a missing success line fails — silence is not success"
 else
   bad "A2 a missing success line fails" "exit $CODE; output: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-200)"
