@@ -2979,13 +2979,14 @@ function waitBandCopy(t, nowMs) {
   else if (t.status === "stopping") head = "Rich is letting go of this turn";
   else head = "Rich is working";
 
-  // The elapsed number is the DURATION ROW'S OWN, straight out of
-  // `RichTimeline.durationRow` — one derivation, so the band and the row can never show two
-  // different ages for one turn. While `queued` the ledger holds no `started_at` at all, so
-  // the only honest clock is the one this window watched, and the headline says whose.
-  const modelTurn = timelineModel.turns.get(t.turnId);
-  const rowDuration = modelTurn ? window.RichTimeline.durationRow(modelTurn, nowMs).duration : null;
-  const time = t.status === "queued" ? window.RichTimeline.formatDuration(nowMs - t.acceptedAt) : rowDuration;
+  // ONE TIMER, AND IT IS THE CONVERSATION'S (product hunt 2026-10-15, finding 22). This band
+  // used to repeat the duration row's number, and the two ticked on separate one-second
+  // intervals, so nightly 57 showed "Working for 6s" in the conversation and "Rich is working
+  // 5s" here for the same wait. The row's `Working for {duration}` is the timer the design
+  // specifies (§6.1), so the band carries a number only while that row has none: `queued`,
+  // where the ledger holds no `started_at` yet and the only honest clock is the one this
+  // window watched.
+  const time = t.status === "queued" ? window.RichTimeline.formatDuration(nowMs - t.acceptedAt) : "";
   const gap = window.RichTimeline.formatDuration(quietMs);
 
   let detail;
