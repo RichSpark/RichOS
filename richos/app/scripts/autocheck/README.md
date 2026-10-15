@@ -137,6 +137,17 @@ commit changes against its HEAD, so a later commit that does not touch a finding
 and the row-currency guard already judges the merge itself. `../autocheck.test.py` proves it
 with a merge whose citation dangles only after the land before it.
 
+## Nothing appears at the root of main without the CEO's authorization (2026-10-15)
+
+The CEO: *"ANY PUBLICLY VISIBLE ITEM IN ROOT on GitHub must always require my explicit
+authorization."* The root rule was a manual step at each land, and `AGENTS.md` reached the root
+of main through one. So every commit and merge onto main, before any suite, and every push of
+main, with or without a land receipt, refuses a tree whose top level holds an entry not in
+`AUTHORIZED_ROOT_ENTRIES` (`autocheck.py`): `.claude-plugin`, `.github`, `.gitignore`, `.richos`,
+`LICENSE`, `docs`, `richos`. The refusal names each entry and says that a new root item needs his
+explicit authorization. The list is read from main's own copy of `autocheck.py`, so an item he
+has authorized is added to the list in a land of its own, before the item.
+
 ## A check that fails under the gate's own load runs again alone, once (2026-10-08)
 
 Twice on 2026-10-08 the gate refused a merge on one timing check while its own parallel checks
