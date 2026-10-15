@@ -2411,7 +2411,12 @@ impl WorkHost {
                     advance(AssignmentState::Running, "A helper is doing the work.");
                 }
                 waits += 1;
-                if !self.wait_for_owned_workers(backend, record, &session) {
+                // **A HIRING GOES ON AT EACH HELPER'S END, NOT AT THE LAST ONE'S** (finding 4;
+                // mid-job review rv-20261015T111101Z-9144da1e-2fe6): Dean returns Will while
+                // Clark still researches Beth, and the back end saves Will on the turn that
+                // gives it, so he joins without waiting on her research.
+                let one_end = (!self.unsaved_hires(record).is_empty()).then_some(ends_at_turn_start);
+                if !self.wait_for_owned_workers(backend, record, &session, one_end) {
                     break;
                 }
                 // **WHAT THE NEXT STEP ACTUALLY IS, READ OFF THE RECEIPTS.** A worker that has
@@ -2543,8 +2548,11 @@ impl WorkHost {
                 // **AND THE TEAM** (proto-teammate shelf slice 5): a teammate saved during the
                 // turn that just ended is registered here, on a successor carrying the run.
                 // After the account check, because a switch registers the team as it is now.
-                if self.switch_account_between_turns(backend, binding, record, &work, context)
-                    || self.renew_team_between_turns(backend, binding, record, &work, context)
+                // Never while a helper of this back end is still running: its run lives in the
+                // connection a renewal would retire (a hiring's turn between two helpers' ends).
+                if !self.helpers_open(&session)
+                    && (self.switch_account_between_turns(backend, binding, record, &work, context)
+                        || self.renew_team_between_turns(backend, binding, record, &work, context))
                 {
                     chars.set(continuation.len());
                     measured.set(None);
@@ -3340,8 +3348,12 @@ impl WorkHost {
     /// same positive-signal-only rule the continuity design's §5.2 holds the crash watchdog
     /// to. The poll interval is a read of one small file, so [`WORKER_WAIT_POLL`] is chosen
     /// for how soon the back end is handed its next turn rather than for cost.
+    ///
+    /// **`one_end`: a hiring's wait also ends when a helper run ends** after that many had
+    /// ended (the latest turn's start), with others still open, so the teammate that helper
+    /// fitted is saved at once (finding 4).
     fn wait_for_owned_workers(
-        self: &Arc<Self>, backend: &Arc<Backend>, record: &Assignment, session: &str,
+        self: &Arc<Self>, backend: &Arc<Backend>, record: &Assignment, session: &str, one_end: Option<usize>,
     ) -> bool {
         let budget = *self.worker_wait.lock().unwrap();
         let mut deadline = std::time::Instant::now() + budget;
@@ -3369,6 +3381,9 @@ impl WorkHost {
             if view.active + view.liveness_unknown == 0 {
                 return true;
             }
+            if one_end.is_some_and(|seen| crate::app_workers::run_ends(&self.state, session).is_some_and(|ends| ends > seen)) {
+                return true;
+            }
             // **The bound is where the row says so, never where the wait ends** (hunt part 1
             // finding 06). Ending here used to revoke the grant the helper works under and
             // fail the job on "nothing could be witnessed finishing it", about a helper the
@@ -3390,6 +3405,12 @@ impl WorkHost {
             }
             std::thread::sleep(WORKER_WAIT_POLL);
         }
+    }
+
+    /// Is a helper run of this session witnessed open (or of unknown liveness)?
+    fn helpers_open(&self, session: &str) -> bool {
+        let view = crate::app_workers::status(&self.state, Some(session));
+        view.is_attributed() && view.active + view.liveness_unknown > 0
     }
 
     /// **Wait for the helper the back end said it is waiting on to end a run** — `true` when
@@ -8536,6 +8557,63 @@ mod tests {
         journal(&h, &helper_stopped("clark-beth"));
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
         assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
+        assert_eq!(told(&h), [
+            "Will (Marketing Director) is on your team now, ready to take work.",
+            "Beth (Bookkeeper) is on your team now, ready to take work.",
+        ]);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Dean's fitting of Will ends while Clark still researches Beth, and Will is saved and
+    /// told at once** (finding 4; mid-job review rv-20261015T111101Z-9144da1e-2fe6). Turn 1
+    /// starts both consults. Dean's run ends first: the back end gets its turn then, with Clark
+    /// still running, saves Will, and he hears that Will joined while Beth's research goes on.
+    /// When Clark's run ends, the next turn saves Beth. The host used to give the back end its
+    /// next turn only once every helper had ended, so Will waited for Beth's research.
+    #[test]
+    fn a_teammate_dean_finished_is_saved_and_told_while_another_consult_still_runs() {
+        use crate::cognition::ObligationState;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
+        }
+        h.replies.lock().unwrap().extend([
+            format!("Asking Dean to fit Will and Clark to research Beth.{TOOL_CALL}Both are running."),
+            format!("Saving Will.{TOOL_CALL}Will is saved; Clark is still researching Beth."),
+            format!("Saving Beth.{TOOL_CALL}Beth is saved too."),
+        ]);
+        journal(&h, &(helper_started("dean-will") + &helper_started("clark-beth")));
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.work_prompts.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the hiring never reached its back end");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Dean's run ends; Clark's does not. The deadline only catches a hang.
+        journal(&h, &helper_stopped("dean-will"));
+        while told(&h).is_empty() {
+            assert!(std::time::Instant::now() < deadline,
+                "Dean returned Will while Clark still researched Beth, and Will was not saved and told: {} turn(s), {:?} {}",
+                h.work_prompts.lock().unwrap().len(), read().state, read().detail);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
+        assert_eq!(told(&h), ["Will (Marketing Director) is on your team now, ready to take work."]);
+        assert_eq!(read().state, AssignmentState::Running, "{}", read().detail);
+        journal(&h, &helper_stopped("clark-beth"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 3);
         assert_eq!(told(&h), [
             "Will (Marketing Director) is on your team now, ready to take work.",
             "Beth (Bookkeeper) is on your team now, ready to take work.",
