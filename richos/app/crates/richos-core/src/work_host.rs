@@ -2771,9 +2771,41 @@ impl WorkHost {
             }
             Err(why) => {
                 let sentence = honest(&why.to_string());
-                advance(AssignmentState::Failed, &sentence);
-                self.forget_at_the_desk(record);
-                self.raise(record, NoticeKind::Failed, &tell(&record.title, &sentence));
+                // **A hiring the back end failed after teammates were saved still tells him who
+                // joined** (handover review rv-20261015T085117Z-b82e5a0c-20fb): the same words as
+                // the two hiring arms below, read off what the app saved. Every proposed teammate
+                // saved is a finished hiring, whatever broke afterwards; otherwise he hears who
+                // joined, then who was not saved and why it stopped.
+                let joined = hiring.clone().filter(|(saved, _)| !saved.is_empty());
+                let mut finished = None;
+                match joined {
+                    Some((saved, unsaved)) if unsaved.is_empty() => {
+                        let said = joined_the_team(&saved).expect("checked by the filter");
+                        advance(AssignmentState::Settled, assignment::ANSWERED_DETAIL);
+                        self.forget_at_the_desk(record);
+                        self.raise(record, NoticeKind::Answer, &said);
+                        finished = Some(said);
+                    }
+                    Some((saved, unsaved)) => {
+                        let unsaved: Vec<String> = unsaved.into_iter().map(|(name, _)| name).collect();
+                        let why = format!(
+                            "{} {} not saved to your team. {sentence}",
+                            names_in_a_sentence(&unsaved),
+                            if unsaved.len() == 1 { "was" } else { "were" }
+                        );
+                        advance(AssignmentState::Failed, &why);
+                        self.forget_at_the_desk(record);
+                        if let Some(joined) = joined_the_team(&saved) {
+                            self.raise(record, NoticeKind::Answer, &joined);
+                        }
+                        self.raise(record, NoticeKind::Failed, &tell(&record.title, &why));
+                    }
+                    None => {
+                        advance(AssignmentState::Failed, &sentence);
+                        self.forget_at_the_desk(record);
+                        self.raise(record, NoticeKind::Failed, &tell(&record.title, &sentence));
+                    }
+                }
                 // **A BACK END THAT FAILED A TURN IS RETIRED, NOT HANDED THE NEXT ONE.**
                 //
                 // `ensure_lease` short-circuits on `lease.is_some()` — *"this conversation's
@@ -2800,10 +2832,17 @@ impl WorkHost {
                 // leave the child alive" is a list that goes stale silently, and the cost of
                 // being wrong in this direction is one extra spawn.
                 *backend.lease.lock().unwrap() = None;
-                let mut inner = backend.inner.lock().unwrap();
-                inner.lease_session = None;
-                inner.context_chars = 0;
-                inner.context_usage = None;
+                {
+                    let mut inner = backend.inner.lock().unwrap();
+                    inner.lease_session = None;
+                    inner.context_chars = 0;
+                    inner.context_usage = None;
+                }
+                // A finished hiring's obligation closes on his words, as in the arm below; LAST,
+                // because the close is subprocess calls and his words must never wait on it.
+                if let Some(said) = finished {
+                    self.close_answered(record, &said);
+                }
             }
             Ok(reason) if stopped || reason == crate::native::STOP_REASON_CANCELLED => {
                 advance(AssignmentState::Interrupted, "Stopped. The workspace and the receipts are kept.");
@@ -8144,6 +8183,73 @@ mod tests {
         for note in WORKING_NOTES {
             assert!(told.iter().all(|t| !t.contains(note)), "he was told {note:?}: {told:?}");
         }
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A hiring the back end fails after teammates were saved still tells him who joined**
+    /// (handover review rv-20261015T085117Z-b82e5a0c-20fb, "joined-team notices=0"). Both hiring
+    /// reports used to need the turn to answer, so a lost connection after Will was saved said
+    /// only that the job stopped, and one after both were saved called a finished hiring a
+    /// failure. Case 1: turn 1 saves Will, the continuation turn loses its connection; he hears
+    /// Will joined, then that Beth was not saved and why it stopped. Case 2: both are saved and
+    /// the turn loses its connection; the hiring is finished and he hears both joined.
+    #[test]
+    fn a_hiring_the_back_end_fails_after_saving_teammates_still_tells_him_who_joined() {
+        use crate::cognition::ObligationState;
+        let ready = || {
+            let h = harness(5);
+            witnessed(&h.state, "work-session-one");
+            *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+            *h.background.lock().unwrap() = Some(Vec::new());
+            *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+            h.team.lock().unwrap().named = true;
+            h
+        };
+
+        // Case 1: Will saved by turn 1, the connection lost on the continuation turn.
+        let h = ready();
+        {
+            let mut team = h.team.lock().unwrap();
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([Some(format!("{STOCK_TEAM} will"))]);
+        }
+        h.replies.lock().unwrap().extend([format!("{}{TOOL_CALL}{}", WORKING_NOTES[0], WORKING_NOTES[3])]);
+        h.first_item_gate.shut();
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        // Turn 1 is held at its first item, past the point a failure is taken: the next turn fails.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.work_prompts.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "turn 1 never came");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.fail_next.lock().unwrap().push_back("connection lost".into());
+        h.first_item_gate.release();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
+        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        assert_eq!(done.state, AssignmentState::Failed, "{}", done.detail);
+        let heard = told(&h);
+        println!("case 1 told: {heard:?}");
+        assert_eq!(heard.len(), 2, "{heard:?}");
+        assert_eq!(heard[0], "Will (Marketing Director) is on your team now, ready to take work.");
+        assert!(heard[1].contains("Beth was not saved to your team. Connection lost."), "{heard:?}");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+
+        // Case 2: Will and Beth both saved, and the turn loses its connection.
+        let h = ready();
+        h.team.lock().unwrap().digest = Some(format!("{STOCK_TEAM} beth will"));
+        h.fail_next.lock().unwrap().push_back("connection lost".into());
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let heard = told(&h);
+        println!("case 2 told: {heard:?} state: {:?}", done.state);
+        assert_eq!(heard, ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
