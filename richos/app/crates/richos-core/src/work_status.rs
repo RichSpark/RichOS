@@ -58,20 +58,26 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
     // repository, and never a guess at its state. Only a failure about the directory itself
     // (above) still refuses the whole view.
     for path in paths.into_iter().take(100) {
-        let item = read_one(&path, entity, thread, &mut bytes_read).unwrap_or_else(|reason| WorkItem {
+        let item = read_one(&path, entity, thread, &mut bytes_read).unwrap_or_else(|reason| Some(WorkItem {
             title: "A saved work record that could not be read".into(),
             repository: "unknown repository".into(),
             role: "unknown role".into(),
             state: "unreadable".into(),
             detail: format!("{reason} The other saved work is shown as recorded."),
-        });
-        summary.items.push(item);
+        }));
+        summary.items.extend(item);
     }
     Ok(summary)
 }
 
 /// One receipt, read into one row of the saved-work view, or the reason it could not be.
-fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Result<WorkItem, String> {
+///
+/// **`None` for a job that never started** (Ray's check of nightly 57, 2026-10-15: an
+/// "Ended without starting. Its preparation was refused or closed before any worker was
+/// dispatched" card under Under the hood). No worker ran and nothing was done, so there is
+/// nothing of it to show. Which records those are is the engine's own `never_dispatched`
+/// (`engine/mega-lander/app.py`): `blocked`, with no `tool_use_id` and no `agent_id`.
+fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Result<Option<WorkItem>, String> {
     let size = std::fs::symlink_metadata(path).map_err(|_| "A saved work record could not be read.")?;
     if !size.is_file() || size.len() > 1024 * 1024 || *bytes_read + size.len() > 16 * 1024 * 1024 {
         return Err("A saved work record is too large or redirected.".into());
@@ -81,6 +87,10 @@ fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Re
     let row: Value = serde_json::from_slice(&bytes).map_err(|_| "A saved work record is damaged.")?;
     if row["schema"] != 1 || row["binding"]["entity_id"] != entity || row["binding"]["thread_id"] != thread {
         return Err("A saved work record has an unsupported schema or different scope.".into());
+    }
+    let dispatched = |key: &str| row[key].as_str().is_some_and(|s| !s.is_empty());
+    if row["status"] == "blocked" && !dispatched("tool_use_id") && !dispatched("agent_id") {
+        return Ok(None);
     }
     let field = |key: &str| -> Result<String, String> {
         row["request"][key].as_str().filter(|s| !s.is_empty() && s.len() <= 4096)
@@ -127,7 +137,7 @@ fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Re
         }
     };
     let repository = if consult { "no repository".to_string() } else { field("repo")? };
-    Ok(WorkItem { title: field("title")?, repository, role: field("role")?, state: state.into(), detail: detail.into() })
+    Ok(Some(WorkItem { title: field("title")?, repository, role: field("role")?, state: state.into(), detail: detail.into() }))
 }
 
 // =======================================================================================
@@ -557,14 +567,20 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// **A preparation the engine settled as `blocked` sits beside running work without
-    /// hiding it** (Ray, test VM, 2026-10-13, esc-20261013T203037Z-9b49483d). Pierce refused a
-    /// brief, `settle_undispatched` wrote `status: "blocked"` (`engine/mega-lander/app.py`
+    /// **A preparation the engine settled as `blocked` never hides running work** (Ray, test
+    /// VM, 2026-10-13, esc-20261013T203037Z-9b49483d). Pierce refused a brief,
+    /// `settle_undispatched` wrote `status: "blocked"` (`engine/mega-lander/app.py`
     /// `record.update(status="blocked", ...)`), and the one status this reader did not know
     /// turned the whole Under-the-hood list into "unsupported state" while the replacement
     /// consult was still running. Every status the engine writes is read, and a record the
     /// reader still cannot read is shown as one unreadable row next to the others.
-    #[test] fn a_blocked_preparation_is_shown_as_ended_without_starting_beside_running_work() {
+    ///
+    /// **And a job that never started is not a card at all** (Ray's check of nightly 57,
+    /// 2026-10-15, `team/under-the-hood.png`: "Ended without starting. Its preparation was
+    /// refused or closed before any worker was dispatched" under Under the hood, in two runs of
+    /// four). No worker ran and nothing was done, so there is nothing of it to show him; the
+    /// engine's own `never_dispatched` says which records those are.
+    #[test] fn a_preparation_that_never_started_is_not_shown_and_never_hides_running_work() {
         let root = temp();
         let mut blocked = receipt("aaa", "obligation-7", "consult");
         blocked["request"]["repo"] = Value::Null;
@@ -580,22 +596,24 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         let path = write(&root, &[blocked, running]);
         let summary = read(&root, "depot", "thread").expect("one blocked record hid the whole work list");
         let state = |summary: &WorkSummary, title: &str| summary.items.iter().find(|i| i.title == title).map(|i| i.state.clone());
-        assert_eq!(state(&summary, "Refused before it started").as_deref(), Some("ended-without-starting"));
+        assert_eq!(state(&summary, "Refused before it started"), None, "a job that never started is shown as a card");
+        assert_eq!(summary.items.len(), 1);
         assert_eq!(state(&summary, "The replacement, still running").as_deref(), Some("observed-start"));
-        // Every status the engine writes into a receipt is a state this reader knows.
+        // Every status the engine writes into a receipt is a state this reader knows; a
+        // `blocked` one that never dispatched is the one it leaves out.
         for status in ["preparing", "prepared", "dispatching", "running", "blocked", "unknown",
                        "interrupted", "run-ended", "integrated"] {
             let mut row = receipt("ccc", "obligation-7", "worker");
             row["status"] = status.into();
             write(&root, &[row]);
             let summary = read(&root, "depot", "thread").unwrap();
-            assert_eq!(summary.items.len(), 3);
+            assert_eq!(summary.items.len(), if status == "blocked" { 1 } else { 2 }, "status {status}");
             assert!(summary.items.iter().all(|i| i.state != "unreadable"), "status {status} was not read");
         }
         // A record it still cannot read is one row of its own; the others stay readable.
         std::fs::write(path.join("ccc.json"), "partial").unwrap();
         let summary = read(&root, "depot", "thread").expect("one damaged record hid the others");
-        assert_eq!(summary.items.len(), 3);
+        assert_eq!(summary.items.len(), 2);
         assert_eq!(summary.items.iter().filter(|i| i.state == "unreadable").count(), 1);
         assert_eq!(state(&summary, "The replacement, still running").as_deref(), Some("observed-start"));
         std::fs::remove_dir_all(root).unwrap();

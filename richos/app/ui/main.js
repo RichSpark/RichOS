@@ -6098,7 +6098,7 @@ async function refreshSetup() {
 /// Ask, or explain, or say nothing at all. Returns true when the sheet opened, so `init` can
 /// hold the memory question back instead of stacking a second dialog on this one.
 function maybeAskAboutSetup() {
-  if (!setupState || !setupState.ask) return false;
+  if (startupWaitsForHome || !setupState || !setupState.ask) return false;
   const { ask } = setupState;
   if (!ask.items.length) {
     if (providerAuth && providerAuth.state !== "connected") {
@@ -6855,7 +6855,7 @@ function rememberMemorySetupDeclined() {
 /// Ask, or say what is wrong, or do nothing at all. Returns true when a dialog opened, so
 /// `init` can hold the company question back rather than stacking it.
 function maybeAskAboutMemory() {
-  if (!memoryState) return false;
+  if (startupWaitsForHome || !memoryState) return false;
   if (memoryState.state === "none") {
     // **"NOT NOW" IS AN ANSWER, AND IT USED TO BE FORGOTTEN AT EVERY LAUNCH.** Ray saw the
     // corpus sheet twice in one walk, over the home screen both times, and audit-6 saw it
@@ -6890,6 +6890,63 @@ function maybeAskAboutMemory() {
   // its own boot line and no sentence worth interrupting him with, since nothing in the
   // window can act on it.
   return false;
+}
+
+/// **A RELAUNCH OPENS ON THE HOME SCREEN, EVERY TIME** (Ray's check of nightly 57, 2026-10-15,
+/// `feedback/r19-again-run1-memory-question.png` against `r19-again-run2.png`). Of two
+/// relaunches, one opened on the home screen and one on the last conversation with the memory
+/// question up: that question was still owed there, and `home.js` gets out of the way of any
+/// sheet on the desk (`giveWayToOpenDeskSheet`). Any question a start puts up does the same: the
+/// setup sheet (an update that needs a different engine included), the memory question, the
+/// company question and the company picker. So on a relaunch they all wait while the home screen
+/// is up and are asked the moment he goes in, in FIRST_RUN_ORDER and one at a time, by the same
+/// hand-offs as always (`closeSetupSheet` asks the memory question, `closeMemorySetup` the
+/// company question).
+///
+/// **The very first start is not a relaunch** and asks at once, as it always has: the first-run
+/// questions come one after another from the moment the app opens. A relaunch is a start whose
+/// launch record says it is the second or later (`launch.rs` `start_ordinal`), or a restart
+/// after a run that did not end cleanly; no record reads as the first start, as `splash.js`
+/// `launchOrdinal` reads it.
+///
+/// While `startupWaitsForHome` is set, `maybeAskAboutSetup` and `maybeAskAboutMemory` ask
+/// nothing: the start's questions are this function's to ask.
+let startupWaitsForHome = false;
+let pickerAfterHome = false;
+
+function homeIsUp() {
+  return !!(window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen());
+}
+
+function relaunched() {
+  const launch = window.__RICHOS_LAUNCH__;
+  if (!launch) return false;
+  // A start after a run that did not end cleanly is a relaunch too, and carries no ordinal
+  // (`launch.rs`: "a crash-restart is not the Nth start"). Measured in the test VM: a relaunch
+  // stopped by its pid came back as one and left the home screen for the company question.
+  return launch.kind === "crash-restart" || (typeof launch.ordinal === "number" && launch.ordinal > 1);
+}
+
+function askStartupQuestionsOffHome() {
+  // `body.home-open` is the home screen's own mark of being up (`home.js` `show`/`hide`).
+  const watch = new MutationObserver(() => {
+    if (homeIsUp()) return;
+    watch.disconnect();
+    startupWaitsForHome = false;
+    if (maybeAskAboutSetup()) {
+      memoryQuestionDeferred = true;
+      return;
+    }
+    if (maybeAskAboutMemory()) return;
+    if (companyQuestionDeferred) {
+      companyQuestionDeferred = false;
+      requireCompanyChoice();
+    } else if (pickerAfterHome) {
+      pickerAfterHome = false;
+      startNewThreadFlow();
+    }
+  });
+  watch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
 }
 
 function openMemorySetup(note, location, opts) {
@@ -9431,6 +9488,9 @@ async function init() {
   // dialog at a time — `closeSetupSheet` hands off to the memory question, which hands off
   // to the company question, so a fresh install answers all three, in order.
   await refreshSetup();
+  // A RELAUNCH OPENS ON THE HOME SCREEN: every question of this start waits for him to go in
+  // (`askStartupQuestionsOffHome`). The very first start asks them at once, as before.
+  const startupWaits = (startupWaitsForHome = homeIsUp() && relaunched());
   const setupAsked = maybeAskAboutSetup();
   // The memory question is HELD, not skipped, when the setup sheet took the screen —
   // `closeSetupSheet` asks it the moment this one is answered.
@@ -9461,8 +9521,10 @@ async function init() {
     // Unless the memory question is already on screen: `closeMemorySetup` asks this one the
     // moment that one is answered, so a fresh install answers both, in order, one dialog at
     // a time.
-    if (setupAsked || memoryAsked) companyQuestionDeferred = true;
+    if (startupWaits || setupAsked || memoryAsked) companyQuestionDeferred = true;
     else requireCompanyChoice();
+  } else if (startupWaits && !chose && navTree.groups.length) {
+    pickerAfterHome = true;
   } else if (!chose && navTree.groups.length) {
     // No active context — the launch could not resolve an entity (the shell fails closed
     // rather than guessing one), or every thread on disk is unbound.
@@ -9479,6 +9541,7 @@ async function init() {
     // selected". No entity is selected, so the picker opens.
     startNewThreadFlow();
   }
+  if (startupWaits) askStartupQuestionsOffHome();
   // WHAT IS RUNNING RIGHT NOW, read from the backend rather than assumed from the absence
   // of events. A webview reload does not restart the Rust side, so a turn can be mid-flight
   // with this script one second old; without this the row renders "Status unavailable" and
