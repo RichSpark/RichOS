@@ -183,7 +183,7 @@
 # so a suite that never adopts `host_gap_exit` cannot hide behind a declaration either.
 
 # run-tests: inputs richos/app/scripts/gui-boot.test.sh richos/app/scripts/lib/gui-launch.sh richos/app/scripts/package-app.sh richos/app/scripts/make-engine-asset.sh richos/app/src-tauri richos/app/crates richos/app/ui richos/engine
-# run-tests: covers richos/app/scripts/lib/gui-launch.sh richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/engine.rs richos/app/crates/richos-core/examples/gui_boot_machine.rs
+# run-tests: covers richos/app/scripts/lib/gui-launch.sh richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/engine.rs richos/app/src-tauri/src/memory.rs richos/app/crates/richos-core/examples/gui_boot_machine.rs
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -345,11 +345,11 @@ declare_rules() {
        never actually spawn against.'
 
   resolved 'loro read half' \
-    '^\[richos\] loro Tier C: compiling from .+ \(via .+\), node .+$' \
+    '^\[richos\] memory: reading from .+ \(via .+\), runtime .+$' \
     'the corpus and the compiler that reads it (loro.rs, c179cc1)'
 
   resolved 'loro write half' \
-    '^\[richos\] loro correction desk: writing to .+ via .+$' \
+    '^\[richos\] memory: saving corrections to .+ via .+$' \
     'the corpus a confirmed correction is written to (correction.rs, 49e2cd4)'
 
   resolved 'company' \
@@ -432,7 +432,7 @@ declare_rules() {
   # stay unaccounted so that boot is SEEN rather than filed as routine.
   routine '^\[richos\] recovery: 0 assignment\(s\) unknown until re-witnessed, 0 left as recorded$' \
     'the boot sweep ran and had nothing to re-witness; every other shape of this line stays unaccounted'
-  routine '^\[richos\] loro lane: no lane narrowing in force' \
+  routine '^\[richos\] memory: this folder has no company partitions;' \
     'an unpartitioned corpus, which is a shape rather than a missing setting'
   routine '^\[richos\] loro corpus: in-repo layout at .+ - this is .+ own' \
     'whose record an in-repo corpus is; a statement about ownership, not resolution'
@@ -444,7 +444,7 @@ declare_rules() {
     'which kind of window this is and whether the splash applies; a fact about the launch'
   # THE SECOND-REVIEW WATCHER (main.rs `review_watch::ensure`, d74d92732): printed only when it
   # started at launch. Its "could not start" form stays UNACCOUNTED on purpose.
-  routine '^\[richos\] second review: the app'"'"'s review-watch runs as pid [1-9][0-9]*$' \
+  routine '^\[richos\] second review: monitoring started \(process [1-9][0-9]*\)$' \
     'the review watcher is running, and its pid; the could-not-start form stays unaccounted'
 
   # -- the declared gaps ------------------------------------------------------------------
@@ -470,7 +470,7 @@ declare_rules() {
   # genuinely has neither pointer. Inventing a fixture-only richos-evidence.mjs would make
   # the harness green on a premise the real product does not meet.
   gap 'RICHOS_EVIDENCE_BIN' \
-    '^\[richos\] loro Tier E: no evidence lookup for this install' \
+    '^\[richos\] file lookup: not configured;' \
     'CliEvidenceLookup::from_env (evidence.rs:114) needs RICHOS_EVIDENCE_BIN, or
        RICHOS_SERVICE_BIN with richos-evidence.mjs beside it, and nothing installs either on
        a real machine today — this is the exact same open premise as the RICHOS_SERVICE_BIN
@@ -641,25 +641,19 @@ declare_rules() {
 
   # --- and what the CEO is told when nothing resolved, in both of its shapes --------------
   refused 'no company registered' \
-    '[richos] no company is registered on this install yet — RichOS will ask in the window and write the answer to /m/entities.json.' \
-    'Printed with its operator line below it. Both are the visible end of a boot that
-       resolved no entity, which the `company` proof already fails on; accounting for them
+    '[richos] no company is registered on this install yet — RichOS will ask in the window and save the company details to /m/entities.json.' \
+    'The visible end of a boot that
+       resolved no entity, which the `company` proof already fails on; accounting for it
        would leave that proof as the only thing standing between this check and a launch
        that can file nothing.'
 
-  refused 'no company registered (operator)' \
-    '[richos] operator: the file'"'"'s format and an example are in docs/entity-registry.md. RICHOS_ENTITY overrides once a company exists.' \
-    'The second line of the same eprintln!. A separate line in the log is a separate line to
-       account for.'
 
   refused 'no company resolved' \
-    '[richos] no company resolved — RichOS will ask in the window and remember the answer.' \
+    '[richos] choose a company in the window. Available companies: acme.' \
     'The other shape of the same condition: companies ARE registered and none was chosen.
        This is what B7 produces.'
 
-  refused 'no company resolved (operator)' \
-    '[richos] operator: RICHOS_ENTITY (one of acme) still overrides, as does launching from that entity'"'"'s repository root.' \
-    'The second line of that one.'
+
 
   # --- first-run setup, on every path that is not "nothing missing" -----------------------
   refused 'first-run setup missing' \
@@ -903,9 +897,9 @@ healthy_log() {
 [richos] central folder: /m/myrichos (present)
 [richos] company: northwind (via the saved choice)
 [richos] onboarding northwind: described — the company layer is in the priming turn
-[richos] loro Tier C: compiling from /m/corpus (via the corpus pointer in Application Support), node /opt/homebrew/bin/node
-[richos] loro correction desk: writing to /m/corpus via /m/loro-tools/bin/loro-write.mjs (the same install the compiler above resolved)
-[richos] loro Tier E: no evidence lookup for this install — a turn memory cannot answer will say so and stop there, rather than looking in the CEO's files. RICHOS_EVIDENCE_BIN names the entry point.
+[richos] memory: reading from /m/corpus (via the corpus pointer in Application Support), runtime /opt/homebrew/bin/node
+[richos] memory: saving corrections to /m/corpus via /m/loro-tools/bin/loro-write.mjs
+[richos] file lookup: not configured; questions that saved memory cannot answer will say so.
 [richos] engine directory: /m/.claude/richos-engine (via engine install pointer, engine 1.2.0 as this build pins)
 [richos] compute connection: starts with the first cancellable request over /m/.local/bin/claude
 [richos] first-run setup: nothing missing.

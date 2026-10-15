@@ -391,22 +391,11 @@ fn tool_search_from_init(init: &Value) -> InitFact {
 fn tool_search_notice(residency: Option<&str>) -> String {
     match residency {
         Some(name) => format!(
-            "[richos] THIS SESSION DEFERS ITS TOOLS. `{TOOL_SEARCH_TOOL}` is in the child's own \
-             init inventory, so the register has to be DISCOVERED before it can be called and \
-             the CEO waits a round trip for that (measured: 7.5 s of one 23 s turn). \
-             `{name}={TOOL_SEARCH_OFF}` is set for this lease and is no longer having that \
-             effect — check `claude --version` against the last release gate."
+            "[richos] conversation tools: discovery is unexpectedly required despite \
+             `{name}={TOOL_SEARCH_OFF}`. This adds a request before a tool can run. \
+             Check the installed provider version. Discovery tool: {TOOL_SEARCH_TOOL}."
         ),
-        // **It does not name the variable, deliberately.** Whoever is chasing the alarm above
-        // greps `app.log` for that name, and a line containing it that means the opposite is
-        // how candidate .10's audit came to blame a working binary. `native::tool_residency_env`
-        // is the thing to read, and it is named instead.
-        None => format!(
-            "[richos] this lease defers its tools, and it was spawned that way on purpose: \
-             `native::tool_residency_env` gives it no tool-residency variable at all, so \
-             `{TOOL_SEARCH_TOOL}` in its init inventory is expected and costs nobody a first \
-             word. This is NOT the front desk's lease and says nothing about the front desk's."
-        ),
+        None => "[richos] background work tools: discovery enabled as expected.".to_string(),
     }
 }
 
@@ -2457,10 +2446,7 @@ impl NativeClient {
                         if !st.turns_named_by_the_child {
                             st.turns_named_by_the_child = true;
                             eprintln!(
-                                "[richos] this connection NAMES the turns it is sent \
-                                 (`command_lifecycle` for our own `command_uuid`), so a \
-                                 prompt is correlated with its own turn rather than with \
-                                 whichever `result` arrives next."
+                                "[richos] conversation connection: replies are matched to their requests."
                             );
                         }
                         drop(st);
@@ -6386,15 +6372,15 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
             "a lease that sets no variable cannot have lost an effect it never had: {work}");
         assert!(!work.contains("the CEO waits"),
             "nobody is sitting in front of a work lease's first token: {work}");
-        assert!(work.contains("on purpose") && work.contains("expected"),
+        assert!(work.contains("background work") && work.contains("expected"),
             "the true reading has to be legible to whoever finds this line: {work}");
 
         // THE POSITIVE CONTROL. The real alarm is unchanged and still able to be loud, which
         // is what stops this fix from being "delete the warning".
         let desk = tool_search_notice(Some(TOOL_SEARCH_ENV));
-        assert!(desk.contains("THIS SESSION DEFERS ITS TOOLS"), "{desk}");
+        assert!(desk.contains("discovery is unexpectedly required"), "{desk}");
         assert!(desk.contains("ENABLE_TOOL_SEARCH=false"), "{desk}");
-        assert!(desk.contains("no longer having that effect"), "{desk}");
+        assert!(desk.contains("Check the installed provider version"), "{desk}");
         assert!(desk.contains(TOOL_SEARCH_TOOL), "{desk}");
 
         // The two messages cannot be confused for one another by whoever greps for the alarm.
