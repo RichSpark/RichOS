@@ -677,3 +677,58 @@ fn a_jobs_result_is_written_into_the_conversation_once_and_is_there_after_a_rela
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_dir_all(&state).unwrap();
 }
+
+/// **"On it!" the instant he says go on the team proposal** (nightly 57's product hunt, finding
+/// 3). After the interview's last answer Rich proposes the team and ends "Say go and I'll get
+/// them hired now."; he said "Go." and "On it!" appeared 14 seconds later, because a full model
+/// turn (behind a re-prime) wrote the same two words the register always hands back. Now the
+/// app says them as the turn starts, before the conversation's model is asked anything, and the
+/// register's own copy is not said a second time. A "Go." that answers anything else is the
+/// model's to answer, as before.
+#[test]
+fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
+    struct Seen {
+        prompts: Arc<Mutex<Vec<String>>>,
+        chunks: Arc<Mutex<Vec<(String, String, usize)>>>,
+    }
+    impl TurnObserver for Seen {
+        fn on_event(&self, event: &StreamEvent) {
+            if let StreamEvent::Chunk { turn_id, text_delta, .. } = event {
+                let asked = self.prompts.lock().unwrap().len();
+                self.chunks.lock().unwrap().push((turn_id.clone(), text_delta.clone(), asked));
+            }
+        }
+    }
+    let skill = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/bootstrap-interview/SKILL.md"),
+    )
+    .unwrap();
+    assert!(skill.contains("Say go and I'll get them hired now."), "the interview no longer ends its team proposal this way");
+
+    let (path, ledger) = tmp_ledger("go-on-it");
+    let mut spine = support::spine(ledger);
+    spine.create_thread("Onboarding", &femcboost()).unwrap();
+    let proposal = "But based on what you told me here, I think we also need to add the following AI teammates \
+                    to my team:\n\n- Will (Marketing Director)\n- Beth (Bookkeeper)\n\nAnd we can expand/change this \
+                    team any time as needed. Say go and I'll get them hired now.";
+    // The second reply is the register's receipt, as the real lease streams it; the third is
+    // the model's own answer to a "Go." that follows something other than the proposal.
+    let mock = MockCognition::new("sess-1", vec![proposal, "On it!", "Go where?"]);
+    let prompts = mock.prompts.clone();
+    let chunks = Arc::new(Mutex::new(Vec::new()));
+    spine.set_observer(Box::new(Seen { prompts: prompts.clone(), chunks: chunks.clone() }));
+    spine.attach_lease(Box::new(mock));
+
+    spine.submit_prompt("Pricing and any spend over $1,000 is my call.", Source::Text).unwrap();
+    let go = spine.submit_prompt("Go.", Source::Text).unwrap();
+    let first = chunks.lock().unwrap().iter().find(|(turn, _, _)| *turn == go).cloned();
+    let (_, words, asked) = first.expect("nothing was said on his go");
+    assert_eq!(words, "On it!");
+    assert_eq!(asked, 1, "\"On it!\" waited for the model to be asked his go");
+    assert_eq!(spine.ledger().turn(&go).unwrap().assistant_text, "On it!", "said once, not twice");
+    assert_eq!(prompts.lock().unwrap().last().map(String::as_str), Some("Go."), "the model still gets his go and hires");
+
+    let again = spine.submit_prompt("Go.", Source::Text).unwrap();
+    assert_eq!(spine.ledger().turn(&again).unwrap().assistant_text, "Go where?", "a go on anything else is the model's");
+    std::fs::remove_file(&path).unwrap();
+}
