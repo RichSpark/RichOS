@@ -243,10 +243,25 @@ async function main() {
       () => window.__calls.filter((c) => c.cmd === "send_message").map((c) => c.args.text)
     );
     assertEqual(sent.length, 1, "one press, one message");
-    assert(/twenty minutes/.test(sent[0]), "and it is the acceptance, in his voice: " + sent[0]);
-    // IT LANDS IN THE RECORD AS SOMETHING HE SAID, because he did say it — he pressed a
-    // button whose label is exactly this.
-    await page.waitForFunction((t) => document.getElementById("messages").innerText.includes(t), sent[0]);
+    assert(/twenty minutes/.test(sent[0]), "and it is the acceptance Rich receives: " + sent[0]);
+    // NOTHING IS POSTED IN HIS NAME (product hunt 2026-10-15, finding 14). He pressed "Start
+    // the questions"; he never typed this sentence, so it is sent as a pressed button and
+    // never drawn as his message — while Rich's answer to it is.
+    assertEqual(
+      await page.evaluate(() => window.__calls.find((c) => c.cmd === "send_message").args.pressed),
+      true,
+      "the send says it is a pressed button, so the record never shows it as his"
+    );
+    await page.waitForFunction(() => document.querySelectorAll("#messages .tl-prose").length > 0);
+    assertEqual(
+      await page.evaluate(() => document.querySelectorAll("#messages .tl-user").length),
+      0,
+      "no message of his is on screen"
+    );
+    assert(
+      !(await page.evaluate((t) => document.getElementById("messages").innerText.includes(t), sent[0])),
+      "the sentence he never typed is not in the conversation"
+    );
     assert(await page.isHidden("#first-run"), "and the notice steps out of the way");
     assertEqual(await page.inputValue("#input"), "", "leaving no draft behind in the composer");
     // NO SECOND DOOR. `main.js` may reach the interview through the composer and nowhere

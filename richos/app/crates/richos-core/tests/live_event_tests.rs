@@ -1349,3 +1349,42 @@ fn a_delegation_on_an_internal_turn_is_constructed_and_then_refused() {
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&stream);
 }
+
+#[test]
+fn a_pressed_button_s_words_reach_rich_and_are_never_shown_as_his() {
+    // Product hunt 2026-10-15, finding 14: pressing "Start the questions" posted "Let's do the
+    // twenty minutes of questions about my business." as his own message, though he never typed
+    // it. Rich still receives the sentence; no surface (the live row, the timeline the window
+    // and the phone read, the message list) shows it in his name.
+    let (path, ledger) = tmp_ledger("pressed");
+    let mut spine = support::spine(ledger);
+    let thread = spine.create_thread("Onboarding", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(ScriptedLease::new(
+        "sess-1",
+        vec![Beat::Text("Great, let us do it. What does the company do?")],
+    )));
+    let live = RecordingLive::default();
+    spine.set_live_observer(Box::new(live.clone()));
+    let words = "Let's do the twenty minutes of questions about my business.";
+    let turn_id = spine.submit_pressed_prompt_to(&thread, words).unwrap();
+
+    assert_eq!(spine.ledger().turn(&turn_id).unwrap().user_text, words, "Rich received the sentence");
+    assert!(live.of("rich://ceo-message").is_empty(), "no live row in his name: {:?}", live.names());
+    let ceo = spine.timeline(&thread).unwrap().view(ViewMode::Ceo);
+    assert!(
+        !ceo.items().iter().any(|i| matches!(i, richos_core::timeline::TimelineItem::UserMessage { .. })),
+        "no message of his in the conversation"
+    );
+    assert!(
+        ceo.items().iter().any(|i| matches!(i, richos_core::timeline::TimelineItem::RichMessage { .. })),
+        "and Rich's answer is there"
+    );
+    let messages = spine.messages(&thread).unwrap();
+    assert!(messages.iter().all(|m| m.role != "user"), "no line of his in the message list");
+
+    // The control: the same sentence TYPED by him is his row.
+    spine.submit_prompt_to(&thread, words, Source::Text).unwrap();
+    assert_eq!(live.of("rich://ceo-message").len(), 1, "his own typed words are his row");
+
+    std::fs::remove_file(&path).expect("the test ledger is removable");
+}

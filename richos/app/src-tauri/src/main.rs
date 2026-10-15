@@ -1508,7 +1508,13 @@ fn send_message(
     phone: State<std::sync::Arc<phone::PhoneRuntime>>,
     text: String,
     thread_id: String,
+    // **The app is sending these words because he pressed a button** ("Start the questions"),
+    // and they are never shown as his (product hunt 2026-10-15, finding 14). They take the
+    // blocking road below, never the intake log, whose whole purpose is HIS words reaching
+    // his phone before the spine is free.
+    pressed: Option<bool>,
 ) -> Result<Vec<Message>, String> {
+    let pressed = pressed == Some(true);
     // ===================================================================================
     // HOW LONG HE WAITED BEFORE HIS TURN EVEN STARTED — and why this line exists
     // ===================================================================================
@@ -1576,7 +1582,7 @@ fn send_message(
     //
     // A write that FAILS is not a refusal of his message either: it falls through to the same
     // old road, and the only thing lost is the wait.
-    let his_words_are_on_the_log = if state.control.lease_session().is_some() {
+    let his_words_are_on_the_log = if !pressed && state.control.lease_session().is_some() {
         match state.control.submit_from_desk(&thread_id, state.entity.lock().unwrap().clone(), &text)
         {
             Ok(record) => {
@@ -1694,6 +1700,10 @@ fn send_message(
                 e.to_string(),
             )
         })?;
+    } else if pressed {
+        spine
+            .submit_pressed_prompt_to(&thread_id, &text)
+            .map_err(|e| refused_send("the spine refused the prompt", e.to_string()))?;
     } else {
         spine
             .submit_prompt_to(&thread_id, &text, Source::Text)

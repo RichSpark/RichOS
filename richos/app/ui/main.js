@@ -2095,7 +2095,14 @@ function attachingLine(files) {
   return (n === 1 ? "Attaching 1 file: " : "Attaching " + n + " files: ") + files.names.join(", ");
 }
 
-async function send(explicitText) {
+///
+/// `opts.pressed` — the label of a button he pressed, when the app is sending these words
+/// for him ("Start the questions"). They are NOT his words, so nothing shows them in his name
+/// (product hunt 2026-10-15, finding 14): no bubble, no steering row, never put back in his
+/// box, and `send_message` records them `pressed`. Returns `false` when such a send was
+/// refused, so the button's owner can offer it again.
+async function send(explicitText, opts) {
+  const pressed = opts && opts.pressed ? String(opts.pressed) : null;
   // AUDIT-7 ROW 10, AND IT WAS A SILENT DROP, NOT A REFUSAL. `mainView === "opening"` is the
   // window between a thread being asked for and its timeline being on screen — six bridge
   // round trips on a cold boot. Through that whole window the composer looks completely idle:
@@ -2147,7 +2154,9 @@ async function send(explicitText) {
   // — an honest refusal, because the spine's mutex is held for the whole turn and there was
   // nowhere durable to put the words. There is now (`steering.rs`), so they go there.
   // Entity drafts retain the previous timeline until first send. Only steer from its conversation.
-  if (mainView === "conversation" && anyLiveTurn()) {
+  // A pressed button's words are never a steering line: they would be drawn as his. They
+  // wait for the turn in front of them like any other prompt.
+  if (mainView === "conversation" && anyLiveTurn() && !pressed) {
     if (files) {
       const folded = await foldAttachments(text, activeThreadId, files);
       if (folded === null) return;
@@ -2231,12 +2240,14 @@ async function send(explicitText) {
     showConversationView(); // clears `draftEntityId`; `entityId` is captured above
     // The throwaway bubble names the files it is carrying; the real one, below, carries the
     // exact words Rich receives once the thread exists and the files are in its folder.
-    const optimisticId = window.RichTimeline.addPendingUserMessage(
-      timelineModel,
-      files ? [text, attachingLine(files)].filter(Boolean).join("\n\n") : text,
-      Date.now()
-    );
-    pendingSends.set(optimisticId, { model: timelineModel, threadId: null, turnId: null, startedAt: Date.now() });
+    const optimisticId = pressed
+      ? "pressed:" + Date.now()
+      : window.RichTimeline.addPendingUserMessage(
+          timelineModel,
+          files ? [text, attachingLine(files)].filter(Boolean).join("\n\n") : text,
+          Date.now()
+        );
+    pendingSends.set(optimisticId, { model: timelineModel, threadId: null, turnId: null, startedAt: Date.now(), pressed: !!pressed });
     startOrStopWaitTimer();
     renderWaitBand();
     followBottom = true;
@@ -2267,6 +2278,13 @@ async function send(explicitText) {
       // "`cognition io: broken pipe` is implementation machinery"). The words were already
       // put back in the box, which was the right half; the sentence never said so, and never
       // named the control that sends them.
+      if (pressed) {
+        // Not his words, so they are not put in his box (finding 14); the button is offered again.
+        composerBlockedEl.textContent =
+          "I couldn't start that thread just now. Press " + pressed + " to try again.";
+        composerBlockedEl.hidden = false;
+        return false;
+      }
       composerBlockedEl.textContent =
         "I couldn't start that thread just now. Your words are still in the box below." +
         " Press Send to try again.";
@@ -2302,7 +2320,7 @@ async function send(explicitText) {
     // AND HIS SENTENCE TRAVELS WITH THE OPEN. See `openThread`'s own note at the line that
     // reads `opts.pendingUser` — the model this bubble lives in is about to be thrown away,
     // and without this the screen holds the first-run greeting until this call returns.
-    await openThread(newId, { pendingUser: { text, at: Date.now() } });
+    await openThread(newId, pressed ? {} : { pendingUser: { text, at: Date.now() } });
     pendingSends.delete(optimisticId);
   }
 
@@ -2322,12 +2340,14 @@ async function send(explicitText) {
   // second lost) and consuming it (the outer send adding a second bubble for a sentence already
   // on screen) are wrong. Not matching is not the same as not being wanted.
   const carriedItem = carriedPendingUserId !== null ? sentModel.items.get(carriedPendingUserId) : null;
-  const adopt = carriedItem && carriedItem.pending && carriedItem.text === text;
+  const adopt = !pressed && carriedItem && carriedItem.pending && carriedItem.text === text;
   const pendingId = adopt
     ? carriedPendingUserId
-    : window.RichTimeline.addPendingUserMessage(sentModel, text, Date.now());
+    : pressed
+      ? "pressed:" + Date.now()
+      : window.RichTimeline.addPendingUserMessage(sentModel, text, Date.now());
   if (adopt) carriedPendingUserId = null;
-  const request = { model: sentModel, threadId: sentThreadId, turnId: null, startedAt: Date.now() };
+  const request = { model: sentModel, threadId: sentThreadId, turnId: null, startedAt: Date.now(), pressed: !!pressed };
   pendingSends.set(pendingId, request);
   startOrStopWaitTimer();
   renderWaitBand();
@@ -2335,7 +2355,10 @@ async function send(explicitText) {
   scheduleRender();
 
   try {
-    await Bridge.invoke("send_message", { text, threadId: sentThreadId });
+    await Bridge.invoke(
+      "send_message",
+      pressed ? { text, threadId: sentThreadId, pressed: true } : { text, threadId: sentThreadId }
+    );
   } catch (e) {
     // A terminal event already explains this attempt. If the command rejected without
     // one, end only this invocation's local live state. A queued turn is not proof that
@@ -2355,6 +2378,22 @@ async function send(explicitText) {
       return;
     }
     window.RichTimeline.dropPendingUserMessage(sentModel, pendingId);
+    if (pressed) {
+      // Not his words, so they never go into his box (finding 14). What refused is said, and
+      // the button he pressed is offered again by its owner (`send` returns false).
+      if (timelineModel === sentModel) {
+        const reason = typeof e === "string" && e.trim() ? e.trim().replace(/\s*$/, "") : null;
+        window.RichTimeline.addLocalNotice(
+          timelineModel,
+          (reason || "I couldn't get that to my desk just now, and nothing is running.") +
+            " Press " + pressed + " when you want me to try again.",
+          Date.now()
+        );
+        syncComposerMode();
+        scheduleRender();
+      }
+      return false;
+    }
     restoreUnsentText(text, sentThreadId);
     if (timelineModel !== sentModel) return;
 
@@ -3496,6 +3535,12 @@ Bridge.listen("rich://turn-status", ({ payload }) => {
   const request = pendingSends.get(pendingId);
   if (request && (payload.status === "queued" || payload.status === "working") &&
       !timelineModel.pendingUser.includes(pendingId)) request.turnId = payload.turnId;
+  // A pressed button's send has no bubble to re-key (finding 14), so its turn is the next one
+  // this thread queues.
+  if (!request && payload.status === "queued" && !payload.supersedesTurnId) {
+    const pressed = [...pendingSends.values()].find((r) => r.pressed && !r.turnId && r.model === timelineModel);
+    if (pressed) pressed.turnId = payload.turnId;
+  }
   if (payload.supersedesTurnId) {
     for (const pending of pendingSends.values()) {
       if (pending.turnId === payload.supersedesTurnId) pending.turnId = payload.turnId;
@@ -6771,12 +6816,18 @@ async function startFirstRunInterview() {
   firstRunButtons(true);
   el("first-run").hidden = true;
   inputEl.focus();
+  // Sent as a PRESSED button, not as his message: he never typed these words, so nothing posts
+  // them in his name (product hunt 2026-10-15, finding 14).
+  const label = el("first-run-start").textContent.trim() || "Start the questions";
+  let sent;
   try {
-    await send(view.state === "partial" ? FIRST_RUN_RESUME_MESSAGE : FIRST_RUN_ACCEPT_MESSAGE);
+    sent = await send(view.state === "partial" ? FIRST_RUN_RESUME_MESSAGE : FIRST_RUN_ACCEPT_MESSAGE, { pressed: label });
   } finally {
     firstRunActions.delete(view.entityId);
     if (action.context === firstRunContext()) firstRunButtons(false);
   }
+  // Refused: the offer comes back, so the button the notice names is there to press.
+  if (sent === false && action.context === firstRunContext()) await renderFirstRunNotice();
 }
 
 /// HE SAYS NOT NOW. The write happens FIRST and the panel only changes if it succeeded.
