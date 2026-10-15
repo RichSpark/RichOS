@@ -1253,7 +1253,7 @@ cargo test -p richos-core                       # 2035 tests + 5 doc-tests (2031
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 412 tests (411 direct, 1 ignored; 4 live-device tests also ignored without a device)
+cargo test -p richos-voice                      # 413 tests (412 direct, 1 ignored; 4 live-device tests also ignored without a device)
 #     The 327 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test

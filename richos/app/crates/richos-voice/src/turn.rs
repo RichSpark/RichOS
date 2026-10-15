@@ -291,7 +291,9 @@ pub fn may_sound(his_floor: bool, his_onset: bool) -> bool {
 /// floor; this decides what may be spoken now.
 #[derive(Debug)]
 pub struct AnswerGate<T> {
-    held: VecDeque<T>,
+    /// Held sentences in order, each with whether it is an announcement (a job's result, which
+    /// belongs to no answer) rather than a sentence of the answer.
+    held: VecDeque<(T, bool)>,
     /// The answer in progress was superseded or interrupted: nothing more of it is spoken.
     muted: bool,
 }
@@ -314,7 +316,7 @@ impl<T> AnswerGate<T> {
         if self.muted {
             return None;
         }
-        self.offer_announcement(sentence, his_floor)
+        self.hold_or_pass(sentence, his_floor, false)
     }
 
     /// A sentence that belongs to no answer: a job's result, said on its own ("Will is on your
@@ -322,10 +324,15 @@ impl<T> AnswerGate<T> {
     /// of it, so it is spoken even after he stopped Rich and no turn has started since (review
     /// rv-20261015T125238Z-37f970a3, finding 1). Everything else is [`AnswerGate::offer`]: held
     /// while he has the floor, and behind sentences already held, so it never talks over him and
-    /// never jumps ahead of Rich.
+    /// never jumps ahead of Rich. Once held it outlives the answer it waited behind: see
+    /// [`AnswerGate::supersede`].
     pub fn offer_announcement(&mut self, sentence: T, his_floor: bool) -> Option<T> {
+        self.hold_or_pass(sentence, his_floor, true)
+    }
+
+    fn hold_or_pass(&mut self, sentence: T, his_floor: bool, announcement: bool) -> Option<T> {
         if his_floor || !self.held.is_empty() {
-            self.held.push_back(sentence);
+            self.held.push_back((sentence, announcement));
             return None;
         }
         Some(sentence)
@@ -333,19 +340,29 @@ impl<T> AnswerGate<T> {
 
     /// The held sentences, in order, once he has given the floor back. Nothing while he has it.
     pub fn release(&mut self, his_floor: bool) -> Vec<T> {
+        self.release_marked(his_floor).into_iter().map(|(sentence, _)| sentence).collect()
+    }
+
+    /// [`AnswerGate::release`], each sentence with whether it is an announcement. The caller
+    /// needs that because an announcement may have been held across a superseded answer, whose
+    /// generation is over, and it is still to be said.
+    pub fn release_marked(&mut self, his_floor: bool) -> Vec<(T, bool)> {
         if his_floor {
             return Vec::new();
         }
         self.held.drain(..).collect()
     }
 
-    /// He went on, or took the floor back, before this answer was said: drop what is held and
-    /// speak nothing more of it. Returns how many held sentences were dropped.
+    /// He went on, or took the floor back, before this answer was said: drop the answer's held
+    /// sentences and speak nothing more of it. Returns how many were dropped. A held
+    /// announcement is not part of the answer and stays held, in order, until the floor is free
+    /// (review rv-20261015T131103Z-6b6f899d, finding 1: his question while a hiring finished
+    /// was recognized, superseded the answer, and the "joined your team" notice went with it).
     pub fn supersede(&mut self) -> usize {
         self.muted = true;
-        let dropped = self.held.len();
-        self.held.clear();
-        dropped
+        let before = self.held.len();
+        self.held.retain(|(_, announcement)| *announcement);
+        before - self.held.len()
     }
 
     /// A new turn started: its answer is his to hear.
@@ -355,6 +372,12 @@ impl<T> AnswerGate<T> {
 
     pub fn held(&self) -> usize {
         self.held.len()
+    }
+
+    /// Held sentences of the ANSWER, announcements not counted: what his new words would leave
+    /// unsaid.
+    pub fn held_answer(&self) -> usize {
+        self.held.iter().filter(|(_, announcement)| !announcement).count()
     }
 
     pub fn muted(&self) -> bool {

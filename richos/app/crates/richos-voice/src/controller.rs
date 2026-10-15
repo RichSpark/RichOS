@@ -2865,7 +2865,7 @@ impl Floor {
 
     fn release(&mut self, shared: &Shared, his_floor: bool) {
         let ready = match self.gate.lock() {
-            Ok(mut gate) => gate.release(his_floor),
+            Ok(mut gate) => gate.release_marked(his_floor),
             Err(_) => Vec::new(),
         };
         if ready.is_empty() {
@@ -2876,11 +2876,37 @@ impl Floor {
             wall_clock_utc(),
             ready.len()
         );
+        // An answer's sentence from a generation that is over is not said. An announcement held
+        // across that answer belongs to no generation: it is said now, in the current one.
         let current = shared.generation.load(Ordering::Relaxed);
-        for msg in ready.into_iter().filter(|m| m.generation == current) {
+        for (mut msg, announcement) in ready {
+            if announcement {
+                msg.generation = current;
+            } else if msg.generation != current {
+                continue;
+            }
             dispatch(shared, &self.speak_tx, msg);
         }
         self.held_logged = 0;
+    }
+
+    /// **His words just started a new turn** (step 1b of [`supervise`]). An answer still unsaid
+    /// (the turn is running, sentences of Rich's answer are held for him, or one is with the
+    /// speaker) was to a thought he had not finished: its generation ends and it is superseded.
+    /// A held announcement is not an answer: it neither counts here nor is dropped by the
+    /// supersede, and is said once the floor is free (review rv-20261015T131103Z-6b6f899d,
+    /// finding 1). Returns whether an answer was outstanding; the caller cuts what is already
+    /// queued at the device.
+    fn his_new_turn(&mut self, shared: &Shared, turn_active: bool) -> bool {
+        let held_answer = self.gate.lock().map(|g| g.held_answer()).unwrap_or(0);
+        let outstanding = turn_active
+            || held_answer > 0
+            || shared.pending_speech.load(Ordering::Relaxed) > 0;
+        if outstanding {
+            shared.generation.fetch_add(1, Ordering::Relaxed);
+            self.supersede("he went on talking before Rich had said it");
+        }
+        outstanding
     }
 
     fn supersede(&mut self, why: &str) {
@@ -2888,7 +2914,8 @@ impl Floor {
             Ok(mut g) => (g.muted(), g.supersede()),
             Err(_) => (true, 0),
         };
-        self.held_logged = 0;
+        // Announcements still held stay counted, so HELD is not logged again for them.
+        self.held_logged = self.held();
         // Said once per answer: a tap-to-stop reaches here twice (the button, then the frame it
         // causes), and a second line for the same answer says nothing new.
         if !was_muted || dropped > 0 {
@@ -3157,13 +3184,9 @@ fn supervise(
             // Outstanding: the turn is still running, sentences are held for him in the gate, or a
             // sentence is still with the speaker (in synthesis, or synthesized and waiting for him).
             let turn_active = machine.lock().map(|m| m.turn_active()).unwrap_or(false);
-            let outstanding = turn_active
-                || floor.held() > 0
-                || shared.pending_speech.load(Ordering::Relaxed) > 0;
+            let outstanding = floor.his_new_turn(&shared, turn_active);
             if outstanding {
-                shared.generation.fetch_add(1, Ordering::Relaxed);
                 let cut = playout.stop_now();
-                floor.supersede("he went on talking before Rich had said it");
                 if cut > 0 {
                     eprintln!(
                         "[richos-voice] {:.3} s of the answer already queued was cut",
@@ -4027,6 +4050,107 @@ mod tests {
                     secs(word_frames)
                 );
             }
+        }
+    }
+
+    /// INVARIANT — review rv-20261015T131103Z-6b6f899d, finding 1 (fixture
+    /// `work_result_recognition.rs`). A job's result ("Will is on your team now") that arrives
+    /// while he is speaking waits for him, and it is NOT lost when his words are recognized and
+    /// start a new turn: it is said once he has finished, never while he has the floor, and never
+    /// ahead of a sentence of Rich's. Driven through the supervisor's own tick: the recognizer's
+    /// words reach `TurnDesk::collect`, then `Floor::his_new_turn`, then the floor's release.
+    /// Two cases: the review's (he had stopped an earlier reply; no turn running), and a turn of
+    /// Rich's running with a sentence of its answer held ahead of the notice.
+    #[test]
+    fn a_result_held_while_he_speaks_is_said_after_his_words_start_a_new_turn() {
+        let joined = "Will (Marketing Director) is on your team now, ready to take work.";
+        for turn_active in [false, true] {
+            let shared = Shared {
+                level: AtomicU32::new(0),
+                speaking: AtomicBool::new(false),
+                his_floor: AtomicBool::new(false),
+                answer_sounded: AtomicBool::new(false),
+                his_onset: AtomicBool::new(false),
+                finish_capture: AtomicBool::new(false),
+                capture_finished: AtomicBool::new(false),
+                drained_after_finish: AtomicBool::new(false),
+                pending_speech: AtomicUsize::new(0),
+                generation: AtomicU64::new(0),
+                no_audio: AtomicBool::new(false),
+                running: AtomicBool::new(true),
+            };
+            let gate: Arc<Mutex<AnswerGate<SpeakMsg>>> = Arc::new(Mutex::new(AnswerGate::new()));
+            let (speak_tx, speak_rx) = channel::<SpeakMsg>();
+            let mut floor = Floor { gate: gate.clone(), speak_tx, held_logged: 0 };
+            let (words_tx, words_rx) = channel();
+            let (submit_tx, submit_rx) = channel();
+            let mut desk = TurnDesk {
+                assembler: TurnAssembler::new(),
+                words_rx,
+                submit_tx,
+                observer: Arc::new(Recorder::default()),
+                last_end: None,
+                sent: 0,
+                unanswered: None,
+                withdrawn: Default::default(),
+                turns_started: Default::default(),
+                submits_done: Default::default(),
+                stop: Default::default(),
+                floor: Default::default(),
+            };
+            // One supervisor tick, steps 1b and 1c, as `supervise` runs them.
+            let tick = |desk: &mut TurnDesk, floor: &mut Floor| {
+                if desk.collect() {
+                    let outstanding = floor.his_new_turn(&shared, turn_active);
+                    desk.continue_thought(outstanding, turn_active);
+                }
+                desk.release();
+                let his_floor = desk.publish_floor();
+                floor.publish(&shared, his_floor);
+                floor.release(&shared, his_floor);
+            };
+            // `send_to_speaker`: the generation at the send, the floor as published.
+            let offer = |text: &str, announcement: bool| {
+                let msg = SpeakMsg { generation: shared.generation.load(Ordering::Relaxed), text: text.into() };
+                let his = shared.his_floor.load(Ordering::Relaxed);
+                let mut g = gate.lock().unwrap();
+                let now = if announcement { g.offer_announcement(msg, his) } else { g.offer(msg, his) };
+                assert!(now.is_none(), "turn_active = {turn_active}: said over him");
+            };
+
+            if !turn_active {
+                gate.lock().unwrap().supersede(); // He tapped Stop on an earlier reply.
+            }
+            desk.assembler.his_utterance_started();
+            tick(&mut desk, &mut floor);
+            if turn_active {
+                offer("Here is the plan for Acme.", false);
+            }
+            offer(joined, true);
+            tick(&mut desk, &mut floor);
+            assert!(speak_rx.try_recv().is_err(), "turn_active = {turn_active}: said while he has the floor");
+
+            // His words are recognized and start a new turn.
+            desk.assembler.utterance_admitted(1200);
+            words_tx.send(Some(("What should we do next?".to_string(), false))).unwrap();
+            tick(&mut desk, &mut floor);
+            assert!(speak_rx.try_recv().is_err(), "turn_active = {turn_active}: said while he has the floor");
+
+            // He finishes: his turn goes to Rich, and the floor is free.
+            desk.assembler.quiet();
+            tick(&mut desk, &mut floor);
+            assert_eq!(submit_rx.try_recv().unwrap().0, "What should we do next?");
+            gate.lock().unwrap().next_turn(); // `turn_started`
+            tick(&mut desk, &mut floor);
+
+            let current = shared.generation.load(Ordering::Relaxed);
+            let said: Vec<(String, bool)> =
+                speak_rx.try_iter().map(|m| (m.text, m.generation == current)).collect();
+            assert_eq!(
+                said,
+                vec![(joined.to_string(), true)],
+                "turn_active = {turn_active}: the notice must be said once, in the current generation, and the superseded answer never"
+            );
         }
     }
 
