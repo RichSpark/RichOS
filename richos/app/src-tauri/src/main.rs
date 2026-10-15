@@ -4370,7 +4370,8 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "detail": row.detail,
                 // **THE DETAIL TELLS HIM WHAT TO DO** (sign in, a helper he may stop, an answer
                 // he owes), so Under the hood shows it without Technical view (hunt 57, finding 11).
-                "forYou": richos_core::work_host::tells_him_what_to_do(&row.detail),
+                // So does Rich's waiting sentence while a teammate works (review of 3b91f1223).
+                "forYou": richos_core::work_host::for_him(row),
                 // **CLOSED BY AN ANSWER ON HIS TIMELINE, NOT BY WORK THAT FINISHED** — a question
                 // of his, or a task the back end did itself and reported in its own words
                 // (esc-20260927T093052Z-85f3303f). The pane says "it's in your conversation"
