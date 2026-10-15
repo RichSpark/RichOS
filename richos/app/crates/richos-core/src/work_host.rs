@@ -3788,13 +3788,12 @@ impl WorkHost {
     /// **A teammate is on his team the moment that one is saved, and he hears it then** (nightly
     /// 57's hunt, finding 4: two teammates took 16 minutes with nothing but "On it!" on screen,
     /// and Will, a ready-made teammate, waited for Beth's research). Read after every back-end
-    /// turn of a hiring that still has somebody unsaved; a hiring that is finished is told by
-    /// its settle, with whoever is left ([`Self::joined_untold`]).
+    /// turn of a hiring, the turn that saves the last one included: that one is told here too,
+    /// before the team refresh's handoff, successor and next model turn (handover review
+    /// rv-20261015T113206Z-3b0b1dc0-7844). The settle tells only whoever is left
+    /// ([`Self::joined_untold`]).
     fn tell_who_joined_so_far(self: &Arc<Self>, record: &Assignment) {
-        let Some((saved, unsaved)) = self.hiring_roll(record) else { return };
-        if unsaved.is_empty() {
-            return;
-        }
+        let Some((saved, _)) = self.hiring_roll(record) else { return };
         if let Some(said) = joined_the_team(&self.joined_untold(record, saved)) {
             self.raise(record, NoticeKind::Answer, &said);
         }
@@ -8618,6 +8617,71 @@ mod tests {
             "Will (Marketing Director) is on your team now, ready to take work.",
             "Beth (Bookkeeper) is on your team now, ready to take work.",
         ]);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The last teammate a hiring proposed is told the moment that one is saved, before the
+    /// team is refreshed** (finding 4; handover review rv-20261015T113206Z-3b0b1dc0-7844). With
+    /// the commands read clear, the turn that saves Will is followed by the team renewal: a
+    /// handoff turn, a successor opened and primed, and another model turn. He hears that Will
+    /// joined before any of that, and once.
+    #[test]
+    fn the_last_hire_is_told_when_saved_before_the_team_refresh() {
+        use crate::cognition::ObligationState;
+        /// What had happened when each notice was raised: (text, connections opened, handoff
+        /// turns, work turns).
+        struct AtRaise {
+            spawns: Arc<AtomicUsize>,
+            handoffs: Arc<Mutex<Vec<String>>>,
+            prompts: Arc<Mutex<Vec<String>>>,
+            seen: Mutex<Vec<(String, usize, usize, usize)>>,
+        }
+        impl WorkNotifier for AtRaise {
+            fn raised(&self, _thread: &str, notice: &PendingNotice) {
+                self.seen.lock().unwrap().push((
+                    notice.text.clone(),
+                    self.spawns.load(Ordering::SeqCst),
+                    self.handoffs.lock().unwrap().len(),
+                    self.prompts.lock().unwrap().len(),
+                ));
+            }
+        }
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        witnessed(&h.state, "work-session-rotated-1");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Clear);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([Some(format!("{STOCK_TEAM} will"))]);
+        }
+        h.replies.lock().unwrap().push_back(format!("Saving Will.{TOOL_CALL}Will is saved."));
+        let notifier = Arc::new(AtRaise {
+            spawns: h.spawns.clone(),
+            handoffs: h.handoffs.clone(),
+            prompts: h.work_prompts.clone(),
+            seen: Mutex::new(Vec::new()),
+        });
+        let host = WorkHost::new(&h.state, Box::new(factory_over(&h, 5)), notifier.clone(), Arc::clone(&h.desk));
+        host.start();
+        let receipt = host.register(&h.binding, &Registration {
+            title: "Hire these AI teammates onto my team: Will (Marketing Director)".into(),
+            ..registration(&h)
+        }).unwrap();
+        assert!(host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let row = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        assert_eq!(row.state, AssignmentState::Settled, "{}", row.detail);
+        assert!(!h.handoffs.lock().unwrap().is_empty(), "the team was never refreshed, so this proves nothing");
+        let joined: Vec<(String, usize, usize, usize)> = notifier.seen.lock().unwrap().iter()
+            .filter(|(text, ..)| text.ends_with(JOINED_TAIL)).cloned().collect();
+        assert_eq!(joined, [(
+            "Will (Marketing Director) is on your team now, ready to take work.".to_string(), 1, 0, 1,
+        )], "Will was saved on the first turn and told only after (connections, handoff turns, work turns)");
+        host.shutdown();
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
