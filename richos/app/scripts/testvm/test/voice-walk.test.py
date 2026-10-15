@@ -63,7 +63,7 @@ class TalkTiming(unittest.TestCase):
         '[richos-voice] 22:51:56.282Z utterance START tainted=false heard-rich=false (Rich audible=false)',
         '[richos-voice] 22:51:59.561Z utterance END ADMITTED — 3.440 s, heard-rich=false, on to the recognizer (Rich audible=false)',
         '[richos-voice] 22:52:00.795Z end-of-turn quiet — 2.000 s of silence since his last word; 0 fragment(s) held, 3 at the recognizer',
-        '[richos-voice] tts: 2.10 s of speech synthesized in 640 ms (rtf 0.305) by Pocket TTS english_2026-04 INT8 · Peter Yearsley · 4 threads',
+        '[richos-voice] tts: 2.10 s of speech synthesized in 640 ms (rtf 0.305), 0 ms before synthesis',
         '[richos-voice] 22:52:09.000Z ANSWER AUDIBLE — half-duplex window OPEN (hold after the last sample 120 ms = out 40.0 + in 40.0 + slicer 40.0)',
     ]
 
@@ -262,30 +262,66 @@ class AFindIsAskedAgainAClickIsNot(unittest.TestCase):
         self.assertEqual(base.call_count, 1)
 
 
-class InstalledVoiceAfterRelaunch(unittest.TestCase):
-    def test_the_original_installation_receipt_survives_a_relaunch_that_skips_downloading(self):
+class InstalledVoice(unittest.TestCase):
+    """The app installs Rich's voice in silence, so the nine pinned files in place are the receipt
+    (CEO 2026-10-15: no log lines about the voice)."""
+
+    def walk(self):
         from types import SimpleNamespace
-        from unittest import mock
         v = walk.VoiceWalk.__new__(walk.VoiceWalk)
         v.vm, v.payload, v.home = 'vm', '/run', '/home'
         v.log, v.a = '/run/relaunch.log', SimpleNamespace(voice_within=1)
+        return v
+
+    def test_all_nine_files_in_place_is_the_receipt(self):
+        from unittest import mock
 
         def guest(vm, command):
             if command.startswith('cat '):
-                # The new launch has no download line. Only the original one
-                # holds the real receipt, exactly as walk-78a86f2c78bf did.
-                return walk.VOICE_INSTALLED if '/run/app.log' in command else ''
+                return ''
+            if command.startswith('ls -l '):
+                return '\n'.join(walk.VOICE_FILES)
             if command.startswith('ls '):
-                return 'peter_yearsley.wav'
+                return '\n'.join(walk.VOICE_FILES)
             if command.startswith('shasum '):
                 return 'fixture-digest  peter_yearsley.wav'
             self.fail(command)
 
         with mock.patch.object(walk, 'guest', side_effect=guest):
-            self.assertEqual(v.rich_voice()['line'], walk.VOICE_INSTALLED)
-        with mock.patch.object(walk, 'guest', return_value=walk.VOICE_INSTALLED + '\n' + walk.VOICE_NOT_INSTALLED):
-            with self.assertRaises(walk.StepFailed):
-                v.rich_voice()
+            self.assertEqual(self.walk().rich_voice()['peter_yearsley_sha256'], 'fixture-digest')
+
+    def test_a_partial_install_is_not_a_receipt_and_a_failed_one_fails(self):
+        from unittest import mock
+        partial = '\n'.join(walk.VOICE_FILES[:8]) + '\nflow_lm_main_int8.onnx.part'
+        with mock.patch.object(walk, 'guest', side_effect=lambda vm, c: partial if c.startswith('ls') else ''), \
+                mock.patch.object(walk.time, 'sleep'):
+            with self.assertRaisesRegex(walk.StepFailed, 'did not install'):
+                self.walk().rich_voice()
+        failed = walk.VOICE_NOT_INSTALLED + ': no network'
+        with mock.patch.object(walk, 'guest', return_value=failed):
+            with self.assertRaisesRegex(walk.StepFailed, 'install failed'):
+                self.walk().rich_voice()
+
+
+class NoLineAboutTheVoice(unittest.TestCase):
+    """CEO 2026-10-15: no other voice names, and no log lines about the voice at all."""
+
+    def test_the_nightly_57_lines_are_all_caught(self):
+        nightly57 = [
+            "[richos-voice] 00:49:42.797Z voice session OPEN — stt=small.en · tts=macOS say · Daniel · 180 wpm "
+            "(Rich's Pocket voice is not installed or loaded yet) · aec=PBFDAF 2048 taps",
+            '[richos-voice] Pocket TTS ready (Pocket TTS english_2026-04 INT8 · Peter Yearsley · 2 threads), '
+            'loaded and verified in 2390 ms',
+            '[richos-voice] Pocket TTS first PCM in 169 ms',
+            '[richos] rich voice: Pocket TTS and the Peter Yearsley voice are installed and verified',
+        ]
+        self.assertEqual(walk.voice_lines(nightly57), nightly57)
+
+    def test_the_timing_figures_that_remain_are_not_about_the_voice(self):
+        kept = ['[richos-voice] tts: 9.12 s of speech streamed in 1383 ms, first audio in 169 ms, 0 ms before synthesis',
+                '[richos-voice] 00:49:42.797Z voice session OPEN — stt=small.en · aec=PBFDAF 2048 taps',
+                '[richos-voice] speech decoder initialized before capture in 9562 ms']
+        self.assertEqual(walk.voice_lines(kept), [])
 
 
 class DecoderWarmup(unittest.TestCase):
@@ -298,15 +334,17 @@ class DecoderWarmup(unittest.TestCase):
 
 
 class TtsTiming(unittest.TestCase):
-    def test_streaming_measures_first_pcm_not_sentence_completion(self):
+    def test_streaming_measures_first_audio_not_sentence_completion(self):
         prefix = '[richos-voice] '
-        done = prefix + 'tts: 9.12 s of speech streamed in 1383 ms by Pocket TTS'
-        self.assertEqual(walk.tts_timing([prefix + 'Pocket TTS first PCM in 169 ms', done], done),
-                         {'first_audio_ms': 169, 'complete_synthesis_ms': 1383})
+        done = prefix + 'tts: 9.12 s of speech streamed in 1383 ms, first audio in 169 ms, 0 ms before synthesis'
+        self.assertEqual(walk.tts_timing([done], done),
+                         {'first_audio_ms': 169, 'complete_synthesis_ms': 1383, 'wait_before_synthesis_ms': 0})
+        bare = prefix + 'tts: 9.12 s of speech streamed in 1383 ms'
         with self.assertRaises(walk.StepFailed):
-            walk.tts_timing([done, prefix + 'Pocket TTS first PCM in 169 ms'], done)
-        old = prefix + 'tts: 2.10 s of speech synthesized in 640 ms (rtf 0.305) by Pocket TTS'
-        self.assertEqual(walk.tts_timing([old], old), {'first_audio_ms': 640, 'complete_synthesis_ms': 640})
+            walk.tts_timing([bare], bare)
+        whole = prefix + 'tts: 2.10 s of speech synthesized in 640 ms (rtf 0.305), 2400 ms before synthesis'
+        self.assertEqual(walk.tts_timing([whole], whole),
+                         {'first_audio_ms': 640, 'complete_synthesis_ms': 640, 'wait_before_synthesis_ms': 2400})
 
 
 class ReplySplit(unittest.TestCase):

@@ -4730,8 +4730,8 @@ fn voice_readiness() -> serde_json::Value {
                 readiness.tag(),
                 rec.provenance_full()
             );
-            // Voice works here, so Rich will speak: fetch his voice now, in the background, if it
-            // is not on this Mac yet, rather than at the first answer (he hears `say` until then).
+            // Voice works here, so Rich will speak: make his voice ready now, at launch and in the
+            // background (installed if it is not on this Mac yet, then loaded), never at Talk.
             voice_provision::fetch_rich_voice_in_background();
             let recognizer = rec.as_ref().clone();
             std::thread::spawn(move || {
@@ -4795,8 +4795,8 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
     // guarantee is local and structural: no permission dialog, no orange indicator, no
     // "listening…" panel in a build with no speech model.
     speech_preflight()?;
-    // FIRST NEED of Rich's voice: fetch Pocket TTS + Peter Yearsley in the background if it is not
-    // here yet (he hears `say` until it is). Loading it is RichVoice's, when voice starts below.
+    // Rich's voice has been loaded since launch; this only installs it if it is somehow missing
+    // (his sentences wait for it). Pressing Talk loads nothing.
     voice_provision::fetch_rich_voice_in_background();
     ensure_voice_state(&app);
     // A dictation listening right now is written first, as if its key had been tapped, so voice
@@ -4942,7 +4942,6 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                 "outputDevice": d.output_device,
                 "outputRate": d.output_rate,
                 "sttModel": d.stt_model,
-                "ttsVoice": d.tts_voice,
                 "echoCancellation": d.echo_cancellation,
                 "bargeInFrames": d.barge_in_frames,
                 "bargeInSecs": d.barge_in_secs,

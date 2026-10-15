@@ -805,8 +805,8 @@ fn install_media_tools(
             fetch_verified(&observer, &state, id)?;
         }
     }
-    // 3. RICH'S VOICE (Pocket TTS + Peter Yearsley), in the background: it never holds this sheet,
-    //    and until it is in Rich speaks with `say`.
+    // 3. RICH'S VOICE (Pocket TTS), in the background: it never holds this sheet, and a sentence
+    //    Rich says before it is in waits for it.
     crate::voice_provision::fetch_rich_voice_in_background();
     Ok(format!("{} are installed.", capitalized(Component::MediaTools.display_name())))
 }

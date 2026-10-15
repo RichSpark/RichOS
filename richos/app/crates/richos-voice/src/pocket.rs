@@ -844,28 +844,21 @@ impl SpeechSynth for PocketSynth {
     }
 
     fn synthesize_stream(&self, text: &str, target_rate: u32, _scratch_dir: &Path, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<(), TtsError> {
-        let started = Instant::now();
+        // Silent: the caller ([`crate::tts::RichVoice`]) prints the timing figures, naming no voice.
         let mut converter = wav::RateConverter::new(SAMPLE_RATE, target_rate);
-        let mut first = true;
-        let mut samples = 0;
         self.engine.lock().map_err(|_| TtsError::Io("Pocket TTS engine lock poisoned".into()))?
             .synthesize_stream(text, &mut |audio| {
                 let mut pcm = Vec::new();
                 converter.push(audio, &mut pcm);
                 if pcm.is_empty() { return true; }
-                if first {
-                    first = false;
-                    eprintln!("[richos-voice] Pocket TTS first PCM in {} ms", started.elapsed().as_millis());
-                }
-                samples += pcm.len();
                 emit(&pcm)
             }).map_err(TtsError::Decode)?;
-        eprintln!("[richos-voice] tts: {:.2} s of speech streamed in {} ms by {}", samples as f64 / target_rate as f64, started.elapsed().as_millis(), self.voice_label());
         Ok(())
     }
 
     fn voice_label(&self) -> String {
-        format!("Pocket TTS {MODEL_LANGUAGE} INT8 · Peter Yearsley · {} threads", threads())
+        // Rich's voice, by that name and no other (CEO, 2026-10-15).
+        "Rich's voice".into()
     }
 }
 
