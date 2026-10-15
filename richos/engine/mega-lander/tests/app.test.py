@@ -112,6 +112,23 @@ class DesktopWork(unittest.TestCase):
         self.args={"request_id":"prepare-one","obligation_id":"fixture-task","repo":str(self.repo),"title":"Create fictional result","brief":"Create result.txt with FICTIONAL in the assigned target worktree. Commit only that file. Do not publish.","role":"worker","teammate":"mark","integration":"main"}
 
     def call(self,name,args=None):return self.app.call(self.scope_path,name,args or {})
+    def test_rich_reads_the_same_work_evidence_without_changing_stus_records(self):
+        ready = self.call("prepare", self.args)
+        root = self.app.folder(self.scope)
+        expected = self.call("inspect", {})["records"]
+        before = {p.name: p.read_bytes() for p in root.glob("*.json")}
+        actual = self.app.call_read_only(self.scope_path, "inspect", {})["records"]
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual[0]["id"], ready["id"])
+        self.assertEqual(actual[0]["request"]["brief"], self.args["brief"])
+        self.assertEqual({p.name: p.read_bytes() for p in root.glob("*.json")}, before)
+        self.assertEqual(self.app.call_read_only(self.scope_path, "repositories", {}), self.call("repositories", {}))
+        for name, args in (("prepare", self.args), ("integrate", {}), ("complete", {}),
+                           ("team", {"action": "save", "name": "will", "text": "invented"})):
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                self.app.call_read_only(self.scope_path, name, args)
+        self.assertEqual({p.name: p.read_bytes() for p in root.glob("*.json")}, before)
+
     def test_pause_message_is_fixed_and_does_not_claim_delivery(self):
         protocol=self.app.load("pause_message_test",ENGINE/"scripts/lib/pause_protocol.py")
         for reason,reset in [("manual",None),("quota","15:30Z")]:

@@ -1963,13 +1963,17 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
         config["mcpServers"]["richos_continuity"] = json!({"type":"stdio", "command":bridge.python,
             "args":[bridge.component.join("adapters/mcp.py"),tools_scope], "env":{"PYTHONDONTWRITEBYTECODE":"1"}});
     }
-    if let (Some(profile), Some((bridge, scope))) = (profile, continuity.filter(|_| role == LeaseRole::Work)) {
-        if let Some(root) = profile.state.parent() {
-            config["mcpServers"][crate::quota::reset_tools::SERVER] = json!({"type":"stdio", "command":executable,
-                "args":["--claude-reset-mcp", scope, root, claude_bin]});
+    if let (Some(profile), Some((bridge, scope))) = (profile, continuity) {
+        if role == LeaseRole::Work {
+            if let Some(root) = profile.state.parent() {
+                config["mcpServers"][crate::quota::reset_tools::SERVER] = json!({"type":"stdio", "command":executable,
+                    "args":["--claude-reset-mcp", scope, root, claude_bin]});
+            }
         }
+        let mut args = vec![profile.engine.join("mega-lander/app.py").to_string_lossy().to_string(), scope.to_string_lossy().to_string()];
+        if role == LeaseRole::Conversation { args.push("--read-only".into()); }
         config["mcpServers"]["richos_work"] = json!({"type":"stdio", "command":bridge.python,
-            "args":[profile.engine.join("mega-lander/app.py"),scope], "env":{"PYTHONDONTWRITEBYTECODE":"1"}});
+            "args":args, "env":{"PYTHONDONTWRITEBYTECODE":"1"}});
     }
     config
 }
@@ -5480,6 +5484,8 @@ done
         // Positive control: the same call for the conversation DOES register its two.
         let chat = mcp_config(&executable, &scope, &assignments, &status, Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Conversation, Path::new("claude"));
         assert!(chat["mcpServers"].get("richos_continuity").is_some(), "the conversation lost its continuity server");
+        assert_eq!(chat["mcpServers"]["richos_work"]["args"][2], "--read-only");
+        assert_eq!(work["mcpServers"]["richos_work"]["args"].as_array().unwrap().len(), 2);
         assert!(chat["mcpServers"].get(crate::assignment_tools::SERVER_NAME).is_some(),
             "the conversation has no way to end a turn on a receipt");
         assert!(chat["mcpServers"].get(crate::status_tools::SERVER_NAME).is_some(),

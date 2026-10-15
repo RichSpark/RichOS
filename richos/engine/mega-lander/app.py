@@ -2211,25 +2211,40 @@ def call(scope_path, name, args):
     if name == "integrate": return integrate(scope_path,scope,args)
     if name == "complete": return complete(scope_path,scope,args)
     if name == "team": return team(args)
-    if name == "inspect":
-        if set(args) - {"offset","limit"}: raise ValueError("unsupported inspection fields")
-        offset,limit = args.get("offset",0),args.get("limit",20)
-        if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=50: raise ValueError("invalid inspection page")
-        with locked(scope) as root:
-            obligation = carried_obligation(scope)
-            rows = [(path,record) for path,record in receipts(root)
-                    if obligation is None or record["request"]["obligation_id"] == obligation]; result=[]
-            for path,record in rows[offset:offset+limit]:
-                refresh(record);save(path,record);project(scope,path,record);result.append(view(record))
-            page = {"records":result,"next_offset":offset+limit if offset+limit<len(rows) else None}
-            # Seats are reconciled with receipts, on the sweep rather than per
-            # page, and only from the conversation's own scope: enumerating or
-            # releasing seats is the host's job and the engine refuses it to a
-            # work seat.
-            if offset == 0 and scope.get("seat") is None:
-                page["seats"] = reconcile_seats(scope)
-            return page
+    if name == "inspect": return inspect_receipts(scope, args)
     raise ValueError("unknown app work tool")
+
+
+def inspect_receipts(scope, args, read_only=False):
+    """One evidence reader for Rich and Stu. Observation never needs Stu to respond."""
+    if set(args) - {"offset", "limit"}: raise ValueError("unsupported inspection fields")
+    offset, limit = args.get("offset", 0), args.get("limit", 20)
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("invalid inspection page")
+    with locked(scope) as root:
+        obligation = carried_obligation(scope)
+        rows = [(path, record) for path, record in receipts(root)
+                if obligation is None or record["request"]["obligation_id"] == obligation]
+        result = []
+        for path, record in rows[offset:offset + limit]:
+            refresh(record)
+            if not read_only:
+                save(path, record)
+                project(scope, path, record)
+            result.append(view(record))
+        page = {"records": result, "next_offset": offset + limit if offset + limit < len(rows) else None}
+        if not read_only and offset == 0 and scope.get("seat") is None:
+            page["seats"] = reconcile_seats(scope)
+        return page
+
+
+def call_read_only(scope_path, name, args):
+    scope = read_scope(scope_path)
+    if not isinstance(args, dict): raise ValueError("tool arguments must be an object")
+    if name == "repositories": return {"repositories": repositories(scope)}
+    if name == "inspect": return inspect_receipts(scope, args, read_only=True)
+    if name == "team" and args.get("action") in ("list", "show"): return team(args)
+    raise ValueError("Rich's evidence connection is read-only")
 
 
 TOOLS = [
@@ -2243,6 +2258,8 @@ TOOLS = [
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
 ]
 if __name__ == "__main__":
-    if len(sys.argv)!=2: raise SystemExit("an explicit app scope is required")
+    read_only = len(sys.argv) == 3 and sys.argv[2] == "--read-only"
+    if len(sys.argv) != 2 and not read_only: raise SystemExit("an explicit app scope is required")
     transport=load("richos_work_mcp_transport",ENGINE / "ecs/adapters/mcp.py")
-    transport.serve(sys.argv[1],sys.stdin.buffer,sys.stdout,tools=TOOLS,handler=call,server_name="richos_work")
+    transport.serve(sys.argv[1],sys.stdin.buffer,sys.stdout,tools=[tool for tool in TOOLS if tool["name"] in ("inspect", "repositories", "team")] if read_only else TOOLS,
+                    handler=call_read_only if read_only else call,server_name="richos_work")
