@@ -5747,6 +5747,33 @@ body.bp-narrow .tl-user-bubble {
 .md-row {
   margin-top: 12px;
 }
+/* WHEN HALF THE ROW CANNOT HOLD THE LABEL, THE HALVES STACK (second review of d623a3f2). The
+   chosen label is dark --on-gold ink: past the gold thumb's edge it is 1.50:1 on the track, so a
+   label wider than its half is unreadable, not merely untidy. "Opus · high effort" is 8.35rem
+   wide at weight 600 (133.6px at 100%, measured in WebKit), and the thumb is half the track less
+   3px, so side by side needs a track of 2 × (8.35rem + 6px clear each side) + 2 × 3px = 16.7rem
+   + 30px. Narrower than that (the two-column panel at 1024 by 700 from 110% up), each option
+   takes the full width on its own line and the thumb slides down instead of across. Nothing
+   changes where the label fits: 297.2px at 100% against the 299.8px track at a 1360px window. */
+.md {
+  container-type: inline-size;
+}
+@container (width < calc(16.7rem + 30px)) {
+  .md .seg {
+    grid-template-columns: 1fr;
+    border-radius: 20px;
+  }
+  .md .seg-thumb {
+    right: 3px;
+    bottom: auto;
+    width: auto;
+    height: 34px;
+    border-radius: 17px;
+  }
+  .md .seg[data-v="fable"] .seg-thumb {
+    transform: translateY(100%);
+  }
+}
 .md-row:first-of-type {
   margin-top: 4px;
 }
@@ -6351,8 +6378,10 @@ body.home-open {
   pointer-events: none;
 }
 
+/* 10.5rem is 168px at 100% and grows with Text size, as the name it shows does: a fixed 168px
+   cut "Harbor Analytics" to "Harbor Analyt" at 135% (second review of d623a3f2). */
 .set-select {
-  max-width: 168px;
+  max-width: 10.5rem;
 }
 
 /* The read-only variant of the same row: `RICHOS_ENTITY` decided it and nothing in the
@@ -6548,10 +6577,21 @@ body.home-open {
    in WebKit, that half needs 146px, which the column gives from a 1020px panel, i.e. a 1350px
    window (1366: 148px, fits; 1320 and 1280: the half grew past the gold thumb, which no longer
    covered the chosen label). At 1024 by 700, the app's minimum, the Company select, the Company
-   buttons button and Token spend's figure also ran past the third column's edge. So below 1360px
-   the first two columns keep their places and the third, "Your company and team", runs across
-   the full width under them. */
-@media (max-width: 1359px) {
+   buttons button and Token spend's figure also ran past the third column's edge. So in a panel
+   narrower than 1030px (a window below 1360px) the first two columns keep their places and the
+   third, "Your company and team", runs across the full width under them.
+
+   THE TEXT SIZE MOVES THAT LINE TOO (second review of d623a3f2). The labels are rem and grow
+   with Text size; the columns are fractions of a panel that does not. A breakpoint on window
+   width alone kept three columns at 1440 and 135% with a 158.68px thumb under a 176px "Opus ·
+   high effort". So the line is the panel's own inside width (inside its 1px border) in rem plus
+   the fixed padding and rules: 50rem + 228px is 1028px at 100%, a 1360px window as before; at
+   90% a 1280px window, at 80% 1200px; and from 110% up it is wider than the panel can be (1108px
+   against 1098px), so larger text always gets two columns. */
+.setmenu {
+  container: setmenu / inline-size;
+}
+@container setmenu (width < calc(50rem + 228px)) {
   .sm-cols[data-n="3"] {
     grid-template-columns: 1fr 1fr;
   }

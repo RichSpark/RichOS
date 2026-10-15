@@ -21,7 +21,11 @@
 //      saves nothing and says nothing;
 //   4. reopening shows it, and so does the next launch;
 //   5. reopening while the close's save is still on its way never paints the old choice back
-//      (the second review's reproduction, held by a gate rather than a clock).
+//      (the second review's reproduction, held by a gate rather than a clock);
+//   6. at every Text size and every window width down to the 1024 by 700 minimum, in both
+//      themes, the chosen label sits inside its gold thumb and every setting in the panel stays
+//      inside its column and its own box (second review of d623a3f2: 1440 at 135% put a 176px
+//      "Opus · high effort" on a 158.68px thumb, its dark ink past the gold).
 // The APPLYING half — the lease in use moves to the stored model at its next boundary — is
 // Rust: `the_model_he_chose_in_preferences_answers_his_next_reply`
 // (crates/richos-core/tests/rotation_tests.rs, his next reply) and
@@ -54,7 +58,7 @@ const SEED_MODELS = (models) => {
 
 async function openApp(browser, opts) {
   const o = opts || {};
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await browser.newPage({ viewport: o.viewport || { width: 1440, height: 900 }, reducedMotion: o.reducedMotion || "no-preference" });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -316,6 +320,75 @@ async function main() {
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "read waited for the save";
+  });
+
+  // ---- 6. every Text size, every window width: the chosen label inside its thumb --------
+  await run.check("6. at every Text size and window width, in both themes, the chosen model sits inside its gold thumb and every setting stays readable", async () => {
+    // 1359/1360 straddle the three-column line at 100%; 1366 is the earlier review's window;
+    // 1440 is round 27's own and this review's; 1024 by 700 is the app's minimum.
+    const widths = [1024, 1280, 1359, 1360, 1366, 1440];
+    const problems = [];
+    let cases = 0;
+    for (const theme of ["dark", "light"]) {
+      for (const width of widths) {
+        const page = await openApp(browser, { theme, viewport: { width, height: 700 }, reducedMotion: "reduce" });
+        await openPrefs(page);
+        await rowsShow(page, { rich: "opus", stu: "opus" });
+        const steps = await page.evaluate(() => window.RichTheme.STEPS);
+        for (const scale of steps) {
+          for (const stu of ["opus", "fable"]) {
+            const seen = await page.evaluate(
+              async ([s, choice]) => {
+                window.RichTheme.setScale(s);
+                document.querySelector(`#md-stu .seg-opt[data-v="${choice}"]`).click();
+                await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+                const bad = [];
+                const menu = document.getElementById("set-menu");
+                // The chosen label of each row, against the gold thumb under it.
+                for (const id of ["md-rich", "md-stu"]) {
+                  const seg = document.getElementById(id);
+                  const thumb = seg.querySelector(".seg-thumb").getBoundingClientRect();
+                  const opt = seg.querySelector('.seg-opt[aria-checked="true"]');
+                  const range = document.createRange();
+                  range.selectNodeContents(opt);
+                  const t = range.getBoundingClientRect();
+                  const gap = Math.min(t.left - thumb.left, thumb.right - t.right, t.top - thumb.top, thumb.bottom - t.bottom);
+                  if (gap < 0) bad.push(`${id} "${opt.textContent}" ${t.width.toFixed(1)}px runs ${(-gap).toFixed(1)}px past a ${thumb.width.toFixed(1)}px thumb`);
+                }
+                // Every line of text inside its column (or foot cell, or heading), and every
+                // control wide enough for what it says.
+                const walker = document.createTreeWalker(menu, NodeFilter.SHOW_TEXT);
+                for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+                  const el = n.parentElement;
+                  if (!n.textContent.trim() || !el.getClientRects().length || el.closest("[hidden], .cx-tip")) continue;
+                  if (getComputedStyle(el).visibility === "hidden") continue;
+                  const box = (el.closest(".sm-col, .sm-foot-cell, .sm-head") || menu).getBoundingClientRect();
+                  const range = document.createRange();
+                  range.selectNodeContents(n);
+                  for (const t of range.getClientRects()) {
+                    if (t.width >= 1 && (t.left < box.left - 0.5 || t.right > box.right + 0.5)) bad.push(`"${n.textContent.trim()}" leaves its column`);
+                  }
+                }
+                for (const c of menu.querySelectorAll("button, select, input")) {
+                  if (!c.getClientRects().length || c.closest("[hidden], .cx-tip")) continue;
+                  if (c.scrollWidth > c.clientWidth + 1) bad.push(`#${c.id || c.className} holds ${c.scrollWidth}px in ${c.clientWidth}px`);
+                }
+                if (menu.scrollWidth > menu.clientWidth) bad.push(`the panel scrolls ${menu.scrollWidth - menu.clientWidth}px sideways`);
+                return { scale: document.documentElement.getAttribute("data-font-scale"), bad };
+              },
+              [scale, stu]
+            );
+            cases++;
+            assertEqual(seen.scale, String(scale), `Text size applied at ${width}px`);
+            for (const b of seen.bad) problems.push(`${theme} ${width}px ${scale}% ${stu}: ${b}`);
+          }
+        }
+        assertEqual(page.__errors, [], "no page errors");
+        await page.close();
+      }
+    }
+    assertEqual(problems, [], "nothing in Settings leaves its place");
+    return `${cases} cases: 2 themes x ${widths.length} widths x 7 Text sizes x both choices for the second row`;
   });
 
   await browser.close();
