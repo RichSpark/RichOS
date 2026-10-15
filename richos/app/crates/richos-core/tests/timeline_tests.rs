@@ -963,13 +963,14 @@ fn the_apps_own_read_path_joins_a_task_call_to_the_worker_it_spawned() {
         "with the source Disabled the app cannot produce a worker row — this is what main shipped"
     );
     // A delegation is not a nameless tool call (finding 13 exempts it): with no worker row it
-    // still reaches his view as an ordinary activity row.
+    // still reaches his view as an ordinary activity row, naming the act rather than reading
+    // "Worked". This fixture's call carries no arguments, so it cannot name more.
     assert!(
         ceo_before
             .items()
             .iter()
-            .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Worked")),
-        "and the delegation reached the CEO as one nameless \"Worked\" row"
+            .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Handed work to a teammate")),
+        "and the delegation reached the CEO as one activity row naming the hand-over"
     );
 
     // (2) WIRED. Same ledger, same journal, same machinery — one setting.
@@ -991,12 +992,75 @@ fn the_apps_own_read_path_joins_a_task_call_to_the_worker_it_spawned() {
     assert!(
         !ceo.items()
             .iter()
-            .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Worked")),
-        "and the nameless row is REPLACED, not duplicated alongside the worker row"
+            .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Handed work to a teammate")),
+        "and the activity row is REPLACED, not duplicated alongside the worker row"
     );
 
     let _ = std::fs::remove_file(&lp);
     let _ = std::fs::remove_file(&sp);
+}
+
+#[test]
+fn a_delegation_without_a_worker_row_names_what_rich_handed_over_and_to_whom() {
+    // Product hunt 2026-10-15, finding 13: a row that just says "Worked" names nothing. A
+    // delegation stays in his view before its worker row exists, and for a synchronous one
+    // that never becomes a worker, so its row says what Rich handed over and to whom, from
+    // the delegation call's own arguments. The three frames the native wire spends on it:
+    // the streamed open (no arguments yet), the `assistant` frame with the whole input, and
+    // the result.
+    let path = tmp("delegname", ".jsonl");
+    two_entity_ledger(&path);
+    let ledger = Ledger::open(&path).unwrap();
+    let binding = ledger.thread_binding("thr_fem").unwrap();
+
+    let label = |id: &str, input: Value| -> Vec<String> {
+        let frames = [
+            json!({"type":"stream_event","event":{"type":"content_block_start","index":0,
+                   "content_block":{"type":"tool_use","id":id,"name":"Agent","input":{}}}}),
+            json!({"type":"assistant","message":{"role":"assistant","content":[
+                   {"type":"tool_use","id":id,"name":"Agent","input":input}]}}),
+            json!({"type":"user","message":{"role":"user","content":[
+                   {"tool_use_id":id,"type":"tool_result","content":"The login works again."}]}}),
+        ];
+        let mut records = Vec::new();
+        for (seq, f) in frames.iter().enumerate() {
+            for r in MachineryRecord::from_native_event(f, "s1", seq as u64 + 1) {
+                records.push(r.stamp("thr_fem", Some("turn_ok"), false));
+            }
+        }
+        let timeline = Timeline::project_with_workers(&ledger, &binding, &records, &[]).unwrap();
+        timeline
+            .view(ViewMode::Ceo)
+            .items()
+            .iter()
+            .filter_map(|i| match i {
+                TimelineItem::Activity { summary, .. } => Some(summary.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // A teammate by name: the display name the worker row would show (`timeline.js`
+    // `teammateName`: "mark-sonnet-f1" is "Mark").
+    assert_eq!(
+        label(
+            "toolu_A",
+            json!({"description":"Fix the login bug","name":"mark-sonnet-f1","subagent_type":"mark",
+                   "prompt":"The login page rejects a correct password."})
+        ),
+        vec!["Handed to Mark: Fix the login bug".to_string()]
+    );
+    // No teammate name: its role, as the worker row falls back to it.
+    assert_eq!(
+        label("toolu_B", json!({"description":"Check the release notes","subagent_type":"ray"})),
+        vec!["Handed to ray: Check the release notes".to_string()]
+    );
+    // Nobody named at all: still what was handed over.
+    assert_eq!(
+        label("toolu_C", json!({"description":"Look into the slow start","prompt":"..."})),
+        vec!["Handed to a teammate: Look into the slow start".to_string()]
+    );
+    std::fs::remove_file(&path).unwrap_or_default();
 }
 
 #[test]

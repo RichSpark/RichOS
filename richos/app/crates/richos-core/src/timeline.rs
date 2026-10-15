@@ -1164,6 +1164,7 @@ impl Timeline {
         // the doc above), keyed by tool call.
         let types = resolve_activity_types(&kept);
         let tool_names = resolve_tool_names(&kept);
+        let delegations = resolve_delegations(&kept);
         let last_seen = resolve_last_seen(&kept);
         // Resolved over the RAW records for the same measured reason the activity type is:
         // the async-launch acknowledgement arrives on the tool RESULT, and `merge_into`
@@ -1228,6 +1229,7 @@ impl Timeline {
                     internal_turn,
                     &types,
                     &tool_names,
+                    &delegations,
                     &last_seen,
                 )),
             }
@@ -1795,11 +1797,11 @@ pub(crate) fn activity_item(
     internal_turn: bool,
     types: &HashMap<String, ActivityType>,
     tool_names: &HashMap<String, String>,
+    delegations: &HashMap<String, String>,
     last_seen: &HashMap<String, u64>,
 ) -> TimelineItem {
     let activity_type = activity_type_of(row, types);
     let state = activity_state_of(row);
-    let summary = semantic_summary(activity_type, row);
     // **A ROW THAT ONLY SAYS "Worked" IS NOT SHOWN IN HIS VIEW** (product hunt 2026-10-15,
     // finding 13). A tool call that classifies to nothing gets the summary "Worked", and on
     // nightly 57 that word appeared as its own row under "Worked for 15s", as "Worked queued"
@@ -1817,6 +1819,18 @@ pub(crate) fn activity_item(
         .and_then(|id| tool_names.get(id))
         .is_some_and(|n| n == "Task" || n == "Agent");
     let nameless = activity_type == ActivityType::Other && row.kind == MachineryKind::ToolCall && !delegation;
+    // And so its row says what Rich handed over and to whom, from the delegation call's own
+    // arguments ([`delegation_summary`]), never the bare "Worked" finding 13 is about. Before
+    // those arguments arrive (the streamed open carries `input: {}`) it still names the act.
+    let summary = if delegation && activity_type == ActivityType::Other {
+        row.tool_call_id
+            .as_ref()
+            .and_then(|id| delegations.get(id))
+            .cloned()
+            .unwrap_or_else(|| delegation_line(None, None))
+    } else {
+        semantic_summary(activity_type, row)
+    };
     let visibility = match machinery_visibility(row, internal_turn) {
         Visibility::Ceo if nameless => Visibility::Technical,
         v => v,
@@ -2150,6 +2164,83 @@ fn resolve_tool_names(records: &[&MachineryRecord]) -> HashMap<String, String> {
         }
     }
     out
+}
+
+/// What each delegation call says it hands over and to whom, across the raw records.
+///
+/// Over the RAW records for the same reason as [`resolve_tool_names`]: the arguments ride on
+/// the `assistant` frame's `tool_use` block, and `merge_into` keeps the last payload, which
+/// is the `tool_result`'s. First conclusive answer wins. `live.rs` keeps the same memo.
+fn resolve_delegations(records: &[&MachineryRecord]) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    for r in records {
+        let (Some(id), Some(payload)) = (r.tool_call_id.as_ref(), r.payload.as_ref()) else {
+            continue;
+        };
+        if out.contains_key(id) {
+            continue;
+        }
+        if let Some(line) = delegation_summary(payload) {
+            out.insert(id.clone(), line);
+        }
+    }
+    out
+}
+
+/// The CEO line for a delegation, from the `Task`/`Agent` call's OWN arguments: what Rich
+/// handed over (`description`, the call's short statement of the work) and to whom (`name`,
+/// the teammate, shown as the worker row shows it; else `subagent_type`, the worker row's
+/// fallback too). `None` when this payload is not a delegation or carries neither, as the
+/// streamed open does (`input: {}`); the caller then falls back to [`delegation_line`].
+/// Never the `prompt`: that is the whole brief, technical-mode content.
+pub(crate) fn delegation_summary(payload: &Value) -> Option<String> {
+    let name = tool_name_of(payload)?;
+    if name != "Task" && name != "Agent" {
+        return None;
+    }
+    let input = payload
+        .get("input")
+        .or_else(|| payload.get("event").and_then(|e| e.get("content_block")).and_then(|b| b.get("input")))?;
+    let text = |key: &str| input.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let what = text("description").and_then(crate::machinery::summarize);
+    let who = text("name").map(teammate_name).or_else(|| text("subagent_type").map(str::to_string));
+    if what.is_none() && who.is_none() {
+        return None;
+    }
+    Some(delegation_line(what.as_deref(), who.as_deref()))
+}
+
+/// "Handed to Mark: Fix the login bug". Past tense is true in every state the row can be in:
+/// the handing over has happened the moment the call exists, whether the work is queued,
+/// running or done.
+fn delegation_line(what: Option<&str>, who: Option<&str>) -> String {
+    let who = who.unwrap_or("a teammate");
+    match what {
+        Some(what) => format!("Handed to {who}: {what}"),
+        None => format!("Handed work to {who}"),
+    }
+}
+
+/// A teammate's display name, the SAME rule as `ui/timeline.js` `teammateName`, so this row
+/// and the worker row that replaces it name one person one way: a `<role>-<model>-<id>`
+/// spawn name (`/^([a-z][a-z0-9]{1,15})-[a-z]+-[a-z0-9]{1,12}$/`) shows as its capitalized
+/// role ("mark-sonnet-f1" is "Mark"); anything else shows as it is.
+fn teammate_name(raw: &str) -> String {
+    let parts: Vec<&str> = raw.split('-').collect();
+    let lower_alnum = |s: &str| s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    let fits = parts.len() == 3
+        && (2..=16).contains(&parts[0].len())
+        && parts[0].starts_with(|c: char| c.is_ascii_lowercase())
+        && lower_alnum(parts[0])
+        && !parts[1].is_empty()
+        && parts[1].chars().all(|c| c.is_ascii_lowercase())
+        && (1..=12).contains(&parts[2].len())
+        && lower_alnum(parts[2]);
+    if !fits {
+        return raw.to_string();
+    }
+    let mut chars = parts[0].chars();
+    chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
 }
 
 /// The latest `agent_id` extractable per tool call, across the raw records.
@@ -2762,7 +2853,7 @@ mod tests {
 
     fn compaction_item(phase: &str, internal_turn: bool) -> TimelineItem {
         let row = compaction_row(phase);
-        activity_item(&row, &entity(), "thr", "turn_1", 3, internal_turn, &HashMap::new(), &HashMap::new(), &HashMap::new())
+        activity_item(&row, &entity(), "thr", "turn_1", 3, internal_turn, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new())
     }
 
     #[test]
@@ -2799,7 +2890,7 @@ mod tests {
         // An unclassified tool call (a vendor tool with no semantic type) is technical.
         let row = tool_open(0, "toolu_X", "SomeVendorTool");
         let TimelineItem::Activity { base, summary, .. } =
-            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new(), &HashMap::new())
+            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new())
         else {
             panic!("a tool call projects as an activity row");
         };
@@ -2810,7 +2901,7 @@ mod tests {
         let mut types = HashMap::new();
         types.insert("toolu_X".to_string(), ActivityType::Command);
         let TimelineItem::Activity { base, summary, .. } =
-            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &types, &HashMap::new(), &HashMap::new())
+            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &types, &HashMap::new(), &HashMap::new(), &HashMap::new())
         else {
             panic!("a tool call projects as an activity row");
         };
@@ -2822,13 +2913,36 @@ mod tests {
         for name in ["Task", "Agent"] {
             let delegation = tool_open(0, "toolu_D", name);
             let names = HashMap::from([("toolu_D".to_string(), name.to_string())]);
-            let TimelineItem::Activity { base, .. } =
-                activity_item(&delegation, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &names, &HashMap::new())
+            let TimelineItem::Activity { base, summary, .. } =
+                activity_item(&delegation, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &names, &HashMap::new(), &HashMap::new())
             else {
                 panic!("a delegation without its worker projects as an activity row");
             };
             assert_eq!(base.visibility, Visibility::Ceo, "a {name} delegation is in his view");
+            // Before its arguments arrive it still names the act, never a bare "Worked".
+            assert_eq!(summary, "Handed work to a teammate");
         }
+    }
+
+    #[test]
+    fn a_delegation_line_names_the_work_and_the_teammate_from_the_call_itself() {
+        let call = |input: Value| json!({"type":"tool_use","id":"toolu_D","name":"Agent","input":input});
+        assert_eq!(
+            delegation_summary(&call(json!({"description":"Fix the login bug","name":"mark-sonnet-f1"}))).as_deref(),
+            Some("Handed to Mark: Fix the login bug")
+        );
+        assert_eq!(
+            delegation_summary(&call(json!({"name":"mark-sonnet-f1","prompt":"the whole brief"}))).as_deref(),
+            Some("Handed work to Mark"),
+            "never the prompt"
+        );
+        assert_eq!(delegation_summary(&call(json!({}))), None, "the streamed open says nothing yet");
+        let bash = json!({"type":"tool_use","id":"toolu_B","name":"Bash","input":{"description":"List files"}});
+        assert_eq!(delegation_summary(&bash), None, "only a delegation is one");
+        // The same rule as ui/timeline.js `teammateName`.
+        assert_eq!(teammate_name("sage-opus-r3"), "Sage");
+        assert_eq!(teammate_name("Clark"), "Clark");
+        assert_eq!(teammate_name("a-opus-r3"), "a-opus-r3", "a one-letter role is not a spawn name");
     }
 
     #[test]
@@ -2914,7 +3028,7 @@ mod tests {
         assert_eq!(last_seen.get(&crate::machinery::merge_key(&first)), Some(&48_805));
         assert_eq!(last_seen.get(&crate::machinery::merge_key(&second)), Some(&90_231));
 
-        let item = activity_item(&first, &entity(), "thr", "t3", 3, false, &HashMap::new(), &HashMap::new(), &last_seen);
+        let item = activity_item(&first, &entity(), "thr", "t3", 3, false, &HashMap::new(), &HashMap::new(), &HashMap::new(), &last_seen);
         let TimelineItem::Activity { completed_at, base, .. } = item else { panic!("activity") };
         assert_eq!(completed_at, Some(48_805), "turn 3's pause ended when turn 3's pause ended");
         assert_eq!(base.updated_at, None, "and nothing later touched that row");
@@ -2949,7 +3063,7 @@ mod tests {
         tool.kind = MachineryKind::ToolCall;
         tool.tool_call_id = Some("toolu_A".into());
         let TimelineItem::Activity { measured_min_ms, .. } =
-            activity_item(&tool, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new(), &HashMap::new())
+            activity_item(&tool, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new())
         else {
             panic!("activity");
         };

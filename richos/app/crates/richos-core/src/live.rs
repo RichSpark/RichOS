@@ -628,6 +628,10 @@ pub(crate) struct LiveTurn {
     /// `extract_agent_id` would answer `None` forever and workers would silently stop being
     /// reported. `timeline::resolve_tool_names` is the same memo, batched.
     tool_names: HashMap<String, String>,
+    /// What each delegation call hands over and to whom, from its `assistant` frame's
+    /// arguments before the merge overwrites the payload. `timeline::resolve_delegations`
+    /// is the same memo, batched.
+    delegations: HashMap<String, String>,
     /// The latest `at` observed per merge key.
     last_seen: HashMap<String, u64>,
     /// Merge keys in FIRST-SIGHT order. A `HashMap` iteration order is not an order, and
@@ -660,6 +664,7 @@ impl LiveTurn {
             merged: HashMap::new(),
             types: HashMap::new(),
             tool_names: HashMap::new(),
+            delegations: HashMap::new(),
             last_seen: HashMap::new(),
             order: Vec::new(),
             agent_ids: HashMap::new(),
@@ -839,6 +844,11 @@ impl LiveTurn {
                     self.tool_names.insert(id.clone(), name.to_string());
                 }
             }
+            if !self.delegations.contains_key(id) {
+                if let Some(line) = timeline::delegation_summary(payload) {
+                    self.delegations.insert(id.clone(), line);
+                }
+            }
             // Resolved from the RAW payload, before the merge below overwrites it. The name
             // comes from the memo above, because the frame carrying the acknowledgement
             // carries no name.
@@ -944,6 +954,7 @@ impl LiveTurn {
             self.internal_turn,
             &self.types,
             &self.tool_names,
+            &self.delegations,
             &self.last_seen,
         );
         let at = row.at;

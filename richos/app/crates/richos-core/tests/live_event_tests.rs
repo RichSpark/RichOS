@@ -1329,6 +1329,51 @@ fn a_lifecycle_row_that_lands_after_the_tool_result_still_reaches_the_screen_in_
     let _ = std::fs::remove_file(&stream);
 }
 
+/// The three frames the native wire spends on one SYNCHRONOUS delegation: the streamed open
+/// (no arguments yet), the `assistant` frame carrying the call's whole input, and a plain
+/// `tool_result` with no async-launch acknowledgement, so it never becomes a worker.
+fn synchronous_delegation(id: &str, input: Value) -> Vec<Value> {
+    vec![
+        json!({"type":"stream_event","event":{"type":"content_block_start","index":0,
+               "content_block":{"type":"tool_use","id":id,"name":"Agent","input":{}}}}),
+        json!({"type":"assistant","message":{"role":"assistant","content":[
+               {"type":"tool_use","id":id,"name":"Agent","input":input}]}}),
+        json!({"type":"user","message":{"role":"user","content":[
+               {"tool_use_id":id,"type":"tool_result","content":"The login works again."}]}}),
+    ]
+}
+
+#[test]
+fn a_delegation_row_on_the_wire_names_what_rich_handed_over_and_to_whom() {
+    // Product hunt 2026-10-15, finding 13: a row that just says "Worked" names nothing. A
+    // delegation stays in his view (it is not a nameless tool call), so its row has to say
+    // what Rich handed over and to whom, read off the delegation call's own arguments.
+    let (path, ledger) = tmp_ledger("delegname");
+    let mut spine = support::spine(ledger);
+    spine.create_thread("General", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(ScriptedLease::new(
+        "sess-1",
+        vec![Beat::Frames(synchronous_delegation(
+            "toolu_D",
+            json!({"description":"Fix the login bug","name":"mark-sonnet-f1","subagent_type":"mark",
+                   "prompt":"The login page rejects a correct password."}),
+        ))],
+    )));
+    let live = RecordingLive::default();
+    spine.set_live_observer(Box::new(live.clone()));
+    spine.submit_prompt("get the login fixed", Source::Text).unwrap();
+
+    let upserts = live.of("rich://activity-upserted");
+    let summaries: Vec<&str> = upserts.iter().map(|p| p["summary"].as_str().unwrap()).collect();
+    assert!(
+        summaries.contains(&"Handed to Mark: Fix the login bug"),
+        "the delegation row names the work and the teammate: {summaries:?}"
+    );
+    assert!(!summaries.contains(&"Worked"), "and never reads a bare \"Worked\": {summaries:?}");
+
+    std::fs::remove_file(&path).unwrap_or_default();
+}
+
 #[test]
 fn a_delegation_on_an_internal_turn_is_constructed_and_then_refused() {
     // The gate, on the richest payload this family carries. A re-prime or rotation turn is
