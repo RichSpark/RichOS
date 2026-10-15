@@ -1070,13 +1070,8 @@ fn still_running_for_others(watching: &[Watched]) -> String {
 /// carries Rich's waiting sentence ([`waiting_sentence`]), which his row shows while the
 /// teammate works. Every other word of the turn is kept exactly as the back end wrote it.
 fn keep_words(answer: &mut String, said: &str) {
-    let without_the_wait: String;
-    let said = if said.lines().any(|line| declared_wait(line).is_some()) {
-        without_the_wait = said.lines().filter(|line| declared_wait(line).is_none()).collect::<Vec<_>>().join("\n");
-        without_the_wait.trim()
-    } else {
-        said.trim()
-    };
+    let said = words_for_him(said);
+    let said = said.as_str();
     if said.is_empty() || answer.len() >= 64 * 1024 || answer.trim_end().ends_with(said) {
         return;
     }
@@ -1085,6 +1080,29 @@ fn keep_words(answer: &mut String, said: &str) {
         answer.push_str("\n\n");
     }
     answer.push_str(said);
+}
+
+/// A turn's words without the engine's declared wait ([`declared_wait`]), trimmed; every
+/// other line exactly as the back end wrote it.
+fn words_for_him(said: &str) -> String {
+    if !said.lines().any(|line| declared_wait(line).is_some()) {
+        return said.trim().to_string();
+    }
+    said.lines().filter(|line| declared_wait(line).is_none()).collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+/// **One continuation turn's words into the account.** A helper's continuation adds to it
+/// ([`keep_words`]); a command's report REPLACES "it has started", which is no longer true and
+/// which he already has. Either way the declared wait stays out of his answer (second review
+/// rv-20261015T110858Z-a5f8a28b-a1ab: a command's report turn that starts a consult kept "Will
+/// is working on the outreach recommendation now." above Will's answer).
+fn fold_turn(answer: &mut String, said: &str, adds: bool) {
+    if adds {
+        keep_words(answer, said);
+    } else if !words_for_him(said).is_empty() {
+        answer.clear();
+        keep_words(answer, said);
+    }
 }
 
 /// Add one streamed piece of a turn's prose to what the turn said.
@@ -2597,11 +2615,7 @@ impl WorkHost {
                 // A helper's continuation adds to the account; a command's report REPLACES
                 // "it has started", which is no longer true and which he already has.
                 last_said = said.clone();
-                if helper_turn {
-                    keep_words(&mut answer, &said);
-                } else if !said.trim().is_empty() {
-                    answer = said;
-                }
+                fold_turn(&mut answer, &said, helper_turn);
                 // Each continuation turn is a back-end turn too (§4.1 (b)).
                 self.project_output(record, &session);
                 // **A TURN THAT PRODUCED NOTHING IS A TURN THIS HOST DID NOT GET.** Not
@@ -8861,6 +8875,15 @@ mod tests {
         let done = read();
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         assert!(done.detail != WILL_WORKS && done.detail != BETH_WORKS, "the waiting sentence outlived the answer: {}", done.detail);
+        // And when a background command's report turn starts the consult, that turn REPLACES the
+        // account ("it has started"), and its declared wait stays out of his answer all the same
+        // (second review rv-20261015T110858Z-a5f8a28b-a1ab, fixture command_then_consult.py).
+        let mut account = "The analysis is running.".to_string();
+        fold_turn(&mut account, "The analysis found 12 qualified leads.\n\nstop-declared: waiting-on-teammate — \
+            Will is working on the outreach recommendation now.", false);
+        fold_turn(&mut account, "Will recommends starting with the three largest leads.", true);
+        assert_eq!(account, "The analysis found 12 qualified leads.\n\nWill recommends starting with the three largest leads.",
+            "a command's report kept its waiting sentence above the answer");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
