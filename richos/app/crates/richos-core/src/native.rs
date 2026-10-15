@@ -1433,6 +1433,8 @@ struct ReaderState {
     /// waiting for his first word (`front-desk.md`, "The record").
     /// [`NativeClient::handle_agent_request`] reads it.
     spoken_this_turn: bool,
+    /// Presentation is complete when Rich starts bookkeeping after his answer.
+    answer_complete_sent: bool,
     /// **The `tool_use` id of the register call on the turn in flight**, so its result can be
     /// recognized when it comes back.
     ///
@@ -1681,6 +1683,7 @@ impl Default for ReaderState {
             // Production sets it from the role one statement after construction.
             tool_residency: None,
             spoken_this_turn: false,
+            answer_complete_sent: false,
             continuity_tools_grant: None,
             register_call_id: None,
             receipt_said: None,
@@ -2387,6 +2390,7 @@ impl NativeClient {
         text_deltas: &Arc<AtomicUsize>,
     ) {
         let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let mut answer_complete = false;
 
         // Kept whichever turn (or none) the frame belongs to: it is a reading of the account.
         if ty == "rate_limit_event" {
@@ -2660,7 +2664,7 @@ impl NativeClient {
                         state.lock().unwrap().register_call_id = Some(id.to_string());
                     }
                 }
-                Self::note_the_checkpoint(block, state);
+                answer_complete |= Self::note_the_checkpoint(block, state);
             }
             if ev_ty == "content_block_delta"
                 && ev.get("delta").and_then(|d| d.get("type")).and_then(|v| v.as_str()) == Some("text_delta")
@@ -2746,7 +2750,7 @@ impl NativeClient {
         // model that has been instructed to say nothing and a host that cannot say anything. So
         // the model keeps its instruction, the app beats it to the words by a round trip, and the
         // duplicate is withheld HERE — where the host can see both and he can only ever see one.
-        let answer_complete = ty == "user" && Self::settle_the_checkpoint(&msg, state);
+        if ty == "user" { Self::settle_the_checkpoint(&msg, state); }
         if ty == "user" && !state.lock().unwrap().context_only {
             let said = {
                 let st = state.lock().unwrap();
@@ -2795,28 +2799,6 @@ impl NativeClient {
         // guard below exists: `--include-partial-messages` is a flag, and the app must not stop
         // speaking because it stopped working. Whichever frame arrives first wins; both name the
         // same id.
-        if ty == "assistant" {
-            for block in msg
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_array())
-                .map(|blocks| blocks.as_slice())
-                .unwrap_or(&[])
-            {
-                if block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
-                    && block.get("name").and_then(|v| v.as_str())
-                        == Some(crate::assignment_tools::QUALIFIED_RECORD_TOOL)
-                {
-                    if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
-                        state.lock().unwrap().register_call_id = Some(id.to_string());
-                    }
-                }
-                // The checkpoint off the COMPLETE message too, for the reason the register's id
-                // is read here as well: `--include-partial-messages` is a flag, and whichever
-                // frame arrives first must be enough.
-                Self::note_the_checkpoint(block, state);
-            }
-        }
 
         if ty == "assistant" && text_deltas.load(Ordering::SeqCst) == 0 {
             let whole: String = msg
@@ -2854,13 +2836,32 @@ impl NativeClient {
             }
         }
 
+        if ty == "assistant" {
+            for block in msg
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+                .map(|blocks| blocks.as_slice())
+                .unwrap_or(&[])
+            {
+                if block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
+                    && block.get("name").and_then(|v| v.as_str())
+                        == Some(crate::assignment_tools::QUALIFIED_RECORD_TOOL)
+                {
+                    if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                        state.lock().unwrap().register_call_id = Some(id.to_string());
+                    }
+                }
+                // The checkpoint off the COMPLETE message too, for the reason the register's id
+                // is read here as well: `--include-partial-messages` is a flag, and whichever
+                // frame arrives first must be enough.
+                answer_complete |= Self::note_the_checkpoint(block, state);
+            }
+        }
+
         Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
-        // **HIS ANSWER IS COMPLETE, AND THE TURN RUNS ON OUT OF SIGHT** (product hunt
-        // 2026-10-15, finding 21: "Rich is working" stayed up about 22 s after the answer was on
-        // screen, while the model wrote the whole answer again after its checkpoint, withheld).
-        // After the frame that completes the checkpoint's row, and only into a turn that is his
-        // and ours: a priming turn is not his, and a turn the child has not named yet is not
-        // running. Nothing is sent to the child and nothing ends here.
+        // The answer has reached him. Checkpoint execution continues independently;
+        // presentation must not wait for its arguments, disk writes or acceptance.
         if answer_complete && !state.lock().unwrap().context_only {
             if let Some(pending) = current.lock().unwrap().as_ref().filter(|p| !p.not_yet_ours()) {
                 // A closed receiver means the turn has already ended: nothing is left to tell.
@@ -2871,6 +2872,7 @@ impl NativeClient {
         }
     }
 
+    /// Observe bookkeeping after the answer, before waiting for the checkpoint result.
     /// **THE TURN HAS WRITTEN ITS CHECKPOINT, AND HE HAD ALREADY BEEN ANSWERED WHEN IT DID** —
     /// Ray's candidate-.11 defect 2.4. [`WITHHELD_AFTER_THE_CHECKPOINT`] has the reasoning and
     /// the two paragraphs he read; `ReaderState::checkpoint_after_his_words` has why the second
@@ -2879,12 +2881,12 @@ impl NativeClient {
     /// `block` is one `content` entry off either frame that can carry a `tool_use` — the
     /// streamed `content_block_start` or the whole `assistant` message. Anything else is
     /// ignored, so this costs one string compare per block.
-    fn note_the_checkpoint(block: &Value, state: &Arc<Mutex<ReaderState>>) {
+    fn note_the_checkpoint(block: &Value, state: &Arc<Mutex<ReaderState>>) -> bool {
         if block.get("type").and_then(|v| v.as_str()) != Some("tool_use") {
-            return;
+            return false;
         }
         if block.get("name").and_then(|v| v.as_str()) != Some(CONTINUITY_CHECKPOINT_TOOL) {
-            return;
+            return false;
         }
         let mut st = state.lock().unwrap();
         // **NEVER BEFORE HIS FIRST WORDS.** A checkpoint ahead of the reply is refused by the
@@ -2900,8 +2902,13 @@ impl NativeClient {
         if st.spoken_this_turn && !st.checkpoint_after_his_words {
             if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
                 st.checkpoint_call_id = Some(id.to_string());
+                if !st.answer_complete_sent {
+                    st.answer_complete_sent = true;
+                    return true;
+                }
             }
         }
+        false
     }
 
     /// **THE CHECKPOINT ANSWERED** — the other half of [`Self::note_the_checkpoint`]. `msg` is a
@@ -2910,14 +2917,9 @@ impl NativeClient {
     /// (`adapters/mcp.py` answers `"isError": True` for a refusal), so anything else is a
     /// checkpoint that succeeded and the closing line after it is the duplicate to withhold.
     ///
-    /// Returns whether THIS frame settled it as ACCEPTED, which is the moment his answer is
-    /// complete ([`ChunkMsg::AnswerComplete`]). Not `is_error` alone: the engine answers a
-    /// checkpoint it rejected (a commitment with no title) without `isError` and with
-    /// `"accepted": false` in its receipt (`ecs_checkpoint.py` `receipt_result`), and the model
-    /// may still repair it.
-    fn settle_the_checkpoint(msg: &Value, state: &Arc<Mutex<ReaderState>>) -> bool {
+    fn settle_the_checkpoint(msg: &Value, state: &Arc<Mutex<ReaderState>>) {
         let mut st = state.lock().unwrap();
-        let Some(pending) = st.checkpoint_call_id.clone() else { return false };
+        let Some(pending) = st.checkpoint_call_id.clone() else { return };
         let blocks = msg.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array());
         for block in blocks.map(|b| b.as_slice()).unwrap_or(&[]) {
             if block.get("type").and_then(|v| v.as_str()) == Some("tool_result")
@@ -2926,29 +2928,10 @@ impl NativeClient {
                 st.checkpoint_call_id = None;
                 if block.get("is_error").and_then(|v| v.as_bool()) != Some(true) {
                     st.checkpoint_after_his_words = true;
-                    return Self::checkpoint_accepted(block);
                 }
-                return false;
+                return;
             }
         }
-        false
-    }
-
-    /// Whether a checkpoint's `tool_result` carries the engine's receipt with
-    /// `"accepted": true`. The content is a plain string or an array of `{type:"text", text}`
-    /// blocks (both observed, `machinery::block_text`); anything unreadable is not accepted.
-    fn checkpoint_accepted(block: &Value) -> bool {
-        let text = match block.get("content") {
-            Some(Value::String(s)) => s.clone(),
-            Some(Value::Array(parts)) => {
-                parts.iter().filter_map(|p| p.get("text").and_then(|t| t.as_str())).collect::<Vec<_>>().join("")
-            }
-            _ => return false,
-        };
-        serde_json::from_str::<Value>(text.trim())
-            .ok()
-            .and_then(|receipt| receipt.get("accepted").and_then(Value::as_bool))
-            == Some(true)
     }
 
     /// ROUTED WHEN THERE IS A TURN, PARKED WHEN THERE IS NOT (§1.5, gap #1).
@@ -3229,6 +3212,7 @@ impl NativeClient {
                 // next one would suppress that turn's reply on the strength of this one's.
                 let mut state = self.reader_state.lock().unwrap();
                 state.spoken_this_turn = false;
+                state.answer_complete_sent = false;
                 state.register_call_id = None;
                 state.receipt_said = None;
                 state.withheld_after_receipt.clear();
@@ -7581,13 +7565,9 @@ read -r keep_alive
     }
 
     #[test]
-    fn the_answer_is_complete_at_the_accepted_checkpoint_and_the_turn_still_ends_at_its_own_end() {
-        // Product hunt 2026-10-15, finding 21: "Rich is working" stayed up about 22 s after the
-        // answer was on screen (first words 7.8 s, turn end 29.7 s), while the model wrote its
-        // checkpoint and then the whole answer again (withheld). The lease says the answer is
-        // complete at the ACCEPTED checkpoint, after the checkpoint's own row, and the turn
-        // itself still ends at the child's `result`, with the tail withheld as before. A
-        // rejected receipt (`"accepted": false`, not an `isError`) says nothing.
+    fn the_answer_is_complete_before_bookkeeping_and_the_turn_still_ends_at_its_own_end() {
+        // The presentation boundary is the start of bookkeeping after speech. Its result
+        // and the terminal provider frame must still be consumed, including rejection.
         let script = write_script("answer-complete-at-the-checkpoint", r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
@@ -7596,6 +7576,8 @@ ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
 test -n "$ours" || exit 9
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
 printf '%s\n' '{"type":"stream_event","event":{"type":"message_start"}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_BEFORE","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_BEFORE","is_error":true,"content":"Answer first."}]}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":[{"type":"text","text":"{\"accepted\":true,\"applied\":1,\"rejected\":0}"}]}]}}'
@@ -7605,14 +7587,14 @@ printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"stat
 read -r prompt
 ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_RJ","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"message_start"}}'
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Here are three."},{"type":"tool_use","id":"toolu_RJ","name":"mcp__richos_continuity__checkpoint","input":{}}]}}'
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_RJ","content":"{\"accepted\":false,\"applied\":0,\"rejected\":1}"}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
 read -r keep_alive
 "#);
-        let client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
+        let client = NativeClient::spawn(&script, &std::env::temp_dir(), &doctrine_fixture(), &skills_fixture()).unwrap();
         #[derive(Debug, PartialEq)]
         enum Seen {
             Said(String),
@@ -7642,7 +7624,9 @@ read -r keep_alive
         assert_eq!(log.iter().filter(|s| **s == Seen::Complete).count(), 1, "said once: {log:?}");
         let complete = log.iter().position(|s| *s == Seen::Complete).unwrap();
         let row = log.iter().rposition(|s| *s == Seen::Checkpoint).expect("the checkpoint's row");
-        assert!(complete > row, "complete only after the checkpoint's own row: {log:?}");
+        let first_row = log.iter().position(|s| *s == Seen::Checkpoint).unwrap();
+        assert!(complete > first_row && complete < row,
+            "presentation completes after the call opens and before its result: {log:?}");
         // THE TURN WAITED FOR ITS OWN END: its `result` was consumed by this prompt, not left
         // on the between-turn lane for whatever came next.
         assert!(
@@ -7654,7 +7638,7 @@ read -r keep_alive
 
         let (reason, log) = run(&client, "Again, please.");
         assert_eq!(reason, "end_turn");
-        assert!(!log.contains(&Seen::Complete), "a rejected checkpoint completes nothing: {log:?}");
+        assert_eq!(log.iter().filter(|s| **s == Seen::Complete).count(), 1, "bookkeeping rejection does not undo the answer: {log:?}");
     }
 
     #[test]
