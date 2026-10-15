@@ -264,7 +264,6 @@ pub struct Diagnostics {
     pub output_channels: u16,
     pub stt_model: String,
     pub stt_binary: String,
-    pub tts_voice: String,
     pub echo_gate: String,
     pub echo_cancellation: bool,
     /// The CONSECUTIVE fallback: 313 frames = 5.008 s. In force only when there is no canceller
@@ -332,7 +331,7 @@ impl Diagnostics {
             )
         };
         format!(
-            "in={} {} Hz/{} ch · out={} {} Hz/{} ch · stt={} · tts={} · aec={} · {barge_in}",
+            "in={} {} Hz/{} ch · out={} {} Hz/{} ch · stt={} · aec={} · {barge_in}",
             self.input_source,
             self.input_rate,
             self.input_channels,
@@ -340,7 +339,6 @@ impl Diagnostics {
             self.output_rate,
             self.output_channels,
             self.stt_model,
-            self.tts_voice,
             self.echo_gate,
         )
     }
@@ -1717,8 +1715,6 @@ impl VoiceController {
         let (aec, reference_ring) = EchoCanceller::new();
         let playout =
             Arc::new(Playout::start(Some(reference_ring)).map_err(VoiceStartError::Playout)?);
-        // Rich's voice: Pocket TTS as Peter Yearsley once installed, `say` until then (tts.rs).
-        let synth: Arc<dyn SpeechSynth> = Arc::new(RichVoice::new());
 
         let shared = Arc::new(Shared {
             level: AtomicU32::new(0),
@@ -1734,6 +1730,10 @@ impl VoiceController {
             no_audio: AtomicBool::new(false),
             running: AtomicBool::new(true),
         });
+        // Rich's voice and no other (tts.rs): a sentence waits while it is installed or loaded,
+        // and stops waiting the moment voice goes off.
+        let wanted = shared.clone();
+        let synth: Arc<dyn SpeechSynth> = Arc::new(RichVoice::waiting_while(move || wanted.running.load(Ordering::Relaxed)));
         let machine = Arc::new(Mutex::new(VoiceStateMachine::new()));
         machine.lock().unwrap().start();
         let gate: Arc<Mutex<AnswerGate<SpeakMsg>>> = Arc::new(Mutex::new(AnswerGate::new()));
@@ -1821,7 +1821,6 @@ impl VoiceController {
             output_channels: playout.channels,
             stt_model: recognizer.model_id().to_string(),
             stt_binary: recognizer.binary_path().display().to_string(),
-            tts_voice: synth.voice_label(),
             echo_gate: format!(
                 "PBFDAF {} taps ({:.0} ms tail)",
                 crate::aec::AEC_TAPS,
@@ -1908,6 +1907,7 @@ impl VoiceController {
             let scratch = opts.scratch_dir.clone();
             let observer = observer.clone();
             threads.push(std::thread::spawn(move || {
+                let mut told: Option<u64> = None;
                 while let Ok(msg) = speak_rx.recv() {
                     // This sentence is no longer "owed" from the moment this body ends,
                     // whichever way it ends. See `PendingSpeech`.
@@ -1937,7 +1937,12 @@ impl VoiceController {
                     });
                     if let Err(e) = result {
                         eprintln!("[richos-voice] tts failed: {e}");
-                        observer.on_voice_event(&VoiceEvent::Error { message: e.ceo_message(), at: now_millis() });
+                        // Told once, not once per sentence (again only after an interruption starts
+                        // a new speech generation), and never after voice went off.
+                        if shared.running.load(Ordering::Relaxed) && told != Some(msg.generation) {
+                            told = Some(msg.generation);
+                            observer.on_voice_event(&VoiceEvent::Error { message: e.ceo_message(), at: now_millis() });
+                        }
                     }
                 }
             }));
@@ -5215,7 +5220,6 @@ mod tests {
             output_channels: 2,
             stt_model: "small.en".into(),
             stt_binary: "/opt/homebrew/bin/whisper-cli".into(),
-            tts_voice: "macOS say · Daniel · 180 wpm".into(),
             echo_gate: "PBFDAF 2048 taps (128 ms tail)".into(),
             echo_cancellation: true,
             barge_in_frames: BARGE_IN_DEBOUNCE_FRAMES,

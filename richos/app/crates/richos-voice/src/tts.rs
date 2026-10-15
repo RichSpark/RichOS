@@ -1,41 +1,28 @@
-//! Text to speech — ONE bundled Rich voice, behind a trait so it can be replaced.
+//! Text to speech — ONE Rich voice, behind a trait so it can be replaced.
 //!
 //! CEO decision, 2026-08-24: *"ONE bundled Rich voice for v1. Voice choice/cloning is a later
 //! feature — do not build selection UI."* So there is no picker, no settings row, and no
-//! per-thread voice. There is one voice, one env override for an operator, and a trait seam.
+//! per-thread voice.
 //!
-//! ## Why macOS `say` for v1, and what it costs
+//! **Rich's voice is Pocket TTS ([`RichVoice`], `pocket.rs`) and nothing else** (CEO, 2026-10-15:
+//! Rich speaks only in his own voice, and no log line names or describes it). No macOS voice
+//! stands in for it: while it is being installed or loaded a sentence waits for it
+//! ([`VoiceGate`]).
 //!
-//! `say` is AVSpeechSynthesizer on the command line: already present on every Mac, offline,
-//! free, zero bytes to bundle, and — the part that matters for a conversation — fast.
-//! Measured on this M4: a 4.358 s sentence synthesizes to 48 kHz PCM in **0.324 s**, a
-//! real-time factor of **0.074**, i.e. ~13.5x faster than it plays. That headroom is exactly
-//! what makes gapless sentence pipelining work: sentence N+1 is always ready before sentence
-//! N finishes.
-//!
-//! What it costs: the compact system voices are recognizably synthetic next to a modern
-//! neural voice. Two upgrade paths, neither of which touches this pipeline:
-//! 1. **Free, no code:** the CEO installs an Enhanced/Premium variant in System Settings ->
-//!    Accessibility -> Spoken Content. [`pick_voice`] already prefers those variants, so the
-//!    same "Daniel" gets materially better the moment one exists. **None is installed on this
-//!    machine today** — `say -v '?'` lists 177 voices and zero of them are Enhanced or Premium.
-//! 2. **Bundled neural voice:** implement [`SpeechSynth`] over Piper/Kokoro and hand the
-//!    packaging engineer a model file. Nothing above this trait changes.
-//!
-//! The voice IDENTITY is "Daniel" — en_GB, calm and measured, which is the chief-of-staff
-//! register the design lead's direction asks for. `RICHOS_TTS_VOICE` overrides it for an operator; it
-//! is deliberately NOT surfaced in the UI.
+//! [`MacSay`] stays for the echo-path measuring tools (`examples/aec_*.rs`), which need a
+//! loudspeaker signal and are never Rich speaking to anyone. Measured on this M4 when it was v1's
+//! synthesizer: a 4.358 s sentence synthesizes to 48 kHz PCM in **0.324 s**, a real-time factor
+//! of **0.074**.
 
 use crate::pocket::{self, PocketSynth};
 use crate::wav;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
-/// The bundled Rich voice, in preference order. The first three are the SAME voice at
-/// increasing quality — if the CEO ever installs an Enhanced/Premium variant, Rich simply
-/// sounds better with no code change. The tail is a fallback for a stripped system.
+/// [`MacSay`]'s voice for the echo-path measuring tools, in preference order: the SAME voice at
+/// increasing quality first, then a fallback for a stripped system. Never Rich's voice.
 pub const VOICE_PREFERENCE: &[&str] =
     &["Daniel (Premium)", "Daniel (Enhanced)", "Daniel", "Reed (English (US))", "Samantha"];
 
@@ -47,6 +34,9 @@ pub enum TtsError {
     Io(String),
     Failed { status: String, stderr: String },
     Decode(String),
+    /// Rich's voice cannot speak this sentence: its install or load failed, or voice went off
+    /// while the sentence waited for it. No other voice stands in.
+    Unavailable(String),
 }
 
 impl TtsError {
@@ -69,6 +59,7 @@ impl std::fmt::Display for TtsError {
             TtsError::Io(s) => write!(f, "tts io: {s}"),
             TtsError::Failed { status, stderr } => write!(f, "say failed ({status}): {stderr}"),
             TtsError::Decode(s) => write!(f, "tts decode: {s}"),
+            TtsError::Unavailable(s) => write!(f, "{s}"),
         }
     }
 }
@@ -117,7 +108,7 @@ pub trait SpeechSynth: Send + Sync {
     fn voice_label(&self) -> String;
 }
 
-/// macOS `say`. v1's synthesizer.
+/// macOS `say`, for the echo-path measuring tools only. Never Rich's voice.
 pub struct MacSay {
     voice: String,
     rate_wpm: u32,
@@ -206,93 +197,245 @@ impl SpeechSynth for MacSay {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rich's voice as shipped: Pocket TTS as Peter Yearsley, `say` until it is on this machine.
+// Rich's voice: Pocket TTS, and nothing else. A sentence waits while it is installed or loaded.
 // ---------------------------------------------------------------------------------------------
 
-/// Where the process-wide Pocket engine has got to. One per process: the graphs are ~165 MB and
-/// loading them is seconds, so a second voice-mode start must not pay it again.
-enum PocketState {
-    /// Not loaded, and no load running. The files may or may not be on disk.
+/// How often a waiting sentence asks whether it is still wanted (voice mode still on). Only a
+/// voice-off can end the wait between two state changes, and 100 ms is well inside how fast
+/// switching voice off already feels (`FINISH_WAIT` alone is 500 ms).
+const WAIT_SLICE: Duration = Duration::from_millis(100);
+
+/// Where Rich's voice has got to on this machine.
+enum VoiceStage<T> {
+    /// Not loaded, and no install or load running. The files may or may not be on disk.
     Idle,
+    /// The app is installing the voice files (`voice_provision.rs`). A sentence waits.
+    Installing,
+    /// The files are here and the engine is loading. A sentence waits.
     Loading,
-    Ready(Arc<PocketSynth>),
-    /// The load failed. Not retried per sentence; [`warm_rich_voice`] tries again.
+    Ready(Arc<T>),
+    /// The last load failed. Not retried per sentence; [`warm_rich_voice`] tries again.
     Failed,
 }
 
-static POCKET: Mutex<PocketState> = Mutex::new(PocketState::Idle);
+/// **The one place a sentence waits for Rich's voice** (CEO, 2026-10-15: no other voice, ever;
+/// a voice that is not installed gets installed). Generic so the waiting can be proved without
+/// the 166 MB of weights: the engine is [`PocketSynth`] in the app and a stand-in in the tests.
+pub struct VoiceGate<T> {
+    stage: Mutex<VoiceStage<T>>,
+    changed: Condvar,
+}
 
-/// Start loading Pocket TTS in the background if its files are all present and it is not loaded.
-/// Returns at once. Called at voice-mode start and after the download finishes, so the first
-/// sentence usually finds the engine ready; until it is, Rich speaks with `say`.
-pub fn warm_rich_voice() {
-    let Some(dir) = pocket::bundle_dir() else { return };
-    let mut state = POCKET.lock().unwrap_or_else(|p| p.into_inner());
-    if !matches!(*state, PocketState::Idle | PocketState::Failed) || !pocket::missing_files(&dir).is_empty() {
-        return;
+impl<T> VoiceGate<T> {
+    pub const fn new() -> Self {
+        VoiceGate { stage: Mutex::new(VoiceStage::Idle), changed: Condvar::new() }
     }
-    *state = PocketState::Loading;
-    drop(state);
+
+    fn lock(&self) -> MutexGuard<'_, VoiceStage<T>> {
+        self.stage.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The app has started installing the voice files.
+    pub fn installing(&self) {
+        let mut stage = self.lock();
+        if matches!(*stage, VoiceStage::Idle | VoiceStage::Failed) {
+            *stage = VoiceStage::Installing;
+        }
+        self.changed.notify_all();
+    }
+
+    /// The install has ended, either way. A waiting sentence then loads the files if all are here.
+    pub fn install_ended(&self) {
+        let mut stage = self.lock();
+        if matches!(*stage, VoiceStage::Installing) {
+            *stage = VoiceStage::Idle;
+        }
+        self.changed.notify_all();
+    }
+
+    /// Claim the load when nothing holds or loads the voice and its files are here. `true`: the
+    /// caller loads it and reports with [`VoiceGate::loaded`].
+    pub fn claim_load(&self, have_files: bool) -> bool {
+        let mut stage = self.lock();
+        if have_files && matches!(*stage, VoiceStage::Idle | VoiceStage::Failed) {
+            *stage = VoiceStage::Loading;
+            return true;
+        }
+        false
+    }
+
+    /// The load has ended: the engine, or `None` when it failed.
+    pub fn loaded(&self, engine: Option<T>) {
+        *self.lock() = match engine {
+            Some(engine) => VoiceStage::Ready(Arc::new(engine)),
+            None => VoiceStage::Failed,
+        };
+        self.changed.notify_all();
+    }
+
+    pub fn ready(&self) -> Option<Arc<T>> {
+        match &*self.lock() {
+            VoiceStage::Ready(engine) => Some(engine.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn failed(&self) -> bool {
+        matches!(*self.lock(), VoiceStage::Failed)
+    }
+
+    /// The stage in words, for the log lines that name Rich's voice before it can speak.
+    pub fn describe(&self) -> &'static str {
+        match *self.lock() {
+            VoiceStage::Idle => "not installed",
+            VoiceStage::Installing => "being installed; Rich waits for it",
+            VoiceStage::Loading => "loading; Rich waits for it",
+            VoiceStage::Ready(_) => "ready",
+            VoiceStage::Failed => "could not load",
+        }
+    }
+
+    /// **Wait for Rich's voice while it is being installed or loaded**, starting the load when its
+    /// files are here and nothing has loaded them. `None` only when it cannot come: no install is
+    /// running and the files are absent, the load failed, `deadline` passed, or `keep_waiting`
+    /// says the sentence is no longer wanted.
+    pub fn wait(
+        &self,
+        have_files: &dyn Fn() -> bool,
+        load: &dyn Fn(),
+        deadline: Option<Instant>,
+        keep_waiting: &dyn Fn() -> bool,
+    ) -> Option<Arc<T>> {
+        let mut stage = self.lock();
+        loop {
+            match &*stage {
+                VoiceStage::Ready(engine) => return Some(engine.clone()),
+                VoiceStage::Failed => return None,
+                VoiceStage::Idle => {
+                    if !have_files() {
+                        return None;
+                    }
+                    *stage = VoiceStage::Loading;
+                    drop(stage);
+                    load();
+                    stage = self.lock();
+                }
+                VoiceStage::Installing | VoiceStage::Loading => {
+                    if !keep_waiting() {
+                        return None;
+                    }
+                    let mut slice = WAIT_SLICE;
+                    if let Some(deadline) = deadline {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            return None;
+                        }
+                        slice = slice.min(deadline - now);
+                    }
+                    stage = match self.changed.wait_timeout(stage, slice) {
+                        Ok((guard, _)) => guard,
+                        Err(poisoned) => poisoned.into_inner().0,
+                    };
+                }
+            }
+        }
+    }
+}
+
+impl<T> Default for VoiceGate<T> {
+    fn default() -> Self {
+        VoiceGate::new()
+    }
+}
+
+/// Rich's voice in this process. One per process: the graphs are ~165 MB and loading them is
+/// seconds, so a second voice-mode start must not pay it again.
+static POCKET: VoiceGate<PocketSynth> = VoiceGate::new();
+
+fn have_rich_voice_files() -> bool {
+    pocket::bundle_dir().is_some_and(|dir| pocket::missing_files(&dir).is_empty())
+}
+
+/// Load the voice on a background thread; the gate is already `Loading`.
+fn load_rich_voice() {
+    let Some(dir) = pocket::bundle_dir() else {
+        POCKET.loaded(None);
+        return;
+    };
+    // Loaded in silence (CEO, 2026-10-15: no log lines about the voice). Only a FAULT is written,
+    // because a load that fails with nothing on record cannot be diagnosed.
     std::thread::spawn(move || {
         let loaded = PocketSynth::load(&dir);
-        let mut state = POCKET.lock().unwrap_or_else(|p| p.into_inner());
-        *state = match loaded {
-            Ok(synth) => {
-                eprintln!("[richos-voice] Pocket TTS ready ({}), loaded and verified in {} ms", synth.voice_label(), synth.load_ms);
-                PocketState::Ready(Arc::new(synth))
-            }
-            Err(e) => {
-                eprintln!("[richos-voice] Pocket TTS could not load, speaking with say instead: {e}");
-                PocketState::Failed
-            }
-        };
+        if let Err(e) = &loaded {
+            eprintln!("[richos-voice] speech synthesis could not load: {e}");
+        }
+        POCKET.loaded(loaded.ok());
     });
 }
 
-/// True when the last Pocket TTS load failed (its reason is on stderr). Rich is speaking with `say`.
+/// Start loading Rich's voice in the background if its files are all present and it is not
+/// loaded. Returns at once. The app calls it when it is up and right after it installs the voice,
+/// so a sentence finds it ready; one that does not waits for it ([`VoiceGate::wait`]).
+pub fn warm_rich_voice() {
+    if POCKET.claim_load(have_rich_voice_files()) {
+        load_rich_voice();
+    }
+}
+
+/// The app has started installing Rich's voice (`voice_provision.rs`): a sentence waits for it.
+pub fn rich_voice_installing() {
+    POCKET.installing();
+}
+
+/// The app's install of Rich's voice has ended, either way: a waiting sentence loads it.
+pub fn rich_voice_install_ended() {
+    POCKET.install_ended();
+}
+
+/// True when the last load of Rich's voice failed (its reason is on stderr).
 pub fn rich_voice_load_failed() -> bool {
-    matches!(*POCKET.lock().unwrap_or_else(|p| p.into_inner()), PocketState::Failed)
+    POCKET.failed()
 }
 
-/// The loaded Pocket engine, if there is one. Starts a load when the files have just arrived.
-fn ready_pocket() -> Option<Arc<PocketSynth>> {
-    if let PocketState::Ready(p) = &*POCKET.lock().unwrap_or_else(|p| p.into_inner()) {
-        return Some(p.clone());
-    }
-    if matches!(*POCKET.lock().unwrap_or_else(|p| p.into_inner()), PocketState::Idle) {
-        warm_rich_voice();
-    }
-    None
-}
-
-/// Rich's voice: Pocket TTS speaking as Peter Yearsley (CEO, 2026-10-14) once its pinned files are
-/// on this machine and loaded, and macOS `say` until then — or for any one sentence Pocket fails
-/// on, so a fault costs that sentence its voice and never costs him the answer.
+/// **Rich's voice: Pocket TTS, and only Pocket TTS** (CEO, 2026-10-14 and 2026-10-15). No other
+/// voice ever speaks for him: while his voice is being installed or loaded, a sentence waits for
+/// it; when it cannot come (the install failed, the load failed, voice was switched off) the
+/// sentence fails and the conversation continues in text.
 pub struct RichVoice {
-    fallback: MacSay,
+    /// False ends a wait for the voice: voice mode was switched off while the sentence waited.
+    keep_waiting: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl RichVoice {
     pub fn new() -> RichVoice {
-        warm_rich_voice();
-        RichVoice { fallback: MacSay::new() }
+        RichVoice::waiting_while(|| true)
     }
 
-    /// A whole reply for a caller that bounds a hung `say` (the phone channel). Pocket runs in this
-    /// process and cannot hang the way a child can, so the bound applies to the fallback.
-    pub fn synthesize_bounded(&self, text: &str, target_rate: u32, scratch_dir: &Path, timeout: std::time::Duration) -> Result<Speech, TtsError> {
-        if let Some(pocket) = ready_pocket() {
-            match pocket.synthesize(text, target_rate, scratch_dir) {
-                Ok(speech) => return Ok(speech),
-                Err(e) => eprintln!("[richos-voice] Pocket TTS failed on a reply, speaking it with say: {e}"),
-            }
+    /// A voice whose sentences stop waiting for it once `keep_waiting` turns false. Creating one
+    /// loads nothing: the app loads Rich's voice when it is up (`voice_provision.rs`), never at
+    /// a Talk press (CEO, 2026-10-15).
+    pub fn waiting_while(keep_waiting: impl Fn() -> bool + Send + Sync + 'static) -> RichVoice {
+        RichVoice { keep_waiting: Box::new(keep_waiting) }
+    }
+
+    fn voice(&self, deadline: Option<Instant>) -> Result<Arc<PocketSynth>, TtsError> {
+        if let Some(engine) = POCKET.ready() {
+            return Ok(engine);
         }
-        self.fallback.synthesize_bounded(text, target_rate, scratch_dir, timeout)
+        POCKET
+            .wait(&have_rich_voice_files, &load_rich_voice, deadline, &*self.keep_waiting)
+            .ok_or_else(|| TtsError::Unavailable(format!("speech synthesis unavailable: {}", POCKET.describe())))
     }
 
-    /// True when the next sentence will be spoken by Pocket TTS.
+    /// A whole reply for a caller with a deadline (the phone channel): the wait for the voice is
+    /// bounded by `timeout`; synthesis itself runs in this process and cannot hang like a child.
+    pub fn synthesize_bounded(&self, text: &str, target_rate: u32, scratch_dir: &Path, timeout: Duration) -> Result<Speech, TtsError> {
+        self.voice(Some(Instant::now() + timeout))?.synthesize(text, target_rate, scratch_dir)
+    }
+
+    /// True when Rich's voice is loaded and the next sentence speaks at once.
     pub fn pocket_ready(&self) -> bool {
-        ready_pocket().is_some()
+        POCKET.ready().is_some()
     }
 }
 
@@ -304,20 +447,14 @@ impl Default for RichVoice {
 
 impl SpeechSynth for RichVoice {
     fn synthesize(&self, text: &str, target_rate: u32, scratch_dir: &Path) -> Result<Speech, TtsError> {
-        let (speech, label) = match ready_pocket() {
-            Some(pocket) => match pocket.synthesize(text, target_rate, scratch_dir) {
-                Ok(speech) => (speech, pocket.voice_label()),
-                Err(e) => {
-                    eprintln!("[richos-voice] Pocket TTS failed on a sentence, speaking it with say: {e}");
-                    (self.fallback.synthesize(text, target_rate, scratch_dir)?, self.fallback.voice_label())
-                }
-            },
-            None => (self.fallback.synthesize(text, target_rate, scratch_dir)?, self.fallback.voice_label()),
-        };
-        // THE TIME TO AUDIO, per sentence, measured. For the first sentence of an answer this is
-        // the time from the sentence reaching the speaker to its audio being ready to play.
+        let asked = Instant::now();
+        let pocket = self.voice(None)?;
+        let wait_ms = asked.elapsed().as_millis();
+        let speech = pocket.synthesize(text, target_rate, scratch_dir)?;
+        // THE TIME TO AUDIO, per sentence, measured: a timing figure for QA, naming no voice.
+        // `before synthesis` is the time the sentence waited for the voice to be ready.
         eprintln!(
-            "[richos-voice] tts: {:.2} s of speech synthesized in {} ms (rtf {:.3}) by {label}",
+            "[richos-voice] tts: {:.2} s of speech synthesized in {} ms (rtf {:.3}), {wait_ms} ms before synthesis",
             speech.duration_secs(),
             speech.synth_ms,
             speech.realtime_factor()
@@ -326,26 +463,29 @@ impl SpeechSynth for RichVoice {
     }
 
     fn synthesize_stream(&self, text: &str, target_rate: u32, scratch_dir: &Path, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<(), TtsError> {
-        if let Some(pocket) = ready_pocket() {
-            let mut delivered = false;
-            let result = pocket.synthesize_stream(text, target_rate, scratch_dir, &mut |pcm| {
-                delivered = true;
-                emit(pcm)
-            });
-            match result {
-                Ok(()) => return Ok(()),
-                Err(e) if delivered => return Err(e),
-                Err(e) => eprintln!("[richos-voice] Pocket TTS failed before playback, speaking with say: {e}"),
-            }
-        }
-        self.fallback.synthesize_stream(text, target_rate, scratch_dir, emit)
+        let asked = Instant::now();
+        let pocket = self.voice(None)?;
+        let wait_ms = asked.elapsed().as_millis();
+        let started = Instant::now();
+        let mut first_ms = None;
+        let mut samples = 0usize;
+        pocket.synthesize_stream(text, target_rate, scratch_dir, &mut |pcm| {
+            first_ms.get_or_insert(started.elapsed().as_millis());
+            samples += pcm.len();
+            emit(pcm)
+        })?;
+        // The same timing figures the streaming engine used to print, naming no voice.
+        eprintln!(
+            "[richos-voice] tts: {:.2} s of speech streamed in {} ms, first audio in {} ms, {wait_ms} ms before synthesis",
+            samples as f64 / target_rate.max(1) as f64,
+            started.elapsed().as_millis(),
+            first_ms.unwrap_or(0)
+        );
+        Ok(())
     }
 
     fn voice_label(&self) -> String {
-        match ready_pocket() {
-            Some(p) => p.voice_label(),
-            None => format!("{} (Rich's Pocket voice is not installed or loaded yet)", self.fallback.voice_label()),
-        }
+        "Rich's voice".into()
     }
 }
 

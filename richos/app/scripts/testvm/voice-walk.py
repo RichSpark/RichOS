@@ -70,12 +70,28 @@ command = adopt_walk.command
 
 STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'rich-voice',
          'new-conversation', 'heard', 'spoken', 'split']
-# Rich's voice (CEO 2026-10-14, "Pocket TTS: Peter Yearsley"). Not in the default run: the two steps
+# Rich's voice (CEO 2026-10-14, Pocket TTS). Not in the default run: the two steps
 # download 166 MB into the guest and wait for a spoken answer. Ask for them with --steps.
 DEFAULT_STEPS = ['identity', 'no-decoder', 'runtime', 'first-run', 'stage', 'relaunch', 'ready', 'heard']
-VOICE_INSTALLED = '[richos] rich voice: Pocket TTS and the Peter Yearsley voice are installed and verified'
-VOICE_NOT_INSTALLED = '[richos] rich voice: not installed this time'
-POCKET_LABEL = 'Pocket TTS english_2026-04 INT8 · Peter Yearsley'
+VOICE_NOT_INSTALLED = '[richos] speech synthesis install failed this time'
+# The nine pinned files of Rich's voice (pocket.rs FILES). The app installs them in silence, each
+# renamed into place only after its size and sha256 match its pin, so all nine present is the
+# install's receipt.
+VOICE_FOLDER = '/.config/richos/models/pocket-tts-english_2026-04'
+VOICE_FILES = ('bos_before_voice.npy', 'bundle.json', 'flow_lm_flow_int8.onnx', 'flow_lm_main_int8.onnx',
+               'mimi_decoder_int8.onnx', 'mimi_encoder.onnx', 'peter_yearsley.wav', 'text_conditioner.onnx',
+               'tokenizer.model')
+# CEO 2026-10-15: Rich speaks only in his own voice, and no log line names or describes it.
+# No app log line may name, describe or report loading a voice; only the `tts:` timing figures
+# (which name none) remain.
+VOICE_LINE_MARKERS = ('macOS say', 'with say', 'Daniel', 'Samantha', 'Reed (English', 'Yearsley', 'peter_yearsley', 'Pocket',
+                      "Rich's voice", 'rich voice:', 'tts=', 'first PCM', 'loaded and verified',
+                      'installed and verified')
+
+
+def voice_lines(lines):
+    """Every app log line about the voice itself (its name, its state, its loading)."""
+    return [l for l in lines if any(marker in l for marker in VOICE_LINE_MARKERS)]
 SPARE_READY = '[richos] a front desk is primed and waiting for the next new thread'
 READY = '[richos] voice: ready on this machine'
 NOT_READY = '[richos] voice: not ready on this machine'
@@ -91,20 +107,20 @@ def decoder_warm_before_capture(lines):
 
 
 def tts_timing(lines, completed):
-    """Whole-sentence synthesis and streaming first PCM are different measurements."""
+    """Whole-sentence synthesis and streaming first audio are different measurements; the
+    `before synthesis` figure is how long the sentence waited for the voice to be ready."""
     match = re.search(r' (synthesized|streamed) in (\d+) ms', completed)
     if not match:
         raise StepFailed('unrecognized TTS measurement: ' + completed)
     total = int(match.group(2))
+    wait = re.search(r'(\d+) ms before synthesis', completed)
+    timing = {'complete_synthesis_ms': total, 'wait_before_synthesis_ms': int(wait.group(1)) if wait else None}
     if match.group(1) == 'synthesized':
-        return {'first_audio_ms': total, 'complete_synthesis_ms': total}
-    for line in lines:
-        match = re.search(r'Pocket TTS first PCM in (\d+) ms', line)
-        if match:
-            return {'first_audio_ms': int(match.group(1)), 'complete_synthesis_ms': total}
-        if line == completed:
-            break
-    raise StepFailed('streamed speech has no first-PCM measurement: ' + completed)
+        return {'first_audio_ms': total, **timing}
+    first = re.search(r'first audio in (\d+) ms', completed)
+    if not first:
+        raise StepFailed('streamed speech has no first-audio measurement: ' + completed)
+    return {'first_audio_ms': int(first.group(1)), **timing}
 
 
 def spoken_prompts(rows):
@@ -389,7 +405,8 @@ class VoiceWalk(adopt_walk.Walk):
     def rich_voice(self):
         """Rich's voice reaches this guest the way it reaches a user: the app, finding voice ready,
         downloads the nine pinned Pocket TTS files in the background (voice_provision.rs
-        fetch_rich_voice_in_background) and says so in its log. Nothing is copied in."""
+        fetch_rich_voice_in_background), in silence; all nine in place is the receipt. Nothing is
+        copied in."""
         end = time.monotonic() + self.a.voice_within
         while time.monotonic() < end:
             # First-run may finish the download before relaunch. That relaunch
@@ -398,51 +415,47 @@ class VoiceWalk(adopt_walk.Walk):
             # receipt from this same run; a later fetch or failure supersedes it.
             logs = dict.fromkeys((self.payload + '/app.log', self.log))
             text = guest(self.vm, 'cat ' + ' '.join(shlex.quote(p) for p in logs) + ' 2>/dev/null || true')
-            fetch_log = [l for l in text.splitlines() if 'rich voice:' in l]
-            for line in fetch_log[-1:]:
-                if VOICE_NOT_INSTALLED in line:
-                    raise StepFailed(line)
-                if VOICE_INSTALLED in line:
-                    folder = self.home + '/.config/richos/models/pocket-tts-english_2026-04'
-                    listing = guest(self.vm, 'ls -l ' + shlex.quote(folder))
-                    voice = guest(self.vm, 'shasum -a 256 ' + shlex.quote(folder + '/peter_yearsley.wav')).split()[0]
-                    return {'line': line, 'files': listing.splitlines(), 'peter_yearsley_sha256': voice,
-                            'fetch_log': fetch_log}
+            failed = [l for l in text.splitlines() if VOICE_NOT_INSTALLED in l]
+            if failed:
+                raise StepFailed(failed[-1])
+            folder = self.home + VOICE_FOLDER
+            names = guest(self.vm, 'ls ' + shlex.quote(folder) + ' 2>/dev/null || true').split()
+            if all(name in names for name in VOICE_FILES):
+                listing = guest(self.vm, 'ls -l ' + shlex.quote(folder))
+                voice = guest(self.vm, 'shasum -a 256 ' + shlex.quote(folder + '/peter_yearsley.wav')).split()[0]
+                return {'files': listing.splitlines(), 'peter_yearsley_sha256': voice}
             time.sleep(2)
         raise StepFailed(f'the app did not install Rich\'s voice within {self.a.voice_within} s')
 
     def spoken(self):
-        """Rich answers aloud in Peter Yearsley's voice: the first sentence of his answer is
-        synthesized by Pocket TTS (the app's `[richos-voice] tts:` line names the voice).
-        Streaming records first PCM separately from completion. Output is muted in the guest."""
+        """Rich answers aloud in his own voice, with no wait for it and no log line about it: the
+        first sentence's `tts:` timing line (printed only by RichVoice, tts.rs, which speaks only
+        with Rich's voice) shows 0 ms before synthesis, and no line of the app's log names,
+        describes or reports loading a voice (VOICE_LINE_MARKERS). Output is muted in the guest."""
         end = time.monotonic() + self.a.within
         lines = []
         while time.monotonic() < end:
-            text = guest(self.vm, 'grep -E "\\[richos-voice\\] (tts:|Pocket TTS)" ' + shlex.quote(self.log) + ' || true')
+            text = guest(self.vm, 'grep -E "\\[richos-voice\\] tts:" ' + shlex.quote(self.log) + ' || true')
             lines = text.splitlines()
             spoken = [l for l in lines if '] tts: ' in l]
             if spoken:
                 first = spoken[0]
-                if POCKET_LABEL not in first:
-                    raise StepFailed(f'Rich\'s first sentence was not spoken by Pocket TTS as Peter Yearsley: {first}\n' +
-                                     '\n'.join(lines))
                 synthesis = tts_timing(lines, first)
                 time.sleep(5)
-                text = guest(self.vm, 'grep -E "\\[richos-voice\\] (tts:|Pocket TTS|ANSWER AUDIBLE)" ' + shlex.quote(self.log) + ' || true')
-                # The whole voice session, kept: the session's tts= line, every utterance, the
-                # end of his turn and the moment Rich became audible, on the app's own clock.
+                # The whole voice session, kept: every utterance, the end of his turn and the
+                # moment Rich became audible, on the app's own clock.
                 session = guest(self.vm, 'grep -F "[richos-voice]" ' + shlex.quote(self.log) + ' || true')
                 (self.out / 'voice-log.txt').write_text(session)
                 lines = session.splitlines()
-                # The session OPEN line names the voice loaded at that instant: on main 0a2ae649f it
-                # reads "macOS say · Daniel ... (Rich's Pocket voice is not installed or loaded yet)"
-                # and Pocket finishes loading about 3 s later, before Rich says anything. What he
-                # hears is every `tts:` line, so those decide; the OPEN line is recorded.
-                opened = [l for l in lines if 'voice session OPEN' in l]
                 said = [l for l in lines if '] tts: ' in l]
-                wrong = [l for l in said if POCKET_LABEL not in l]
-                if wrong:
-                    raise StepFailed('a sentence Rich spoke was not Pocket TTS as Peter Yearsley: ' + wrong[0])
+                foreign = [l for l in said if 'ms before synthesis' not in l]
+                if foreign:
+                    raise StepFailed('a sentence was spoken by something other than Rich\'s voice: ' + foreign[0])
+                about = voice_lines(guest(self.vm, 'cat ' + shlex.quote(self.log)).splitlines())
+                if about:
+                    raise StepFailed('the app log has a line about the voice itself: ' + about[0])
+                if synthesis['wait_before_synthesis_ms'] != 0:
+                    raise StepFailed('Rich\'s first sentence waited for his voice to be ready: ' + first)
                 if self.a.expect_warmed_decoder and not decoder_warm_before_capture(lines):
                     raise StepFailed('the first speech decoder initialization was not completed before capture opened')
                 timing = talk_timing(lines)
@@ -451,11 +464,9 @@ class VoiceWalk(adopt_walk.Walk):
                 if timing['audible_ms'] is None:
                     raise StepFailed('Rich synthesized speech but the session never logged ANSWER AUDIBLE: '
                                      + json.dumps(timing))
-                ready = [l for l in lines if 'Pocket TTS ready' in l]
-                return {'first_sentence': first, **synthesis, 'voice_log': text.splitlines()[-20:],
-                        'sentences': len(said), 'session_open': opened, 'pocket_ready': ready,
-                        'open_line_names_pocket': all('tts=' + POCKET_LABEL in l for l in opened),
-                        'timing': timing}
+                return {'first_sentence': first, **synthesis, 'sentences': len(said),
+                        'session_open': [l for l in lines if 'voice session OPEN' in l],
+                        'lines_about_the_voice': about, 'timing': timing}
             time.sleep(2)
         raise StepFailed(f'Rich spoke no sentence within {self.a.within} s; voice log:\n' + '\n'.join(lines))
 
@@ -516,7 +527,39 @@ class VoiceWalk(adopt_walk.Walk):
                 raise
             return None
 
-    def talk(self):
+    def press_to_listening_ms(self, pressed):
+        """Milliseconds from `pressed` (guest epoch seconds) to the first `voice session OPEN`
+        after it, on the app's own UTC clock. None when no such line arrives within 30 s."""
+        end = time.monotonic() + 30
+        while time.monotonic() < end:
+            text = guest(self.vm, 'grep -F "voice session OPEN" ' + shlex.quote(self.log) + ' || true')
+            for line in text.splitlines():
+                match = re.search(r'(\d\d):(\d\d):(\d\d)\.(\d\d\d)Z voice session OPEN', line)
+                if not match:
+                    continue
+                h, m, sec, ms = (int(x) for x in match.groups())
+                opened = h * 3600000 + m * 60000 + sec * 1000 + ms
+                pressed_ms = round((pressed % 86400) * 1000)
+                gap = (opened - pressed_ms) % 86400000
+                if gap < 600000:
+                    return gap
+            time.sleep(0.5)
+        return None
+
+    def mark_press(self):
+        """CEO 2026-10-15: what Talk needs is ready when the app is up, so pressing it listens at
+        once. Taken just before the press: whether the speech decoder has already initialized,
+        and the guest's clock, against which the app's own `voice session OPEN` stamp (printed
+        once capture is running) gives an upper bound on the press-to-listening gap."""
+        before = guest(self.vm, 'cat ' + shlex.quote(self.log)).splitlines()
+        return {'pressed': self.guest_clock(),
+                'decoder_ready': any('speech decoder initialized before capture' in l for l in before)}
+
+    def guest_clock(self):
+        """The guest's epoch seconds, to the millisecond (perl ships with macOS)."""
+        return float(guest(self.vm, "perl -MTime::HiRes -e 'printf \"%.3f\\n\", Time::HiRes::time()'").strip())
+
+    def talk(self, before_press=None):
         """Open the microphone the way a person does: through the home screen's door, then the talk
         control. TWO BUTTONS ARE NAMED "Talk to Rich". The home screen's door (#home-enter,
         home.js DOOR_LABEL) opens the conversation and nothing else, and while the home screen is
@@ -540,12 +583,26 @@ class VoiceWalk(adopt_walk.Walk):
         if not toggle:
             self.shot('talk-missing.png')
             raise StepFailed('the talk control (#talk-toggle) is not on screen within 30 s of the home door')
+        marked = before_press() if before_press else None
         self.press_by_id('talk-toggle')  # once; what it did is read below
+        clicked = self.guest_clock() if marked else None
         end = time.monotonic() + 30
         while time.monotonic() < end:
             toggle = self.by_id('talk-toggle') or {}
             if toggle.get('desc') == 'Stop talking':
-                return {'home_door_pressed': bool(door), 'talk_control': toggle}
+                result = {'home_door_pressed': bool(door), 'talk_control': toggle}
+                if marked:
+                    # The click is an accessibility round trip into the guest, so the press lands
+                    # somewhere inside it. Both bounds: from before the click was sent (upper),
+                    # and from when the click call returned (negative: listening began before
+                    # the click call had even returned).
+                    upper = self.press_to_listening_ms(marked['pressed'])
+                    click_ms = round((clicked - marked['pressed']) * 1000)
+                    result.update(decoder_ready_before_press=marked['decoder_ready'],
+                                  click_round_trip_ms=click_ms,
+                                  press_to_listening_ms=upper,
+                                  listening_after_click_returned_ms=None if upper is None else upper - click_ms)
+                return result
             time.sleep(1)
         self.shot('talk-refused.png')
         log = guest(self.vm, 'tail -40 ' + shlex.quote(self.log) + ' || true')
@@ -635,7 +692,7 @@ class VoiceWalk(adopt_walk.Walk):
 
     def heard(self):
         muted = self.mute_guest_output()
-        talk = self.talk()
+        talk = self.talk(self.mark_press)
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
             rows = self.spoken_rows()

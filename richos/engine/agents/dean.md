@@ -87,7 +87,7 @@ If video is relevant, use the available `watch-video` skill; if audio is relevan
 
 ### Frontmatter rules
 
-- **`name`:** lowercase kebab slug, exactly equal to the file name without `.md`. It is how Stu names the teammate.
+- **`name`:** the teammate's first name in lowercase letters a to z and digits only, at most 16: accents dropped, and any hyphen, space or apostrophe left out (Anne-Marie is `annemarie`, Renée is `renee`, Bjørn is `bjorn`). It is exactly the file name without `.md`, the name the team tool saves, and how Stu names the teammate.
 - **`description`:** one short line saying what the teammate is for. Stu reads every active teammate's description to choose who does a job, so make it specific: the role, then "Use for/when …".
 - **`model`:** `sonnet` by default; `opus` only for judgment-critical roles (architect, senior advisor, technical lead, design gatekeeper, adversarial QA). Always set it; never leave it to be inherited.
 - **`tools`:** exactly the line in the template. Those are the tools a teammate has.

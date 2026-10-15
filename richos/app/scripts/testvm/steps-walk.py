@@ -18,12 +18,14 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
   until  args[] contains seconds       repeat ax.sh VM <args...> until its output contains the text
   keys   text                          guest.sh osascript keystroke into the frontmost app
   push   src dest                      guest.sh VM --push src dest (src relative to the repository root, or absolute)
+  pull   src dest                      guest.sh VM --pull src <out>/dest: a guest file kept whole (a `guest`
+                                       step's output is cut at 2,000 characters), e.g. the app's log
   handfile mode path [to]              hand-file.sh VM paste|drag path [--to x,y]
   pointer points[] [right]             pointer-drag.sh VM x,y x,y ... [--right]: the REAL mouse. The same
                                        point twice is a click, the way a hand clicks; `ax click --at` is
                                        System Events' accessibility press at a point and does not focus
                                        a text box (candidate 50 rewalk, run K)
-  relaunch                             relaunch.py VM: the recorded app stopped by its captured PID and
+  relaunch [env[]]                     relaunch.py VM [--env KEY=VALUE ...]: the recorded app stopped by its captured PID and
                                        started again with its fixture environment (a choice that must
                                        survive a relaunch is checked after this step)
 
@@ -85,10 +87,20 @@ def step_run(vm, step, out):
         src = Path(step['src'])
         src = src if src.is_absolute() else REPO_ROOT / src
         return run([str(HERE / 'guest.sh'), vm, '--push', str(src), step['dest']])
+    if op == 'pull':
+        # dest is a name inside the walk's own folder: the evidence stays with steps.json.
+        dest = out / step['dest']
+        if dest.resolve().parent != out.resolve() and out.resolve() not in dest.resolve().parents:
+            return 2, f"pull refused: {step['dest']!r} is outside the walk's folder"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        return run([str(HERE / 'guest.sh'), vm, '--pull', step['src'], str(dest)], timeout=300)
     if op == 'handfile':
         return run([str(HERE / 'hand-file.sh'), vm, step['mode'], step['path']] + (['--to', step['to']] if step.get('to') else []))
     if op == 'relaunch':
-        return run([str(HERE / 'relaunch.py'), vm], timeout=90)
+        # `env` (KEY=VALUE strings) is added to the fixture environment, as relaunch.py --env: a
+        # launch's TESTVM_APP_ENV (the voice WAV standing in for the microphone) is not carried over.
+        extra = [x for pair in step.get('env', []) for x in ('--env', pair)]
+        return run([str(HERE / 'relaunch.py'), vm] + extra, timeout=90)
     if op == 'pointer':
         return run([str(HERE / 'pointer-drag.sh'), vm] + step['points'] + (['--right'] if step.get('right') else []))
     if op == 'wait':
@@ -113,11 +125,12 @@ def step_run(vm, step, out):
 # op -> {argument: type} every step of that op must carry; OPTIONAL ones are typed when present.
 REQUIRED = {
     'tree': {'name': str}, 'shot': {'name': str}, 'ax': {'args': list}, 'guest': {'command': str},
-    'keys': {'text': str}, 'push': {'src': str, 'dest': str}, 'handfile': {'mode': str, 'path': str},
+    'keys': {'text': str}, 'push': {'src': str, 'dest': str}, 'pull': {'src': str, 'dest': str}, 'handfile': {'mode': str, 'path': str},
     'wait': {'seconds': (int, float)}, 'until': {'args': list, 'contains': str}, 'relaunch': {},
     'pointer': {'points': list},
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool},
+            'relaunch': {'env': list},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
 

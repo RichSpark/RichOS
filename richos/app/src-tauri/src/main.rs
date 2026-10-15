@@ -3255,11 +3255,6 @@ fn main() {
                 permissions.clone(),
             );
             work.set_quota(quota.clone());
-            // The central folder the spine's priming reads company notes from, so an
-            // assignment's brief carries them too (`WorkHost::company_notes`).
-            if let Some(root) = richos_core::company::install_central_root() {
-                work.set_central_root(root);
-            }
             // **How a held queue sees the sign-in come back** (T3 idea 1, finished: richos-hq
             // `docs/plans/2026-10-09-automatic-second-review-and-t3-ideas.md` §3, Sage's check
             // §1.1): the same `claude auth status` reading Settings shows, for the account a
@@ -3284,6 +3279,11 @@ fn main() {
             work.set_answered_close(Arc::new(richos_core::operator_runtime::EcsAnsweredClose::with(
                 engine_store_call(Arc::clone(&engine_cell), &data_dir),
             )));
+            // A hiring is briefed with his company notes, read from the folder the interview
+            // saves them in (the same root the conversation is primed from, above).
+            if let Some(root) = richos_core::company::install_central_root() {
+                work.set_central_root(root);
+            }
             if let Some(desk) = &operator_desk {
                 work.set_operator(desk.clone());
             }
@@ -4735,8 +4735,8 @@ fn voice_readiness() -> serde_json::Value {
                 readiness.tag(),
                 rec.provenance_full()
             );
-            // Voice works here, so Rich will speak: fetch his voice now, in the background, if it
-            // is not on this Mac yet, rather than at the first answer (he hears `say` until then).
+            // Voice works here, so Rich will speak: make his voice ready now, at launch and in the
+            // background (installed if it is not on this Mac yet, then loaded), never at Talk.
             voice_provision::fetch_rich_voice_in_background();
             let recognizer = rec.as_ref().clone();
             std::thread::spawn(move || {
@@ -4800,8 +4800,8 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
     // guarantee is local and structural: no permission dialog, no orange indicator, no
     // "listening…" panel in a build with no speech model.
     speech_preflight()?;
-    // FIRST NEED of Rich's voice: fetch Pocket TTS + Peter Yearsley in the background if it is not
-    // here yet (he hears `say` until it is). Loading it is RichVoice's, when voice starts below.
+    // Rich's voice has been loaded since launch; this only installs it if it is somehow missing
+    // (his sentences wait for it). Pressing Talk loads nothing.
     voice_provision::fetch_rich_voice_in_background();
     ensure_voice_state(&app);
     // A dictation listening right now is written first, as if its key had been tapped, so voice
@@ -4947,7 +4947,6 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                 "outputDevice": d.output_device,
                 "outputRate": d.output_rate,
                 "sttModel": d.stt_model,
-                "ttsVoice": d.tts_voice,
                 "echoCancellation": d.echo_cancellation,
                 "bargeInFrames": d.barge_in_frames,
                 "bargeInSecs": d.barge_in_secs,
