@@ -32,7 +32,7 @@ engineer in a worktree, Codex, Rich in the main checkout.
   merge before it exists, so it cannot be pushed; that is all that refuses it (land_verdict).
   A check that did not reach a verdict is NOT RUN, which is never a pass: it is named in the
   verdict and in the receipt, and the nightly runs it (README.md, "NOT RUN"). Before all of
-  it, and at every push of any branch or tag, a tree whose root holds an entry the CEO has not
+  it, and at every push of any branch, a tree whose root holds an entry the CEO has not
   authorized is refused (root_entries_gate).
 
   THE ONE ESCAPE is git's own `--no-verify`. It cannot be prevented; it is recorded. After
@@ -1342,15 +1342,16 @@ def publication_completeness_gate(repo, what):
 # words: "ANY PUBLICLY VISIBLE ITEM IN ROOT on GitHub must always require my explicit authorization.
 # No such item can ever appear (publicly visible on GitHub) without my explicit authorization."
 # The root rule was a manual step at each land, and AGENTS.md reached the root of main on
-# 2026-09-25 through one. So every commit and merge onto main, and every push of any branch or tag
-# (each is publicly visible on GitHub), refuses a tree whose top level holds an entry not named
-# here. The hook shim runs the copy of this file main already holds, so an authorization lands on
-# its own before the item it authorizes.
+# 2026-09-25 through one. So every commit and merge onto main, and every push of any branch
+# (main and the release branches, each a root publicly visible on GitHub), refuses a tree whose
+# top level holds an entry not named here. Tags are not asked (pre_push says why). The hook shim
+# runs the copy of this file committed at HEAD (main's when HEAD has none), so on main an
+# authorization lands on its own before the item it authorizes.
 AUTHORIZED_ROOT_ENTRIES = (".claude-plugin", ".github", ".gitignore", ".richos", "LICENSE", "docs", "richos")
 
 
 def root_entries_gate(repo, what, tree, where=LAND_BRANCH):
-    """0, or 1 after printing a refusal: `tree`, the tree `where` (main, or a branch or tag being
+    """0, or 1 after printing a refusal: `tree`, the tree `where` (main, or a branch being
     pushed) would point at, holds a root entry the CEO has not authorized."""
     names = [n for n in git("ls-tree", "-z", "--name-only", tree, cwd=repo.top).split("\0") if n]
     unauthorized = sorted(n for n in names if n not in AUTHORIZED_ROOT_ENTRIES)
@@ -1832,11 +1833,14 @@ def pre_push(repo, stdin_text):
         if local_sha == ZERO:
             continue
         tree = repo.head_tree(local_sha)
-        # Asked of every branch and tag pushed, main or not, receipt or not: each is publicly
-        # visible on GitHub, and a tree landed before this check existed has a receipt and was
-        # never asked.
-        where = remote_ref.removeprefix("refs/heads/").removeprefix("refs/")
-        if root_entries_gate(repo, "push", tree, where):
+        # Asked of every BRANCH pushed (main and the release branches), receipt or not: a branch
+        # is the repository's root as GitHub shows it, and a tree landed before this check
+        # existed has a receipt and was never asked. Tags are not asked: the `nightly` tag is
+        # the update feed, whose root has always held latest.json and build-info.json, and the
+        # CEO (2026-10-15, when this check stopped nightly 58's feed): "since when do I need to
+        # authorize every fart like this?"
+        if remote_ref.startswith("refs/heads/") and root_entries_gate(
+                repo, "push", tree, remote_ref.removeprefix("refs/heads/")):
             return 1
         if remote_ref != f"refs/heads/{LAND_BRANCH}":
             continue
