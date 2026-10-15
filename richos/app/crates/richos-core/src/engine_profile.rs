@@ -192,12 +192,22 @@ pub fn active_team(engine: &Path, data: &Path) -> Result<std::collections::BTree
         let body = std::fs::read_to_string(engine.join(format!("agents/{name}.md"))).map_err(|e| RuntimeError(e.to_string()))?;
         team.insert(name.to_string(), body);
     }
+    for (name, body) in user_definitions(data)? {
+        team.insert(name, with_media_skills(&body));
+    }
+    Ok(team)
+}
+
+/// The user's own definition files, by name, as saved: the files [`active_team`] registers
+/// from [`USER_TEAM`], under the same rules.
+fn user_definitions(data: &Path) -> Result<Vec<(String, String)>, RuntimeError> {
     let folder = data.join(USER_TEAM);
     let entries = match std::fs::read_dir(&folder) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(team),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(RuntimeError(format!("the team folder could not be read: {e}"))),
     };
+    let mut found = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| RuntimeError(e.to_string()))?;
         let path = entry.path();
@@ -207,9 +217,58 @@ pub fn active_team(engine: &Path, data: &Path) -> Result<std::collections::BTree
         if name.is_empty() || name.starts_with('-') || DUTIES.contains(&name)
             || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { continue; }
         let body = std::fs::read_to_string(&path).map_err(|e| RuntimeError(format!("team/{name}.md could not be read: {e}")))?;
-        team.insert(name.to_string(), with_media_skills(&body));
+        found.push((name.to_string(), body));
     }
-    Ok(team)
+    found.sort();
+    Ok(found)
+}
+
+/// **One teammate the user added, as the home screen names him** (product hunt 2026-10-15,
+/// finding 7: the home screen showed a made-up company to a user who had just hired two).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Teammate {
+    pub name: String,
+    /// The role title, or `None` when the definition does not state one.
+    pub role: Option<String>,
+}
+
+/// **The teammates the user added**: the [`USER_TEAM`] definitions a lease registers, minus a
+/// refit of one of the [`ALWAYS_ACTIVE`] five, which every install has and nobody hired. Name
+/// and role come from the definition's own heading, `# {Name} — {Role Title}` (Dean's
+/// template; the shelf's carry a parenthesis after the title, which is dropped). A definition
+/// with no such heading is named by its file name. Ordered by file name.
+pub fn user_teammates(data: &Path) -> Result<Vec<Teammate>, RuntimeError> {
+    Ok(user_definitions(data)?
+        .into_iter()
+        .filter(|(name, _)| !ALWAYS_ACTIVE.contains(&name.as_str()))
+        .map(|(name, body)| teammate_from(&name, &body))
+        .collect())
+}
+
+fn teammate_from(file_name: &str, body: &str) -> Teammate {
+    // After the frontmatter, whose YAML may carry a `# comment` of its own.
+    let mut lines = body.lines().peekable();
+    if lines.peek().is_some_and(|l| l.trim_end() == "---") {
+        lines.next();
+        for l in lines.by_ref() { if l.trim_end() == "---" { break; } }
+    }
+    let heading = lines.find_map(|l| l.strip_prefix("# ")).map(str::trim).filter(|h| !h.is_empty());
+    let fallback = || {
+        let mut chars = file_name.chars();
+        chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+    };
+    let Some(heading) = heading else { return Teammate { name: fallback(), role: None } };
+    let Some((name, role)) = heading.split_once(" — ") else { return Teammate { name: heading.to_string(), role: None } };
+    let role = role.trim();
+    let role = match role.find(" (") {
+        Some(at) if role.ends_with(')') => role[..at].trim(),
+        _ => role,
+    };
+    let name = name.trim();
+    Teammate {
+        name: if name.is_empty() { fallback() } else { name.to_string() },
+        role: (!role.is_empty()).then(|| role.to_string()),
+    }
 }
 
 /// **The sentence every RichOS teammate's definition carries about video and audio** (CEO

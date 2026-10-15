@@ -1313,6 +1313,12 @@
   // what the preview lands on, byte for byte, without anything opting out.
   let homeField = preset.homeField ? { ...preset.homeField } : null;
 
+  // THE TEAMMATES HE ADDED (`main.rs::home_team`, product hunt 2026-10-15, finding 7). None by
+  // default, so the home screen lands on the first-run demonstration exactly as before;
+  // `preset.homeTeam` (`[{ name, role }]`) is a user who has hired, in place before the field
+  // asks.
+  let homeTeam = Array.isArray(preset.homeTeam) ? preset.homeTeam.map((t) => ({ ...t })) : [];
+
   function homeFieldAnswer() {
     if (!homeField) {
       return {
@@ -3207,6 +3213,8 @@
         // on it without being told to.
         case "home_field_data":
           return homeFieldAnswer();
+        case "home_team":
+          return homeTeam.map((t) => ({ ...t }));
         // WHAT DID NOT LOAD OUT OF THE LEDGER (`Ledger::history_health`). The default is a
         // CLEAN load, because that is what every real launch produces — the notice is
         // supposed to be invisible almost always, and a preview that showed it constantly

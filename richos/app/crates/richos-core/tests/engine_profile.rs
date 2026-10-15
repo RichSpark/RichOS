@@ -704,3 +704,29 @@ fn machine_settings_survive_filtering_and_hold_a_job_snapshot() {
     assert_eq!(values["RICHOS_MACHINE_SETTINGS_RESOLVED"].as_deref(), Some("1"));
     assert_eq!(values["RICHOS_UNSUPPORTED"], None);
 }
+
+/// **The home screen names the teammates the user added, and only them** (product hunt
+/// 2026-10-15, finding 7: a made-up company of 18 specialists on the home screen of a user who
+/// had just hired two). Name and role come from Dean's `# {Name} — {Role Title}` heading; the
+/// shelf's trailing parenthesis is dropped; a definition with no heading is named by its file.
+/// The always-active five (a refit of Dean included), the duty names and a file that is not a
+/// definition are not his team. No folder is no team, never an error.
+#[test]
+fn the_home_screen_team_is_the_users_own_teammates_by_name_and_role() {
+    use richos_core::engine_profile::{user_teammates, Teammate};
+    let f = Scratch::new();
+    assert_eq!(user_teammates(&f.0).unwrap(), Vec::<Teammate>::new());
+    let team = f.0.join("team");
+    std::fs::create_dir_all(&team).unwrap();
+    std::fs::write(team.join("will.md"), "---\nname: will\n# a yaml comment\nmodel: sonnet\n---\n\n# Will — Marketing Director\n\nYou are Will.\n").unwrap();
+    std::fs::write(team.join("beth.md"), "---\nname: beth\n---\n# Beth — Bookkeeper (Small-Business Books & Payroll)\n").unwrap();
+    std::fs::write(team.join("nora.md"), "---\nname: nora\n---\nNo heading at all.\n").unwrap();
+    std::fs::write(team.join("dean.md"), "---\nname: dean\n---\n# Dean — HR Director\n").unwrap();
+    std::fs::write(team.join("worker.md"), "---\nname: worker\n---\n# Worker — Duty\n").unwrap();
+    std::fs::write(team.join("notes.txt"), "# Notes — not a definition\n").unwrap();
+    assert_eq!(user_teammates(&f.0).unwrap(), vec![
+        Teammate { name: "Beth".into(), role: Some("Bookkeeper".into()) },
+        Teammate { name: "Nora".into(), role: None },
+        Teammate { name: "Will".into(), role: Some("Marketing Director".into()) },
+    ]);
+}

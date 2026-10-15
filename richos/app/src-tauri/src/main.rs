@@ -4065,7 +4065,10 @@ fn main() {
             bug_report::bug_report_open_issue,
             // --- "Let Codex review your team's work" (round 20.2, ruling §114) — appended ---
             codex_reviews_status,
-            codex_reviews_set
+            codex_reviews_set,
+            // --- the user's own team on the home screen (product hunt 2026-10-15, finding 7)
+            // — appended ---
+            home_team
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -9798,6 +9801,16 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
         topics.len(),
     );
     serde_json::json!({ "available": true, "field": field })
+}
+
+/// **The teammates the user added, for the home screen** (product hunt 2026-10-15, finding 7:
+/// after a relaunch the home screen showed a made-up company of 18 specialists to a user who
+/// had just hired two). `home.js` shows these, by name and role, and nothing made up, once
+/// there is at least one; with none it keeps the first-run demonstration. A folder that
+/// cannot be read is an error, never an empty team.
+#[richos_command::command]
+fn home_team(state: State<'_, AppState>) -> Result<Vec<richos_core::engine_profile::Teammate>, String> {
+    richos_core::engine_profile::user_teammates(&state.data_dir).map_err(|e| e.0)
 }
 
 

@@ -172,8 +172,9 @@ window.RichHome = (function () {
   var state = {
     /// `true` while the home screen is the surface in front.
     open: false,
-    /// `"loading" | "live" | "degraded"` — the picture's own state, which is not the
-    /// screen's: the screen is up and usable in all three.
+    /// `"loading" | "live" | "degraded" | "none"` — the picture's own state, which is not
+    /// the screen's: the screen is up and usable in all four. `"none"` is his team with no
+    /// picture of his own to draw (see `showTeam`).
     field: "loading",
     /// Why the picture is not live, in one sentence, or `null`. Never swallowed.
     fieldError: null,
@@ -205,6 +206,11 @@ window.RichHome = (function () {
     ///   `threshold` — the number those were judged against
     ///   `taken`     — `true` only when his loro is what got drawn
     fieldOffer: null,
+    /// HIS OWN TEAM, once `home_team` has answered with at least one teammate he added
+    /// (`[{ name, role }]`), else `null`. While it is set the screen shows that team and his
+    /// own numbers and nothing made up (product hunt 2026-10-15, finding 7), and `field` is
+    /// `"none"` when there is no picture of his own to draw.
+    team: null,
   };
 
   // =========================================================================================
@@ -372,7 +378,8 @@ window.RichHome = (function () {
     var meta = window.MATURE_LORO && window.MATURE_LORO.meta;
     state.dataIsCustomers = fieldDataIsCustomers();
     state.dataSource = state.dataIsCustomers ? "customer" : meta && meta.synthetic === true ? "synthetic" : "unknown";
-    box.hidden = state.dataIsCustomers;
+    // With his team on the screen nothing on it is a demonstration (see `showTeam`).
+    box.hidden = state.dataIsCustomers || !!state.team;
     state.noteShown = !box.hidden;
 
     reserveNoteInset();
@@ -1159,6 +1166,87 @@ window.RichHome = (function () {
       });
   }
 
+  // =========================================================================================
+  // HIS OWN TEAM — product hunt 2026-10-15, finding 7.
+  //
+  // After a relaunch the home screen showed "18 AI specialists · 6 working now", "1,596 tasks
+  // handled without you", "2,365 h of your attention saved", "7,508 memories" and six named
+  // specialists "working now" to a user who had just hired his first two teammates, and
+  // showed neither of them. The demonstration is the FIRST-RUN experience (CEO 2026-09-06:
+  // "The demo is definitely needed, initially, for the user"); a user with a team of his own
+  // is past that. From the first teammate he adds, the screen shows only his team, by name
+  // and role, and his own numbers: the demonstration's dataset is never loaded, the banner
+  // calling the screen a demonstration goes, and the picture is drawn only from his own loro
+  // (when `HOME_FIELD_MIN_OBJECTS` takes it). Otherwise there is no picture at all.
+  //
+  // "Working now" is not claimed for anybody: nothing here knows who is working, so the list
+  // is headed "Your team".
+  // =========================================================================================
+
+  /// The teammates he added (`main.rs::home_team`), or `null` for none, no bridge, or an
+  /// answer that cannot be read. A failure keeps the screen as it was, never a made-up team.
+  function askForTeam() {
+    var bridge = window.RichBridge;
+    if (!bridge || typeof bridge.invoke !== "function") return Promise.resolve(null);
+    return Promise.resolve(bridge.invoke("home_team"))
+      .then(function (team) {
+        if (!Array.isArray(team)) return null;
+        var rows = team.filter(function (t) {
+          return t && typeof t.name === "string" && t.name.trim();
+        });
+        return rows.length ? rows : null;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  /// Put his team and his numbers in the two columns, and take the demonstration's banner
+  /// down. Built with `textContent`, never markup: the names come from files he saved.
+  function showTeam(team) {
+    state.team = team;
+    // Tells `home/field-engine.js` the columns are this file's, so drawing his loro under them
+    // does not put the dataset's own lines back.
+    window.RICHOS_HOME_HUD_OWNED = true;
+    if (!root) return;
+    var user = window.RICHOS_USER && window.RICHOS_USER.name ? window.RICHOS_USER.name : "you";
+    root.querySelector("#home-owner").textContent = "for " + user;
+    root.querySelector("#home-brand-line").textContent = "";
+    var signals = root.querySelector("#home-signals");
+    signals.textContent = "";
+    var sig = elem("div", "sig");
+    var n = elem("div", "n");
+    n.textContent = String(team.length);
+    var l = elem("div", "l");
+    l.textContent = team.length === 1 ? "AI specialist" : "AI specialists";
+    sig.appendChild(n);
+    sig.appendChild(l);
+    signals.appendChild(sig);
+    root.querySelector("#home-live .cap").textContent = "Your team";
+    var list = root.querySelector("#home-working");
+    list.textContent = "";
+    team.forEach(function (t, i) {
+      var li = elem("li", null, { id: "home-team-" + i });
+      li.appendChild(document.createTextNode(t.name.trim()));
+      if (t.role && String(t.role).trim()) {
+        li.appendChild(document.createTextNode(" "));
+        var fn = elem("span", "fn");
+        fn.textContent = String(t.role).trim();
+        li.appendChild(fn);
+      }
+      list.appendChild(li);
+    });
+    refreshNote();
+    reserveDoorTop();
+  }
+
+  /// HIS TEAM AND NO PICTURE OF HIS OWN: nothing is drawn, and "waking loro…" goes with it.
+  function noPicture() {
+    state.field = "none";
+    var loading = root && root.querySelector("#home-loading");
+    if (loading) loading.classList.add("gone");
+  }
+
   function startField() {
     if (fieldStarted) return;
     // The surface may already be gone: this runs on an idle callback, and a page that has
@@ -1183,6 +1271,11 @@ window.RichHome = (function () {
       .then(function (appearance) {
         var name = appearance && appearance.user_name;
         if (name && String(name).trim()) window.RICHOS_USER = { name: String(name).trim() };
+        // HIS TEAM FIRST: it decides whether the demonstration may be drawn at all.
+        return askForTeam();
+      })
+      .then(function (team) {
+        if (team) showTeam(team);
         // WHOSE LORO IS THIS GOING TO BE — asked BEFORE a script is injected, because the
         // answer picks the script list. `field-data.js` assigns `window.MATURE_LORO` the
         // moment it loads, so a real dataset installed first would simply be overwritten;
@@ -1190,6 +1283,8 @@ window.RichHome = (function () {
         return askForCustomerField();
       })
       .then(function (dataset) {
+        // A user with a team gets his own loro or no picture, never the demonstration.
+        if (!dataset && state.team) return false;
         var list = FIELD;
         if (dataset) {
           // THE ONE ASSIGNMENT THAT MAKES THIS HIS. `field-engine.js:103` is
@@ -1205,14 +1300,23 @@ window.RichHome = (function () {
             return loadScript(src);
           });
         });
-        return chain;
+        return chain.then(function () {
+          return true;
+        });
       })
-      .then(function () {
+      .then(function (drawing) {
+        if (!drawing) return false;
         // The engine is an async IIFE: its script having loaded is not the picture being up.
         // `window.__loro` is what it publishes when it is, and it is what is waited on.
-        return settled();
+        return settled().then(function () {
+          return true;
+        });
       })
-      .then(function () {
+      .then(function (drawn) {
+        if (!drawn) {
+          noPicture();
+          return;
+        }
         state.field = "live";
         // The signal block is only now carrying its five lines, so the left column has a real
         // bottom edge for the first time and the door can sit on it rather than on the
