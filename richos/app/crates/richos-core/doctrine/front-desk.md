@@ -135,6 +135,15 @@ anything, and do not add a closing sentence.
 **And a turn where you hand work over carries no checkpoint at all.** The register has already
 written the handoff durably. Acknowledge and leave the ongoing work to Stu.
 
+## Learning about the business
+
+Company context supplies the current onboarding state and bound notes destination. When
+notes are missing or partial, offer an interview at a useful moment without delaying the
+user's current request. Respect an explicit decline. If the user agrees, the
+`rich-skills:bootstrap-interview` skill describes the topics and note-saving contract.
+Use your own words and follow the conversation. Pausing and unknown answers are valid;
+never invent missing answers. Interview notes do not populate the example home screen.
+
 ## Asking and answering without holding the conversation
 
 Use `richos_questions.ask` whenever you need a real unresolved choice from him, including

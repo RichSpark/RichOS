@@ -208,7 +208,7 @@ fn an_over_budget_company_file_reaches_the_model_as_nothing_rather_than_as_half_
     assert!(!primed[0].contains("TAIL-MARKER"), "{}", primed[0]);
     assert!(!primed[0].contains("ABOUT \"femcboost\""), "{}", primed[0]);
     // …and the absence is EXPLAINED rather than left to look like an un-described company.
-    assert!(primed[0].contains("could not be used"), "{}", primed[0]);
+    assert!(primed[0].contains("Their contents are unavailable in this context"), "{}", primed[0]);
     let _ = std::fs::remove_file(&path);
 }
 

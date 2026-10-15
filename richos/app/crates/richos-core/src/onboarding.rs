@@ -71,23 +71,13 @@
 //! asked, so Rich neither re-offers nor wonders why he knows nothing. The way back is the CEO
 //! asking, which needs no mechanism.
 //!
-//! # THE INTERVIEW ENDS WITH A TEAM PROPOSED, AND HIS "GO" HIRES IT
+//! # The interview and team handoff
 //!
-//! The CEO, 2026-10-13: *"Why the fuck does Rich not already automatically auto-hire everyone
-//! he deems to be needed???"*, and then the ending in his own words: Rich names the five
-//! teammates every install starts with (Clark, Dean, Frank, Pierce, Reed —
-//! `engine_profile::ALWAYS_ACTIVE`), lists the new ones the interview calls for, and ends *"Say
-//! go and I'll get them hired now."* The skill carries that message word for word.
-//!
-//! Until 2026-10-13 this section said staffing was declared and never attempted, because the
-//! front desk has no way to hire and an early measurement (cells B2/B3,
-//! `docs/verification/onboarding-honesty-2026-09-06/`) found a spawn of Dean failing. Both are
-//! still true of the FRONT DESK, which is why the skill tells it to spawn nobody. What changed
-//! is the install: since the proto-teammate shelf (richos-hq
-//! `docs/plans/2026-10-06-proto-teammate-shelf.md`) the back end hires — Dean fits a shelf
-//! teammate or writes a new one, `richos_work.team` saves it into `<app data>/team/`, and every
-//! later lease registers it. So his go is an assignment like any other, and the honesty rule
-//! moves with it: a teammate is named as hired only once the hiring has reported it saved.
+//! Rich uses the interview as an adaptive conversation and preserves the actual answers.
+//! A team proposal uses current evidence. Approval is interpreted in context, then handed
+//! over under the ordinary latency rule with every requested name, role and constraint.
+//! The display title is never the execution contract. Only an observed saved definition
+//! establishes that a teammate was added. This module supplies state, not conversation scripts.
 
 use crate::company::CompanyLayer;
 use crate::entity::EntityId;
@@ -243,78 +233,24 @@ pub fn state(layer: Option<&CompanyLayer>, record: &OnboardingRecord) -> Onboard
     }
 }
 
-/// **The CEO's sentence about the team** (richos-hq `docs/ceo-input/2026-10-13_1/feedback.md`,
-/// "Change the copy in the onboarding paragraph"), exactly as he wrote it. Rich says it in the
-/// first minute of the interview; [`OFFER_BLOCK`] and the interview skill both carry it.
-pub const HIRING_SENTENCE: &str = "And if you describe specialists you'd like me to have on my AI team, I'll add (\"hire\") them once we finish this onboarding interview.";
+/// Current onboarding observations. Conversation behavior belongs in Rich's standing
+/// role and the interview skill; these facts prescribe no reply or next action.
+pub const OFFER_BLOCK: &str = "ONBOARDING — Company notes are not available in this install. \
+The interview is optional. Stopping partway is fine; 'not sure yet' is a valid answer. \
+Unknown answers remain open. Interview notes do not populate the home screen, which shows a \
+worked example.\n\n";
 
-/// THE OFFER, issued in the priming turn when a company has nothing on file.
-///
-/// It is written as an instruction to Rich rather than as copy to read out, because the
-/// interview is a conversation and a script read aloud is a form. The onboarding document's §2
-/// makes the same call: the only new user-facing surface it proposes is a sheet that makes the
-/// offer *visible*, and the conversation itself stays a conversation.
-///
-/// Four things it must contain, and each is here because leaving it out has a named cost:
-///
-/// 1. **It is his call, and "not now" is a real answer.** Onboarding §4: alone, nobody reminds
-///    him that deferral is honest, so an unanswered question reads as a failure to answer. Rich
-///    has to say it unprompted, in the first minute.
-/// 2. **The team is hired when the interview ends.** The CEO's own sentence, word for word
-///    ([`HIRING_SENTENCE`]); the module doc says how his go becomes a hire.
-/// 3. **He must not be sold a corpus he will not get.** Onboarding §6: his own corpus compiles
-///    to 168 objects against the demo's 7,500 and a new customer's compiles to zero. Any copy
-///    implying "answer these and watch your company appear" is a lie the product cannot cover.
-/// 4. **Never fabricate.** An unanswered stage stays unanswered on the page.
-pub const OFFER_BLOCK: &str = "\
-ONBOARDING — you have nothing on file about this company, and that is a fact about this \
-install rather than about him. He has not been asked yet.\n\
-So offer, once, in your own words and at a natural moment: you can spend about twenty minutes \
-asking about his business — what it does, who it is for, and how he wants to work — and you \
-will write the answers down and use them from then on. If he is in the middle of something, \
-finish that first and offer afterwards. Do not ask the questions until he says yes.\n\
-When he says yes, use the skill named 'bootstrap-interview'. It carries the questions, their \
-order and what to do with the answers; do not improvise a substitute for it.\n\
-Four things are true while you do this, and he needs to hear all four from you:\n\
-  - Stopping partway is fine and so is 'not sure yet'. Say that in the first minute, before he \
-has to wonder. An unanswered question stays unanswered — never fill one in to make the session \
-look finished.\n\
-  - Say this sentence about his team, word for word: And if you describe specialists you'd like \
-me to have on my AI team, I'll add (\"hire\") them once we finish this onboarding interview.\n\
-  - Answering questions will not make his own data appear on the home screen. What is there is a \
-worked example. Say so if he asks, and do not imply otherwise if he does not.\n\
-  - If he would rather not do this now, say that is fine and let it go. Do not raise it again \
-in this conversation. Call mcp__richos_onboarding__decline_onboarding only when he explicitly \
-says he does not want this interview now in response to this offer. Never infer that from an \
-unrelated 'not now'. Report a declined state only after the tool confirms it.\n\n";
+/// The recorded decision survives company switches and restarts.
+pub const DECLINED_BLOCK: &str = "ONBOARDING — He said not now to the interview or its \
+resumption. That explicit decline is recorded. Declining does not change saved notes.\n\n";
 
-/// What Rich is told when he was already asked and said no.
-///
-/// Without it he would arrive at every company switch knowing nothing and being told to offer
-/// again — the nag M5 names. With it he knows the question was put and answered.
-pub const DECLINED_BLOCK: &str = "\
-ONBOARDING — you have nothing on file about this company because he was offered the twenty \
-minutes of questions and said not now. That was a real answer and it stands. Do not offer \
-again unless he brings it up; if he does, the skill named 'bootstrap-interview' is still there. \
-Meanwhile, do not guess at facts about his business — ask him, the way you would ask about \
-anything you were not told.\n\n";
+/// Saved answers exist, with interview progress still partial.
+pub const RESUME_BLOCK: &str = "ONBOARDING — This company's interview is partly complete. \
+The company notes contain the answers already saved.\n\n";
 
-/// A resumption offers the remaining questions without pretending the saved answers are absent.
-pub const RESUME_BLOCK: &str = "ONBOARDING — this company's interview is partly complete. \
-The notes above contain answers already saved. Offer to pick up the remaining questions once \
-at a natural moment, using rich-skills:bootstrap-interview if he agrees. Never re-ask questions \
-already answered. If he explicitly declines this offer, use mcp__richos_onboarding__decline_onboarding \
-and leave the saved answers intact.\n\n";
-
-/// What Rich is told when the file exists and cannot be used.
-///
-/// The only state that needs somebody to act, so it is the only one that says so. It never
-/// carries the file's contents — an over-budget file's whole point is that it does not go in.
-pub const UNUSABLE_BLOCK: &str = "\
-ONBOARDING — there is a file of notes about this company and it could not be used, so you are \
-working without it. Do not guess at what it said. If he asks about it, tell him plainly that \
-his notes about this company could not be read and that whoever set RichOS up will need to look \
-at it.\n\n";
+/// A file exists but no usable contents are supplied to the agent.
+pub const UNUSABLE_BLOCK: &str = "ONBOARDING — Company notes exist but could not be read. \
+Their contents are unavailable in this context.\n\n";
 
 /// The onboarding contribution to a priming turn: the material, the offer, or the honest note.
 ///
@@ -336,11 +272,9 @@ pub fn priming_block(
     let destination = serde_json::to_string(&path.to_string_lossy()).expect("path serializes");
     let mut block = format!(
         "COMPANY NOTES DESTINATION: entity={entity}; file={destination}. \
-         This absolute path is supplied by RichOS. Never guess a different folder. \
-         Use mcp__richos_onboarding__save_company_notes for interview notes and \
-         mcp__richos_onboarding__decline_onboarding for an explicit decline of the interview. \
-         Those tools are bound to this company by the app; do not write the notes with general \
-         file or shell tools. A successful save means RichOS read the file back and verified it.\n\n"
+         Bound save tool: mcp__richos_onboarding__save_company_notes. \
+         Bound decline tool: mcp__richos_onboarding__decline_onboarding. \
+         Saves are atomic and verified by reading the notes back.\n\n"
     );
     if let Some(material) = layer.render_for_priming(entity) { block.push_str(&material); }
     block.push_str(match state {
@@ -436,7 +370,7 @@ mod tests {
         let central = tmp("notyet");
         assert_eq!(state(Some(&layer_for(&central)), &OnboardingRecord::default()), OnboardingState::NotYet);
         let block = priming_block(&entity(), Some(&layer_for(&central)), &OnboardingRecord::default()).unwrap();
-        assert!(block.contains("he has not been asked yet") || block.contains("He has not been asked yet"));
+        assert!(block.contains("Company notes are not available in this install"));
     }
 
     #[test]
@@ -484,7 +418,7 @@ mod tests {
         );
         let block = priming_block(&entity(), Some(&layer_for(&central)), &record).unwrap();
         assert!(block.contains("said not now"), "{block}");
-        assert!(block.contains("Do not offer again"), "{block}");
+        assert!(block.contains("explicit decline is recorded"), "{block}");
         assert!(!block.contains("offer, once"), "a declined company is not re-offered: {block}");
     }
 
@@ -517,14 +451,12 @@ mod tests {
     // the CEO's constraint, pinned in the text that is actually sent
     // -----------------------------------------------------------------------
 
-    /// The CEO's copy, 2026-10-13, word for word in the offer, and nothing left of the old line
-    /// that told him Rich could not hire anyone.
+    /// Runtime state is information, not a scripted conversation or work request.
     #[test]
-    fn the_offer_carries_his_sentence_and_never_says_rich_cannot_hire() {
-        let flat = OFFER_BLOCK.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(flat.contains(HIRING_SENTENCE), "{flat}");
-        for gone in ["cannot hire", "not hired", "staffed"] {
-            assert!(!flat.contains(gone), "the offer still says {gone:?}: {flat}");
+    fn the_offer_reports_missing_notes_without_dictating_a_reply() {
+        assert!(OFFER_BLOCK.contains("Company notes are not available in this install"));
+        for instruction in ["Say this sentence", "word for word", "Write it down", "hire them"] {
+            assert!(!OFFER_BLOCK.contains(instruction));
         }
     }
 
@@ -545,15 +477,14 @@ mod tests {
     fn the_offer_makes_stopping_and_not_knowing_visibly_safe() {
         assert!(OFFER_BLOCK.contains("Stopping partway is fine"));
         assert!(OFFER_BLOCK.contains("not sure yet"));
-        assert!(OFFER_BLOCK.contains("in the first minute"));
-        assert!(OFFER_BLOCK.contains("never fill one in"));
+        assert!(OFFER_BLOCK.contains("Unknown answers remain open"));
     }
 
     /// Onboarding §6: the demo stays, and the interview must not be sold on the promise that
     /// answering questions makes his own data appear.
     #[test]
     fn the_offer_refuses_to_promise_his_data_on_the_home_screen() {
-        assert!(OFFER_BLOCK.contains("will not make his own data appear on the home screen"));
+        assert!(OFFER_BLOCK.contains("Interview notes do not populate the home screen"));
         assert!(OFFER_BLOCK.contains("worked example"));
     }
 
@@ -606,73 +537,36 @@ mod tests {
         body.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// **The ending the CEO wrote, 2026-10-13**: the five teammates every install starts with,
-    /// the new ones the interview calls for, and *"Say go and I'll get them hired now."* His
-    /// go is written down as one hiring assignment, and nobody is named as hired before the
-    /// hiring reports them saved.
+    /// The shipped skill preserves the full approved request and the agent's judgment.
     #[test]
-    fn the_interview_ends_by_proposing_the_team_and_hires_it_on_his_go() {
+    fn the_interview_hands_over_the_complete_approved_request_without_a_title_protocol() {
         let s = interview_skill();
-        assert!(s.contains(HIRING_SENTENCE), "his first-minute sentence, word for word");
-        assert!(s.contains("At the beginning, I already had these teammates on my AI team: Clark (Senior Researcher), \
-            Dean (HR Director for our RichOS team; he hires new AI teammates when needed), Frank (Expert Advisor/Devil's \
-            Advocate; one of our most valuable teammates because he helps us uncover blind spots), Pierce (Brief Checker; \
-            he's vital in helping me avoid errors when briefing my AI teammates) and Reed (Source-Reading & \
-            Knowledge-Extraction Specialist). But based on what you told me here, I think we also need to add the \
-            following AI teammates to my team:"), "his opening of the team message, word for word");
-        assert!(s.contains("And we can expand/change this team any time as needed. Say go and I'll get them hired now."));
-        // The five he names are the five every install registers, so the opening line is true.
-        for name in crate::engine_profile::ALWAYS_ACTIVE {
-            let shown = format!("{}{} (", name[..1].to_uppercase(), &name[1..]);
-            assert!(s.contains(&shown), "{name} is on every team and in his sentence");
-        }
-        assert!(s.contains("When he says go, hire them at once."));
-        assert!(s.contains("Write it down with the assignment register as a task"));
-        // The hiring task is a TITLE, and the register keeps a title as one line of at most 160
-        // characters (`assignment::sanitize_title`). The walk of 2026-10-13 had Rich write each
-        // hire with a line about them: the title was cut after the first teammate ("…; and…")
-        // and the back end had to ask him who the second one was. So the skill asks for names
-        // and job titles only, and splits a longer list; this ties its number to the code's.
-        assert!(s.contains("names and job titles from your list and nothing else"));
-        assert!(s.contains("one line of at most 160 characters"));
-        let at_cap = "a".repeat(160);
-        assert_eq!(crate::assignment::sanitize_title(&at_cap).unwrap(), at_cap, "160 characters are kept whole");
-        assert!(crate::assignment::sanitize_title(&format!("{} b", "a".repeat(159))).unwrap().ends_with('…'),
-                "161 characters are cut, so the skill's 160 is the register's own limit");
-        let example = "Hire these AI teammates onto my team: Nora (Marketing Lead), Mark (Backend Engineer)";
-        assert!(s.contains(example) && example.chars().count() <= 160, "the skill's own example fits the line");
+        assert!(s.contains("No particular word is required"));
+        assert!(s.contains("Rich decides what to handle and what to pass to Stu"));
+        assert!(s.contains("A handoff carries the entire approved request"));
+        assert!(s.contains("Do not split a request to fit that title"));
+        assert!(s.contains("Acknowledge in your own words"));
         assert!(s.contains("Name someone as hired only after the hiring has reported them saved."));
-        assert!(!s.contains("cannot hire"), "the old line is gone");
+        assert!(!s.contains("Hire these AI teammates onto my team:"));
+        assert!(!s.contains("Say the words the register hands you"));
     }
 
-    /// The ready-made names the skill offers are exactly the shelf this engine ships, so Rich
-    /// never proposes a ready-made teammate the back end cannot find, nor misses one it has.
+    /// Team evidence has one source, rather than a second name/role catalog in the skill.
     #[test]
-    fn the_ready_made_names_in_the_interview_are_the_shelf() {
+    fn the_interview_uses_the_current_team_evidence_instead_of_a_stock_roster() {
         let s = interview_skill();
-        let shelf = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine/team/shelf");
-        let mut names: Vec<String> = std::fs::read_dir(&shelf).unwrap()
-            .filter_map(|e| e.unwrap().path().file_stem().map(|s| s.to_string_lossy().to_string())).collect();
-        names.sort();
-        assert!(!names.is_empty());
-        let start = "use that teammate's name: ";
-        let listed = &s[s.find(start).expect("the ready-made list") + start.len()..];
-        let listed = &listed[..listed.find("For any other role").expect("the end of the list")];
-        let shown: Vec<&str> = listed.split(", ").map(|item| item.split(" (").next().unwrap().trim()).collect();
-        assert_eq!(shown.len(), names.len(), "{listed}");
-        for name in names {
-            let title = format!("{}{} (", name[..1].to_uppercase(), &name[1..]);
-            assert!(listed.contains(&title), "the shelf's {name} is missing from the interview's list");
-        }
+        assert!(s.contains("`richos_work.team` lists and shows the shelf and saved definitions"));
+        assert!(s.contains("Distinguish existing teammates from proposed additions"));
+        assert!(!s.contains("At the beginning, I already had these teammates"));
     }
 
     /// The engine's interview ends by spawning Dean. This one must not: the front desk spawns
     /// nobody, and his go becomes an assignment. Dean is named now (he is one of the five on
     /// every team, in the CEO's own sentence), so the check is on the spawning words.
     #[test]
-    fn the_interview_instructs_no_spawn_and_no_delegation() {
+    fn the_interview_leaves_specialist_dispatch_to_stu() {
         let lowered = interview_skill().to_lowercase();
-        for word in ["subagent", "spawn", "delegate", "isolation"] {
+        for word in ["richos_work.prepare", "subagent_type", "isolation"] {
             assert!(!lowered.contains(word), "the interview must not reach for staffing: {word}");
         }
     }

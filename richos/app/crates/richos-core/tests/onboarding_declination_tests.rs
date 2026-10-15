@@ -100,7 +100,7 @@ fn the_declination_changes_what_rich_is_primed_with() {
 
     let before = primings(&mut spine);
     assert!(
-        before[0].contains("He has not been asked yet."),
+        before[0].contains("Company notes are not available in this install"),
         "before the press, Rich is told to offer: {}",
         before[0]
     );
@@ -122,7 +122,7 @@ fn the_declination_changes_what_rich_is_primed_with() {
         after[0]
     );
     assert!(
-        !after[0].contains("He has not been asked yet."),
+        !after[0].contains("Company notes are not available in this install"),
         "and he is NOT told to offer again — that is the nag: {}",
         after[0]
     );
@@ -159,7 +159,7 @@ fn the_notice_state_and_the_priming_block_never_disagree() {
     spine.set_onboarding_record(record_path(&config));
     let b = spine.ensure_active_thread_in(&company()).unwrap();
     assert_eq!(spine.onboarding_state(&b), OnboardingState::NotYet);
-    assert!(primings(&mut spine)[0].contains("He has not been asked yet."));
+    assert!(primings(&mut spine)[0].contains("Company notes are not available in this install"));
 
     // (c) he was asked and declined.
     spine.record_onboarding_declination(1_788_634_800_000).unwrap();
@@ -455,7 +455,7 @@ fn after_not_now_the_next_message_on_every_kind_of_desk_carries_the_decline() {
     for desk in ["desk-1", "desk-2", "desk-3"] {
         let p = primes_of(&primes, desk);
         assert_eq!(p.len(), 1, "{desk} was primed once before the answer");
-        assert!(p[0].contains("He has not been asked yet."), "{desk} was primed with the offer");
+        assert!(p[0].contains("Company notes are not available in this install"), "{desk} was primed with the offer");
     }
 
     spine.reader().snapshot().record_onboarding_declination(1_000).unwrap();
@@ -473,7 +473,7 @@ fn after_not_now_the_next_message_on_every_kind_of_desk_carries_the_decline() {
         eprintln!("[not-now-every-desk] {kind} ({desk}): {} primes; the last carries the decline: {carries}", p.len());
         assert_eq!(p.len(), 2, "the {kind} desk is re-primed exactly once after the answer");
         assert!(carries, "the {kind} desk's next message carries the decline: {}", p[1]);
-        assert!(!p[1].contains("He has not been asked yet."), "and no longer the offer ({kind})");
+        assert!(!p[1].contains("Company notes are not available in this install"), "and no longer the offer ({kind})");
     }
     assert_eq!(
         spawns.load(std::sync::atomic::Ordering::SeqCst),
