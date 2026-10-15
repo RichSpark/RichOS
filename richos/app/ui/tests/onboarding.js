@@ -277,6 +277,29 @@ async function main() {
     return "one ordinary message, one turn in the record, no private route";
   });
 
+  // The handover review of 24668df27: a pressed Start refused because the setting up is not
+  // done returned before asking `setup_status`, so the sheet never came back and pressing
+  // Start again could never get him past it. A typed message reopens it (setup.js check 15);
+  // the button must too.
+  await run.check("4b a Start refused for unfinished setting up puts the setting up back on screen", async () => {
+    const page = await openApp(browser, { onboarding: "not-yet", setup: "missing-engine", memory: "ready" });
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    await page.click("#setup-later"); // he defers, which he is entitled to do
+    await page.waitForSelector("#setup-sheet", { state: "hidden" });
+    await page.waitForSelector("#first-run:not([hidden])");
+    await page.click("#first-run-start");
+    await page.waitForFunction(() => window.__calls.some((c) => c.cmd === "send_message"));
+    await page.waitForFunction(() => window.__calls.some((c) => c.cmd === "setup_status" &&
+      window.__calls.findIndex((d) => d.cmd === "send_message") < window.__calls.indexOf(c)));
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    assert(await page.isVisible("#setup-go"), "the sheet must be back, with Set it up on it");
+    assertEqual(await page.inputValue("#input"), "", "the sentence he never typed is not put in his box");
+    bump(2);
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    await page.close();
+    return "refused, and the setting up is offered again";
+  });
+
   // -------------------------------------------------------------------------------------
   // 5. The one state that needs a person.
   // -------------------------------------------------------------------------------------

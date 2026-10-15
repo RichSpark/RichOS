@@ -2383,14 +2383,21 @@ async function send(explicitText, opts) {
       // the button he pressed is offered again by its owner (`send` returns false).
       if (timelineModel === sentModel) {
         const reason = typeof e === "string" && e.trim() ? e.trim().replace(/\s*$/, "") : null;
+        // The setting up is asked of the disk and offered again, exactly as for a typed
+        // message below: without it, pressing the button again could never get past setup.
+        const setupNow = await refreshSetup();
+        const setupPending = !!(setupNow && setupNow.ask && setupNow.ask.items.length);
         window.RichTimeline.addLocalNotice(
           timelineModel,
           (reason || "I couldn't get that to my desk just now, and nothing is running.") +
-            " Press " + pressed + " when you want me to try again.",
+            (setupPending
+              ? " Press " + pressed + " again when the setting up is done."
+              : " Press " + pressed + " when you want me to try again."),
           Date.now()
         );
         syncComposerMode();
         scheduleRender();
+        if (setupPending) maybeAskAboutSetup();
       }
       return false;
     }
