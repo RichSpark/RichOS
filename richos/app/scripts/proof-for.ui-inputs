@@ -109,6 +109,7 @@ composer-scroll.js      @shell
 control-names.js        @shell
 live-workers.js         @shell richos/app/ui/timeline.js
 question-timer.js       @shell richos/app/ui/timeline.js
+conversation-while-working.js @shell richos/app/ui/timeline.js
 slow-bridge.js          @shell richos/app/ui/updates.js
 waiting-state.js        @shell richos/app/ui/mock.js
 waiting-lifecycle.js    @shell richos/app/ui/mock.js

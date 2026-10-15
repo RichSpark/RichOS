@@ -962,12 +962,22 @@ fn the_apps_own_read_path_joins_a_task_call_to_the_worker_it_spawned() {
         !ceo_before.items().iter().any(|i| matches!(i, TimelineItem::WorkerActivity { .. })),
         "with the source Disabled the app cannot produce a worker row — this is what main shipped"
     );
+    // The nameless "Worked" record is technical since product hunt 2026-10-15 finding 13:
+    // it is still projected, and it no longer reaches his view at all.
     assert!(
-        ceo_before
+        before
+            .view(ViewMode::Technical)
             .items()
             .iter()
             .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Worked")),
-        "and the delegation reached the CEO as one nameless \"Worked\" row"
+        "and the delegation was projected as one nameless \"Worked\" record"
+    );
+    assert!(
+        !ceo_before
+            .items()
+            .iter()
+            .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Worked")),
+        "and that nameless record is not a row in his view"
     );
 
     // (2) WIRED. Same ledger, same journal, same machinery — one setting.

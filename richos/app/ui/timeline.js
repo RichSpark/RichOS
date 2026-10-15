@@ -232,10 +232,14 @@
           live: true,
         };
       }
+      // A COMPLETED TURN WITH NO NUMBER TO SHOW HAS NO LABEL (product hunt 2026-10-15,
+      // finding 13). It used to read "Worked", which says nothing: on nightly 57 it stood
+      // above every message Rich sent on his own ("Rich reached out"), whose turns run for
+      // well under a second. `renderDurationRow` draws no row for an empty label.
       case "completed": {
         if (typeof t.activeMs !== "number") {
           return {
-            label: "Worked",
+            label: "",
             duration: null,
             tone: "done",
             note: "How long this took was not recorded.",
@@ -246,7 +250,7 @@
         // MEASURED but under §6.2's one-second display floor. Not the same statement as
         // "unrecorded", so it carries no apology.
         return {
-          label: d ? `Worked for ${d}` : "Worked",
+          label: d ? `Worked for ${d}` : "",
           duration: d,
           tone: "done",
           note: DURATION_MEANING,
@@ -2756,6 +2760,10 @@
     // disclosure control instead of a static row — before this it got the static one and
     // the delegation had nowhere to be.
     const hasActivity = turn.stream.some(isWork);
+    // No number and nothing to disclose: no row at all, rather than one reading "Worked".
+    if (!row.label && !hasActivity) return { node: null, row, hasActivity };
+    // No number, but work to disclose: the control names what it opens.
+    if (!row.label) row.label = "What Rich did";
     const wrap = elem("div", "tl-duration");
     wrap.dataset.tone = row.tone;
 
@@ -3067,7 +3075,7 @@
 
     {
       const { node, row, hasActivity } = renderDurationRow(turn, opts);
-      section.appendChild(node);
+      if (node) section.appendChild(node);
 
       const expanded = !hasActivity || opts.isExpanded(turn.turnId);
       const lane = elem("div", "tl-lane");
