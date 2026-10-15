@@ -404,6 +404,19 @@ class Fixture(unittest.TestCase):
         self.git("checkout", "-q", "main")
         self.log.unlink(missing_ok=True)
 
+    def authorize_root(self, *names):
+        """The CEO authorized `names` at the root: his authorization lands on main by itself, as
+        the refusal says, and the next land may hold them."""
+        checker = self.repo / "richos/app/scripts/autocheck/autocheck.py"
+        before = checker.read_text()
+        after = before.replace("AUTHORIZED_ROOT_ENTRIES = (", "AUTHORIZED_ROOT_ENTRIES = (" +
+                               "".join(f"{name!r}, " for name in names), 1)
+        self.assertNotEqual(after, before, "the fixture's checker has no AUTHORIZED_ROOT_ENTRIES")
+        checker.write_text(after)
+        self.git("add", str(checker))
+        self.git("commit", "-q", "-m", "the CEO authorized " + ", ".join(names) + " at the root")
+        self.log.unlink(missing_ok=True)
+
     def land_a_merge_commit_on_main(self):
         """main's tip becomes a land merge (two parents), checked and passed like any land."""
         self.branch_with("other", "richos/app/src/thing.txt", "fine, better\n")
@@ -1114,6 +1127,10 @@ class BatteryTrailer(Fixture):
 
 
 class Land(Fixture):
+    # What the publication fixtures put at the root of main, authorized for them first.
+    PUBLICATION_ROOT = (".publication-boundary", ".publication-completeness", "fixture-machine-debt.json",
+                        "scripts", ".widget.example", "README.md")
+
     def publication_fixture_baseline(self):
         # Borrowed checker/shim retain their reviewed migration debt. Scope this
         # to those two fixture tools so a new literal elsewhere still refuses.
@@ -1170,6 +1187,7 @@ class Land(Fixture):
         # that exists where it was cut, and the land before it moved that file. The real checker
         # runs (richos/engine is the real engine).
         self.make()
+        self.authorize_root(*self.PUBLICATION_ROOT)
         self.write(".publication-boundary", 'PRIVATE_RECORD="the private record"\nPRIVATE_SOURCES=""\n')
         self.publication_fixture_baseline()
         # The checker refuses a published tree that ships no declaration-gated mechanism (it reads
@@ -1208,6 +1226,7 @@ class Land(Fixture):
         # passed silently. A declared boundary makes that a check that did not run: refuse, naming
         # the file. A tree with no declaration stays NOT APPLICABLE and lands.
         self.make()
+        self.authorize_root(*self.PUBLICATION_ROOT)
         self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
         (self.repo / "richos/engine").unlink()
         self.write("richos/engine/scripts/lib/machine_settings.py",
@@ -1662,7 +1681,7 @@ class Land(Fixture):
         # Hunt part 2, finding 13: a docs-only land paid for `lint.sh --all` (58 s warm) although
         # nothing it changed is application code. The commit check already skips it.
         self.make()
-        self.branch_with("docs", "README.md", "docs\n")
+        self.branch_with("docs", "docs/README.md", "docs\n")
         out = self.git("merge", "--no-ff", "-m", "land docs", "docs")
         self.assertNotIn("lint --", self.tools())
         self.assertNotIn("lint.sh --", out.stderr)
@@ -1804,6 +1823,74 @@ class Land(Fixture):
         self.assertNotIn("owned/a.txt", out.stderr)
         self.assertEqual(self.head("main"), before)
         self.git("merge", "--abort")
+
+    def test_nothing_appears_at_the_root_of_main_without_the_ceos_authorization(self):
+        # 2026-10-15, the CEO: "No such item can ever appear (publicly visible on GitHub) without
+        # my explicit authorization." AGENTS.md reached the root of main through a land; the root
+        # rule was a manual step. A merge, a commit on main and a push of main are each refused.
+        refusal = "the root of main would hold an item the CEO has not authorized"
+        self.make()
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main")
+        before = self.head("main")
+        self.branch_with("agents", "AGENTS.md", "pointers for agents\n")
+        out = self.git("merge", "--no-ff", "-m", "land agents", "agents", expect=1)
+        self.assertIn("MERGE INTO MAIN REFUSED: " + refusal, out.stderr)
+        self.assertIn("  AGENTS.md\n", out.stderr)
+        self.assertIn("needs the CEO's", out.stderr)
+        self.assertNotIn("run cd richos/app", self.tools())  # refused before any suite
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
+        # A commit straight onto main.
+        self.write("NOTES.md", "notes\n")
+        self.git("add", "NOTES.md")
+        out = self.git("commit", "-m", "notes at the root", expect=1)
+        self.assertIn("COMMIT TO MAIN REFUSED: " + refusal, out.stderr)
+        self.assertIn("  NOTES.md\n", out.stderr)
+        self.git("rm", "-q", "--cached", "NOTES.md")
+        (self.repo / "NOTES.md").unlink()
+        # A fast-forward runs no merge hook; the push of main is refused, and GitHub never sees it.
+        self.git("merge", "-q", "--ff-only", "agents")
+        out = self.git("push", "origin", "main", expect=1)
+        self.assertIn("PUSH REFUSED: " + refusal, out.stderr)
+        self.assertEqual(self.git("rev-parse", "main", cwd=remote).stdout.strip(), before)
+        self.git("reset", "-q", "--hard", before)
+        # Inside an authorized entry it lands; and once the CEO has authorized the name (landed
+        # first, by itself), so does the root item.
+        self.branch_with("docs", "docs/AGENTS.md", "pointers for agents\n")
+        self.git("merge", "--no-ff", "-m", "land docs", "docs")
+        self.authorize_root("AGENTS.md")
+        out = self.git("merge", "--no-ff", "-m", "land agents", "agents")
+        self.assertNotIn(refusal, out.stderr)
+        self.git("push", "-q", "origin", "main")
+        self.assertEqual(self.git("rev-parse", "main", cwd=remote).stdout.strip(), self.head("main"))
+
+    def test_no_branch_or_tag_reaches_github_with_an_unauthorized_root_item(self):
+        # 2026-10-15: branches and tags are publicly visible on GitHub too (v1.2.1 and v1.3.0 were
+        # cut locally, not yet pushed). A push of any branch or tag whose root holds an item the
+        # CEO has not authorized is refused, and the remote never sees it.
+        self.make()
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main")
+        self.branch_with("v1.2.1", "AGENTS.md", "pointers for agents\n")
+        out = self.git("push", "origin", "v1.2.1", expect=1)
+        self.assertIn("PUSH REFUSED: the root of v1.2.1 would hold an item the CEO has not authorized",
+                      out.stderr)
+        self.assertIn("  AGENTS.md\n", out.stderr)
+        self.git("tag", "-a", "-m", "release", "v1.2.1-tag", "v1.2.1")
+        out = self.git("push", "origin", "v1.2.1-tag", expect=1)
+        self.assertIn("PUSH REFUSED: the root of tags/v1.2.1-tag would hold", out.stderr)
+        self.assertEqual(self.git("for-each-ref", cwd=remote).stdout.splitlines(),
+                         [f"{self.head('main')} commit\trefs/heads/main"])
+        # Everything inside an authorized entry pushes, branch and tag alike.
+        self.branch_with("v1.3.0", "docs/AGENTS.md", "pointers for agents\n")
+        self.git("tag", "v1.3.0-tag", "v1.3.0")
+        self.git("push", "-q", "origin", "v1.3.0", "v1.3.0-tag")
+        self.assertEqual(self.git("rev-parse", "v1.3.0", cwd=remote).stdout.strip(), self.head("v1.3.0"))
 
     def test_a_direct_commit_on_main_runs_the_land_checks(self):
         self.make()
