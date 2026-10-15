@@ -1478,6 +1478,17 @@ struct ReaderState {
     /// says the write failed clears this id and leaves everything after it visible.
     /// Host-owned, reset with the send.
     checkpoint_call_id: Option<String>,
+    /// **The host ended his turn when its checkpoint answered, and the child is still finishing
+    /// it** (product hunt 2026-10-15, finding 21). On nightly 57 Rich's answer was on screen at
+    /// 7.8 s and the turn ended at 29.7 s: the model wrote its checkpoint and then its whole
+    /// answer a second time (438 characters, all withheld). By the doctrine the checkpoint is
+    /// the last thing on the turn and everything after it is withheld, so the answer is
+    /// complete when it answers, and the turn ends there ([`NativeClient::end_at_the_checkpoint`]).
+    /// The child's own tail still streams; it is withheld exactly as before and retained on the
+    /// between-turn lane. Set at that early end, cleared by the next `result` the child writes,
+    /// which is the tail's own. While it is set a new send does not reset the withholding, so
+    /// the tail cannot reach the next turn as words.
+    tail_after_the_checkpoint: bool,
     /// The [`brief_cache_identity`] of context this session completed receiving, either
     /// during silent priming or alongside a visible request. A fact about the
     /// SESSION, not the turn, so unlike its neighbors it is never reset with the send — a new
@@ -1694,6 +1705,7 @@ impl Default for ReaderState {
             checkpoint_after_his_words: false,
             withheld_after_checkpoint: String::new(),
             checkpoint_call_id: None,
+            tail_after_the_checkpoint: false,
             context_brief_held: None,
             turns_named_by_the_child: false,
             background: Vec::new(),
@@ -2515,6 +2527,21 @@ impl NativeClient {
                         st.context_window = Some(w);
                     }
                 }
+                // **THE TAIL OF A TURN THAT ENDED AT ITS CHECKPOINT ENDS HERE** (finding 21).
+                // The child runs one turn at a time, so the first `result` after that early end
+                // is the tail's own. What it said is reported the way the turn's end always
+                // reported it, and the withholding is lifted for whatever turn comes next.
+                if std::mem::take(&mut st.tail_after_the_checkpoint) {
+                    let withheld = std::mem::take(&mut st.withheld_after_checkpoint);
+                    if !withheld.trim().is_empty() {
+                        let withheld = withheld.trim();
+                        eprintln!(
+                            "{WITHHELD_AFTER_THE_CHECKPOINT} ({} chars, after his turn had ended at the checkpoint): {withheld:?}",
+                            withheld.chars().count(),
+                        );
+                    }
+                    st.checkpoint_after_his_words = false;
+                }
             }
             // ---- WHOSE TURN DOES THIS END? (see [`PendingTurn`]) -----------------------
             //
@@ -2755,9 +2782,7 @@ impl NativeClient {
         // model that has been instructed to say nothing and a host that cannot say anything. So
         // the model keeps its instruction, the app beats it to the words by a round trip, and the
         // duplicate is withheld HERE — where the host can see both and he can only ever see one.
-        if ty == "user" {
-            Self::settle_the_checkpoint(&msg, state);
-        }
+        let answer_complete = ty == "user" && Self::settle_the_checkpoint(&msg, state);
         if ty == "user" && !state.lock().unwrap().context_only {
             let said = {
                 let st = state.lock().unwrap();
@@ -2866,6 +2891,9 @@ impl NativeClient {
         }
 
         Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
+        if answer_complete {
+            Self::end_at_the_checkpoint(current, state);
+        }
     }
 
     /// **THE TURN HAS WRITTEN ITS CHECKPOINT, AND HE HAD ALREADY BEEN ANSWERED WHEN IT DID** —
@@ -2906,9 +2934,12 @@ impl NativeClient {
     /// settles it. `is_error` is the wire's own word for a call that did not write
     /// (`adapters/mcp.py` answers `"isError": True` for a refusal), so anything else is a
     /// checkpoint that succeeded and the closing line after it is the duplicate to withhold.
-    fn settle_the_checkpoint(msg: &Value, state: &Arc<Mutex<ReaderState>>) {
+    ///
+    /// Returns whether THIS frame settled it as written, which is the moment his answer is
+    /// complete ([`ReaderState::tail_after_the_checkpoint`]).
+    fn settle_the_checkpoint(msg: &Value, state: &Arc<Mutex<ReaderState>>) -> bool {
         let mut st = state.lock().unwrap();
-        let Some(pending) = st.checkpoint_call_id.clone() else { return };
+        let Some(pending) = st.checkpoint_call_id.clone() else { return false };
         let blocks = msg.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array());
         for block in blocks.map(|b| b.as_slice()).unwrap_or(&[]) {
             if block.get("type").and_then(|v| v.as_str()) == Some("tool_result")
@@ -2917,8 +2948,41 @@ impl NativeClient {
                 st.checkpoint_call_id = None;
                 if block.get("is_error").and_then(|v| v.as_bool()) != Some(true) {
                     st.checkpoint_after_his_words = true;
+                    return true;
                 }
-                return;
+                return false;
+            }
+        }
+        false
+    }
+
+    /// **HIS ANSWER IS COMPLETE: THE TURN ENDS AT THE CHECKPOINT** (product hunt 2026-10-15,
+    /// finding 21: "Rich is working" stayed up about 22 s after the answer was on screen).
+    ///
+    /// Called right after the frame that settled the checkpoint was routed into the turn, so the
+    /// checkpoint's own row is complete in it. The parked prompt is answered as an ordinary end
+    /// of turn; nothing is sent to the child, which finishes its tail on its own (withheld, and
+    /// retained on the between-turn lane), so what the model sees of its conversation is
+    /// unchanged.
+    ///
+    /// **Only where the next prompt can tell the tail's `result` from its own**: on a child that
+    /// names our turns (`command_lifecycle`), a prompt sent during the tail is `Queued` or not
+    /// yet named, and [`PendingTurn::result_is_another_turns`] retains the tail's `result`. A
+    /// child that names nothing keeps the old ending, because there the next `result` would be
+    /// taken as the next prompt's. Never on a hidden priming turn, which is not his.
+    fn end_at_the_checkpoint(current: &Arc<Mutex<Option<PendingTurn>>>, state: &Arc<Mutex<ReaderState>>) {
+        let mut guard = current.lock().unwrap();
+        let ours = guard.as_ref().is_some_and(|pending| !pending.not_yet_ours());
+        let mut st = state.lock().unwrap();
+        if !ours || !st.turns_named_by_the_child || st.context_only {
+            return;
+        }
+        st.tail_after_the_checkpoint = true;
+        drop(st);
+        if let Some(pending) = guard.take() {
+            // A closed receiver means the drain loop has already returned: nothing is waiting.
+            if pending.sink.send(ChunkMsg::Done(json!({ "stop_reason": "end_turn" }))).is_err() {
+                eprintln!("[richos] the turn's checkpoint answered after its drain loop had already returned");
             }
         }
     }
@@ -3207,8 +3271,13 @@ impl NativeClient {
                 // And the checkpoint's two, for the identical reason: a checkpoint belongs to
                 // ONE turn, and one carried into the next would withhold that turn's reply on
                 // the strength of this turn's bookkeeping.
-                state.checkpoint_after_his_words = false;
-                state.withheld_after_checkpoint.clear();
+                // EXCEPT while the previous turn's tail is still running after it ended at its
+                // checkpoint (finding 21): that tail is still the duplicate, and it stays
+                // withheld until its own `result` lifts the withholding.
+                if !state.tail_after_the_checkpoint {
+                    state.checkpoint_after_his_words = false;
+                    state.withheld_after_checkpoint.clear();
+                }
                 state.checkpoint_call_id = None;
                 drop(state);
             }
@@ -7371,6 +7440,70 @@ printf '%s\n' '{{"type":"result","stop_reason":"end_turn"}}'
             said,
             vec!["It is landed.", "Correction: it is not landed yet, the checkpoint was refused."],
             "words after a refused checkpoint were hidden: {log:#?}"
+        );
+    }
+
+    #[test]
+    fn the_turn_ends_when_its_checkpoint_answers_and_the_tail_never_reaches_the_next_turn() {
+        // Product hunt 2026-10-15, finding 21: "Rich is working" stayed up about 22 s after the
+        // answer was on screen (first words 7.8 s, turn end 29.7 s), while the model wrote its
+        // checkpoint and then the whole answer again (438 characters, withheld). The turn must
+        // be over before the tail: decided by a FACT, not a clock. The tail's own `result` can
+        // only reach the between-turn lane if the turn had already ended when it arrived; a
+        // turn that waited for it consumes it as its own ending. A prompt sent during the tail
+        // must be answered by its own turn, with none of the tail's words.
+        let script = write_script("ends-at-the-checkpoint", r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
+test -n "$ours" || exit 9
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
+printf '%s\n' '{"type":"stream_event","event":{"type":"message_start"}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":"checkpoint written"}]}}'
+sleep 1
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three subject line ideas."}}}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":1}'
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+read -r prompt
+ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
+test -n "$ours" || exit 9
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"The second answer."}}}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+read -r keep_alive
+"#);
+        let client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
+        let said = |client: &NativeClient, prompt: &str| {
+            let mut said = String::new();
+            let reason = client
+                .prompt(prompt, &mut |item| {
+                    if let TurnItem::Text { text, .. } = item {
+                        said.push_str(text);
+                    }
+                })
+                .unwrap();
+            (reason, said)
+        };
+
+        let (reason, first) = said(&client, "Suggest three subject lines.");
+        assert_eq!(reason, "end_turn");
+        assert_eq!(first, "Here are three.", "the answer, once");
+
+        // Sent while the tail is still running: answered by its own turn, with none of the tail.
+        let (reason, second) = said(&client, "Thanks.");
+        assert_eq!(reason, "end_turn");
+        assert_eq!(second, "The second answer.", "the tail reached the next turn, or its result ended it");
+        // THE VERDICT: the tail's own result is on the between-turn lane (§1.4 G5), so the turn
+        // had ended before it. A turn that waited for the tail would have consumed it.
+        assert!(
+            client.between.lock().unwrap().queue.iter().any(|i| matches!(i,
+                BetweenItem::Frame(f) if f.get("type").and_then(Value::as_str) == Some("result")
+                    && f.get("queued_turn_count").and_then(Value::as_u64) == Some(1))),
+            "the tail's own result ended the turn: the turn waited for the tail after its checkpoint",
         );
     }
 
