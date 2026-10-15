@@ -328,7 +328,8 @@ impl Resolution {
             Basis::Override => "env-override".to_string(),
             Basis::Chosen => "chosen in Dictation settings".to_string(),
             Basis::TopRung => match self.measured_secs {
-                Some(s) => format!("hw-resolved top rung, {s:.3}s/utt <= {:.3}s", self.ceiling_secs),
+                Some(s) => format!("hw-resolved top available rung, {s:.3}s/utt {} {:.3}s",
+                    if s <= self.ceiling_secs { "<=" } else { ">" }, self.ceiling_secs),
                 None => "hw-resolved top rung".to_string(),
             },
             Basis::TooSlow => match (&self.rejected, self.measured_secs) {
@@ -353,46 +354,13 @@ impl Resolution {
         )
     }
 
-    /// Is this worth telling the user about at all?
-    ///
-    /// The top rung on a healthy machine is the product working as designed and does not deserve a
-    /// notice. Anything else is the product having quietly made a choice on the CEO's behalf, and
-    /// the brief for this work is explicit that such a choice is NOT a routine notification to be
-    /// suppressed — it is the product explaining itself.
-    pub fn is_noteworthy(&self) -> bool {
-        !matches!(self.basis, Basis::TopRung | Basis::Override)
-    }
+    /// Automatic speech-model selection belongs in provenance, not the conversation.
+    /// A slower or unmeasured machine still has a working recognizer. Actionable capture
+    /// and recognition failures use their own error path.
+    pub fn is_noteworthy(&self) -> bool { false }
 
-    /// What the CEO reads. Plain language, no paths, no model filenames, no byte counts — the same
-    /// register `SttError::ceo_message` already uses, and for the same reason: he cannot act on a
-    /// path and should not have to read one.
-    ///
-    /// It says WHAT changed and WHY, because a degradation nobody is told about is the defect this
-    /// module was built to remove, and a silent one in the other direction would be the same defect
-    /// wearing better manners.
-    pub fn ceo_message(&self) -> Option<String> {
-        match self.basis {
-            Basis::Override | Basis::Chosen | Basis::TopRung => None,
-            Basis::TooSlow => Some(
-                "I'm using my faster hearing on this machine. The more accurate one takes long \
-                 enough here that you'd be waiting after every sentence, and a conversation with \
-                 pauses in it isn't a conversation. You can still say anything you like. I just \
-                 might misread an unusual name now and then."
-                    .into(),
-            ),
-            Basis::TooLarge => Some(
-                "I'm using my lighter hearing on this machine: there isn't enough free memory \
-                 right now for the more accurate one, and I'd rather not slow everything else \
-                 down. You can still say anything you like."
-                    .into(),
-            ),
-            Basis::Unmeasured => Some(
-                "I couldn't work out how fast this machine hears, so I've started with the \
-                 setting that works everywhere. I'll check again next time you turn voice on."
-                    .into(),
-            ),
-        }
-    }
+    pub fn ceo_message(&self) -> Option<String> { None }
+
 }
 
 // -------------------------------------------------------------------------------------------
@@ -801,6 +769,18 @@ mod tests {
     /// against. Every other test here would pass against a registry that had quietly lost its
     /// ladders, and would prove nothing.
     #[test]
+    fn an_only_installed_model_over_budget_is_not_logged_as_within_budget() {
+        let mut costs = Costs::load();
+        costs.retain_installed(|id| id == "small.en");
+        let over = resolve_live(&costs, &roomy(), |_| Some(8.668));
+        assert_eq!(over.model_id, "small.en");
+        assert!(over.provenance().contains("8.668s/utt > 1.000s"));
+        assert!(!over.provenance().contains("<="));
+        let within = resolve_live(&costs, &roomy(), |_| Some(1.0));
+        assert!(within.provenance().contains("1.000s/utt <= 1.000s"));
+    }
+
+    #[test]
     fn the_compiled_in_registry_carries_both_ladders_and_both_gates() {
         let c = Costs::load();
         assert_eq!(c.live_ladder, vec!["large-v3-turbo-q5_0", "small.en", "base.en", "tiny.en"]);
@@ -860,9 +840,7 @@ mod tests {
         assert_eq!(r.model_id, "small.en");
         assert_eq!(r.basis, Basis::TooSlow);
         assert_eq!(r.rejected, Some(("large-v3-turbo-q5_0".to_string(), 1.302)));
-        assert!(r.is_noteworthy(), "a machine that could not have the better model is told so");
-        let msg = r.ceo_message().expect("a demotion always has words for him");
-        assert!(!msg.contains('/') && !msg.contains("small.en"), "no paths and no model filenames: {msg}");
+        assert_eq!(r.ceo_message(), None, "automatic selection does not add a conversation card");
         assert!(r.provenance().contains("too slow here at 1.302s/utt"), "{}", r.provenance());
     }
 
@@ -880,7 +858,7 @@ mod tests {
         });
         assert_eq!(r.model_id, "base.en");
         assert_eq!(r.basis, Basis::TooSlow);
-        assert!(r.is_noteworthy());
+        assert!(!r.is_noteworthy());
     }
 
     /// INVARIANT: the bottom rung is never refused. A machine that clears no gate still gets a
@@ -890,7 +868,7 @@ mod tests {
         let c = Costs::load();
         let r = resolve_live(&c, &roomy(), |_| Some(9.000));
         assert_eq!(r.model_id, "tiny.en", "the last rung always fits");
-        assert!(r.is_noteworthy(), "and the CEO is told he is on it");
+        assert!(!r.is_noteworthy());
     }
 
     /// INVARIANT: the memory gate can force a demotion, and it says memory rather than speed when
@@ -909,8 +887,7 @@ mod tests {
         let r = resolve_live(&c, &squeezed, |_| Some(0.300));
         assert_eq!(r.model_id, "base.en", "q5_0 and small.en both exceed 500,000,000 B available");
         assert_eq!(r.basis, Basis::TooLarge);
-        let msg = r.ceo_message().expect("a memory demotion has words for him too");
-        assert!(msg.contains("memory"), "he is told which constraint it was: {msg}");
+        assert_eq!(r.ceo_message(), None);
         assert!(r.provenance().contains("does not fit 500000000 B available"), "{}", r.provenance());
     }
 
@@ -946,7 +923,7 @@ mod tests {
         assert_ne!(r.model_id, *c.live_ladder.last().unwrap(), "NOT the bottom rung");
         assert_eq!(r.basis, Basis::Unmeasured);
         assert_eq!(r.measured_secs, None);
-        assert!(r.is_noteworthy(), "an unmeasured machine is exactly when to say so");
+        assert!(!r.is_noteworthy());
         assert!(r.provenance().contains("hw-unmeasured"), "{}", r.provenance());
     }
 
@@ -999,7 +976,7 @@ mod tests {
         let r = resolve_batch(&c, &roomy(), 25.0);
         assert_eq!(r.model_id, "small.en");
         assert_eq!(r.basis, Basis::TooSlow);
-        assert!(r.is_noteworthy());
+        assert!(!r.is_noteworthy());
         // And the reference machine itself is nowhere near it — a guard, not a discriminator.
         let here = resolve_batch(&c, &roomy(), 1.0);
         assert_eq!(here.model_id, "large-v3-turbo-q5_0");

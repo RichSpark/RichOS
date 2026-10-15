@@ -1136,7 +1136,19 @@ fn create_thread(state: State<AppState>, title: String) -> Result<String, String
 
 #[richos_command::command]
 fn switch_thread(state: State<AppState>, thread_id: String) -> Result<(), String> {
-    take_the_spine(&state.spine).switch_thread(&thread_id).map_err(|e| e.to_string())
+    switch_thread_in(&state.spine, &state.reader, &state.control, &thread_id)
+}
+
+fn switch_thread_in(spine: &Mutex<Spine>, reader: &SpineReader, control: &TurnControl,
+    thread_id: &str) -> Result<(), String> {
+    // Startup is already preparing this exact active conversation under the spine lock.
+    // Reopening it is a read, not another switch. Let the window paint while preparation
+    // runs. A different thread still takes the ordinary serialized switching path.
+    if control.front_desk_priming().as_deref() == Some(thread_id)
+        && reader.snapshot().active_thread() == Some(thread_id) {
+        return Ok(());
+    }
+    take_the_spine(spine).switch_thread(thread_id).map_err(|e| e.to_string())
 }
 
 /// Scoped read. Now fallible: a thread written before entity scoping existed has no
@@ -1172,44 +1184,26 @@ fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Re
     payload
 }
 
-/// **Make this thread's front desk ready BEFORE he types, on a thread of its own** — the CEO's
-/// ruling §55, 2026-09-18: *"35 seconds of waiting for the first response is not [fine]"*.
+/// Prepare a conversation on a background thread, once per opened thread. Startup
+/// and company confirmation ask before the window opens the conversation. The exact
+/// active conversation can be read through its snapshot while preparation holds the
+/// spine; switching to a different conversation remains serialized.
 ///
-/// # Why the timeline read is the hook, and not `setup`
-///
-/// The seconds this removes are a MODEL TURN, not a process start
-/// (`Spine::prime_front_desk`'s own documentation has the derivation), so the priming holds the
-/// spine's lock for as long as that turn takes — ~8 s, measured. Doing it inside `setup` would put
-/// those seconds in front of FIRST PAINT, because the page's own first reads (`list_threads`,
-/// `active_context`, this command) take the same lock. `get_timeline` is the read that opens a
-/// thread — `ui/main.js`'s `openThread` is `switch_thread` + `active_context` + `get_timeline` —
-/// so by the time this line runs the window is painted, he is looking at the conversation he is
-/// about to type into, and the snapshot he is looking at has already been handed over.
-///
-/// **The lock being held for ~8 s is an existing, tolerated condition, not a new one.**
-/// `send_message` takes the same lock and holds it for the WHOLE of a turn (still held at the end
-/// of the function), which is longer than this.
-///
-/// **HIS SEND NO LONGER WAITS FOR IT** (CEO §55, 2026-09-18). This paragraph used to say that a
-/// message sent during priming *"waits for exactly the priming his own message used to perform"*,
-/// which was true and was also the whole defect: Ray opened a brand-new thread and typed into it
-/// immediately, and his Send sat on this lock for the remainder of a 4412 ms prime while the
-/// window read *"Sending your message / Waiting for Rich to accept it"* and his sentence existed
-/// nowhere but the webview. `Spine::prime_front_desk` now opens the intake log's road for this
-/// thread while it primes and drains it before returning, so `send_message` takes the sentence in
-/// the time one `fsync` costs and the prime hands it over on its way out.
-///
-/// **What that does NOT do, so this doc never has to be corrected a second time.** It does not
-/// make his first words arrive sooner. The priming is a model turn, the lease is serial
-/// (continuity §3.1) and an already-primed thread never primes twice, so the contended cost is
-/// `prime_remainder + turn` whichever road the message took. The pre-prime is a bet that he is
-/// slower than the prime, and this only changes what happens when he wins that race. Recovering
-/// the seconds needs a desk that is already primed when the thread opens — a different slice,
-/// raised as `esc-20260918T195518Z-79f7b0d9`.
-///
-/// **One attempt per thread opened.** The verdict is reported on stderr and nowhere else: this is
-/// an optimization of WHEN the waiting happens, so a failure is not his business, and a UI that
-/// said anything about it would be telling him about the machinery §55 exists to hide.
+/// The priming intake marker makes messages durable while the provider is preparing.
+/// Context and company permissions retain the thread's immutable binding. Failure is
+/// logged and the next real request keeps the existing recovery path.
+/// Start the already selected conversation while the user is still opening the app
+/// or completing setup. No company or conversation is invented for this optimization.
+fn ready_selected_front_desk(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let active = state.reader.snapshot().active_thread().map(str::to_string);
+    if let Some(thread) = active {
+        ready_the_front_desk(app, &thread);
+    } else if let Some(entity) = state.entity.lock().unwrap().clone() {
+        ready_a_spare_front_desk(app, entity);
+    }
+}
+
 fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
     {
         let Some(state) = app.try_state::<AppState>() else { return };
@@ -1230,8 +1224,7 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
         adopt_at_the_turn_boundary(spine, &state.work);
         match verdict {
             richos_core::spine::FrontDeskReady::Ready { millis, spawned } => eprintln!(
-                "[richos] the front desk is ready before he types: {millis} ms{} — that is what his \
-                 first message used to wait through (CEO §55)",
+                "[richos] conversation preparation completed in {millis} ms{}",
                 if spawned { ", including the lease's own start" } else { "" }
             ),
             richos_core::spine::FrontDeskReady::AlreadyReady => {}
@@ -1576,7 +1569,7 @@ fn send_message(
     //
     // A write that FAILS is not a refusal of his message either: it falls through to the same
     // old road, and the only thing lost is the wait.
-    let his_words_are_on_the_log = if state.control.lease_session().is_some() {
+    let his_words_are_on_the_log = if desk_input_can_be_logged(&state.control, &thread_id) {
         match state.control.submit_from_desk(&thread_id, state.entity.lock().unwrap().clone(), &text)
         {
             Ok(record) => {
@@ -1803,6 +1796,14 @@ fn drain_the_phone(
     let outcome = spine.poll_intake();
     adopt_at_the_turn_boundary(spine, work);
     outcome
+}
+
+/// A cold prime starts before its provider has a session id. Its intake marker
+/// already identifies the exact conversation, so its messages must be durable too.
+/// The send handler always drains intake under the spine after writing it, including
+/// when priming finishes between this observation and the write.
+fn desk_input_can_be_logged(control: &TurnControl, thread_id: &str) -> bool {
+    control.lease_session().is_some() || control.front_desk_priming().as_deref() == Some(thread_id)
 }
 
 /// **A TYPED MESSAGE THAT NEVER BECAME A TURN, ON THE OPERATOR'S LOG** — the nightly's D4.
@@ -3696,6 +3697,9 @@ fn main() {
             phone_runtime.resume_if_paired(app.handle().clone());
             app.manage(phone_runtime);
             question_host::start(app.handle().clone());
+            // Readiness starts before the window's setup/navigation reads, with the
+            // selected thread's immutable company scope. Reader snapshots stay available.
+            ready_selected_front_desk(app.handle());
             // The composer's attachments, in the SAME app-data directory the phone's
             // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
             let attachments_home = app.state::<AppState>().data_dir.clone();
@@ -3799,21 +3803,6 @@ fn main() {
             // It is also the honest answer to an operator reading a terminal: the lines
             // above are all of it, so nothing further is coming and a missing line is
             // missing rather than late.
-            // **A DESK FOR HIS FIRST NEW THREAD, STARTED AFTER THE BOOT HAS FINISHED RESOLVING**
-            // (CEO §55). This is the case Ray measured on candidate .10: launch, start a brand-new
-            // thread, type immediately — and it is the one hook that cannot come from a thread
-            // being opened, because at this point none has been. It is a background thread and it
-            // takes the spine's mutex for a model turn, so it is placed AFTER the marker's
-            // resolution work and after the window exists; first paint's own reads
-            // (`list_threads`, `active_context`, `get_timeline`) are already served by then, and
-            // if one is not, it waits exactly as it waits for a pre-prime today.
-            //
-            // No entity means no spare and no complaint: a launch that has not been told which
-            // company it works for refuses his first sentence anyway (`ENTITY_UNRESOLVED_MESSAGE`),
-            // and priming for a company nobody has chosen would be inventing one.
-            if let Some(entity) = app.try_state::<AppState>().and_then(|s| s.entity.lock().unwrap().clone()) {
-                ready_a_spare_front_desk(app.handle(), entity);
-            }
             eprintln!("[richos] boot complete — every line above is what this launch resolved");
             // AND THE FAILURE ALERT STANDS DOWN ON THE SAME LINE, for the reason the marker
             // above exists at all: this is the program stating where "starting up" ends.
@@ -4728,7 +4717,9 @@ fn voice_readiness() -> serde_json::Value {
     // The ready line names the MODEL and why it was chosen, because "voice is on" and "voice is
     // on with the weakest recognizer this machine could have taken" are different facts.
     match (&readiness, &reason) {
-        (_, Some(r)) => eprintln!("[richos] voice: not ready on this machine ({}) — {r}", readiness.tag()),
+        // Log the observed state. The UI offer is not a prediction about a future
+        // Talk tap: setup may already be downloading these weights.
+        (_, Some(_)) => eprintln!("[richos] voice: not ready on this machine ({}) — {readiness:?}", readiness.tag()),
         (richos_voice::stt::SpeechReadiness::Ready(rec), None) => {
             eprintln!(
                 "[richos] voice: ready on this machine ({}) — {}",
@@ -6343,7 +6334,7 @@ fn entity_choice(state: State<AppState>) -> EntityChoiceView {
 /// channel until the turn finished would be a settings row nobody touches. The DURABLE
 /// write happens before the spine is touched at all, so the answer is never lost to a wait.
 #[richos_command::command]
-fn choose_entity(state: State<AppState>, entity_id: String) -> Result<EntityChoiceView, String> {
+fn choose_entity(app: AppHandle, state: State<AppState>, entity_id: String) -> Result<EntityChoiceView, String> {
     if state.entity_pinned_by_env {
         return Err(ENTITY_PINNED_MESSAGE.to_string());
     }
@@ -6365,6 +6356,7 @@ fn choose_entity(state: State<AppState>, entity_id: String) -> Result<EntityChoi
     *state.entity_source.lock().unwrap() = Some(EntitySource::SavedChoice);
 
     apply_company_choice(&mut take_the_spine(&state.spine), &id)?;
+    ready_selected_front_desk(&app);
     Ok(entity_choice_view(&state))
 }
 
@@ -6519,6 +6511,7 @@ fn resolve_company_folder(raw: &str) -> Result<PathBuf, String> {
 /// `send_message` holds for the whole of a turn.
 #[richos_command::command]
 fn register_entity(
+    app: AppHandle,
     state: State<AppState>,
     display_name: String,
     folder: Option<String>,
@@ -6599,6 +6592,7 @@ fn register_entity(
         roots.len(),
         state.registry_path.display()
     );
+    ready_selected_front_desk(&app);
     Ok(entity_choice_view(&state))
 }
 
@@ -6925,6 +6919,31 @@ mod send_wait_tests {
     //! `cargo test --manifest-path app/src-tauri/Cargo.toml`.
 
     use std::time::Duration;
+
+    #[test]
+    fn a_send_during_cold_priming_is_durable_before_the_provider_has_a_session() {
+        let root = std::env::temp_dir().join(format!("cold-prime-intake-{}-{}",
+            std::process::id(), richos_core::util::now_millis()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("intake.jsonl");
+        let control = super::TurnControl::open(&path).unwrap();
+        assert!(control.lease_session().is_none());
+        assert!(!super::desk_input_can_be_logged(&control, "thread-a"));
+        control.begin_front_desk_prime("thread-a");
+        assert!(super::desk_input_can_be_logged(&control, "thread-a"));
+        assert!(!super::desk_input_can_be_logged(&control, "thread-b"));
+        control.submit_from_desk("thread-a", Some(super::EntityId::parse("alpha").unwrap()),
+            "Keep this first message").unwrap();
+        control.end_front_desk_prime();
+        assert!(!super::desk_input_can_be_logged(&control, "thread-a"));
+        let reopened = super::TurnControl::open(&path).unwrap();
+        assert_eq!(reopened.pending_intake().len(), 1, "a cold-start message did not survive reopening its intake log");
+        assert!(std::fs::read_to_string(&path).unwrap().contains("Keep this first message"));
+        drop(reopened);
+        drop(control);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
 
     #[test]
     fn an_ordinary_hop_says_nothing_and_a_hop_that_waited_says_how_long_and_where() {

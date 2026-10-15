@@ -1693,21 +1693,8 @@ impl VoiceController {
     ) -> Result<VoiceController, VoiceStartError> {
         let recognizer = Recognizer::resolve().map_err(VoiceStartError::Stt)?;
 
-        // WHICH RECOGNIZER THIS MACHINE COULD CARRY, said out loud — once, here, at the toggle.
-        //
-        // `Resolution::ceo_message()` is `None` whenever the machine got the best rung it has or
-        // an engineer named the model outright, so this is silent on a healthy machine and on a
-        // developer's. It speaks only when the product has quietly made a choice on his behalf,
-        // which is the thing `hardware.rs` exists to stop happening in silence.
-        //
-        // ONCE, NOT PER UTTERANCE. Resolution happens once per voice-mode start, and a sentence
-        // repeated after everything he says is noise — and noise is what makes a real notice get
-        // ignored. It rides `voice-notice` rather than `voice-error` because voice is WORKING:
-        // the UI's `voice-error` handler also flips the panel out of voice mode, so sending it
-        // there would end the conversation it was reporting on.
-        if let Some(message) = recognizer.resolution().ceo_message() {
-            observer.on_voice_event(&VoiceEvent::Notice { message, at: now_millis() });
-        }
+        // Automatic model selection is recorded in recognizer provenance. It does not
+        // create a conversation notice when the user starts talking.
 
         // The echo canceller and the lock-free ring that feeds it. The ring goes to the
         // OUTPUT callback; the canceller itself is owned outright by the capture path (inside
