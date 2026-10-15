@@ -353,7 +353,8 @@ async function main() {
     });
     assert(row, "the settings menu carries no way back to the memory folder");
     assertEqual(row.text, "Memory folder", "the row does not name the thing it opens");
-    assertEqual(row.role, "menuitem");
+    // A plain button since round 27: the one Settings panel is a dialog, not a menu.
+    assertEqual(row.role, null);
     await again.click("#set-memory-open");
     await again.waitForSelector("#memory-setup:not([hidden])");
     assert(

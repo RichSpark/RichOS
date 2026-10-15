@@ -199,14 +199,14 @@ module.exports = [
       "now. Either nobody has signed in on this Mac yet, or the sign-in ran out. You can " +
       "connect it in Settings, under Claude accounts, and then send this to me again.",
     c: "ACTIONABLE",
-    control: "#rail-settings",
+    control: "#set-btn",
     fixture: null,
     why:
       "`InterruptionCause::NotSignedIn`. HIS to fix, which is why it is ACTIONABLE and not " +
       "NEEDS-SOMEONE-ELSE: the account is his and the screen exists. The audit's third " +
       "finding was that the app never mentioned the account at all 'even though the app " +
       "offered to connect one on first run, knows it was declined, and has a working route " +
-      "to it'. The control is the rail's settings button, which is on screen in every view " +
+      "to it'. The control is the Settings button at top right, which is on screen in every view " +
       "this card can appear in, and the sentence itself names the route in words. It was TWO sentences briefly, the second returned by a `route()` method — deleted because under app/crates this registry can only see literals inside a function called `ceo_message`, so a route authored anywhere else would reach his screen while being invisible to the one inventory that asks whether he can act on what he is told.",
   },
   {
@@ -301,12 +301,12 @@ module.exports = [
       "user-name preference on a fresh install, so this is what almost every install shows, " +
       "and it is deliberately NOT an invented name or a '??' placeholder. It is ACTIONABLE " +
       "because it is an imperative aimed at the reader, and the control is the row itself — " +
-      "in the unset state `#rail-identity` is a button that opens the preferences popover " +
-      "where the field lives. Once a name is set the row stops being a control and the " +
+      "in the unset state `#rail-identity` is a button that opens the one Settings panel " +
+      "on the field (round 27). Once a name is set the row stops being a control and the " +
       "string stops rendering, which is the correct pairing in both directions.",
   },
   {
-    s: "No name is set. Open preferences to add yours.",
+    s: "No name is set. Open Settings to add yours.",
     c: "ACTIONABLE",
     control: "#rail-identity",
     why:
@@ -987,9 +987,9 @@ module.exports = [
   { s: "Worker panel width", c: "CONTROL", why: "#inspector-resizer accessible name." },
   { s: "Under the hood", c: "CONTROL", why: "Slide-over title and its trigger." },
   { s: "back to Rich", c: "CONTROL", why: "#slideover-close." },
-  { s: "How much should Rich interrupt you?", c: "CONTROL", why: "Assertiveness popover title over its radios." },
+  { s: "How much should Rich interrupt you?", c: "CONTROL", why: "The interruption choice's title over its radios, in the Settings panel's Working with Rich column (round 27)." },
   { s: "Only when it's urgent", c: "CONTROL", why: "Assertiveness radio label." },
-  { s: "Show it when RichOS starts", c: "CONTROL", why: "The splash screen's off switch in the gear's general settings (CEO 2026-10-06 item 7): a checkbox label, and the control IS the state." },
+  { s: "Show it when RichOS starts", c: "CONTROL", why: "The splash screen's off switch in the Settings panel's foot band (CEO 2026-10-06 item 7, round 27): a checkbox label, and the control IS the state." },
   { s: "Which company is this work in?", c: "CONTROL", why: "Entity picker title over its list. \"company\", never \"entity\" — Ray candidate-.11 §3.5." },
   { s: "Search entities, threads and conversations…", c: "CONTROL", why: "#search-input placeholder." },
   { s: "Talk to Rich", c: "CONTROL", why: "#talk-toggle title." },
@@ -2193,19 +2193,19 @@ module.exports = [
       "and two places printing one name is two places that can disagree.",
   },
   {
-    s: "Technical view is on for every conversation in this company. Turn it off here.",
+    s: "Technical view is on for every conversation in this company. Open its switch in Settings.",
     c: "CONTROL",
-    why: "#techy-chip's accessible name in the company case, matching the two beside it.",
+    why: "#techy-chip's accessible name in the company case, matching the two beside it. Since round 27 the chip opens Settings on the technical view's one switch.",
   },
   {
-    s: "Technical view is on for this conversation. Turn it off.",
+    s: "Technical view is on for this conversation. Open its switch in Settings.",
     c: "CONTROL",
-    why: "#techy-chip's accessible name in the pinned case — the label plus what pressing it does.",
+    why: "#techy-chip's accessible name in the pinned case — the label plus what pressing it does (round 27: it opens Settings on the switch).",
   },
   {
-    s: "Technical view is on for every conversation. Turn it off here.",
+    s: "Technical view is on for every conversation. Open its switch in Settings.",
     c: "CONTROL",
-    why: "#techy-chip's accessible name in the global case. 'here' because the switch it undoes is in Settings.",
+    why: "#techy-chip's accessible name in the global case. Since round 27 pressing it opens Settings on the technical view's one switch.",
   },
   // THE RAIL'S TECHY GROUP HAS NO ROW HERE ANY MORE, and that is this gate working rather
   // than a gap. Its title was "Show the technical view" and its label "In every
@@ -2308,7 +2308,12 @@ module.exports = [
   // report a fault. Nothing here is a state the CEO is being asked to fix — the three radios
   // are RIGHT THERE, and the sentence exists so that picking one is an informed act rather
   // than a guess about what "whichever binds first" will do to his stored output.
-  { s: "Keep the stored output", c: "CONTROL", why: "Settings popover title over the raw-retention radio group." },
+  { s: "Keep the stored output", c: "CONTROL", why: "The Settings panel's title over the raw-retention radio group (round 27: its first column)." },
+  // ROUND 27: the one Settings panel's three column labels, each a heading over the controls in
+  // its column (settings-button.js `addColumn`). Nothing to act on in the words themselves.
+  { s: "How it looks", c: "CONTROL", why: "The Settings panel's first column label (round 27), over Theme, Text size, Technical view and stored output." },
+  { s: "Working with Rich", c: "CONTROL", why: "The Settings panel's second column label (round 27), over Rich's model, interruptions, Dictation and the phone." },
+  { s: "Your company and team", c: "CONTROL", why: "The Settings panel's third column label (round 27), over Company, Home screen, Token spend, Codex reviews, accounts, folders, memory and Updates." },
   { s: "For two weeks", c: "CONTROL", why: "The `two-weeks` radio's label — the shipping default (`config.rs`)." },
   { s: "For three months", c: "CONTROL", why: "The `three-months` radio's label." },
   {
@@ -5610,7 +5615,7 @@ module.exports = [
   {"s":"Rich talks with you on Opus again, the default.","c":"INFORMATIONAL","why":"Round 23 (§119): MODEL_TOAST rich.opus, the toast after a successful save back to the default. It reports what is now true and asks nothing."},
   {"s":"Rich now directs your team on Fable.","c":"INFORMATIONAL","why":"Round 23 (§119): MODEL_TOAST stu.fable, the toast after a successful save. It reports what is now true and asks nothing."},
   {"s":"Rich directs your team on Opus at high effort again, the default.","c":"INFORMATIONAL","why":"Round 23 (§119): MODEL_TOAST stu.opus, the toast after a successful save back to the default. It reports what is now true and asks nothing."},
-  {"s":"Rich's model could not be saved, so nothing changed.","c":"ACTIONABLE","control":"#rail-settings","fixture":null,"why":"Round 23 (§119): the toast when `set_lease_models` refuses after Preferences closes (`commitModelChoice`'s catch). He can act on it: the rail's settings button, on screen in every view this toast can appear in (Preferences opens only from it or from the rail identity row beside it), reopens Preferences with the rows put back to the saved choice, and closing it after picking again sends the save again."},
+  {"s":"Rich's model could not be saved, so nothing changed.","c":"ACTIONABLE","control":"#set-btn","fixture":null,"why":"Round 23 (§119): the toast when `set_lease_models` refuses after Settings closes (`commitModelChoice`'s catch). He can act on it: the Settings button, on screen in every view this toast can appear in, reopens the one Settings panel (round 27) with the rows put back to the saved choice, and closing it after picking again sends the save again."},
   {"s":"unknown model: {rich}","c":"NOT-RENDERED","why":"Round 23 (§119): `set_lease_models`'s refusal for a name `ModelChoice::parse` does not know. The UI only ever sends \"opus\" or \"fable\" (`modelValue`), and `commitModelChoice`'s catch discards the error text and shows its own sentence, so this string never reaches the DOM."},
   {"s":"unknown model: {stu}","c":"NOT-RENDERED","why":"Round 23 (§119): the same refusal for the directs-your-team row's name. Never reaches the DOM for the same reason: the UI sends only \"opus\" or \"fable\" and the catch shows its own sentence."},
   {"s":"the server answered {}","c":"NOT-RENDERED","why":"Rich's Pocket TTS voice download: `fetch_rich_voice_file`'s refusal for a non-success HTTP status (voice_provision.rs:602). Its only caller is `fetch_rich_voice`, whose only caller is the background thread in `fetch_rich_voice_in_background`; every error ends in `eprintln!` (:577 per attempt, :554 at the end) and none is returned to the webview. Until the files verify, Rich keeps speaking with `say`, so nothing is shown and nothing is asked."},

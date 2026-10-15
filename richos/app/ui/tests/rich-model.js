@@ -11,11 +11,12 @@
 //
 // WHAT THIS SUITE PROVES is the browser half, through the real renderer and mock.js's stand-in
 // for config.rs:
-//   1. the rows show the stored choice, first in Preferences (the rail gear), not in the quick
-//      settings, and Stu is never named;
-//   2. changing a row while Preferences is open changes nothing in use: no command, no write
+//   1. the rows show the stored choice, first under "Working with Rich" in the one Settings
+//      panel (round 27 retired the rail gear's Preferences), never in its first column, and
+//      Stu is never named;
+//   2. changing a row while Settings is open changes nothing in use: no command, no write
 //      to the store, no toast;
-//   3. closing Preferences saves it, by every way it closes (the gear, Escape, a click
+//   3. closing Settings saves it, by every way it closes (the button, Escape, a click
 //      outside), and says what is now true in one toast; a choice flipped and flipped back
 //      saves nothing and says nothing;
 //   4. reopening shows it, and so does the next launch;
@@ -88,11 +89,12 @@ const stored = (page) =>
     return { rich: c.rich_model || "opus", stu: c.stu_model || "opus" };
   }, STORE);
 
+/// Round 27: Rich's model lives in the one Settings panel, opened by the button at top right.
 async function openPrefs(page) {
-  await page.click("#rail-settings");
-  await page.waitForSelector("#assertiveness-popover", { state: "visible" });
+  await page.click("#set-btn");
+  await page.waitForSelector("#set-menu", { state: "visible" });
 }
-const isOpen = (page) => page.isVisible("#assertiveness-popover");
+const isOpen = (page) => page.isVisible("#set-menu");
 
 /// What the two rows show: the half each row has checked, and the "default" word beside it.
 async function rows(page) {
@@ -142,10 +144,10 @@ async function toastSays(page, text) {
 async function main() {
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
-  const run = createRun("Rich's model in Preferences (§119): held while open, saved and applied on close");
+  const run = createRun("Rich's model in Settings (§119, round 27): held while open, saved and applied on close");
 
   // ---- 1. the rows show the stored choice ------------------------------------------------
-  await run.check("1. the rows show the stored choice, first in the gear's Preferences, never in quick settings", async () => {
+  await run.check("1. the rows show the stored choice, first under Working with Rich, away from the first column", async () => {
     // A fresh install: both on Opus, both marked default.
     const fresh = await openApp(browser);
     await openPrefs(fresh);
@@ -153,15 +155,20 @@ async function main() {
     const r0 = await rows(fresh);
     assertEqual([r0.rich, r0.stu], [{ chosen: "opus", state: "default" }, { chosen: "opus", state: "default" }], "fresh install");
     assert(r0.note.startsWith("Opus is the default for both."), "the line under the rows: " + r0.note);
-    // First in Preferences: the first section title in the popover is this one.
-    const firstTitle = await fresh.$eval("#assertiveness-popover .popover-title", (n) => n.textContent);
-    assertEqual(firstTitle, "Rich's model", "the first section in Preferences");
+    // Round 27: first in the middle column, "Working with Rich", and never in the first column
+    // of quick controls (§119: "in general settings, not in quick settings").
+    const where = await fresh.evaluate(() => {
+      const col = document.getElementById("md").closest(".sm-col");
+      return {
+        group: col.querySelector(".sm-group").textContent,
+        firstTitle: col.querySelector(".popover-title").textContent,
+        column: [...col.parentElement.children].indexOf(col),
+      };
+    });
+    assertEqual(where, { group: "Working with Rich", firstTitle: "Rich's model", column: 1 }, "where Rich's model sits");
     // The app only ever names Rich (§110): no "Stu" anywhere a person can read.
-    const visible = await fresh.$eval("#assertiveness-popover", (n) => n.innerText);
-    assert(!/\bStu\b/.test(visible), "Stu is named in Preferences");
-    // Not in the quick settings (the sliders menu at top right).
-    const quick = await fresh.evaluate(() => (document.querySelector(".settings") || {}).innerText || "");
-    assert(!/Fable|Opus/.test(quick), "the model choice leaked into quick settings: " + quick);
+    const visible = await fresh.$eval("#set-menu", (n) => n.innerText);
+    assert(!/\bStu\b/.test(visible), "Stu is named in Settings");
     await fresh.close();
 
     // A stored choice of Fable for "talks with you" is what the row shows.
@@ -177,7 +184,7 @@ async function main() {
   });
 
   // ---- 2. changing a row while open changes nothing in use ------------------------------
-  await run.check("2. a row changed while Preferences is open changes nothing in use: no command, no write, no toast", async () => {
+  await run.check("2. a row changed while Settings is open changes nothing in use: no command, no write, no toast", async () => {
     const page = await openApp(browser);
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
@@ -191,24 +198,24 @@ async function main() {
     const r = await rows(page);
     assertEqual([r.rich.chosen, r.stu.chosen], ["fable", "fable"], "the popover shows both picks");
     assert(r.note.startsWith("Rich is on Fable for both."), "and says what they would mean: " + r.note);
-    assert(await isOpen(page), "Preferences is still open");
-    assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Preferences was open");
-    assertEqual(await stored(page), { rich: "opus", stu: "opus" }, "the store changed while Preferences was open");
-    assertEqual(await toastText(page), null, "a toast fired before Preferences closed");
+    assert(await isOpen(page), "Settings is still open");
+    assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Settings was open");
+    assertEqual(await stored(page), { rich: "opus", stu: "opus" }, "the store changed while Settings was open");
+    assertEqual(await toastText(page), null, "a toast fired before Settings closed");
     await page.close();
     return "shown, not sent";
   });
 
-  // ---- 3. closing Preferences saves and applies it ---------------------------------------
-  await run.check("3. closing Preferences saves it by every way it closes, and says what is now true", async () => {
-    // (a) the gear.
+  // ---- 3. closing Settings saves and applies it ------------------------------------------
+  await run.check("3. closing Settings saves it by every way it closes, and says what is now true", async () => {
+    // (a) the Settings button.
     const page = await openApp(browser);
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
-    await page.click("#rail-settings");
+    await page.click("#set-btn");
     await toastSays(page, "Rich now talks with you on Fable.");
-    assertEqual(await isOpen(page), false, "the gear closed Preferences");
+    assertEqual(await isOpen(page), false, "the Settings button closed Settings");
     const sent = await calls(page, "set_lease_models");
     assertEqual(sent.map((c) => c.args), [{ rich: "fable", stu: "opus" }], "one save, both rows, on close");
     assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the store after close");
@@ -222,7 +229,7 @@ async function main() {
     await page.keyboard.press("Escape");
     const both = "Rich talks with you on Opus again, the default. Rich now directs your team on Fable.";
     await toastSays(page, both);
-    assertEqual(await isOpen(page), false, "Escape closed Preferences");
+    assertEqual(await isOpen(page), false, "Escape closed Settings");
     assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after Escape");
     assertEqual(await toastText(page), both, "one toast, both changes");
 
@@ -236,25 +243,25 @@ async function main() {
     await rowsShow(page, { rich: "opus", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     await page.click('#md-rich .seg-opt[data-v="opus"]');
-    await page.mouse.click(1100, 300);
+    await page.mouse.click(1100, 880); // below the panel, which now spans the stage
     // The save is sent synchronously inside the close (`commitModelChoice`), and a toast only
     // follows a sent save, so once the popover is hidden the negatives below are settled.
-    await page.waitForSelector("#assertiveness-popover", { state: "hidden" }).catch(() => {});
-    assertEqual(await isOpen(page), false, "a click outside closed Preferences");
+    await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
+    assertEqual(await isOpen(page), false, "a click outside closed Settings");
     assertEqual(await calls(page, "set_lease_models"), [], "an unchanged choice was saved");
     assertEqual(await toastText(page), null, "an unchanged choice was announced");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
-    return "gear, Escape, outside click";
+    return "the button, Escape, outside click";
   });
 
   // ---- 4. reopening shows it ---------------------------------------------------------------
-  await run.check("4. reopening Preferences shows the saved choice, and so does the next launch", async () => {
+  await run.check("4. reopening Settings shows the saved choice, and so does the next launch", async () => {
     const page = await openApp(browser, { theme: "light" });
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
     await page.click('#md-stu .seg-opt[data-v="fable"]');
-    await page.click("#rail-settings");
+    await page.click("#set-btn");
     await toastSays(page, "Rich now directs your team on Fable.");
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "fable" });
@@ -276,7 +283,7 @@ async function main() {
   });
 
   // ---- 5. a reopen while the save is on its way never paints the old choice back ----------
-  await run.check("5. reopening Preferences while the close's save is still on its way shows the new choice", async () => {
+  await run.check("5. reopening Settings while the close's save is still on its way shows the new choice", async () => {
     // The second review's reproduction (rv-20261011T040418Z): the save is held open, so the
     // read that reopening makes would answer from the store as it was before the save. Held by
     // a gate this check releases, not by a clock, so the order is the same on any host.
@@ -297,7 +304,7 @@ async function main() {
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
-    await page.click("#rail-settings"); // close: the save starts and is held
+    await page.click("#set-btn"); // close: the save starts and is held
     const readsBefore = await page.evaluate(() => window.__readsDone);
     await openPrefs(page); // reopen: its read starts while the save is held
     await page.evaluate(() => window.__releaseSave());

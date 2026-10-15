@@ -179,34 +179,26 @@ async function pressToggle(page) {
   await bridgeQuiet(page, "the per-conversation toggle");
 }
 
-/// Flip the rail's "Show the technical view" switch — a SCOPE-AMBIGUOUS control, so inside
-/// a conversation this is what opens the three-way choice.
-///
-/// IT LEAVES THE POPOVER OPEN, and that is not an oversight. The sheet is an `.overlay`
-/// (z-index 60) and the popover is `.popover` (20), so the sheet paints OVER the rail the
-/// moment the switch flips; a helper that tried to tidy the popover away first would be
-/// clicking the gear through a modal and hangs for the full 30s timeout. That is measured,
-/// not predicted — it is how the first draft of this helper failed. The popover is
-/// dismissed by `dismissPopover` once the sheet is resolved, which is also the order the
-/// CEO's own hand does it in.
+/// Flip the technical view's ONE switch (round 27: the Settings panel's `#set-techy`) — a
+/// SCOPE-AMBIGUOUS control, so inside a conversation this is what opens the three-way choice.
+/// The panel closes as the question opens (main.js `openTechyScope`), so nothing of it covers
+/// the question's buttons.
 async function openTechySwitch(page, on) {
-  await page.click("#rail-settings");
-  await page.waitForSelector("#assertiveness-popover:not([hidden])");
-  if (on) await page.check("#techy-default");
-  else await page.uncheck("#techy-default");
+  await page.click("#set-btn");
+  await page.waitForSelector("#set-menu #set-techy");
+  if (on) await page.check("#set-techy");
+  else await page.uncheck("#set-techy");
   await page.waitForSelector("#techy-scope:not([hidden])");
 }
 
-/// Put the rail's popover away, the way the CEO does (its own toggle), so the thread list
-/// underneath is clickable again. A no-op when it is not open — the chip path never opens
-/// it. NOT Escape: `main.js`'s Escape handler reaches the popover through `RichDismiss`,
-/// but going through the gear is the path a person takes and keeps this helper honest
-/// about what it is standing in for.
+/// Put Settings away, the way the CEO does (its own button), so the thread list underneath is
+/// clickable again. A no-op when it is not open, which is the usual case: the panel closes
+/// itself as the scope question opens.
 async function dismissPopover(page) {
-  if (await page.locator("#assertiveness-popover").isHidden()) return;
-  await page.click("#rail-settings");
-  await page.waitForSelector("#assertiveness-popover", { state: "hidden" });
-  await bridgeQuiet(page, "putting the rail's popover away");
+  if (await page.locator("#set-menu").isHidden()) return;
+  await page.click("#set-btn");
+  await page.waitForSelector("#set-menu", { state: "hidden" });
+  await bridgeQuiet(page, "putting Settings away");
 }
 
 /// The sheet's option labels, in document order and only the ones on screen — a hidden
@@ -235,8 +227,9 @@ async function pickScope(page, value) {
   await dismissPopover(page);
 }
 
-/// The rail's switch, and the settings menu's row: the two doors into one state.
-const railSwitch = (page) => page.isChecked("#techy-default");
+/// The technical view's one switch, read without opening the panel (it is painted while the
+/// panel is closed too), and read again by opening Settings the way a person does.
+const railSwitch = (page) => page.isChecked("#set-techy");
 
 async function settingsSwitch(page) {
   await page.click("#set-btn");
@@ -521,32 +514,9 @@ async function main() {
     await openThread(page, "hiring");
     assert(await page.locator("#techy-chip").isHidden(), "hiring is pinned off and stays off");
     await openThread(page, "acme");
-    // DISMISS THE POPOVER BEFORE REACHING PAST IT, which is what the CEO does and what this
-    // check never had to say out loud until 2026-09-01. The rail row this next line clicks
-    // sits BEHIND the open settings popover; it used to be a couple of rows clear of it and
-    // now it is not, because the app stopped borrowing the platform's typeface and Inter's
-    // metrics make the popover 38px taller (581 -> 619 at 1400x950, measured, still well
-    // inside its 880px max-height and not overflowing). Five rail rows are covered where
-    // four were.
-    //
-    // Clicking the settings button again is THIS popover's own dismissal (main.js: the
-    // toggle at `assertivenessPopover.hidden = open`, and the outside-click at
-    // `!assertivenessPopover.contains(e.target) && e.target !== settingsBtn`), so this is
-    // the user's path and not a way around the product.
-    //
-    // NOT Escape, which was tried first and does not work: main.js's Escape handler closes
-    // the thread menu, search, the entity picker, corrections, feedback, the slide-over and
-    // the inspector, and the assertiveness popover is in none of those branches. That looks
-    // like a §18 gap ("Escape closes overlays and inspector detail") but it is somebody
-    // else's to rule on, so it is named here rather than fixed from a test.
-    //
-    // Nothing about what this check PROVES has changed: its subject is that the global
-    // switch reaches an unpinned conversation, never that the rail is clickable through an
-    // open popover — that it was, was an accident of the old font's metrics.
-    //
-    // `state: "hidden"` and not a `[hidden]` selector: waitForSelector's default is
-    // "visible", so waiting for `#assertiveness-popover[hidden]` waits for an element to be
-    // hidden AND visible at once and can only ever time out.
+    // Its subject is that the global switch reaches an unpinned conversation. Since round 27
+    // the switch is in the Settings panel, which closes as the scope question opens, so
+    // nothing covers the rail rows this check clicks next.
     assert(await page.locator("#techy-chip").isVisible(), "the conversation he switched it on from is ON");
     await openThread(page, "partner");
     assert(await page.locator("#techy-chip").isVisible(), "and so is an unpinned thread in ANOTHER company");
@@ -985,9 +955,16 @@ async function main() {
     await openThread(page, "acme");
     assert(await page.locator("#techy-chip").isVisible(), "everything is on to start with");
 
-    // OFF for a given company, from the chip — the switch-off path inside a conversation.
+    // OFF for a given company, from the chip — the switch-off path inside a conversation. Round
+    // 27: the chip opens Settings on the technical view's one switch, and turning that off asks
+    // the same three.
     await page.click("#techy-chip");
-    assert(await page.locator("#techy-scope").isVisible(), "the chip asks the same three");
+    await page.waitForSelector("#set-menu", { state: "visible" });
+    assertEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), "set-techy",
+      "the chip opens Settings on the switch");
+    await page.uncheck("#set-techy");
+    await page.waitForSelector("#techy-scope:not([hidden])");
+    assert(await page.locator("#techy-scope").isVisible(), "the switch asks the same three");
     assertEqual(await page.textContent("#techy-scope-title"), "Turn off the technical view");
     assertEqual(await page.textContent("#techy-scope-confirm"), "Turn it off");
     assertEqual(await scopeChecked(page), "all-companies", "the same first choice, in both directions");
@@ -1057,7 +1034,7 @@ async function main() {
     await page.waitForSelector("#techy-scope", { state: "hidden" });
     await dismissPopover(page);
     assertEqual(await page.evaluate(() => window.__RICHOS_MOCK__.techyState()), before, "Cancel wrote nothing");
-    assertEqual(await railSwitch(page), false, "and the rail switch is back where the store is");
+    assertEqual(await railSwitch(page), false, "and the switch is back where the store is");
     assert(await page.locator("#techy-chip").isHidden(), "and no chip appeared");
 
     // Escape is the CEO's rule (2026-09-17) and it CANCELS — it is never a silent yes to
@@ -1188,16 +1165,20 @@ async function main() {
     return "unchanged: the key is inert with no conversation open";
   });
 
-  await run.check("30. the two doors into one state can never show different answers", async () => {
-    // §15's settings row and the rail's own switch. They now read the RESOLVED state rather
-    // than the global default, which is what makes them agree with the WINDOW as well as
-    // with each other: a switch showing "on" over a conversation pinned off is one control
-    // disagreeing with the screen it is drawn on.
+  await run.check("30. the one switch always shows the conversation on screen", async () => {
+    // Round 27: Technical view has ONE switch, in the Settings panel (the Preferences checkbox
+    // that was its second door is gone, and so is the gear that opened it). It reads the
+    // RESOLVED state rather than the global default, which is what makes it agree with the
+    // WINDOW: a switch showing "on" over a conversation pinned off is one control disagreeing
+    // with the screen it is drawn on.
     const page = await openApp(browser);
+    assertEqual(await page.locator("#techy-default, #rail-settings, #assertiveness-popover").count(), 0,
+      "no second door: the Preferences checkbox, the gear and its popover are gone");
+    assertEqual(await page.locator("#set-techy").count(), 1, "one switch");
     await openThread(page, "acme");
     await pressToggle(page); // pin acme ON, global default still off
-    assertEqual(await railSwitch(page), true, "the rail switch follows the conversation on screen");
-    assertEqual(await settingsSwitch(page), true, "and so does the settings menu's row");
+    assertEqual(await railSwitch(page), true, "the switch follows the conversation on screen");
+    assertEqual(await settingsSwitch(page), true, "and reads the same with Settings open");
 
     await openThread(page, "hiring"); // unpinned, follows the off default
     assertEqual(await railSwitch(page), false);
@@ -1214,7 +1195,7 @@ async function main() {
       "and the hint names which of the three tiers is holding it, since the label no longer can"
     );
     await page.close();
-    return "both doors, three tiers, one answer";
+    return "one switch, three tiers, one answer";
   });
 
   await run.check("32. every wait here is on the app, not the clock: the same presses at 300 ms of bridge latency", async () => {

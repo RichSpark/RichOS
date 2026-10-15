@@ -74,7 +74,7 @@ async function main() {
     await page.waitForFunction(() => document.querySelector("#set-accounts-open .acc-mini b, #set-accounts-open .acc-mini i"));
     assert(await page.locator("#set-accounts-state").isHidden(), "no second line with one account and room");
     assert(await page.locator("#set-accounts-open .acc-mini").isVisible(), "the week's mini bar");
-    const order = await page.locator("#set-menu > button.bugbtn").evaluateAll(b => b.map(x => x.id));
+    const order = await page.locator("#set-menu button.bugbtn").evaluateAll(b => b.map(x => x.id));
     assert(order.indexOf("set-accounts-open") < order.indexOf("set-repositories-open"), "above the folders row, as drawn: " + order);
     await page.close();
     page = await open("dark", one(86));

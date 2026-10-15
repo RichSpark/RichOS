@@ -49,7 +49,6 @@
     },
     "cannotBite": {
       "opening-screen": "The opening screen measures 0 of 450 nodes while the shell measures 92 of 448. Its two extra considered nodes are within the three-node tolerance, so the count floor cannot prove arrival. The driver instead holds the curtain and asserts RichSplash.state() still reports a held curtain with no dismissal reason.",
-      "settings": "The assertiveness popover unhides existing markup: both it and the shell consider 448 nodes. It measures 74 against the shell's 92 because the panel obscures the shell. The driver requires #assertiveness-popover:not([hidden]) and awaits its completed entry animation; an unopened panel fails that wait.",
       "settings-tooltip": "The tooltip is stylesheet-generated content, not a DOM text node. Its node counts equal the shell's 92 of 448. The driver requires an opaque ::after pseudo-element, and check 11b separately requires the authored Settings string to be measured.",
       "quota-work-status": "A single status sentence adds only two nodes across both themes, inside the unchanged three-node tolerance. Its driver waits for #quota-work-status:not([hidden]) and asserts the saved-work sentence before measuring it.",
       "quit-question": "Re-derived 2026-10-10 (walk48fix20): the sheet no longer claims aria-modal, so the shell behind it is filed obscured rather than measured through an inert layer, and the surface measures only its own 12 nodes against the shell's 102. Its text ships in the shared shell, hidden until shown, so it considers 724 against the shell's 722, inside the three-node tolerance. The driver raises it through RichQuitQuestion.show, the listener's own entry point, and waits for #quit-question to be visible with its entry animation finished (overlaySettled); an unshown sheet fails that wait. tests/quit-question.js measures its ratios."
@@ -117,8 +116,9 @@
     },
     "settings": {
       "//": "74 -> 72 on 2026-09-01, when the app stopped borrowing the platform's typeface and started shipping its own. Inter's metrics are not SF Pro's, so the rail's thread rows sit at slightly different heights, and ONE MORE nav-thread-title now falls underneath the assertiveness popover. Diffed node by node rather than assumed: `considered` is 132 per theme before and after, `invisible` is 77 before and after, and the single lost path is li.nav-thread-item > div.nav-thread-row > button.nav-thread > span.nav-thread-title, which moves from measured into `obscured` (its recorded example goes from \"Partner book review\" to \"Q4 hiring\"). Nothing stopped rendering, which is the failure this floor exists to catch (see mutation 9b in contrast.js: `.nav-thread-title { display: none }`). Check 11 still passes, which is the proof that matters here — every obscured node is measured on some other surface, so no contrast coverage was lost, only relocated.",
-      "checked": 104,
-      "considered": 668
+      "// 2026-10-15 round 27": "RE-DERIVED at round 27 (product hunt 57 finding 18): the rail gear and its Preferences popover are gone and this walk opens the ONE Settings panel, which holds what both held. One contrast.js run on this branch measured it at 196 of 754 across both themes, and that run is the floor; it now bites (the bare shell measured 100 of 750), so it came off cannotBite.",
+      "checked": 196,
+      "considered": 754
     },
     "history-notice": {
       "//": "Added 2026-09-05 with the tolerant ledger reader. The shell walk is 90 of 408; this is 94 of 412, and the delta is exactly the notice: two paragraphs, both themes, both MEASURED rather than filed invisible or obscured. Computed before the walk ran and unchanged by it: headline --attention on --surface-raised is 7.05:1 dark and 6.19:1 light, detail --ink on --surface-raised is 13.02:1 dark and 17.02:1 light, and the --attention border (a non-text indicator, floor 3:1) is 7.05:1 / 7.88:1 dark and 6.19:1 / 5.42:1 light against the panel and the ground behind it. Nothing here is exempt; the sentence explaining why part of his history is missing is the last text in this app anyone should have to squint at. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
@@ -209,17 +209,20 @@
     },
     "voice-model-offer": {
       "//": "the offer row: the sentence, the attention dot and the download control. ADDED 2026-09-17 with the speech-model provisioning work; walked with NO audio device open, which is why this panel is measurable where the listening row is not. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
-      "checked": 108,
+      "// 2026-10-15 round 27": "108 -> 106: round 27 removed the rail gear, a text glyph measured once per theme on every surface where the rail shows. One contrast.js run on this branch: the bare shell 100 of 750, this surface 104; nothing this surface renders changed.",
+      "checked": 106,
       "considered": 698
     },
     "voice-model-progress": {
       "//": "the transfer row: the progress line plus the bar fill and track, which are the only non-text progress indicators this suite measures outside the update row. ADDED 2026-09-17 with the speech-model provisioning work; walked with NO audio device open, which is why this panel is measurable where the listening row is not. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
-      "checked": 108,
+      "// 2026-10-15 round 27": "108 -> 106: round 27 removed the rail gear, a text glyph measured once per theme on every surface where the rail shows. One contrast.js run on this branch: the bare shell 100 of 750, this surface 104; nothing this surface renders changed.",
+      "checked": 106,
       "considered": 700
     },
     "voice-model-failed": {
       "//": "the refusal row: the sentence and the retry control it must render beside. ADDED 2026-09-17 with the speech-model provisioning work; walked with NO audio device open, which is why this panel is measurable where the listening row is not. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",
-      "checked": 108,
+      "// 2026-10-15 round 27": "108 -> 106: round 27 removed the rail gear, a text glyph measured once per theme on every surface where the rail shows. One contrast.js run on this branch: the bare shell 100 of 750, this surface 104; nothing this surface renders changed.",
+      "checked": 106,
       "considered": 702
     },
     "entity-view": {
