@@ -31,7 +31,7 @@ Validate complete coverage using the existing receipt verifier where available,
 with source fingerprints and relevant inputs checked independently. Preserve
 failed attempts and receipt provenance. Distinguish reconciled proof from a
 single clean invocation and stop when the required evidence is complete. In a
-RichOS checkout, read `AGENTS.md` and `docs/development/verification-retries.md`
+RichOS checkout, read `docs/development/verification-retries.md`
 before tests. These instructions do not add a mechanical command interceptor.
 
 For an authorized implementation assignment:
