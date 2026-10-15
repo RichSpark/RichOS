@@ -18,6 +18,8 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
   until  args[] contains seconds       repeat ax.sh VM <args...> until its output contains the text
   keys   text                          guest.sh osascript keystroke into the frontmost app
   push   src dest                      guest.sh VM --push src dest (src relative to the repository root, or absolute)
+  pull   src dest                      guest.sh VM --pull src <out>/dest: a guest file kept whole (a `guest`
+                                       step's output is cut at 2,000 characters), e.g. the app's log
   handfile mode path [to]              hand-file.sh VM paste|drag path [--to x,y]
   pointer points[] [right]             pointer-drag.sh VM x,y x,y ... [--right]: the REAL mouse. The same
                                        point twice is a click, the way a hand clicks; `ax click --at` is
@@ -85,6 +87,13 @@ def step_run(vm, step, out):
         src = Path(step['src'])
         src = src if src.is_absolute() else REPO_ROOT / src
         return run([str(HERE / 'guest.sh'), vm, '--push', str(src), step['dest']])
+    if op == 'pull':
+        # dest is a name inside the walk's own folder: the evidence stays with steps.json.
+        dest = out / step['dest']
+        if dest.resolve().parent != out.resolve() and out.resolve() not in dest.resolve().parents:
+            return 2, f"pull refused: {step['dest']!r} is outside the walk's folder"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        return run([str(HERE / 'guest.sh'), vm, '--pull', step['src'], str(dest)], timeout=300)
     if op == 'handfile':
         return run([str(HERE / 'hand-file.sh'), vm, step['mode'], step['path']] + (['--to', step['to']] if step.get('to') else []))
     if op == 'relaunch':
@@ -113,7 +122,7 @@ def step_run(vm, step, out):
 # op -> {argument: type} every step of that op must carry; OPTIONAL ones are typed when present.
 REQUIRED = {
     'tree': {'name': str}, 'shot': {'name': str}, 'ax': {'args': list}, 'guest': {'command': str},
-    'keys': {'text': str}, 'push': {'src': str, 'dest': str}, 'handfile': {'mode': str, 'path': str},
+    'keys': {'text': str}, 'push': {'src': str, 'dest': str}, 'pull': {'src': str, 'dest': str}, 'handfile': {'mode': str, 'path': str},
     'wait': {'seconds': (int, float)}, 'until': {'args': list, 'contains': str}, 'relaunch': {},
     'pointer': {'points': list},
 }
