@@ -130,6 +130,28 @@ try:
     check(len(its) == 2 and len(set(got)) == 2 and not refused,
           "P1h one module name in two crates is two checks with two labels, and the plan is accepted",
           "%s %s" % (got, refused))
+    # P1i: the land's own `lint.sh --changed` (autocheck land_check, about a second when little
+    # changed) and the lint.test.sh suite (`lint.sh --all`, Tauri Clippy, about 100 s) were both
+    # "lint", so their times shared one weights.tsv row. On 2026-10-15 the main checkout's row read
+    # 1.0,98.3,82.6,1.7,96.5,0.9,0.9,78.2,0.9, median 1.7; the commit gate took lint.test.sh for a
+    # fast check, capped it at 120 s and refused every richos/app/ui commit. Two labels, two rows.
+    its = items_from([
+        "cd richos/app && bash scripts/lint.sh --changed",
+        "cd richos/app && scripts/run-tests.sh --only lint.test.sh",
+    ], tmp)
+    got = sorted(i.label for i in its)
+    d1i = os.path.join(tmp, "p1i")
+    os.makedirs(d1i)
+    with open(os.path.join(d1i, "weights.tsv"), "w") as fh:
+        fh.write("lint\t98.3\t98.3,82.6,96.5\n")
+    for it in its:
+        it.state, it.started = "passed", 1.0
+        it.ended = it.started + (0.9 if it.argv[:2] == ["bash", "scripts/lint.sh"] else 101.0)
+    pr.record_weights(d1i, its)
+    suite_samples = pr.history_samples(d1i).get("lint")
+    check(len(set(got)) == 2 and suite_samples == [98.3, 82.6, 96.5, 101.0],
+          "P1i the land's lint.sh --changed is not the lint suite: its second never enters the suite's times",
+          "%s %s" % (got, suite_samples))
 
     # P2 — concurrency: four checks run together, not one after another. Proved by a rendezvous,
     # never by a wall-clock bound a loaded host can miss: each check announces itself and waits
