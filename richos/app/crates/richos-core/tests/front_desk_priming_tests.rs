@@ -278,3 +278,63 @@ fn rich_is_given_the_company_name_exactly_as_he_typed_it() {
     assert!(priming.contains("exactly"), "and Rich is told to write it exactly so: {priming}");
     std::fs::remove_file(&path).expect("the test ledger is removable");
 }
+
+/// Adapter with the native lease's context attachment capability. The original user
+/// instruction and current company snapshot are recorded separately, as on the wire.
+type CompanyDeliveryLog = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+struct InlineCompany {
+    mock: MockCognition,
+    current: Option<String>,
+    sent: CompanyDeliveryLog,
+}
+
+impl richos_core::cognition::Cognition for InlineCompany {
+    fn session_id(&self) -> &str { self.mock.session_id() }
+    fn set_company_context(&mut self, context: Option<&str>)
+        -> Result<bool, richos_core::cognition::CognitionError> {
+        self.current = context.map(str::to_string);
+        Ok(true)
+    }
+    fn reprime(&mut self, text: &str, sink: &mut dyn FnMut(richos_core::cognition::TurnItem))
+        -> Result<(), richos_core::cognition::CognitionError> {
+        self.mock.reprime(text, sink)
+    }
+    fn prompt(&mut self, text: &str, sink: &mut dyn FnMut(richos_core::cognition::TurnItem))
+        -> Result<String, richos_core::cognition::CognitionError> {
+        self.sent.lock().unwrap().push((text.to_string(), self.current.clone()));
+        self.mock.prompt(text, sink)
+    }
+}
+
+#[test]
+fn saved_interview_answers_reach_the_next_request_without_repriming_the_session() {
+    let (path, ledger) = tmp_ledger("inline-company");
+    let root = std::env::temp_dir().join(format!("inline-company-{}", uuid::Uuid::new_v4()));
+    let company = richos_core::company::company_file(&root, &femcboost());
+    std::fs::create_dir_all(company.parent().unwrap()).unwrap();
+    std::fs::write(&company, "# Company\nWe sell bicycle parts.\n").unwrap();
+    let mut spine = support::spine(ledger);
+    spine.set_central_root(root.clone());
+    let thread = spine.create_thread("Interview", &femcboost()).unwrap();
+    spine.switch_thread(&thread).unwrap();
+    let mock = MockCognition::new("inline-company", vec!["First answer", "Second answer"]);
+    let primes = mock.reprimes.clone();
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    spine.attach_lease(Box::new(InlineCompany { mock, current: None, sent: sent.clone() }));
+    spine.prime_front_desk(&thread);
+    let first = spine.submit_prompt("What do you know?", Source::Text).unwrap();
+    assert!(sent.lock().unwrap()[0].1.as_deref().unwrap().contains("We sell bicycle parts."));
+    std::fs::write(&company, "# Company\nWe repair bicycles. Our next priority is service bookings.\n").unwrap();
+    let second = spine.submit_prompt("What comes next?", Source::Text).unwrap();
+    assert_eq!(primes.lock().unwrap().len(), 1, "a saved answer caused another hidden model turn");
+    let delivered = sent.lock().unwrap();
+    assert_eq!(delivered[1].0, "What comes next?");
+    let context = delivered[1].1.as_deref().unwrap();
+    assert!(context.contains("Our next priority is service bookings."));
+    assert!(!context.contains("We sell bicycle parts."));
+    assert_eq!(spine.ledger().turn(&first).unwrap().user_text, "What do you know?");
+    assert_eq!(spine.ledger().turn(&second).unwrap().user_text, "What comes next?");
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -669,55 +669,6 @@ module.exports = [
       "suppressed when the voice panel is closed.",
   },
 
-  // ---- hardware.rs — which recognizer this machine got, said once at voice-mode start ---
-  //
-  // `Resolution::ceo_message()` at hardware.rs:358-380, relayed as `rich://voice-notice`
-  // (event.rs:31) and rendered by main.js's listener through `richVoiceSays` — one of Rich's
-  // own lines in the thread. It is silent on `Basis::TopRung` and `Basis::Override`, so these
-  // three are the only sentences it can say. Added by echo-opus-hw1 (978a34ab) without rows
-  // here, which is what turned `affordances.js` red on main from c1df6f24; classified by
-  // echo-opus-ci1. All three are INFORMATIONAL for the reason `SoundButNoWords` is: the
-  // product made a choice for him and is saying so, it asks nothing, and there is no setting
-  // that overrides it — the only lever, turning voice off and on with ◉, re-runs the same
-  // resolution and is already on screen, and the one sentence that relies on it says so
-  // itself rather than instructing him.
-  {
-    s:
-      "I'm using my faster hearing on this machine. The more accurate one takes long enough " +
-      "here that you'd be waiting after every sentence, and a conversation with pauses in it " +
-      "isn't a conversation. You can still say anything you like. I just might misread an " +
-      "unusual name now and then.",
-    c: "INFORMATIONAL",
-    why:
-      "`Basis::TooSlow` (hardware.rs:361). A better rung exists and this machine decodes it " +
-      "too slowly — measured, per hardware.rs:288. Nothing about it is his to change — it " +
-      "is a fact about the hardware — and 'You can still say anything you like' is " +
-      "reassurance, not an instruction.",
-  },
-  {
-    s:
-      "I'm using my lighter hearing on this machine: there isn't enough free memory right " +
-      "now for the more accurate one, and I'd rather not slow everything else down. You can " +
-      "still say anything you like.",
-    c: "INFORMATIONAL",
-    why:
-      "`Basis::TooLarge` (hardware.rs:368). The one of the three he could in principle " +
-      "influence, by freeing memory, and the sentence deliberately does not ask him to: " +
-      "'right now' is a statement of the reading, resolution re-runs at every voice-mode " +
-      "start, and a request to go and close applications would be an instruction with no " +
-      "control in the app to answer it.",
-  },
-  {
-    s:
-      "I couldn't work out how fast this machine hears, so I've started with the setting " +
-      "that works everywhere. I'll check again next time you turn voice on.",
-    c: "INFORMATIONAL",
-    why:
-      "`Basis::Unmeasured` (hardware.rs:374). Nothing could be measured — no probe, no " +
-      "binary, no cache (hardware.rs:292) — so the resolver took the safe rung. The retry is the product's " +
-      "('I'll check again'), triggered by the ◉ voice toggle that is already on screen — " +
-      "named as a time, not issued as a command.",
-  },
   {
     s: "My ears aren't installed on this machine yet. Whoever set RichOS up adds those. I can still read what you type.",
     c: "NEEDS-SOMEONE-ELSE",
@@ -762,6 +713,7 @@ module.exports = [
     fixture: null,
     why: "Same: a real TtsError from a live pipeline, unreachable from the browser harness.",
   },
+
 
   // -------------------------------------------------------------------------------------
   // INFORMATIONAL
