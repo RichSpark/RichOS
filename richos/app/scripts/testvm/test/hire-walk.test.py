@@ -149,6 +149,16 @@ class Verdicts(unittest.TestCase):
         self.assertTrue(any('interrupted' in f for f in failures) and any('No work was started' in f for f in failures)
                         and any('no run of penny' in f for f in failures), failures)
 
+    def test_a_job_asked_of_rich_naming_nobody_is_judged_by_its_own_outcome(self):
+        # --ask-rich: a user never names who does the work, so no teammate is required, and an
+        # interrupted task he was told nothing useful about still fails.
+        settled = {'state': 'settled', 'obligation_id': 'work-1', 'notices': [{'text': 'Three lines: one, two, three.'}]}
+        self.assertEqual(hire_walk.delegate_verdict(settled, [], None), [])
+        interrupted = {'state': 'interrupted', 'obligation_id': 'work-1', 'notices': [{'text': 'No work was started.'}]}
+        failures = hire_walk.delegate_verdict(interrupted, [], None)
+        self.assertTrue(any('interrupted' in f for f in failures) and any('No work was started' in f for f in failures),
+                        failures)
+
     def test_the_turns_are_read_off_the_ledger(self):
         rows = [{'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'a', 'text': 'hi', 'source': 'text'},
                 {'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'x', 'text': 'prime', 'source': 'internal'},
