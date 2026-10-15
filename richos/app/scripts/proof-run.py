@@ -500,6 +500,14 @@ def plan(lines, args, logdir, hist):
                 first = next((a for a in argv[1:] if not a.startswith("-")), first)
             base = os.path.basename(first)
             label = re.sub(r"\.test\.sh$|\.sh$", "", base)
+            if (base.endswith(".sh") and not base.endswith(".test.sh")
+                    and os.path.isfile(os.path.join(cwd, "scripts", label + ".test.sh"))):
+                # A script named like a run-tests suite is not that suite. The land's `lint.sh
+                # --changed` (about a second) was "lint", the label of lint.test.sh (`lint.sh
+                # --all`, about 100 s), and its seconds pulled the suite's median to 1.7 s, so
+                # the commit gate ran lint.test.sh as a fast check under a 120 s cap and refused
+                # every richos/app/ui commit (2026-10-15). Its whole name and arguments label it.
+                label = " ".join([base] + argv[argv.index(first) + 1:])
             if argv[:2] == ["node", "--test"]:
                 label = "web-app"
             elif "testvm/test/run-tests.sh" in m.group(2):
