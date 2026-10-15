@@ -671,8 +671,18 @@ fn declares_waiting_on_a_helper(said: &str) -> bool {
 const HIRING_TITLE: &str = "Hire these AI teammates onto my team:";
 
 /// **What a hiring's brief says before his company notes** ([`WorkHost::hiring_notes`]).
-const HIRING_NOTES_HEAD: &str = "His onboarding interview saved these notes about his business. Fit every \
-     teammate to it, and give each helper the facts from them that its work needs in its brief.";
+const HIRING_NOTES_HEAD: &str = "His onboarding interview saved these notes about his business, in his own answers. \
+     They are facts: fit every teammate to them, and give each helper the facts from them that its work needs in its brief.";
+
+/// **Where a hiring's facts about his business come from, and where they never do** (nightly
+/// 57's hunt, finding 5). With his notes on file the back end still wrote Clark's brief from
+/// a guess off his sign-in email's domain, called his interview answers "unconfirmed" and
+/// stated "US-based", which he never said; the email also went to a researcher with web
+/// access. Said in every hiring's first brief, with his notes or without them.
+const HIRING_FACTS_RULE: &str = "His answers about his business are facts: state them as facts, never as \
+     unconfirmed. Never infer anything about his business from his email address or his sign-in, and never put \
+     either in a brief. State nothing about the business he did not say (where it is, for one): where a teammate \
+     needs a fact he has not given, say it is not known yet.";
 
 /// A hiring's teammates, each as (name as written, job title he was given).
 type Hires = Vec<(String, String)>;
@@ -1970,6 +1980,9 @@ impl WorkHost {
                 prompt.push_str("\n\n");
                 prompt.push_str(&notes);
             }
+            // His answers are facts, and his email says nothing about his business (finding 5).
+            prompt.push_str("\n\n");
+            prompt.push_str(HIRING_FACTS_RULE);
         }
         // **HIS ANSWERS, CARRIED, AND NOT LET GO UNTIL THE BACK END HAS THEM** (the work-path
         // design D1, D5). Reading them changes nothing on disk: they are let go at this turn's
@@ -8427,6 +8440,43 @@ mod tests {
         assert!(brief.contains(HIRING_NOTES_HEAD), "{brief}");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A hiring's brief takes his interview answers as facts and never guesses from his email**
+    /// (nightly 57's hunt, finding 5). The back end's brief for Beth's research read "company
+    /// domain [his sign-in email's domain], likely leadership/consulting services; treat that as
+    /// unconfirmed", and stated "US-based", which he never said. With his notes on file the
+    /// brief says they are his own answers and facts; with or without them it says his email
+    /// and sign-in say nothing about the business and never go in a brief, and that what he did
+    /// not say is not known.
+    #[test]
+    fn a_hiring_brief_takes_his_answers_as_facts_and_never_guesses_from_his_email() {
+        for with_notes in [true, false] {
+            let h = harness(5);
+            if with_notes {
+                let central = h.root.join("central");
+                let entity = crate::entity::EntityId::parse("depot").unwrap();
+                let file = crate::company::company_file(&central, &entity);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(&file, "<!-- richos-interview:complete -->\n# Acme\n\n\
+                    Acme runs leadership coaching for managers at mid-size companies.\n").unwrap();
+                h.host.set_central_root(central);
+            }
+            h.replies.lock().unwrap().push_back("Will and Beth are being hired.".into());
+            h.host.start();
+            h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+            assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+            let brief = h.work_prompts.lock().unwrap()[0].clone();
+            if with_notes {
+                assert!(brief.contains("his own answers"), "{brief}");
+            }
+            assert!(brief.contains("never as unconfirmed"), "with notes {with_notes}: {brief}");
+            assert!(brief.contains("Never infer anything about his business from his email address"), "with notes {with_notes}: {brief}");
+            assert!(brief.contains("never put either in a brief"), "with notes {with_notes}: {brief}");
+            assert!(brief.contains("say it is not known yet"), "with notes {with_notes}: {brief}");
+            h.host.shutdown();
+            std::fs::remove_dir_all(&h.root).unwrap();
+        }
     }
 
     /// **The team renewal a hiring needs still happens after six waits** (handover review
