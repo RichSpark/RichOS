@@ -824,9 +824,12 @@ const FIXTURES = {
   /// (ray-opus-a1, finding 4); it is now said once, as the answer to the press that produced
   /// it. So the fixture provisions with no compiler present, exactly as he would.
   async "memory-no-compiler"(browser) {
-    const page = await openApp(browser, undefined, { memory: "none", memoryCompiler: false });
-    await page.waitForSelector("#memory-setup:not([hidden])");
-    await page.click("#memory-setup-go");
+    // Since the product hunt of 2026-10-15 (finding 15) the press closes the sheet whatever the
+    // backend answers, so the sentence is said where he looks: the "Memory folder" row.
+    const page = await openApp(browser, undefined, { memory: "no-compiler" });
+    await page.click("#set-btn");
+    await page.waitForFunction(() => !document.getElementById("set-menu").hidden);
+    await page.click("#set-memory-open");
     await page.waitForSelector("#memory-setup-close:not([hidden])");
     return page;
   },

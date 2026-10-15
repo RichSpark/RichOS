@@ -6958,19 +6958,11 @@ async function provisionMemory() {
   // it caches is known to be stale.
   await refreshDesk();
   // A YES THAT WORKED NEEDS NO SECOND BOX (product hunt 2026-10-15, finding 15): the sheet
-  // closes and the next first-run question, if one was held back, is asked.
-  if (next.state === "ready") {
-    closeMemorySetup();
-    return;
-  }
-  // AND THE HEADING STOPS ASKING A QUESTION HE HAS ANSWERED. It is the dialog's accessible
-  // name and it stayed on "Where should I keep what you tell me?" over the answer, so the
-  // screen he actually reaches read as a question above its own answer — the same defect the
-  // setup sheet's heading had two screens earlier (ray-opus-a1, finding 7).
-  memorySetupTitleEl.textContent = "Your memory folder.";
-  // `consented`, and deliberately NOT `next.root`: the two name one directory, and the one he
-  // is owed is the one he answered a question about.
-  openMemorySetup(MEMORY_NO_READER, consented, { canProvision: false });
+  // closes and the next first-run question, if one was held back, is asked. That holds when
+  // the folder was made and the part that reads it is not on this Mac yet (no engine, the
+  // setup sheet answered "Not now"): MEMORY_NO_READER asks nothing of him, and the
+  // "Memory folder" row in the settings menu still says it when he looks.
+  closeMemorySetup();
 }
 
 memorySetupGoEl.addEventListener("click", provisionMemory);

@@ -236,9 +236,20 @@ async function main() {
     // repository, the bundle's Resources hold `icon.icns`, and the engine asset carries
     // `engine/`), so there is nobody to fetch and nothing to press. The sentence therefore
     // owes him three things and no imperative.
-    const page = await openApp(browser, { memory: "none", memoryCompiler: false });
+    //
+    // FINDING 15 (product hunt 2026-10-15): no second box to close after he answers, here
+    // too. The press closes the sheet and asks the company question held behind it; the
+    // sentence is said when he looks, from the settings menu's "Memory folder" row.
+    const page = await openApp(browser, { memory: "none", memoryCompiler: false, chosenEntity: null });
     await page.waitForSelector("#memory-setup:not([hidden])");
     await page.click("#memory-setup-go");
+    await page.waitForFunction(() => document.getElementById("memory-setup").hidden, null, { timeout: 60000 });
+    await page.waitForSelector("#entity-picker:not([hidden])", { timeout: 60000 });
+    await page.click("#entity-picker-later");
+    await page.waitForSelector("#entity-picker", { state: "hidden", timeout: 60000 });
+    await page.click("#set-btn");
+    await page.waitForFunction(() => !document.getElementById("set-menu").hidden, null, { timeout: 60000 });
+    await page.click("#set-memory-open");
     await page.waitForSelector("#memory-setup-close:not([hidden])");
     const text = await dialogText(page);
     assert(
@@ -396,14 +407,11 @@ async function main() {
       /invoke\("provision_memory",\s*\{\s*location:\s*consented\s*\}\)/.test(MAIN_JS),
       "the one call site must pass the backend's offer"
     );
-    // AND THE SAME VARIABLE IS WHAT A FOLDER IT CANNOT READ RENDERS (the one result that still
-    // draws a box). Two reads of `offered_location` would also happen to agree today and would
-    // stop agreeing the moment the backend answered under another name — which is precisely
-    // what it does.
-    assert(
-      /openMemorySetup\(MEMORY_NO_READER, consented,/.test(MAIN_JS),
-      "the result screen must render the location he consented to, from the same variable"
-    );
+    // AND NO RESULT OF THE PRESS OPENS A SECOND BOX (product hunt 2026-10-15, finding 15),
+    // whatever state the backend answers: the press's own function never opens the sheet.
+    const press = (MAIN_JS.match(/async function provisionMemory\(\) \{[\s\S]*?\n\}\n/) || [""])[0];
+    assert(press.length > 0, "provisionMemory was not found in main.js");
+    assert(!/openMemorySetup\(/.test(press), "a result of the press opens a second box");
     // And nothing in the surface composes a path of its own — ACROSS THE WHOLE SHIPPED UI,
     // not just `main.js`. An absence claim scoped to one file of twelve is the weakest kind
     // of green there is: it passes by not looking.
