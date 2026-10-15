@@ -162,6 +162,54 @@ async function main() {
     assertEqual(errors.length,0,"renderer errors"); await page.close();
     return "plain: three rows, three plain sentences, no back-end lines; Technical view: all three lines are back";
   });
+  // **BUT A LINE THAT TELLS HIM WHAT TO DO STAYS IN THE ORDINARY VIEW** (the review of
+  // 25b540804, rv-20261015T113335Z-25b54080-3123). Hiding every recorded line also hid
+  // "Waiting for you to sign in to Claude, in Settings under Claude accounts." under a held job,
+  // which then read only "Written down. Nothing has been prepared yet.", and the long-wait line
+  // that names Stop. The shell marks those rows `forYou` (`work_host.rs`'s
+  // `tells_him_what_to_do`); the sentences are read from `work_host.rs`, so this check follows
+  // the words the back end really writes.
+  await run.check("a line that tells him what to do shows in the ordinary view, and the back end's own lines still do not", async () => {
+    const host = require("fs").readFileSync(path.join(UI_DIR, "..", "crates", "richos-core", "src", "work_host.rs"), "utf8");
+    const constant = (name) => JSON.parse('"' + host.match(new RegExp("pub const " + name + ": &str =\\s*\"([\\s\\S]*?)\";"))[1]
+      .replace(/\\\r?\n\s*/g, "") + '"');
+    const signIn = constant("HELD_FOR_SIGN_IN"), longer = constant("HELPER_TAKING_LONGER_DETAIL");
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript(({signIn, longer}) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [
+      {id: "h", title: "Prepare the report", state: "registered", detail: signIn, forYou: true,
+       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, held: true, awaitingYou: null},
+      {id: "q", title: "How many invoices are open?", kind: "check", state: "registered", detail: signIn, forYou: true,
+       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false, held: true, awaitingYou: null},
+      {id: "r", title: "Hire a bookkeeper", state: "running", detail: longer, forYou: true,
+       repositories: [], registeredAtMs: 3, canStop: true, onTheConnection: false, awaitingYou: null},
+      {id: "p", title: "The nightly build", state: "preparing", detail: "Opening the work connection.", forYou: false,
+       repositories: [], registeredAtMs: 4, canStop: true, onTheConnection: false, awaitingYou: null},
+    ]}}, {signIn, longer});
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    await chipWithin(page, "assignment", "on hiring");
+    await page.click(".drill-chip");
+    await page.waitForFunction(() => document.querySelectorAll("#slideover-body .assignment-title").length === 4);
+    const rows = await page.$$eval("#slideover-body .slide-item", (items) => items.map((n) => n.textContent));
+    const row = (title) => rows.find((text) => text.includes(title)) || "";
+    assert(row("Prepare the report").includes(signIn), "a job held for sign-in hides how to start it: " + JSON.stringify(row("Prepare the report")));
+    assert(row("How many invoices are open?").includes(signIn), "a question held for sign-in hides how to start it: " + JSON.stringify(row("How many invoices are open?")));
+    assert(row("Hire a bookkeeper").includes(longer), "the long wait hides that Stop ends it: " + JSON.stringify(row("Hire a bookkeeper")));
+    // NEGATIVE CONTROL: the back end's own line is still behind Technical view.
+    assert(!row("The nightly build").includes("connection"), "a back-end line shows in the ordinary view: " + JSON.stringify(row("The nightly build")));
+    // Said once, not twice, in Technical view too.
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    const technical = await page.$$eval("#slideover-body .slide-item", (items) => items.map((n) => n.textContent));
+    assertEqual(technical.find((text) => text.includes("Prepare the report")).split(signIn).length - 1, 1, "the sign-in line in Technical view");
+    assert(technical.find((text) => text.includes("The nightly build")).includes("Opening the work connection."), "Technical view lost the back end's line");
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "ordinary: sign-in on the held job and the held question, the long wait with Stop; the connection line hidden; Technical view: each once";
+  });
   // **THE OTHER TWO THINGS THE CHIP IS BUILT FROM, AND THEY WERE NOT BEING SCOPED.**
   //
   // The check above has guarded `savedWork` across a conversation change since it was

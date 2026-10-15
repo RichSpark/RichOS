@@ -228,9 +228,15 @@
       // machinery: "Opening the work connection.", "The back end couldn't take it yet", "It
       // landed on cc/echo-1 in project.", or an error relayed as it came. A business owner reads
       // the state's own sentence, which is complete on its own.
+      //
+      // **EXCEPT A LINE THAT TELLS HIM WHAT TO DO** (`forYou`, from `work_host.rs`'s
+      // `tells_him_what_to_do`; the review of 25b540804): "Waiting for you to sign in to Claude,
+      // in Settings under Claude accounts." under a held job, a helper Stop can end, an answer
+      // he owes. Hidden, a job held for sign-in read only "Written down. Nothing has been
+      // prepared yet." That line shows in the ordinary view, for a question as for work.
       const addsSomething = row.state !== "waiting-for-screen" && sentencesFor(row.kind, row.answered) === STATES;
       item.append(title, detail);
-      if (technical && row.detail && addsSomething) {
+      if (row.detail && (row.forYou || (technical && addsSomething))) {
         const recorded = document.createElement("p");
         recorded.className = "overlay-note";
         recorded.textContent = row.detail;

@@ -879,6 +879,18 @@ pub const HELD_FOR_SIGN_IN: &str = "Waiting for you to sign in to Claude, in Set
 /// half is the reason it gave.
 pub const HELD_FOR_BACK_END: &str = "It will start by itself as soon as the work connection opens.";
 
+/// What a job's row says while a question it asked him is still open, or his answer waits for
+/// the next run.
+pub const WAITING_FOR_YOUR_ANSWER: &str = "Waiting for your answer. Independent work can continue.";
+
+/// **The recorded lines that tell him what to do**, which Under the hood shows in its ordinary
+/// view (`get_assignments`' `forYou`). Every other recorded detail is the back end's own record
+/// and shows only with Technical view on (hunt 57, finding 11; the review of 25b540804, which
+/// found a job held for sign-in reading only "Written down. Nothing has been prepared yet.").
+pub fn tells_him_what_to_do(detail: &str) -> bool {
+    [HELD_FOR_SIGN_IN, HELPER_TAKING_LONGER_DETAIL, WAITING_FOR_YOUR_ANSWER].contains(&detail)
+}
+
 /// **How often the host looks again at the cause of a held queue**, with no model turn: the
 /// sign-in reading the shell installs ([`WorkHost::set_sign_in`]), or one attempt to open the
 /// back end. Sage's check §1.1: *"checking the sign-in state at most every few minutes, without
@@ -2866,7 +2878,7 @@ impl WorkHost {
             // carried: that one was taken at the first item, and waiting on it would leave the
             // job blocked on an answer it already has.
             Ok(_) if crate::questions::Store::new(&self.state).list(&record.entity_id,&record.thread_id).is_ok_and(|qs|qs.iter().any(|q|q.asker==record.obligation_id && !q.delivered && q.state!=crate::questions::State::Withdrawn)) || self.answer_waits_for_next_run(backend, record, &session, &carried_ids) => {
-                advance(AssignmentState::Blocked,"Waiting for your answer. Independent work can continue.");
+                advance(AssignmentState::Blocked, WAITING_FOR_YOUR_ANSWER);
             }
             // ===========================================================================
             // HIS ANSWER — the CEO's ruling §58, 2026-09-18
@@ -11303,5 +11315,28 @@ mod tests {
         assert_eq!(honest("   "), "No reason was recorded.");
         assert_eq!(honest("ended."), "Ended.");
         assert!(honest(&"x".repeat(500)).chars().count() <= 201);
+    }
+
+    /// **Only the lines that tell him what to do reach the ordinary view** (hunt 57, finding
+    /// 11; the review of 25b540804): sign in, a helper he may stop, an answer he owes. The back
+    /// end's own record stays behind Technical view, including a hold whose reason it relayed.
+    #[test]
+    fn only_the_lines_that_tell_him_what_to_do_are_for_him() {
+        assert!(tells_him_what_to_do(&HoldCause::SignIn.detail()));
+        assert!(tells_him_what_to_do(HELPER_TAKING_LONGER_DETAIL));
+        assert!(tells_him_what_to_do(WAITING_FOR_YOUR_ANSWER));
+        let relayed = HoldCause::BackEnd("spawn failed: no such file".into()).detail();
+        for record in [
+            relayed.as_str(),
+            ANSWER_RETRY_DETAIL,
+            STARTED_DETAIL,
+            COMMAND_STILL_RUNNING_DETAIL,
+            LIMIT_SWITCH_DETAIL,
+            WATCHED_STOP_REFUSED,
+            "Opening the work connection.",
+            "",
+        ] {
+            assert!(!tells_him_what_to_do(record), "a back-end record is shown as his to act on: {record:?}");
+        }
     }
 }
