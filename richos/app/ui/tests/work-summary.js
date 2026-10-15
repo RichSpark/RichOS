@@ -36,19 +36,53 @@ async function main() {
     }});
     await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
     await openThread(page,"hiring");
-    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("2 saved work records"));
+    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("2 team jobs"));
     await page.click(".drill-chip");
     assert((await page.textContent("#slideover-body")).includes("Review is still required"), "run end became success");
     assert((await page.textContent("#slideover-body")).includes("Whole assignment remains open"), "integration became whole-task completion");
     assertEqual(await page.locator("#slideover-body img").count(),0,"receipt rendered as markup");
     await page.click("#slideover-close"); await openThread(page,"acme");
-    assert(!(await page.textContent("#drill-chip-zone")).includes("2 saved work records"),"old-company receipt leaked");
+    assert(!(await page.textContent("#drill-chip-zone")).includes("2 team jobs"),"old-company receipt leaked");
     await page.evaluate(() => window.__RICHOS_MOCK_PRESET__.workSummaryError = "Synthetic damaged receipt");
     await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("Saved work unavailable"));
     await page.click(".drill-chip");
     assert((await page.textContent("#slideover-body")).includes("Synthetic damaged receipt"),"damaged receipt looked empty");
     assertEqual(errors.length,0,"renderer errors"); await page.close();
     return "scoped receipts, explicit outcomes, escaped content and visible read failure";
+  });
+  // **HUNT 57, FINDING 11 (2026-10-15): THE WORK PANELS SPEAK TO A BUSINESS OWNER.** Nightly 57's
+  // hiring job showed "consult · no repository" under every row of Under the hood and "4 saved
+  // work records" above the message box. The status line now counts team jobs, and the machinery
+  // line (the helper's role and its repository) shows only with Technical view on, where it
+  // still reads exactly as before.
+  await run.check("the status line and Under the hood say nothing about records, consults or repositories unless Technical view is on", async () => {
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript(() => window.__RICHOS_MOCK_PRESET__ = {workSummaries: {
+      hiring: {items:[{title:"Research brief for new teammate Beth, Bookkeeper", role:"consult", repository:"no repository", state:"answered", detail:"Done. The teammate's answer went back to Rich."}], omitted:3}
+    }});
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    const chip = await chipWithin(page, "team job", "on hiring");
+    assert(chip.includes("1 team job"), "the status line reads " + JSON.stringify(chip.trim()));
+    assert(!/record/i.test(chip), "the status line still counts records: " + JSON.stringify(chip.trim()));
+    await page.click(".drill-chip");
+    const plain = await page.textContent("#slideover-body");
+    for (const word of ["repositor", "consult", "record"]) {
+      assert(!plain.toLowerCase().includes(word), "Under the hood names " + JSON.stringify(word) + ": " + JSON.stringify(plain.trim()));
+    }
+    assert(plain.includes("Done. The teammate's answer went back to Rich."), "the row's own sentence is missing: " + JSON.stringify(plain.trim()));
+    assert(plain.includes("3 older team jobs aren't shown here."), "the older jobs are not counted in plain words: " + JSON.stringify(plain.trim()));
+    // POSITIVE CONTROL: with Technical view on, the machinery line is still there, as it was.
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    const technical = await page.textContent("#slideover-body");
+    assert(technical.includes("consult · no repository"), "Technical view lost the machinery line: " + JSON.stringify(technical.trim()));
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "plain: " + JSON.stringify(chip.trim()) + ", no machinery line; Technical view: the line is back";
   });
   // **THE OTHER TWO THINGS THE CHIP IS BUILT FROM, AND THEY WERE NOT BEING SCOPED.**
   //
@@ -124,10 +158,10 @@ async function main() {
     }});
     await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
     await openThread(page,"hiring");
-    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("saved work record"));
+    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("team job"));
     const one = await page.textContent("#drill-chip-zone");
-    assert(one.includes("1 saved work record"), `the chip reads ${JSON.stringify(one.trim())}`);
-    assert(!one.includes("1 saved work records"), `singular count, plural noun: ${JSON.stringify(one.trim())}`);
+    assert(one.includes("1 team job"), `the chip reads ${JSON.stringify(one.trim())}`);
+    assert(!one.includes("1 team jobs"), `singular count, plural noun: ${JSON.stringify(one.trim())}`);
 
     assertEqual(errors.length,0,"renderer errors"); await page.close();
 
@@ -143,9 +177,9 @@ async function main() {
     }});
     await many.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(many);
     await openThread(many,"hiring");
-    await many.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("saved work record"));
+    await many.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("team job"));
     const two = await many.textContent("#drill-chip-zone");
-    assert(two.includes("2 saved work records"), `two receipts read ${JSON.stringify(two.trim())}`);
+    assert(two.includes("2 team jobs"), `two receipts read ${JSON.stringify(two.trim())}`);
     await many.close();
     return `one receipt reads ${JSON.stringify(one.trim())}; two read ${JSON.stringify(two.trim())}`;
   });
@@ -263,7 +297,7 @@ async function main() {
         }});
         await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
         await openThread(page,"hiring");
-        await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 saved work record"));
+        await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 team job"));
         await page.click(".drill-chip");
         await page.waitForFunction(() => !document.getElementById("slideover").hidden);
         const m = await page.evaluate(() => {

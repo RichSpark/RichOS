@@ -3840,7 +3840,9 @@ function renderDrillChip() {
   quotaWorking = active;
   renderQuotaWorkStatus();
   if (done) parts.push(`${done} done`);
-  if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "saved work record", "saved work records"));
+  // "Team jobs", never "saved work records" (hunt 57, finding 11): each saved record is one job
+  // handed to a teammate, and a business owner has no use for the word "record".
+  if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "team job", "team jobs"));
   if (savedWork.error) parts.push("Saved work unavailable");
   // THE ASSIGNMENTS, AND THE REASON THEY ARE ON THIS CHIP AT ALL (background-work spec §7's
   // observability note, §7.8). This chip is the only way to open the pane the assignments
@@ -3957,7 +3959,7 @@ function renderSlideOver() {
     row.textContent = `${marker} ${item.label}${item.state === "paused" ? " · paused" : ""}`;
     slideoverBody.appendChild(row);
   }
-  window.RichWorkSummary.render(savedWork, slideoverBody);
+  window.RichWorkSummary.render(savedWork, slideoverBody, {technical: techyOn()});
   // The assignments, with their own stop control (background-work spec §4.2: "where the
   // work is already visible"). Rendered after the receipts because a receipt is evidence
   // and an assignment is a thing he can still act on.

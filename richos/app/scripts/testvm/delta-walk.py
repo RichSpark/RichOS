@@ -281,7 +281,7 @@ class Walk:
             path=Path(self.phone['directory'])/('%04d.png'%n)
             img=qaimg.load(str(path));x,y,w,h=self.a.chip_box
             crop=self.out/('chip-%04d.png'%n);qaimg.save(img.crop(x,y,x+w,y+h),str(crop))
-            if re.search(r"\d+\s+(working|waiting|ready|done|saved work records?|I can.t see)",qaocr.text(crop),re.I):
+            if re.search(r"\d+\s+(working|waiting|ready|done|saved work records?|team jobs?|I can.t see)",qaocr.text(crop),re.I):
                 raise Failure('product failure','destination chip shows work counts from another thread')
         return {'post_switch_frames':len(chosen),'stale_counts':0,'switch':self.switch,'visible_switch_ms':switched_at}
     def rejected_phone(self,step,budget):

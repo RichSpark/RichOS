@@ -863,6 +863,11 @@ pub const QUOTA_WAIT_AFTER_START: [&str; 2] = [
 /// (the work-path design D4), in the design's words.
 pub const ANSWER_RETRY_DETAIL: &str = "Your answer is saved. The back end couldn't take it yet, so I'm trying again.";
 
+/// **What an assignment's row says once the work has been taken up**, after "Running." in the
+/// Under the hood panel. It said "The back end has started on it." until hunt 57's finding 11
+/// (2026-10-15): inside the app the user only ever meets Rich, so it is Rich who has started.
+pub const STARTED_DETAIL: &str = "Rich has started on it.";
+
 /// **What a held job's row says while nobody is signed in to Claude** (T3 idea 1, finished:
 /// richos-hq `docs/plans/2026-10-09-automatic-second-review-and-t3-ideas.md` §3, and Sage's
 /// check of it, §1.1). The job never started, nothing was asked of the back end, and the host
@@ -2072,7 +2077,7 @@ impl WorkHost {
         let started_detail: &str = if resumed {
             "You approved the step it stopped at. Carrying it out now."
         } else {
-            "The back end has started on it."
+            STARTED_DETAIL
         };
         // **HOW MANY ITEMS THIS ONE TURN DELIVERED** — passed in rather than captured, so the
         // caller can read it per turn. `confirmed` above is the whole run's "did the back end

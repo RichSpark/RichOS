@@ -581,7 +581,7 @@ const SURFACES = [
     drive: async (p) => {
       await p.click('.nav-thread[data-thread-id="hiring"]');
       await atHiringThread(p);
-      await p.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 saved work record"));
+      await p.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 team job"));
       if (showPanel) {
         await p.click(".drill-chip");
         await p.waitForFunction(() => document.getElementById("slideover-body").textContent.includes("Whole assignment remains open."));

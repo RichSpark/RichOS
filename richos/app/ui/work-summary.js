@@ -1,7 +1,12 @@
 "use strict";
 // Saved receipts are evidence of work, separate from the live worker count.
 (function () {
-  function render(summary, parent) {
+  // **A BUSINESS OWNER READS THIS PANEL** (hunt 57, finding 11, 2026-10-15). Each row is the
+  // title and its plain sentence (`work_status.rs`). The machinery line under it, the helper's
+  // role and the repository ("consult · no repository"), is for Technical view only:
+  // `opts.technical` is `main.js`'s `techyOn()`.
+  function render(summary, parent, opts) {
+    const technical = !!(opts && opts.technical);
     if (summary.error) {
       const note = document.createElement("p"); note.className = "overlay-note";
       note.textContent = "Saved work is unavailable: " + summary.error;
@@ -11,14 +16,18 @@
       const row = document.createElement("section"); row.className = "slide-item";
       const title = document.createElement("strong"); title.textContent = item.title;
       const detail = document.createElement("p"); detail.textContent = item.detail;
-      const repository = document.createElement("p"); repository.className = "overlay-note";
-      repository.textContent = item.role + " · " + item.repository;
-      repository.style.overflowWrap = "anywhere";
-      row.append(title, detail, repository); parent.appendChild(row);
+      row.append(title, detail);
+      if (technical) {
+        const repository = document.createElement("p"); repository.className = "overlay-note";
+        repository.textContent = item.role + " · " + item.repository;
+        repository.style.overflowWrap = "anywhere";
+        row.append(repository);
+      }
+      parent.appendChild(row);
     }
     if (summary.omitted) {
       const note = document.createElement("p"); note.className = "overlay-note";
-      note.textContent = `${summary.omitted} more saved records. Ask Rich about the assignment you want to continue.`;
+      note.textContent = `${summary.omitted} older team ${summary.omitted === 1 ? "job isn't" : "jobs aren't"} shown here. Ask Rich about any of them.`;
       parent.appendChild(note);
     }
   }
