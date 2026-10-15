@@ -43,6 +43,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               closed settled with a result he was told. Evidence: delegate-observed.json, and
               whatever the verdict delegate-ledger.json (the conversation from the send on) and
               delegate-1-before/2-sent/3-end.png.
+              With --ask-rich TEXT the job is TEXT, asked of Rich naming no teammate, as a user asks
+              (a user never hands a job to a teammate and never needs to know who does it): PASS
+              when Rich answers it in his own turn with no assignment (`answered_in_turn`), or when
+              the assignment he registers closes settled with a result he was told; whoever Rich
+              dispatched is recorded (`dispatched`), never required.
   hood        after delegate, "Under the hood" opened as a person opens it (the work summary chip
               under the conversation): both Output buttons, the stage header's (#out-top) and the
               composer's (#out-bottom), end at or before the panel's left edge and are shown
@@ -109,6 +114,7 @@ def turns_of(rows, thread):
             by_id[r['turn_id']]['reply'] += r.get('text', '')
         elif event in ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed') and r.get('turn_id') in by_id:
             by_id[r['turn_id']]['done'] = True
+            by_id[r['turn_id']]['end'] = event
     return turns
 
 
@@ -241,7 +247,8 @@ def fitting_teammate(hired, definitions):
 
 
 def delegate_verdict(record, receipts, name):
-    """Why the task sent after the relaunch does NOT show `name` doing it ([] = it does).
+    """Why the task sent after the relaunch does NOT show `name` doing it ([] = it does). With
+    `name` None (--ask-rich: no teammate named) only the task's own outcome is judged.
 
     The evidence is the back end's own dispatch receipts (engine/mega-lander/app.py, `folder`:
     <app data>/engine-state/work-receipts/<hash>/*.json), taken only where the receipt's
@@ -259,6 +266,8 @@ def delegate_verdict(record, receipts, name):
         failures.append('he was told nothing about the result')
     obligation = (record or {}).get('obligation_id')
     mine = [r for r in receipts if obligation and (r.get('request') or {}).get('obligation_id') == obligation]
+    if name is None:
+        return failures
     runs = [r for r in mine if (r.get('request') or {}).get('teammate') == name]
     if not runs:
         failures.append(f"no run of {name} was dispatched for this task; its runs were "
@@ -268,6 +277,16 @@ def delegate_verdict(record, receipts, name):
     if runs and not answered:
         failures.append(f'{name} was dispatched for this task and its run handed back no answer')
     return failures
+
+
+def answered_in_turn(turns, asked):
+    """Rich's reply to the message `asked`, once that turn COMPLETED with words in it, else None:
+    a job asked of Rich (--ask-rich) may be answered in his own turn, with no assignment at all.
+    An interrupted, stopped or failed turn is no answer, whatever partial text it carries."""
+    mine = [t for t in turns if t['prompt'].strip() == asked.strip()]
+    if mine and mine[-1].get('end') == 'TurnCompleted' and mine[-1]['reply'].strip():
+        return mine[-1]['reply']
+    return None
 
 
 def answer_of(receipts, record, name):
@@ -356,6 +375,16 @@ class HireWalk(command_walk.CommandWalk):
             self.shot(name)
         except (StepFailed, subprocess.TimeoutExpired) as exc:
             (self.out / (name + '.failed.txt')).write_text(str(exc) + '\n')
+
+    def keep_logs(self):
+        """command-walk.py's logs, plus every conversation as stored: what Rich said in all of
+        them, the hiring's progress messages included, is the record a hunt reads."""
+        kept = super().keep_logs()
+        text = guest(self.vm, 'tail -c 3000000 ' + shlex.quote(self.data + '/conversation-ledger.jsonl')
+                     + ' 2>/dev/null || true', 120)
+        (self.out / 'conversation-ledger.jsonl').write_text(text + '\n')
+        kept['conversation-ledger.jsonl'] = len(text)
+        return kept
 
     def ledger(self):
         text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
@@ -549,13 +578,35 @@ class HireWalk(command_walk.CommandWalk):
         # Rich rightly asked who should do it, and the walk never answered his card (911 s).
         definitions = {n: guest(self.vm, 'cat ' + shlex.quote(f'{self.data}/team/{n}.md') + ' 2>/dev/null || true')
                        for n in hired}
-        name = fitting_teammate(hired, definitions)
+        name = None if self.a.ask_rich else fitting_teammate(hired, definitions)
         # The screen and the conversation around the message, kept whatever the verdict.
         self.evidence_shot('delegate-1-before.png')
-        sent = self.send(DELEGATE_TASK.format(Name=name.capitalize()))
+        sent = self.send(self.a.ask_rich or DELEGATE_TASK.format(Name=name.capitalize()))
         time.sleep(5)
         self.evidence_shot('delegate-2-sent.png')
         pressed, answered = [0], []
+        if self.a.ask_rich:
+            # Asked of Rich, naming nobody: he may answer in his own turn and register nothing.
+            # The turn is followed first; only when it ends registering an assignment is that
+            # assignment followed below (ask-rich walk of nightly 57: he answered in 7.8 s, and
+            # the walk then waited 942 s for an assignment that never existed).
+            end, reply = time.monotonic() + self.a.turn_within, None
+            while time.monotonic() < end and reply is None:
+                reply = answered_in_turn(turns_of(self.ledger(), self.facts.get('thread')), self.a.ask_rich)
+                if reply is None:
+                    time.sleep(3)
+            time.sleep(10)  # an assignment the turn registers is written as the turn ends
+            # A question card he has not answered means the job is not done: it is answered
+            # below (pick) as a person answers it, and the walk follows what comes after.
+            if reply is not None and not self.ours(sent) and not self.present(RECOMMENDS):
+                self.evidence_shot('delegate-3-end.png')
+                since = [r for r in self.ledger() if r.get('at', 0) >= sent[0] - 1000]
+                (self.out / 'delegate-ledger.json').write_text(json.dumps(since, indent=2) + '\n')
+                evidence = {'teammate': None, 'asked': self.a.ask_rich, 'dispatched': [], 'assignment': None,
+                            'answered_in_turn': reply}
+                (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+                return {'teammate': None, 'dispatched': [], 'state': 'answered in the turn', 'answer': reply[:1000],
+                        'notice': ''}
 
         def pick():
             if not answered and self.present(RECOMMENDS):
@@ -572,13 +623,17 @@ class HireWalk(command_walk.CommandWalk):
         receipts = self.receipts()
         self.facts['approvals_delegate'] = pressed[0]
         self.save()
-        evidence = {'teammate': name, 'assignment': record, 'receipts': receipts, 'approvals_pressed': pressed[0],
+        obligation = (record or {}).get('obligation_id')
+        dispatched = [(r.get('request') or {}).get('teammate') for r in receipts
+                      if obligation and (r.get('request') or {}).get('obligation_id') == obligation]
+        evidence = {'teammate': name, 'asked': self.a.ask_rich, 'dispatched': dispatched, 'assignment': record, 'receipts': receipts, 'approvals_pressed': pressed[0],
                     'question_card_answered_at_guest_ms': answered[0] if answered else None}
         (self.out / 'delegate-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         failures = delegate_verdict(record, receipts, name)
         if failures:
             raise StepFailed('; '.join(failures))
-        return {'teammate': name, 'state': record.get('state'), 'answer': answer_of(receipts, record, name)[:1000],
+        return {'teammate': name, 'dispatched': dispatched, 'state': record.get('state'),
+                'answer': answer_of(receipts, record, name)[:1000] if name else '',
                 'notice': record['notices'][-1].get('text', '')}
 
     def hood(self):
@@ -625,6 +680,8 @@ def main():
                    help='seconds to wait after the relaunch for the guest to stop running whisper-cli')
     p.add_argument('--after-relaunch-deadline', type=float, default=60,
                    help='the guest accessibility read deadline (TESTVM_AX_TIMEOUT) after the relaunch')
+    p.add_argument('--ask-rich', default=None, metavar='TEXT',
+                   help='delegate asks Rich for TEXT, naming no teammate, and records who did it')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')

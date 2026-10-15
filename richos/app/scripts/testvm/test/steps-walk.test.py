@@ -88,12 +88,31 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     mod.step_run('no-such-vm', {'op': 'push', 'src': '/abs/where.txt', 'dest': '/tmp/x'}, Path(tmp))
     check('an absolute push source is used as written', seen and seen[0][-2] == '/abs/where.txt', seen)
 
+    # A pull keeps a guest file whole inside the walk's folder (a guest step's output is cut at 2,000
+    # characters, so the app's log could not be read from one), and refuses a destination outside it.
+    seen.clear()
+    code, _ = mod.step_run('no-such-vm', {'op': 'pull', 'src': '/Users/admin/hunt/app.log', 'dest': 'logs/app.log'}, Path(tmp))
+    check('a pull hands guest.sh --pull the guest file and a path inside the walk folder',
+          code == 0 and seen and seen[0][2:] == ['--pull', '/Users/admin/hunt/app.log', str(Path(tmp) / 'logs/app.log')], seen)
+    seen.clear()
+    code, text = mod.step_run('no-such-vm', {'op': 'pull', 'src': '/x', 'dest': '../escaped.log'}, Path(tmp))
+    check('a pull outside the walk folder is refused and never run', code == 2 and 'outside' in text and not seen, (code, text, seen))
+    check('pull is a valid step with src and dest', mod.problems([{'op': 'pull', 'src': '/a', 'dest': 'b'}]) == [],
+          mod.problems([{'op': 'pull', 'src': '/a', 'dest': 'b'}]))
+    check('a pull without dest is refused', mod.problems([{'op': 'pull', 'src': '/a'}]) != [], mod.problems([{'op': 'pull', 'src': '/a'}]))
+
     # S8: a relaunch is a step, so "the choice survives a relaunch" is a walk's data, not a new script.
     seen.clear()
     mod.step_run('no-such-vm', {'op': 'relaunch'}, Path(tmp))
     check('relaunch runs relaunch.py on the walk\'s own VM',
           len(seen) == 1 and seen[0][0].endswith('/relaunch.py') and seen[0][1:] == ['no-such-vm'], seen)
     check('relaunch is a valid step with no arguments', mod.problems([{'op': 'relaunch'}]) == [], mod.problems([{'op': 'relaunch'}]))
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'relaunch', 'env': ['RICHOS_VOICE_INPUT_WAV=/Users/admin/voice.wav']}, Path(tmp))
+    check('a relaunch with env hands relaunch.py each pair as --env',
+          len(seen) == 1 and seen[0][1:] == ['no-such-vm', '--env', 'RICHOS_VOICE_INPUT_WAV=/Users/admin/voice.wav'], seen)
+    check('a relaunch whose env is not a list is refused', mod.problems([{'op': 'relaunch', 'env': 'X=1'}]) != [],
+          mod.problems([{'op': 'relaunch', 'env': 'X=1'}]))
     mod.run = lambda args, timeout=120: (2, 'recorded app PID no longer belongs to this payload')
     code, text = mod.step_run('no-such-vm', {'op': 'relaunch'}, Path(tmp))
     check('a relaunch that fails fails its step, with relaunch.py\'s sentence', code == 2 and 'no longer belongs' in text, (code, text))
