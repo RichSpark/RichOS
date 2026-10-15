@@ -149,6 +149,37 @@ class Verdicts(unittest.TestCase):
         self.assertTrue(any('interrupted' in f for f in failures) and any('No work was started' in f for f in failures)
                         and any('no run of penny' in f for f in failures), failures)
 
+    def test_a_job_asked_of_rich_naming_nobody_is_judged_by_its_own_outcome(self):
+        # --ask-rich: a user never names who does the work, so no teammate is required, and an
+        # interrupted task he was told nothing useful about still fails.
+        settled = {'state': 'settled', 'obligation_id': 'work-1', 'notices': [{'text': 'Three lines: one, two, three.'}]}
+        self.assertEqual(hire_walk.delegate_verdict(settled, [], None), [])
+        interrupted = {'state': 'interrupted', 'obligation_id': 'work-1', 'notices': [{'text': 'No work was started.'}]}
+        failures = hire_walk.delegate_verdict(interrupted, [], None)
+        self.assertTrue(any('interrupted' in f for f in failures) and any('No work was started' in f for f in failures),
+                        failures)
+
+    def test_a_job_rich_answers_in_his_own_turn_is_his_answer(self):
+        asked = 'Suggest three subject lines.'
+        done = [{'turn': 'a', 'prompt': asked, 'reply': 'Here are three: one, two, three.', 'done': True,
+                 'end': 'TurnCompleted'}]
+        self.assertEqual(hire_walk.answered_in_turn(done, asked), 'Here are three: one, two, three.')
+        interrupted = [dict(done[0], end='TurnInterrupted', reply='Here are three subject lines: 1. Grow')]
+        self.assertIsNone(hire_walk.answered_in_turn(interrupted, asked), 'partial text of an interrupted turn is no answer')
+        rows = [{'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'a', 'text': asked, 'source': 'text'},
+                {'event': 'AssistantDelta', 'turn_id': 'a', 'text': 'Here are three: one, two, three.'},
+                {'event': 'TurnStopped', 'turn_id': 'a'}]
+        self.assertIsNone(hire_walk.answered_in_turn(hire_walk.turns_of(rows, 't'), asked),
+                          'a stopped turn read off the ledger is no answer')
+        rows[-1] = {'event': 'TurnCompleted', 'turn_id': 'a'}
+        self.assertEqual(hire_walk.answered_in_turn(hire_walk.turns_of(rows, 't'), asked), 'Here are three: one, two, three.')
+        running = [dict(done[0], done=False, end=None)]
+        self.assertIsNone(hire_walk.answered_in_turn(running, asked), 'a turn still running is no answer yet')
+        empty = [dict(done[0], reply='  ')]
+        self.assertIsNone(hire_walk.answered_in_turn(empty, asked), 'a finished turn with no words is no answer')
+        other = [dict(done[0], prompt='Go.')]
+        self.assertIsNone(hire_walk.answered_in_turn(other, asked), 'another message\'s reply is not this one')
+
     def test_the_turns_are_read_off_the_ledger(self):
         rows = [{'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'a', 'text': 'hi', 'source': 'text'},
                 {'event': 'PromptReceived', 'thread_id': 't', 'turn_id': 'x', 'text': 'prime', 'source': 'internal'},
