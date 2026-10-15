@@ -943,6 +943,7 @@ impl LiveTurn {
             self.fence.binding_revision(),
             self.internal_turn,
             &self.types,
+            &self.tool_names,
             &self.last_seen,
         );
         let at = row.at;

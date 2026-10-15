@@ -1163,6 +1163,7 @@ impl Timeline {
         // Activity type + the observed time window, resolved over the RAW records (see
         // the doc above), keyed by tool call.
         let types = resolve_activity_types(&kept);
+        let tool_names = resolve_tool_names(&kept);
         let last_seen = resolve_last_seen(&kept);
         // Resolved over the RAW records for the same measured reason the activity type is:
         // the async-launch acknowledgement arrives on the tool RESULT, and `merge_into`
@@ -1226,6 +1227,7 @@ impl Timeline {
                     binding.binding_revision(),
                     internal_turn,
                     &types,
+                    &tool_names,
                     &last_seen,
                 )),
             }
@@ -1792,6 +1794,7 @@ pub(crate) fn activity_item(
     revision: u64,
     internal_turn: bool,
     types: &HashMap<String, ActivityType>,
+    tool_names: &HashMap<String, String>,
     last_seen: &HashMap<String, u64>,
 ) -> TimelineItem {
     let activity_type = activity_type_of(row, types);
@@ -1803,7 +1806,17 @@ pub(crate) fn activity_item(
     // while Rich was still working, and as the band's "Rich is working / Worked". It names no
     // action and is in the past tense for work not yet done. The record is kept and stays in
     // technical mode, exactly as the untyped vendor kinds above are.
-    let nameless = activity_type == ActivityType::Other && row.kind == MachineryKind::ToolCall;
+    //
+    // A DELEGATION IS NOT NAMELESS. A `Task`/`Agent` call classifies to `Other` too (see
+    // [`classify`]), but it is Rich handing work to a teammate, and he sees it while it runs:
+    // before its worker row exists (the lifecycle row can land after the tool result), and for
+    // a synchronous delegation that never becomes a worker at all.
+    let delegation = row
+        .tool_call_id
+        .as_ref()
+        .and_then(|id| tool_names.get(id))
+        .is_some_and(|n| n == "Task" || n == "Agent");
+    let nameless = activity_type == ActivityType::Other && row.kind == MachineryKind::ToolCall && !delegation;
     let visibility = match machinery_visibility(row, internal_turn) {
         Visibility::Ceo if nameless => Visibility::Technical,
         v => v,
@@ -2749,7 +2762,7 @@ mod tests {
 
     fn compaction_item(phase: &str, internal_turn: bool) -> TimelineItem {
         let row = compaction_row(phase);
-        activity_item(&row, &entity(), "thr", "turn_1", 3, internal_turn, &HashMap::new(), &HashMap::new())
+        activity_item(&row, &entity(), "thr", "turn_1", 3, internal_turn, &HashMap::new(), &HashMap::new(), &HashMap::new())
     }
 
     #[test]
@@ -2786,7 +2799,7 @@ mod tests {
         // An unclassified tool call (a vendor tool with no semantic type) is technical.
         let row = tool_open(0, "toolu_X", "SomeVendorTool");
         let TimelineItem::Activity { base, summary, .. } =
-            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new())
+            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new(), &HashMap::new())
         else {
             panic!("a tool call projects as an activity row");
         };
@@ -2797,12 +2810,25 @@ mod tests {
         let mut types = HashMap::new();
         types.insert("toolu_X".to_string(), ActivityType::Command);
         let TimelineItem::Activity { base, summary, .. } =
-            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &types, &HashMap::new())
+            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &types, &HashMap::new(), &HashMap::new())
         else {
             panic!("a tool call projects as an activity row");
         };
         assert_eq!(summary, "Ran a command");
         assert_eq!(base.visibility, Visibility::Ceo);
+
+        // A delegation classifies to nothing too, and stays in his view: Rich handing work to
+        // a teammate, before its worker row exists or when it never becomes one.
+        for name in ["Task", "Agent"] {
+            let delegation = tool_open(0, "toolu_D", name);
+            let names = HashMap::from([("toolu_D".to_string(), name.to_string())]);
+            let TimelineItem::Activity { base, .. } =
+                activity_item(&delegation, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &names, &HashMap::new())
+            else {
+                panic!("a delegation without its worker projects as an activity row");
+            };
+            assert_eq!(base.visibility, Visibility::Ceo, "a {name} delegation is in his view");
+        }
     }
 
     #[test]
@@ -2888,7 +2914,7 @@ mod tests {
         assert_eq!(last_seen.get(&crate::machinery::merge_key(&first)), Some(&48_805));
         assert_eq!(last_seen.get(&crate::machinery::merge_key(&second)), Some(&90_231));
 
-        let item = activity_item(&first, &entity(), "thr", "t3", 3, false, &HashMap::new(), &last_seen);
+        let item = activity_item(&first, &entity(), "thr", "t3", 3, false, &HashMap::new(), &HashMap::new(), &last_seen);
         let TimelineItem::Activity { completed_at, base, .. } = item else { panic!("activity") };
         assert_eq!(completed_at, Some(48_805), "turn 3's pause ended when turn 3's pause ended");
         assert_eq!(base.updated_at, None, "and nothing later touched that row");
@@ -2923,7 +2949,7 @@ mod tests {
         tool.kind = MachineryKind::ToolCall;
         tool.tool_call_id = Some("toolu_A".into());
         let TimelineItem::Activity { measured_min_ms, .. } =
-            activity_item(&tool, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new())
+            activity_item(&tool, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new(), &HashMap::new())
         else {
             panic!("activity");
         };

@@ -197,10 +197,10 @@ fn no_machinery_from_one_entity_renders_in_another_entitys_thread() {
         json!({"type":"stream_event","event":{"type":"content_block_start","index":0,
                "content_block":{"type":"tool_use","id":id,"name":title,"input":{}}}})
     };
-    // Legitimate femcboost machinery.
+    // Legitimate femcboost machinery: a classified tool (`Bash`), so its row is in his view.
     journal
         .append(&mk(
-            done("t_ok", "git status"),
+            done("t_ok", "Bash"),
             "thr_fem",
             "turn_ok",
             1,
@@ -962,22 +962,14 @@ fn the_apps_own_read_path_joins_a_task_call_to_the_worker_it_spawned() {
         !ceo_before.items().iter().any(|i| matches!(i, TimelineItem::WorkerActivity { .. })),
         "with the source Disabled the app cannot produce a worker row — this is what main shipped"
     );
-    // The nameless "Worked" record is technical since product hunt 2026-10-15 finding 13:
-    // it is still projected, and it no longer reaches his view at all.
+    // A delegation is not a nameless tool call (finding 13 exempts it): with no worker row it
+    // still reaches his view as an ordinary activity row.
     assert!(
-        before
-            .view(ViewMode::Technical)
+        ceo_before
             .items()
             .iter()
             .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Worked")),
-        "and the delegation was projected as one nameless \"Worked\" record"
-    );
-    assert!(
-        !ceo_before
-            .items()
-            .iter()
-            .any(|i| matches!(i, TimelineItem::Activity { summary, .. } if summary == "Worked")),
-        "and that nameless record is not a row in his view"
+        "and the delegation reached the CEO as one nameless \"Worked\" row"
     );
 
     // (2) WIRED. Same ledger, same journal, same machinery — one setting.
