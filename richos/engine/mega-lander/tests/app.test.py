@@ -113,6 +113,9 @@ class DesktopWork(unittest.TestCase):
 
     def call(self,name,args=None):return self.app.call(self.scope_path,name,args or {})
     def test_rich_reads_the_same_work_evidence_without_changing_stus_records(self):
+        tools = {tool["name"]: tool for tool in self.app.available_tools(read_only=True)}
+        self.assertEqual(set(tools), {"inspect", "repositories", "team"})
+        self.assertEqual(tools["team"]["inputSchema"]["properties"]["action"]["enum"], ["list", "show"])
         ready = self.call("prepare", self.args)
         root = self.app.folder(self.scope)
         expected = self.call("inspect", {})["records"]
@@ -371,10 +374,9 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(mine.exists())
         saved=self.call("team",{"action":"save","name":"sage","text":fitted})
         self.assertEqual((saved["saved"],saved["replaced"],saved["registered"]),(str(mine),False,False))
-        # Slice 5: the app renews the connection when the turn ends, so the back end is told to
-        # end it rather than report or try to start the teammate it cannot name yet.
-        self.assertIn("End your turn now without a report",saved["note"])
-        self.assertIn("next turn in this same assignment",saved["note"])
+        # Saving is durable; registration happens on the next provider connection.
+        self.assertEqual(saved["registration_boundary"], "next_provider_connection")
+        self.assertNotIn("note", saved)
         self.assertEqual(mine.read_text(),fitted)
         self.assertEqual(mine.stat().st_mode&0o777,0o600)
         self.assertEqual({row["name"]:row["activated"] for row in self.call("team",{"action":"list"})["shelf"]}["sage"],True)

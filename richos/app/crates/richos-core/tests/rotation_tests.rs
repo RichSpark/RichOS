@@ -624,7 +624,8 @@ fn clean_rotation_asks_the_outgoing_lease_for_a_self_authored_handoff_summary() 
     // handoff-summary request (in that order).
     let prompts = outgoing_prompts.lock().unwrap().clone();
     assert_eq!(prompts.len(), 2);
-    assert!(prompts[1].contains("summarize this conversation"), "handoff summary was requested");
+    let event: serde_json::Value = serde_json::from_str(&prompts[1]).unwrap();
+    assert_eq!(event["event"], "session_handoff_requested");
 
     // The internal ask + its reply are durable (ledger.turns()) but NEVER rendered.
     let msgs = spine.messages(&thread).unwrap();

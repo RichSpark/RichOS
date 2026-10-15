@@ -50,6 +50,16 @@ class DesktopHooks(unittest.TestCase):
         self.assertFalse((self.root / "state/evidence/fictional-session/callbacks.jsonl").exists())
         self.assertEqual(self.hook("Stop", last_assistant_message="I'm dispatching Worker now.").returncode, 0)
 
+    def test_internal_report_allows_only_host_granted_reads(self):
+        self.scope.write_text(json.dumps({"version": 1, "actions_allowed": False,
+                                          "read_only_tools": ["Read"]}))
+        read = self.hook("PreToolUse", tool_name="Read", tool_use_id="report-read", tool_input={"file_path": str(self.scope)})
+        self.assertEqual(read.returncode, 0, read.stderr + read.stdout)
+        for tool in ("Write", "Bash", "Agent", "mcp__richos_assignments__record"):
+            denied = self.hook("PreToolUse", tool_name=tool, tool_use_id="report-action", tool_input={})
+            self.assertEqual(denied.returncode, 2, tool + denied.stderr)
+            self.assertIn("This app turn is stopped", denied.stderr)
+
     def test_a_dispatched_worker_still_acts_after_the_turn_that_dispatched_it_ended(self):
         """The turn's grant is the LEASE's; a background worker's is its receipt's.
 

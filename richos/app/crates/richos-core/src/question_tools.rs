@@ -126,7 +126,7 @@ pub fn call(path: &Path, name: &str, args: Value) -> Result<Value, String> {
                     .map_err(|e| e.to_string())?;
             let questions = store.ask(s, qs)?;
             Ok(
-                json!({"recorded":true,"questions":questions,"instruction":if s.asker=="front_desk" {"The questions are recorded for display. End your turn now. His answer arrives later; do not wait for it."} else {"The questions are recorded for display. Continue work that does not depend on the answer."}}),
+                json!({"recorded":true,"questions":questions,"answer_delivery":"later_turn"}),
             )
         }
         "withdraw" => {
@@ -195,7 +195,7 @@ pub fn convert_vendor_scoped(context: &AskScope, input: &Value) -> Result<Value,
         std::time::Duration::from_millis(800),
     )?;
     Ok(
-        json!({"recorded":true,"questions":questions,"instruction":if context.asker=="front_desk"{"The questions are recorded for display. End your turn now. His answer arrives later; do not wait for it."}else{"The questions are recorded for display. Continue work that does not depend on the answer."}}),
+        json!({"recorded":true,"questions":questions,"answer_delivery":"later_turn"}),
     )
 }
 pub fn run_stdio(path: &Path) -> io::Result<()> {

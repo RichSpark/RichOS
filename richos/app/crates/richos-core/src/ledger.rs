@@ -2081,10 +2081,17 @@ impl Ledger {
         tier: AttentionTier,
         text: &str,
     ) -> Result<String, LedgerError> {
+        self.record_proactive_message_as(binding, tier, text, new_id("turn"))
+    }
+
+    /// A caller with a durable delivery identity can retry without creating another message.
+    pub(crate) fn record_proactive_message_as(
+        &mut self, binding: &ThreadBinding, tier: AttentionTier, text: &str, turn_id: String,
+    ) -> Result<String, LedgerError> {
         // Rich speaking unprompted is still a scoped write: an unbound or mis-scoped
         // thread must not receive one either.
         self.verify_binding(binding)?;
-        let turn_id = new_id("turn");
+        if self.turn(&turn_id).is_some() { return Ok(turn_id); }
         self.append(
             Event::ProactiveMessage {
                 turn_id: turn_id.clone(),

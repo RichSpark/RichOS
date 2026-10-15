@@ -315,7 +315,7 @@ fn drive_prepare(
     let scope_path = scratch.join(format!("work-scope-{}.json", uuid::Uuid::new_v4()));
     richos_core::ecs::write_scope(
         &scope_path,
-        &richos_core::ecs::ToolScope {
+        &richos_core::ecs::ToolScope { read_only_tools: Vec::new(),
             version: 1,
             actions_allowed: true,
             bridge: bridge.clone(),
@@ -1445,7 +1445,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "the continuity grant : shut at the send = {grant_shut_at_send}, first seen open at = {}",
             grant_opened_at.map(|at| format!("{at:.3} s")).unwrap_or_else(|| "never".into())
         );
-        rows.push((kind, said, to_first_words, ahead, runs, trace, grant_shut_at_send, grant_opened_at));
+        rows.push((kind, said, to_first_words, ahead, runs, grant_shut_at_send, grant_opened_at));
     }
 
     // What the register actually holds. A right reply over a wrong record would be half the
@@ -1459,12 +1459,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ---- the rule ----------------------------------------------------------------------
     //
-    // **Only the OPENING of the turn is scored here.** Which words he is handed is §58's leg
-    // and `question_receipt_e2e` is its probe; what is measured here is the one thing §55
-    // asked for and the doctrine could not enforce: nothing ahead of the reply that does not
-    // have to be there, and the hand-over first when there is one.
+    // Score response latency and avoidable discovery/bookkeeping without prescribing
+    // the order of a quick lookup and a handoff or the words Rich chooses.
     let mut failures = Vec::new();
-    for (index, (kind, said, to_first_words, ahead, runs, trace, grant_shut_at_send, grant_opened_at))
+    for (index, (kind, said, to_first_words, ahead, runs, grant_shut_at_send, grant_opened_at))
         in rows.iter().enumerate()
     {
         // **The lease's FIRST visible turn is a different measurement and gets its own budget.**
@@ -1496,23 +1494,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if texts.windows(2).any(|pair| pair[0] == pair[1] && !pair[0].is_empty()) {
                 failures.push(format!("[{kind}] he was told the same thing twice: {texts:?}"));
             }
-        }
-        // **SCORED: HIS WORDS CAME FROM THE APP, AT THE REGISTER'S RETURN.** The app reads the
-        // register's own answer off the wire and says the sentence itself, so on a turn that
-        // handed work over his first words must arrive BEFORE the machinery record that closes
-        // the register's row — both are built from the same frame, and the text is routed first.
-        // A model that said them instead would put its words AFTER that record, a whole round
-        // trip later (1.094 s and 1.427 s, measured on 2026-09-18 before this change).
-        //
-        // The rule is `first_reply::first_words_not_from_the_app`, shared with the unit test that
-        // feeds it the PREVIOUS shipped state's own pair (6.034 s -> 7.128 s) and watches it go
-        // red — so this arm is proven able to fail without spending a model turn on it.
-        let answered_at = trace
-            .iter()
-            .find(|(label, _)| label.starts_with("tool_call closed:") && label.contains("\"recorded\":true"))
-            .map(|(_, at)| *at);
-        if let Some(fault) = richos_core::first_reply::first_words_not_from_the_app(answered_at, *to_first_words) {
-            failures.push(format!("[{kind}] {fault}"));
         }
         // **SCORED: NO ECS WRITE COULD HAVE PRECEDED HIS FIRST WORDS.** The rule above catches a
         // write that HAPPENED; this catches the turn where one was possible and the model simply
@@ -1563,9 +1544,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("{} check(s) failed", failures.len()).into());
     }
     eprintln!("---");
-    eprintln!("PASS: the register was the first tool call on every turn that handed work over, and \
-               nothing was discovered or written down ahead of his first word.");
-    let slowest = rows.iter().filter_map(|(_, _, d, _, _, _, _, _)| *d).fold(0.0, f64::max);
+    eprintln!("PASS: response latency and pre-reply discovery/bookkeeping checks passed.");
+    let slowest = rows.iter().filter_map(|(_, _, d, _, _, _, _)| *d).fold(0.0, f64::max);
     eprintln!(
         "slowest send -> first words this run: {slowest:.3} s (budgets: {:.0} s warm, {:.0} s on the \
          lease's first VISIBLE turn; §55: a few seconds, 35 s is a defect)",

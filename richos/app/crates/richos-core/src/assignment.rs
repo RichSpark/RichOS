@@ -218,39 +218,17 @@ impl NoticeKind {
     }
 }
 
-/// **Is this a piece of work he asked for, or a question he asked?** The CEO's ruling §58,
-/// 2026-09-18.
-///
-/// *"when the user asks Rich a question (in RichOS app) and the front desk Rich doesn't
-/// immediately know the answer and therefore has to get it from the back-end Rich, the front
-/// desk Rich should reply as follows: If the answer from the back-end Rich is expected to take
-/// more than a minute, then the front desk Rich should reply with "I'll investigate." … And if
-/// the answer from the back-end Rich is expected to take less than a minute, then the front
-/// desk Rich should reply with "I'll check.""*
-///
-/// **The split between [`Self::Check`] and [`Self::Investigate`] is a ROUGH ESTIMATE and
-/// nothing here measures it.** Asked directly whether the minute was a measurement, he said:
-/// *"Yeah, just a rough estimate whether or not the answer is expected quickly is all we need
-/// to distinguish between "I'll check" or "I'll investigate". OK, go."* So the model reports
-/// which kind of work it expects and the app owns both sentences — the same division §55 made
-/// for `after_questions`, and for the same reason: a model free to compose the sentence would
-/// eventually compose a paragraph.
-///
-/// **The minute appears exactly once in this build and it is not here.** A check still running
-/// at sixty seconds reads "investigating" on his screen — that flip is mechanical, derived in
-/// the UI from the registered-at time (`ui/timeline.js`), and it deliberately does not rewrite
-/// this field: the record keeps what the model estimated, which is the only thing that can be
-/// compared against what actually happened.
+/// Rich's classification of delegated work. This is retained as work metadata and
+/// does not select a workflow or compose conversational replies.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssignmentKind {
-    /// Work he asked for. §55's *"On it!"*, and every state sentence in [`says`] below.
+    /// Requested work.
     #[default]
     Task,
-    /// A question whose answer is expected quickly. *"I'll check."*
+    /// A delegated lookup.
     Check,
-    /// A question whose answer is expected to take more than about a minute.
-    /// *"I'll investigate."*
+    /// A delegated investigation.
     Investigate,
 }
 
@@ -258,7 +236,7 @@ impl AssignmentKind {
     /// Is this a question of his rather than a piece of work?
     ///
     /// **Everything that behaves differently for a question branches on THIS**, never on
-    /// `Check` or `Investigate` separately: the two differ only in the sentence he hears and
+    /// `Check` or `Investigate` separately: the two differ only in their recorded classification and
     /// the word beside the timer. What the back end is asked to do, and how its answer comes
     /// back, is the same for both.
     pub fn is_question(self) -> bool {
@@ -272,8 +250,7 @@ impl AssignmentKind {
         }
     }
     /// Parse the one word the model reports. Anything unrecognized is refused rather than
-    /// defaulted: a mistyped kind that silently became a task would hand him *"On it!"* for a
-    /// question he asked, which is the wrong sentence in the one place §58 is about.
+    /// defaulted: a mistyped kind must not silently change a question into a task.
     pub fn parse(word: &str) -> Result<Self, AssignmentError> {
         match word {
             "task" => Ok(Self::Task),
@@ -333,6 +310,9 @@ pub struct Assignment {
     pub instruction_sha256: String,
     /// His assignment in his own terms. Bounded and single-line; see [`sanitize_title`].
     pub title: String,
+    /// Rich's complete handoff. A display title is never an execution contract.
+    #[serde(default)]
+    pub handoff: String,
     /// **Work he asked for, or a question he asked** — the CEO's ruling §58.
     ///
     /// `#[serde(default)]` so every record written before 2026-09-18 reads back as
@@ -467,79 +447,6 @@ pub struct Receipt {
     /// what was actually written down, never by the caller — so the reply he hears and the
     /// record on disk cannot be two different kinds of thing.
     pub kind: AssignmentKind,
-}
-
-impl Receipt {
-    /// **"On it!" — the CEO's ruling §55, verbatim and entire** (`richos-hq`
-    /// `wiki/ceo-decisions.md:2822-2846`, 2026-09-18).
-    ///
-    /// *"3) Rich **immediately** replies with: "On it!" and only after that does all that work
-    /// that took 35 seconds in this example. … That's it. Instant responses and ultra-short
-    /// replies."* What it binds, in his words: no restating the task back, no "running", no
-    /// "you'll find it with your saved work". **It supersedes the engineering annex
-    /// `background-work-spec-2026-09-17.md` §1.2 and spec §1.2's own list of clauses**, and
-    /// the supersession is the point — every clause this sentence used to carry was a true
-    /// clause, and he does not want any of them.
-    ///
-    /// **Two defects died here and they were different defects.** The sentence read *"I've
-    /// taken down your assignment: [the task, verbatim]. It's running now, and you'll find it
-    /// with your saved work. …"*. Ray's candidate-.7 row 2 is that *"running"* was false: it
-    /// was on his screen at 08:13:07Z and the job had failed at 08:13:10Z, three seconds
-    /// later. §55 is that the whole paragraph was the wrong shape at the wrong time — he had
-    /// waited 35 seconds for it. Fixing only the first would have left him waiting 35 seconds
-    /// for a more accurate paragraph.
-    ///
-    /// **It carries no title, and that is now a property rather than an omission.** A title
-    /// cannot be read aloud wrong, truncated, double-punctuated or leaked if it is not in the
-    /// sentence. [`sanitize_title`] and [`after_title`] still matter, because the seven
-    /// sentences in [`says`] that report a RESULT do name the assignment — that is where Ray's
-    /// row 8 double period lives now.
-    ///
-    /// **What the app still guarantees at the instant this is said:** the assignment is on
-    /// disk, fsynced, and `work_host.rs`'s `adopt_registered` will pick it up at the turn
-    /// boundary. The sentence asserts none of it, which is exactly why it cannot be wrong.
-    ///
-    /// **The two question sentences are the CEO's ruling §58, verbatim and entire**
-    /// (`richos-hq` `wiki/ceo-decisions.md:2884-2914`, 2026-09-18): *"If the answer from the
-    /// back-end Rich is expected to take more than a minute, then the front desk Rich should
-    /// reply with "I'll investigate." … And if the answer from the back-end Rich is expected
-    /// to take less than a minute, then the front desk Rich should reply with "I'll
-    /// check.""* Three fixed strings now, chosen by one reported fact, exactly as §55's two
-    /// are — see [`AssignmentKind`] for why the estimate is the model's and the words are
-    /// not.
-    pub fn sentence(&self) -> String {
-        match self.kind {
-            AssignmentKind::Task => "On it!".into(),
-            AssignmentKind::Check => "I'll check.".into(),
-            AssignmentKind::Investigate => "I'll investigate.".into(),
-        }
-    }
-
-    /// The same reply when he had to answer a question first — §55's other half.
-    ///
-    /// *"And if clarification questions need to be asked, then Rich asks those questions
-    /// first. And once all answers are in, Rich replies with a simple "Got it. On it!""*
-    ///
-    /// **It is a second fixed string and not a composed one.** Only the model knows whether it
-    /// asked him anything, so it reports that one fact; the words stay the app's, the same way
-    /// [`Registration`] keeps the id, the seat and the instruction out of the model's hands. A
-    /// model free to compose this would eventually compose the 35-second paragraph again.
-    ///
-    /// **FOR A QUESTION IT RETURNS THE SAME SENTENCE AS [`Self::sentence`], and that is a
-    /// decision rather than an omission.** §55 gives *"Got it. On it!"* for a task whose
-    /// clarification is answered. §58 gives exactly two sentences for a question — *"I'll
-    /// check."* and *"I'll investigate."* — and gives no third form for the after-a-question
-    /// case. Prefixing *"Got it. "* onto one of them would be this app composing a sentence
-    /// the CEO never wrote, in the one feature whose entire point is that it does not. So a
-    /// question he clarified first is answered with his own words for a question, and the
-    /// gap is named here rather than filled: if he wants *"Got it. I'll check."* it is one
-    /// line, and it is his to say.
-    pub fn sentence_after_questions(&self) -> String {
-        match self.kind {
-            AssignmentKind::Task => "Got it. On it!".into(),
-            AssignmentKind::Check | AssignmentKind::Investigate => self.sentence(),
-        }
-    }
 }
 
 // **Where Ray's row 8 double period went, and why there is no helper here for it.**
@@ -731,6 +638,9 @@ pub fn register_kind(
     if !usable_identity(&request.thread_id) {
         return Err(AssignmentError("this conversation cannot be identified".into()));
     }
+    if serde_json::to_string(&request.title).map_err(|e| AssignmentError(e.to_string()))?.len() > 64 * 1024 {
+        return Err(AssignmentError("the complete handoff is too large to record".into()));
+    }
     if request.entity_id.is_empty() || request.entity_id.len() > 128 {
         return Err(AssignmentError("this conversation has no company binding".into()));
     }
@@ -796,6 +706,7 @@ pub fn register_kind(
         instruction_ledger_ref: request.instruction_ledger_ref.clone(),
         instruction_sha256: request.instruction_sha256.clone(),
         title: title.clone(),
+        handoff: request.title.clone(),
         kind,
         repositories: request.repositories.clone(),
         state: AssignmentState::Registered,
@@ -970,6 +881,25 @@ fn update(
     id: &str,
     change: impl FnOnce(&mut Assignment),
 ) -> Result<Assignment, AssignmentError> {
+    // Atomic replacement alone cannot prevent two writers losing one another's updates.
+    #[cfg(unix)]
+    let _lock = {
+        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+        let root = folder(state, entity, thread)?;
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(root.join(".updates.lock"))
+            .map_err(|e| AssignmentError(e.to_string()))?;
+        // SAFETY: the descriptor belongs to this guard and closes after the update.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(AssignmentError(std::io::Error::last_os_error().to_string()));
+        }
+        file
+    };
+    #[cfg(not(unix))]
+    let _lock = {
+        static UPDATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        UPDATES.lock().unwrap()
+    };
     let mut record = read(state, entity, thread, id)?;
     change(&mut record);
     write(&folder(state, entity, thread)?.join(format!("{id}.json")), &record)?;
@@ -1092,6 +1022,49 @@ pub struct PendingNotice {
     pub kind: NoticeKind,
     pub text: String,
     pub raised_at_ms: u64,
+}
+
+impl PendingNotice {
+    /// Stable across delivery retries and independent of the assignment's display title.
+    pub fn delivery_id(&self, entity: &str, thread: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let identity = serde_json::to_vec(&(entity, thread, &self.assignment_id,
+            self.kind, self.raised_at_ms, &self.text)).expect("notice fields serialize");
+        format!("work-report-{:x}", Sha256::digest(identity))
+    }
+}
+
+/// Read without consuming. The conversation acknowledges a report only after its reply is durable.
+pub fn pending_notices_of(
+    state: &Path, entity: &str, thread: &str, wanted: impl Fn(NoticeKind) -> bool,
+) -> Result<Vec<PendingNotice>, AssignmentError> {
+    let scan = scan_all(state, entity, thread)?;
+    for error in &scan.unreadable {
+        eprintln!("[richos] assignments: a record could not be read, so its notices wait: {error}");
+    }
+    let mut pending = Vec::new();
+    for row in scan.rows {
+        for notice in row.notices.into_iter().filter(|n| n.delivered_at_ms.is_none() && wanted(n.kind)) {
+            pending.push(PendingNotice { assignment_id: row.id.clone(), title: row.title.clone(),
+                kind: notice.kind, text: notice.text, raised_at_ms: notice.raised_at_ms });
+        }
+    }
+    pending.sort_by_key(|n| n.raised_at_ms);
+    Ok(pending)
+}
+
+pub fn acknowledge_notice(
+    state: &Path, entity: &str, thread: &str, delivered: &PendingNotice,
+) -> Result<(), AssignmentError> {
+    update(state, entity, thread, &delivered.assignment_id, |record| {
+        for notice in &mut record.notices {
+            if notice.kind == delivered.kind && notice.raised_at_ms == delivered.raised_at_ms
+                && notice.text == delivered.text && notice.delivered_at_ms.is_none() {
+                notice.delivered_at_ms = Some(now_ms());
+            }
+        }
+    })?;
+    Ok(())
 }
 
 /// Everything he has not been told yet, oldest first — **and it marks them delivered.**
@@ -1520,6 +1493,52 @@ mod tests {
     /// that [`says::continues`] is the only join in this module; the enumeration is the evidence
     /// that it is applied, not a promise about code that does not exist yet.
     #[test]
+    fn concurrent_reports_acknowledgments_and_state_updates_are_all_retained() {
+        let state = root();
+        let receipt = std::sync::Arc::new(register(&state, &registration()).unwrap());
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(5));
+        let threads: Vec<_> = (0..5).map(|worker| {
+            let (state, receipt, gate) = (state.clone(), receipt.clone(), gate.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                for step in 0..10 {
+                    if worker == 4 {
+                        advance(&state, "depot", "thread-one", &receipt.id, AssignmentState::Running, "Active.").unwrap();
+                    } else {
+                        let text = format!("Report {worker}:{step}");
+                        let notice = raise_notice(&state, "depot", "thread-one", &receipt.id, NoticeKind::Answer, &text).unwrap();
+                        acknowledge_notice(&state, "depot", "thread-one", &PendingNotice {
+                            assignment_id: receipt.id.clone(), title: receipt.title.clone(),
+                            kind: notice.kind, text, raised_at_ms: notice.raised_at_ms,
+                        }).unwrap();
+                    }
+                }
+            })
+        }).collect();
+        for thread in threads { thread.join().unwrap(); }
+        let saved = read(&state, "depot", "thread-one", &receipt.id).unwrap();
+        assert_eq!(saved.notices.len(), 40);
+        assert!(saved.notices.iter().all(|notice| notice.delivered_at_ms.is_some()));
+        assert_eq!(saved.state, AssignmentState::Running);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_complete_authored_handoff_survives_a_shortened_display_title() {
+        let state = root();
+        let mut request = registration();
+        request.title = format!("{}\nPreserve this final requirement exactly.", "A complete request with context. ".repeat(12));
+        let receipt = register(&state, &request).unwrap();
+        let record = read(&state, "depot", "thread-one", &receipt.id).unwrap();
+        assert!(record.title.chars().count() <= 161);
+        assert_eq!(record.handoff, request.title);
+        let mut legacy = serde_json::to_value(record).unwrap();
+        legacy.as_object_mut().unwrap().remove("handoff");
+        assert!(serde_json::from_value::<Assignment>(legacy).unwrap().handoff.is_empty());
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
     fn a_truncated_title_never_collides_with_the_verdict_that_continues_from_it() {
         let instruction = "Add a line to the notes file in the QA fixture repository saying the \
                            candidate eight walk happened, and land it. (Third try; the first two \
@@ -1851,42 +1870,14 @@ mod tests {
         std::fs::remove_dir_all(state).unwrap();
     }
 
-    /// **The whole reply is "On it!" — the CEO's ruling §55, as an assertion.**
-    ///
-    /// Both of his negatives are tested, because they are separate failures: the sentence must
-    /// not claim the work is running (Ray's row 2 — it said so three seconds before the job
-    /// failed), and it must not restate his task back to him or tell him where to find it
-    /// (§55 — he had waited 35 seconds for that paragraph). The state word on disk is asserted
-    /// beside it so the record and the reply can never drift apart again.
     #[test]
-    fn the_whole_reply_to_a_recorded_assignment_is_on_it() {
+    fn registration_records_acceptance_without_claiming_execution() {
         let state = root();
         let receipt = register(&state, &registration()).unwrap();
-        // Verbatim, both forms. Nothing is composed, so nothing can be composed wrongly.
-        assert_eq!(receipt.sentence(), "On it!");
-        assert_eq!(receipt.sentence_after_questions(), "Got it. On it!");
-        let sentence = receipt.sentence();
-        // §55: no restating the task back to him.
-        assert!(!sentence.contains("landing the three branches"), "the task was read back: {sentence}");
-        // §55: nothing about where it will show up.
-        for absent in ["saved work", "look at", "written down", "assignment"] {
-            assert!(!sentence.to_lowercase().contains(absent), "§55 forbids this clause: {sentence}");
-        }
-        // Ray's row 2, and `doctrine/front-desk.md:46-49`: no claim that work is underway.
-        for forbidden in ["done", "finished", "complete", "landed", "succeeded", "running", "started", "underway"] {
-            assert!(!sentence.to_lowercase().contains(forbidden), "receipt implied an outcome: {sentence}");
-        }
-        // The record it describes says `registered` — and the reply claims nothing at all, so
-        // there is no clause left for the record to contradict.
         let rows = read_all(&state, "depot", "thread-one").unwrap();
         assert_eq!(rows[0].state, AssignmentState::Registered);
-        // No identifiers, which is now structural: the reply has no room for one.
-        assert!(!sentence.contains(&receipt.id));
-        assert!(!sentence.contains(&rows[0].seat));
-        // §1.4 still says the opposite out loud: a registration that FAILED is never softened,
-        // and it is the one reply that must say more than three words.
-        let refusal = failed_registration_sentence("the work connection could not be opened.");
-        assert!(refusal.contains("Nothing is running and nothing was started."));
+        assert_eq!(receipt.id, rows[0].id);
+        assert_eq!(receipt.kind, rows[0].kind);
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -1939,54 +1930,18 @@ mod tests {
         assert!(sanitize_title(".").is_err());
     }
 
-    /// **THE THREE SENTENCES, EXACT, AND THE FACT THAT CHOOSES EACH** — the CEO's ruling
-    /// §58 (`richos-hq` `wiki/ceo-decisions.md:2884-2914`, 2026-09-18).
-    ///
-    /// *"If the answer from the back-end Rich is expected to take more than a minute, then
-    /// the front desk Rich should reply with "I'll investigate." … And if the answer from
-    /// the back-end Rich is expected to take less than a minute, then the front desk Rich
-    /// should reply with "I'll check.""*
-    ///
-    /// The strings are asserted whole, with their punctuation, because they ARE the feature:
-    /// `assignment_tools.rs` hands `say` to the model verbatim and the doctrine tells it to
-    /// end the turn with exactly that, so whatever is here is what he reads and hears.
     #[test]
-    fn a_question_is_answered_with_one_of_two_exact_sentences_and_never_with_on_it() {
+    fn delegated_questions_retain_the_kind_chosen_by_rich() {
         let state = root();
-        let check = register_kind(&state, &registration(), AssignmentKind::Check).unwrap();
-        assert_eq!(check.sentence(), "I'll check.");
-        let investigate = register_kind(
-            &state,
-            &Registration { obligation_id: "obligation-8".into(), ..registration() },
-            AssignmentKind::Investigate,
-        )
-        .unwrap();
-        assert_eq!(investigate.sentence(), "I'll investigate.");
-        // §55's sentence is untouched, and `register` still means a task with no argument.
-        let task = register_kind(
-            &state,
-            &Registration { obligation_id: "obligation-9".into(), ..registration() },
-            AssignmentKind::Task,
-        )
-        .unwrap();
-        assert_eq!(task.sentence(), "On it!");
-        assert_eq!(task.sentence_after_questions(), "Got it. On it!");
-        // **The one place §58 is silent, decided conservatively and asserted so a future
-        // change to it is deliberate**: a question he clarified first still gets his own two
-        // words for a question, not a composed "Got it. I'll check."
-        assert_eq!(check.sentence_after_questions(), "I'll check.");
-        assert_eq!(investigate.sentence_after_questions(), "I'll investigate.");
-        // Nothing a question hands back says "On it!", and nothing restates his question.
-        for say in [check.sentence(), check.sentence_after_questions(), investigate.sentence()] {
-            assert!(!say.contains("On it"), "a question was answered with the task reply: {say}");
-            assert!(!say.contains("landing the three branches"), "his question was read back: {say}");
-            assert!(!say.contains(&check.id), "an identifier reached the sentence: {say}");
+        for (n, kind) in [AssignmentKind::Check, AssignmentKind::Investigate, AssignmentKind::Task].into_iter().enumerate() {
+            let receipt = register_kind(&state, &Registration {
+                obligation_id: format!("obligation-{n}"), ..registration()
+            }, kind).unwrap();
+            assert_eq!(receipt.kind, kind);
         }
-        // The kind is on disk, and it is what the reply was chosen from.
         let rows = read_all(&state, "depot", "thread-one").unwrap();
         assert_eq!(rows.len(), 3);
-        let kinds: Vec<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
-        assert!(kinds.contains(&"check") && kinds.contains(&"investigate") && kinds.contains(&"task"));
+        for row in rows { assert_eq!(row.state, AssignmentState::Registered); }
         std::fs::remove_dir_all(state).unwrap();
     }
 

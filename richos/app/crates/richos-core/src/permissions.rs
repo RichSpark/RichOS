@@ -165,6 +165,13 @@ fn grant(path: &Path) -> Option<Binding> {
     let open = grant.actions_allowed || (grant.background_work_allowed && is_background(&grant.binding));
     (grant.version == 1 && open).then_some(grant.binding)
 }
+fn read_grant(path: &Path, tool: &str) -> Option<Binding> {
+    if std::fs::metadata(path).ok()?.len() > crate::ecs::SCOPE_LIMIT { return None; }
+    let scope: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    if scope["version"] != 1 || !scope["read_only_tools"].as_array()?.iter().any(|name| name == tool) { return None; }
+    serde_json::from_value(scope["binding"].clone()).ok()
+}
+
 fn permission_reason(request: &Value) -> String {
     if let Some(reason)=request["decision_reason"].as_str().filter(|s|!s.is_empty()) {return reason.into();}
     match request["decision_reason_type"].as_str() {
@@ -246,33 +253,18 @@ impl ScopedPermissions {
     fn wait(&self, request: &Value, limit: Duration) -> PermissionDecision {
         let deny=|message:&str|PermissionDecision::Deny{message:message.into()};
         let allow=||PermissionDecision::Allow{updated_input:request.get("input").cloned().unwrap_or(json!({}))};
-        let Some(binding)=grant(&self.scope) else {return deny("This app turn is stopped or is supplying context. New actions are unavailable.")};
         let tool=request["tool_name"].as_str().unwrap_or("");
+        let report_read = read_grant(&self.scope, tool);
+        let Some(binding)=grant(&self.scope).or_else(|| report_read.clone()) else {return deny("This app turn is stopped or is supplying context. New actions are unavailable.")};
+        if report_read.is_some() { return allow(); }
+        let work_read = matches!(tool, "mcp__richos_work__inspect" | "mcp__richos_work__repositories")
+            || (tool == "mcp__richos_work__team" && matches!(request["input"]["action"].as_str(), Some("list" | "show")));
+        if work_read { return allow(); }
         // ===================================================================================
         // THE FRONT DESK DOES NOT DO THE WORK — the CEO's Two Riches note 3, landed
         // ===================================================================================
-        //
-        // *"The front desk gets no orchestration tools, so it cannot drift into doing the
-        // work."* These four lines are the refusal that implements it, and they were written
-        // in the approval slice and deliberately HELD, with both preconditions named. Both
-        // are now met, in the same commit as this:
-        //
-        //   1. **The doctrine moved.** The standing instruction used to route work through
-        //      these tools from the conversation; it now tells the front desk to hand work to
-        //      the back end with `richos_assignments.record` and to look with
-        //      `richos_status.background_work` (`doctrine.rs`).
-        //   2. **The read exists.** Sage's check of that page, finding 6: taking `richos_work`
-        //      off the front desk left it no read tool at all, because every status surface is
-        //      a Tauri command the model cannot call. `status_tools.rs` is that read.
-        //
-        // **This is the SECOND of two enforcements, and it is the one that catches a lease
-        // that should not have the server at all.** The first is the omission in
-        // `native.rs`'s `mcp_config` — a conversation lease is no longer given `richos_work`
-        // — which is the enforcement that matters, exactly as seam 1 argues for
-        // `richos_continuity`. This one refuses the call if a work tool ever reaches the desk
-        // on a binding that is not background work: a config edit, a lease that outlived a
-        // role change, or a future path nobody has thought of yet. A deny here is never a
-        // thing he sees, and it names the register so the model's next move is the right one.
+        // Both agents can inspect the same evidence. Execution methods remain on
+        // the work connection; the read cases above never reach this mutation gate.
         if tool.starts_with("mcp__richos_work__") && !is_background(&binding) {
             return deny("The conversation does not run work directly. Write the assignment down with \
                          the assignment register and let the background connection run it.");
@@ -530,6 +522,24 @@ impl ScopedPermissions {
     /// arm is a step with no grant from the SAME lease on the SAME desk, and it is refused. And
     /// the loop is over the whole set rather than four names, so a sixth work tool added
     /// tomorrow is a decision somebody has to make here rather than a silent inheritance.
+    #[test]
+    fn internal_report_reads_are_available_without_granting_actions() {
+        let desk = Arc::new(PermissionDesk::default());
+        let (path, rich) = joined(&desk, "ceo", "internal-report");
+        let mut scope: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        scope["actions_allowed"] = json!(false);
+        scope["read_only_tools"] = json!(["Read", "mcp__richos_work__inspect"]);
+        std::fs::write(&path, scope.to_string()).unwrap();
+        for tool in ["Read", "mcp__richos_work__inspect"] {
+            assert_eq!(rich.wait(&json!({"tool_name":tool,"input":{}}), Duration::from_millis(20)).behavior(), "allow");
+        }
+        for tool in ["Write", "Bash", "mcp__richos_assignments__record", "mcp__richos_work__prepare"] {
+            assert_eq!(rich.wait(&json!({"tool_name":tool,"input":{}}), Duration::from_millis(20)).behavior(), "deny");
+        }
+        assert!(desk.current().is_none());
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test] fn a_background_lease_lands_without_asking_him(){
         let desk=Arc::new(PermissionDesk::default());
         let (p,work_lease)=joined(&desk,WORK_AUDIENCE,"obligation-7");
@@ -571,6 +581,10 @@ impl ScopedPermissions {
         for tool in ["mcp__richos_work__repositories","mcp__richos_work__prepare","mcp__richos_work__inspect",
                      "mcp__richos_work__complete","mcp__richos_work__integrate","mcp__richos_work__team"] {
             let refused=conversation.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20));
+            if matches!(tool, "mcp__richos_work__repositories" | "mcp__richos_work__inspect") {
+                assert_eq!(refused.behavior(), "allow", "Rich lost shared evidence access: {tool}");
+                continue;
+            }
             assert_eq!(refused.behavior(),"deny","the front desk still reaches {tool}");
             // The refusal names the way OUT, not just the door: a model told "no" with no
             // alternative retries; a model told where the work goes hands it over.

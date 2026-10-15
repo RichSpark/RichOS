@@ -428,6 +428,11 @@ struct WorkNotice {
 
 impl richos_core::work_host::WorkNotifier for WorkNotice {
     fn raised(&self, thread_id: &str, notice: &richos_core::assignment::PendingNotice) {
+        if notice.kind.is_result() {
+            if let Some(state) = self.app.try_state::<AppState>() {
+                say_work_results(&self.app, &state.data_dir.join("engine-state"), thread_id);
+            }
+        }
         let _ = self.app.emit(
             EVENT_WORK_NOTICE,
             serde_json::json!({"threadId": thread_id, "notice": notice}),
@@ -597,13 +602,6 @@ impl LeaseFactory for EngineLeaseFactory {
     fn team_digest(&self) -> Option<String> {
         let engine = self.engine_dir.lock().ok()?.clone();
         richos_core::engine_profile::team_digest(&engine, &self.data_dir).ok()
-    }
-
-    /// The definitions that digest covers, read the same way: the names they record are what
-    /// the work host checks a hiring's proposed teammates against.
-    fn team_definitions(&self) -> Option<Vec<String>> {
-        let engine = self.engine_dir.lock().ok()?.clone();
-        richos_core::engine_profile::active_team(&engine, &self.data_dir).ok().map(|team| team.into_values().collect())
     }
 
     /// **The models the next leases would start on** (§119): what `EngineProfile::prepare`
@@ -3705,6 +3703,22 @@ fn main() {
                 boot_engine,
             });
 
+            // Replay durable reports independently of which conversation the UI opens.
+            {
+                let state = app.state::<AppState>();
+                let engine_state = state.data_dir.join("engine-state");
+                for thread in state.reader.snapshot().threads() {
+                    let Some(entity) = thread.entity_id.as_deref() else { continue };
+                    let pending = richos_core::assignment::pending_notices_of(
+                        &engine_state, entity, &thread.id, |kind| kind.is_result());
+                    match pending {
+                        Ok(notices) if !notices.is_empty() => say_work_results(app.handle(), &engine_state, &thread.id),
+                        Ok(_) => {},
+                        Err(error) => eprintln!("[richos] work: pending reports could not be read: {error}"),
+                    }
+                }
+            }
+
             // Resume only after AppState exists: PhoneBridge::new immediately reads
             // the spine to prime the paired phone's conversation. The window was
             // created above for first paint, but setup has not returned to the event
@@ -4416,36 +4430,40 @@ fn take_work_notices(
 ) -> Result<Vec<richos_core::assignment::PendingNotice>, String> {
     let entity = assignment_scope(&state, &thread_id)?;
     let engine_state = state.data_dir.join("engine-state");
-    say_work_results(&app, &state, &engine_state, &thread_id);
+    say_work_results(&app, &engine_state, &thread_id);
     richos_core::assignment::take_pending_notices_of(&engine_state, entity.as_str(), &thread_id, |kind| !kind.is_result())
         .map_err(|e| e.to_string())
 }
 
-/// Write this conversation's waiting job results into it ([`take_work_notices`]): now, when no
-/// turn holds the conversation, or else on one waiter per conversation that takes it when the
-/// turn lets go. Nothing is taken off the assignment until it is being written.
-fn say_work_results(app: &AppHandle, state: &AppState, engine_state: &Path, thread_id: &str) {
-    if let Ok(mut spine) = state.spine.try_lock() {
-        let written = spine.say_work_results(engine_state, thread_id);
-        drop(spine);
-        tell_work_results(app, thread_id, written);
-        return;
-    }
-    static WAITING: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
-    let waiting = WAITING.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
-    if !waiting.lock().unwrap().insert(thread_id.to_string()) {
-        return;
+/// Wake one durable report consumer per conversation. New reports arriving during a read
+/// leave a wake flag, so they cannot fall between the last read and consumer shutdown.
+fn say_work_results(app: &AppHandle, engine_state: &Path, thread_id: &str) {
+    static WAITING: std::sync::OnceLock<Mutex<std::collections::HashMap<String, bool>>> = std::sync::OnceLock::new();
+    let waiting = WAITING.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    {
+        let mut pending = waiting.lock().unwrap();
+        if let Some(again) = pending.get_mut(thread_id) {
+            *again = true;
+            return;
+        }
+        pending.insert(thread_id.to_string(), false);
     }
     let app = app.clone();
     let (engine_state, thread_id) = (engine_state.to_path_buf(), thread_id.to_string());
-    std::thread::spawn(move || {
+    std::thread::spawn(move || loop {
         if let Some(state) = app.try_state::<AppState>() {
             let mut spine = take_the_spine(&state.spine);
             let written = spine.say_work_results(&engine_state, &thread_id);
             drop(spine);
             tell_work_results(&app, &thread_id, written);
         }
-        waiting.lock().unwrap().remove(&thread_id);
+        let mut pending = waiting.lock().unwrap();
+        if pending.get(&thread_id) == Some(&true) {
+            pending.insert(thread_id.clone(), false);
+        } else {
+            pending.remove(&thread_id);
+            break;
+        }
     });
 }
 

@@ -625,68 +625,78 @@ impl UnwrapErrTurn for Result<String, richos_core::spine::SpineError> {
     }
 }
 
-/// **A job's result is in the conversation, and still there after a relaunch** (nightly 57's
-/// product hunt, finding 6). "Will and Beth have both joined your team" was a card the window
-/// drew from the assignment's notice, marked told as it was handed over and gone after a
-/// relaunch, so the conversation ended at "On it!". Now a result is written into the
-/// conversation as Rich's message, once; a notice that says where a job stands now (here, a
-/// held one) stays on its assignment for the window's card.
+/// Work reports reach Rich as internal data. Only his response reaches the durable
+/// conversation. Failure retains the report; replay after publishing cannot duplicate it.
 #[test]
 fn a_jobs_result_is_written_into_the_conversation_once_and_is_there_after_a_relaunch() {
     use richos_core::assignment::{self, NoticeKind, Registration};
+    struct ReportDesk(MockCognition);
+    impl Cognition for ReportDesk {
+        fn session_id(&self) -> &str { self.0.session_id() }
+        fn reprime(&mut self, text: &str, sink: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+            self.0.reprime(text, sink)
+        }
+        fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            panic!("a work report must not run with user-turn tool authority")
+        }
+        fn prompt_context_only(&mut self, text: &str, sink: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            self.0.prompt(text, sink)
+        }
+    }
     let (path, ledger) = tmp_ledger("work-result");
     let mut spine = support::spine(ledger);
-    let thread = spine.create_thread("General", &femcboost()).unwrap();
-    let state = std::env::temp_dir().join(format!(
-        "richos-test-work-result-{}-{}",
-        std::process::id(),
-        richos_core::util::now_millis()
-    ));
+    let thread = spine.create_thread("Market research", &femcboost()).unwrap();
+    let elsewhere = spine.create_thread("Another conversation", &femcboost()).unwrap();
+    spine.switch_thread(&elsewhere).unwrap();
+    let state = std::env::temp_dir().join(format!("richos-test-work-result-{}-{}",
+        std::process::id(), richos_core::util::now_millis()));
     std::fs::create_dir_all(&state).unwrap();
     let receipt = assignment::register(&state, &Registration {
-        entity_id: "femcboost".into(),
-        thread_id: thread.clone(),
-        obligation_id: "obligation-1".into(),
-        instruction_ledger_ref: format!("ledger:{thread}:turn-1"),
-        instruction_sha256: "0".repeat(64),
-        title: "Hire these AI teammates onto my team: Will (Marketing Director), Beth (Bookkeeper)".into(),
-        repositories: Vec::new(),
-        needs_screen: false,
-    })
-    .unwrap();
-    let joined = "Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work.";
-    let held = "Your request is waiting until you sign in to Claude again.";
+        entity_id: "femcboost".into(), thread_id: thread.clone(), obligation_id: "obligation-1".into(),
+        instruction_ledger_ref: format!("ledger:{thread}:turn-1"), instruction_sha256: "0".repeat(64),
+        title: "Compare the two markets".into(), repositories: Vec::new(), needs_screen: false,
+    }).unwrap();
+    let raw = "Retrying the research call. No sources yet. Research complete: the northern market has twice as many buyers.";
+    let reply = "The northern market has twice as many buyers.";
+    let held = "Your request is waiting until you sign in again.";
     assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Held, held).unwrap();
-    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, joined).unwrap();
+    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, raw).unwrap();
 
-    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), [joined], "the result was not written, or not answered for the speaker");
-    assert!(spine.say_work_results(&state, &thread).unwrap().is_empty(), "the result was written twice");
-    let cards = assignment::take_pending_notices(&state, "femcboost", &thread).unwrap();
-    assert_eq!(cards.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), [held], "the held line is still a card");
+    assert!(spine.say_work_results(&state, &thread).is_err(), "no Rich is available yet");
+    assert_eq!(assignment::pending_notices_of(&state, "femcboost", &thread, |k| k.is_result()).unwrap().len(), 1);
+    assert!(spine.ledger().messages(&thread).unwrap().is_empty(), "raw backend text leaked on failure");
+    let desk = ReportDesk(MockCognition::new("report-desk", vec![reply]));
+    let prompts = desk.0.prompts.clone();
+    spine.attach_lease(Box::new(desk));
+    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), [reply]);
+    assert_eq!(spine.active_thread(), Some(elsewhere.as_str()), "delivery changed the selected conversation");
+    let input: serde_json::Value = serde_json::from_str(&prompts.lock().unwrap()[0]).unwrap();
+    assert_eq!(input["from"], "stu");
+    assert_eq!(input["work_report"]["report"], raw);
+    assert_eq!(input["work_report"]["request"], "Compare the two markets");
+    assert!(spine.say_work_results(&state, &thread).unwrap().is_empty());
+    assert_eq!(prompts.lock().unwrap().len(), 1);
+    assert!(spine.ledger().messages(&elsewhere).unwrap().is_empty());
 
+    // Simulate a crash after the conversation write but before report acknowledgment.
+    let partition = std::fs::read_dir(state.join("assignments")).unwrap().next().unwrap().unwrap().path();
+    let record_path = partition.join(format!("{}.json", receipt.id));
+    let mut record: serde_json::Value = serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+    for notice in record["notices"].as_array_mut().unwrap() { notice["delivered_at_ms"] = serde_json::Value::Null; }
+    std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
     drop(spine);
-    let relaunched = Ledger::open(&path).unwrap();
-    let said: Vec<String> = relaunched
-        .messages(&thread)
-        .unwrap()
-        .into_iter()
-        .filter(|m| m.role == "assistant")
-        .map(|m| m.text)
-        .collect();
-    assert_eq!(said, [joined], "after a relaunch the conversation does not hold the result");
+    let mut relaunched = support::spine(Ledger::open(&path).unwrap());
+    assert!(relaunched.say_work_results(&state, &thread).unwrap().is_empty(), "a delivered result needs no second model call");
+    assert_eq!(relaunched.ledger().messages(&thread).unwrap().iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), [reply]);
+    assert_eq!(assignment::take_pending_notices(&state, "femcboost", &thread).unwrap()
+        .iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), [held]);
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_dir_all(&state).unwrap();
 }
 
-/// **"On it!" the instant he says go on the team proposal** (nightly 57's product hunt, finding
-/// 3). After the interview's last answer Rich proposes the team and ends "Say go and I'll get
-/// them hired now."; he said "Go." and "On it!" appeared 14 seconds later, because a full model
-/// turn (behind a re-prime) wrote the same two words the register always hands back. Now the
-/// app says them as the turn starts, before the conversation's model is asked anything, and the
-/// register's own copy is not said a second time. A "Go." that answers anything else is the
-/// model's to answer, as before.
+/// Rich interprets a reply in context before the app can publish any promise of work.
 #[test]
-fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
+fn go_on_a_proposal_is_interpreted_by_rich_before_any_reply() {
     struct Seen {
         prompts: Arc<Mutex<Vec<String>>>,
         chunks: Arc<Mutex<Vec<(String, String, usize)>>>,
@@ -699,12 +709,6 @@ fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
             }
         }
     }
-    let skill = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/bootstrap-interview/SKILL.md"),
-    )
-    .unwrap();
-    assert!(skill.contains("Say go and I'll get them hired now."), "the interview no longer ends its team proposal this way");
-
     let (path, ledger) = tmp_ledger("go-on-it");
     let mut spine = support::spine(ledger);
     spine.create_thread("Onboarding", &femcboost()).unwrap();
@@ -713,7 +717,7 @@ fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
                     team any time as needed. Say go and I'll get them hired now.";
     // The second reply is the register's receipt, as the real lease streams it; the third is
     // the model's own answer to a "Go." that follows something other than the proposal.
-    let mock = MockCognition::new("sess-1", vec![proposal, "On it!", "Go where?"]);
+    let mock = MockCognition::new("sess-1", vec![proposal, "Which roles do you mean?", "Go where?"]);
     let prompts = mock.prompts.clone();
     let chunks = Arc::new(Mutex::new(Vec::new()));
     spine.set_observer(Box::new(Seen { prompts: prompts.clone(), chunks: chunks.clone() }));
@@ -723,9 +727,9 @@ fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
     let go = spine.submit_prompt("Go.", Source::Text).unwrap();
     let first = chunks.lock().unwrap().iter().find(|(turn, _, _)| *turn == go).cloned();
     let (_, words, asked) = first.expect("nothing was said on his go");
-    assert_eq!(words, "On it! ", "said with the space that lets voice mode speak it at once");
-    assert_eq!(asked, 1, "\"On it!\" waited for the model to be asked his go");
-    assert_eq!(spine.ledger().turn(&go).unwrap().assistant_text, "On it!", "said once, not twice");
+    assert!("Which roles do you mean?".starts_with(&words), "a reply was invented before Rich spoke: {words:?}");
+    assert_eq!(asked, 2, "the app replied before Rich interpreted the request");
+    assert_eq!(spine.ledger().turn(&go).unwrap().assistant_text, "Which roles do you mean?");
     assert_eq!(prompts.lock().unwrap().last().map(String::as_str), Some("Go."), "the model still gets his go and hires");
 
     let again = spine.submit_prompt("Go.", Source::Text).unwrap();

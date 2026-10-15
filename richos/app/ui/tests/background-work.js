@@ -473,11 +473,12 @@ async function main() {
     await settle();
     assertEqual(calls, [], "a result was said with voice mode off, or from another conversation");
 
-    // The shell emits it, with its words, for every result the spine writes, on both paths.
+    // The shell relays results off the UI thread, then sends only the replies it wrote.
     const shell = fs.readFileSync(path.join(UI_DIR, "..", "src-tauri", "src", "main.rs"), "utf8");
     assert(shell.includes('pub const EVENT_WORK_RESULT: &str = "rich://work-result";'), "the shell declares no rich://work-result");
     const writer = shell.slice(shell.indexOf("fn say_work_results("), shell.indexOf("fn tell_work_results("));
-    assertEqual((writer.match(/tell_work_results\(/g) || []).length, 2, "a path that writes results does not tell the window");
+    assertEqual((writer.match(/tell_work_results\(/g) || []).length, 1, "the result worker must notify the window once");
+    assert(writer.includes("std::thread::spawn"), "model delivery runs on the synchronous UI command thread");
     assert(/fn tell_work_results[\s\S]{0,400}?emit\(EVENT_WORK_RESULT, serde_json::json!\(\{"threadId": thread_id, "text": text\}\)\)/.test(shell),
       "the shell does not emit each written result's words");
     // ...and its speaker command says them as words of their own, which a Stop he gave an
@@ -533,6 +534,26 @@ async function main() {
       "the durable read must run on thread open, turn boundary and live wakeup"
     );
     return "held on a live turn or a live voice exchange, flushed at both boundaries, and read durably on open, boundary and push";
+  });
+
+  await run.check("execution attempts stay inspectable without becoming duplicate user jobs", async () => {
+    const page = await openPage(browser, "dark");
+    const observed = await page.evaluate(() => {
+      const body = document.getElementById("slideover-body");
+      const attempts = {items: [
+        {title: "Internal first attempt with shelf text", detail: "Ended.", role: "consult", repository: "none"},
+        {title: "Internal retry with shelf text", detail: "Started.", role: "consult", repository: "none"},
+      ]};
+      window.RichWorkSummary.render(attempts, body, {technical: false});
+      const ordinary = body.textContent;
+      window.RichWorkSummary.render(attempts, body, {technical: true});
+      return {ordinary, technical: body.textContent, rows: body.querySelectorAll("section").length};
+    });
+    assertEqual(observed.ordinary, "", "internal attempt descriptions leaked into the user view");
+    assertEqual(observed.rows, 2, "technical evidence disappeared");
+    assert(observed.technical.includes("Internal first attempt") && observed.technical.includes("Internal retry"));
+    await page.close();
+    return "user assignments remain the normal view; both execution attempts remain available technically";
   });
 
   await browser.close();

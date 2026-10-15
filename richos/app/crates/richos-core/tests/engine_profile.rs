@@ -264,10 +264,12 @@ fn the_front_desk_is_told_its_own_job_and_never_the_back_ends_execution_contract
     // The front desk is told what it HAS: hand the work over, and look at what is running.
     assert!(desk.contains("richos_assignments.record"),"the front desk is not told how to hand work over");
     assert!(desk.contains("richos_status.background_work"),"the front desk is not told how to look");
-    // And it is never told to do the work itself. **The negative is about the whole server,
-    // not a list of tool names** — a doctrine that named one more work tool tomorrow would
-    // slip past a list and not past this.
-    assert!(!desk.contains("richos_work"),"the front desk is still instructed to do the work itself");
+    // Rich has the full evidence reader and chooses by expected latency. The
+    // conversation does not receive Stu's execution contract.
+    assert!(desk.contains("read-only `richos_work`"), "Rich cannot inspect the full evidence");
+    assert!(desk.contains("For every request, question or check"), "Rich does not own every handoff decision");
+    assert!(desk.contains("within a few seconds"), "the latency criterion is missing");
+    assert!(!desk.contains("richos_work.prepare"), "Stu's dispatch contract reached Rich");
     // The positive controls are the four the engine's contract names literally. The fifth,
     // `inspect`, appears in DESKTOP.md as prose ("Inspect saved work") rather than as a
     // qualified name, and asserting it here would be asserting about a sentence the engine

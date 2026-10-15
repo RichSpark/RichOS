@@ -60,9 +60,10 @@ def ecs(scope, request):
 SCOPE_LIMIT = 256 * 1024
 
 
-def read_scope(path, require_action=True):
+def read_scope(path, require_action=True, allow_read_only=False):
     value = bounded(Path(path), SCOPE_LIMIT)
-    if value.get("version") != 1 or (require_action and value.get("actions_allowed") is not True):
+    if value.get("version") != 1 or (require_action and value.get("actions_allowed") is not True
+            and not (allow_read_only and value.get("read_only_tools"))):
         raise ValueError("work tools require a current visible app turn")
     if require_action:
         if any(value["binding"][key] != os.environ.get(env) for key, env in (("entity_id", "RICHOS_APP_ENTITY"), ("thread_id", "RICHOS_APP_THREAD"))):
@@ -865,9 +866,8 @@ def team(args):
             temporary.unlink(missing_ok=True)
         return {"saved": str(path), "name": name, "replaced": existed,
                 "registered": False,
-                "note": (f"{name} is not in your Agent listing yet, and prepare refuses the name until it is. "
-                         "End your turn now without a report: the app renews your connection with "
-                         f"{name} registered and gives you the next turn in this same assignment.")}
+                "registration_boundary": "next_provider_connection"}
+
     raise ValueError("action must be list, show or save")
 
 
@@ -2239,7 +2239,7 @@ def inspect_receipts(scope, args, read_only=False):
 
 
 def call_read_only(scope_path, name, args):
-    scope = read_scope(scope_path)
+    scope = read_scope(scope_path, allow_read_only=True)
     if not isinstance(args, dict): raise ValueError("tool arguments must be an object")
     if name == "repositories": return {"repositories": repositories(scope)}
     if name == "inspect": return inspect_receipts(scope, args, read_only=True)
@@ -2254,12 +2254,26 @@ TOOLS = [
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
     {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the assignment this connection is carrying. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs on its own model with its own definition, and the duty's app instructions are put at the top of your brief for you. Your connection already knows which assignment that is, so leave obligation_id out; never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A failed preparation that never dispatched is settled when a new request_id prepares a replacement: anything it created is withdrawn, and dirty files are refused rather than discarded. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, fast-forward the recorded clean integration branch to the exact reviewed commit and clean up through Mega Lander. If the branch moved since the work started, the reviewed commit is merged with a merge commit only when Git merges the two without a conflict. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
-    {"name":"team","description":"The shelf of named teammates not yet active, and the user's own team. action list: every shelf teammate with its description, model and whether the user already has an activated copy. action show: one shelf teammate's whole definition, by name. action save: write a definition as the user's own teammate, team/<name>.md, from name and text (the definition itself, starting at its --- line, its name: line equal to name, with a description and a model). name is the teammate's first name in lowercase letters a to z and digits only, at most 16: accents dropped, and any hyphen, space or apostrophe left out (Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn). To activate a shelf teammate, show it, consult Dean with that text and the job, and save the definition he returns (the text inside his code fence) under the same name. A saved copy is the user's and a later shelf update never replaces it; saving over it is refused unless replace is true, which is only for a change the user asked for. A saved teammate is registered once your turn ends: end it after saving, and the app renews your connection and gives you the next turn in the same assignment, with the teammate in your Agent listing.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
+    {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. Saved definitions become available to Agent after this turn, when the provider connection is renewed.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
 ]
+def available_tools(read_only=False):
+    if not read_only: return TOOLS
+    result = []
+    for tool in TOOLS:
+        if tool["name"] not in ("inspect", "repositories", "team"): continue
+        if tool["name"] == "team":
+            tool = {**tool, "description": "Read the shelf and the user's saved team. list returns names, descriptions, models and activated copies; show returns a full definition by name.",
+                    "inputSchema": {"type": "object", "properties": {
+                        "action": {"type": "string", "enum": ["list", "show"]},
+                        "name": {"type": "string"}}, "required": ["action"], "additionalProperties": False}}
+        result.append(tool)
+    return result
+
+
 if __name__ == "__main__":
     read_only = len(sys.argv) == 3 and sys.argv[2] == "--read-only"
     if len(sys.argv) != 2 and not read_only: raise SystemExit("an explicit app scope is required")
     transport=load("richos_work_mcp_transport",ENGINE / "ecs/adapters/mcp.py")
-    transport.serve(sys.argv[1],sys.stdin.buffer,sys.stdout,tools=[tool for tool in TOOLS if tool["name"] in ("inspect", "repositories", "team")] if read_only else TOOLS,
+    transport.serve(sys.argv[1],sys.stdin.buffer,sys.stdout,tools=available_tools(read_only),
                     handler=call_read_only if read_only else call,server_name="richos_work")

@@ -128,6 +128,9 @@ impl UserInstruction {
 pub struct ToolScope {
     pub version: u32,
     pub actions_allowed: bool,
+    /// Read capabilities granted for an internal agent report, without user-action authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_only_tools: Vec<String>,
     pub bridge: EcsBridge,
     pub binding: Binding,
     #[serde(default)]
@@ -238,6 +241,7 @@ pub fn revoke(path: &Path) -> Result<(), EcsError> {
     let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
     scope.actions_allowed = false;
     scope.background_work_allowed = false;
+    scope.read_only_tools.clear();
     write_scope(path, &scope)
 }
 

@@ -378,7 +378,8 @@ impl Cognition for WaitingHandoff {
         if self.calls == 1 {
             return Ok("end_turn".into());
         }
-        assert!(text.contains("summarize this conversation"));
+        let event: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(event["event"], "session_handoff_requested");
         self.entered.send(()).unwrap();
         self.cancelled.recv_timeout(Duration::from_secs(5)).unwrap();
         Ok("cancelled".into())

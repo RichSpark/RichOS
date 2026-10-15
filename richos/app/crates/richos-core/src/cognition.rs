@@ -94,14 +94,6 @@ pub trait LeaseFactory: Send {
         None
     }
 
-    /// **The definitions on the team the next lease would register**
-    /// (`engine_profile::active_team`): the name each records is what tells the work host a
-    /// hiring is finished, every proposed teammate saved. `None` — the default, and any reading
-    /// that fails — means this factory cannot say, and no hiring is held open on the strength of it.
-    fn team_definitions(&self) -> Option<Vec<String>> {
-        None
-    }
-
     /// **The models the next leases would start on** (the CEO's §119): Rich's for a
     /// conversation lease and Stu's for a work lease, as the stored setting says now. Read at
     /// each boundary and compared with the lease in the chair's own
@@ -347,6 +339,11 @@ pub trait Cognition: Send {
     fn prompt_context_only(
         &mut self, text: &str, on_item: &mut dyn FnMut(TurnItem),
     ) -> Result<String, CognitionError> { self.prompt(text, on_item) }
+
+    /// Communicate an internal report with read access and no new action authority.
+    fn prompt_read_only(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        self.prompt_context_only(text, on_item)
+    }
 
     /// A handle that interrupts the CURRENTLY RUNNING `prompt` from another thread
     /// (UX §9.3 step 2).
