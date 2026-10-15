@@ -752,6 +752,51 @@ fn recorded_name(definition: &str) -> Option<&str> {
     })
 }
 
+/// **The name a saved definition was saved under**: its frontmatter `name:`, which the team
+/// tool refuses to save unless it is the file name (`engine/mega-lander/app.py`,
+/// `definition_model`), read as that tool reads it (keys lowercased, quotes stripped). `None`
+/// for a text without a frontmatter block or a `name:` in it.
+fn saved_under(definition: &str) -> Option<&str> {
+    let mut lines = definition.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    lines
+        .take_while(|line| line.trim() != "---")
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim().eq_ignore_ascii_case("name")).then(|| value.trim().trim_matches(|c| c == '"' || c == '\''))
+        })
+        .filter(|name| !name.is_empty())
+}
+
+/// **The name a proposed teammate is saved under, by the one rule the hiring is given**: his
+/// first name in lowercase letters a to z and digits, accents dropped and everything else (a
+/// hyphen, a space, an apostrophe) left out, at most 16. Anne-Marie is `annemarie`, Renée is
+/// `renee`, Bjørn is `bjorn`. Dean's definition template states it (`engine/agents/dean.md`,
+/// the `name` rule) and the team tool saves nothing else (`engine/mega-lander/app.py`,
+/// `TEAMMATE_NAME`).
+fn save_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let mut saved = String::new();
+    for c in name.nfkd().flat_map(char::to_lowercase) {
+        match c {
+            'a'..='z' | '0'..='9' => saved.push(c),
+            'ø' => saved.push('o'),
+            'æ' => saved.push_str("ae"),
+            'œ' => saved.push_str("oe"),
+            'ß' => saved.push_str("ss"),
+            'ł' => saved.push('l'),
+            'đ' | 'ð' => saved.push('d'),
+            'þ' => saved.push_str("th"),
+            'ı' => saved.push('i'),
+            // An accent NFKD split off, and every character that is no letter or digit.
+            _ => {}
+        }
+    }
+    saved.chars().take(16).collect()
+}
+
 /// A name as compared: Unicode-composed (so an é typed as e plus an accent is the same é) and
 /// lowercased.
 fn compared_name(name: &str) -> String {
@@ -3597,7 +3642,9 @@ impl WorkHost {
 
     /// **A hiring's proposed teammates, split into the saved and the not yet saved**, each by
     /// name as written with its job title ([`proposed_hires`]): a proposed name is saved when a
-    /// definition on the team records it ([`recorded_name`]), whatever file it was saved under.
+    /// definition on the team records it ([`recorded_name`]), whatever file it was saved under,
+    /// or when a definition was saved under the name the hiring gives it ([`save_name`]),
+    /// whatever its `**Name:**` line says, or with none.
     /// `None` for any other assignment, and when the team cannot be read: a hiring is held open,
     /// and reported, only on a team this host could read.
     fn hiring_roll(&self, record: &Assignment) -> Option<(Hires, Hires)> {
@@ -3606,8 +3653,11 @@ impl WorkHost {
             return None;
         }
         let team = self.factory.lock().unwrap().team_definitions()?;
-        let saved: Vec<String> = team.iter().filter_map(|definition| recorded_name(definition)).map(compared_name).collect();
-        Some(proposed.into_iter().partition(|(name, _)| saved.contains(&compared_name(name))))
+        let recorded: Vec<String> = team.iter().filter_map(|definition| recorded_name(definition)).map(compared_name).collect();
+        let files: Vec<&str> = team.iter().filter_map(|definition| saved_under(definition)).collect();
+        Some(proposed.into_iter().partition(|(name, _)| {
+            recorded.contains(&compared_name(name)) || files.contains(&save_name(name).as_str())
+        }))
     }
 
     /// **His company notes, as a hiring's brief carries them**: what his interview saved for this
@@ -8071,6 +8121,47 @@ mod tests {
         for note in WORKING_NOTES {
             assert!(told.iter().all(|t| !t.contains(note)), "he was told {note:?}: {told:?}");
         }
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A teammate saved without a `**Name:**` line, or with one naming them differently from
+    /// the proposal, still counts as hired**, by the name it was saved under. Will's definition
+    /// has no Identity line at all; Beth's says she is Elizabeth. Both were saved under the names
+    /// the hiring gives them (`will`, `beth`), so the hiring is finished on the first turn. The
+    /// check used to read only the `**Name:**` line: Will and Beth stayed "not saved", the back
+    /// end was sent after them again, and the hiring ended Failed with both on the team.
+    #[test]
+    fn a_hiring_counts_a_teammate_saved_without_a_name_line_or_under_another_name() {
+        use crate::cognition::ObligationState;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        let folder = h.root.join("team");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("will.md"),
+            "---\nname: will\ndescription: Marketing Director. Use for filling the cohorts.\nmodel: sonnet\n---\n\n\
+             # Will, Marketing Director\n\nYou fill the coaching cohorts.\n").unwrap();
+        std::fs::write(folder.join("beth.md"),
+            "---\nname: beth\ndescription: Bookkeeper. Use for the books.\nmodel: sonnet\n---\n\n\
+             # Elizabeth, Bookkeeper\n\n## Identity\n- **Name:** Elizabeth\n- **Role:** Bookkeeper\n").unwrap();
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([Some(format!("{STOCK_TEAM} beth will"))]);
+        }
+        h.replies.lock().unwrap().extend([format!("Saving Will and Beth.{TOOL_CALL}Will and Beth are saved.")]);
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 1, "the back end was sent after teammates already saved: {:?} {prompts:#?}", read());
+        assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
+        assert_eq!(told(&h), ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
