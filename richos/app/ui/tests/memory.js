@@ -32,7 +32,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { leaveHome, loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
+const { leaveHome, leaveSplash, loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
 
 const SOURCES = require("./lib/ui-sources");
 const APP = "file://" + path.join(UI_DIR, "index.html");
@@ -40,7 +40,7 @@ const MAIN_JS = fs.readFileSync(path.join(UI_DIR, "main.js"), "utf8");
 
 /// Open the shell with a preset, recording every `invoke` the page makes so the ARGUMENTS a
 /// click produces can be read rather than inferred from what changed on screen.
-async function openApp(browser, preset, resolveOverrides) {
+async function openApp(browser, preset, resolveOverrides, opts) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -82,10 +82,15 @@ async function openApp(browser, preset, resolveOverrides) {
     }, preset);
   }
   await page.goto(APP);
+  page.__errors = errors;
+  // `stayHome`: the launch as he sees it, the opening curtain gone and nothing else touched.
+  if (opts && opts.stayHome) {
+    await leaveSplash(page);
+    return page;
+  }
   // The home screen is the landing surface now; this suite is about the app UI behind it.
   await leaveHome(page);
   await page.waitForSelector(".nav-thread", { state: "attached" });
-  page.__errors = errors;
   return page;
 }
 
@@ -371,6 +376,37 @@ async function main() {
       '"Not now" survives the relaunch and the question is not re-asked; the settings menu\'s ' +
       '"Memory folder" row reopens the same offer with its own control on it'
     );
+  });
+
+  await run.check("5d a relaunch that still owes the question opens on the home screen, and asks on the way in", async () => {
+    // **Ray's check of nightly 57, 2026-10-15** (`feedback/r19-again-run1-memory-question.png`
+    // against `feedback/r19-again-run2.png`). Two relaunches of one install: run 2 opened on the
+    // home screen; run 1 opened on the last conversation with this question up, because the
+    // question was still owed and the home screen gets out of the way of any sheet on the desk
+    // (`home.js` `giveWayToOpenDeskSheet`). A relaunch opens on the home screen every time, so
+    // the question waits for him to go in, and is asked then.
+    const page = await openApp(browser, { memory: "none", chosenEntity: "northwind" }, null, { stayHome: true });
+    await page.waitForFunction(() => (window.__calls || []).some((c) => c.cmd === "memory_status"), null, { timeout: 30000 });
+    await pastTheQuestion(page);
+    const landed = await page.evaluate(() => ({
+      homeOpen: !!(window.RichHome && window.RichHome.isOpen()),
+      homeHidden: document.getElementById("home").hidden,
+      leftFor: window.RichHome && window.RichHome.state.lastLeaveReason,
+      asked: !document.getElementById("memory-setup").hidden,
+    }));
+    assert(landed.homeOpen && !landed.homeHidden,
+      "the relaunch did not open on the home screen: " + JSON.stringify(landed));
+    assert(!landed.asked, "the question was put up over the launch: " + JSON.stringify(landed));
+    // HE GOES IN, the way he does: the home screen's own door.
+    await page.click("#home-enter");
+    await page.waitForSelector("#memory-setup:not([hidden])", { timeout: 30000 });
+    const said = await dialogText(page);
+    assert(said.includes("If this looks right, I'll set it up now."), "the sheet on the way in is not the offer: " + said);
+    assert(await page.isVisible("#memory-setup-go"), "the offer came without its own control");
+    bump(4);
+    assertEqual(page.__errors, [], "the shell logged errors");
+    await page.close();
+    return "the relaunch stays on the home screen with the question owed; \"Talk to Rich\" asks it";
   });
 
   await run.check("6  an install that is already set up is never asked", async () => {

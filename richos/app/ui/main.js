@@ -6892,6 +6892,41 @@ function maybeAskAboutMemory() {
   return false;
 }
 
+/// **A RELAUNCH OPENS ON THE HOME SCREEN, EVERY TIME** (Ray's check of nightly 57, 2026-10-15,
+/// `feedback/r19-again-run1-memory-question.png` against `r19-again-run2.png`). Of two
+/// relaunches, one opened on the home screen and one on the last conversation with this
+/// question up: the question was still owed there, and `home.js` gets out of the way of any
+/// sheet on the desk (`giveWayToOpenDeskSheet`). So the question a launch owes waits while the
+/// home screen is up and is asked the moment he goes in; a company question held behind it is
+/// asked after it, as `closeMemorySetup` always asks it. Returns true when the question was
+/// asked or is waiting, as `maybeAskAboutMemory` does when it asks.
+let memoryQuestionAfterHome = false;
+
+function homeIsUp() {
+  return !!(window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen());
+}
+
+function maybeAskAboutMemoryOffHome() {
+  if (!homeIsUp()) return maybeAskAboutMemory();
+  // Owed is `maybeAskAboutMemory`'s own first branch: no memory folder, and no "Not now".
+  if (!memoryState || memoryState.state !== "none" || memorySetupDeclined()) return false;
+  if (!memoryQuestionAfterHome) {
+    memoryQuestionAfterHome = true;
+    // `body.home-open` is the home screen's own mark of being up (`home.js` `show`/`hide`).
+    const watch = new MutationObserver(() => {
+      if (homeIsUp()) return;
+      watch.disconnect();
+      memoryQuestionAfterHome = false;
+      if (!maybeAskAboutMemory() && companyQuestionDeferred) {
+        companyQuestionDeferred = false;
+        requireCompanyChoice();
+      }
+    });
+    watch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  }
+  return true;
+}
+
 function openMemorySetup(note, location, opts) {
   memorySetupNoteEl.textContent = note;
   memorySetupLocationEl.replaceChildren(location ? wrapPathText(location) : document.createDocumentFragment());
@@ -9435,7 +9470,7 @@ async function init() {
   // The memory question is HELD, not skipped, when the setup sheet took the screen —
   // `closeSetupSheet` asks it the moment this one is answered.
   if (setupAsked) memoryQuestionDeferred = true;
-  const memoryAsked = !setupAsked && maybeAskAboutMemory();
+  const memoryAsked = !setupAsked && maybeAskAboutMemoryOffHome();
 
   // HAS HE ALREADY CHOSEN? Read synchronously, right here — see the block over `navTicket` for
   // the measurement this comes from.
