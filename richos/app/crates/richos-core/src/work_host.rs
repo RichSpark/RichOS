@@ -8544,6 +8544,60 @@ mod tests {
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
+    /// **The hiring report is only what is true when it arrives, said once** (nightly 57's
+    /// product hunt, finding 9). Nightly 57's report was the back end's turns joined: it opened
+    /// with progress that had stopped being true ("Neither of them is on the team yet.", "Neither
+    /// one has joined yet.") and wrote its summary of Will and Beth twice. These are its words,
+    /// over the same two turns (Beth's research running after the first). He hears that Will and
+    /// Beth joined, once, and none of the back end's words.
+    #[test]
+    fn the_hiring_report_is_only_what_is_true_when_it_arrives_said_once() {
+        use crate::cognition::ObligationState;
+        const STALE: [&str; 2] = ["Neither of them is on the team yet.", "Neither one has joined yet."];
+        const SUMMARY: [&str; 2] = [
+            "Will and Beth have both joined your team.",
+            "Will and Beth are both on your team now, and both are ready to take work.",
+        ];
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} beth will"))]);
+        }
+        h.replies.lock().unwrap().extend([
+            format!("Starting the research for Beth, the new Bookkeeper.{TOOL_CALL}{}", STALE[0]),
+            format!(
+                "Beth's research is in. {}{TOOL_CALL}{}\n\n- **Will, Marketing Director.**\n- **Beth, Bookkeeper.**\n\n{}\n\n\
+                 - **Will, Marketing Director.**\n- **Beth, Bookkeeper.**",
+                STALE[1], SUMMARY[0], SUMMARY[1]
+            ),
+        ]);
+        journal(&h, &helper_started("clark-beth"));
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.work_prompts.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the hiring never reached its back end");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        journal(&h, &helper_stopped("clark-beth"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
+        let heard = told(&h);
+        assert_eq!(heard, ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
+        for line in STALE.iter().chain(SUMMARY.iter()) {
+            assert!(heard.iter().all(|t| !t.contains(line)), "he was told {line:?}: {heard:?}");
+        }
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
     /// **A hiring's brief takes his interview answers as facts and never guesses from his email**
     /// (nightly 57's hunt, finding 5). The back end's brief for Beth's research read "company
     /// domain [his sign-in email's domain], likely leadership/consulting services; treat that as
