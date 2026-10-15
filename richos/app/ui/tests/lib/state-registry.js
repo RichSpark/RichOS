@@ -1467,14 +1467,14 @@ module.exports = [
       "leaving that in a hint below it.",
   },
   {
-    s: "Give me a folder and I'll pick this company on my own whenever you start RichOS from inside it. Leave it blank and you'll just pick it yourself. Everything else works the same.",
+    s: "You can leave this blank.",
     c: "INFORMATIONAL",
     fixture: "company-unchosen",
     why:
-      "What the folder DOES, beside the field that takes it. It is not a request: it names " +
-      "the consequence of both answers and says plainly that leaving it blank costs him " +
-      "nothing but the automatic pick. A person who does not know his own folder path must " +
-      "not stop here, and without this sentence he would.",
+      "Beside the folder field: a person who does not know his own folder path must not stop " +
+      "here. It promises nothing about the folder (product hunt 2026-10-15, finding 16: the " +
+      "old sentence promised the company would be picked whenever RichOS started from inside " +
+      "the folder, which a Mac app opened from the Dock or Finder never does).",
   },
   {
     s: "Add this company",
@@ -3696,11 +3696,6 @@ module.exports = [
     "why": "Prefix joined to the native error describing why saved receipts cannot be read."
   },
   {
-    "s": "Saved work unavailable",
-    "c": "INFORMATIONAL",
-    "why": "Labels an unavailable saved-work observation without claiming a successful read."
-  },
-  {
     "s": "Sign-in could not be canceled. Try again.",
     "c": "ACTIONABLE",
     "why": "Cancellation remains available while the provider is still connecting.",
@@ -3762,20 +3757,10 @@ module.exports = [
     "why": "A CSS selector used to trap keyboard focus, never displayed as prose."
   },
   {
-    "s": "more saved records. Ask Rich about the assignment you want to continue.",
+    "s": "older team shown here. Ask Rich about any of them.",
     "c": "ACTIONABLE",
-    "why": "The saved-record limit directs the user to the normal message composer for a specific assignment.",
+    "why": "The limit on older team jobs shown directs the user to the normal message composer for any of them (hunt 57, finding 11: plain words, no 'saved records').",
     "control": "#input"
-  },
-  {
-    "s": "saved work records",
-    "c": "FRAGMENT",
-    "why": "A numeric record-count suffix in the saved-work disclosure."
-  },
-  {
-    "s": "saved work record",
-    "c": "FRAGMENT",
-    "why": "The same suffix at a count of one. Ray candidate-.11 \u00a71.2 read \"1 saved work records\"; the chip now picks its noun from its count."
   },
   // -------------------------------------------------------------------------------------
   // GETTING THE SPEECH MODEL (2026-09-17)
@@ -4037,7 +4022,7 @@ module.exports = [
       "turn boundary without him doing anything, so there is nothing here for him to act on.",
   },
   {
-    "s": "Getting a workspace ready.",
+    "s": "Getting ready to start.",
     "c": "INFORMATIONAL",
     "why": "The preparing state: the work lease is inside the spawn preparer. Nothing is asked of him.",
   },

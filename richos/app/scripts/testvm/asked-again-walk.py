@@ -258,9 +258,10 @@ class Walk:
         self.wait_for(lambda: self.text_present('Where should I keep what you tell me?'), 'the memory sheet', 40)
         self.shot('03-memory-sheet')
         self.ax('click', '--title', 'Set it up', '--role', 'AXButton', '--in', 'dialog', '--first')
-        self.wait_for(lambda: self.text_present('Your memory folder.'), 'the memory folder confirmation', 60)
+        # A yes that works closes the sheet with no second box (product hunt 2026-10-15,
+        # finding 15), so the walk waits for the question to go, not for a box to close.
+        self.wait_for(lambda: not self.text_present('Where should I keep what you tell me?'), 'the memory sheet to close', 60)
         self.shot('04-memory-done')
-        self.ax('click', '--title', 'Close', '--role', 'AXButton', '--in', 'dialog', '--first')
         guest(self.vm, 'mkdir -p {c} && cd {c} && if [ ! -d .git ]; then printf "Acme notes\\n" > README.md '
                        '&& git init -q && git add README.md && git -c user.name=QA -c user.email=qa@example.invalid '
                        'commit -q -m init; fi'.format(c=shlex.quote(self.company)))

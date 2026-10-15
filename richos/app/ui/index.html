@@ -955,11 +955,11 @@
               spellcheck="false"
               placeholder="Click and select folder"
             />
-            <p class="entity-add-hint">
-              Give me a folder and I'll pick this company on my own whenever you start RichOS
-              from inside it. Leave it blank and you'll just pick it yourself. Everything else
-              works the same.
-            </p>
+            <!-- No promise about the folder (product hunt 2026-10-15, finding 16). This said
+                 "I'll pick this company on my own whenever you start RichOS from inside it",
+                 and a Mac app opened from the Dock or Finder starts from /, never from inside
+                 a folder, so that never happened. Only the reassurance stays. -->
+            <p class="entity-add-hint">You can leave this blank.</p>
             <p id="entity-add-error" class="setup-error" role="alert" hidden></p>
             <div class="memory-setup-actions">
               <button id="entity-add-go" class="desk-btn desk-btn--confirm" type="button">Add this company</button>
@@ -1072,8 +1072,9 @@
            restored, in `docs/verification/first-run-provisioning-2026-09-01/`. Nothing in
            the product created it, and nothing offered to.
 
-           HIS PART IS ONE CLICK AND NO PATH. The location is SHOWN, pre-filled from
-           `memory_status.offered_location`, and the button accepts it. Nothing here, and
+           HIS PART IS ONE CLICK AND NO PATH. The location is `memory_status.offered_location`
+           and the button accepts it; it is not shown on the question (product hunt
+           2026-10-15, finding 15). Nothing here, and
            nothing behind it, picks a location when he has not: `provision` refuses an unset
            target by name rather than falling back to one — `wiki/loro-structure.md`'s "no
            silent default", which exists because a default root silently compiles the

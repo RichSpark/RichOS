@@ -13,10 +13,13 @@
 //
 //   1. A fresh install ASKS, and asks THIS question first — one dialog at a time, with the
 //      company question held back rather than stacked or dropped.
-//   2. THE LOCATION IS SHOWN AND IS WHAT GETS SENT. The string the window displays and the
-//      string the command receives are compared byte for byte. His part is a choice about a
-//      location he can see; it is never a path he types, and the surface never composes a
-//      second opinion about where his record goes.
+//   2. NO PATH IS SHOWN, AND THE BACKEND'S OFFER IS WHAT GETS SENT (product hunt 2026-10-15,
+//      finding 15: the question showed a raw path ending in "RichOS/corpus"). The string the
+//      command receives is compared byte for byte with `memory_status.offered_location`. It
+//      is never a path he types, and the surface never composes a second opinion about where
+//      his record goes.
+//   3. A YES THAT WORKS CLOSES THE SHEET, with no second "That's set up" box to dismiss
+//      (the same finding).
 //   3. NO SILENT DEFAULT REACHES THE COMMAND. There is exactly one `provision_memory` call
 //      site in the shipped source and it passes the offered location; a build that lost the
 //      argument would send nothing, and the backend refuses that by name.
@@ -32,7 +35,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { leaveHome, loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
+const { leaveHome, leaveSplash, loadPlaywright, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
 
 const SOURCES = require("./lib/ui-sources");
 const APP = "file://" + path.join(UI_DIR, "index.html");
@@ -40,7 +43,7 @@ const MAIN_JS = fs.readFileSync(path.join(UI_DIR, "main.js"), "utf8");
 
 /// Open the shell with a preset, recording every `invoke` the page makes so the ARGUMENTS a
 /// click produces can be read rather than inferred from what changed on screen.
-async function openApp(browser, preset, resolveOverrides) {
+async function openApp(browser, preset, resolveOverrides, opts) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -81,11 +84,27 @@ async function openApp(browser, preset, resolveOverrides) {
       window.__RICHOS_MOCK_PRESET__ = v;
     }, preset);
   }
+  // `launch`: the launch record the shell puts in front of every page (`main.rs`
+  // `launch_init_script`), for a check about which start this is.
+  if (opts && opts.launch) {
+    await page.addInitScript((v) => {
+      window.__RICHOS_LAUNCH__ = Object.freeze(v);
+    }, opts.launch);
+  }
+  // `declined`: an earlier launch's "Not now" on the memory question (`MEMORY_DECLINED_KEY`).
+  if (opts && opts.declined) {
+    await page.addInitScript(() => window.localStorage.setItem("richos.memorySetupDeclined", "true"));
+  }
   await page.goto(APP);
+  page.__errors = errors;
+  // `stayHome`: the launch as he sees it, the opening curtain gone and nothing else touched.
+  if (opts && opts.stayHome) {
+    await leaveSplash(page);
+    return page;
+  }
   // The home screen is the landing surface now; this suite is about the app UI behind it.
   await leaveHome(page);
   await page.waitForSelector(".nav-thread", { state: "attached" });
-  page.__errors = errors;
   return page;
 }
 
@@ -142,7 +161,7 @@ async function main() {
     return "asked first, one at a time, and the second question survives the first being answered";
   });
 
-  await run.check("2  the location is SHOWN, and is exactly what the command is given", async () => {
+  await run.check("2  no path is shown, and the backend's offer is exactly what the command is given", async () => {
     // A LOCATION THE SURFACE COULD NOT HAVE GUESSED. The mock's own offer is
     // `/Users/you/RichOS/corpus`, which is also what a hard-coded path would say — so a
     // build that ignored the backend and wrote the path itself would pass against it. This
@@ -154,10 +173,11 @@ async function main() {
       { memory_status: { state: "none", root: null, source: null, compiler: null, tried: [], detail: null, offered_location: offered, provisioned_now: false } }
     );
     await page.waitForSelector("#memory-setup:not([hidden])");
-    const shown = (await page.textContent("#memory-setup-location")).trim();
-    assertEqual(shown, offered, "the window must show the location the backend offered");
-    assert(shown.length > 0, "a location he cannot see is a location he cannot accept");
-    assert(shown.startsWith("/"), "the location must be a full path: " + shown);
+    // FINDING 15 (product hunt 2026-10-15): the question showed a raw path ending in
+    // "RichOS/corpus". A business owner is asked whether to keep his notes, not shown a path.
+    const asked = await dialogText(page);
+    assert(await page.isHidden("#memory-setup-location"), "the question shows a folder path: " + asked);
+    assert(!/\/|corpus/i.test(asked), "the question carries a path or the word corpus: " + asked);
     // No text input anywhere in this dialog. His part is a choice, never a path he types.
     assertEqual(
       await page.$$eval("#memory-setup input, #memory-setup textarea", (n) => n.length),
@@ -169,55 +189,33 @@ async function main() {
       window.__calls.some((c) => c.cmd === "provision_memory")
     );
     const call = await page.evaluate(() => window.__calls.find((c) => c.cmd === "provision_memory"));
-    assertEqual(call.args.location, shown, "the string sent must be the string he was shown");
+    assertEqual(call.args.location, offered, "the string sent must be the backend's offer, byte for byte");
     bump(5);
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await page.close();
-    return "shown " + JSON.stringify(shown) + ", sent byte-identical, and no field to type into";
+    return "no path on the question, " + JSON.stringify(offered) + " sent byte-identical, and no field to type into";
   });
 
-  await run.check("3  one press, and it says the thing is done", async () => {
-    const page = await openApp(browser, { memory: "none" });
+  await run.check("3  one press, and the sheet closes: no second box to close", async () => {
+    // FINDING 15 (product hunt 2026-10-15): answering opened a second box, "That's set up",
+    // that had to be closed. A yes that worked is done; the next first-run question, if one
+    // was held back, is the next thing he sees.
+    const page = await openApp(browser, { memory: "none", chosenEntity: null });
     await page.waitForSelector("#memory-setup:not([hidden])");
-    const asked = (await page.textContent("#memory-setup-location")).trim();
     await page.click("#memory-setup-go");
-    await page.waitForFunction(() =>
-      (document.getElementById("memory-setup-note").textContent || "").indexOf("That's set up") === 0
-    );
-    const text = await dialogText(page);
-    assert(text.indexOf("That's set up") >= 0, text);
-    // THE PATH HE AGREED TO IS THE PATH HE IS SHOWN — the second half of ray-opus-a1's
-    // 2026-09-04 first run, where the sheet asked about `/Users/alex/RichOS/corpus` and the
-    // result reported `/Users/alex/Library/Application Support/RichOS/corpus`. Nothing had
-    // moved: `provision` writes a pointer beside the corpus and the backend re-resolves
-    // through it, so the status comes back under the alias's name. The mock returns that
-    // same alias, so this comparison is against the answer the shipped backend gives and not
-    // against a double that agrees by construction.
-    const reported = (await page.textContent("#memory-setup-location")).trim();
-    assertEqual(
-      reported,
-      asked,
-      "the consent sheet asked about one folder and the result named another — on the one " +
-        "screen that is about trusting this app with his record"
-    );
-    assert(await page.isHidden("#memory-setup-go"), "nothing left to set up, so nothing offers to");
-    assert(await page.isVisible("#memory-setup-close"), "a finished dialog needs a way out");
-    // AND THE HEADING IS NOT STILL ASKING. It is the dialog's accessible name, so a question
-    // left standing over its own answer is read out as one too.
-    const heading = (await page.textContent("#memory-setup-title")).trim();
-    assert(
-      !/Where should I keep/.test(heading),
-      "the heading is still asking a question the body has just answered: " + heading
-    );
+    await page.waitForFunction(() => document.getElementById("memory-setup").hidden, null, { timeout: 60000 });
+    assert(await page.isHidden("#memory-setup-close"), "a Close button is still drawn");
+    // AND THE QUESTION HELD BEHIND IT IS ASKED, not dropped.
+    await page.waitForSelector("#entity-picker:not([hidden])", { timeout: 60000 });
     // ONE PRESS. Not two, not a wizard.
     const provisionCalls = await page.evaluate(
       () => window.__calls.filter((c) => c.cmd === "provision_memory").length
     );
     assertEqual(provisionCalls, 1, "his whole part is one click");
-    bump(6);
+    bump(4);
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await page.close();
-    return "1 click -> 1 command -> \"That's set up.\", still naming " + JSON.stringify(asked);
+    return "1 click -> 1 command -> the sheet is gone and the company question is up";
   });
 
   await run.check("4  a refusal reaches the screen, as it stands", async () => {
@@ -254,9 +252,20 @@ async function main() {
     // repository, the bundle's Resources hold `icon.icns`, and the engine asset carries
     // `engine/`), so there is nobody to fetch and nothing to press. The sentence therefore
     // owes him three things and no imperative.
-    const page = await openApp(browser, { memory: "none", memoryCompiler: false });
+    //
+    // FINDING 15 (product hunt 2026-10-15): no second box to close after he answers, here
+    // too. The press closes the sheet and asks the company question held behind it; the
+    // sentence is said when he looks, from the settings menu's "Memory folder" row.
+    const page = await openApp(browser, { memory: "none", memoryCompiler: false, chosenEntity: null });
     await page.waitForSelector("#memory-setup:not([hidden])");
     await page.click("#memory-setup-go");
+    await page.waitForFunction(() => document.getElementById("memory-setup").hidden, null, { timeout: 60000 });
+    await page.waitForSelector("#entity-picker:not([hidden])", { timeout: 60000 });
+    await page.click("#entity-picker-later");
+    await page.waitForSelector("#entity-picker", { state: "hidden", timeout: 60000 });
+    await page.click("#set-btn");
+    await page.waitForFunction(() => !document.getElementById("set-menu").hidden, null, { timeout: 60000 });
+    await page.click("#set-memory-open");
     await page.waitForSelector("#memory-setup-close:not([hidden])");
     const text = await dialogText(page);
     assert(
@@ -374,6 +383,83 @@ async function main() {
     );
   });
 
+  await run.check("5d a relaunch that still owes the question opens on the home screen, and asks on the way in", async () => {
+    // **Ray's check of nightly 57, 2026-10-15** (`feedback/r19-again-run1-memory-question.png`
+    // against `feedback/r19-again-run2.png`). Two relaunches of one install: run 2 opened on the
+    // home screen; run 1 opened on the last conversation with this question up, because the
+    // question was still owed and the home screen gets out of the way of any sheet on the desk
+    // (`home.js` `giveWayToOpenDeskSheet`). A relaunch opens on the home screen every time, so
+    // the question waits for him to go in, and is asked then.
+    const relaunch = { kind: "fresh", ordinal: 2, splashEnabled: true };
+    const page = await openApp(browser, { memory: "none", chosenEntity: "northwind" }, null, { stayHome: true, launch: relaunch });
+    await page.waitForFunction(() => (window.__calls || []).some((c) => c.cmd === "memory_status"), null, { timeout: 30000 });
+    await pastTheQuestion(page);
+    const landed = await page.evaluate(() => ({
+      homeOpen: !!(window.RichHome && window.RichHome.isOpen()),
+      homeHidden: document.getElementById("home").hidden,
+      leftFor: window.RichHome && window.RichHome.state.lastLeaveReason,
+      asked: !document.getElementById("memory-setup").hidden,
+    }));
+    assert(landed.homeOpen && !landed.homeHidden,
+      "the relaunch did not open on the home screen: " + JSON.stringify(landed));
+    assert(!landed.asked, "the question was put up over the launch: " + JSON.stringify(landed));
+    // HE GOES IN, the way he does: the home screen's own door.
+    await page.click("#home-enter");
+    await page.waitForSelector("#memory-setup:not([hidden])", { timeout: 30000 });
+    const said = await dialogText(page);
+    assert(said.includes("If this looks right, I'll set it up now."), "the sheet on the way in is not the offer: " + said);
+    assert(await page.isVisible("#memory-setup-go"), "the offer came without its own control");
+    assertEqual(page.__errors, [], "the shell logged errors");
+    await page.close();
+
+    // THE VERY FIRST START IS NOT A RELAUNCH: its first-run questions come at once, as before.
+    const first = await openApp(browser, { memory: "none", chosenEntity: "northwind" }, null,
+      { stayHome: true, launch: { ...relaunch, ordinal: 1 } });
+    await first.waitForSelector("#memory-setup:not([hidden])", { timeout: 30000 });
+    assert(await first.isVisible("#memory-setup-go"), "the first start did not ask the question at once");
+    bump(5);
+    assertEqual(first.__errors, [], "the shell logged errors on the first start");
+    await first.close();
+    return "the relaunch stays on the home screen with the question owed; \"Talk to Rich\" asks it; the first start asks at once";
+  });
+
+  await run.check("5e every other question a relaunch owes waits for the home screen too", async () => {
+    // Second review rv-20261015T074838Z-1c744187-1e06, finding 2: the setup sheet (an update that
+    // needs a different engine is one) and the company question, after "Not now" to the memory
+    // question, still took a relaunch off the home screen.
+    const relaunch = { kind: "fresh", ordinal: 2, splashEnabled: true };
+    const cases = [
+      { what: "the setup sheet", preset: { setup: "missing-both", memory: "ready", chosenEntity: "northwind" },
+        sheet: "#setup-sheet", opts: {} },
+      { what: "the company question", preset: { memory: "none", chosenEntity: null },
+        sheet: "#entity-picker", opts: { declined: true } },
+      // A restart after a run that did not end cleanly carries no ordinal and is a relaunch too
+      // (seen in the test VM: a relaunch stopped by its pid came back as one).
+      { what: "the memory question after a crash-restart", preset: { memory: "none", chosenEntity: "northwind" },
+        sheet: "#memory-setup", opts: { launch: { kind: "crash-restart", ordinal: null, splashEnabled: true } } },
+    ];
+    const seen = [];
+    for (const c of cases) {
+      const page = await openApp(browser, c.preset, null, { stayHome: true, launch: relaunch, ...c.opts });
+      await page.waitForFunction(() => (window.__calls || []).some((x) => x.cmd === "setup_status"), null, { timeout: 30000 });
+      await pastTheQuestion(page);
+      const landed = await page.evaluate((sel) => ({
+        homeOpen: !!(window.RichHome && window.RichHome.isOpen()),
+        leftFor: window.RichHome && window.RichHome.state.lastLeaveReason,
+        asked: !document.querySelector(sel).hidden,
+      }), c.sheet);
+      assert(landed.homeOpen && !landed.asked,
+        `a relaunch owing ${c.what} did not open on the home screen: ${JSON.stringify(landed)}`);
+      await page.click("#home-enter");
+      await page.waitForSelector(`${c.sheet}:not([hidden])`, { timeout: 30000 });
+      assertEqual(page.__errors, [], `the shell logged errors (${c.what})`);
+      await page.close();
+      seen.push(c.what);
+      bump(3);
+    }
+    return `the home screen stays for ${seen.join(" and ")}, and "Talk to Rich" asks each`;
+  });
+
   await run.check("6  an install that is already set up is never asked", async () => {
     const page = await openApp(browser, { memory: "ready" });
     await pastTheQuestion(page);
@@ -413,15 +499,13 @@ async function main() {
     );
     assert(
       /invoke\("provision_memory",\s*\{\s*location:\s*consented\s*\}\)/.test(MAIN_JS),
-      "the one call site must pass the location the window showed"
+      "the one call site must pass the backend's offer"
     );
-    // AND THE SAME VARIABLE IS WHAT THE RESULT RENDERS. Two reads of `offered_location`
-    // would also happen to agree today and would stop agreeing the moment the backend
-    // answered under another name — which is precisely what it does.
-    assert(
-      /openMemorySetup\(readable \? MEMORY_DONE : MEMORY_NO_READER, consented,/.test(MAIN_JS),
-      "the result screen must render the location he consented to, from the same variable"
-    );
+    // AND NO RESULT OF THE PRESS OPENS A SECOND BOX (product hunt 2026-10-15, finding 15),
+    // whatever state the backend answers: the press's own function never opens the sheet.
+    const press = (MAIN_JS.match(/async function provisionMemory\(\) \{[\s\S]*?\n\}\n/) || [""])[0];
+    assert(press.length > 0, "provisionMemory was not found in main.js");
+    assert(!/openMemorySetup\(/.test(press), "a result of the press opens a second box");
     // And nothing in the surface composes a path of its own — ACROSS THE WHOLE SHIPPED UI,
     // not just `main.js`. An absence claim scoped to one file of twelve is the weakest kind
     // of green there is: it passes by not looking.
@@ -472,14 +556,13 @@ main().catch((e) => {
 //  1b  main.js `closeMemorySetup`: drop the companyQuestionDeferred branch
 //        -> the company question is asked never, and the composer stays blocked
 //  2   main.js `provisionMemory`: invoke with { location: "~/RichOS/corpus" }
-//        -> the string sent stops being the string he was shown
-//  3   main.js `provisionMemory`: pass `next.root` to the closing openMemorySetup
-//        -> the result names the pointer in Application Support and not the folder he agreed
-//           to, which is exactly what the installed v1.0.0 did on 2026-09-04
+//        -> the string sent stops being the backend's offer
+//  2c  main.js `maybeAskAboutMemory`: pass memoryState.offered_location to openMemorySetup
+//        -> the question shows a raw path again (product hunt 2026-10-15, finding 15)
 //  2b  index.html: add an <input> to the dialog
 //        -> the CEO is asked to type a path
-//  3   main.js `provisionMemory`: leave memorySetupGoEl visible after success
-//        -> a finished dialog still offers to do the thing it just did
+//  3   main.js `provisionMemory`: open the MEMORY_DONE box on success instead of closing
+//        -> a second box he has to close (product hunt 2026-10-15, finding 15)
 //  4   main.js `provisionMemory`: replace the catch body with console.error(e)
 //        -> the refusal dies in a console the CEO does not have
 //  5   main.js MEMORY_NO_READER: restore "It needs whoever set RichOS up to add it"

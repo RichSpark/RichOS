@@ -303,6 +303,16 @@ async function openMenu(page) {
   await flushFrames(page);
 }
 
+/// Technical view on, through the same read and repaint the app uses (`main.js` `refreshTechy`,
+/// which repaints the settings menu and with it this row).
+async function technicalOn(page) {
+  await page.evaluate(async () => {
+    await window.RichBridge.invoke("set_techy_default", { enabled: true });
+    await refreshTechy(activeThreadId);
+  });
+  await page.waitForFunction(() => window.RichSettings.technicalView && window.RichSettings.technicalView());
+}
+
 /// What the row says right now: the two sentences, which buttons are visible, and whether
 /// the settings button is marked.
 async function readRow(page) {
@@ -542,14 +552,22 @@ async function main() {
     assertEqual(row.checkDisabled, true, "and Check is not offered against an endpoint that cannot resolve");
     // The placeholder is never printed at the CEO; a non-placeholder endpoint always is.
     assertEqual(row.endpoint, null, "the .invalid placeholder is not paraded on screen");
+    // HUNT 57, FINDING 19 (2026-10-15): nightly 57 printed "…/nightly/latest.json" under
+    // "Request a feature" for a business owner. The update server is a technical line: with
+    // Technical view off it is not on screen, whatever it points at.
+    await setState(page, view({ state: "upToDate", endpoint: "https://github.com/WebDevBooster/richos/releases/download/nightly/latest.json", endpointIsPlaceholder: false, checkedAt: Date.now() }));
+    const plainRow = await readRow(page);
+    assertEqual(plainRow.endpoint, null, "the update server's file name is on screen with Technical view off");
+    assert(!(await page.evaluate(() => document.getElementById("set-menu").innerText)).includes("latest.json"), "a file name shows in Settings");
+    await technicalOn(page);
     await setState(page, view({ state: "upToDate", endpoint: "https://staging.example.com/u", endpointIsPlaceholder: false, checkedAt: Date.now() }));
     const staged = await readRow(page);
     assert(
       staged.endpoint && staged.endpoint.indexOf("staging.example.com") >= 0,
-      "a build pointed somewhere unusual says so on screen: " + staged.endpoint
+      "with Technical view on, a build pointed somewhere unusual says so on screen: " + staged.endpoint
     );
     await page.close();
-    return "unconfigured is not an error; a non-default endpoint is disclosed";
+    return "unconfigured is not an error; the update server is shown only in Technical view, and there it is disclosed";
   });
 
   // ---- 5. THE ONE THAT MATTERS: a refused signature is not retryable --------------------
@@ -1399,6 +1417,8 @@ async function main() {
     const page = await openApp(browser);
     await settled(page);
     await openMenu(page);
+    // The update server is a Technical view line (hunt 57, finding 19).
+    await technicalOn(page);
     // The audited URL itself, verbatim.
     const auditedUrl = "https://raw.githubusercontent.com/WebDevBooster/richos/nightly-channel/latest.json";
     await setState(page, view({ state: "upToDate", endpointIsPlaceholder: false, endpoint: auditedUrl, checkedAt: Date.now() }));

@@ -511,8 +511,12 @@ window.RichUpdates = (function () {
     }
 
     // Shown whenever it is NOT the shipped default, so a build pointed at a staging manifest
-    // or at a test server says so on screen instead of in a log nobody opens.
-    if (v.endpoint && !v.endpointIsPlaceholder) {
+    // or at a test server says so on screen instead of in a log nobody opens: in Technical view
+    // only (hunt 57, finding 19, 2026-10-15), because nightly 57 put "…/nightly/latest.json"
+    // under "Request a feature" for a business owner who has no use for a file name. Technical
+    // view repaints this row (`main.js` `renderTechySettings` → `RichSettings.paint`).
+    var technical = !!(window.RichSettings && window.RichSettings.technicalView && window.RichSettings.technicalView());
+    if (v.endpoint && !v.endpointIsPlaceholder && technical) {
       nodes.endpoint.hidden = false;
       // The URL is the one part of this line that hard-wraps (audit D7, 2026-09-17):
       // `window.RichWrapPath` (main.js) inserts break opportunities after `/`, `.`, `-`

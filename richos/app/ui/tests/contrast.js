@@ -581,7 +581,7 @@ const SURFACES = [
     drive: async (p) => {
       await p.click('.nav-thread[data-thread-id="hiring"]');
       await atHiringThread(p);
-      await p.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 saved work record"));
+      await p.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 team job"));
       if (showPanel) {
         await p.click(".drill-chip");
         await p.waitForFunction(() => document.getElementById("slideover-body").textContent.includes("Whole assignment remains open."));
@@ -915,14 +915,15 @@ const SURFACES = [
     preset: { chosenEntity: null },
   },
   // THE FIRST-RUN MEMORY DIALOG, IN BOTH OF ITS STATES, because they paint different ink:
-  // the ask carries the location line (`--ink` monospace, computed 11.81:1 dark and
-  // 18.27:1 light before it was written) and the confirm button on the accent; the
-  // no-compiler state carries neither and paints only the plain button. Neither is
+  // the ask carries the confirm button on the accent and, since the product hunt of
+  // 2026-10-15 (finding 15), no location line; the no-compiler state carries the location
+  // line (`--ink` monospace, computed 11.81:1 dark and 18.27:1 light before it was written)
+  // and only the plain button. Neither is
   // reachable from any surface above — a machine that has been set up once renders neither
   // — so without these two walks the whole dialog would be uncovered.
   {
     name: "memory-setup",
-    what: "the first-run memory question: its note, the location it offers, and the two buttons",
+    what: "the first-run memory question: its note and the two buttons",
     drive: async (p) => {
       await p.waitForSelector("#memory-setup:not([hidden])");
       await overlaySettled(p, "#memory-setup");
@@ -931,18 +932,19 @@ const SURFACES = [
   },
   {
     name: "memory-no-compiler",
-    what: "a corpus this install cannot read, said once as the answer to his press",
-    // REACHED BY PRESSING THE BUTTON, not by booting into it. This state stopped opening its
-    // own dialog at launch on 2026-09-04 — on a machine whose compiler ships from nowhere
-    // that was every launch forever (ray-opus-a1, finding 4) — so the walk provisions with no
-    // compiler present, which is how a person arrives at it.
+    what: "a corpus this install cannot read, said when he opens the Memory folder row",
+    // REACHED FROM THE SETTINGS MENU, not by booting into it. This state stopped opening its
+    // own dialog at launch on 2026-09-04 (ray-opus-a1, finding 4), and since the product hunt
+    // of 2026-10-15 (finding 15) the press that sets the folder up closes the sheet whatever
+    // the answer, so the "Memory folder" row is where a person meets this sentence.
     drive: async (p) => {
-      await p.waitForSelector("#memory-setup:not([hidden])");
-      await p.click("#memory-setup-go");
+      await p.click("#set-btn");
+      await p.waitForFunction(() => !document.getElementById("set-menu").hidden);
+      await p.click("#set-memory-open");
       await p.waitForSelector("#memory-setup-close:not([hidden])");
       await overlaySettled(p, "#memory-setup");
     },
-    preset: { memory: "none", memoryCompiler: false },
+    preset: { memory: "no-compiler" },
   },
   // FIRST-RUN SETUP, IN TWO STATES, and neither is reachable from any surface above: a
   // machine that has Claude Code and an engine renders neither. §19 says every machine but

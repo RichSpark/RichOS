@@ -115,6 +115,13 @@
 
   function paint() {
     if (!root || !$("cx-switch")) return;
+    // **A SWITCH THAT CANNOT BE USED IS NOT SHOWN** (hunt 57, finding 19, 2026-10-15). Nightly 57
+    // showed this row to a user without Codex, a switch that cannot be turned on beside a product
+    // name he may never have heard of. So with Codex not ready and the switch off, the row, its
+    // rules included, is not there; it appears the next time Codex is read ready (Settings
+    // opening, the window coming back, `reread` below). A choice he made stays reachable: on and
+    // not ready ("lapsed") is still shown, so it can be turned off. Round 20.2's words are kept.
+    root.hidden = !usable();
     const v = view();
     const sw = $("cx-switch");
     sw.setAttribute("aria-checked", String(!!(st && st.on)));
@@ -182,7 +189,9 @@
   // read again when the app window regains focus or becomes visible with Settings open, and when
   // the tooltip opens; with Settings shut nothing is asked (the row is read when Settings opens).
   // Each is one `codex_reviews_status` (Codex's own `login status`, no network), never a timer.
-  const visible = () => !!root && !(root.closest && root.closest("[hidden]"));
+  // The menu around the row, not the row itself: a row hidden because Codex was not ready has to
+  // be read again, or it could never come back while Settings stays open.
+  const visible = () => !!root && !!root.parentElement && !root.parentElement.closest("[hidden]");
   function reread() { if (visible()) return read(); }
   window.addEventListener("focus", reread);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) return reread(); });

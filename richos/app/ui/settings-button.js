@@ -1111,6 +1111,12 @@ window.RichSettings = (function () {
       rebuild();
     },
 
+    /** Whether Technical view is on, as the menu's own switch reads it. Rows that keep a
+     *  technical line behind it (`updates.js`'s update server) ask here. */
+    technicalView: function () {
+      return !!(techy && techy.read && techy.read());
+    },
+
     /** Repaint the menu from outside. `updates.js` calls this when a `rich://update` event
      *  arrives while the menu is open, so a download's progress moves on screen rather than
      *  only in memory. */
