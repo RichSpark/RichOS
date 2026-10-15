@@ -565,6 +565,12 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
                             "interrupted", "run-ended", "integrated"].into_iter().enumerate() {
             let mut row = receipt(&format!("w{n}"), "o", "worker");
             row["status"] = status.into();
+            // A `blocked` record that never dispatched is not shown at all
+            // (`a_preparation_that_never_started_is_not_shown_and_never_hides_running_work`),
+            // so this one carries a dispatch for its sentence to be produced and checked.
+            if status == "blocked" {
+                row["agent_id"] = "a".into();
+            }
             rows.push(row);
         }
         for (n, verdict) in ["changes-requested", "passed"].into_iter().enumerate() {
