@@ -243,10 +243,25 @@ async function main() {
       () => window.__calls.filter((c) => c.cmd === "send_message").map((c) => c.args.text)
     );
     assertEqual(sent.length, 1, "one press, one message");
-    assert(/twenty minutes/.test(sent[0]), "and it is the acceptance, in his voice: " + sent[0]);
-    // IT LANDS IN THE RECORD AS SOMETHING HE SAID, because he did say it — he pressed a
-    // button whose label is exactly this.
-    await page.waitForFunction((t) => document.getElementById("messages").innerText.includes(t), sent[0]);
+    assert(/twenty minutes/.test(sent[0]), "and it is the acceptance Rich receives: " + sent[0]);
+    // NOTHING IS POSTED IN HIS NAME (product hunt 2026-10-15, finding 14). He pressed "Start
+    // the questions"; he never typed this sentence, so it is sent as a pressed button and
+    // never drawn as his message — while Rich's answer to it is.
+    assertEqual(
+      await page.evaluate(() => window.__calls.find((c) => c.cmd === "send_message").args.pressed),
+      true,
+      "the send says it is a pressed button, so the record never shows it as his"
+    );
+    await page.waitForFunction(() => document.querySelectorAll("#messages .tl-prose").length > 0);
+    assertEqual(
+      await page.evaluate(() => document.querySelectorAll("#messages .tl-user").length),
+      0,
+      "no message of his is on screen"
+    );
+    assert(
+      !(await page.evaluate((t) => document.getElementById("messages").innerText.includes(t), sent[0])),
+      "the sentence he never typed is not in the conversation"
+    );
     assert(await page.isHidden("#first-run"), "and the notice steps out of the way");
     assertEqual(await page.inputValue("#input"), "", "leaving no draft behind in the composer");
     // NO SECOND DOOR. `main.js` may reach the interview through the composer and nowhere
@@ -260,6 +275,29 @@ async function main() {
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await page.close();
     return "one ordinary message, one turn in the record, no private route";
+  });
+
+  // The handover review of 24668df27: a pressed Start refused because the setting up is not
+  // done returned before asking `setup_status`, so the sheet never came back and pressing
+  // Start again could never get him past it. A typed message reopens it (setup.js check 15);
+  // the button must too.
+  await run.check("4b a Start refused for unfinished setting up puts the setting up back on screen", async () => {
+    const page = await openApp(browser, { onboarding: "not-yet", setup: "missing-engine", memory: "ready" });
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    await page.click("#setup-later"); // he defers, which he is entitled to do
+    await page.waitForSelector("#setup-sheet", { state: "hidden" });
+    await page.waitForSelector("#first-run:not([hidden])");
+    await page.click("#first-run-start");
+    await page.waitForFunction(() => window.__calls.some((c) => c.cmd === "send_message"));
+    await page.waitForFunction(() => window.__calls.some((c) => c.cmd === "setup_status" &&
+      window.__calls.findIndex((d) => d.cmd === "send_message") < window.__calls.indexOf(c)));
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    assert(await page.isVisible("#setup-go"), "the sheet must be back, with Set it up on it");
+    assertEqual(await page.inputValue("#input"), "", "the sentence he never typed is not put in his box");
+    bump(2);
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    await page.close();
+    return "refused, and the setting up is offered again";
   });
 
   // -------------------------------------------------------------------------------------

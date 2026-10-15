@@ -462,11 +462,12 @@ richos/app/
                               Mac drew the greeting twice where the phone drew it once). Both
                               runs are retained; the repeat renders in no mode.
                               with its session clause
-    tests/live_event_tests.rs 20 additive-family tests (§13): the four original events
+    tests/live_event_tests.rs 22 additive-family tests (§13): the four original events
                               asserted BYTE-IDENTICAL with and without the new family, the
                               wire and the reload agreeing field by field, phase honestly
-                              `unknown`, the states that are never emitted, and the
-                              cross-entity fence on every payload
+                              `unknown`, the states that are never emitted, the
+                              cross-entity fence on every payload, and a pressed button's
+                              words never drawn as his
     tests/company_layer_tests.rs 7 tests driving a REAL spine and asserting on what the
                               lease was actually primed with, never on the renderer: what the
                               CEO said about a company reaches the priming turn, another

@@ -1396,8 +1396,10 @@ fn turn_items(turn: &Turn, entity: &EntityId, revision: u64) -> Vec<TimelineItem
 
     // --- the CEO's message (§5.1) ---
     // A proactive turn has no CEO prompt at all (`user_text` is empty by construction),
-    // so it contributes no user item rather than an empty bubble.
-    if turn.source != Source::Proactive && !turn.user_text.is_empty() {
+    // so it contributes no user item rather than an empty bubble. Nor does a turn the app
+    // started for a button he pressed: those words are not his (product hunt 2026-10-15,
+    // finding 14, `Turn::pressed`).
+    if turn.source != Source::Proactive && !turn.pressed && !turn.user_text.is_empty() {
         out.push(TimelineItem::UserMessage {
             base: base(format!("{}:user", turn.id), None, TimelineSlot::Opening, turn.created_at, vis(Visibility::Ceo)),
             text: turn.user_text.clone(),
@@ -1723,8 +1725,9 @@ pub(crate) fn machinery_visibility(row: &MachineryRecord, internal_turn: bool) -
         // record is still routed, still retained, still on `rich://machinery`, and still
         // rendered in technical mode with its vendor kind in `detail.vendor_kind`.
         //
-        // A `ToolCall` whose payload merely failed to classify is NOT affected — that is
-        // real work with an unrefined type, and it stays CEO-facing as "Worked".
+        // A `ToolCall` whose payload merely failed to classify is not decided here: its
+        // record has no type yet. `activity_item` demotes that row too, once the type is
+        // known to be `Other` (product hunt 2026-10-15, finding 13).
         Visibility::Technical
     } else {
         // Everything else is a CEO-visible SEMANTIC row whose technical half (the exact
@@ -1793,7 +1796,18 @@ pub(crate) fn activity_item(
 ) -> TimelineItem {
     let activity_type = activity_type_of(row, types);
     let state = activity_state_of(row);
-    let visibility = machinery_visibility(row, internal_turn);
+    let summary = semantic_summary(activity_type, row);
+    // **A ROW THAT ONLY SAYS "Worked" IS NOT SHOWN IN HIS VIEW** (product hunt 2026-10-15,
+    // finding 13). A tool call that classifies to nothing gets the summary "Worked", and on
+    // nightly 57 that word appeared as its own row under "Worked for 15s", as "Worked queued"
+    // while Rich was still working, and as the band's "Rich is working / Worked". It names no
+    // action and is in the past tense for work not yet done. The record is kept and stays in
+    // technical mode, exactly as the untyped vendor kinds above are.
+    let nameless = activity_type == ActivityType::Other && row.kind == MachineryKind::ToolCall;
+    let visibility = match machinery_visibility(row, internal_turn) {
+        Visibility::Ceo if nameless => Visibility::Technical,
+        v => v,
+    };
 
     let key = crate::machinery::merge_key(row);
     let updated = last_seen.get(&key).copied().filter(|&t| t > row.at);
@@ -1818,7 +1832,7 @@ pub(crate) fn activity_item(
         },
         activity_type,
         state,
-        summary: semantic_summary(activity_type, row),
+        summary,
         detail_ref: Some(row.machinery_id.clone()),
         started_at: Some(row.at),
         // Only when the row actually reached a terminal state. An unknown state has no
@@ -2304,6 +2318,7 @@ mod tests {
             channel: None,
             client_id: None,
             voice_note: false,
+            pressed: false,
         }
     }
 
@@ -2762,6 +2777,32 @@ mod tests {
                 "{phase}: a number here would be invented — got {summary:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_tool_call_that_classifies_to_nothing_is_not_a_worked_row_in_his_view() {
+        // Product hunt 2026-10-15, finding 13: "Worked" under "Worked for 15s", "Worked
+        // queued" while Rich was still working, and "Rich is working / Worked" in the band.
+        // An unclassified tool call (a vendor tool with no semantic type) is technical.
+        let row = tool_open(0, "toolu_X", "SomeVendorTool");
+        let TimelineItem::Activity { base, summary, .. } =
+            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &HashMap::new(), &HashMap::new())
+        else {
+            panic!("a tool call projects as an activity row");
+        };
+        assert_eq!(summary, "Worked", "the record keeps what it is");
+        assert_eq!(base.visibility, Visibility::Technical, "a row that only says Worked is not in his view");
+
+        // A classified call is untouched: it says what Rich did.
+        let mut types = HashMap::new();
+        types.insert("toolu_X".to_string(), ActivityType::Command);
+        let TimelineItem::Activity { base, summary, .. } =
+            activity_item(&row, &entity(), "thr", "turn_1", 3, false, &types, &HashMap::new())
+        else {
+            panic!("a tool call projects as an activity row");
+        };
+        assert_eq!(summary, "Ran a command");
+        assert_eq!(base.visibility, Visibility::Ceo);
     }
 
     #[test]

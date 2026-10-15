@@ -130,6 +130,8 @@ enum Beat {
     /// another process AFTER the tool result that named the worker has already been
     /// observed. It consumes no `seq`, because nothing reached the stream.
     Effect(Box<dyn Fn() + Send>),
+    /// The lease saying his answer is complete while the turn runs on (finding 21).
+    AnswerComplete,
 }
 
 struct ScriptedLease {
@@ -178,6 +180,7 @@ impl Cognition for ScriptedLease {
                     }
                 }
                 Beat::Effect(f) => f(),
+                Beat::AnswerComplete => on_item(TurnItem::AnswerComplete),
             }
         }
         match &self.die_with {
@@ -598,6 +601,37 @@ fn turn_status_walks_the_states_it_can_actually_observe() {
     assert_eq!(last["messageCount"], json!(2), "the CEO's prompt and Rich's reply");
 
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn an_answer_complete_turn_says_so_while_it_is_still_working_and_ends_as_before() {
+    // Product hunt 2026-10-15, finding 21: "Rich is working" stayed up about 22 s after the
+    // answer was on screen. The lease's "answer complete" reaches the screen as a second
+    // `working` status carrying `answered: true`, between the turn's start and its own end,
+    // and the turn still completes exactly once, at its end.
+    let (path, ledger) = tmp_ledger("answered");
+    let mut spine = support::spine(ledger);
+    spine.create_thread("General", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(ScriptedLease::new(
+        "sess-1",
+        vec![Beat::Text("Here are three."), Beat::AnswerComplete, Beat::Frame(json!({"type":"stream_event",
+            "event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t9","name":"Bash","input":{}}}}))],
+    )));
+    let live = RecordingLive::default();
+    spine.set_live_observer(Box::new(live.clone()));
+    spine.submit_prompt("go", Source::Text).unwrap();
+
+    let s = live.of("rich://turn-status");
+    let statuses: Vec<&str> = s.iter().map(|p| p["status"].as_str().unwrap()).collect();
+    assert_eq!(statuses, vec!["queued", "working", "working", "completed"]);
+    assert!(s[1].get("answered").is_none(), "the turn's start says nothing about an answer");
+    assert_eq!(s[2]["answered"], json!(true));
+    assert_eq!(s[2]["startedAt"], s[1]["startedAt"], "the same turn, still timed from its start");
+    assert_eq!(s[2]["activeDurationMs"], json!(null), "still running, so not a span");
+    assert!(s[3].get("answered").is_none() && s[3]["activeDurationMs"].is_u64());
+
+    drop(spine);
+    std::fs::remove_file(&path).unwrap();
 }
 
 #[test]
@@ -1348,4 +1382,43 @@ fn a_delegation_on_an_internal_turn_is_constructed_and_then_refused() {
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&stream);
+}
+
+#[test]
+fn a_pressed_button_s_words_reach_rich_and_are_never_shown_as_his() {
+    // Product hunt 2026-10-15, finding 14: pressing "Start the questions" posted "Let's do the
+    // twenty minutes of questions about my business." as his own message, though he never typed
+    // it. Rich still receives the sentence; no surface (the live row, the timeline the window
+    // and the phone read, the message list) shows it in his name.
+    let (path, ledger) = tmp_ledger("pressed");
+    let mut spine = support::spine(ledger);
+    let thread = spine.create_thread("Onboarding", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(ScriptedLease::new(
+        "sess-1",
+        vec![Beat::Text("Great, let us do it. What does the company do?")],
+    )));
+    let live = RecordingLive::default();
+    spine.set_live_observer(Box::new(live.clone()));
+    let words = "Let's do the twenty minutes of questions about my business.";
+    let turn_id = spine.submit_pressed_prompt_to(&thread, words).unwrap();
+
+    assert_eq!(spine.ledger().turn(&turn_id).unwrap().user_text, words, "Rich received the sentence");
+    assert!(live.of("rich://ceo-message").is_empty(), "no live row in his name: {:?}", live.names());
+    let ceo = spine.timeline(&thread).unwrap().view(ViewMode::Ceo);
+    assert!(
+        !ceo.items().iter().any(|i| matches!(i, richos_core::timeline::TimelineItem::UserMessage { .. })),
+        "no message of his in the conversation"
+    );
+    assert!(
+        ceo.items().iter().any(|i| matches!(i, richos_core::timeline::TimelineItem::RichMessage { .. })),
+        "and Rich's answer is there"
+    );
+    let messages = spine.messages(&thread).unwrap();
+    assert!(messages.iter().all(|m| m.role != "user"), "no line of his in the message list");
+
+    // The control: the same sentence TYPED by him is his row.
+    spine.submit_prompt_to(&thread, words, Source::Text).unwrap();
+    assert_eq!(live.of("rich://ceo-message").len(), 1, "his own typed words are his row");
+
+    std::fs::remove_file(&path).expect("the test ledger is removable");
 }

@@ -219,6 +219,11 @@
         if (t.status === "queued") {
           return { label: "Waiting to start", duration: null, tone: "active", note: "Your message is recorded.", live: true };
         }
+        // HIS ANSWER IS COMPLETE (product hunt 2026-10-15, finding 21): the turn finishes out of
+        // sight, so the timer stops being shown. The measured "Worked for" arrives at its end.
+        if (t.answered) {
+          return { label: "", duration: null, tone: "done", note: DURATION_MEANING, live: false };
+        }
         if (typeof t.startedAt !== "number") {
           // Accepted but not yet handed to a lease: §6.1's under-one-second row.
           return { label: "Working", duration: null, tone: "active", note: DURATION_MEANING, live: true };
@@ -232,10 +237,14 @@
           live: true,
         };
       }
+      // A COMPLETED TURN WITH NO NUMBER TO SHOW HAS NO LABEL (product hunt 2026-10-15,
+      // finding 13). It used to read "Worked", which says nothing: on nightly 57 it stood
+      // above every message Rich sent on his own ("Rich reached out"), whose turns run for
+      // well under a second. `renderDurationRow` draws no row for an empty label.
       case "completed": {
         if (typeof t.activeMs !== "number") {
           return {
-            label: "Worked",
+            label: "",
             duration: null,
             tone: "done",
             note: "How long this took was not recorded.",
@@ -246,7 +255,7 @@
         // MEASURED but under §6.2's one-second display floor. Not the same statement as
         // "unrecorded", so it carries no apology.
         return {
-          label: d ? `Worked for ${d}` : "Worked",
+          label: d ? `Worked for ${d}` : "",
           duration: d,
           tone: "done",
           note: DURATION_MEANING,
@@ -1274,6 +1283,9 @@
     if (!known) structural = true;
 
     t.status = p.status;
+    // Finding 21: `answered` rides on a second `working` status and lasts while the turn is
+    // working; any other status ends it.
+    t.answered = p.status === "working" && (p.answered === true || t.answered === true);
     if (typeof p.startedAt === "number") t.startedAt = p.startedAt;
     // NEVER `?? 0` and never `now() - startedAt`: `activeDurationMs` is explicitly null
     // until the turn ends, and 0 is a measurement claim (STREAMING.md, §6.3).
@@ -1293,7 +1305,8 @@
       model.expanded.add(p.turnId);
     }
 
-    if (p.status === "queued" || p.status === "working") adoptPendingUserMessage(model, p.turnId);
+    // An answered status is about a turn already running, never the start of the next one.
+    if ((p.status === "queued" || p.status === "working") && !p.answered) adoptPendingUserMessage(model, p.turnId);
     if (!t.live && !model.expanded.has(p.turnId)) model.settled.delete(p.turnId);
 
     return { structural, rejected: false };
@@ -2756,6 +2769,10 @@
     // disclosure control instead of a static row — before this it got the static one and
     // the delegation had nowhere to be.
     const hasActivity = turn.stream.some(isWork);
+    // No number and nothing to disclose: no row at all, rather than one reading "Worked".
+    if (!row.label && !hasActivity) return { node: null, row, hasActivity };
+    // No number, but work to disclose: the control names what it opens.
+    if (!row.label) row.label = "What Rich did";
     const wrap = elem("div", "tl-duration");
     wrap.dataset.tone = row.tone;
 
@@ -3067,7 +3084,7 @@
 
     {
       const { node, row, hasActivity } = renderDurationRow(turn, opts);
-      section.appendChild(node);
+      if (node) section.appendChild(node);
 
       const expanded = !hasActivity || opts.isExpanded(turn.turnId);
       const lane = elem("div", "tl-lane");
