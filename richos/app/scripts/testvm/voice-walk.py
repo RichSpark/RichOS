@@ -84,7 +84,7 @@ VOICE_FILES = ('bos_before_voice.npy', 'bundle.json', 'flow_lm_flow_int8.onnx', 
 # CEO 2026-10-15: Rich speaks only in his own voice, and no log line names or describes it.
 # No app log line may name, describe or report loading a voice; only the `tts:` timing figures
 # (which name none) remain.
-VOICE_LINE_MARKERS = ('macOS say', 'with say', 'Daniel', 'Samantha', 'Reed (English', 'Yearsley', 'Pocket',
+VOICE_LINE_MARKERS = ('macOS say', 'with say', 'Daniel', 'Samantha', 'Reed (English', 'Yearsley', 'peter_yearsley', 'Pocket',
                       "Rich's voice", 'rich voice:', 'tts=', 'first PCM', 'loaded and verified',
                       'installed and verified')
 

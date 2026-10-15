@@ -122,6 +122,17 @@ pub fn verify_file(path: &Path, pin: &PinnedFile) -> Result<(), String> {
     Ok(())
 }
 
+/// `fault` with every pinned file name and every web address taken out, so an install fault
+/// written to the log names no voice (a file name such as `peter_yearsley.wav`, or a download
+/// address that carries one, would).
+pub fn fault_without_names(fault: &str) -> String {
+    let mut out = fault.split(' ').map(|w| if w.contains("://") { "(address)" } else { w }).collect::<Vec<_>>().join(" ");
+    for f in FILES {
+        out = out.replace(f.name, "a file");
+    }
+    out
+}
+
 /// The pinned files not yet in `dir` with the right size. Cheap (one stat each): the full hash is
 /// taken when a file is installed and again by [`PocketSynth::load`] before anything is read.
 pub fn missing_files(dir: &Path) -> Vec<PinnedFile> {
@@ -865,6 +876,22 @@ impl SpeechSynth for PocketSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_install_fault_names_no_voice_file_and_no_address() {
+        let wav = FILES.iter().find(|f| f.name == "peter_yearsley.wav").expect("the voice recording is pinned");
+        for fault in [
+            format!("error sending request for url ({})", wav.url),
+            format!("{} hashes to 00ff, not the pinned {}", wav.name, wav.sha256),
+            format!("{}: no answer from the server", wav.name),
+        ] {
+            let clean = fault_without_names(&fault).to_lowercase();
+            for name in ["peter_yearsley", "yearsley", "pocket", "huggingface", "://"] {
+                assert!(!clean.contains(name), "{clean:?} still carries {name:?}");
+            }
+        }
+        assert_eq!(fault_without_names("no answer from the server"), "no answer from the server");
+    }
 
     /// Real pinned inference, silent. Opt in with RICHOS_POCKET_TEST_DIR and --ignored.
     #[test]

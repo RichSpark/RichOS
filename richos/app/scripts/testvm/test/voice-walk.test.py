@@ -317,6 +317,10 @@ class NoLineAboutTheVoice(unittest.TestCase):
         ]
         self.assertEqual(walk.voice_lines(nightly57), nightly57)
 
+    def test_a_failed_download_naming_the_voice_file_is_caught(self):
+        failed = '[richos] speech synthesis install: peter_yearsley.wav attempt 1 failed: no answer from the server'
+        self.assertEqual(walk.voice_lines([failed]), [failed])
+
     def test_the_timing_figures_that_remain_are_not_about_the_voice(self):
         kept = ['[richos-voice] tts: 9.12 s of speech streamed in 1383 ms, first audio in 169 ms, 0 ms before synthesis',
                 '[richos-voice] 00:49:42.797Z voice session OPEN — stt=small.en · aec=PBFDAF 2048 taps',

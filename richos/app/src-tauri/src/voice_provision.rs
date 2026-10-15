@@ -569,10 +569,14 @@ async fn fetch_rich_voice(dir: &std::path::Path) -> Result<(), String> {
     let missing = richos_voice::pocket::missing_files(dir);
     let need: u64 = missing.iter().map(|f| f.bytes).sum();
     if let Some(finding) = provision::disk_preflight(provision::free_bytes_for(dir), need.saturating_mul(11).div_ceil(10)) {
-        return Err(finding.describe("Rich's voice", false));
+        return Err(finding.describe("speech synthesis", false));
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    for pin in missing {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create the speech synthesis folder: {e}"))?;
+    // A fault is logged by the file's place in the list, never its name or download address:
+    // no log line names the voice.
+    let total = missing.len();
+    for (n, pin) in missing.into_iter().enumerate() {
+        let n = n + 1;
         let mut last = String::new();
         for attempt in 1..=provision::MAX_ATTEMPTS {
             match fetch_rich_voice_file(dir, &pin).await {
@@ -581,13 +585,14 @@ async fn fetch_rich_voice(dir: &std::path::Path) -> Result<(), String> {
                     break;
                 }
                 Err(e) => {
-                    eprintln!("[richos] speech synthesis install: {} attempt {attempt} failed: {e}", pin.name);
+                    let e = richos_voice::pocket::fault_without_names(&e);
+                    eprintln!("[richos] speech synthesis install: file {n} of {total} attempt {attempt} failed: {e}");
                     last = e;
                 }
             }
         }
         if !last.is_empty() {
-            return Err(format!("{}: {last}", pin.name));
+            return Err(format!("file {n} of {total}: {last}"));
         }
     }
     Ok(())
