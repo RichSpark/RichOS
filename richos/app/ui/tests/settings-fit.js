@@ -136,8 +136,9 @@ const MEASURE = `(a) => {
   // The shipped candidate also had no sticky floor (style.css "THE FLOOR STAYS IN VIEW", added
   // with the Token spend row): with the panel unbounded, a sticky Bust a bug would pin itself to
   // the window's bottom edge and the control would reproduce nothing, so bare drops it too.
-  // Since round 24 the sticky box is the floor holding Bust a bug and Request a feature under it.
-  const floor = bug.closest(".set-floor") || bug;
+  // Since round 24 the floor holds Bust a bug and Request a feature under it; since round 27 the
+  // sticky box is the panel's foot band (.sm-foot), whose last cell is that floor.
+  const floor = bug.closest(".sm-foot") || bug.closest(".set-floor") || bug;
   if (a.bare) { menu.style.maxHeight = "none"; menu.style.overflowY = "visible"; floor.style.position = "static"; }
   else { menu.style.maxHeight = ""; menu.style.overflowY = ""; floor.style.position = ""; }
   menu.scrollTop = 0;
@@ -231,7 +232,9 @@ async function main() {
     // bound and the scrolling removed — which is exactly the shipped candidate. If this check
     // ever passes without failing the way he described, the check below proves nothing.
     const m = await measure(page, { grow: AUDIT_PANEL_HEIGHT, bare: true });
-    assertEqual(m.height, AUDIT_PANEL_HEIGHT, "the panel did not reach the audited height");
+    // AT LEAST the audited height: since round 27 the one panel's own content is taller than
+    // Ray's 738px at this width, so no spacer is needed to get there.
+    assert(m.height >= AUDIT_PANEL_HEIGHT, `the panel did not reach the audited height: ${m.height}px`);
     assert(!m.scrollable, "the unbounded panel scrolls, so it is not the state that was audited");
     assert(
       !m.bugInWindow,

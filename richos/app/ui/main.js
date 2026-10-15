@@ -172,8 +172,8 @@ const slideoverBody = el("slideover-body");
 const jumpLatestBtn = el("jump-latest");
 const liveRegionEl = el("live-region");
 const drillChipEl = el("drill-chip-zone");
-const settingsBtn = el("rail-settings");
-const assertivenessPopover = el("assertiveness-popover");
+// Round 27: what the rail gear's Preferences held, as parts of the one Settings panel.
+const settingsPartsEl = el("settings-parts");
 
 // ---------------------------------------------------------------------------------------
 // State
@@ -4370,6 +4370,11 @@ function sayWorkNotice(text, raisedAt, model = timelineModel, team = null, key =
 }
 
 function flushWorkNotices() {
+  if (heldWorkResults.length && !anyLiveTurn()) {
+    const results = heldWorkResults;
+    heldWorkResults = [];
+    for (const text of results) speakWorkResult(text);
+  }
   if (!heldWorkNotices.length || !calmEnoughForANotice()) return;
   const pending = heldWorkNotices;
   heldWorkNotices = [];
@@ -4386,6 +4391,34 @@ function receiveWorkNotice(text, raisedAt, model = timelineModel, team = null, k
     return;
   }
   sayWorkNotice(text, raisedAt, model, team, key);
+}
+
+/// **A job's result, said in voice mode** (nightly 57's hunt, findings 4 and 6; handover review
+/// rv-20261015T122526Z-558b93b7). The result is written into the conversation as Rich's message
+/// and drawn from `rich://proactive-message`, which speaks nothing, so "Will is on your team now"
+/// was silent to a CEO who was listening. `rich://work-result` carries its words to the speaker
+/// whole (`voice_speak_result`), as words of their own rather than part of an answer, so a Stop
+/// he gave an earlier reply does not silence them (review rv-20261015T125238Z-37f970a3).
+/// Held while a turn runs; the speaker itself queues it behind Rich's own sentences and holds it
+/// while he is talking.
+let heldWorkResults = [];
+let workResultsSaid = Promise.resolve();
+
+function receiveWorkResult(text) {
+  if (!voiceMode || !text) return;
+  if (anyLiveTurn()) {
+    heldWorkResults.push(text);
+    return;
+  }
+  speakWorkResult(text);
+}
+
+function speakWorkResult(text) {
+  if (!voiceMode) return;
+  // One after another, in the order they arrived.
+  workResultsSaid = workResultsSaid
+    .then(() => Bridge.invoke("voice_speak_result", { text }))
+    .catch(() => {});
 }
 
 /// Everything he has not been told yet on this conversation. Called when a thread opens and
@@ -4929,6 +4962,13 @@ Bridge.listen("rich://work-notice", ({ payload }) => {
   drainWorkNotices();
 });
 
+/// **A job's result was written into this conversation** (`main.rs` `EVENT_WORK_RESULT`). The
+/// message is drawn by `rich://proactive-message`; this says it, in voice mode only.
+Bridge.listen("rich://work-result", ({ payload }) => {
+  if (!payload || !payload.text || payload.threadId !== activeThreadId) return;
+  receiveWorkResult(payload.text);
+});
+
 /// **His team said something, pushed** (an operator install only; `app/STREAMING.md` "His
 /// team, on an operator install"). A wakeup for the durable read, exactly like the work
 /// lane's: the notice is on disk before this is emitted, so the read, not this payload, is
@@ -4996,13 +5036,13 @@ function setAssertiveness(v) {
   });
 }
 function checkAssertivenessRadio(value) {
-  for (const input of assertivenessPopover.querySelectorAll('input[name="assertiveness"]')) {
+  for (const input of document.querySelectorAll('input[name="assertiveness"]')) {
     input.checked = input.value === value;
   }
 }
 (function initAssertivenessControl() {
   checkAssertivenessRadio(getAssertiveness());
-  for (const input of assertivenessPopover.querySelectorAll('input[name="assertiveness"]')) {
+  for (const input of document.querySelectorAll('input[name="assertiveness"]')) {
     input.addEventListener("change", () => setAssertiveness(input.value));
   }
 })();
@@ -5094,7 +5134,7 @@ function pickModel(who, v, focus) {
   if (focus) el(who === "rich" ? "md-rich" : "md-stu").querySelector(`[data-v="${v}"]`).focus();
 }
 (function initModelRows() {
-  for (const seg of assertivenessPopover.querySelectorAll(".seg")) {
+  for (const seg of document.querySelectorAll("#md .seg")) {
     const who = seg.dataset.who;
     for (const opt of seg.querySelectorAll(".seg-opt")) {
       opt.addEventListener("click", () => pickModel(who, opt.dataset.v, false));
@@ -5122,7 +5162,7 @@ async function syncModelsFromBackend() {
     const stored = await Bridge.invoke("get_lease_models");
     const untouched = modelDraft.rich === modelSaved.rich && modelDraft.stu === modelSaved.stu;
     modelSaved = { rich: modelValue(stored && stored.rich), stu: modelValue(stored && stored.stu) };
-    if (untouched || assertivenessPopover.hidden) {
+    if (untouched || !settingsPanelOpen()) {
       modelDraft = { ...modelSaved };
       paintModelRows(null);
     }
@@ -5154,44 +5194,42 @@ function commitModelChoice() {
     });
 }
 
-/// Open the preferences popover, from the gear or from the unset identity row. Named
-/// because there are now two entrances and an inline listener cannot be one of them.
-function openAssertivenessPopover(opts) {
-  if (assertivenessPopover.hidden === false) return;
+/// Whether the one Settings panel is open (round 27). Rich's model is HELD while it is.
+function settingsPanelOpen() {
+  const menu = document.getElementById("set-menu");
+  return !!menu && !menu.hidden;
+}
+/// The Settings panel is opening: it shows the SAVED model choice, and re-reads the retention
+/// window and the model choice, not just at boot: both can be changed by editing
+/// `config.json`, and this panel is the only screen that claims to say what they are — a stale
+/// claim about a setting is worse than no claim. Each read is one command over a file of a few
+/// hundred bytes, on an explicit click.
+function onSettingsOpen() {
   modelDraft = { ...modelSaved };
   paintModelRows(null);
-  assertivenessPopover.hidden = false;
-  settingsBtn.setAttribute("aria-expanded", "true");
-  // Re-read the retention window and the model choice every time the popover OPENS, not just
-  // at boot: both can be changed by editing `config.json`, and the popover is the only screen
-  // that claims to say what they are — a stale claim about a setting is worse than no claim.
-  // Each read is one command over a file of a few hundred bytes, on an explicit click.
   syncRetentionFromBackend();
   syncModelsFromBackend();
-  if (opts && opts.focusName === false) return;
-  const name = el("user-name-input");
-  if (name) name.focus();
 }
-/// Close it, and put `aria-expanded` back — the two halves that were written out three times
-/// and are now written once, because the Escape handler is the third caller and a copy that
-/// forgot the attribute would leave the gear announcing an open popover that is not there.
-/// Every close saves and applies the model choice (round 23), so every close comes here.
-function closeAssertivenessPopover() {
-  if (assertivenessPopover.hidden) return;
-  assertivenessPopover.hidden = true;
-  settingsBtn.setAttribute("aria-expanded", "false");
-  commitModelChoice();
-}
-settingsBtn.addEventListener("click", () => {
-  if (assertivenessPopover.hidden === false) closeAssertivenessPopover();
-  else openAssertivenessPopover({ focusName: false });
-});
-document.addEventListener("click", (e) => {
-  if (railIdentityEl && railIdentityEl.contains(e.target)) return;
-  if (!assertivenessPopover.hidden && !assertivenessPopover.contains(e.target) && e.target !== settingsBtn) {
-    closeAssertivenessPopover();
+/// ROUND 27: ONE SETTINGS, REACHED ONE WAY. What the rail gear's Preferences held (Rich's
+/// model, interruptions, stored output, the technical view's hint, the name field and the
+/// splash switch) is handed to the panel `settings-button.js` builds, which places each part
+/// where the round's NOTES.md puts it. Every close of that panel saves and applies the model
+/// choice (round 23), whichever way it closes: the button, Escape, a click outside.
+if (settingsPartsEl) {
+  const parts = {};
+  for (const node of Array.from(settingsPartsEl.children)) {
+    if (node.dataset.settingsPart) parts[node.dataset.settingsPart] = node;
   }
-});
+  window.RichSettings.registerPreferences({ parts, onOpen: onSettingsOpen, onClose: commitModelChoice });
+  // Once the panel holds every part, the holder goes, rather than staying in the document as a
+  // hidden panel with nothing in it. The panel is mounted at DOMContentLoaded (settings-button.js
+  // runs before this file and registered its listener first), so that is when the holder empties.
+  const dropEmptyHolder = () => {
+    if (!settingsPartsEl.children.length) settingsPartsEl.remove();
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", dropEmptyHolder);
+  else dropEmptyHolder();
+}
 
 // ---------------------------------------------------------------------------------------
 // The opening screen's off switch — the same shape as the dial above, for the same reason.
@@ -7405,11 +7443,9 @@ function setRailOpen(open) {
   railToggleBtn.title = label + " (⌘⇧S)";
   railScrimEl.hidden = !(open && narrow);
   railEl.setAttribute("aria-hidden", String(!open));
-  // Nothing of the rail stays open, or focused, once the rail has gone away: its popover
-  // closes with it (an invisible popover would otherwise take the next Escape), and focus
-  // goes to the way back, the toggle.
+  // Nothing of the rail stays focused once the rail has gone away: focus goes to the way back,
+  // the toggle.
   if (!open) {
-    closeAssertivenessPopover();
     if (railEl.contains(document.activeElement)) railToggleBtn.focus();
   }
   if (!narrow && sidebarHiddenPref !== !open) {
@@ -8437,7 +8473,6 @@ el("feedback-history-retry").addEventListener("click", () => refreshFeedback().t
 const techyChipEl = el("techy-chip");
 const techyChipLabelEl = el("techy-chip-label");
 const techyStateEl = el("techy-state");
-const techyDefaultInput = el("techy-default");
 const techyHintEl = el("techy-hint");
 const techyScopeEl = el("techy-scope");
 const techyScopeTitleEl = el("techy-scope-title");
@@ -8495,28 +8530,19 @@ function renderTechyChip() {
   techyChipEl.setAttribute(
     "aria-label",
     techy.source === "thread"
-      ? "Technical view is on for this conversation. Turn it off."
+      ? "Technical view is on for this conversation. Open its switch in Settings."
       : techy.source === "entity"
-        ? "Technical view is on for every conversation in this company. Turn it off here."
-        : "Technical view is on for every conversation. Turn it off here."
+        ? "Technical view is on for every conversation in this company. Open its switch in Settings."
+        : "Technical view is on for every conversation. Open its switch in Settings."
   );
 }
 
 function renderTechySettings() {
-  // §15 puts a Techy Mode toggle in the settings menu, "directly under" Text size. That is
-  // a SECOND ENTRANCE TO ONE STATE, not a second state: it reads `techy.default` and writes
-  // through `setTechyDefault`, exactly as the rail's own preference row does. Repainting it
-  // here — inside the one function that renders the other entrance — is what keeps the two
-  // from ever showing different answers, because there is no path that updates one without
-  // running this.
+  // ONE SWITCH (round 27): the Settings panel's Technical view row, painted from the
+  // RESOLVED state (`techyOn()`) by `RichSettings.paint()`. There is one technical view, so
+  // there is one answer to "is it on?", and the answer a person means is the one they can
+  // SEE: the switch never reads `techy.default` over a conversation pinned off.
   window.RichSettings.paint();
-  if (!techyDefaultInput) return;
-  // THE RESOLVED STATE, NOT THE GLOBAL DEFAULT — changed 2026-09-18 with the third tier.
-  // There is one technical view, so there is one answer to "is it on?", and the answer a
-  // person means is the one they can SEE. While this read `techy.default` the switch could
-  // sit ON above a conversation pinned off: not two controls disagreeing with each other,
-  // but one control disagreeing with the window it is drawn on.
-  techyDefaultInput.checked = techyOn();
   if (!techyHintEl) return;
   const key = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "\u2318\u21e7T" : "Ctrl+Shift+T";
   // WHICH TIER IS HOLDING IT, in a sentence, because the switch above can no longer carry
@@ -8734,7 +8760,7 @@ function retentionWindowSentence(view) {
 /// stored output from 3 earlier days" has been told; one who is told nothing finds out by
 /// opening a row that is empty, weeks later, and cannot connect it to anything he did.
 function renderRetention(view) {
-  const inputs = assertivenessPopover.querySelectorAll('input[name="raw-retention"]');
+  const inputs = document.querySelectorAll('input[name="raw-retention"]');
   if (!view) {
     for (const input of inputs) input.checked = false;
     if (retentionHintEl) retentionHintEl.textContent = RETENTION_UNWIRED;
@@ -8936,9 +8962,11 @@ function requestTechyToggle(on) {
   openTechyScope(on);
 }
 
-if (techyChipEl) techyChipEl.addEventListener("click", () => requestTechyToggle(false));
-if (techyDefaultInput) {
-  techyDefaultInput.addEventListener("change", () => requestTechyToggle(techyDefaultInput.checked));
+// THE CHIP LEADS BACK TO THE ONE SWITCH (round 27, NOTES.md "The header chip"): it opens the
+// Settings panel with the Technical view switch focused, where turning it off asks where, as
+// turning it on did. It is a state indicator with a way back to its control, not a second one.
+if (techyChipEl) {
+  techyChipEl.addEventListener("click", () => window.RichSettings.openMenu({ focus: "#set-techy" }));
 }
 if (techyScopeCancelEl) techyScopeCancelEl.addEventListener("click", closeTechyScope);
 if (techyScopeConfirmEl) techyScopeConfirmEl.addEventListener("click", confirmTechyScope);
@@ -8965,18 +8993,16 @@ if (techyScopeEl) {
   });
 }
 
-// The settings menu's Techy row, registered with the SAME read and the SAME write the rail
-// preference uses. Registering the capability is also what makes the row appear at all —
-// settings-button.js omits it until a host provides one, so the component still works on a
-// page with no shell behind it and carries no dead toggle there.
+// The Settings panel's Technical view row, the ONE switch for the view since round 27.
+// Registering the capability is also what makes the row appear at all — settings-button.js
+// omits it until a host provides one, so the component still works on a page with no shell
+// behind it and carries no dead toggle there.
 window.RichSettings.registerTechy({
-  // The SAME resolved read and the SAME scope-asking write the rail switch uses, which is
-  // what makes "one state, two doors" a structural fact here rather than a promise: there
-  // is no path that updates one door without running the function that repaints the other.
+  // The resolved read and the scope-asking write, the same pair ⌘⇧T uses.
   read: () => techyOn(),
   write: (on) => requestTechyToggle(on),
 });
-for (const input of assertivenessPopover.querySelectorAll('input[name="raw-retention"]')) {
+for (const input of document.querySelectorAll('input[name="raw-retention"]')) {
   input.addEventListener("change", () => setRetentionChoice(input.value));
 }
 
@@ -9219,7 +9245,6 @@ const POPUP_CLOSERS = {
   "feedback-overlay": closeFeedback,
   slideover: closeSlideOver,
   inspector: closeWorkerInspector,
-  "assertiveness-popover": closeAssertivenessPopover,
   // Escape CANCELS the scope choice — it does not apply the preselected option. Escape is
   // the way out of a question, never a silent answer to it, and this closer repaints the
   // switch that opened the sheet so backing out leaves nothing claiming a state the store
@@ -9463,7 +9488,7 @@ async function renderUserIdentity() {
   railUserNameEl.textContent = named ? who.name : "Set your name";
   railIdentityEl.setAttribute(
     "aria-label",
-    named ? who.name : "No name is set. Open preferences to add yours."
+    named ? who.name : "No name is set. Open Settings to add yours."
   );
   // A nameplate is not a button. Only the unset state is actionable, so only the unset
   // state advertises itself as one.
@@ -9487,7 +9512,10 @@ if (userNameInput) {
 
 if (railIdentityEl) {
   railIdentityEl.addEventListener("click", () => {
-    if (railIdentityEl.classList.contains("is-unset")) openAssertivenessPopover();
+    // The SAME Settings panel the button opens (round 27), on the name field, lit for 1.6s.
+    if (railIdentityEl.classList.contains("is-unset")) {
+      window.RichSettings.openMenu({ focus: "#user-name-input", call: true });
+    }
   });
 }
 

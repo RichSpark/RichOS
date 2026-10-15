@@ -121,13 +121,14 @@ async function main() {
   });
 
   // ---- 1. the way in -------------------------------------------------------------------------
-  await run.check("the row: Token spend in quick settings, directly under Technical view, with this month's figure and a chevron", async () => {
+  await run.check("the row: Token spend in Settings, directly under Home screen, with this month's figure and a chevron", async () => {
     const page = await open("dark", undefined);
     await menu(page);
-    const order = await page.evaluate(() => [...document.querySelectorAll("#set-menu > *")].map(e => e.id || e.className));
-    const techy = order.indexOf("set-techy-row");
-    assert(techy >= 0, "Technical view is in the menu: " + order);
-    assertEqual(order[techy + 1], "set-spend", "Token spend comes directly after Technical view: " + order);
+    // Round 27: the third column, "Your company and team", row 3, under Company and Home screen.
+    const order = await page.evaluate(() => [...document.getElementById("set-spend").parentElement.children].map(e => e.id || e.className));
+    const home = order.indexOf("set-home-row");
+    assert(home >= 0, "Home screen is in the column: " + order);
+    assertEqual(order[home + 1], "set-spend", "Token spend comes directly after Home screen: " + order);
     assertEqual(await text(page, "#set-spend-open .set-name"), "Token spend");
     await page.waitForFunction(() => document.getElementById("set-spend-amt").textContent.length > 0);
     const s = starts(Date.now());

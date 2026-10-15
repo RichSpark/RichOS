@@ -36,7 +36,7 @@
 //   A1  every popup in the booted window declares how it is dismissed
 //   A2  positive control — an undeclared popup makes A1 red
 //   B1  every declared surface answers Escape, with focus OUTSIDE it   [derived]
-//   B2  the gear's preferences popover, by the real path
+//   B2  Settings opened from the nameplate (round 27's second way in), by the real path
 //   B3  the settings menu, by the real path
 //   B4  topmost first, measured against the stacking rather than a chosen order
 //   B5  an inline permission request leaves Escape and the composer available
@@ -126,15 +126,15 @@ async function main() {
       [...document.querySelectorAll("[data-dismiss]")].map((n) => n.id).sort()
     );
     // The permission request is now an inline card, so its former popup declaration
-    // is intentionally absent. The other twelve historical surfaces remain popups.
+    // is intentionally absent, and round 27 retired the gear's Preferences popover into the
+    // one Settings panel. The other eleven historical surfaces remain popups.
     assert(
-      declared.length >= 12,
+      declared.length >= 11,
       "only " + declared.length + " declared surfaces: " + declared.join(", ")
     );
     // ...and the ones the old eight-line handler never covered are among them, by name,
     // because those are the popups the CEO actually hit.
     for (const id of [
-      "assertiveness-popover",
       "setup-sheet",
       "memory-setup",
       "set-menu",
@@ -243,26 +243,31 @@ async function main() {
     return surfaces.length + " derived surfaces, all closed by Escape: " + report.join(", ");
   });
 
-  await run.check("B2  the gear's preferences popover, by the real path", async () => {
+  await run.check("B2  Settings opened from the nameplate (round 27's second way in), by the real path", async () => {
+    // Round 27 retired the gear's Preferences popover: the unset nameplate at the foot of the
+    // rail opens the ONE Settings panel on the name field. Escape closes it from there too.
     const page = await openApp(browser);
-    await page.click("#rail-settings");
-    await page.waitForSelector("#assertiveness-popover:not([hidden])");
+    await page.waitForSelector("#rail-identity.is-unset");
+    await page.click("#rail-identity");
+    await page.waitForSelector("#set-menu:not([hidden])");
+    assertEqual(
+      await page.evaluate(() => document.activeElement && document.activeElement.id),
+      "user-name-input",
+      "the nameplate opened Settings on the name field"
+    );
     await focusTheComposer(page);
     await page.keyboard.press("Escape");
-    assert(
-      await page.isHidden("#assertiveness-popover"),
-      "the popup the CEO opens most often still cannot be closed with Escape"
-    );
-    // The gear must not go on announcing a popover that is not there.
+    assert(await page.isHidden("#set-menu"), "Settings opened from the nameplate survived Escape");
+    // The button must not go on announcing a panel that is not there.
     assertEqual(
-      await page.getAttribute("#rail-settings", "aria-expanded"),
+      await page.getAttribute("#set-btn", "aria-expanded"),
       "false",
-      "the gear still reports itself expanded"
+      "the settings button still reports itself expanded"
     );
     bump(2);
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await page.close();
-    return "opened from the gear, closed by Escape, and the gear says so";
+    return "opened from the nameplate, closed by Escape, and the button says so";
   });
 
   await run.check("B3  the settings menu, by the real path", async () => {
@@ -735,15 +740,15 @@ main().catch((e) => {
 // RUN RED — the mutation that makes each check fail, applied to the SHIPPED source
 // ---------------------------------------------------------------------------------------
 //
-// A1   index.html: delete `data-dismiss="escape"` from #assertiveness-popover
+// A1   index.html: delete `data-dismiss="escape"` from #techy-scope
 //        -> "these are popups by structure and declare no `data-dismiss`" names it
 // A2   main.js `dismissTopmostPopup`: delete the `top.hidden = true` fallback
 //        -> an undeclared popup survives Escape, which is the CEO's rule failing quietly
 // B1   main.js: restore the eight-line `if (!someEl.hidden) return closeSomething()` chain
-//        -> #assertiveness-popover, #setup-sheet, #memory-setup, #set-menu, #permission-sheet
+//        -> #setup-sheet, #memory-setup, #set-menu, #permission-sheet
 //           and #repositories-sheet all survive Escape
-// B2   main.js `POPUP_CLOSERS`: drop the "assertiveness-popover" entry
-//        -> the popover is hidden by the blunt fallback and the gear keeps aria-expanded=true
+// B2   main.js `POPUP_CLOSERS`: drop the "set-menu" entry
+//        -> the panel is hidden by the blunt fallback and the button keeps aria-expanded=true
 // B4   main.js `openPopups`: sort ascending instead of descending
 //        -> one Escape reaches the panel underneath and leaves the overlay on top of it
 // B5   permissions.js: restore modal Escape dismissal

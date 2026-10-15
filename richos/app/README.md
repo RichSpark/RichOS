@@ -227,7 +227,7 @@ richos/app/
                               rather than four directory names, including the multi-root
                               proof (`richos` + `richos-hq` -> one entity id) and the
                               string-prefix trap beside it
-    tests/spine_tests.rs     17 spine invariant tests (no live Claude needed). One is the
+    tests/spine_tests.rs     19 spine invariant tests (no live Claude needed). One is the
                               nightly D4 pair: a failed TEXT turn and a failed VOICE turn are
                               classified identically, which is what makes the operator line
                               impossible to write for only one surface
@@ -691,6 +691,9 @@ richos/app/
                               at each codec block while the rest of the sentence is generated
     src/controller.rs        four threads, CaptureBrain, the half-duplex taint rule
     tests/barge_in_composition.rs  the WIRING: echo defense + real interruptions
+    tests/on_it_spoken_at_once.rs 1 test: on his spoken go the early "On it!" reaches speech
+                              the moment it is shown, through the real spine and the production
+                              sentence chunker, not at turn end
     tests/rich_voice.rs      2 tests: voice mode speaks through RichVoice, and with the pinned
                               bundle installed a sentence comes out of Pocket TTS as Peter
                               Yearsley (ignored, never ok, without the bundle)
@@ -1223,7 +1226,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2041 tests + 5 doc-tests (2037 direct, 4 ignored)
+cargo test -p richos-core                       # 2048 tests + 5 doc-tests (2044 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1251,7 +1254,7 @@ cargo test -p richos-core                       # 2041 tests + 5 doc-tests (2037
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 410 tests (409 direct, 1 ignored; 4 live-device tests also ignored without a device)
+cargo test -p richos-voice                      # 416 tests (415 direct, 1 ignored; 4 live-device tests also ignored without a device)
 #     The 327 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test

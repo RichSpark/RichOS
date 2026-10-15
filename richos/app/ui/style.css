@@ -486,25 +486,6 @@ button {
   position: relative;
 }
 
-.rail-settings-btn {
-  order: 1;
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--ink-faint);
-  font-size: 1.0625rem;
-  cursor: pointer;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  line-height: 1;
-}
-
-.rail-settings-btn:hover {
-  background: var(--tint-weak);
-  color: var(--ink-soft);
-}
-
 /* THE FOOT OF THE RAIL — the CEO's identity, not Rich's (his correction to round 10.1).
    A filled circle of initials, then the name. `assets/rich-hand.png` is still Rich's
    avatar in the conversation, where it belongs; it is only this nameplate that changed
@@ -584,47 +565,6 @@ button {
   display: block;
   color: var(--ink);
   flex-shrink: 0;
-}
-
-/* THE PREFERENCES POPOVER IS 330px WIDE, WHICH IS THE ROUND-10.1 SPEC AND NOT A PREFERENCE.
-
-   It was 208px, which was right when its labels were 11.5-13px. At the CEO's 16px readable
-   floor (§15) every option and hint in it wrapped, and the popover grew from 489px tall to
-   678px — tall enough to cover the rail's thread list, so opening preferences hid the
-   threads and made them unclickable. `techy.js` check 9 is what caught it: it flips the
-   global switch and then opens another conversation, which is a perfectly ordinary thing to
-   do and had stopped being possible.
-
-   A narrow popover at a large type size is a tower. The round-10.1 mockups already answer
-   this — `#app-settings` is 330px there — so this is the spec's width, adopted, not a number
-   picked to make a test pass. `max-height` + internal scroll is the belt: a preference list
-   that grows again must scroll rather than silently eat the rail, and scrolling is expressly
-   fine (the standing ban is on PAGINATION, not on overflow). */
-.popover {
-  position: absolute;
-  bottom: 46px;
-  /* ANCHORED LEFT, not right, and that is the mockup's own choice (`#app-settings` is
-     `left:10px` there). At 330px in a 300px rail an right-anchored popover hangs 22px off
-     the LEFT EDGE OF THE WINDOW — the retention radios and the opening-screen switch ended
-     up at x = -22 and were unclickable, which `splash.js` check 11 and `retention.js`
-     checks 3-5 caught within a minute of the widening. Anchored left it overhangs the
-     STAGE instead, which is empty space it is already drawn above. */
-  left: 10px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px 14px;
-  box-shadow: 0 8px 24px var(--shadow-weak);
-  width: 330px;
-  max-width: calc(100vw - 32px);
-  /* Only clamps when the popover would otherwise run off the TOP of the window — it is
-     anchored 46px from the bottom, so this leaves it everything above that minus a margin.
-     A tighter cap was tried and was wrong: it forced an internal scroll at 800px tall, where
-     the popover fits perfectly well, and put the retention radios outside the viewport. A
-     max-height is a last resort against overflow, not a layout tool. */
-  max-height: calc(100vh - 70px);
-  overflow-y: auto;
-  z-index: 20;
 }
 
 /* The name field. Same vocabulary as the rest of the popover — a quiet inset, not a form. */
@@ -5786,10 +5726,8 @@ body.bp-narrow .tl-user-bubble {
    ROUND 23 — PREFERENCES IN TWO COLUMNS, AND RICH'S MODEL FIRST IN IT (CEO §119).
    richos-hq design/mockups/rounds/round-23 (index.html + NOTES.md) is the design built here.
 
-   The popover gains a heading and two columns (760px): with a fifth section in one 330px
-   column it would be a scrolling tower. Rich's model and "How much should Rich interrupt
-   you?" sit on the left, the technical view, stored output and splash screen on the right.
-   Narrower than two 300px columns, the grid falls back to one.
+   Round 27 retired the popover: these rows now sit in the one Settings panel's middle column
+   ("Working with Rich"), and the panel's layout is in the ROUND 27 block after `.setmenu`.
 
    Each model row is the house segmented track (round 10.1's theme control, scaled up to carry
    words): the chosen half is the ruled gold, and the gold thumb slides between halves, with
@@ -5806,38 +5744,35 @@ body.bp-narrow .tl-user-bubble {
      INDICATORS (3:1): gold thumb on track                5.11                    3.35
                        the note's gold rule, focus ring   6.36 (on surface)       3.83 (on surface)
    ========================================================================================= */
-.popover.prefs {
-  width: 760px;
-  padding: 0;
-}
-.prefs-head {
-  padding: 14px 22px 12px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.prefs-title {
-  margin: 0;
-  font-size: 1.0625rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--ink);
-}
-.prefs-cols {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
-.prefs-col {
-  padding: 16px 22px 18px;
-  min-width: 0;
-}
-.prefs-col + .prefs-col {
-  border-left: 1px solid var(--line-soft);
-}
-.prefs-col .popover-divider {
-  margin: 12px 0;
-  background: var(--line-soft);
-}
 .md-row {
   margin-top: 12px;
+}
+/* WHEN HALF THE ROW CANNOT HOLD THE LABEL, THE HALVES STACK (second review of d623a3f2). The
+   chosen label is dark --on-gold ink: past the gold thumb's edge it is 1.50:1 on the track, so a
+   label wider than its half is unreadable, not merely untidy. "Opus · high effort" is 8.35rem
+   wide at weight 600 (133.6px at 100%, measured in WebKit), and the thumb is half the track less
+   3px, so side by side needs a track of 2 × (8.35rem + 6px clear each side) + 2 × 3px = 16.7rem
+   + 30px. Narrower than that (the two-column panel at 1024 by 700 from 110% up), each option
+   takes the full width on its own line and the thumb slides down instead of across. Nothing
+   changes where the label fits: 297.2px at 100% against the 299.8px track at a 1360px window. */
+.md {
+  container-type: inline-size;
+}
+@container (width < calc(16.7rem + 30px)) {
+  .md .seg {
+    grid-template-columns: 1fr;
+    border-radius: 20px;
+  }
+  .md .seg-thumb {
+    right: 3px;
+    bottom: auto;
+    width: auto;
+    height: 34px;
+    border-radius: 17px;
+  }
+  .md .seg[data-v="fable"] .seg-thumb {
+    transform: translateY(100%);
+  }
 }
 .md-row:first-of-type {
   margin-top: 4px;
@@ -6241,12 +6176,15 @@ body.home-open {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  min-width: 264px;
+  /* ROUND 27: ONE SETTINGS PANEL, wide enough for three columns and a band across the foot
+     (`settings-button.js` `buildMenu`). It hangs where it always hung, rises as it always rose,
+     and is bounded as below. 330px is the left margin it leaves in a narrow window. */
+  width: min(1100px, calc(100vw - 330px));
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 6px;
-  box-shadow: 0 24px 60px -30px var(--shadow-strong);
+  border-radius: 14px;
+  padding: 0;
+  box-shadow: 0 30px 70px -30px var(--shadow-strong);
   animation: setrise 0.2s cubic-bezier(0.2, 0.8, 0.25, 1) both;
   /* **IT CANNOT GROW PAST THE BOTTOM OF THE WINDOW** — candidate-.4 audit, defect 3.
      Ray measured the panel at 738pt in a 700pt window, hanging 132pt below the edge and not
@@ -6440,8 +6378,10 @@ body.home-open {
   pointer-events: none;
 }
 
+/* 10.5rem is 168px at 100% and grows with Text size, as the name it shows does: a fixed 168px
+   cut "Harbor Analytics" to "Harbor Analyt" at 135% (second review of d623a3f2). */
 .set-select {
-  max-width: 168px;
+  max-width: 10.5rem;
 }
 
 /* The read-only variant of the same row: `RICHOS_ENTITY` decided it and nothing in the
@@ -6587,21 +6527,240 @@ body.home-open {
   outline-offset: 2px;
 }
 
-/* THE PANEL'S OWN NAME — Ray's candidate .11 defect 3.4. It is the only heading in this
-   menu, so it takes the shell's strongest ink rather than a hint tier, and it takes the
-   same 16px the rows below it use: a panel title a person has to lean in for is the defect
-   wearing a smaller font.
+/* =========================================================================================
+   ROUND 27 — ONE SETTINGS, REACHED ONE WAY (richos-hq design/mockups/rounds/round-27,
+   product hunt 57 finding 18). Everything the top-right menu and the rail gear's Preferences
+   held lives in this one panel: a heading, three columns divided by `--line-soft` rules, then a
+   band across the foot on a faint `--tint-weak` wash. `settings-button.js` `buildMenu` builds
+   it; the parts `main.js` owns (Rich's model, interruptions, stored output, the technical
+   view's hint, the name field, the splash switch) are placed in it by `registerPreferences`.
 
-   COMPUTED, both themes, against the ground `.setmenu` declares — `--surface`, which is
-   `--card` in both themes:
-     --ink on --card    12.06:1 dark   18.07:1 light   (floor 4.5)
-   Both far over. No new token, no new color. */
+   THE PANEL'S OWN NAME — Ray's candidate .11 defect 3.4 — is now its heading, in Newsreader
+   at 26px, and the dialog's accessible name. --ink on --card: 12.06:1 dark, 18.07:1 light.
+   ========================================================================================= */
+.sm-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 10px 22px 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
 .setmenu-title {
-  margin: 0 0 4px;
-  font-size: 1rem;
-  font-weight: 600;
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.625rem;
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  line-height: 1.1;
   color: var(--ink);
-  line-height: 1.3;
+}
+.sm-cols {
+  display: grid;
+  grid-template-columns: 1fr 1.04fr 1.06fr;
+}
+/* A column with nothing registered in it is left out (a page with no shell behind it). */
+.sm-cols[data-n="2"] {
+  grid-template-columns: 1fr 1.04fr;
+}
+.sm-cols[data-n="1"] {
+  grid-template-columns: 1fr;
+}
+.sm-col {
+  padding: 12px 22px;
+  min-width: 0;
+}
+.sm-col + .sm-col {
+  border-left: 1px solid var(--line-soft);
+}
+/* A NARROW WINDOW, which round 27 does not draw (it is designed at 1440 by 900). Three columns
+   need the middle one wide enough for "Opus · high effort" in half of the model row: measured
+   in WebKit, that half needs 146px, which the column gives from a 1020px panel, i.e. a 1350px
+   window (1366: 148px, fits; 1320 and 1280: the half grew past the gold thumb, which no longer
+   covered the chosen label). At 1024 by 700, the app's minimum, the Company select, the Company
+   buttons button and Token spend's figure also ran past the third column's edge. So in a panel
+   narrower than 1030px (a window below 1360px) the first two columns keep their places and the
+   third, "Your company and team", runs across the full width under them.
+
+   THE TEXT SIZE MOVES THAT LINE TOO (second review of d623a3f2). The labels are rem and grow
+   with Text size; the columns are fractions of a panel that does not. A breakpoint on window
+   width alone kept three columns at 1440 and 135% with a 158.68px thumb under a 176px "Opus ·
+   high effort". So the line is the panel's own inside width (inside its 1px border) in rem plus
+   the fixed padding and rules: 50rem + 228px is 1028px at 100%, a 1360px window as before; at
+   90% a 1280px window, at 80% 1200px; and from 110% up it is wider than the panel can be (1108px
+   against 1098px), so larger text always gets two columns. */
+.setmenu {
+  container: setmenu / inline-size;
+}
+@container setmenu (width < calc(50rem + 228px)) {
+  .sm-cols[data-n="3"] {
+    grid-template-columns: 1fr 1fr;
+  }
+  .sm-cols[data-n="3"] > .sm-col:nth-child(3) {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+}
+/* Each column opens with a 14px caps label in `--trim-text`, the rail's company-label tier.
+   DECLARED 14px: it names a group whose every setting carries its own 16px name, so it is the
+   skippable tier (§15), and it still clears 4.5:1 on the panel (tests/contrast.js walks it). */
+.sm-group {
+  margin: 0 0 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--trim-text);
+}
+.sm-divider {
+  height: 1px;
+  margin: 10px 0;
+  background: var(--line-soft);
+}
+
+/* The rows sit on the column's text edge; a row that can be pressed keeps its hover tint by
+   reaching 8px past that edge on both sides. */
+.sm-col .set-row {
+  padding: 2px 0;
+  min-height: 40px;
+}
+.sm-col .bugbtn,
+.sm-foot .bugbtn,
+.sm-col .set-spend {
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  min-height: 40px;
+  padding: 5px 8px;
+}
+.sm-col #set-quota-open {
+  margin-top: 6px;
+}
+/* The Codex slot draws a rule above and below itself (round 20.2); in this column the one
+   below is the divider before Claude accounts, and the one above is not drawn. */
+.sm-col #set-codex .set-rule {
+  margin: 10px 0;
+}
+.sm-col #set-codex .set-rule:first-child {
+  display: none;
+}
+.sm-col .cx {
+  position: relative;
+  margin: 0 -8px;
+  padding: 6px 8px 4px;
+}
+/* The explanation tooltip (round 20.2) was 344px wide, hung from "Reviewing now". At 1280px
+   wide this column is 324px, so it ran 37px past the column and the panel clipped it (second
+   review of d3b1c723). In the panel it hangs from the whole Codex row instead and is as wide as
+   the row, up to the round's 344px; `codex-reviews.js` still points its arrow at the info icon from the
+   measured boxes. 8px below the row (4px of the row's padding, then 8px), inside the 14px
+   bridge that lets the pointer cross from the icon into it. */
+.sm-col .cx-who {
+  position: static;
+}
+.sm-col .cx-tip {
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: 344px;
+}
+/* Updates: the slot `updates.js` fills, after the column's last divider. */
+.sm-col .set-updates {
+  padding: 0;
+  margin: 0;
+  border-top: 0;
+}
+
+/* The parts that were Preferences, in the panel's vocabulary: a group's title in --ink-soft
+   over its options in --ink, and hints in --ink-soft. Computed on --card: --ink-soft 5.78:1
+   dark, 6.38:1 light; --ink 12.06:1 / 18.07:1. On the foot band's --tint-weak wash the ground
+   moves by under 2% and tests/contrast.js measures every node there. */
+.setmenu .popover-title {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+.setmenu .popover-option {
+  width: fit-content;
+  gap: 9px;
+  color: var(--ink);
+}
+.setmenu .popover-hint {
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+}
+.setmenu .md-note {
+  margin-top: 10px;
+}
+.setmenu #user-name-input {
+  width: 100%;
+  height: 38px;
+  margin: 0 0 4px;
+  padding: 0 12px;
+  border-radius: 8px;
+  transition: box-shadow 0.3s, border-color 0.3s;
+}
+.setmenu #user-name-input:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-soft);
+}
+/* Opened from the nameplate's "Set your name": the field is lit for 1.6s so the eye finds it
+   in a panel this size (`settings-button.js` `focusInside`). */
+.setmenu #user-name-input.is-called {
+  animation: called 1.6s ease-out 1;
+}
+@keyframes called {
+  0%,
+  30% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--gold) 45%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px var(--gold-soft);
+  }
+}
+
+/* THE FOOT BAND: what is set once (your name, the splash screen) and the floor (Bust a bug,
+   Request a feature), across the panel's three columns. The band itself is the panel's opaque
+   ground and each cell carries the faint wash as a plain translucent color, so the contrast gate
+   can composite it (a gradient is a color it cannot prove).
+
+   THE FLOOR STAYS IN VIEW. In a window shorter than the panel's content (the app's smallest is
+   1024 by 700) the panel scrolls inside its bound, and this band stays at its bottom edge while
+   the columns above it scroll, so Bust a bug, the floor CEO ruling §15 puts on every screen,
+   is in view as the panel comes up. The band is opaque, so nothing scrolling under it shows
+   through, and nothing changes where the panel is not scrolled. */
+.sm-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 1.04fr 1.06fr;
+  border-top: 1px solid var(--line-soft);
+  background-color: var(--surface);
+  border-radius: 0 0 13px 13px;
+  overflow: hidden;
+}
+.sm-foot[data-n="2"] {
+  grid-template-columns: 2.04fr 1.06fr;
+}
+.sm-foot[data-n="1"] {
+  grid-template-columns: 1fr;
+}
+.sm-foot-cell {
+  padding: 10px 22px 12px;
+  min-width: 0;
+  background-color: var(--tint-weak);
+}
+.sm-foot-cell + .sm-foot-cell {
+  border-left: 1px solid var(--line-soft);
+}
+@media (prefers-reduced-motion: reduce) {
+  .setmenu #user-name-input.is-called {
+    animation: none;
+  }
 }
 
 /* Row 2 of the reference: a full-row tappable ACTION, not a toggle. */
@@ -10682,18 +10841,17 @@ body.bug-dock-open .overlay-panel--desk {
    "LET CODEX REVIEW YOUR TEAM'S WORK" — round 20.2 (richos-hq design/mockups/rounds/round-20.2/),
    copied from its index.html ("ROUND 20", "ROUND 20.1", "ROUND 20.2" blocks) with the selectors
    scoped to this row; `codex-reviews.js` builds it. One row in Settings below Technical view,
-   between two rules. The menu widens from 264 to 372px while the row is in it, as drawn, so the
-   tooltip's words read at 16px in a comfortable column. Every color is an existing token; the one
+   between two rules (since round 27, in the panel's third column, under Token spend). Every
+   color is an existing token; the one
    derived value, --sw-off (ink at 62% dark, 58% light), carries the off and unavailable switch,
    as in the round. Contrast is computed in WebKit, both themes, by tests/codex-reviews.js.
 --------------------------------------------------------------------------------------------- */
 :root { --sw-off: rgba(223, 228, 238, 0.62); }
 :root[data-theme="light"] { --sw-off: rgba(12, 19, 34, 0.58); }
-.setmenu:has(#set-codex) { width: 372px; }
 /* THE TECHNICAL VIEW QUESTION IS AN ORDINARY `.overlay` (60), BELOW SETTINGS (300), like every
    overlay the button sits above (second review of 9463220ef, finding 2: at 310 it covered Settings
    and Bust a bug). The menu's Technical view switch opens it, and the menu closes as it does
-   (main.js openTechyScope), so the 372px menu covers neither Turn it on nor Cancel at the app's
+   (main.js openTechyScope), so the panel covers neither Turn it on nor Cancel at the app's
    minimum window, 1024 by 700 (tests/quota.js, appearance.js check 7). */
 /* TWO DEPARTURES FROM THE ROUND'S SPACING, both forced by a floor the round could not see:
    the rules' margin is 2px above and below (the round's 6px) and the row's padding 9px over
@@ -10926,14 +11084,8 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .set-spend svg { width: 16px; height: 16px; flex: none; color: var(--ink-soft); }
 .set-spend[aria-current="page"] svg { color: var(--gold-text); }
 
-/* THE FLOOR STAYS IN VIEW. The Token spend row (round 22.1) made the panel's content taller than its
-   bound in the app's smallest window (1024 by 700, on the home screen: tests/settings-fit.js check 1
-   measured Bust a bug ending at 728 in a 700px window). The bound already scrolls the panel; this
-   keeps Bust a bug, the floor CEO ruling §15 puts on every screen, at the panel's bottom edge while
-   the rows above it scroll, so it is in view as the panel comes up however many rows it holds. It
-   sits on the panel's own ground, so nothing changes where the panel is not scrolled. */
 /* Round 24 put Request a feature directly under Bust a bug, so the floor is the box holding both
-   (`settings-button.js` `buildFloor`), and the two stay in view together. */
-.setmenu > .set-floor { position: sticky; bottom: 0; z-index: 1; background-color: var(--surface); }
+   (`settings-button.js` `buildFloor`). Since round 27 it is the last cell of the panel's foot band,
+   which is what stays in view while the columns scroll (`.sm-foot`). */
 .set-floor > .bugbtn:hover:not(:disabled) { background: linear-gradient(var(--tint-gold), var(--tint-gold)), var(--surface); }
 .set-floor > .bugbtn + .bugbtn { margin-top: 2px; }

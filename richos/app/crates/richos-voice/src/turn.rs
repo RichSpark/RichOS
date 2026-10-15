@@ -291,7 +291,9 @@ pub fn may_sound(his_floor: bool, his_onset: bool) -> bool {
 /// floor; this decides what may be spoken now.
 #[derive(Debug)]
 pub struct AnswerGate<T> {
-    held: VecDeque<T>,
+    /// Held sentences in order, each with whether it is an announcement (a job's result, which
+    /// belongs to no answer) rather than a sentence of the answer.
+    held: VecDeque<(T, bool)>,
     /// The answer in progress was superseded or interrupted: nothing more of it is spoken.
     muted: bool,
 }
@@ -314,8 +316,23 @@ impl<T> AnswerGate<T> {
         if self.muted {
             return None;
         }
+        self.hold_or_pass(sentence, his_floor, false)
+    }
+
+    /// A sentence that belongs to no answer: a job's result, said on its own ("Will is on your
+    /// team now"). The mute is about the answer he stopped or went on past, and this is not part
+    /// of it, so it is spoken even after he stopped Rich and no turn has started since (review
+    /// rv-20261015T125238Z-37f970a3, finding 1). Everything else is [`AnswerGate::offer`]: held
+    /// while he has the floor, and behind sentences already held, so it never talks over him and
+    /// never jumps ahead of Rich. Once held it outlives the answer it waited behind: see
+    /// [`AnswerGate::supersede`].
+    pub fn offer_announcement(&mut self, sentence: T, his_floor: bool) -> Option<T> {
+        self.hold_or_pass(sentence, his_floor, true)
+    }
+
+    fn hold_or_pass(&mut self, sentence: T, his_floor: bool, announcement: bool) -> Option<T> {
         if his_floor || !self.held.is_empty() {
-            self.held.push_back(sentence);
+            self.held.push_back((sentence, announcement));
             return None;
         }
         Some(sentence)
@@ -323,19 +340,38 @@ impl<T> AnswerGate<T> {
 
     /// The held sentences, in order, once he has given the floor back. Nothing while he has it.
     pub fn release(&mut self, his_floor: bool) -> Vec<T> {
+        self.release_marked(his_floor).into_iter().map(|(sentence, _)| sentence).collect()
+    }
+
+    /// [`AnswerGate::release`], each sentence with whether it is an announcement. The caller
+    /// needs that because an announcement may have been held across a superseded answer, whose
+    /// generation is over, and it is still to be said.
+    pub fn release_marked(&mut self, his_floor: bool) -> Vec<(T, bool)> {
         if his_floor {
             return Vec::new();
         }
         self.held.drain(..).collect()
     }
 
-    /// He went on, or took the floor back, before this answer was said: drop what is held and
-    /// speak nothing more of it. Returns how many held sentences were dropped.
+    /// He went on, or took the floor back, before this answer was said: drop the answer's held
+    /// sentences and speak nothing more of it. Returns how many were dropped. A held
+    /// announcement is not part of the answer and stays held, in order, until the floor is free
+    /// (review rv-20261015T131103Z-6b6f899d, finding 1: his question while a hiring finished
+    /// was recognized, superseded the answer, and the "joined your team" notice went with it).
     pub fn supersede(&mut self) -> usize {
         self.muted = true;
-        let dropped = self.held.len();
-        self.held.clear();
-        dropped
+        let before = self.held.len();
+        self.held.retain(|(_, announcement)| *announcement);
+        before - self.held.len()
+    }
+
+    /// Announcements that had already left the gate and were cut before he heard them (see
+    /// [`Unheard::reclaim`]) are held again, at the front and in their order: they were sent
+    /// before anything held now. Not dropped by the mute, like any announcement.
+    pub fn hold_again(&mut self, announcements: Vec<T>) {
+        for sentence in announcements.into_iter().rev() {
+            self.held.push_front((sentence, true));
+        }
     }
 
     /// A new turn started: its answer is his to hear.
@@ -347,8 +383,134 @@ impl<T> AnswerGate<T> {
         self.held.len()
     }
 
+    /// Held sentences of the ANSWER, announcements not counted: what his new words would leave
+    /// unsaid.
+    pub fn held_answer(&self) -> usize {
+        self.held.iter().filter(|(_, announcement)| !announcement).count()
+    }
+
     pub fn muted(&self) -> bool {
         self.muted
+    }
+}
+
+/// **Announcements past the gate that he has not heard yet** (a job's result, "Will is on your
+/// team now"). [`AnswerGate`] keeps one only while it waits for him; once sent it is with the
+/// speaker (queued, being synthesized, or queued at the device), and an interruption there used
+/// to lose it: the generation that ends Rich's answer ended the announcement behind it too
+/// (review rv-20261015T132600Z-fdc3dafb, finding 1). This keeps each one until its last sample has
+/// actually played, so an interruption can hand it back to be said again.
+///
+/// Positions are the device's own count of samples: a block queued at the device ends at
+/// "samples played so far + samples queued", and it has been heard once that many have played.
+/// Only an interruption empties the device queue, and every interruption calls
+/// [`Unheard::reclaim`], so a position is never compared across one.
+#[derive(Debug)]
+pub struct Unheard<T> {
+    next_id: u64,
+    sent: Vec<Sent<T>>,
+    /// The latest one heard to its last sample. While more of its job result is still unheard,
+    /// that result is still being said, between two of its sentences, and a Stop then ends the
+    /// rest of it ([`Unheard::reclaim`]).
+    last_heard: Option<T>,
+}
+
+#[derive(Debug)]
+struct Sent<T> {
+    id: u64,
+    item: T,
+    /// Where its first sample sits in the device's count, once it is queued there.
+    start: Option<u64>,
+    /// Where its last sample queued so far ends.
+    through: u64,
+    /// Its last block is queued: once `through` has played, he has heard all of it.
+    complete: bool,
+}
+
+impl<T> Default for Unheard<T> {
+    fn default() -> Self {
+        Unheard { next_id: 1, sent: Vec::new(), last_heard: None }
+    }
+}
+
+impl<T> Unheard<T> {
+    /// It goes to the speaker now. Returns its id, which the speaker reports against.
+    pub fn sent(&mut self, item: T) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.sent.push(Sent { id, item, start: None, through: 0, complete: false });
+        id
+    }
+
+    /// A block of it reached the device queue, from `start` to `end` in the device's count.
+    pub fn queued(&mut self, id: u64, start: u64, end: u64) {
+        if let Some(s) = self.sent.iter_mut().find(|s| s.id == id) {
+            s.start.get_or_insert(start);
+            s.through = end;
+        }
+    }
+
+    /// Its last block is queued at the device.
+    pub fn complete(&mut self, id: u64) {
+        if let Some(s) = self.sent.iter_mut().find(|s| s.id == id) {
+            s.complete = true;
+        }
+    }
+
+    /// It will never reach the device (the speaker is gone, or synthesis failed and he was told).
+    pub fn forget(&mut self, id: u64) {
+        self.sent.retain(|s| s.id != id);
+    }
+
+    /// Forget every one that has played to its last sample, remembering the latest of them.
+    pub fn heard(&mut self, played: u64) {
+        for s in std::mem::take(&mut self.sent) {
+            if s.complete && played >= s.through {
+                if s.start.is_some() {
+                    self.last_heard = Some(s.item);
+                }
+            } else {
+                self.sent.push(s);
+            }
+        }
+    }
+
+    /// **The device queue was just cut** (he talked over Rich, his words started a new turn, or he
+    /// pressed Stop). Every announcement not fully played is returned, in order, to be held and
+    /// said again; the rest are forgotten. `he_stopped`: the one that was SOUNDING when he pressed
+    /// Stop is what he stopped, so it is not said again, or Stop could never end it; nor is any
+    /// later part of the same announcement (`same`: two items are sentences of one job result),
+    /// or Stop would end one sentence and the rest of the result would be said after it (review
+    /// rv-20261015T153739Z-e8097367-ffad, finding 1). The result is the one he stopped from its
+    /// first sample until its last sentence has played, so between two of its sentences, with
+    /// nothing of it sounding and the next still being synthesized, it is the one last heard
+    /// (review rv-20261015T162000Z-1749e1d8-d766, finding 1). A separate announcement is still
+    /// returned.
+    pub fn reclaim(&mut self, played: u64, he_stopped: bool, same: impl Fn(&T, &T) -> bool) -> Vec<T> {
+        let sent: Vec<Sent<T>> = self.sent.drain(..).collect();
+        // A barge-in hands the rest of the result back to be said, so it is still being said.
+        let last_heard = if he_stopped { self.last_heard.take() } else { None };
+        let sounding = |s: &Sent<T>| s.start.is_some_and(|start| played > start);
+        let stopped: Vec<&T> =
+            sent.iter().filter(|s| he_stopped && sounding(s)).map(|s| &s.item).chain(last_heard.as_ref()).collect();
+        let cut: Vec<bool> = sent
+            .iter()
+            .map(|s| {
+                let heard = s.complete && played >= s.through;
+                let stopped_by_him = he_stopped && (sounding(s) || stopped.iter().any(|t| same(t, &s.item)));
+                heard || stopped_by_him
+            })
+            .collect();
+        sent.into_iter().zip(cut).filter(|(_, cut)| !cut).map(|(s, _)| s.item).collect()
+    }
+
+    /// How many are with the speaker or the device and not yet heard.
+    pub fn len(&self) -> usize {
+        self.sent.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sent.is_empty()
     }
 }
 
@@ -538,6 +700,29 @@ mod tests {
         assert_eq!(g.offer("late", false), None, "the rest of a superseded answer was said");
         g.next_turn();
         assert_eq!(g.offer("next turn", false), Some("next turn"));
+    }
+
+    /// INVARIANT — the review's case (rv-20261015T125238Z-37f970a3, finding 1, fixture
+    /// `work-result-gate.rs`). He tapped Stop on a spoken reply and waited; no turn started. A
+    /// job's result that arrives then is still said; the stopped answer is still not; and the
+    /// result waits while he has the floor.
+    #[test]
+    fn a_result_after_he_stopped_rich_is_still_said_and_never_over_him() {
+        let mut g = AnswerGate::new();
+        g.supersede(); // `force_barge_in`: tap-to-stop. No `next_turn` follows.
+        let joined = "Will (Marketing Director) is on your team now, ready to take work.";
+        assert_eq!(g.offer_announcement(joined, false), Some(joined), "the joined notice was dropped");
+        assert_eq!(g.offer("rest of the stopped reply", false), None, "the stopped reply was said");
+
+        assert_eq!(g.offer_announcement(joined, true), None, "the notice talked over him");
+        assert!(g.release(true).is_empty(), "released while he still had the floor");
+        assert_eq!(g.release(false), vec![joined], "the held notice was lost");
+
+        // Behind a sentence of Rich's that is waiting for him, never ahead of it.
+        let mut g = AnswerGate::new();
+        assert_eq!(g.offer("Rich's sentence", true), None);
+        assert_eq!(g.offer_announcement(joined, false), None, "the notice jumped ahead of Rich");
+        assert_eq!(g.release(false), vec!["Rich's sentence", joined]);
     }
 
     /// INVARIANT: an earlier turn carried into his continuation comes first, and the turn that

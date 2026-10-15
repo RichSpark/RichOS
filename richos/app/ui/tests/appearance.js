@@ -344,21 +344,22 @@ async function openApp(browser, opts) {
 }
 
 const themeOf = (page) => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
-/// The menu's ROWS, in order. `.setmenu-title` is excluded by name and not by position: it
-/// is the panel's own name rather than a row — added for Ray's candidate .11 defect 3.4,
-/// because he found a panel of settings with no word on it saying it was Settings — and
-/// §15's ruling is about the ORDER OF THE ROWS. Check 11b asserts the title itself.
-/// The floor (round 24, `settings-button.js` `buildFloor`) is one sticky box holding Bust a bug
-/// and Request a feature directly under it; each of its two buttons is a row of its own.
+/// The panel's ROWS, in order: column by column, then the foot band's cells (round 27). The
+/// panel's heading, each column's caps label, the dividers and the technical view's hint are
+/// not rows. The floor (round 24, `settings-button.js` `buildFloor`) holds Bust a bug and
+/// Request a feature directly under it; each of its two buttons is a row of its own. A part
+/// that was Preferences is named by its group title.
 const menuRows = (page) =>
   page.evaluate(() =>
-    [...document.querySelectorAll("#set-menu > *")]
-      .filter((n) => !n.classList.contains("setmenu-title"))
+    [...document.querySelectorAll("#set-menu .sm-col, #set-menu .sm-foot-cell")]
+      .flatMap((b) => [...b.children])
+      .filter((n) => !n.matches(".sm-group, .sm-divider, .popover-hint"))
       .flatMap((n) => (n.classList.contains("set-floor") ? [...n.children] : [n]))
-      .map((n) =>
+      .map((n) => {
         // The Codex row's name is its title; the rest of its text is its tooltip's words.
-        n.querySelector(".set-name, #cx-title") ? n.querySelector(".set-name, #cx-title").textContent.trim() : n.textContent.trim()
-      )
+        const name = n.querySelector(".set-name, #cx-title, .popover-title");
+        return name ? name.textContent.trim() : n.textContent.trim();
+      })
   );
 
 /// `.setmenu` carries `animation: setrise 0.2s ... both` — opacity 0 to 1 over a 14px
@@ -915,7 +916,6 @@ async function main() {
       ["corrections", async (p) => { await p.click("#nav-corrections"); await overlayOpen(p, "#corrections-overlay"); }],
       ["feedback", async (p) => { await p.click("#nav-feedback"); await overlayOpen(p, "#feedback-overlay"); }],
       ["search", async (p) => { await p.click("#nav-search"); await overlayOpen(p, "#search-overlay"); }],
-      ["preferences", async (p) => { await p.click("#rail-settings"); await overlayOpen(p, "#assertiveness-popover"); }],
     ];
     const report = [];
     for (const [name, drive] of surfaces) {
@@ -1215,56 +1215,32 @@ async function main() {
 
   // ---- 8. the menu's contents, in §15's order ------------------------------------------
 
-  await run.check("8  the menu is theme, then Text size, then Technical view, then the floor", async () => {
+  await run.check("8  the panel is theme, then Text size, then Technical view, in round 27's places, then the floor", async () => {
     const page = track(await openApp(browser));
     await openMenu(page);
     const rows = await menuRows(page);
     assertEqual(
       rows,
-      // "Splash screen" AND NOT "Opening screen" SINCE 2026-09-18 — audit-10 row 1. The
-      // ORDER is untouched; only the fourth row's word changed. It had to: this list holds
-      // BOTH "Opening screen" (the 3 s curtain, `splash.js`) and, two rows below, "Home
-      // screen" (the landing surface, `home.js`) — and two audits in a row read the first
-      // name as governing the second surface and filed a FAIL against a switch that was
-      // working. The full argument is beside the control in `index.html`; the check that
-      // pins it, with the home screen as its negative control, is `splash.js` 11b.
-      // "Technical view" AND NOT "Techy Mode" SINCE 2026-09-19 — Ray's candidate-.12
-      // defect A. One setting carried two names: this row said "Techy Mode" while the gear
-      // panel said "Technical view" and THIS toggle's own modal is headed "Turn off the
-      // technical view". The ORDER is untouched; only the third row's words changed.
-      ["Theme", "Text size", "Technical view", "Token spend", "Let Codex review your team’s work", "Claude Code quota", "Company", "Home screen", "Claude accounts", "Connected folders (repositories)", "Memory folder", "Use Rich from your phone", "Updates", "Bust a bug!", "Request a feature"],
-      "§15 fixes the first three: Text size 'directly under the theme switch', and 'directly under " +
-        "that, a Techy Mode toggle'. The technical-only Claude Code quota row follows that toggle. The splash screen's off switch is not in this menu " +
-        "since the CEO's 2026-10-06 feedback item 7 (it is in the gear's general settings), and Bust a bug is always the floor. " +
-        "Updates (RICH-TODOs row 12) was added on 2026-08-31 BELOW all four and ABOVE the floor, for " +
-        "the same reason the opening-screen row sits where it does: the ruling does not name it, and " +
-        "the floor stays the floor. Company (2026-09-01, the entity picker's durable half) went in " +
-        "at the same rank and for the same reason, above Updates because it is a preference and " +
-        "Updates is a status panel. Home screen (2026-09-01 — what the home screen\'s company " +
-        "buttons say, and which of them show) went in directly under Company, because it is " +
-        "about the same six things Company is about, and above Updates for the same reason " +
-        "Company is: a preference outranks a status panel. The floor is still the floor. " +
-        "Claude accounts (2026-10-06, round 18, the CEO's feedback item 9) took the place of the " +
-        "old Account connection row and sits above the folders row, as round 18 draws it, for " +
-        "everyone whatever Technical view is set to; the first account's sign-in lives in its card. " +
-        "Memory folder (2026-09-18, audit-7 row 13) went in directly under the account row " +
-        "and above Updates, on the same reasoning as every row before it: the ruling does not " +
-        "name it, it is a preference rather than a status panel, and the floor stays the floor. " +
-        "It sits with the other two rows that open a sheet about where something of his lives, " +
-        "and it EXISTS because 'Not now' is now remembered — an offer that stops being asked " +
-        "needs a door that is not a question. " +
-        "Use Rich from your phone (2026-09-18, the phone channel, plan §4.1) went in directly " +
-        "under Memory folder and above Updates, on the same reasoning as every row before it: " +
-        "the ruling does not name it, the floor stays the floor. It is the ONE ROW IN THIS MENU " +
-        "THAT IS NOT A PREFERENCE — it is a thing he does once, ever — and that is why it sits " +
-        "at the bottom of the preferences rather than among them, next to the other rows that " +
-        "open a sheet about an arrangement rather than flipping a switch. " +
-        "Let Codex review your team's work (2026-10-09, round 20.2, the CEO's ruling §114) sits " +
-        "directly below Technical view, between two rules, as round 20.2 draws it, for everyone. " +
-        "Token spend (2026-10-10, round 22.1, the CEO's ruling §118: \"That needs to be a row in " +
-        "quick settings.\") sits between them, directly under Technical view, as round 22.1 draws it. " +
-        "Request a feature (2026-10-11, round 24: \"Under the 'Bust a bug' button, I want to add a " +
-        "'Request a feature' button\") is the floor's second row, directly under Bust a bug."
+      // ROUND 27 (richos-hq design/mockups/rounds/round-27, NOTES.md "Where every setting now
+      // lives"): ONE Settings panel holds what the top-right menu and the rail gear's
+      // Preferences held. Column 1 "How it looks", column 2 "Working with Rich", column 3 "Your
+      // company and team", then the band across the foot; the floor is still last.
+      // §15 still fixes the first three: Text size "directly under the theme switch", and
+      // "directly under that, a Techy Mode toggle" (named "Technical view" since Ray's
+      // candidate-.12 defect A). The technical-only Claude Code quota row follows that toggle.
+      // "Splash screen" AND NOT "Opening screen" since audit-10 row 1 (`splash.js` 11b), and it
+      // sits in the foot band, away from the first things the panel shows (the CEO's
+      // 2026-10-06 feedback item 7). Rich's model is first in the middle column, never in the
+      // first (§119: "in general settings, not in quick settings"). Request a feature is the
+      // floor's second row, directly under Bust a bug (round 24).
+      [
+        "Theme", "Text size", "Technical view", "Claude Code quota", "Keep the stored output",
+        "Rich's model", "How much should Rich interrupt you?", "Use Rich from your phone",
+        "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Claude accounts",
+        "Connected folders (repositories)", "Memory folder", "Updates",
+        "Your name", "Splash screen", "Bust a bug!", "Request a feature",
+      ],
+      "round 27's table, column by column, then the foot band"
     );
     await page.close();
     return rows.join(" -> ");
@@ -1274,35 +1250,32 @@ async function main() {
 
   // ---- 8a. ONE SETTING, ONE NAME ------------------------------------------------------
 
-  await run.check("8a  the technical view is called the SAME thing in both panels and in its own modal", async () => {
+  await run.check("8a  the technical view has ONE switch, and it is called the same thing as its own modal", async () => {
     // Ray's candidate-.12 defect A, and it is a defect about a PERSON rather than about code:
     // the gear panel said "Technical view" with a "Show it" checkbox, the settings menu said
     // "Techy Mode" with a toggle, and clicking that toggle opened a modal headed "Turn off the
-    // technical view" (frame 13). One setting, three surfaces, two names — so a person who
-    // turns off "Techy Mode" is told they turned off something else. "Techy Mode" was also the
-    // informal of the two, in front of an audience of non-technical CEOs.
+    // technical view" (frame 13). One setting, three surfaces, two names. Round 27 (product
+    // hunt 57 finding 18) went further: the gear and its "Show it" checkbox are gone, so there
+    // is ONE switch, in the one Settings panel.
     //
-    // THE THREE SURFACES ARE COMPARED WITH EACH OTHER, not each against a literal. Three
-    // pinned literals would pass happily while they drifted apart the next time one of them
-    // was edited, which is exactly how this shipped.
+    // THE SURFACES ARE COMPARED WITH EACH OTHER, not each against a literal: pinned literals
+    // would pass happily while they drifted apart the next time one of them was edited.
     const page = track(await openApp(browser));
     await openMenu(page);
     const menuRow = (await page.textContent("#set-techy-label")).trim();
-    const gearTitle = await page.evaluate(() => {
-      // The gear panel's own heading for this switch: the nearest preceding `.popover-title`.
-      let node = document.getElementById("techy-default").closest(".popover-option");
-      while (node && !(node.matches && node.matches(".popover-title"))) node = node.previousElementSibling;
-      return node ? node.textContent.trim() : "";
-    });
-    // The third door is the scope modal's heading, written by `renderTechyScope`. It is read
+    const doors = await page.evaluate(() => ({
+      switches: document.querySelectorAll("#set-techy").length,
+      gone: ["techy-default", "rail-settings", "assertiveness-popover"].filter((id) => document.getElementById(id)),
+      hint: !!document.querySelector("#set-menu #techy-hint"),
+    }));
+    assertEqual(doors, { switches: 1, gone: [], hint: true },
+      "one switch, with the Preferences hint under it, and no second door");
+    // The other door is the scope modal's heading, written by `renderTechyScope`. It is read
     // from the source rather than driven, because reaching it needs a live conversation and
     // this suite runs on the static page; the sentence is the thing under test either way.
     const modal = MAIN_JS.match(/techyScopeTitleEl\.textContent = on \? "([^"]+)" : "([^"]+)"/);
 
-    assertEqual(menuRow, gearTitle,
-      "the settings row and the gear panel name the same setting differently — defect A");
     assert(!/techy/i.test(menuRow), `a person-facing name must not be ${JSON.stringify(menuRow)}`);
-    assert(!/techy/i.test(gearTitle), `a person-facing name must not be ${JSON.stringify(gearTitle)}`);
     assert(modal, "renderTechyScope's two headings were not found in main.js");
     for (const heading of [modal[1], modal[2]]) {
       assert(
@@ -1311,7 +1284,7 @@ async function main() {
       );
     }
     await page.close();
-    return `both panels say ${JSON.stringify(menuRow)}; the modal says ${JSON.stringify(modal[2])}`;
+    return `one switch, ${JSON.stringify(menuRow)}; the modal says ${JSON.stringify(modal[2])}`;
   });
 
   await run.check("9  the accelerator is the APP's — preventDefault, and it moves the stored number", async () => {
@@ -1390,7 +1363,7 @@ async function main() {
     return "row 100->110 by click, 110->100 by ⌘-, and the row's reading tracked both";
   });
 
-  await run.check("11  Technical view: the menu row and the rail preference are ONE state, through the choice §7.1 asks for", async () => {
+  await run.check("11  Technical view: the ONE switch asks through the choice §7.1 asks for, both ways", async () => {
     // THIS CHECK WAS RED ON MAIN, AND IT WAS THE CHECK THAT WAS WRONG. It asserted that
     // clicking `#set-techy` calls `set_techy_default` — the behavior this row had until
     // `68a91f0e`. Since 2026-09-18 every scope-ambiguous switch goes through
@@ -1402,15 +1375,14 @@ async function main() {
     // conversation open, and the second half below is that branch, measured rather than
     // assumed.
     //
-    // WHAT THIS CHECK OWNS, and why it is not a duplicate of `techy.js` 23-29: those drive
-    // the RAIL switch, the chip and ⌘⇧T, and they own the sheet's contents. This owns the
-    // SETTINGS MENU door — the one piece of chrome on every screen — and the claim that the
-    // menu row and the rail preference are ONE state rather than two that agree.
+    // ROUND 27 made this the technical view's ONLY switch (the rail gear's "Show it" checkbox
+    // is gone), so what this owns is that the switch reaches the store and shows what the
+    // store took, in both directions. `techy.js` 23-29 own the sheet's contents.
     const page = track(await openApp(browser));
     await openThread(page, "acme");
     await openMenu(page);
 
-    // ---- the menu door asks, and the answer reaches the rail ----------------------------
+    // ---- the switch asks, and the answer is what it shows next time ---------------------
     const directWrite = await invokeCount(page, "set_techy_default");
     await page.click("#set-techy");
     assertEqual(
@@ -1421,30 +1393,24 @@ async function main() {
     assertEqual(
       await invokeCount(page, "set_techy_default"),
       directWrite,
-      "the menu row wrote the global default DIRECTLY from inside a conversation, which is " +
+      "the switch wrote the global default DIRECTLY from inside a conversation, which is " +
         "the path §7.1 replaced: with one open, every switch asks where it applies"
     );
-    await page.click("#rail-settings");
-    await overlayOpen(page, "#assertiveness-popover");
+    await openMenu(page);
     assertEqual(
-      await page.evaluate(() => document.getElementById("techy-default").checked),
+      await page.evaluate(() => document.getElementById("set-techy").checked),
       true,
-      "the rail's own preference followed the menu"
+      "the switch shows what the store took"
     );
 
     // ---- and back the other way, which is the direction a one-way binding still passes ---
-    // THE RAIL SWITCH IS SCOPE-AMBIGUOUS TOO, so this half asks as well. The popover is
-    // deliberately left open behind the sheet: the sheet is an `.overlay` (z-index 60) and
-    // the popover a `.popover` (20), so tidying the popover away first would be clicking the
-    // gear through a modal — `techy.js`'s own helper carries the same measurement.
-    await page.click("#techy-default");
+    await page.click("#set-techy");
     assertEqual(await confirmTechyScope(page), "all-companies", "the same first option, in the off direction");
-    await page.click("#rail-settings");
     await openMenu(page);
     assertEqual(
       await page.evaluate(() => document.getElementById("set-techy").checked),
       false,
-      "and the menu followed the rail — a binding that only works one way is two states with a lag"
+      "and it shows the off the store took — a binding that only works one way is two states with a lag"
     );
     await page.close();
 
@@ -1467,41 +1433,39 @@ async function main() {
       "and the row shows what was taken"
     );
     await bare.close();
-    return "in a conversation: menu -> sheet (first option preselected) -> rail, and rail -> sheet -> menu; with none open: straight to set_techy_default, no sheet";
+    return "in a conversation: switch -> sheet (first option preselected) -> store, on and off; with none open: straight to set_techy_default, no sheet";
   });
 
-  await run.check("11b  the splash off switch is in the general settings only, not the quick settings (CEO 2026-10-06 item 7)", async () => {
-    // A GUARD-RAIL, and it has changed shape twice: READ THIS BEFORE CHANGING IT AGAIN.
+  await run.check("11b  the splash off switch is in the foot band of the one Settings panel, once (CEO 2026-10-06 item 7, round 27)", async () => {
+    // A GUARD-RAIL, and it has changed shape three times: READ THIS BEFORE CHANGING IT AGAIN.
     //
     // It was written for one state behind two doors (the rail gear popover AND the universal
-    // menu), then Ray's candidate .11 defect 3.4 cut it to one door, the universal menu's.
-    // The CEO's feedback of 2026-10-06, item 7, moves that one door: "Move the splash screen
-    // toggle to the general settings section (i.e. remove from quick settings because ideally
-    // I don't want them to turn it off)". The universal menu is the quick settings (his
-    // screenshot updates.png is that menu); the rail gear popover is the general settings.
+    // menu), then Ray's candidate .11 defect 3.4 cut it to one door. The CEO's feedback of
+    // 2026-10-06, item 7: "Move the splash screen toggle to the general settings section (i.e.
+    // remove from quick settings because ideally I don't want them to turn it off)". Round 27
+    // (product hunt 57 finding 18) made Settings ONE panel, so there is no quick tier; the
+    // switch sits in the band across its foot, away from the first things it shows.
     //
-    // So this pins: the switch EXISTS in the gear popover, it is NOT in the quick settings
-    // menu, it moves the state both ways, and the mirror `splash.js` reads synchronously on
-    // the next launch agrees with it.
+    // So this pins: the switch exists ONCE, in the foot band and not in the first column, it
+    // moves the state both ways, and the mirror `splash.js` reads synchronously on the next
+    // launch agrees with it.
     const page = track(await openApp(browser));
     await openMenu(page);
     assertEqual(
-      await page.locator("#set-menu #set-splash, #set-menu #set-splash-row").count(),
-      0,
-      "the quick settings menu still offers the splash switch; the CEO moved it to the general settings"
-    );
-    assertEqual(
       (await page.textContent(".setmenu-title")).trim(),
       "Settings",
-      "the settings menu does not name itself, so the panel a person lands on is unlabeled"
+      "the settings panel does not name itself, so the panel a person lands on is unlabeled"
     );
-    await page.keyboard.press("Escape");
-    await page.waitForSelector("#set-menu", { state: "hidden" });
-
-    await page.click("#rail-settings");
-    await overlayOpen(page, "#assertiveness-popover");
-    assertEqual(await page.locator("#assertiveness-popover #splash-enabled").count(), 1,
-      "the general settings do not offer the splash switch, and 'from settings' is the CEO's word");
+    const where = await page.evaluate(() => {
+      const box = document.getElementById("splash-enabled");
+      return {
+        copies: document.querySelectorAll("#splash-enabled, #set-splash, #set-splash-row").length,
+        inFoot: !!box.closest("#set-menu .sm-foot"),
+        inFirstColumn: !!box.closest("#set-menu .sm-col:first-child"),
+      };
+    });
+    assertEqual(where, { copies: 1, inFoot: true, inFirstColumn: false },
+      "one splash switch, in the panel's foot band, away from the first things it shows");
     const title = await page.evaluate(() => {
       let n = document.getElementById("splash-enabled").closest(".popover-option").previousElementSibling;
       while (n && !n.classList.contains("popover-title")) n = n.previousElementSibling;
@@ -1528,7 +1492,7 @@ async function main() {
     const mirrored = await page.evaluate(() => window.localStorage.getItem("richos.splash.enabled"));
     assert(mirrored !== "false", "the local mirror disagrees with the switch: " + mirrored);
     await page.close();
-    return "in the gear popover only, absent from the quick settings, both directions observed, the mirror agrees";
+    return "once, in the foot band, both directions observed, the mirror agrees";
   });
 
   // ---- 12-13. the type scale itself ------------------------------------------------------
@@ -1974,8 +1938,11 @@ async function main() {
     assertEqual(unset.label, "Set your name", "it says what is true, and it is an offer rather than a dead end");
     assert(unset.richLabelGone, "Rich's nameplate is gone from the CEO's own rail");
 
+    // Round 27: the unset nameplate opens the ONE Settings panel on the name field.
     await page.click("#rail-identity");
-    await overlayOpen(page, "#assertiveness-popover");
+    await overlayOpen(page, "#set-menu");
+    assertEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), "user-name-input",
+      "the nameplate opens Settings with the name field ready");
     await page.fill("#user-name-input", "Alex Booster");
     // The `change` handler is `await set_user_name` and THEN `await renderUserIdentity()`,
     // which re-reads `get_user_identity`. The second read is what paints the initials and the
@@ -2043,7 +2010,7 @@ async function main() {
       ["corrections", async (p) => { await p.click("#nav-corrections"); await overlayOpen(p, "#corrections-overlay"); }],
       ["feedback", async (p) => { await p.click("#nav-feedback"); await overlayOpen(p, "#feedback-overlay"); }],
       ["search", async (p) => { await p.click("#nav-search"); await overlayOpen(p, "#search-overlay"); }],
-      ["preferences", async (p) => { await p.click("#rail-settings"); await overlayOpen(p, "#assertiveness-popover"); }],
+      // Round 27: the gear's Preferences is gone; everything it held is in this one panel.
       ["settings-menu", async (p) => { await openMenu(p); }],
     ];
     const made = [];
@@ -2065,7 +2032,7 @@ async function main() {
         await page.close();
       }
     }
-    assertEqual(made.length, 12, "six surfaces, two themes");
+    assertEqual(made.length, 10, "five surfaces, two themes");
     return made.length + " shots: " + made.join(", ");
   });
 
@@ -2084,7 +2051,7 @@ async function main() {
     await openMenu(page);
     const rows = await page.evaluate(() => {
       const out = [];
-      for (const btn of document.querySelectorAll("#set-menu > .set-row > button")) {
+      for (const btn of document.querySelectorAll("#set-menu .set-row > button")) {
         out.push({
           id: btn.id || "(no id)",
           text: btn.textContent,
@@ -2094,7 +2061,7 @@ async function main() {
       }
       return out;
     });
-    assert(rows.length > 0, "no button found directly inside a `.set-row` — did the menu's markup move?");
+    assert(rows.length > 0, "no button found directly inside a `.set-row` — did the panel's markup move?");
     for (const row of rows) {
       assert(
         row.scrollWidth <= row.clientWidth,

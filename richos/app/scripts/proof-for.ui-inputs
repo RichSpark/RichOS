@@ -161,7 +161,7 @@ rail-initials-fit.js    @shell
 speckled-ground.js      @shell @home @splash richos/app/ui/speckle.js richos/app/ui/speckle-app.js richos/app/ui/speckle.css richos/app/ui/timeline.js richos/app/ui/mock.js
 
 # ---- one screen each -----------------------------------------------------------------------
-background-work.js      @shell richos/app/ui/work-summary.js richos/app/ui/timeline.js
+background-work.js      @shell richos/app/ui/work-summary.js richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
 no-home-network.js      @shell @phone richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/phone/ richos/web/web-app/
 permissions.js          @shell richos/app/ui/permissions.js
 questions.js            @shell richos/app/ui/questions.js richos/app/ui/timeline.js

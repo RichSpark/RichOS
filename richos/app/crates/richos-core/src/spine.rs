@@ -67,7 +67,30 @@ pub enum SpineError {
     /// swallowed: an undrained record is the CEO's words still waiting to be delivered.
     #[error("steering intake: {0}")]
     Steering(String),
+    /// A job's result could not be taken off its assignment to be written into the
+    /// conversation ([`Spine::say_work_results`]); it stays pending there.
+    #[error("assignments: {0}")]
+    Assignments(String),
 }
+
+/// **The sentence the interview's team proposal ends on** (`skills/bootstrap-interview/SKILL.md`,
+/// which the front desk carries word for word), compared lowercase with a typographic
+/// apostrophe read as a plain one. His go to it starts the hiring ([`Spine::is_go_on_the_team_proposal`]).
+const TEAM_PROPOSAL_ASK: &str = "say go and i'll get them hired now";
+
+/// **What the register hands back for a task** (`assignment.rs`, `Receipt::sentence` and
+/// `sentence_after_questions`). The first is what the app says at once on his go; either, when
+/// the register's answer streams in afterwards, is the same words and is not said twice.
+const GO_RECEIPT: &str = "On it!";
+const GO_RECEIPT_AFTER_QUESTIONS: &str = "Got it. On it!";
+
+/// **His go, as a person says it**, compared lowercase with everything but letters, digits and
+/// spaces dropped ("Go.", "Yes, go!", "OK, go ahead", "Let's go"). Anything longer or different
+/// ("Go, but drop Beth") is the model's to answer, as before.
+const GO_WORDS: [&str; 14] = [
+    "go", "go ahead", "go for it", "yes", "yes go", "yes go ahead", "yes please", "ok go", "okay go",
+    "ok go ahead", "okay go ahead", "do it", "hire them", "lets go",
+];
 
 /// A prompt accepted while a turn was in flight, awaiting delivery at the next turn
 /// boundary (queue-not-interrupt: the CEO is never blocked, workers are never killed).
@@ -2063,6 +2086,34 @@ impl Spine {
         Ok(turn_id)
     }
 
+    /// **A job's result, written into the conversation it was asked in, as Rich's message**
+    /// (nightly 57's hunt, finding 6). "Will and Beth have both joined your team" was a card the
+    /// window drew from the assignment's notice, marked told as it was handed over, and gone
+    /// after a relaunch: the conversation ended at "On it!" and he never saw his team hired.
+    ///
+    /// Takes this conversation's waiting results off their assignments
+    /// ([`crate::assignment::NoticeKind::is_result`]), oldest first, and raises each as a
+    /// proactive message ([`Self::raise_proactive`], `Digest`): durable, in the timeline after
+    /// a relaunch, in the tail the front desk is primed with, and drawn at once by the window's
+    /// `rich://proactive-message`. The notices that say where a job stands now stay on their
+    /// assignments for the window's cards. Answers the words written, oldest first, so the shell
+    /// can hand them to the speaker in voice mode (`rich://work-result`): drawing the message
+    /// says nothing out loud.
+    ///
+    /// Called with the spine held and no turn running, so a result never lands inside a turn.
+    pub fn say_work_results(&mut self, engine_state: &std::path::Path, thread_id: &str) -> Result<Vec<String>, SpineError> {
+        let binding = self.ledger.thread_binding(thread_id)?;
+        let entity = binding.entity_id().as_str().to_string();
+        let results = crate::assignment::take_pending_notices_of(engine_state, &entity, thread_id, |kind| kind.is_result())
+            .map_err(|e| SpineError::Assignments(e.to_string()))?;
+        let mut written = Vec::new();
+        for notice in results.into_iter().filter(|notice| !notice.text.trim().is_empty()) {
+            self.raise_proactive(Some(thread_id), AttentionTier::Digest, &notice.text)?;
+            written.push(notice.text);
+        }
+        Ok(written)
+    }
+
     /// **A conversation the app opens on its own, with Rich's first message already in it**
     /// (the CEO, 2026-10-13: once dictation is set up, a conversation titled "Dictation feature"
     /// is created under the company, holding Rich's message about it).
@@ -2849,6 +2900,62 @@ impl Spine {
         }
     }
 
+    /// **Is this his go on the team the interview just proposed?** His words are one of
+    /// [`GO_WORDS`], and the last thing said in this conversation before them, Rich's own
+    /// proactive lines aside, is Rich's proposal ending [`TEAM_PROPOSAL_ASK`]. Typed or
+    /// spoken; never a turn the app or a phone wrote for him.
+    fn is_go_on_the_team_proposal(&self, binding: &ThreadBinding, turn_id: &str, text: &str) -> bool {
+        let plain = |words: &str| words.to_lowercase().replace('\u{2019}', "'");
+        let said: String = plain(text).chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect();
+        let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !GO_WORDS.contains(&said.as_str()) {
+            return false;
+        }
+        if !self.ledger.turn(turn_id).is_some_and(|turn| matches!(turn.source, Source::Text | Source::Jam)) {
+            return false;
+        }
+        let Ok(messages) = self.ledger.messages(binding.thread_id()) else { return false };
+        messages
+            .iter()
+            .rev()
+            .filter(|message| message.turn_id != turn_id)
+            .find(|message| self.ledger.turn(&message.turn_id).is_none_or(|turn| turn.source != Source::Proactive))
+            .is_some_and(|message| message.role == "assistant" && plain(&message.text).contains(TEAM_PROPOSAL_ASK))
+    }
+
+    /// **Say "On it!" now, as this turn's first words, when he has just said go on the team
+    /// proposal** ([`Self::is_go_on_the_team_proposal`]): written to the ledger at position 0
+    /// and sent to the window and every live surface the way a streamed word is. `true` when it
+    /// was said. A write that fails says nothing and leaves the turn to the model, as before.
+    fn say_on_it_ahead(&mut self, binding: &ThreadBinding, turn_id: &str, text: &str, live_turn: &mut LiveTurn) -> bool {
+        if !self.is_go_on_the_team_proposal(binding, turn_id, text) {
+            return false;
+        }
+        let at = match self.ledger.append_assistant_delta(turn_id, GO_RECEIPT, 0) {
+            Ok(at) => at,
+            Err(e) => {
+                eprintln!("[richos] his go on the team proposal: \"{GO_RECEIPT}\" could not be written ahead of the turn ({e}); the model says it");
+                return false;
+            }
+        };
+        // The chunk carries a space after the words: voice mode speaks `rich://chunk` through
+        // a sentence chunker that holds a full stop until it sees past it, so a bare "On it!"
+        // was spoken only when the turn completed. The window draws from the live surfaces
+        // below and the ledger keeps the words as they are.
+        if let Some(observer) = self.observer.as_deref() {
+            observer.on_event(&StreamEvent::Chunk {
+                thread_id: binding.thread_id().to_string(),
+                turn_id: turn_id.to_string(),
+                seq: 0,
+                text_delta: format!("{GO_RECEIPT} "),
+                at,
+            });
+        }
+        let runs = self.ledger.turn(turn_id).map(|t| t.text_runs.as_slice()).unwrap_or(&[]);
+        Self::forward_live(self.live.as_deref(), live_turn.on_text(runs, 0, GO_RECEIPT, now_millis()));
+        true
+    }
+
     /// Deliver one already-journaled turn to the current lease. Each assistant delta is
     /// persisted to the ledger FIRST (crash-safe partial capture) and then emitted LIVE
     /// to the UI sink, so the CEO sees Rich's reply render token-by-token. Turn-state
@@ -2902,6 +3009,24 @@ impl Spine {
         self.emit_live(self.turn_status_event(binding, turn_id, TurnStatus::Working, None));
         self.emit_live(self.thread_summary_event(binding, turn_id, ThreadStatus::Working));
 
+        // A turn the CEO never sees (re-prime injection, the rotation handoff summary)
+        // produces machinery he must never see either — §1.5's `internal` rule, the same
+        // distinction `ActionVisibility::Internal` already draws (`ledger.rs:119-133`),
+        // and the standing order that Rich never reveals or references session rotation.
+        let internal_turn = self.ledger.turn(turn_id).map(|t| t.source == Source::Internal).unwrap_or(false);
+        // The additive family's per-turn bookkeeping (§13). Holds no counter of its own:
+        // message ids come from the ledger's `text_runs` fold, activity identity and
+        // position from `machinery.rs`'s merge rules.
+        let mut live_turn = LiveTurn::new(EventFence::for_turn(binding, turn_id), internal_turn);
+
+        // **"ON IT!" THE INSTANT HE SAYS GO ON THE TEAM PROPOSAL** (nightly 57's product hunt,
+        // finding 3: it came 14 seconds after "Go.", written by a full model turn behind a
+        // re-prime, and it is always the same two words). Said here, before the request is
+        // prepared and before the model is asked anything, at position 0 of the turn; the
+        // lease's own items follow it one position on, and the register's copy of the same
+        // words is not said again (the stream below). The model still gets his go and hires.
+        let said_ahead = self.say_on_it_ahead(binding, turn_id, text, &mut live_turn);
+
         // Preparation belongs to the accepted request. Its text stays internal, but
         // its wait and cancellation must share the user's visible lifecycle.
         let preparation = if self.control.stop_claim_for(turn_id).is_some() {
@@ -2934,12 +3059,6 @@ impl Spine {
             other => CognitionError::Protocol(other.to_string()),
         });
 
-        // A turn the CEO never sees (re-prime injection, the rotation handoff summary)
-        // produces machinery he must never see either — §1.5's `internal` rule, the same
-        // distinction `ActionVisibility::Internal` already draws (`ledger.rs:119-133`),
-        // and the standing order that Rich never reveals or references session rotation.
-        let internal_turn = self.ledger.turn(turn_id).map(|t| t.source == Source::Internal).unwrap_or(false);
-
         // Disjoint field borrows: the closure appends each delta to the ledger AND emits
         // it live, while `lease` streams — `ledger`, `lease`, `observer`, `machinery_*`
         // are distinct fields of *self, so all can be borrowed at once.
@@ -2970,10 +3089,14 @@ impl Spine {
         let worker_session = self.lease.as_ref().map(|l| l.session_id().to_string());
         let lease = self.lease.as_mut();
         let mut persist_err: Option<LedgerError> = None;
-        // The additive family's per-turn bookkeeping (§13). Holds no counter of its own:
-        // message ids come from the ledger's `text_runs` fold, activity identity and
-        // position from `machinery.rs`'s merge rules.
-        let mut live_turn = LiveTurn::new(EventFence::for_turn(binding, turn_id), internal_turn);
+        // "On it!" took position 0 of this turn: the lease's items follow it one on, and the
+        // register's own copy of the words, the first time it streams, is not said again.
+        // A piece of the stream that could be the start of those words is held back
+        // (`held`) and said only if it turns out to be something else. A turn that ends with
+        // such a piece still held ended on a fragment of the words he already has.
+        let offset = u64::from(said_ahead);
+        let mut receipt_unsaid = said_ahead;
+        let mut held: Vec<(u64, String)> = Vec::new();
 
         let stop = if stopped_before_prompt {
             // An internal prime completing is not the user's request completing.
@@ -2987,33 +3110,56 @@ impl Spine {
                 // by text and machinery. The spine no longer counts text items itself —
                 // that would be the second counter G1 exists to forbid.
                 TurnItem::Text { seq, text: c } => {
-                    // Ledger stays the source of truth: persist the delta BEFORE emitting
-                    // — and persist it AT its shared-sequence position, so the
-                    // interleaving of text and machinery survives the process (§1.4 G1).
-                    let at = match ledger.append_assistant_delta(turn_id, c, seq) {
-                        Ok(at) => at,
-                        Err(e) => { persist_err = Some(e); return; }
-                    };
-                    // Then emit it live (clean output: assistant text only ever reaches here).
-                    if let Some(obs) = observer {
-                        obs.on_event(&StreamEvent::Chunk {
-                            thread_id: thread_id.to_string(),
-                            turn_id: turn_id.to_string(),
-                            seq,
-                            text_delta: c.to_string(),
-                            at,
-                        });
+                    // **The register's copy of the "On it!" already said** (finding 3) is held
+                    // back piece by piece while it can still be those words (the speller can
+                    // split it), and dropped once it is; anything else is said as it came.
+                    let mut pieces = vec![(seq + offset, c.to_string())];
+                    if receipt_unsaid {
+                        held.append(&mut pieces);
+                        let so_far: String = held.iter().map(|(_, piece)| piece.as_str()).collect();
+                        let so_far = so_far.trim_start();
+                        if so_far == GO_RECEIPT || so_far == GO_RECEIPT_AFTER_QUESTIONS {
+                            receipt_unsaid = false;
+                            held.clear();
+                            return;
+                        }
+                        if GO_RECEIPT.starts_with(so_far) || GO_RECEIPT_AFTER_QUESTIONS.starts_with(so_far) {
+                            return;
+                        }
+                        receipt_unsaid = false;
+                        pieces = std::mem::take(&mut held);
                     }
-                    // ADDITIVE (§13): message-started / message-delta, keyed to the run the
-                    // LEDGER just folded this delta into — so the boundary between "he said
-                    // X" and "then said Z" is the ledger's, not a second opinion.
-                    // Borrowed, never cloned: this runs once per delta, and copying the
-                    // whole reply-so-far each time would be quadratic in the reply length.
-                    let runs = ledger.turn(turn_id).map(|t| t.text_runs.as_slice()).unwrap_or(&[]);
-                    Self::forward_live(live_observer, live_turn.on_text(runs, seq, c, now_millis()));
+                    for (seq, c) in &pieces {
+                        let (seq, c) = (*seq, c.as_str());
+                        // Ledger stays the source of truth: persist the delta BEFORE emitting
+                        // — and persist it AT its shared-sequence position, so the
+                        // interleaving of text and machinery survives the process (§1.4 G1).
+                        let at = match ledger.append_assistant_delta(turn_id, c, seq) {
+                            Ok(at) => at,
+                            Err(e) => { persist_err = Some(e); return; }
+                        };
+                        // Then emit it live (clean output: assistant text only ever reaches here).
+                        if let Some(obs) = observer {
+                            obs.on_event(&StreamEvent::Chunk {
+                                thread_id: thread_id.to_string(),
+                                turn_id: turn_id.to_string(),
+                                seq,
+                                text_delta: c.to_string(),
+                                at,
+                            });
+                        }
+                        // ADDITIVE (§13): message-started / message-delta, keyed to the run the
+                        // LEDGER just folded this delta into — so the boundary between "he said
+                        // X" and "then said Z" is the ledger's, not a second opinion.
+                        // Borrowed, never cloned: this runs once per delta, and copying the
+                        // whole reply-so-far each time would be quadratic in the reply length.
+                        let runs = ledger.turn(turn_id).map(|t| t.text_runs.as_slice()).unwrap_or(&[]);
+                        Self::forward_live(live_observer, live_turn.on_text(runs, seq, c, now_millis()));
+                    }
                 }
                 TurnItem::Machinery(record) => {
-                    let record = record.stamp(thread_id, Some(turn_id), internal_turn);
+                    let mut record = record.stamp(thread_id, Some(turn_id), internal_turn);
+                    record.seq += offset;
                     // THE ONE machinery record that is read rather than merely retained.
                     // Everything else in this family is routed for later interpretation;
                     // this pair decides when Rich rotates, so it is consumed here, live.

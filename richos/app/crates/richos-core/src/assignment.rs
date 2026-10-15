@@ -207,6 +207,17 @@ pub enum NoticeKind {
     Held,
 }
 
+impl NoticeKind {
+    /// **What a job ended on, or the answer it brought**: a line that stays true once he has
+    /// heard it, so it is written into his conversation (nightly 57's hunt, finding 6: "Will and
+    /// Beth have both joined your team" was a card in the window and was gone after a relaunch).
+    /// The other kinds say where a job stands now (waiting on his approval, held, not known after
+    /// a relaunch), which a later moment can make untrue, so they stay cards.
+    pub fn is_result(self) -> bool {
+        matches!(self, Self::Answer | Self::Settled | Self::Failed | Self::Interrupted)
+    }
+}
+
 /// **Is this a piece of work he asked for, or a question he asked?** The CEO's ruling §58,
 /// 2026-09-18.
 ///
@@ -1095,6 +1106,18 @@ pub fn take_pending_notices(
     entity: &str,
     thread: &str,
 ) -> Result<Vec<PendingNotice>, AssignmentError> {
+    take_pending_notices_of(state, entity, thread, |_| true)
+}
+
+/// [`take_pending_notices`] for the notices whose kind `wanted` takes, and only those: the
+/// others stay pending for the read that wants them. The conversation takes a job's results
+/// to write them into itself ([`NoticeKind::is_result`]), the window the rest as cards.
+pub fn take_pending_notices_of(
+    state: &Path,
+    entity: &str,
+    thread: &str,
+    wanted: impl Fn(NoticeKind) -> bool,
+) -> Result<Vec<PendingNotice>, AssignmentError> {
     // Every notice that can be read is handed over; a damaged record's cannot be, and it is
     // said on stderr rather than taking the healthy ones with it (finding 08). The boot
     // reconciliation reports it as unreadable in its own line.
@@ -1106,13 +1129,13 @@ pub fn take_pending_notices(
     let at = now_ms();
     let mut pending = Vec::new();
     for row in rows {
-        if row.notices.iter().all(|n| n.delivered_at_ms.is_some()) {
+        if row.notices.iter().all(|n| n.delivered_at_ms.is_some() || !wanted(n.kind)) {
             continue;
         }
         let title = row.title.clone();
         let id = row.id.clone();
         let updated = update(state, entity, thread, &row.id, |record| {
-            for notice in record.notices.iter_mut().filter(|n| n.delivered_at_ms.is_none()) {
+            for notice in record.notices.iter_mut().filter(|n| n.delivered_at_ms.is_none() && wanted(n.kind)) {
                 notice.delivered_at_ms = Some(at);
             }
         })?;

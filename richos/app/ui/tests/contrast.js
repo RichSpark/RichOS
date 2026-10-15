@@ -864,11 +864,11 @@ const SURFACES = [
   },
   {
     name: "settings",
-    what: "the assertiveness popover",
+    what: "the one Settings panel (round 27): its three columns and the band across its foot, which hold what the gear's Preferences held",
     drive: async (p) => {
-      await p.click("#rail-settings");
-      await p.waitForSelector("#assertiveness-popover:not([hidden])");
-      await overlaySettled(p, "#assertiveness-popover");
+      await p.click("#set-btn");
+      await p.waitForSelector("#set-menu:not([hidden])");
+      await overlaySettled(p, "#set-menu");
     },
   },
   // NO SEPARATE SURFACE FOR THE COMPANY RADIOS, and that is a measured decision rather than
@@ -1314,11 +1314,9 @@ const SURFACES = [
       // opposite of the narrow "not meant to be read closely" exemption — so all of it is
       // measured and none of it is declared exempt.
       //
-      // Opened through the rail's own switch, which is the CEO's path: `#techy-default`
-      // flips, `requestTechyToggle` sees a conversation open, and the sheet asks where.
-      // The popover behind it is left open deliberately — the sheet is an `.overlay`
-      // (z-index 60) over a `.popover` (20), so the sheet is what gets measured and the
-      // popover's own nodes are filed as obscured, exactly as check 11 requires.
+      // Opened through the technical view's one switch, in Settings (round 27), which is the
+      // CEO's path: `#set-techy` flips, `requestTechyToggle` sees a conversation open, and the
+      // sheet asks where. Settings closes as the sheet opens (main.js `openTechyScope`).
       //
       // `hiring` AND NOT `acme`, and the reason is check 11 rather than taste. This is a
       // `role="dialog"` sheet, so everything behind it is filed `obscured` — and check 11
@@ -1335,9 +1333,9 @@ const SURFACES = [
       // three. `hiring` is in `northwind`, so all three are on screen.
       await p.click('.nav-thread[data-thread-id="hiring"]');
       await atHiringThread(p);
-      await p.click("#rail-settings");
-      await p.waitForSelector("#assertiveness-popover:not([hidden])");
-      await p.check("#techy-default");
+      await p.click("#set-btn");
+      await p.waitForSelector("#set-menu:not([hidden]) #set-techy");
+      await p.check("#set-techy");
       await p.waitForSelector("#techy-scope:not([hidden])");
       // All three options on screen, since the whole claim is that each of them is legible.
       // A sheet that painted before `openTechyScope` un-hid the middle row would measure
@@ -2906,9 +2904,9 @@ async function main() {
       const page = await openApp(browser, theme);
       await page.click('.nav-thread[data-thread-id="hiring"]');
       await settleOnThread(page, "hiring");
-      await page.click("#rail-settings");
-      await page.waitForSelector("#assertiveness-popover:not([hidden])");
-      await page.check("#techy-default");
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu:not([hidden]) #set-techy");
+      await page.check("#set-techy");
       await page.waitForSelector("#techy-scope:not([hidden])");
       await awaitSettled(page);
 
@@ -3002,8 +3000,8 @@ async function main() {
       const page = await openApp(browser, theme);
       await page.click('.nav-thread[data-thread-id="hiring"]');
       await settleOnThread(page, "hiring");
-      await page.click("#rail-settings");
-      await page.waitForSelector("#assertiveness-popover:not([hidden])");
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu:not([hidden])");
       await awaitSettled(page);
 
       // ONE CONTROL, BOTH OF ITS STATES, and it is measured by setting `.checked` in the
@@ -3016,9 +3014,9 @@ async function main() {
       //      two crops are the same element, at the same size, on the same ground, one frame
       //      apart. Nothing but the state differs.
       //
-      // It used to read `#splash-enabled` for the unchecked half. That control is gone from
-      // this popover — Ray's candidate .11 defect 3.4, one state, one door — and this shape
-      // does not need a second control at all.
+      // It reads `#splash-enabled`, the checkbox of this kind that Settings still holds (in the
+      // band across its foot). Round 27 removed the Preferences "Show it" checkbox this used
+      // to read: the technical view has one switch now, `#set-techy`, which is a switch.
       //
       // THE STATE IS SET AND THE CROP IS TAKEN IN THE SAME TURN OF THIS LOOP. The first
       // draft set both states first and screenshotted afterwards, so both crops were of the
@@ -3027,10 +3025,10 @@ async function main() {
       const measured = [];
       for (const want of [false, true]) {
         const b = await page.evaluate((state) => {
-          const node = document.getElementById("techy-default");
+          const node = document.getElementById("splash-enabled");
           node.checked = state;
           const r = node.getBoundingClientRect();
-          return { id: "techy-default", checked: node.checked, x: r.x, y: r.y, w: r.width, h: r.height };
+          return { id: "splash-enabled", checked: node.checked, x: r.x, y: r.y, w: r.width, h: r.height };
         }, want);
         assertEqual(b.checked, want, "the checkbox would not take the state to be measured");
         // The same three-pixel skirt check 16 uses, so the ground is READ off the panel
@@ -3044,7 +3042,7 @@ async function main() {
             height: Math.ceil(b.h + 6),
           },
         }));
-        crops[theme + ":techy-default:" + b.checked] = buf.toString("base64");
+        crops[theme + ":splash-enabled:" + b.checked] = buf.toString("base64");
         measured.push(Object.assign({ theme: theme }, C.measureIndicatorCrop(buf), { id: b.id, checked: b.checked }));
       }
       assert(
@@ -3082,7 +3080,7 @@ async function main() {
     // stops a half-themed control passing.
     for (const state of ["false", "true"]) {
       assert(
-        crops["light:techy-default:" + state] !== crops["dark:techy-default:" + state],
+        crops["light:splash-enabled:" + state] !== crops["dark:splash-enabled:" + state],
         "the " + (state === "true" ? "checked" : "unchecked") + " checkbox paints " +
           "byte-identical pixels in light and dark. That is not a ratio failure, it is the " +
           "proof that nothing in this app is painting the control — which is how defect 3.6 " +

@@ -92,8 +92,11 @@ async function main() {
       await menu(page);
       await waitText(page, "#set-dictation-state", want);
       assertEqual(await page.locator("#set-dictation-state.is-attention").count(), attention ? 1 : 0, want + ": attention");
-      const order = await page.locator("#set-menu > button.bugbtn").evaluateAll(b => b.map(x => x.id));
-      assert(order.indexOf("set-dictation-open") === order.indexOf("set-accounts-open") + 1, "right after Claude accounts, as drawn: " + order);
+      // Round 27: under "Working with Rich", after the interruption choice and directly above
+      // Use Rich from your phone, as drawn.
+      const order = await page.locator("#set-menu button.bugbtn").evaluateAll(b => b.map(x => x.id));
+      assert(order.indexOf("set-dictation-open") + 1 === order.indexOf("set-phone-open"), "directly above Use Rich from your phone, as drawn: " + order);
+      assertEqual(await page.evaluate(() => document.getElementById("set-dictation-open").closest(".sm-col").querySelector(".sm-group").textContent), "Working with Rich", "in the Working with Rich column");
       seen.push(want);
       await page.close();
     }

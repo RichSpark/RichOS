@@ -93,22 +93,22 @@ async function openApp(browser) {
   return page;
 }
 
-/// Open the gear. The popover re-reads the window on open, so this is also the trigger that
+/// Open Settings (round 27: the one panel, from the button at top right). It re-reads the window on open, so this is also the trigger that
 /// makes a config.json edited behind the app's back show up.
 async function openSettings(page) {
-  await page.click("#rail-settings");
-  await page.waitForSelector("#assertiveness-popover", { state: "visible" });
+  await page.click("#set-btn");
+  await page.waitForSelector("#set-menu", { state: "visible" });
   await page.waitForTimeout(120);
 }
 
 async function closeSettings(page) {
-  await page.click("#rail-settings");
+  await page.click("#set-btn");
   await page.waitForTimeout(60);
 }
 
 /// Which retention radio is checked, or null when none is — which is a real state, not a bug.
 async function selected(page) {
-  return page.$eval("#assertiveness-popover", (pop) => {
+  return page.$eval("#set-menu", (pop) => {
     const on = pop.querySelector('input[name="raw-retention"]:checked');
     return on ? on.value : null;
   });
@@ -130,7 +130,7 @@ const checkedIs = (page, value) =>
   surfaceSays(
     page,
     (v) => {
-      const on = document.querySelector('#assertiveness-popover input[name="raw-retention"]:checked');
+      const on = document.querySelector('#set-menu input[name="raw-retention"]:checked');
       return (on ? on.value : null) === v;
     },
     value
@@ -142,13 +142,13 @@ async function main() {
   const run = createRun("the raw-retention window as a setting (§7.2) — through the real shell");
 
   // ---- 1. the control is where a person would look -------------------------------------
-  await run.check("1. the window is a control behind the gear, not a constant in a source file", async () => {
+  await run.check("1. the window is a control in Settings, not a constant in a source file", async () => {
     const page = await openApp(browser);
     // Nothing on the conversation surface: §7.3's rule for techy mode applies to its
     // retention too — the calm view gains no affordance, and this is one line in Settings.
-    assertEqual(await page.isVisible("#retention-hint"), false, "nothing before the gear is pressed");
+    assertEqual(await page.isVisible("#retention-hint"), false, "nothing before Settings is opened");
     await openSettings(page);
-    const labels = await page.$$eval('#assertiveness-popover input[name="raw-retention"]', (els) =>
+    const labels = await page.$$eval('#set-menu input[name="raw-retention"]', (els) =>
       els.map((e) => ({ value: e.value, label: e.parentElement.textContent.trim(), enabled: !e.disabled }))
     );
     assertEqual(labels.length, 3, "three choices");
@@ -173,7 +173,7 @@ async function main() {
     // would say so. Both sides are read off disk.
     const page = await openApp(browser);
     await openSettings(page);
-    const onScreen = (await page.$$eval('#assertiveness-popover input[name="raw-retention"]', (els) =>
+    const onScreen = (await page.$$eval('#set-menu input[name="raw-retention"]', (els) =>
       els.map((e) => e.value)
     )).sort();
     const inRust = rustChoices();
