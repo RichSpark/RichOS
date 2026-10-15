@@ -44,6 +44,10 @@ window.RichSettings = (function () {
   var home = null; // { open() } — the home screen's company buttons: their labels and which show
   var codexReviews = null; // { render(container), onOpen() }, "Let Codex review your team's work" (round 20.2, codex-reviews.js)
   var spend = null; // { render(container), onOpen() }, "Token spend" (round 22.1, spend.js)
+  // What the rail gear's Preferences held until round 27, owned by main.js: { parts: { model,
+  // interrupt, "techy-hint", retention, name, splash } (nodes this file places), onOpen(),
+  // onClose() } — onClose is where Rich's model, held while the panel is open, is saved.
+  var preferences = null;
 
   var wrap = null;
   var menuEl = null;
@@ -212,6 +216,8 @@ window.RichSettings = (function () {
       id: "set-techy",
       "aria-labelledby": "set-techy-label",
     });
+    // The hint under it (round 27, from Preferences) says which tier holds the view on.
+    if (part("techy-hint")) input.setAttribute("aria-describedby", "techy-hint");
     row.appendChild(label);
     row.appendChild(input);
     return row;
@@ -398,7 +404,9 @@ window.RichSettings = (function () {
    *  from the label in weight and ink alone. Both computed in `.set-row-state` (style.css).
    */
   function buildDisclosureRow(id, label, onOpen, stateId) {
-    var b = elem("button", "bugbtn bugbtn--disclosure", { type: "button", role: "menuitem", id: id });
+    // A plain button, no `menuitem` role: since round 27 the panel is a dialog that holds a text
+    // field, radios and switches, not a menu, and a menuitem outside a menu is announced wrongly.
+    var b = elem("button", "bugbtn bugbtn--disclosure", { type: "button", id: id });
     if (stateId) {
       var col = elem("span", "set-row-text");
       var name = elem("span", "set-name");
@@ -438,120 +446,180 @@ window.RichSettings = (function () {
     // into `main.js`'s DOM-derived enumeration as well, so the two agree on what is open and
     // on which surface is topmost instead of racing. Both are idempotent (`close()` returns
     // early when the menu is already hidden), so the overlap costs nothing.
+    //
+    // ROUND 27 (richos-hq design/mockups/rounds/round-27, NOTES.md "Where every setting now
+    // lives"): ONE Settings panel, reached one way. Everything the top-right menu and the rail
+    // gear's Preferences held is here, in three columns and a band across the foot, and
+    // Technical view has one switch. A DIALOG, not a menu: it holds a text field, radios and
+    // switches, and its visible heading names it.
     var menu = elem("div", "setmenu", {
       id: "set-menu",
-      "aria-label": "Settings",
-      role: "menu",
+      role: "dialog",
+      "aria-labelledby": "set-menu-title",
       "data-dismiss": "escape",
     });
     menu.hidden = true;
-    // THE PANEL SAYS WHAT IT IS — Ray's candidate .11 defect 3.4, and the lead's call on it.
-    //
-    // His sentence is "a person looking for a setting presses the gear", and what he found
-    // behind the OTHER control was a panel of rows with no name on it. This menu has carried
-    // `aria-label="Settings"` since it was written and the button carries a stylesheet
-    // tooltip reading Settings — both of which a screen reader and a hover reach, and
-    // neither of which a person scanning two panels for the word does. So the word is on the
-    // panel now, where he is already looking.
-    //
-    // `aria-hidden` because the menu's own `aria-label` already announces it: a heading that
-    // repeats the container's name reads it twice to anyone using a screen reader, which is
-    // the accessible equivalent of the two panels this defect is about.
-    var title = elem("p", "setmenu-title", { "aria-hidden": "true" });
+    // THE PANEL SAYS WHAT IT IS — Ray's candidate .11 defect 3.4: a person scanning for the
+    // word finds it on the panel. Round 27 makes it the panel's heading (Newsreader, 26px), and
+    // the dialog's accessible name through `aria-labelledby`.
+    var head = elem("header", "sm-head");
+    var title = elem("h2", "setmenu-title", { id: "set-menu-title" });
     title.textContent = "Settings";
-    menu.appendChild(title);
-    if (!T.forcedDark()) menu.appendChild(buildThemeRow());
-    menu.appendChild(buildFontRow()); // ...then Text size directly under it (§15)
-    if (techy) menu.appendChild(buildTechyRow()); // ...and directly under that, Techy Mode
-    // TOKEN SPEND (round 22.1, richos-hq design/mockups/rounds/round-22.1/; the CEO, §118: "The user
-    // should never need to "ask Rich" for getting those token stats. That needs to be a row in
-    // quick settings."). Directly under Technical view, above the Codex row's rule, as drawn, for
-    // everyone. A slot its owner fills (`spend.js`): the row, this month's figure, and the screen
-    // it opens are that file's.
-    if (spend) {
-      var spSlot = elem("div", "set-spend-slot", { id: "set-spend" });
-      spend.render(spSlot);
-      menu.appendChild(spSlot);
+    head.appendChild(title);
+    menu.appendChild(head);
+
+    var cols = elem("div", "sm-cols");
+    var foot = elem("div", "sm-foot");
+
+    // ---- COLUMN 1: how it looks -----------------------------------------------------------
+    var look = [];
+    if (!T.forcedDark()) look.push(buildThemeRow());
+    look.push(buildFontRow()); // ...then Text size directly under it (§15)
+    if (techy) {
+      // Technical view: ONE switch (it was in both panels), the Preferences hint under it, and
+      // Claude Code quota under that, shown only while the view is on (`paint`).
+      look.push(divider());
+      look.push(buildTechyRow());
+      var techyHint = part("techy-hint");
+      if (techyHint) look.push(techyHint);
+      if (quota) look.push(buildDisclosureRow("set-quota-open", "Claude Code quota", function () { quota.open(); }, "set-quota-state"));
     }
-    // "LET CODEX REVIEW YOUR TEAM'S WORK" (round 20.2, richos-hq design/mockups/rounds/round-20.2/;
-    // the CEO, ruling §114, 2026-10-09: "we should give the user a toggle/switch to manually enable
-    // that"). One row below Technical view, between two rules, as drawn, whatever Technical view is
-    // set to. A slot its owner fills (`codex-reviews.js`), as the updates row is: the row's states,
-    // its tooltip and its nudge are that file's.
-    if (codexReviews) {
-      var cxSlot = elem("div", "set-codex-slot", { id: "set-codex" });
-      codexReviews.render(cxSlot);
-      menu.appendChild(cxSlot);
+    var retention = part("retention");
+    if (retention) {
+      look.push(divider());
+      look.push(retention);
     }
-    if (quota) menu.appendChild(buildDisclosureRow("set-quota-open", "Claude Code quota", function () { quota.open(); }, "set-quota-state"));
-    if (company) menu.appendChild(buildCompanyRow()); // ...then which company this copy is for
-    if (home) menu.appendChild(buildHomeRow()); // ...and directly under it, the home screen's buttons
-    // CLAUDE ACCOUNTS, FOR EVERYONE (round 18, richos-hq design/mockups/rounds/round-18/; the CEO
-    // 2026-10-06, feedback item 9: "Non-technical users should also be able to take advantage of
-    // the multi-account setup"). Shown whatever Technical view is set to, with one plain line
-    // under it ("One account", "Using Home", "Using Work, switched 11:01 AM") and the week's mini
-    // bar, which `accounts.js` paints. It takes the place of the old account row, as round 18
-    // draws it, above the folders row: two rows about Claude accounts would confuse exactly the
-    // person this is for, and the first account's sign-in now lives in its card.
-    if (accounts) {
-      menu.appendChild(buildDisclosureRow("set-accounts-open", "Claude accounts", function () {
-        accounts.open();
-      }, "set-accounts-state"));
+    addColumn(cols, "set-group-look", "How it looks", look);
+
+    // ---- COLUMN 2: working with Rich ------------------------------------------------------
+    var rich = [];
+    var model = part("model");
+    if (model) rich.push(model);
+    var interrupt = part("interrupt");
+    if (interrupt) {
+      if (rich.length) rich.push(divider());
+      rich.push(interrupt);
     }
-    // DICTATION, FOR EVERYONE (round 19, state 5; dictation plan slice 2): after Claude accounts,
-    // as drawn, with its one plain line ("Off", "On. Tap F1 to talk", "Needs a permission").
-    // `dictation.js` registers it only once the app says dictation is there (DICTATION_READY).
+    var doors = [];
+    // DICTATION, FOR EVERYONE (round 19, state 5; dictation plan slice 2), with its one plain
+    // line ("Off", "On. Tap F1 to talk", "Needs a permission"). `dictation.js` registers it only
+    // once the app says dictation is there (DICTATION_READY).
     if (dictation) {
-      menu.appendChild(buildDisclosureRow("set-dictation-open", "Dictation", function () {
+      doors.push(buildDisclosureRow("set-dictation-open", "Dictation", function () {
         dictation.open();
       }, "set-dictation-state"));
     }
-    // N2 (dev-walk audit, 2026-09-17): these two carried the class "set-bug" — a typo with
-    // no rule anywhere in style.css, `grep -rn "\.set-bug" ui/` returns nothing — so they
-    // rendered as raw, unstyled native buttons (pure white `#FEFEFE` in the dark theme,
-    // breaking the panel's grid as well as its palette). `.bugbtn` is this same menu's own
-    // full-row action-button class (`buildBugButton` below, and `style.css`'s "Row 2 of the
-    // reference: a full-row tappable ACTION, not a toggle"), which is exactly what a
-    // menuitem button with no label/control split needs — so they take that class rather
-    // than a new one.
-    //
-    // AND THEY TAKE THE CHEVRON — Urban's G10. `.bugbtn` alone is `1rem/600/--ink`, which is
-    // also exactly what `.setmenu-title` ("Settings") and `.update-title` ("Updates") are, so
-    // four rows a person can press looked like two headings they cannot. See `ICON_CHEVRON`
-    // for why a chevron and not four icons.
+    if (phonePairing) {
+      doors.push(buildDisclosureRow("set-phone-open", "Use Rich from your phone", function () {
+        phonePairing.open();
+      }, "set-phone-state"));
+    }
+    if (doors.length && rich.length) rich.push(divider());
+    rich = rich.concat(doors);
+    addColumn(cols, "set-group-rich", "Working with Rich", rich);
+
+    // ---- COLUMN 3: your company and team --------------------------------------------------
+    var team = [];
+    if (company) team.push(buildCompanyRow()); // which company this copy is for
+    if (home) team.push(buildHomeRow()); // ...and directly under it, the home screen's buttons
+    // TOKEN SPEND (round 22.1; the CEO, §118: "The user should never need to "ask Rich" for
+    // getting those token stats."). A slot its owner fills (`spend.js`): the row, this month's
+    // figure, and the screen it opens are that file's.
+    if (spend) {
+      var spSlot = elem("div", "set-spend-slot", { id: "set-spend" });
+      spend.render(spSlot);
+      team.push(spSlot);
+    }
+    // "LET CODEX REVIEW YOUR TEAM'S WORK" (round 20.2; the CEO, ruling §114). A slot its owner
+    // fills (`codex-reviews.js`): the row's states, its tooltip and its nudge are that file's.
+    if (codexReviews) {
+      var cxSlot = elem("div", "set-codex-slot", { id: "set-codex" });
+      codexReviews.render(cxSlot);
+      team.push(cxSlot);
+    }
+    var places = [];
+    // CLAUDE ACCOUNTS, FOR EVERYONE (round 18; the CEO 2026-10-06, feedback item 9), with one
+    // plain line under it and the week's mini bar, which `accounts.js` paints.
+    if (accounts) {
+      places.push(buildDisclosureRow("set-accounts-open", "Claude accounts", function () {
+        accounts.open();
+      }, "set-accounts-state"));
+    }
     if (repositories) {
-      menu.appendChild(buildDisclosureRow("set-repositories-open", "Connected folders (repositories)", function () {
+      places.push(buildDisclosureRow("set-repositories-open", "Connected folders (repositories)", function () {
         repositories.open();
       }));
     }
     // The old account row stays only where "Claude accounts" is not registered (a page with no
     // accounts sheet behind it), so the first account's sign-in always has a door.
     if (account && !accounts) {
-      menu.appendChild(buildDisclosureRow("set-account-open", "Account connection", function () {
+      places.push(buildDisclosureRow("set-account-open", "Account connection", function () {
         account.open();
       }));
     }
-    // WHERE HIS MEMORY IS KEPT — audit-7 row 13. The sheet that asks this used to be the only
-    // way to reach it, and it asked at EVERY launch on a machine with no memory folder, which
-    // is what Ray met twice in one walk. "Not now" is remembered now, so the offer needs a door
-    // that is not a question: this row. The app's own word for the thing, taken from the
-    // sheet's own finished heading ("Your memory folder.") rather than invented here.
+    // WHERE HIS MEMORY IS KEPT — audit-7 row 13: "Not now" is remembered, so the offer needs a
+    // door that is not a question.
     if (memory) {
-      menu.appendChild(buildDisclosureRow("set-memory-open", "Memory folder", function () {
+      places.push(buildDisclosureRow("set-memory-open", "Memory folder", function () {
         memory.open();
       }));
     }
-    if (phonePairing) {
-      // BELOW the memory row and ABOVE the version row, which is where a thing he does ONCE
-      // belongs: it is not a preference and it is not chrome, so it sits with the other
-      // one-off arrangements rather than among the switches.
-      menu.appendChild(buildDisclosureRow("set-phone-open", "Use Rich from your phone", function () {
-        phonePairing.open();
-      }, "set-phone-state"));
+    if (places.length && team.length && !codexReviews) team.push(divider());
+    team = team.concat(places);
+    if (updates) {
+      // ...then what version this is, and what is waiting, last, after a divider.
+      if (team.length) team.push(divider());
+      team.push(buildUpdatesRow());
     }
-    if (updates) menu.appendChild(buildUpdatesRow()); // ...then what version this is, and what is waiting
-    menu.appendChild(buildFloor()); // the floor, always last and always present
+    addColumn(cols, "set-group-team", "Your company and team", team);
+
+    cols.setAttribute("data-n", String(cols.children.length));
+    if (cols.children.length) menu.appendChild(cols);
+
+    // ---- THE FOOT BAND: what is set once (name, splash screen), and the floor -------------
+    var name = part("name");
+    if (name) foot.appendChild(footCell(name));
+    var splash = part("splash");
+    if (splash) foot.appendChild(footCell(splash));
+    // THE FLOOR, always last and always present (§15): Bust a bug, and Request a feature
+    // directly under it, in the foot band's last cell. The band stays at the panel's bottom
+    // edge while the columns above it scroll (style.css "THE FLOOR STAYS IN VIEW").
+    foot.appendChild(footCell(buildFloor()));
+    foot.setAttribute("data-n", String(foot.children.length));
+    menu.appendChild(foot);
     return menu;
+  }
+
+  /// A thin rule between groups inside a column, the panel's `--line-soft`.
+  function divider() {
+    return elem("div", "sm-divider", { role: "presentation" });
+  }
+
+  /// One column: its 14px caps label (the rail's company-label tier), then its rows. A column
+  /// with nothing registered in it is left out rather than drawn empty.
+  function addColumn(cols, id, label, nodes) {
+    if (!nodes.length) return;
+    var col = elem("section", "sm-col", { "aria-labelledby": id });
+    var lab = elem("p", "sm-group", { id: id });
+    lab.textContent = label;
+    col.appendChild(lab);
+    for (var i = 0; i < nodes.length; i++) col.appendChild(nodes[i]);
+    cols.appendChild(col);
+  }
+
+  function footCell(node) {
+    var cell = elem("div", "sm-foot-cell");
+    cell.appendChild(node);
+    return cell;
+  }
+
+  /// A part of the panel that `main.js` owns (Rich's model, interruptions, stored output, the
+  /// technical-view hint, the name field, the splash switch), or null when no host registered
+  /// it. The SAME node every rebuild: it is moved, never copied, so its listeners and its
+  /// state come with it.
+  function part(key) {
+    var parts = preferences && preferences.parts;
+    return (parts && parts[key]) || null;
   }
 
   function wireHome(menu) {
@@ -577,12 +645,21 @@ window.RichSettings = (function () {
   function rebuild() {
     if (!wrap) return;
     var wasOpen = menuEl && !menuEl.hidden;
+    // A rebuild while the panel is open (the company answer moving, a capability arriving)
+    // must not cost him the field he is in: the parts main.js owns are moved into the new
+    // panel, not copied, so the same node can take focus back.
+    var focused = wasOpen && menuEl.contains(document.activeElement) ? document.activeElement : null;
     if (menuEl) menuEl.remove();
     menuEl = buildMenu();
     wrap.appendChild(menuEl);
     wireMenu();
     paint();
-    if (wasOpen) open();
+    if (wasOpen) {
+      // Reopened as the SAME open: no fresh read of the held model choice, which would put
+      // back what he picked a moment ago.
+      open({ rebuilt: true });
+      if (focused && menuEl.contains(focused)) focused.focus();
+    }
   }
 
   // ---- state painting ------------------------------------------------------------------
@@ -639,9 +716,13 @@ window.RichSettings = (function () {
 
   // ---- open / close --------------------------------------------------------------------
 
-  function open() {
+  function open(opts) {
+    opts = opts || {};
     if (!menuEl || !menuEl.hidden) return;
     paintBug();
+    // What Preferences did as it opened (round 27 moved it here): show the saved model choice,
+    // and re-read what a hand-edited config.json can change. Not on a rebuild's reopen.
+    if (!opts.rebuilt && preferences && preferences.onOpen) preferences.onOpen();
     menuEl.hidden = false;
     // **IT OPENS AT ITS TOP, EVERY TIME** — Urban's G12, and he found it by being bitten by it:
     // the panel reopened at the scroll position it was closed at, his click landed a row off,
@@ -672,12 +753,30 @@ window.RichSettings = (function () {
     // AND THE SPEND ROW'S FIGURE, taken when the menu opens, so the menu holds no ticking number
     // either (round 22.1): one `spend_view` for this month.
     if (spend && spend.onOpen) spend.onOpen();
+    if (opts.focus) focusInside(opts.focus, opts.call);
   }
+
+  /// Opened FOR one control (the nameplate's "Set your name", the header's Technical view
+  /// chip): focus it, and with `call` light it for 1.6s (`@keyframes called`), so the eye finds
+  /// the field in a panel this size.
+  function focusInside(selector, call) {
+    var target = menuEl.querySelector(selector);
+    if (!target) return;
+    target.focus();
+    if (!call) return;
+    target.classList.remove("is-called");
+    void target.offsetWidth;
+    target.classList.add("is-called");
+  }
+
   function close(refocus) {
     if (!menuEl || menuEl.hidden) return;
     menuEl.hidden = true;
     wrap.classList.remove("open");
     btnEl.setAttribute("aria-expanded", "false");
+    // Every close saves Rich's model, as every close of Preferences did (round 23): closing the
+    // panel IS the confirmation, whichever way it closes.
+    if (preferences && preferences.onClose) preferences.onClose();
     if (refocus) btnEl.focus();
   }
 
@@ -894,9 +993,21 @@ window.RichSettings = (function () {
      *  "click the opener" are not the same operation and only one of them is what the caller
      *  means. `open()` is idempotent and also runs the capability's `onOpen()`, which is what
      *  keeps a claim about an update from being stale on the screen that makes it. */
-    openMenu: function () {
-      open();
+    openMenu: function (opts) {
+      // `opts.focus`: a selector inside the panel to focus once it is open (round 27: the
+      // nameplate opens it on the name field, the Technical view chip on its switch). An
+      // already-open panel still takes the focus.
+      if (menuEl && !menuEl.hidden) {
+        if (opts && opts.focus) focusInside(opts.focus, opts.call);
+        return;
+      }
+      open(opts);
     },
+    /** ROUND 27: what the rail gear's Preferences held now lives in this panel. `host.parts` are
+     *  nodes `main.js` owns and wires (`model`, `interrupt`, `techy-hint`, `retention`, `name`,
+     *  `splash`); this file places them. `host.onOpen()` runs as the panel opens, `host.onClose()`
+     *  on every close, which is where the held model choice is saved. */
+    registerPreferences: function (host) { preferences = host || null; rebuild(); },
     paint: paint,
     stepFont: stepFont,
     resetFont: resetFont,
@@ -909,10 +1020,10 @@ window.RichSettings = (function () {
       durable = host || null;
     },
 
-    /** §15: "directly under that, a Techy Mode toggle". The host passes the SAME read and
-     *  write the rail's own preference row uses — `techy.default` and `setTechyDefault` —
-     *  so the two entrances move one state rather than two that agree most of the time.
-     *  `RichSettings.paint()` after any change is what keeps the other entrance honest. */
+    /** §15: "directly under that, a Techy Mode toggle" — since round 27 the ONLY switch for
+     *  the technical view. The host's read is the resolved state of the conversation on screen
+     *  and its write asks where (`requestTechyToggle`); `RichSettings.paint()` after any change
+     *  keeps the switch true to it. */
     registerTechy: function (host) {
       techy = host || null;
       rebuild();
