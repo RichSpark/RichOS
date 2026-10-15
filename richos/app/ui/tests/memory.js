@@ -439,6 +439,10 @@ async function main() {
         sheet: "#setup-sheet", opts: {} },
       { what: "the company question", preset: { memory: "none", chosenEntity: null },
         sheet: "#entity-picker", opts: { declined: true } },
+      // A restart after a run that did not end cleanly carries no ordinal and is a relaunch too
+      // (seen in the test VM: a relaunch stopped by its pid came back as one).
+      { what: "the memory question after a crash-restart", preset: { memory: "none", chosenEntity: "northwind" },
+        sheet: "#memory-setup", opts: { launch: { kind: "crash-restart", ordinal: null, splashEnabled: true } } },
     ];
     const seen = [];
     for (const c of cases) {

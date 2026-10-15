@@ -6905,8 +6905,9 @@ function maybeAskAboutMemory() {
 ///
 /// **The very first start is not a relaunch** and asks at once, as it always has: the first-run
 /// questions come one after another from the moment the app opens. A relaunch is a start whose
-/// launch record says it is the second or later (`launch.rs` `start_ordinal`); no record reads
-/// as the first start, as `splash.js` `launchOrdinal` reads it.
+/// launch record says it is the second or later (`launch.rs` `start_ordinal`), or a restart
+/// after a run that did not end cleanly; no record reads as the first start, as `splash.js`
+/// `launchOrdinal` reads it.
 ///
 /// While `startupWaitsForHome` is set, `maybeAskAboutSetup` and `maybeAskAboutMemory` ask
 /// nothing: the start's questions are this function's to ask.
@@ -6919,7 +6920,11 @@ function homeIsUp() {
 
 function relaunched() {
   const launch = window.__RICHOS_LAUNCH__;
-  return !!launch && typeof launch.ordinal === "number" && launch.ordinal > 1;
+  if (!launch) return false;
+  // A start after a run that did not end cleanly is a relaunch too, and carries no ordinal
+  // (`launch.rs`: "a crash-restart is not the Nth start"). Measured in the test VM: a relaunch
+  // stopped by its pid came back as one and left the home screen for the company question.
+  return launch.kind === "crash-restart" || (typeof launch.ordinal === "number" && launch.ordinal > 1);
 }
 
 function askStartupQuestionsOffHome() {
