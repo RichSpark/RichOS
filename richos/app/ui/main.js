@@ -6900,14 +6900,24 @@ function maybeAskAboutMemory() {
 /// home screen is up and is asked the moment he goes in; a company question held behind it is
 /// asked after it, as `closeMemorySetup` always asks it. Returns true when the question was
 /// asked or is waiting, as `maybeAskAboutMemory` does when it asks.
+///
+/// **The very first start is not a relaunch** and asks at once, as it always has: the first-run
+/// questions come one after another from the moment the app opens (FIRST_RUN_ORDER). The first
+/// start is the launch record's ordinal 1 (`launch.rs` `start_ordinal`, `splash.js`
+/// `launchOrdinal`).
 let memoryQuestionAfterHome = false;
 
 function homeIsUp() {
   return !!(window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen());
 }
 
+function firstStart() {
+  const launch = window.__RICHOS_LAUNCH__;
+  return !!launch && launch.ordinal === 1;
+}
+
 function maybeAskAboutMemoryOffHome() {
-  if (!homeIsUp()) return maybeAskAboutMemory();
+  if (!homeIsUp() || firstStart()) return maybeAskAboutMemory();
   // Owed is `maybeAskAboutMemory`'s own first branch: no memory folder, and no "Not now".
   if (!memoryState || memoryState.state !== "none" || memorySetupDeclined()) return false;
   if (!memoryQuestionAfterHome) {

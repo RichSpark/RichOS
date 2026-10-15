@@ -81,6 +81,13 @@ async function openApp(browser, preset, resolveOverrides, opts) {
       window.__RICHOS_MOCK_PRESET__ = v;
     }, preset);
   }
+  // `launch`: the launch record the shell puts in front of every page (`main.rs`
+  // `launch_init_script`), for a check about which start this is.
+  if (opts && opts.launch) {
+    await page.addInitScript((v) => {
+      window.__RICHOS_LAUNCH__ = Object.freeze(v);
+    }, opts.launch);
+  }
   await page.goto(APP);
   page.__errors = errors;
   // `stayHome`: the launch as he sees it, the opening curtain gone and nothing else touched.
@@ -385,7 +392,8 @@ async function main() {
     // question was still owed and the home screen gets out of the way of any sheet on the desk
     // (`home.js` `giveWayToOpenDeskSheet`). A relaunch opens on the home screen every time, so
     // the question waits for him to go in, and is asked then.
-    const page = await openApp(browser, { memory: "none", chosenEntity: "northwind" }, null, { stayHome: true });
+    const relaunch = { kind: "fresh", ordinal: 2, splashEnabled: true };
+    const page = await openApp(browser, { memory: "none", chosenEntity: "northwind" }, null, { stayHome: true, launch: relaunch });
     await page.waitForFunction(() => (window.__calls || []).some((c) => c.cmd === "memory_status"), null, { timeout: 30000 });
     await pastTheQuestion(page);
     const landed = await page.evaluate(() => ({
@@ -403,10 +411,18 @@ async function main() {
     const said = await dialogText(page);
     assert(said.includes("If this looks right, I'll set it up now."), "the sheet on the way in is not the offer: " + said);
     assert(await page.isVisible("#memory-setup-go"), "the offer came without its own control");
-    bump(4);
     assertEqual(page.__errors, [], "the shell logged errors");
     await page.close();
-    return "the relaunch stays on the home screen with the question owed; \"Talk to Rich\" asks it";
+
+    // THE VERY FIRST START IS NOT A RELAUNCH: its first-run questions come at once, as before.
+    const first = await openApp(browser, { memory: "none", chosenEntity: "northwind" }, null,
+      { stayHome: true, launch: { ...relaunch, ordinal: 1 } });
+    await first.waitForSelector("#memory-setup:not([hidden])", { timeout: 30000 });
+    assert(await first.isVisible("#memory-setup-go"), "the first start did not ask the question at once");
+    bump(5);
+    assertEqual(first.__errors, [], "the shell logged errors on the first start");
+    await first.close();
+    return "the relaunch stays on the home screen with the question owed; \"Talk to Rich\" asks it; the first start asks at once";
   });
 
   await run.check("6  an install that is already set up is never asked", async () => {
