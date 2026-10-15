@@ -1867,6 +1867,31 @@ class Land(Fixture):
         self.git("push", "-q", "origin", "main")
         self.assertEqual(self.git("rev-parse", "main", cwd=remote).stdout.strip(), self.head("main"))
 
+    def test_no_branch_or_tag_reaches_github_with_an_unauthorized_root_item(self):
+        # 2026-10-15: branches and tags are publicly visible on GitHub too (v1.2.1 and v1.3.0 were
+        # cut locally, not yet pushed). A push of any branch or tag whose root holds an item the
+        # CEO has not authorized is refused, and the remote never sees it.
+        self.make()
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main")
+        self.branch_with("v1.2.1", "AGENTS.md", "pointers for agents\n")
+        out = self.git("push", "origin", "v1.2.1", expect=1)
+        self.assertIn("PUSH REFUSED: the root of v1.2.1 would hold an item the CEO has not authorized",
+                      out.stderr)
+        self.assertIn("  AGENTS.md\n", out.stderr)
+        self.git("tag", "-a", "-m", "release", "v1.2.1-tag", "v1.2.1")
+        out = self.git("push", "origin", "v1.2.1-tag", expect=1)
+        self.assertIn("PUSH REFUSED: the root of tags/v1.2.1-tag would hold", out.stderr)
+        self.assertEqual(self.git("for-each-ref", cwd=remote).stdout.splitlines(),
+                         [f"{self.head('main')} commit\trefs/heads/main"])
+        # Everything inside an authorized entry pushes, branch and tag alike.
+        self.branch_with("v1.3.0", "docs/AGENTS.md", "pointers for agents\n")
+        self.git("tag", "v1.3.0-tag", "v1.3.0")
+        self.git("push", "-q", "origin", "v1.3.0", "v1.3.0-tag")
+        self.assertEqual(self.git("rev-parse", "v1.3.0", cwd=remote).stdout.strip(), self.head("v1.3.0"))
+
     def test_a_direct_commit_on_main_runs_the_land_checks(self):
         self.make()
         self.write("richos/app/src/thing.txt", "BROKEN\n")

@@ -32,8 +32,8 @@ engineer in a worktree, Codex, Rich in the main checkout.
   merge before it exists, so it cannot be pushed; that is all that refuses it (land_verdict).
   A check that did not reach a verdict is NOT RUN, which is never a pass: it is named in the
   verdict and in the receipt, and the nightly runs it (README.md, "NOT RUN"). Before all of
-  it, and at every push of main, a tree whose root holds an entry the CEO has not authorized
-  is refused (root_entries_gate).
+  it, and at every push of any branch or tag, a tree whose root holds an entry the CEO has not
+  authorized is refused (root_entries_gate).
 
   THE ONE ESCAPE is git's own `--no-verify`. It cannot be prevented; it is recorded. After
   the fact (post-commit, post-merge) a commit whose tree this check never passed, or a main
@@ -1342,23 +1342,24 @@ def publication_completeness_gate(repo, what):
 # words: "ANY PUBLICLY VISIBLE ITEM IN ROOT on GitHub must always require my explicit authorization.
 # No such item can ever appear (publicly visible on GitHub) without my explicit authorization."
 # The root rule was a manual step at each land, and AGENTS.md reached the root of main on
-# 2026-09-25 through one. So every commit and merge onto main, and every push of main, refuses a
-# tree whose top level holds an entry not named here. The hook shim runs the copy of this file
-# main already holds, so an authorization lands on its own before the item it authorizes.
+# 2026-09-25 through one. So every commit and merge onto main, and every push of any branch or tag
+# (each is publicly visible on GitHub), refuses a tree whose top level holds an entry not named
+# here. The hook shim runs the copy of this file main already holds, so an authorization lands on
+# its own before the item it authorizes.
 AUTHORIZED_ROOT_ENTRIES = (".claude-plugin", ".github", ".gitignore", ".richos", "LICENSE", "docs", "richos")
 
 
-def root_entries_gate(repo, what, tree):
-    """0, or 1 after printing a refusal: `tree`, the tree main would point at, holds a root entry
-    the CEO has not authorized."""
+def root_entries_gate(repo, what, tree, where=LAND_BRANCH):
+    """0, or 1 after printing a refusal: `tree`, the tree `where` (main, or a branch or tag being
+    pushed) would point at, holds a root entry the CEO has not authorized."""
     names = [n for n in git("ls-tree", "-z", "--name-only", tree, cwd=repo.top).split("\0") if n]
     unauthorized = sorted(n for n in names if n not in AUTHORIZED_ROOT_ENTRIES)
     if not unauthorized:
         return 0
-    banner(f"{what.upper()} REFUSED: the root of main would hold an item the CEO has not authorized", [
+    banner(f"{what.upper()} REFUSED: the root of {where} would hold an item the CEO has not authorized", [
         *unauthorized,
         "",
-        "Everything at the root of main is publicly visible on GitHub, and a new root item needs the CEO's",
+        f"Everything at the root of {where} is publicly visible on GitHub, and a new root item needs the CEO's",
         "explicit authorization. Move it into one of " + ", ".join(AUTHORIZED_ROOT_ENTRIES) + ", or remove it.",
         "Only once he has explicitly authorized it: add the name to AUTHORIZED_ROOT_ENTRIES in",
         f"{SELF}, citing his words, and land that before the item.",
@@ -1828,13 +1829,17 @@ def pre_push(repo, stdin_text):
         if len(parts) != 4:
             continue
         _local_ref, local_sha, remote_ref, remote_sha = parts
-        if remote_ref != f"refs/heads/{LAND_BRANCH}" or local_sha == ZERO:
+        if local_sha == ZERO:
             continue
         tree = repo.head_tree(local_sha)
-        # Asked of every push of main, receipt or not: a tree landed before this check existed
-        # has a receipt and was never asked.
-        if root_entries_gate(repo, "push", tree):
+        # Asked of every branch and tag pushed, main or not, receipt or not: each is publicly
+        # visible on GitHub, and a tree landed before this check existed has a receipt and was
+        # never asked.
+        where = remote_ref.removeprefix("refs/heads/").removeprefix("refs/")
+        if root_entries_gate(repo, "push", tree, where):
             return 1
+        if remote_ref != f"refs/heads/{LAND_BRANCH}":
+            continue
         if repo.land_receipt(tree).exists():
             continue
         say(f"autocheck: push: {LAND_BRANCH} at {local_sha[:12]} has no land receipt "

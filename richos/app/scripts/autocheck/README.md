@@ -142,9 +142,9 @@ with a merge whose citation dangles only after the land before it.
 The CEO: *"ANY PUBLICLY VISIBLE ITEM IN ROOT on GitHub must always require my explicit
 authorization."* The root rule was a manual step at each land, and `AGENTS.md` reached the root
 of main through one. So every commit and merge onto main, before any suite, and every push of
-main, with or without a land receipt, refuses a tree whose top level holds an entry not in
-`AUTHORIZED_ROOT_ENTRIES` (`autocheck.py`): `.claude-plugin`, `.github`, `.gitignore`, `.richos`,
-`LICENSE`, `docs`, `richos`. The refusal names each entry and says that a new root item needs his
+any branch or tag, each publicly visible on GitHub (main with or without a land receipt), refuses
+a tree whose top level holds an entry not in `AUTHORIZED_ROOT_ENTRIES` (`autocheck.py`):
+`.claude-plugin`, `.github`, `.gitignore`, `.richos`, `LICENSE`, `docs`, `richos`. The refusal names each entry and says that a new root item needs his
 explicit authorization. The list is read from main's own copy of `autocheck.py`, so an item he
 has authorized is added to the list in a land of its own, before the item.
 
