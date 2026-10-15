@@ -4496,14 +4496,8 @@ impl Spine {
         true
     }
 
-    /// **The one-line switch notice and the high-speed alert, in the conversation** (plan §15
-    /// answers 9 and the brief's "a switch shows one line"). Raised as Rich's proactive
-    /// messages so they are durable: the alert at `InterruptNow` (at once, with the OS
-    /// notification), the switch at `Digest`. Called before every turn, at the backstop, and by
-    /// the desktop's quota monitor whenever the spine is free — so with no turn running, an
-    /// alert lands the moment the reading that detected it is taken; while a conversation turn
-    /// holds the spine, it is written at the next of those points. With no thread to speak in
-    /// they stay pending.
+    /// Report account changes and work that is actually held. Routine meter speed,
+    /// polling intervals and moving thresholds stay in the account settings view.
     pub fn raise_quota_notices(&mut self, thread_id: Option<&str>) {
         let Some(quota) = self.quota_service() else { return };
         let thread = match thread_id {
@@ -4517,7 +4511,6 @@ impl Spine {
         // conversation draws the buttons round 18 puts under it (See your accounts, Add a
         // second account, Not now).
         let mut pending = vec![
-            (AttentionTier::InterruptNow, None, quota.take_alert()),
             (AttentionTier::Digest, Some("switched".to_string()), quota.accounts.take_notice()),
         ];
         pending.extend(quota.take_notes().into_iter().map(|note| (AttentionTier::Digest, None, Some(note))));

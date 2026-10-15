@@ -782,7 +782,7 @@ fn install_media_tools(
         if tally.both_models() { "both speech models" } else { "not both speech models" }
     );
 
-    let observer = SetupModelObserver { app: app.clone(), index, total, tally };
+    let observer = SetupModelObserver { app: app.clone(), index, total, tally, log: Mutex::new(ModelProgressLog::default()) };
     let state = crate::ensure_model_fetch_state(app);
 
     // 1. THE MODEL VOICE HEARS WITH, first: with only the large model installed, voice would take
@@ -805,9 +805,6 @@ fn install_media_tools(
             fetch_verified(&observer, &state, id)?;
         }
     }
-    // 3. RICH'S VOICE (Pocket TTS), in the background: it never holds this sheet, and a sentence
-    //    Rich says before it is in waits for it.
-    crate::voice_provision::fetch_rich_voice_in_background();
     Ok(format!("{} are installed.", capitalized(Component::MediaTools.display_name())))
 }
 
@@ -910,6 +907,43 @@ struct SetupModelObserver {
     total: usize,
     /// What this download brings in all, for the voice row's counter.
     tally: DownloadTally,
+    log: Mutex<ModelProgressLog>,
+}
+
+/// Log each model once per ten-percent milestone. Window events keep their full precision.
+#[derive(Default)]
+struct ModelProgressLog {
+    model: String,
+    milestone: Option<u64>,
+    checking: bool,
+}
+
+impl ModelProgressLog {
+    fn line(&mut self, payload: &serde_json::Value) -> Option<String> {
+        let model = payload.get("modelId")?.as_str()?;
+        let phase = payload.get("phase")?.as_str()?;
+        if model != self.model {
+            self.model = model.to_string();
+            self.milestone = None;
+            self.checking = false;
+        }
+        match phase {
+            "started" | "progress" => {
+                let total = payload.get("total")?.as_u64()?;
+                if total == 0 { return None; }
+                let received = payload.get("received")?.as_u64()?;
+                let milestone = (received.saturating_mul(100) / total).min(100) / 10 * 10;
+                if self.milestone.is_some_and(|last| milestone <= last) { return None; }
+                self.milestone = Some(milestone);
+                Some(format!("[richos] speech model {model}: downloading {milestone}%"))
+            }
+            "verifying" if !self.checking => {
+                self.checking = true;
+                Some(format!("[richos] speech model {model}: checking download"))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl crate::voice_provision::ModelObserver for SetupModelObserver {
@@ -921,7 +955,12 @@ impl crate::voice_provision::ModelObserver for SetupModelObserver {
             eprintln!("[richos] setup: the voice panel missed a model event ({e})");
         }
         if let Some(line) = model_progress(&self.tally, &payload, self.index, self.total) {
-            emit_from(&self.app, line, true);
+            if let Some(message) = self.log.lock().unwrap().line(&payload) {
+                eprintln!("{message}");
+            }
+            if let Err(error) = self.app.emit(EVENT_SETUP, line) {
+                eprintln!("[richos] setup: the window missed a download update ({error})");
+            }
         }
     }
 }
@@ -966,6 +1005,33 @@ mod tests {
     /// **THE CONSENT SHEET IS ONE STEP AND CARRIES THE ACCOUNT SENTENCE.** The BYO-Anthropic
     /// caveat is row 3.14's second condition and it must reach him before he presses anything,
     /// not after.
+    #[test]
+    fn progress_logs_ten_percent_milestones_once_per_model_and_keeps_precise_ui_events() {
+        let mut log = ModelProgressLog::default();
+        for id in ["small.en", "large-v3-turbo-q5_0"] {
+            let mut lines = Vec::new();
+            for percent in 0..=100 {
+                let event = serde_json::json!({
+                    "modelId": id, "phase": "progress", "received": percent, "total": 100
+                });
+                for _ in 0..2 {
+                    if let Some(line) = log.line(&event) { lines.push(line); }
+                }
+                let tally = DownloadTally::new(vec![(id.into(), 100)], 0);
+                let ui = model_progress(&tally, &event, 1, 1).unwrap();
+                assert!(ui.what.ends_with(&format!("{percent}%")));
+            }
+            assert_eq!(lines.len(), 11);
+            assert!(lines[0].ends_with("downloading 0%"));
+            assert!(lines[10].ends_with("downloading 100%"));
+            let checking = serde_json::json!({"modelId": id, "phase": "verifying"});
+            assert!(log.line(&checking).unwrap().ends_with("checking download"));
+            assert!(log.line(&checking).is_none());
+        }
+        let empty = serde_json::json!({"modelId": "empty", "phase": "progress", "received": 0, "total": 0});
+        assert!(log.line(&empty).is_none());
+    }
+
     #[test]
     fn the_consent_sheet_says_he_still_needs_his_own_account() {
         assert!(SETUP_ACCOUNT_NOTE.contains("Anthropic account"));

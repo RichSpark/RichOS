@@ -222,13 +222,6 @@ release_turn() {  # the fake answers; the turn has ended once Send is back
   done
   sleep 3
 }
-wait_line() {  # wait_line <words>: Rich's line in the conversation, read rather than assumed
-  for _ in $(seq 1 60); do
-    ax find --value "$1" --contains --first >/dev/null 2>&1 && return 0
-    sleep 2
-  done
-  note "never appeared in the conversation: $1"
-}
 evidence() {  # every lease's journal as the app reads it, for the record of this run
   "$T/guest.sh" "$VM" "for d in \"$DATA/engine-state/evidence\"/*/; do echo \"== \$d\"; cat \"\$d/callbacks.jsonl\"; done" > "$S/$1-evidence.txt" 2>&1 || true
 }
@@ -272,22 +265,21 @@ ax click --title 'Refresh' --first || true
 sleep 6
 pair_sheet 5-fast-sheet
 
-note "6 the panel closed: Rich's alert with the agents counted, then a turn with the working row"
+note "6 the panel closed: usage speed stays in the panel, then a turn with the working row"
 close_panel
-wait_line 'Usage is climbing fast'
-# The rise stops here, so nothing reaches the moved line while the turns below are held; the
-# way back ("Usage is back to normal") is said at the end of this turn or between turns.
+# Routine usage speed changes no longer post into the conversation.
+# Stop the rise before it reaches the moved pause threshold.
 "$T/guest.sh" "$VM" 'touch /Users/admin/fill-first/stop-rise'
 hold_turn 'How are the three of them doing?' 'All three are still working. Nothing needs you right now.' 6
 pair 6-fast-alert
 release_turn
 
-note "7 flat readings: Rich's line back to normal, then a turn with the working row"
+note "7 flat readings: normal usage stays in the panel, then a turn with the working row"
 open_panel
 ax click --title 'Refresh' --first || true
 sleep 6
 close_panel
-wait_line 'Usage is back to normal'
+# Normal meter readings also stay out of the conversation.
 hold_turn 'Thanks. Keep me posted.' 'Will do.' 7
 evidence 7
 pair 7-back-to-normal
