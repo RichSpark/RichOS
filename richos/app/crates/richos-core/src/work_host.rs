@@ -2242,9 +2242,6 @@ impl WorkHost {
             self.hold(backend, binding, record, HoldCause::SignIn);
             return;
         }
-        // Where the account stood before the latest turn's words: a consult's answer replaces
-        // that turn's words and keeps everything before them (below).
-        let mut before_last_turn = answer.trim_end().len();
         keep_words(&mut answer, &said);
         let mut last_said = said.clone();
         // The back-end turn is over: what it, its workers and its commands wrote so far goes
@@ -2553,23 +2550,20 @@ impl WorkHost {
                 // check of nightly 57, 2026-10-15, `team/hire4-delegate-3-end.png`). That turn said
                 // "They're working on it now, and I'll pass along what they suggest as soon as
                 // they're done."; the answer has arrived, so the sentence is no longer true, and
-                // he was shown it above the answer it promised. Only its waiting sentences go
-                // ([`without_waiting_sentences`]): an answer that turn delivered stays (second
-                // review rv-20261015T074838Z-1c744187-1e06, finding 1: a turn can give Will's
-                // answer and start Beth's consult).
+                // he was shown it above the answer it promised. Only waiting sentences go
+                // ([`without_waiting_sentences`]): an answer already given stays (second review
+                // rv-20261015T074838Z-1c744187-1e06, finding 1: a turn can give Will's answer and
+                // start Beth's consult). They go from the whole account, whatever this turn says:
+                // on the real app the back end gave Will's answer before this continuation, which
+                // then added nothing. The account is shown only when the job ends, when nothing a
+                // waiting sentence promised is still under way.
                 last_said = said.clone();
-                if said.trim().is_empty() {
-                    // Nothing said: the account, and where its last turn began, stay as they are.
-                } else if consult_answered {
-                    let waited = answer.split_off(before_last_turn);
-                    keep_words(&mut answer, &without_waiting_sentences(&waited));
-                    before_last_turn = answer.trim_end().len();
+                if consult_answered {
+                    answer = without_waiting_sentences(&answer);
                     keep_words(&mut answer, &said);
                 } else if helper_turn {
-                    before_last_turn = answer.trim_end().len();
                     keep_words(&mut answer, &said);
-                } else {
-                    before_last_turn = 0;
+                } else if !said.trim().is_empty() {
                     answer = said;
                 }
                 // Each continuation turn is a back-end turn too (§4.1 (b)).
@@ -8411,6 +8405,50 @@ mod tests {
             !told.iter().any(|t| t.contains("working on it now")),
             "the answer arrived and he was still told they are working on it: {told:?}"
         );
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The waiting sentence goes even when the turn after the teammate's end says nothing**
+    /// (the real app in the test VM, bundle of f23711252, hire-walk `delegate`: his notice read
+    /// "I've asked Will ... and he's working on them now. I'll pass along what he suggests as
+    /// soon as he's done." above "Here are Will's three subject lines"). The back end had given
+    /// the answer before the host's own continuation, which then added nothing, and only a turn
+    /// with words of its own retired the waiting sentences.
+    #[test]
+    fn a_consult_answered_before_the_continuation_still_loses_its_waiting_sentence() {
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        engine_receipt(&h, "consult-will", "obligation-7", "consult", None, None);
+        {
+            use sha2::{Digest, Sha256};
+            let path = h.state.join("work-receipts")
+                .join(format!("{:x}", Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join("consult-will.json");
+            let mut row: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            row["request"]["repo"] = serde_json::Value::Null;
+            row["end_observation"] = serde_json::json!({"at": 100.0, "signal": "SubagentStop"});
+            row["consult_answer"] = serde_json::json!({"message": "answered", "answered": true});
+            std::fs::write(&path, serde_json::to_vec(&row).unwrap()).unwrap();
+        }
+        journal(&h, &helper_started("will-1"));
+        h.replies.lock().unwrap().extend([
+            "I've asked Will for three subject lines, and he's working on them now. I'll pass along what he \
+             suggests as soon as he's done.\n\nHere are Will's three subject lines: one, two and three."
+                .to_string(),
+            String::new(),
+        ]);
+        h.host.start();
+        let receipt = h.host
+            .register(&h.binding, &Registration { repositories: Vec::new(), ..registration(&h) })
+            .unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        until("the host never waited for Will", || read().detail == "A helper is doing the work.");
+        journal(&h, &helper_stopped("will-1"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        assert_eq!(h.work_prompts.lock().unwrap()[1], CONSULT_ENDED_CONTINUATION);
+        let all = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect::<Vec<_>>().join("\n");
+        assert!(all.contains("Here are Will's three subject lines: one, two and three."), "his answer was lost: {all}");
+        assert!(!all.contains("working on them"), "the answer arrived and he was still told Will is working on it: {all}");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
