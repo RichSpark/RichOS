@@ -1123,6 +1123,43 @@ fn without_waiting_sentences(text: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// [`keep_words`], remembering in `starts` where the turn's words begin in the account.
+fn keep_turn(answer: &mut String, starts: &mut Vec<usize>, said: &str) {
+    let before = answer.len();
+    keep_words(answer, said);
+    if answer.len() != before {
+        starts.push(answer.len() - said.trim().len());
+    }
+}
+
+/// **Each turn's opening paragraph without its waiting sentences** ([`without_waiting_sentences`]),
+/// and every other paragraph as it was but for the engine's `stop-declared:` line. The opening is where Rich says what he has just started
+/// ("I've asked Will, and he's working on it now."); what follows it can be delivered content
+/// that happens to use the same words, and is never touched.
+fn retire_waiting_openings(answer: &mut String, starts: &mut Vec<usize>) {
+    let Some(&first) = starts.first() else { return };
+    let mut cuts = starts.clone();
+    cuts.push(answer.len());
+    let before = answer[..first].trim_end().to_string();
+    let turns: Vec<String> = cuts.windows(2).map(|w| answer[w[0]..w[1]].trim().to_string()).collect();
+    answer.clear();
+    starts.clear();
+    answer.push_str(&before);
+    for turn in turns {
+        // The engine's own `stop-declared:` line is never content, wherever it stands.
+        let turn = turn.lines().filter(|l| !l.trim_start().starts_with("stop-declared:")).collect::<Vec<_>>().join("\n");
+        let turn = turn.trim();
+        let (opening, rest) = turn.split_once("\n\n").unwrap_or((turn, ""));
+        let opening = without_waiting_sentences(opening);
+        let kept = match (opening.trim().is_empty(), rest.trim().is_empty()) {
+            (true, _) => rest.to_string(),
+            (false, true) => opening,
+            (false, false) => format!("{opening}\n\n{rest}"),
+        };
+        keep_turn(answer, starts, &kept);
+    }
+}
+
 /// Add one streamed piece of a turn's prose to what the turn said.
 ///
 /// **Different notices are their own paragraphs** (video-finish walks on `ec12621f8`: his
@@ -2106,6 +2143,8 @@ impl WorkHost {
         // a runaway back end costs memory for one turn and cannot write a record the app can
         // no longer read.
         let mut answer = String::new();
+        // Where each turn's words begin in `answer` ([`keep_turn`]).
+        let mut turn_starts: Vec<usize> = Vec::new();
         let keeping_an_answer = true;
         // **THE ONE PLACE `Running` IS WRITTEN, AND THE EVIDENCE THAT MAKES IT TRUE.**
         //
@@ -2314,7 +2353,7 @@ impl WorkHost {
             self.hold(backend, binding, record, HoldCause::SignIn);
             return;
         }
-        keep_words(&mut answer, &said);
+        keep_turn(&mut answer, &mut turn_starts, &said);
         let mut last_said = said.clone();
         // The back-end turn is over: what it, its workers and its commands wrote so far goes
         // on the thread's output list (Output side panel PRD §4.1 (b), the per-turn reader).
@@ -2628,18 +2667,22 @@ impl WorkHost {
                 // he was shown it above the answer it promised. Only waiting sentences go
                 // ([`without_waiting_sentences`]): an answer already given stays (second review
                 // rv-20261015T074838Z-1c744187-1e06, finding 1: a turn can give Will's answer and
-                // start Beth's consult). They go from the whole account, whatever this turn says:
-                // on the real app the back end gave Will's answer before this continuation, which
-                // then added nothing. The account is shown only when the job ends, when nothing a
-                // waiting sentence promised is still under way.
+                // start Beth's consult). They go from every turn's opening paragraph, whatever this
+                // turn says: on the real app the back end gave Will's answer before this
+                // continuation, which then added nothing. Only the opening, where Rich says what he
+                // has just started, never what follows it: delivered content can use the same
+                // words (second review rv-20261015T095030Z-73f3e50d-0539: "Still working on that
+                // big idea?" as a subject line). The account is shown only when the job ends, when
+                // nothing a waiting sentence promised is still under way.
                 last_said = said.clone();
                 if consult_answered {
-                    answer = without_waiting_sentences(&answer);
-                    keep_words(&mut answer, &said);
+                    retire_waiting_openings(&mut answer, &mut turn_starts);
+                    keep_turn(&mut answer, &mut turn_starts, &said);
                 } else if helper_turn {
-                    keep_words(&mut answer, &said);
+                    keep_turn(&mut answer, &mut turn_starts, &said);
                 } else if !said.trim().is_empty() {
                     answer = said;
+                    turn_starts = vec![0];
                 }
                 // Each continuation turn is a back-end turn too (§4.1 (b)).
                 self.project_output(record, &session);
@@ -8918,6 +8961,51 @@ mod tests {
         let all = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect::<Vec<_>>().join("\n");
         assert!(all.contains("Here are Will's three subject lines: one, two and three."), "his answer was lost: {all}");
         assert!(!all.contains("working on them"), "the answer arrived and he was still told Will is working on it: {all}");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Only the sentence Rich wrote while the teammate worked goes, never delivered content
+    /// that happens to use the same words** (second review rv-20261015T095030Z-73f3e50d-0539: a
+    /// suggested subject line "Still working on that big idea?" and a recommendation "Will
+    /// recommends working on this in two stages" were deleted with it).
+    #[test]
+    fn delivered_content_that_uses_waiting_words_stays() {
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        engine_receipt(&h, "consult-will", "obligation-7", "consult", None, None);
+        {
+            use sha2::{Digest, Sha256};
+            let path = h.state.join("work-receipts")
+                .join(format!("{:x}", Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join("consult-will.json");
+            let mut row: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            row["request"]["repo"] = serde_json::Value::Null;
+            row["end_observation"] = serde_json::json!({"at": 100.0, "signal": "SubagentStop"});
+            row["consult_answer"] = serde_json::json!({"message": "answered", "answered": true});
+            std::fs::write(&path, serde_json::to_vec(&row).unwrap()).unwrap();
+        }
+        journal(&h, &helper_started("will-1"));
+        h.replies.lock().unwrap().extend([
+            "I've asked Will for subject lines, and he's working on them now.\n\nHere are Will's three subject \
+             lines:\n1. Still working on that big idea?\n2. Your next chapter starts here\n3. Make it happen\n\n\
+             Will recommends working on this in two stages: interview five clients, then test the draft with ten \
+             prospects."
+                .to_string(),
+            String::new(),
+        ]);
+        h.host.start();
+        let receipt = h.host
+            .register(&h.binding, &Registration { repositories: Vec::new(), ..registration(&h) })
+            .unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        until("the host never waited for Will", || read().detail == "A helper is doing the work.");
+        journal(&h, &helper_stopped("will-1"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let all = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect::<Vec<_>>().join("\n");
+        assert!(all.contains("1. Still working on that big idea?"), "a delivered subject line was deleted: {all}");
+        assert!(all.contains("Will recommends working on this in two stages: interview five clients"),
+            "a delivered recommendation was deleted: {all}");
+        assert!(!all.contains("he's working on them now"), "the waiting sentence stayed: {all}");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
