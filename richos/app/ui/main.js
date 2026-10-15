@@ -4209,8 +4209,9 @@ function renderVoiceState(state, noAudio) {
   const speaking = state === "speaking";
   // Whether a background result may be said right now (background-work spec §3.5: never
   // mid-sentence, and never while he is speaking). Recorded here rather than inferred
-  // elsewhere, because this is the one function that knows.
-  voiceBusy = voiceMode && state !== "idle" && state !== "off";
+  // elsewhere, because this is the one function that knows. "listening" is the resting
+  // state — Rich silent, he silent, no turn — and the engine never reports "idle".
+  voiceBusy = voiceMode && state !== "listening" && state !== "off";
   if (!voiceBusy) flushWorkNotices();
   // The mic is open and healthy but nothing has arrived for 3.008 s (noaudio.rs). It
   // REPLACES the listening row: "listening…" next to "I can't hear anything" is two claims

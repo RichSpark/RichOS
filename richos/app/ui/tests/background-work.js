@@ -382,6 +382,43 @@ async function main() {
     return "one durable consumer; equal text from another assignment survives; delayed notice keeps origin";
   });
 
+  await run.check("in voice mode a held card appears once he is listening, never while either one speaks", async () => {
+    // DRIVEN through the real `renderVoiceState`, because the defect was in which states it
+    // called calm: it waited for "idle", a state the voice engine never reports (its states
+    // are off, listening, hearing, thinking and speaking — `richos-voice` `VoiceState::as_str`),
+    // so with voice mode on every held card stayed hidden until voice mode was turned off.
+    const vm = require("node:vm");
+    const src = fs.readFileSync(MAIN_JS, "utf8");
+    const row = () => ({hidden: false});
+    const context = vm.createContext({window: {}, console, Date, Map, Promise,
+      followBottom: false, scheduleRender() {},
+      voiceListeningEl: row(), voiceNoAudioEl: row(), voiceSpeakingEl: row()});
+    vm.runInContext(fs.readFileSync(path.join(UI_DIR, "timeline.js"), "utf8"), context);
+    vm.runInContext(`
+      let timelineModel = window.RichTimeline.createModel();
+      window.RichTimeline.bind(timelineModel, "company", "a", 1);
+      let voiceMode = true;
+      function anyLiveTurn() { return false; }
+    `, context);
+    vm.runInContext(src.slice(src.indexOf("let voiceBusy = false;"), src.indexOf("/// A line Rich says LOCALLY")), context);
+    const renderStart = src.indexOf("function renderVoiceState(");
+    vm.runInContext(src.slice(renderStart, src.indexOf("\n}\n", renderStart) + 3), context);
+    const shown = () => vm.runInContext("timelineModel.items.size", context);
+    vm.runInContext('renderVoiceState("speaking", false)', context);
+    vm.runInContext('receiveWorkNotice("Waiting until you sign in.", 100)', context);
+    assertEqual(shown(), 0, "a card appeared while Rich was speaking");
+    vm.runInContext('renderVoiceState("hearing", false)', context);
+    assertEqual(shown(), 0, "a card appeared while the CEO was talking");
+    vm.runInContext('renderVoiceState("thinking", false)', context);
+    assertEqual(shown(), 0, "a card appeared mid-exchange, before Rich answered");
+    vm.runInContext('renderVoiceState("listening", false)', context);
+    assertEqual(shown(), 1, "the held card did not appear once voice mode was resting in listening");
+    // Arriving while he is already listening, it shows at once rather than being held.
+    vm.runInContext('receiveWorkNotice("Waiting for your decision before it can go on.", 101)', context);
+    assertEqual(shown(), 2, "a card arriving while listening was held instead of shown");
+    return "held through speaking, hearing and thinking; shown on listening; shown at once while listening";
+  });
+
   await run.check("a background result is HELD while a turn runs, and never dropped", async () => {
     // Read from the source, not driven: the hold lives in the shell, and running a real
     // turn needs a live Tauri bridge. A suite that mocked one would be asserting about the
