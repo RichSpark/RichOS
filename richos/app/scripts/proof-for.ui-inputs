@@ -152,7 +152,8 @@ chrome-align.js         @shell @home richos/app/ui/settings-button.js richos/app
 escape.js               @shell @home @splash richos/app/ui/permissions.js
 front-door.js           @shell @home
 home-fit.js             @shell @home
-home.js                 @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/settings-button.js richos/app/ui/theme-boot.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
+home-team.js            @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
+home.js               @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/settings-button.js richos/app/ui/theme-boot.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
 ticker-wrap.js          @shell @home
 settings-fit.js         @shell @phone richos/app/ui/settings-button.js
 rail-initials-fit.js    @shell

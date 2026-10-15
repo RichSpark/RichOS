@@ -9,11 +9,12 @@
   any log. The string below is what the CEO reads in the system prompt, so it is written
   in Rich's voice, not in engineering's.
 
-  THE SENTENCE IS IRIS'S, APPROVED BY THE CEO (2026-10-08, round 19: "yes, also keep the
-  sentence Iris wrote for when macOS shows when RichOS asks for the microphone"), word for
-  word, for voice mode and dictation alike (dictation plan slice 2, section 2 row 7). It names
-  F1 even after a different dictation key is chosen: an app cannot change this string at run
-  time, and he approved it as written.
+  THE SENTENCE NAMES ONLY WHAT IS TRUE ON EVERY INSTALL (product hunt 2026-10-15, finding 20).
+  Iris's sentence, approved 2026-10-08, said "I listen only after you tap F1 or press the talk
+  button", and macOS showed it on the first press of Talk to Rich while dictation was off and
+  F1 did nothing. An app cannot change this string at run time, so it names no key and no
+  button: whatever starts the listening (the talk button, or a dictation key once dictation is
+  on), it is the user asking. Voice mode and dictation share it.
 
   Tauri 2 merges this file into the bundled app's generated Info.plist. It is NOT applied
   to a bare `cargo run` binary, which has no bundle to carry it — a dev run inherits the
@@ -29,6 +30,6 @@
 <plist version="1.0">
   <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>So you can talk instead of typing. I listen only after you tap F1 or press the talk button.</string>
+    <string>So you can talk instead of typing. I listen only when you ask me to.</string>
   </dict>
 </plist>

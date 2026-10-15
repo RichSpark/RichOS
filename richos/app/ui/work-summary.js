@@ -1,24 +1,36 @@
 "use strict";
 // Saved receipts are evidence of work, separate from the live worker count.
 (function () {
-  function render(summary, parent) {
-    if (summary.error) {
+  // **A BUSINESS OWNER READS THIS PANEL** (hunt 57, finding 11, 2026-10-15). Each row is the
+  // title and its plain sentence (`work_status.rs`). The machinery line under it, the helper's
+  // role and the repository ("consult · no repository"), is for Technical view only:
+  // `opts.technical` is `main.js`'s `techyOn()`.
+  function render(summary, parent, opts) {
+    const technical = !!(opts && opts.technical);
+    // A read that failed (hunt 57, finding 12) keeps the rows last read, and says why only in
+    // Technical view: "Work status is changing" while Rich gets ready is nothing a business
+    // owner needs to hear.
+    if (summary.error && technical) {
       const note = document.createElement("p"); note.className = "overlay-note";
       note.textContent = "Saved work is unavailable: " + summary.error;
-      parent.appendChild(note); return;
+      parent.appendChild(note);
     }
     for (const item of summary.items || []) {
       const row = document.createElement("section"); row.className = "slide-item";
       const title = document.createElement("strong"); title.textContent = item.title;
       const detail = document.createElement("p"); detail.textContent = item.detail;
-      const repository = document.createElement("p"); repository.className = "overlay-note";
-      repository.textContent = item.role + " · " + item.repository;
-      repository.style.overflowWrap = "anywhere";
-      row.append(title, detail, repository); parent.appendChild(row);
+      row.append(title, detail);
+      if (technical) {
+        const repository = document.createElement("p"); repository.className = "overlay-note";
+        repository.textContent = item.role + " · " + item.repository;
+        repository.style.overflowWrap = "anywhere";
+        row.append(repository);
+      }
+      parent.appendChild(row);
     }
     if (summary.omitted) {
       const note = document.createElement("p"); note.className = "overlay-note";
-      note.textContent = `${summary.omitted} more saved records. Ask Rich about the assignment you want to continue.`;
+      note.textContent = `${summary.omitted} older team ${summary.omitted === 1 ? "job isn't" : "jobs aren't"} shown here. Ask Rich about any of them.`;
       parent.appendChild(note);
     }
   }
@@ -74,7 +86,9 @@
   // changed; the measurement is the authority and the comment now carries what it measured.)
   const STATES = {
     registered: "Written down. Nothing has been prepared yet.",
-    preparing: "Getting a workspace ready.",
+    // Plain words for a business owner (hunt 57, finding 11): it was "Getting a workspace
+    // ready.", and a workspace is machinery he never meets.
+    preparing: "Getting ready to start.",
     running: "Running.",
     // A decision of his is outstanding, and the controls that make it are on the same row:
     // the desk holds his decision while he is away (§5.2/§5.7). The sentence names no
@@ -167,7 +181,11 @@
   /// on him for. It is a request id and not an assignment id on purpose: what he approves is
   /// one action, and the press has to carry which one (spec §5.2's *"one exact action"*
   /// survives the queue).
-  function renderAssignments(view, parent, onStop, onDecide) {
+  ///
+  /// `opts.technical` is `main.js`'s `techyOn()`, the same switch `render` takes above: the
+  /// back end's recorded line under a row is for Technical view only (hunt 57, finding 11).
+  function renderAssignments(view, parent, onStop, onDecide, opts) {
+    const technical = !!(opts && opts.technical);
     if (view.error) {
       const note = document.createElement("p");
       note.className = "overlay-note";
@@ -204,9 +222,27 @@
       // telling him the same thing twice. And a QUESTION (§58): its detail is a record's
       // internal note ("Answered.", "Opening the work connection.") that says nothing he
       // needs and reads as machinery beside a sentence written for him.
+      //
+      // **AND IN TECHNICAL VIEW ONLY, ON ITS OWN LINE** (hunt 57, finding 11, the same rule as
+      // the saved-work rows above). What the back end records is written for whoever reads the
+      // machinery: "Opening the work connection.", "The back end couldn't take it yet", "It
+      // landed on cc/echo-1 in project.", or an error relayed as it came. A business owner reads
+      // the state's own sentence, which is complete on its own.
+      //
+      // **EXCEPT A LINE THAT TELLS HIM WHAT TO DO** (`forYou`, from `work_host.rs`'s
+      // `tells_him_what_to_do`; the review of 25b540804): "Waiting for you to sign in to Claude,
+      // in Settings under Claude accounts." under a held job, a helper Stop can end, an answer
+      // he owes. Hidden, a job held for sign-in read only "Written down. Nothing has been
+      // prepared yet." That line shows in the ordinary view, for a question as for work.
       const addsSomething = row.state !== "waiting-for-screen" && sentencesFor(row.kind, row.answered) === STATES;
-      if (row.detail && addsSomething) detail.textContent += " " + row.detail;
       item.append(title, detail);
+      if (row.detail && (row.forYou || (technical && addsSomething))) {
+        const recorded = document.createElement("p");
+        recorded.className = "overlay-note";
+        recorded.textContent = row.detail;
+        recorded.style.overflowWrap = "anywhere";
+        item.append(recorded);
+      }
       if (waiting) {
         // WHAT HE IS BEING ASKED, in the backend's own words for it — one phrase, written
         // in one place (`work_host.rs`'s `plain_action`), so the receipt and this row can

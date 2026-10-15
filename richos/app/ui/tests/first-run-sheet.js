@@ -165,6 +165,15 @@ async function main() {
       return `sheet at y=${before.panelTop.toFixed(0)}-${before.panelBottom.toFixed(0)} of ${before.viewportH}, holding ${before.panelScrollH}px of content in ${before.panelH.toFixed(0)}px (overflow-y ${before.scrollable}); "Not now" pressed, block and control both stand`;
     });
 
+    // FINDING 16 of the 2026-10-15 product hunt: the form promised "I'll pick this company on my
+    // own whenever you start RichOS from inside it". A Mac app opened from the Dock or Finder
+    // starts from /, so that never happens; the form must not promise it.
+    await run.check(`${size}: the company form promises nothing about starting RichOS from a folder`, async () => {
+      const text = await page.evaluate(() => document.querySelector("#entity-picker").textContent.replace(/\s+/g, " "));
+      assert(!/from inside it|start RichOS from|open RichOS from/i.test(text), `the sheet still promises a folder launch: ${JSON.stringify(text.slice(0, 400))}`);
+      return "no folder-launch promise in the sheet";
+    });
+
     await run.check(`${size}: no page errors`, async () => {
       assertEqual(page.__errors, [], "the page reported errors");
       return "0 errors";

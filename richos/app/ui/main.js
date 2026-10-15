@@ -3757,7 +3757,14 @@ async function pollWorkerStatus() {
       savedWork = summary;
     } catch (error) {
       if (!current()) return;
-      savedWork = {items: [], error: String(error)};
+      // **A READ THAT FAILS KEEPS WHAT THIS CONVERSATION LAST READ** (hunt 57, finding 12,
+      // 2026-10-15). `get_work_status` refuses while Rich's session is being started ("Work
+      // status is changing. Please try again.") and while another conversation is working, and
+      // nightly 57 printed that refusal as "Saved work unavailable" under the very first
+      // conversation of a fresh install, where nothing has been saved. `openThread` empties
+      // `savedWork` on every switch, so what is kept is only ever this conversation's own last
+      // reading: nothing at all for a new one. The reason stays for Technical view.
+      savedWork = {items: savedWork.items || [], omitted: savedWork.omitted || 0, error: String(error)};
     }
     // The ASSIGNMENTS he gave — a different thing from the receipts above, and the only
     // surface that can show background work at all. `get_worker_status` returns an empty
@@ -3840,8 +3847,11 @@ function renderDrillChip() {
   quotaWorking = active;
   renderQuotaWorkStatus();
   if (done) parts.push(`${done} done`);
-  if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "saved work record", "saved work records"));
-  if (savedWork.error) parts.push("Saved work unavailable");
+  // "Team jobs", never "saved work records" (hunt 57, finding 11): each saved record is one job
+  // handed to a teammate, and a business owner has no use for the word "record".
+  if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "team job", "team jobs"));
+  // A read that failed is not on this line (hunt 57, finding 12): it keeps the last reading,
+  // and the reason is shown under Technical view in the panel this line opens.
   // THE ASSIGNMENTS, AND THE REASON THEY ARE ON THIS CHIP AT ALL (background-work spec §7's
   // observability note, §7.8). This chip is the only way to open the pane the assignments
   // live in, and every other part of it is fed by `get_worker_status`, which is EMPTY
@@ -3859,7 +3869,7 @@ function renderDrillChip() {
   // failed ... a CEO who reads the first answer and looks away has been told something false."
   // `AssignmentState`'s own doc comments are precise about the difference and `work-summary.js`
   // has always relayed them precisely — `registered` is "Written down. Nothing has been
-  // prepared yet.", `preparing` is "Getting a workspace ready.", `running` is "Running." The
+  // prepared yet.", `preparing` is "Getting ready to start.", `running` is "Running." The
   // chip was the one surface that flattened three states into the strongest of the three.
   //
   // `running` now means what it says on the backend too: it is written once the back end's own
@@ -3957,11 +3967,11 @@ function renderSlideOver() {
     row.textContent = `${marker} ${item.label}${item.state === "paused" ? " · paused" : ""}`;
     slideoverBody.appendChild(row);
   }
-  window.RichWorkSummary.render(savedWork, slideoverBody);
+  window.RichWorkSummary.render(savedWork, slideoverBody, {technical: techyOn()});
   // The assignments, with their own stop control (background-work spec §4.2: "where the
   // work is already visible"). Rendered after the receipts because a receipt is evidence
   // and an assignment is a thing he can still act on.
-  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, answerAssignment);
+  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, answerAssignment, {technical: techyOn()});
 }
 
 /// **His decision on the one step an assignment stopped at** (background-work spec §5.2,
@@ -4199,8 +4209,9 @@ function renderVoiceState(state, noAudio) {
   const speaking = state === "speaking";
   // Whether a background result may be said right now (background-work spec §3.5: never
   // mid-sentence, and never while he is speaking). Recorded here rather than inferred
-  // elsewhere, because this is the one function that knows.
-  voiceBusy = voiceMode && state !== "idle" && state !== "off";
+  // elsewhere, because this is the one function that knows. "listening" is the resting
+  // state — Rich silent, he silent, no turn — and the engine never reports "idle".
+  voiceBusy = voiceMode && state !== "listening" && state !== "off";
   if (!voiceBusy) flushWorkNotices();
   // The mic is open and healthy but nothing has arrived for 3.008 s (noaudio.rs). It
   // REPLACES the listening row: "listening…" next to "I can't hear anything" is two claims
@@ -6098,7 +6109,7 @@ async function refreshSetup() {
 /// Ask, or explain, or say nothing at all. Returns true when the sheet opened, so `init` can
 /// hold the memory question back instead of stacking a second dialog on this one.
 function maybeAskAboutSetup() {
-  if (!setupState || !setupState.ask) return false;
+  if (startupWaitsForHome || !setupState || !setupState.ask) return false;
   const { ask } = setupState;
   if (!ask.items.length) {
     if (providerAuth && providerAuth.state !== "connected") {
@@ -6509,10 +6520,11 @@ Bridge.listen("richos://setup", (payload) => {
 // `docs/verification/first-run-provisioning-2026-09-01/`. Nothing in the product created
 // it, and nothing offered to. This is the offer.
 //
-// HIS PART IS ONE CLICK. The location is SHOWN, never typed, and it comes from the backend
-// (`memory_status.offered_location`) rather than being composed here — so the string on
-// screen is the string the command was given, and there is no second opinion about where
-// his record goes.
+// HIS PART IS ONE CLICK, AND HE IS SHOWN NO PATH. The location comes from the backend
+// (`memory_status.offered_location`) rather than being composed here, so there is no second
+// opinion about where his record goes. It is no longer put on the question, and a yes closes
+// the sheet with no second box to dismiss (product hunt 2026-10-15, finding 15: a raw path
+// ending in "RichOS/corpus", then a "That's set up" box that had to be closed).
 // ---------------------------------------------------------------------------------------
 
 let memoryState = null;
@@ -6855,7 +6867,7 @@ function rememberMemorySetupDeclined() {
 /// Ask, or say what is wrong, or do nothing at all. Returns true when a dialog opened, so
 /// `init` can hold the company question back rather than stacking it.
 function maybeAskAboutMemory() {
-  if (!memoryState) return false;
+  if (startupWaitsForHome || !memoryState) return false;
   if (memoryState.state === "none") {
     // **"NOT NOW" IS AN ANSWER, AND IT USED TO BE FORGOTTEN AT EVERY LAUNCH.** Ray saw the
     // corpus sheet twice in one walk, over the home screen both times, and audit-6 saw it
@@ -6871,7 +6883,7 @@ function maybeAskAboutMemory() {
     // which opens this same sheet in whatever state the backend reports. That row is the
     // control this state now names.
     if (memorySetupDeclined()) return false;
-    openMemorySetup(MEMORY_ASK, memoryState.offered_location, { canProvision: true });
+    openMemorySetup(MEMORY_ASK, null, { canProvision: true });
     return true;
   }
   // `no-compiler` — SAID ONCE, WHEN HE ASKS FOR IT, AND NEVER AS A NAG.
@@ -6890,6 +6902,63 @@ function maybeAskAboutMemory() {
   // its own boot line and no sentence worth interrupting him with, since nothing in the
   // window can act on it.
   return false;
+}
+
+/// **A RELAUNCH OPENS ON THE HOME SCREEN, EVERY TIME** (Ray's check of nightly 57, 2026-10-15,
+/// `feedback/r19-again-run1-memory-question.png` against `r19-again-run2.png`). Of two
+/// relaunches, one opened on the home screen and one on the last conversation with the memory
+/// question up: that question was still owed there, and `home.js` gets out of the way of any
+/// sheet on the desk (`giveWayToOpenDeskSheet`). Any question a start puts up does the same: the
+/// setup sheet (an update that needs a different engine included), the memory question, the
+/// company question and the company picker. So on a relaunch they all wait while the home screen
+/// is up and are asked the moment he goes in, in FIRST_RUN_ORDER and one at a time, by the same
+/// hand-offs as always (`closeSetupSheet` asks the memory question, `closeMemorySetup` the
+/// company question).
+///
+/// **The very first start is not a relaunch** and asks at once, as it always has: the first-run
+/// questions come one after another from the moment the app opens. A relaunch is a start whose
+/// launch record says it is the second or later (`launch.rs` `start_ordinal`), or a restart
+/// after a run that did not end cleanly; no record reads as the first start, as `splash.js`
+/// `launchOrdinal` reads it.
+///
+/// While `startupWaitsForHome` is set, `maybeAskAboutSetup` and `maybeAskAboutMemory` ask
+/// nothing: the start's questions are this function's to ask.
+let startupWaitsForHome = false;
+let pickerAfterHome = false;
+
+function homeIsUp() {
+  return !!(window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen());
+}
+
+function relaunched() {
+  const launch = window.__RICHOS_LAUNCH__;
+  if (!launch) return false;
+  // A start after a run that did not end cleanly is a relaunch too, and carries no ordinal
+  // (`launch.rs`: "a crash-restart is not the Nth start"). Measured in the test VM: a relaunch
+  // stopped by its pid came back as one and left the home screen for the company question.
+  return launch.kind === "crash-restart" || (typeof launch.ordinal === "number" && launch.ordinal > 1);
+}
+
+function askStartupQuestionsOffHome() {
+  // `body.home-open` is the home screen's own mark of being up (`home.js` `show`/`hide`).
+  const watch = new MutationObserver(() => {
+    if (homeIsUp()) return;
+    watch.disconnect();
+    startupWaitsForHome = false;
+    if (maybeAskAboutSetup()) {
+      memoryQuestionDeferred = true;
+      return;
+    }
+    if (maybeAskAboutMemory()) return;
+    if (companyQuestionDeferred) {
+      companyQuestionDeferred = false;
+      requireCompanyChoice();
+    } else if (pickerAfterHome) {
+      pickerAfterHome = false;
+      startNewThreadFlow();
+    }
+  });
+  watch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
 }
 
 function openMemorySetup(note, location, opts) {
@@ -6956,16 +7025,12 @@ async function provisionMemory() {
   // watched it be created. `refreshDesk` is idempotent and this is the one moment the fact
   // it caches is known to be stale.
   await refreshDesk();
-  const readable = next.state === "ready";
-  // AND THE HEADING STOPS ASKING A QUESTION HE HAS ANSWERED. It is the dialog's accessible
-  // name and it stayed on "Where should I keep what you tell me?" over both endings, so the
-  // screen he actually reaches read as a question above its own answer — the same defect the
-  // setup sheet's heading had two screens earlier (ray-opus-a1, finding 7). One heading for
-  // both endings, because what follows it is about the folder in either case.
-  memorySetupTitleEl.textContent = "Your memory folder.";
-  // `consented`, and deliberately NOT `next.root`: the two name one directory, and the one he
-  // is owed is the one he answered a question about.
-  openMemorySetup(readable ? MEMORY_DONE : MEMORY_NO_READER, consented, { canProvision: false });
+  // A YES THAT WORKED NEEDS NO SECOND BOX (product hunt 2026-10-15, finding 15): the sheet
+  // closes and the next first-run question, if one was held back, is asked. That holds when
+  // the folder was made and the part that reads it is not on this Mac yet (no engine, the
+  // setup sheet answered "Not now"): MEMORY_NO_READER asks nothing of him, and the
+  // "Memory folder" row in the settings menu still says it when he looks.
+  closeMemorySetup();
 }
 
 memorySetupGoEl.addEventListener("click", provisionMemory);
@@ -7015,7 +7080,7 @@ window.RichSettings.registerMemory({
       return;
     }
     if (memoryState.state === "none") {
-      openMemorySetup(MEMORY_ASK, memoryState.offered_location, { canProvision: true });
+      openMemorySetup(MEMORY_ASK, null, { canProvision: true });
       return;
     }
     memorySetupTitleEl.textContent = "Your memory folder.";
@@ -9431,6 +9496,9 @@ async function init() {
   // dialog at a time — `closeSetupSheet` hands off to the memory question, which hands off
   // to the company question, so a fresh install answers all three, in order.
   await refreshSetup();
+  // A RELAUNCH OPENS ON THE HOME SCREEN: every question of this start waits for him to go in
+  // (`askStartupQuestionsOffHome`). The very first start asks them at once, as before.
+  const startupWaits = (startupWaitsForHome = homeIsUp() && relaunched());
   const setupAsked = maybeAskAboutSetup();
   // The memory question is HELD, not skipped, when the setup sheet took the screen —
   // `closeSetupSheet` asks it the moment this one is answered.
@@ -9461,8 +9529,10 @@ async function init() {
     // Unless the memory question is already on screen: `closeMemorySetup` asks this one the
     // moment that one is answered, so a fresh install answers both, in order, one dialog at
     // a time.
-    if (setupAsked || memoryAsked) companyQuestionDeferred = true;
+    if (startupWaits || setupAsked || memoryAsked) companyQuestionDeferred = true;
     else requireCompanyChoice();
+  } else if (startupWaits && !chose && navTree.groups.length) {
+    pickerAfterHome = true;
   } else if (!chose && navTree.groups.length) {
     // No active context — the launch could not resolve an entity (the shell fails closed
     // rather than guessing one), or every thread on disk is unbound.
@@ -9479,6 +9549,7 @@ async function init() {
     // selected". No entity is selected, so the picker opens.
     startNewThreadFlow();
   }
+  if (startupWaits) askStartupQuestionsOffHome();
   // WHAT IS RUNNING RIGHT NOW, read from the backend rather than assumed from the absence
   // of events. A webview reload does not restart the Rust side, so a turn can be mid-flight
   // with this script one second old; without this the row renders "Status unavailable" and
