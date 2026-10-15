@@ -462,7 +462,7 @@ richos/app/
                               Mac drew the greeting twice where the phone drew it once). Both
                               runs are retained; the repeat renders in no mode.
                               with its session clause
-    tests/live_event_tests.rs 21 additive-family tests (§13): the four original events
+    tests/live_event_tests.rs 22 additive-family tests (§13): the four original events
                               asserted BYTE-IDENTICAL with and without the new family, the
                               wire and the reload agreeing field by field, phase honestly
                               `unknown`, the states that are never emitted, the
@@ -1223,7 +1223,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2030 tests + 5 doc-tests (2026 direct, 4 ignored)
+cargo test -p richos-core                       # 2031 tests + 5 doc-tests (2027 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

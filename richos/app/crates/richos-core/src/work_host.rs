@@ -2142,6 +2142,7 @@ impl WorkHost {
                             measured.set(Some(usage));
                         }
                     }
+                    TurnItem::AnswerComplete => {}
                     }
                 });
                 // The failed turn's own words, or the words it streamed (the two shapes the

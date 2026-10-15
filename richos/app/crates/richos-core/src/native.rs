@@ -872,6 +872,11 @@ enum ChunkMsg {
     /// its own arm rather than a frame because it is the only thing on this channel RichOS
     /// computed rather than received, and that distinction must survive to the record.
     Usage { used: u64, size: u64, usage: Value },
+    /// **His answer is complete; the turn is still running** (product hunt 2026-10-15, finding
+    /// 21). Sent once, right after the frame whose accepted checkpoint started withholding
+    /// everything after it ([`NativeClient::settle_the_checkpoint`]). It ends nothing: the turn
+    /// still ends at its own `result`. It only lets the screen stop saying "Rich is working".
+    AnswerComplete,
     /// The turn's terminal `result` frame.
     Done(Value),
     /// The CEO pressed stop. Sent by [`NativeCancelHandle`] into THIS turn's channel purely
@@ -1467,17 +1472,6 @@ struct ReaderState {
     /// says the write failed clears this id and leaves everything after it visible.
     /// Host-owned, reset with the send.
     checkpoint_call_id: Option<String>,
-    /// **The host ended his turn when its checkpoint answered, and the child is still finishing
-    /// it** (product hunt 2026-10-15, finding 21). On nightly 57 Rich's answer was on screen at
-    /// 7.8 s and the turn ended at 29.7 s: the model wrote its checkpoint and then its whole
-    /// answer a second time (438 characters, all withheld). By the doctrine the checkpoint is
-    /// the last thing on the turn and everything after it is withheld, so the answer is
-    /// complete when it answers, and the turn ends there ([`NativeClient::end_at_the_checkpoint`]).
-    /// The child's own tail still streams; it is withheld exactly as before and retained on the
-    /// between-turn lane. Set at that early end, cleared by the next `result` the child writes,
-    /// which is the tail's own. While it is set a new send does not reset the withholding, so
-    /// the tail cannot reach the next turn as words.
-    tail_after_the_checkpoint: bool,
     /// The [`brief_cache_identity`] of context this session completed receiving, either
     /// during silent priming or alongside a visible request. A fact about the
     /// SESSION, not the turn, so unlike its neighbors it is never reset with the send — a new
@@ -1694,7 +1688,6 @@ impl Default for ReaderState {
             checkpoint_after_his_words: false,
             withheld_after_checkpoint: String::new(),
             checkpoint_call_id: None,
-            tail_after_the_checkpoint: false,
             context_brief_held: None,
             turns_named_by_the_child: false,
             background: Vec::new(),
@@ -2513,21 +2506,6 @@ impl NativeClient {
                         st.context_window = Some(w);
                     }
                 }
-                // **THE TAIL OF A TURN THAT ENDED AT ITS CHECKPOINT ENDS HERE** (finding 21).
-                // The child runs one turn at a time, so the first `result` after that early end
-                // is the tail's own. What it said is reported the way the turn's end always
-                // reported it, and the withholding is lifted for whatever turn comes next.
-                if std::mem::take(&mut st.tail_after_the_checkpoint) {
-                    let withheld = std::mem::take(&mut st.withheld_after_checkpoint);
-                    if !withheld.trim().is_empty() {
-                        let withheld = withheld.trim();
-                        eprintln!(
-                            "{WITHHELD_AFTER_THE_CHECKPOINT} ({} chars, after his turn had ended at the checkpoint): {withheld:?}",
-                            withheld.chars().count(),
-                        );
-                    }
-                    st.checkpoint_after_his_words = false;
-                }
             }
             // ---- WHOSE TURN DOES THIS END? (see [`PendingTurn`]) -----------------------
             //
@@ -2877,8 +2855,19 @@ impl NativeClient {
         }
 
         Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
-        if answer_complete {
-            Self::end_at_the_checkpoint(current, state);
+        // **HIS ANSWER IS COMPLETE, AND THE TURN RUNS ON OUT OF SIGHT** (product hunt
+        // 2026-10-15, finding 21: "Rich is working" stayed up about 22 s after the answer was on
+        // screen, while the model wrote the whole answer again after its checkpoint, withheld).
+        // After the frame that completes the checkpoint's row, and only into a turn that is his
+        // and ours: a priming turn is not his, and a turn the child has not named yet is not
+        // running. Nothing is sent to the child and nothing ends here.
+        if answer_complete && !state.lock().unwrap().context_only {
+            if let Some(pending) = current.lock().unwrap().as_ref().filter(|p| !p.not_yet_ours()) {
+                // A closed receiver means the turn has already ended: nothing is left to tell.
+                if pending.sink.send(ChunkMsg::AnswerComplete).is_err() {
+                    eprintln!("[richos] conversation: the answer was complete after its turn had already ended.");
+                }
+            }
         }
     }
 
@@ -2922,10 +2911,10 @@ impl NativeClient {
     /// checkpoint that succeeded and the closing line after it is the duplicate to withhold.
     ///
     /// Returns whether THIS frame settled it as ACCEPTED, which is the moment his answer is
-    /// complete ([`ReaderState::tail_after_the_checkpoint`]). Not `is_error` alone: the engine
-    /// answers a checkpoint it rejected (a commitment with no title) without `isError` and with
-    /// `"accepted": false` in its receipt (`ecs_checkpoint.py` `receipt_result`), and the turn
-    /// must stay open for the model to repair it.
+    /// complete ([`ChunkMsg::AnswerComplete`]). Not `is_error` alone: the engine answers a
+    /// checkpoint it rejected (a commitment with no title) without `isError` and with
+    /// `"accepted": false` in its receipt (`ecs_checkpoint.py` `receipt_result`), and the model
+    /// may still repair it.
     fn settle_the_checkpoint(msg: &Value, state: &Arc<Mutex<ReaderState>>) -> bool {
         let mut st = state.lock().unwrap();
         let Some(pending) = st.checkpoint_call_id.clone() else { return false };
@@ -2960,37 +2949,6 @@ impl NativeClient {
             .ok()
             .and_then(|receipt| receipt.get("accepted").and_then(Value::as_bool))
             == Some(true)
-    }
-
-    /// **HIS ANSWER IS COMPLETE: THE TURN ENDS AT THE CHECKPOINT** (product hunt 2026-10-15,
-    /// finding 21: "Rich is working" stayed up about 22 s after the answer was on screen).
-    ///
-    /// Called right after the frame that settled the checkpoint was routed into the turn, so the
-    /// checkpoint's own row is complete in it. The parked prompt is answered as an ordinary end
-    /// of turn; nothing is sent to the child, which finishes its tail on its own (withheld, and
-    /// retained on the between-turn lane), so what the model sees of its conversation is
-    /// unchanged.
-    ///
-    /// **Only where the next prompt can tell the tail's `result` from its own**: on a child that
-    /// names our turns (`command_lifecycle`), a prompt sent during the tail is `Queued` or not
-    /// yet named, and [`PendingTurn::result_is_another_turns`] retains the tail's `result`. A
-    /// child that names nothing keeps the old ending, because there the next `result` would be
-    /// taken as the next prompt's. Never on a hidden priming turn, which is not his.
-    fn end_at_the_checkpoint(current: &Arc<Mutex<Option<PendingTurn>>>, state: &Arc<Mutex<ReaderState>>) {
-        let mut guard = current.lock().unwrap();
-        let ours = guard.as_ref().is_some_and(|pending| !pending.not_yet_ours());
-        let mut st = state.lock().unwrap();
-        if !ours || !st.turns_named_by_the_child || st.context_only {
-            return;
-        }
-        st.tail_after_the_checkpoint = true;
-        drop(st);
-        if let Some(pending) = guard.take() {
-            // A closed receiver means the drain loop has already returned: nothing is waiting.
-            if pending.sink.send(ChunkMsg::Done(json!({ "stop_reason": "end_turn" }))).is_err() {
-                eprintln!("[richos] the turn's checkpoint answered after its drain loop had already returned");
-            }
-        }
     }
 
     /// ROUTED WHEN THERE IS A TURN, PARKED WHEN THERE IS NOT (§1.5, gap #1).
@@ -3277,13 +3235,8 @@ impl NativeClient {
                 // And the checkpoint's two, for the identical reason: a checkpoint belongs to
                 // ONE turn, and one carried into the next would withhold that turn's reply on
                 // the strength of this turn's bookkeeping.
-                // EXCEPT while the previous turn's tail is still running after it ended at its
-                // checkpoint (finding 21): that tail is still the duplicate, and it stays
-                // withheld until its own `result` lifts the withholding.
-                if !state.tail_after_the_checkpoint {
-                    state.checkpoint_after_his_words = false;
-                    state.withheld_after_checkpoint.clear();
-                }
+                state.checkpoint_after_his_words = false;
+                state.withheld_after_checkpoint.clear();
                 state.checkpoint_call_id = None;
                 drop(state);
             }
@@ -3365,7 +3318,7 @@ impl NativeClient {
             // What the provider says while it winds the asking turn down is not part of his
             // conversation: the question is the last thing this turn had to say.
             if question_ended
-                && matches!(received, Ok(ChunkMsg::Text(_) | ChunkMsg::Frame(_) | ChunkMsg::Permission { .. } | ChunkMsg::Usage { .. }))
+                && matches!(received, Ok(ChunkMsg::Text(_) | ChunkMsg::Frame(_) | ChunkMsg::Permission { .. } | ChunkMsg::Usage { .. } | ChunkMsg::AnswerComplete))
             {
                 continue;
             }
@@ -3418,6 +3371,10 @@ impl NativeClient {
                         seq,
                     )));
                     seq += 1;
+                }
+                Ok(ChunkMsg::AnswerComplete) => {
+                    release(&mut seq, on_item, &mut spelling);
+                    on_item(TurnItem::AnswerComplete);
                 }
                 Ok(ChunkMsg::Cancel) => {
                     // The interrupt has already gone out (`NativeCancelHandle::cancel` writes
@@ -7215,6 +7172,7 @@ printf '%s\n' '{{"type":"result","stop_reason":"end_turn"}}'
                     record.title.clone(),
                     record.summary.clone().unwrap_or_default(),
                 )),
+                TurnItem::AnswerComplete => {}
             };
             assert_eq!(client.prompt("Land the pricing branch", &mut collect).unwrap(), "end_turn");
         }
@@ -7362,6 +7320,7 @@ printf '%s\n' '{{"type":"result","stop_reason":"end_turn"}}'
                     record.title.clone(),
                     record.summary.clone().unwrap_or_default(),
                 )),
+                TurnItem::AnswerComplete => {}
             };
             assert_eq!(client.prompt("how is it going?", &mut collect).unwrap(), "end_turn");
         }
@@ -7450,15 +7409,18 @@ printf '%s\n' '{{"type":"result","stop_reason":"end_turn"}}'
     }
 
     #[test]
-    fn the_turn_ends_when_its_checkpoint_answers_and_the_tail_never_reaches_the_next_turn() {
-        // Product hunt 2026-10-15, finding 21: "Rich is working" stayed up about 22 s after the
-        // answer was on screen (first words 7.8 s, turn end 29.7 s), while the model wrote its
-        // checkpoint and then the whole answer again (438 characters, withheld). The turn must
-        // be over before the tail: decided by a FACT, not a clock. The tail's own `result` can
-        // only reach the between-turn lane if the turn had already ended when it arrived; a
-        // turn that waited for it consumes it as its own ending. A prompt sent during the tail
-        // must be answered by its own turn, with none of the tail's words.
-        let script = write_script("ends-at-the-checkpoint", r#"
+    fn a_message_he_sends_after_the_answer_is_complete_gets_its_own_visible_reply() {
+        // Product hunt 2026-10-15, finding 21, and the handover review of e1c99788e
+        // (rv-20261015T120723Z-e1c99788-12ab): ending the turn at its checkpoint let the next
+        // prompt reach the child while the old turn's tail was still running, the child folded
+        // it into that turn (its `completed` before the `result`, the wire's own fold shape),
+        // and its answer was withheld as the tail's: he got no visible reply. The turn now
+        // runs to its own end, so the next prompt is written only after it, as on main.
+        //
+        // The child below folds a prompt that arrives during its tail, and answers one that
+        // arrives after its `result` in a turn of its own. The verdict is what he reads, not
+        // a clock: the `read -t` only lets the script tell the two shapes apart.
+        let script = write_script("follow-up-after-the-checkpoint", r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
 read -r prompt
@@ -7469,17 +7431,24 @@ printf '%s\n' '{"type":"stream_event","event":{"type":"message_start"}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
 printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":"{\"accepted\":true,\"applied\":1,\"rejected\":0}"}]}}'
-sleep 1
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three subject line ideas."}}}'
-printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":1}'
-printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
-read -r prompt
-ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
-test -n "$ours" || exit 9
-printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"The second answer."}}}'
-printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
-printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+if read -r -t 2 next; then
+  next_id=$(printf '%s' "$next" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
+  printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$next_id\",\"state\":\"queued\"}"
+  printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"The answer to your thanks."}}}'
+  printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$next_id\",\"state\":\"completed\"}"
+  printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
+  printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+else
+  printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three subject line ideas."}}}'
+  printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
+  printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+  read -r next
+  next_id=$(printf '%s' "$next" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
+  printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$next_id\",\"state\":\"started\"}"
+  printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"The answer to your thanks."}}}'
+  printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
+  printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$next_id\",\"state\":\"completed\"}"
+fi
 read -r keep_alive
 "#);
         let client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
@@ -7498,30 +7467,20 @@ read -r keep_alive
         let (reason, first) = said(&client, "Suggest three subject lines.");
         assert_eq!(reason, "end_turn");
         assert_eq!(first, "Here are three.", "the answer, once");
-
-        // Sent while the tail is still running: answered by its own turn, with none of the tail.
         let (reason, second) = said(&client, "Thanks.");
         assert_eq!(reason, "end_turn");
-        assert_eq!(second, "The second answer.", "the tail reached the next turn, or its result ended it");
-        // THE VERDICT: the tail's own result is on the between-turn lane (§1.4 G5), so the turn
-        // had ended before it. A turn that waited for the tail would have consumed it.
-        assert!(
-            client.between.lock().unwrap().queue.iter().any(|i| matches!(i,
-                BetweenItem::Frame(f) if f.get("type").and_then(Value::as_str) == Some("result")
-                    && f.get("queued_turn_count").and_then(Value::as_u64) == Some(1))),
-            "the tail's own result ended the turn: the turn waited for the tail after its checkpoint",
-        );
+        assert_eq!(second, "The answer to your thanks.", "his follow-up got no visible reply");
     }
 
     #[test]
-    fn a_rejected_checkpoint_never_ends_the_turn() {
-        // The handover review of 24668df27: the engine answers a checkpoint it REJECTED (a
-        // commitment with no title) with `"isError": false` and a receipt saying
-        // `"accepted": false, "rejected": 1`. Ending the turn there closed the tool grants, so
-        // the model's repair could no longer save it. Only an ACCEPTED checkpoint completes
-        // the answer. The verdict is the same fact as the test above: the turn's own `result`
-        // reaches the between-turn lane only if the turn had already ended without it.
-        let script = write_script("rejected-checkpoint-keeps-the-turn", r#"
+    fn the_answer_is_complete_at_the_accepted_checkpoint_and_the_turn_still_ends_at_its_own_end() {
+        // Product hunt 2026-10-15, finding 21: "Rich is working" stayed up about 22 s after the
+        // answer was on screen (first words 7.8 s, turn end 29.7 s), while the model wrote its
+        // checkpoint and then the whole answer again (withheld). The lease says the answer is
+        // complete at the ACCEPTED checkpoint, after the checkpoint's own row, and the turn
+        // itself still ends at the child's `result`, with the tail withheld as before. A
+        // rejected receipt (`"accepted": false`, not an `isError`) says nothing.
+        let script = write_script("answer-complete-at-the-checkpoint", r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
 read -r prompt
@@ -7531,47 +7490,63 @@ printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"stat
 printf '%s\n' '{"type":"stream_event","event":{"type":"message_start"}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
-printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":[{"type":"text","text":"{\"accepted\":false,\"applied\":0,\"rejected\":1,\"rejections\":[\"commitment needs a title\"]}"}]}]}}'
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_CP2","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
-printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP2","content":[{"type":"text","text":"{\"accepted\":true,\"applied\":1,\"rejected\":0,\"rejections\":[]}"}]}]}}'
-printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":1}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_CP","content":[{"type":"text","text":"{\"accepted\":true,\"applied\":1,\"rejected\":0}"}]}]}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three subject line ideas."}}}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":7}'
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
 read -r prompt
 ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
-test -n "$ours" || exit 9
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"The second answer."}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here are three."}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_RJ","name":"mcp__richos_continuity__checkpoint","input":{}}}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_RJ","content":"{\"accepted\":false,\"applied\":0,\"rejected\":1}"}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
 read -r keep_alive
 "#);
         let client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
-        let said = |client: &NativeClient, prompt: &str| {
-            let mut said = String::new();
+        #[derive(Debug, PartialEq)]
+        enum Seen {
+            Said(String),
+            Checkpoint,
+            Complete,
+        }
+        let run = |client: &NativeClient, prompt: &str| {
+            let mut log = Vec::new();
             let reason = client
-                .prompt(prompt, &mut |item| {
-                    if let TurnItem::Text { text, .. } = item {
-                        said.push_str(text);
+                .prompt(prompt, &mut |item| match item {
+                    TurnItem::Text { text, .. } => log.push(Seen::Said(text.to_string())),
+                    TurnItem::Machinery(record) => {
+                        if record.payload.as_ref().is_some_and(|p| p.to_string().contains("toolu_CP")) {
+                            log.push(Seen::Checkpoint);
+                        }
                     }
+                    TurnItem::AnswerComplete => log.push(Seen::Complete),
                 })
                 .unwrap();
-            (reason, said)
+            (reason, log)
         };
 
-        let (reason, first) = said(&client, "Suggest three subject lines.");
+        let (reason, log) = run(&client, "Suggest three subject lines.");
         assert_eq!(reason, "end_turn");
-        assert_eq!(first, "Here are three.");
-        // The second prompt is read by the child only after the first turn's `result`, so by
-        // the time it is answered the reader has routed that `result` one way or the other.
-        let (reason, second) = said(&client, "Thanks.");
-        assert_eq!(reason, "end_turn");
-        assert_eq!(second, "The second answer.");
+        let said: Vec<&Seen> = log.iter().filter(|s| matches!(s, Seen::Said(_))).collect();
+        assert_eq!(said, vec![&Seen::Said("Here are three.".into())], "the tail stays withheld: {log:?}");
+        assert_eq!(log.iter().filter(|s| **s == Seen::Complete).count(), 1, "said once: {log:?}");
+        let complete = log.iter().position(|s| *s == Seen::Complete).unwrap();
+        let row = log.iter().rposition(|s| *s == Seen::Checkpoint).expect("the checkpoint's row");
+        assert!(complete > row, "complete only after the checkpoint's own row: {log:?}");
+        // THE TURN WAITED FOR ITS OWN END: its `result` was consumed by this prompt, not left
+        // on the between-turn lane for whatever came next.
         assert!(
             !client.between.lock().unwrap().queue.iter().any(|i| matches!(i,
                 BetweenItem::Frame(f) if f.get("type").and_then(Value::as_str) == Some("result")
-                    && f.get("queued_turn_count").and_then(Value::as_u64) == Some(1))),
-            "the turn ended at a checkpoint the engine rejected, before the model could repair it",
+                    && f.get("queued_turn_count").and_then(Value::as_u64) == Some(7))),
+            "the turn ended before its own result",
         );
+
+        let (reason, log) = run(&client, "Again, please.");
+        assert_eq!(reason, "end_turn");
+        assert!(!log.contains(&Seen::Complete), "a rejected checkpoint completes nothing: {log:?}");
     }
 
     #[test]
@@ -7804,6 +7779,7 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         let reason=client.prompt("First fictional turn", &mut |item|match item {
             TurnItem::Text{text,..}=>visible.push_str(text),
             TurnItem::Machinery(record)=>reports.push(record),
+            TurnItem::AnswerComplete=>{}
         }).unwrap();
         assert_eq!(reason,"end_turn");assert_eq!(visible,"Lead done");
         assert!(reports.iter().any(|r|r.title=="Worker report" && r.payload.as_ref().is_some_and(|p|p["parent_tool_use_id"]=="worker-call" && p["block"]["text"]=="WORKER REPORT")));
@@ -8403,6 +8379,7 @@ cat '{frames}'
         let result = client.prompt(prompt, &mut |item| match item {
             TurnItem::Text { seq, text } => items.push((seq, Some(text.to_string()))),
             TurnItem::Machinery(record) => items.push((record.seq, None)),
+            TurnItem::AnswerComplete => {}
         });
         BritishTurn { items, result, received: std::fs::read_to_string(&received).unwrap_or_default() }
     }

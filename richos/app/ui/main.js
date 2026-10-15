@@ -2477,6 +2477,13 @@ async function send(explicitText, opts) {
 /// §9.2 cue and nothing else is claimed: no "Rich is reading this", no re-ordering of the
 /// running turn's rows.
 async function steer(text, preserveDraft) {
+  // A message he sends while an answered turn finishes out of sight (finding 21) waits for that
+  // turn, as it always has, so the turn shows as working again, as it did before.
+  for (const [turnId, t] of timelineModel.turns) {
+    if (!t.live || !t.answered) continue;
+    t.answered = false;
+    syncWaitBand({ turnId, status: t.status, startedAt: t.startedAt });
+  }
   if (!preserveDraft) inputEl.value = "";
   autoGrow();
   window.RichTimeline.addPendingUserMessage(timelineModel, text, Date.now());
@@ -3195,7 +3202,11 @@ function startOrStopWaitTimer() {
 /// would be the reassurance-after-death this whole change exists to remove.
 function syncWaitBand(payload, opts) {
   const live = payload.status === "queued" || payload.status === "working" || payload.status === "recovering";
-  if (!live) {
+  // HIS ANSWER IS COMPLETE (product hunt 2026-10-15, finding 21): "Rich is working" stood over
+  // a finished answer for about 22 s while the turn wrote out a withheld duplicate. The turn
+  // is still live for everything else (Stop, and a message he sends steers it as before);
+  // only the band goes, exactly as a terminal status takes it.
+  if (!live || payload.answered === true) {
     waitHistory.delete(payload.turnId);
     if (waitTurn && waitTurn.turnId !== payload.turnId) return;
     waitTurn = null;
@@ -3260,7 +3271,7 @@ function resetWaitBandForThread() {
   waitTurn = null;
   removeWaitBand();
   for (const [turnId, t] of timelineModel.turns) {
-    if (!t.live) continue;
+    if (!t.live || t.answered) continue;
     const hadEvidence = waitHistory.has(turnId);
     syncWaitBand({ turnId, status: t.status, startedAt: t.startedAt }, { joinedLate: true });
     // A snapshot carries the actual latest activity instant. Restoring it must not make

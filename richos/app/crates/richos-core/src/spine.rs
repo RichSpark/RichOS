@@ -1003,6 +1003,7 @@ impl Spine {
             started_at: turn.and_then(|t| t.started_at),
             active_duration_ms: turn.and_then(|t| t.active_ms()),
             supersedes_turn_id,
+            answered: false,
             at: now_millis(),
         }]
     }
@@ -3054,6 +3055,25 @@ impl Spine {
                     }
                     Self::retain_and_emit_machinery(journal, machinery_observer, record);
                 }
+                // **HIS ANSWER IS COMPLETE, THE TURN RUNS ON** (product hunt 2026-10-15, finding
+                // 21). The turn is still working, durably and for every other purpose (a message
+                // he sends now steers it, exactly as before); this status only tells the screen
+                // the answer is done, so it stops saying "Rich is working". Never for a turn he
+                // does not see.
+                TurnItem::AnswerComplete => {
+                    if !internal_turn {
+                        let turn = ledger.turn(turn_id);
+                        Self::forward_live(live_observer, vec![LiveEvent::TurnStatus {
+                            fence: EventFence::for_turn(binding, turn_id),
+                            status: TurnStatus::Working,
+                            started_at: turn.and_then(|t| t.started_at),
+                            active_duration_ms: None,
+                            supersedes_turn_id: None,
+                            answered: true,
+                            at: now_millis(),
+                        }]);
+                    }
+                }
             };
             lease.expect("successful preparation has a lease").prompt(text, &mut on_item)
         };
@@ -4446,6 +4466,7 @@ impl Spine {
                     let record = record.stamp(thread_id, Some(&turn_id), true);
                     Self::retain_and_emit_machinery(journal, machinery_observer, record);
                 }
+                TurnItem::AnswerComplete => {}
             };
             lease.prompt_context_only(HANDOFF_PROMPT, &mut on_item)
         };

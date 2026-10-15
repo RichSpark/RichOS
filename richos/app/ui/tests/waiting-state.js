@@ -555,6 +555,65 @@ async function main() {
     await page.close();
   });
 
+  // Product hunt 2026-10-15, finding 21: "Rich is working" stood over a finished answer for
+  // about 22 s (first words 7.8 s, turn end 29.7 s) while the turn wrote out a withheld
+  // duplicate. The spine now says the answer is complete with a second `working` status
+  // carrying `answered: true`; the turn itself runs on to its own end.
+  await run.check("once his answer is complete, 'Rich is working' and its timer go while the turn finishes", async () => {
+    const page = await openApp(browser, "dark");
+    const fence = await startTurn(page, "t_answered");
+    await goWorking(page, fence, "t_answered");
+    await advance(page, 8000);
+    await tick(page);
+    assert(await band(page), "the band is up while the answer is being written");
+    assertEqual(await timers(page), ["Working for 8s"], "and the conversation's timer runs");
+
+    await page.evaluate((f) => {
+      window.__emit("rich://turn-status", Object.assign({}, f, {
+        turnId: "t_answered", status: "working", startedAt: Date.now() - 8000, activeDurationMs: null,
+        answered: true, visibility: "ceo", at: Date.now(),
+      }));
+    }, fence);
+    await page
+      .waitForFunction(() => ![...document.querySelectorAll(".tl-duration-label")].some((n) => /\d/.test(n.textContent)), null, { timeout: 30000 })
+      .catch(() => {});
+    assertEqual(await band(page), null, "'Rich is working' over a complete answer");
+    assertEqual(await timers(page), [], "a timer still counting a complete answer");
+    await advance(page, 22000);
+    await tick(page);
+    assertEqual(await band(page), null, "the band came back on a later tick");
+    assertEqual(await timers(page), [], "a timer came back on a later tick");
+
+    // The turn is still running for everything else: a message he sends now steers it, as it
+    // always has, and while it waits on that turn the turn shows as working again.
+    const placeholder = await page.evaluate(() => document.getElementById("input").placeholder);
+    assert(/steer/.test(placeholder), "the composer must still steer the running turn; placeholder " + JSON.stringify(placeholder));
+    await page.evaluate(() => {
+      const bridge = window.RichBridge;
+      const invoke = bridge.invoke;
+      bridge.invoke = (cmd, args) => (cmd === "steer_message" ? Promise.resolve(null) : invoke(cmd, args));
+    });
+    await page.fill("#input", "Thanks.");
+    await page.press("#input", "Enter");
+    await page.waitForFunction(() => !!document.getElementById("turn-wait"), null, { timeout: 30000 }).catch(() => {});
+    const back = await band(page);
+    assert(back && back.head === "Rich is working", "a message sent meanwhile waits on the turn, shown as working: " + JSON.stringify(back));
+
+    // And the turn's own end is reported as it always was, with its measured duration.
+    await page.evaluate((f) => {
+      window.__emit("rich://turn-status", Object.assign({}, f, {
+        turnId: "t_answered", status: "completed", startedAt: Date.now() - 30000, activeDurationMs: 30000, visibility: "ceo", at: Date.now(),
+      }));
+    }, fence);
+    await page
+      .waitForFunction(() => [...document.querySelectorAll(".tl-duration-label")].some((n) => n.textContent === "Worked for 30s"), null, { timeout: 30000 })
+      .catch(() => {});
+    assertEqual(await band(page), null, "the completed turn leaves no band");
+    assertEqual(await timers(page), ["Worked for 30s"], "the turn's measured end");
+    assertEqual(page.__errors, [], "page errors");
+    await page.close();
+  });
+
   // =====================================================================================
   // 5. CONTRAST — computed from the real DOM, both themes
   // =====================================================================================

@@ -201,6 +201,12 @@ pub enum TurnItem<'a> {
     /// Everything else the session emitted, normalized. `thread_id` / `turn_id` /
     /// `internal` are still unset here; only the caller that knows the turn can stamp them.
     Machinery(MachineryRecord),
+    /// **His answer is complete, and the turn is still running** (product hunt 2026-10-15,
+    /// finding 21). Nothing after this in the turn will reach him as words: the turn's
+    /// checkpoint was accepted after his answer, and the lease withholds what follows it. The
+    /// turn still ends at its own end; this only lets the screen stop saying "Rich is working".
+    /// A lease that cannot tell never sends it, and the turn shows as working to its end.
+    AnswerComplete,
 }
 
 /// **One command the provider is running, or ran, in the background** — the thing a back end
