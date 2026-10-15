@@ -3255,6 +3255,11 @@ fn main() {
                 permissions.clone(),
             );
             work.set_quota(quota.clone());
+            // The central folder the spine's priming reads company notes from, so an
+            // assignment's brief carries them too (`WorkHost::company_notes`).
+            if let Some(root) = richos_core::company::install_central_root() {
+                work.set_central_root(root);
+            }
             // **How a held queue sees the sign-in come back** (T3 idea 1, finished: richos-hq
             // `docs/plans/2026-10-09-automatic-second-review-and-t3-ideas.md` §3, Sage's check
             // §1.1): the same `claude auth status` reading Settings shows, for the account a

@@ -448,6 +448,10 @@ pub struct WorkHost {
     sign_in: Mutex<Option<SignInReading>>,
     /// [`HOLD_CHECK_EVERY`] in production; shortened by tests, like `screen_poll`.
     hold_check: Mutex<std::time::Duration>,
+    /// **His central folder, where each company's notes are** (`company.rs`), so an
+    /// assignment's brief carries what he told Rich about the company it is for
+    /// ([`WorkHost::company_notes`]). Installed by the shell; none means no notes are read.
+    central_root: Mutex<Option<PathBuf>>,
 }
 
 /// One reading of whether the account a work lease would run under is signed in; see
@@ -1031,7 +1035,29 @@ impl WorkHost {
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
             sign_in: Mutex::new(None),
             hold_check: Mutex::new(HOLD_CHECK_EVERY),
+            central_root: Mutex::new(None),
         })
+    }
+
+    /// Where the company notes are read from: the central folder the conversation's own
+    /// priming reads (`Spine::set_central_root`).
+    pub fn set_central_root(&self, root: PathBuf) {
+        *self.central_root.lock().unwrap() = Some(root);
+    }
+
+    /// **What he told Rich about the company this assignment is for**, framed exactly as the
+    /// conversation's priming frames it (`CompanyLayer::render_for_priming`), or `None` when
+    /// there is nothing usable on file.
+    ///
+    /// Ray's check of nightly 57 (2026-10-15): in all four hirings Dean's first brief was
+    /// refused before it started, Pierce's finding that "the brief withheld business facts and
+    /// standing rules the owner already gave", after the back end had said "No business notes
+    /// on hand". The interview's answers were saved in this file, and the front desk is primed
+    /// with it; a work lease never was, so the back end briefed the hiring without them.
+    fn company_notes(&self, record: &Assignment) -> Option<String> {
+        let root = self.central_root.lock().unwrap().clone()?;
+        let entity = crate::entity::EntityId::parse(&record.entity_id).ok()?;
+        crate::company::CompanyLayer::read(&root, &entity).render_for_priming(&entity)
     }
 
     /// **How the host reads whether a held queue's sign-in has come back** — no model turn,
@@ -1863,6 +1889,16 @@ impl WorkHost {
             }
             None => brief_for(record, resumed, &instruction),
         };
+        // His company's notes go with the assignment's brief, as they go with every priming
+        // of the front desk: a back end that hires, or briefs anyone, for his company starts
+        // from what he already said about it ([`Self::company_notes`]). Not with a report or
+        // an approved step: that back end already has them.
+        if report.is_none() && !resumed {
+            if let Some(notes) = self.company_notes(record) {
+                prompt.push_str("\n\n");
+                prompt.push_str(notes.trim_end());
+            }
+        }
         // **HIS ANSWERS, CARRIED, AND NOT LET GO UNTIL THE BACK END HAS THEM** (the work-path
         // design D1, D5). Reading them changes nothing on disk: they are let go at this turn's
         // first item ([`Self::answers_taken`]), so a crash or a failed send before that leaves
@@ -8234,6 +8270,33 @@ mod tests {
         assert_eq!(h.host.continuation_after_a_helper_ended(&record, "work-session-one"), WORKER_ENDED_CONTINUATION);
         assert!(!h.host.no_helper_ever_ran(&record));
         std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// **An assignment's brief carries what he told Rich about his company** (Ray's check of
+    /// nightly 57, 2026-10-15: in all four hirings Dean's first brief was refused before it
+    /// started, Pierce's finding that it "withheld business facts and standing rules the owner
+    /// already gave", after the back end said "No business notes on hand"). The interview saved
+    /// them in the company's notes; the front desk is primed with that file and the work lease
+    /// was not, so its first turn is now given them with the assignment.
+    #[test]
+    fn an_assignment_s_brief_carries_what_he_told_rich_about_his_company() {
+        const RULE: &str = "Never share a client's coaching notes with anyone outside the company.";
+        let h = harness(5);
+        let central = h.root.join("central");
+        let notes = crate::company::company_file(&central, &EntityId::parse("depot").unwrap());
+        std::fs::create_dir_all(notes.parent().unwrap()).unwrap();
+        std::fs::write(&notes, format!("Depot runs leadership coaching for managers.\n{RULE}\n")).unwrap();
+        h.host.set_central_root(central);
+        h.replies.lock().unwrap().push_back("Done.".to_string());
+        h.host.start();
+        h.host.register(&h.binding, &Registration { repositories: Vec::new(), ..registration(&h) }).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert!(prompts[0].contains("landing the three branches"), "{}", prompts[0]);
+        assert!(prompts[0].contains("ABOUT \"depot\""), "the company's notes are not in the brief: {}", prompts[0]);
+        assert!(prompts[0].contains(RULE), "his standing rule is not in the brief: {}", prompts[0]);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
     }
 
     /// **Once a delegated answer has arrived, "They're working on it now" is gone from it**
