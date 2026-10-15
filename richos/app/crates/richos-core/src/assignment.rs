@@ -392,6 +392,14 @@ pub struct Assignment {
     /// is there for.
     #[serde(default)]
     pub needs_screen: bool,
+    /// **`detail` is Rich's waiting sentence while a teammate works** ("I've asked Will for
+    /// advice, and he's working on it now."), written by [`advance_waiting`] and cleared by
+    /// every other [`advance`]. His row shows it in both views, for a task and a question
+    /// alike (`work_host.rs`'s `for_him`; the review of 3b91f1223, finding 1): it is free text
+    /// from the back end, so no fixed list of sentences can recognize it. Written only while
+    /// it is true, so every other record keeps its shape.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waiting_sentence: bool,
 }
 
 /// **The record's detail for an assignment that was ANSWERED rather than worked on** — a
@@ -813,6 +821,7 @@ pub fn register_kind(
         work_session: None,
         repository_pins: Vec::new(),
         needs_screen: request.needs_screen,
+        waiting_sentence: false,
     };
     let root = folder(state, &request.entity_id, &request.thread_id)?;
     write(&root.join(format!("{id}.json")), &record)?;
@@ -982,11 +991,36 @@ pub fn advance(
     to: AssignmentState,
     detail: &str,
 ) -> Result<Assignment, AssignmentError> {
+    move_to(state, entity, thread, id, to, detail, false)
+}
+
+/// **[`advance`] to `Running` with Rich's waiting sentence as the detail**, marked so his row
+/// shows it ([`Assignment::waiting_sentence`]). The next [`advance`] clears the mark.
+pub fn advance_waiting(
+    state: &Path,
+    entity: &str,
+    thread: &str,
+    id: &str,
+    sentence: &str,
+) -> Result<Assignment, AssignmentError> {
+    move_to(state, entity, thread, id, AssignmentState::Running, sentence, true)
+}
+
+fn move_to(
+    state: &Path,
+    entity: &str,
+    thread: &str,
+    id: &str,
+    to: AssignmentState,
+    detail: &str,
+    waiting_sentence: bool,
+) -> Result<Assignment, AssignmentError> {
     // A detail is a whole sentence and keeps its own period — see [`sanitize_line`].
     let detail = sanitize_line(detail).unwrap_or_else(|_| "No detail was recorded.".into());
     update(state, entity, thread, id, |record| {
         record.state = to;
         record.detail = detail;
+        record.waiting_sentence = waiting_sentence;
         // **THE ONLY PLACE `updated_at_ms` IS STAMPED** — see [`update`] for Ray's row 9 and
         // the two numbers. This is the only function in the module that writes `record.state`,
         // so a time stamped here is a time the assignment actually moved, which is what

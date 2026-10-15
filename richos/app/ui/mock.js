@@ -1818,11 +1818,11 @@
     const turnId = uid("turn");
     const userAt = now();
     messagesByThread[threadId] = messagesByThread[threadId] || [];
-    messagesByThread[threadId].push({ role: "user", text: userText, turn_id: turnId, at: userAt });
+    if (!opts.pressed) messagesByThread[threadId].push({ role: "user", text: userText, turn_id: turnId, at: userAt });
     turnsById.set(turnId, {
       threadId,
       entityId: (threads.find((x) => x.id === threadId) || {}).entity_id,
-      userText,
+      userText: opts.pressed ? null : userText,
       runs: [],
       state: "queued",
       createdAt: userAt,
@@ -1848,7 +1848,7 @@
     // looked identical under the mock and took 5.68 s on his phone. `messageId` is the
     // PROJECTION'S `{turn}:user` and `createdAt` is the turn's own instant — an id minted here
     // would make his one sentence two rows.
-    emit("rich://ceo-message", Object.assign({}, fence, {
+    if (!opts.pressed) emit("rich://ceo-message", Object.assign({}, fence, {
       messageId: turnId + ":user", text: userText, source: opts.source || "text",
       createdAt: userAt, visibility: "ceo", at: now(),
     }));
@@ -3857,7 +3857,8 @@
             memoryScenario.runTo(2);
             return messagesByThread[MEMORY_THREAD_ID];
           }
-          simulateTurn(activeThreadId, args.text);
+          // A pressed button's words reach Rich and are never his row (`Turn::pressed`, finding 14).
+          simulateTurn(activeThreadId, args.text, args.pressed ? { pressed: true } : undefined);
           return messagesByThread[activeThreadId];
         }
 

@@ -984,7 +984,8 @@ impl Spine {
     /// construction, and the projection contributes no user item for one either.
     fn ceo_message_event(&self, binding: &ThreadBinding, turn_id: &str) -> Vec<LiveEvent> {
         let Some(turn) = self.ledger.turn(turn_id) else { return Vec::new() };
-        if turn.user_text.is_empty() || turn.source == Source::Proactive {
+        // A pressed button's words are not his, so they are never sent as his row (finding 14).
+        if turn.user_text.is_empty() || turn.source == Source::Proactive || turn.pressed {
             return Vec::new();
         }
         vec![LiveEvent::CeoMessage {
@@ -1016,6 +1017,7 @@ impl Spine {
             started_at: turn.and_then(|t| t.started_at),
             active_duration_ms: turn.and_then(|t| t.active_ms()),
             supersedes_turn_id,
+            answered: false,
             at: now_millis(),
         }]
     }
@@ -2486,7 +2488,19 @@ impl Spine {
     }
 
     pub fn submit_prompt(&mut self, text: &str, source: Source) -> Result<String, SpineError> {
-        self.submit_prompt_inner(text, source, None)
+        self.submit_prompt_inner(text, source, None, false)
+    }
+
+    /// **Words the app sends Rich because he pressed a button**, into `thread_id` (product hunt
+    /// 2026-10-15, finding 14: "Start the questions" posted "Let's do the twenty minutes of
+    /// questions about my business." as his own message). Rich receives them as an ordinary
+    /// turn; the record marks them `pressed`, so no surface shows them in his name, and they
+    /// are not read as a correction he made.
+    pub fn submit_pressed_prompt_to(&mut self, thread_id: &str, text: &str) -> Result<String, SpineError> {
+        if self.active_thread() != Some(thread_id) {
+            self.activate(thread_id)?;
+        }
+        self.submit_prompt_inner(text, Source::Text, None, true)
     }
 
     /// A SPOKEN prompt, carrying what the capture path measured about Rich's own audible
@@ -2506,7 +2520,7 @@ impl Spine {
         source: Source,
         rich_audible: bool,
     ) -> Result<String, SpineError> {
-        self.submit_prompt_inner(text, source, Some(rich_audible))
+        self.submit_prompt_inner(text, source, Some(rich_audible), false)
     }
 
     fn submit_prompt_inner(
@@ -2514,9 +2528,14 @@ impl Spine {
         text: &str,
         source: Source,
         rich_audible: Option<bool>,
+        pressed: bool,
     ) -> Result<String, SpineError> {
         let binding = self.ensure_active_thread()?;
-        let turn_id = self.accept_prompt(&binding, text, source, rich_audible, None, DESK_CHANNEL)?;
+        let turn_id = if pressed {
+            self.accept_pressed_prompt(&binding, text)?
+        } else {
+            self.accept_prompt(&binding, text, source, rich_audible, None, DESK_CHANNEL)?
+        };
 
         // (2) if a turn is already running, queue it (never interrupt / never kill workers).
         //     The BINDING rides along, so a context switch while it waits cannot re-scope it.
@@ -2666,6 +2685,16 @@ impl Spine {
         // (1d) AND THE THIRD, which is the only one that watches rather than listens: what
         //      he DICTATED against what he actually sent. Same seam, same reason.
         self.stage_heard_correction(binding, &turn_id, text, source);
+        Ok(turn_id)
+    }
+
+    /// [`Self::accept_prompt`] for words the app sends because he pressed a button: the same
+    /// durable write and the same queued status, recorded `pressed`, and none of the three
+    /// correction seams, which read only what he said.
+    fn accept_pressed_prompt(&mut self, binding: &ThreadBinding, text: &str) -> Result<String, SpineError> {
+        let turn_id = self.ledger.record_prompt_received_pressed(binding, text, Source::Text)?;
+        self.emit_live(self.turn_status_event(binding, &turn_id, TurnStatus::Queued, None));
+        self.emit_live(self.thread_summary_event(binding, &turn_id, ThreadStatus::Queued));
         Ok(turn_id)
     }
 
@@ -3162,6 +3191,25 @@ impl Spine {
                         }
                     }
                     Self::retain_and_emit_machinery(journal, machinery_observer, record);
+                }
+                // **HIS ANSWER IS COMPLETE, THE TURN RUNS ON** (product hunt 2026-10-15, finding
+                // 21). The turn is still working, durably and for every other purpose (a message
+                // he sends now steers it, exactly as before); this status only tells the screen
+                // the answer is done, so it stops saying "Rich is working". Never for a turn he
+                // does not see.
+                TurnItem::AnswerComplete => {
+                    if !internal_turn {
+                        let turn = ledger.turn(turn_id);
+                        Self::forward_live(live_observer, vec![LiveEvent::TurnStatus {
+                            fence: EventFence::for_turn(binding, turn_id),
+                            status: TurnStatus::Working,
+                            started_at: turn.and_then(|t| t.started_at),
+                            active_duration_ms: None,
+                            supersedes_turn_id: None,
+                            answered: true,
+                            at: now_millis(),
+                        }]);
+                    }
                 }
             };
             lease.expect("successful preparation has a lease").prompt(text, &mut on_item)
@@ -4299,7 +4347,10 @@ impl Spine {
     ) -> Result<(), SpineError> {
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
+        // A pressed button's words stay pressed through the replay (finding 14).
+        let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
         let retry_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
+            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, Source::Text)?,
             Some(channel) => self.record_prompt(binding, original_text, Source::Text, None, None, &channel)?,
             None => self.ledger.record_prompt_received(binding, original_text, Source::Text)?,
         };
@@ -4339,7 +4390,10 @@ impl Spine {
         // desk's (operator back-end spec r3 (s)).
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
+        // A pressed button's words stay pressed through the replay (finding 14).
+        let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
         let replay_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
+            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, Source::Text)?,
             Some(channel) => self.record_prompt(binding, original_text, Source::Text, None, None, &channel)?,
             None => self.ledger.record_prompt_received(binding, original_text, Source::Text)?,
         };
@@ -4549,6 +4603,7 @@ impl Spine {
                     let record = record.stamp(thread_id, Some(&turn_id), true);
                     Self::retain_and_emit_machinery(journal, machinery_observer, record);
                 }
+                TurnItem::AnswerComplete => {}
             };
             lease.prompt_context_only(HANDOFF_PROMPT, &mut on_item)
         };

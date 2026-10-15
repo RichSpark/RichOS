@@ -989,10 +989,55 @@ module.exports = [
     c: "FRAGMENT",
     why: "Appended to the backend's own sentence in the failed-stop notice.",
   },
+  // A PRESSED BUTTON'S SEND THAT WAS REFUSED (product hunt 2026-10-15, finding 14). The only
+  // caller that passes `send(…, { pressed })` is `startFirstRunInterview` (main.js), with the
+  // label of `#first-run-start` ("Start the questions" / "Resume the questions"), so each
+  // sentence below is completed with that label. His words never go in the box: `send`
+  // returns false and the caller re-renders the first-run offer (`renderFirstRunNotice`),
+  // which sits inside `#conversation`, so the button the sentence names is back in the same
+  // view. Each whole sentence is ACTIONABLE against `#first-run-start`.
+  {
+    s: "I couldn't start that thread just now. Press",
+    c: "FRAGMENT",
+    why:
+      "Head of `#composer-blocked`'s line when creating the thread for a pressed button failed: " +
+      "'I couldn't start that thread just now. Press <label> to try again.' ACTIONABLE as a " +
+      "whole against `#first-run-start`, which the refused send brings back.",
+  },
+  {
+    s: "to try again.",
+    c: "FRAGMENT",
+    why: "Tail of the same `#composer-blocked` line, after the pressed button's label.",
+  },
+  {
+    s: "again when the setting up is done.",
+    c: "FRAGMENT",
+    why:
+      "Tail of the local notice when a pressed button's send was refused while setup still " +
+      "asks for something: '<reason> Press <label> again when the setting up is done.' The " +
+      "setup ask is opened beside it (`maybeAskAboutSetup`). ACTIONABLE as a whole against " +
+      "`#first-run-start`, which the refused send brings back.",
+  },
+  {
+    s: "when you want me to try again.",
+    c: "FRAGMENT",
+    why:
+      "Tail of the same local notice with nothing left to set up: '<reason> Press <label> when " +
+      "you want me to try again.' ACTIONABLE as a whole against `#first-run-start`, which the " +
+      "refused send brings back.",
+  },
   { s: "You stopped after", c: "FRAGMENT", why: "Completed with a duration." },
   { s: "Set up the environment ( steps)", c: "FRAGMENT", why: "Template hole: the step count." },
   { s: "Used the web times", c: "FRAGMENT", why: "Template hole: the count." },
   { s: "Worked ( steps)", c: "FRAGMENT", why: "Template hole: the step count." },
+  {
+    s: "What Rich did",
+    c: "CONTROL",
+    why:
+      "The label of a turn's disclosure button (`.tl-duration-btn`, timeline.js " +
+      "`renderDurationRow`) when the turn has work to show and no measured time: it names what " +
+      "the button opens instead of reading 'Worked' (product hunt 2026-10-15, finding 13).",
+  },
   { s: "are no longer running", c: "FRAGMENT", why: "Worker group verb, completed with names." },
   { s: "is no longer running", c: "FRAGMENT", why: "Worker group verb, completed with a name." },
   { s: "headphones recommended · tap", c: "FRAGMENT", why: "Voice footnote, completed by the ◉ glyph." },

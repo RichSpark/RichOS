@@ -158,6 +158,7 @@ fn traffic_after_the_turn_result_lands_in_the_lane_and_not_in_the_finished_turn(
         .prompt("hello", &mut |item| match item {
             TurnItem::Text { text: t, .. } => text.push_str(t),
             TurnItem::Machinery(m) => in_turn.push((m.seq, m.title.clone())),
+            TurnItem::AnswerComplete => {}
         })
         .unwrap();
     assert_eq!(stop, "end_turn");

@@ -323,6 +323,13 @@ pub enum LiveEvent {
         /// carried because without it a renderer draws the CEO's one prompt twice. It is
         /// a MERGE instruction, not an announcement — Rich never says a rotation happened.
         supersedes_turn_id: Option<String>,
+        /// **His answer is complete while the turn is still `working`** (product hunt
+        /// 2026-10-15, finding 21): the lease withholds everything after its accepted
+        /// checkpoint, so nothing more will reach him as words in this turn. Carried only when
+        /// true, on a second `working` status. The turn is otherwise live in every respect (a
+        /// message he sends steers it, Stop still stops it); the screen stops saying
+        /// "Rich is working" and stops its timer.
+        answered: bool,
         at: u64,
     },
     /// §13 `rich://message-started` — opens one contiguous run of Rich's prose.
@@ -504,7 +511,7 @@ impl LiveEvent {
         self.fence().write_into(&mut map);
         map.insert("visibility".into(), json!(self.visibility().as_str()));
         match self {
-            LiveEvent::TurnStatus { status, started_at, active_duration_ms, supersedes_turn_id, at, .. } => {
+            LiveEvent::TurnStatus { status, started_at, active_duration_ms, supersedes_turn_id, answered, at, .. } => {
                 map.insert("status".into(), json!(status.as_str()));
                 map.insert("startedAt".into(), json!(started_at));
                 // Explicit null, never omitted: an absent field invites `?? 0`, and 0 is a
@@ -512,6 +519,9 @@ impl LiveEvent {
                 map.insert("activeDurationMs".into(), json!(active_duration_ms));
                 if let Some(s) = supersedes_turn_id {
                     map.insert("supersedesTurnId".into(), json!(s));
+                }
+                if *answered {
+                    map.insert("answered".into(), json!(true));
                 }
                 map.insert("at".into(), json!(at));
             }
@@ -618,6 +628,10 @@ pub(crate) struct LiveTurn {
     /// `extract_agent_id` would answer `None` forever and workers would silently stop being
     /// reported. `timeline::resolve_tool_names` is the same memo, batched.
     tool_names: HashMap<String, String>,
+    /// What each delegation call hands over and to whom, from its `assistant` frame's
+    /// arguments before the merge overwrites the payload. `timeline::resolve_delegations`
+    /// is the same memo, batched.
+    delegations: HashMap<String, String>,
     /// The latest `at` observed per merge key.
     last_seen: HashMap<String, u64>,
     /// Merge keys in FIRST-SIGHT order. A `HashMap` iteration order is not an order, and
@@ -650,6 +664,7 @@ impl LiveTurn {
             merged: HashMap::new(),
             types: HashMap::new(),
             tool_names: HashMap::new(),
+            delegations: HashMap::new(),
             last_seen: HashMap::new(),
             order: Vec::new(),
             agent_ids: HashMap::new(),
@@ -829,6 +844,11 @@ impl LiveTurn {
                     self.tool_names.insert(id.clone(), name.to_string());
                 }
             }
+            if !self.delegations.contains_key(id) {
+                if let Some(line) = timeline::delegation_summary(payload) {
+                    self.delegations.insert(id.clone(), line);
+                }
+            }
             // Resolved from the RAW payload, before the merge below overwrites it. The name
             // comes from the memo above, because the frame carrying the acknowledgement
             // carries no name.
@@ -933,6 +953,8 @@ impl LiveTurn {
             self.fence.binding_revision(),
             self.internal_turn,
             &self.types,
+            &self.tool_names,
+            &self.delegations,
             &self.last_seen,
         );
         let at = row.at;
@@ -1093,6 +1115,7 @@ mod tests {
                 started_at: Some(8),
                 active_duration_ms: None,
                 supersedes_turn_id: None,
+                answered: false,
                 at: 8,
             },
             LiveEvent::MessageStarted {
@@ -1147,6 +1170,7 @@ mod tests {
             started_at: Some(8),
             active_duration_ms: None,
             supersedes_turn_id: None,
+            answered: false,
             at: 8,
         }
         .payload();
