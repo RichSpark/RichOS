@@ -8125,6 +8125,30 @@ mod tests {
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
+    /// **The name a hiring checks a saved teammate by is the name Dean is told to write**: every
+    /// example in Dean's `name` rule (`engine/agents/dean.md`) is what [`save_name`] gives for
+    /// that name, so the instructions, the team tool and this check keep one rule. Dean's template
+    /// used to say "lowercase kebab slug", which writes Anne-Marie as `anne-marie`, a name the
+    /// team tool refuses.
+    #[test]
+    fn the_name_a_hiring_checks_is_the_name_dean_is_told_to_write() {
+        let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let dean = std::fs::read_to_string(engine.join("agents/dean.md")).unwrap();
+        let rule = dean.lines().find(|line| line.starts_with("- **`name`:**")).unwrap();
+        let examples: Vec<(&str, &str)> = rule
+            .match_indices(" is `")
+            .filter_map(|(at, marker)| {
+                let name = rule[..at].rsplit([' ', '(']).next()?;
+                let rest = &rule[at + marker.len()..];
+                Some((name, &rest[..rest.find('`')?]))
+            })
+            .collect();
+        assert!(examples.iter().any(|(name, _)| *name == "Anne-Marie"), "Dean's name rule shows no hyphenated name: {rule}");
+        for (name, saved_as) in examples {
+            assert_eq!(save_name(name), saved_as, "Dean writes {name} as {saved_as}");
+        }
+    }
+
     /// **A teammate saved without a `**Name:**` line, or with one naming them differently from
     /// the proposal, still counts as hired**, by the name it was saved under. Will's definition
     /// has no Identity line at all; Beth's says she is Elizabeth. Both were saved under the names
