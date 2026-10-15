@@ -433,6 +433,10 @@ pub struct WorkHost {
     /// How an assignment the back end handled itself is closed in the engine
     /// ([`AnsweredClose`]); `None` leaves it open, as every build before this did.
     answered_close: Mutex<Option<Arc<dyn AnsweredClose>>>,
+    /// **The central folder his company notes are saved in** (`company.rs`,
+    /// `<central>/companies/<entity>/company.md`), or `None` when the shell has not said. A
+    /// hiring's brief carries those notes ([`Self::hiring_notes`]); without it, it carries none.
+    central_root: Mutex<Option<PathBuf>>,
     /// [`COMMAND_WAIT_BUDGET`] in production; shortened by tests, like `screen_poll`.
     command_wait: Mutex<std::time::Duration>,
     /// [`WORKER_WAIT_BUDGET`] in production; shortened by tests, like `command_wait`.
@@ -665,6 +669,10 @@ fn declares_waiting_on_a_helper(said: &str) -> bool {
 /// titled with this, then the proposed names and job titles, "Nora (Marketing Lead), Mark
 /// (Backend Engineer)". His go is that task, so it is finished only when each of them is saved.
 const HIRING_TITLE: &str = "Hire these AI teammates onto my team:";
+
+/// **What a hiring's brief says before his company notes** ([`WorkHost::hiring_notes`]).
+const HIRING_NOTES_HEAD: &str = "His onboarding interview saved these notes about his business. Fit every \
+     teammate to it, and give each helper the facts from them that its work needs in its brief.";
 
 /// A hiring's teammates, each as (name as written, job title he was given).
 type Hires = Vec<(String, String)>;
@@ -1061,6 +1069,7 @@ impl WorkHost {
             quota: Mutex::new(None),
             operator: Mutex::new(None),
             answered_close: Mutex::new(None),
+            central_root: Mutex::new(None),
             command_wait: Mutex::new(COMMAND_WAIT_BUDGET),
             worker_wait: Mutex::new(WORKER_WAIT_BUDGET),
             output: Mutex::new(None),
@@ -1144,6 +1153,12 @@ impl WorkHost {
     /// [`AnsweredClose`]. Installed by the shell.
     pub fn set_answered_close(&self, close: Arc<dyn AnsweredClose>) {
         *self.answered_close.lock().unwrap() = Some(close);
+    }
+
+    /// **Where his company notes are** (the shell's `company::install_central_root`, the same
+    /// folder the interview saves them in), so a hiring is briefed with them.
+    pub fn set_central_root(&self, root: PathBuf) {
+        *self.central_root.lock().unwrap() = Some(root);
     }
 
     /// **Hand every assignment from here on to his team** (operator mode, decided once at
@@ -1899,6 +1914,18 @@ impl WorkHost {
             }
             None => brief_for(record, resumed, &instruction),
         };
+        // **A HIRING IS BRIEFED WITH WHAT HIS INTERVIEW SAVED** (nightly 57's check, run 1). The
+        // brief was the title and his "Go." and nothing else: the work lease is never primed
+        // with his company notes (only the conversation is, `company.rs` `render_for_priming`),
+        // so the back end opened "No business notes on hand, so Clark researches the Bookkeeper
+        // role generically" straight after the interview had saved them, and only Pierce, who
+        // reads the conversation, could see what was left out.
+        if report.is_none() && !resumed && !proposed_hires(&record.title).is_empty() {
+            if let Some(notes) = self.hiring_notes(record) {
+                prompt.push_str("\n\n");
+                prompt.push_str(&notes);
+            }
+        }
         // **HIS ANSWERS, CARRIED, AND NOT LET GO UNTIL THE BACK END HAS THEM** (the work-path
         // design D1, D5). Reading them changes nothing on disk: they are let go at this turn's
         // first item ([`Self::answers_taken`]), so a crash or a failed send before that leaves
@@ -3581,6 +3608,16 @@ impl WorkHost {
         let team = self.factory.lock().unwrap().team_definitions()?;
         let saved: Vec<String> = team.iter().filter_map(|definition| recorded_name(definition)).map(compared_name).collect();
         Some(proposed.into_iter().partition(|(name, _)| saved.contains(&compared_name(name))))
+    }
+
+    /// **His company notes, as a hiring's brief carries them**: what his interview saved for this
+    /// assignment's company, introduced as what every teammate is fitted to. `None` when the
+    /// shell gave no central folder or the company has no notes that reach a model.
+    fn hiring_notes(&self, record: &Assignment) -> Option<String> {
+        let root = self.central_root.lock().unwrap().clone()?;
+        let entity = crate::entity::EntityId::parse(&record.entity_id).ok()?;
+        let notes = crate::company::CompanyLayer::read(&root, &entity).render_for_priming(&entity)?;
+        Some(format!("{HIRING_NOTES_HEAD}\n\n{}", notes.trim_end()))
     }
 
     /// **The teammates a hiring proposed that are not saved yet**, by name as written
@@ -8034,6 +8071,34 @@ mod tests {
         for note in WORKING_NOTES {
             assert!(told.iter().all(|t| !t.contains(note)), "he was told {note:?}: {told:?}");
         }
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A hiring is briefed with the business notes his interview saved** (nightly 57's check,
+    /// run 1: "No business notes on hand, so Clark researches the Bookkeeper role generically",
+    /// straight after the interview said everything was saved). The notes are in the company
+    /// file the interview writes; the hiring's first brief carries them, so Clark and Dean are
+    /// briefed with his business rather than a generic one.
+    #[test]
+    fn a_hiring_is_briefed_with_the_business_notes_his_interview_saved() {
+        let h = harness(5);
+        let central = h.root.join("central");
+        let entity = crate::entity::EntityId::parse("depot").unwrap();
+        let file = crate::company::company_file(&central, &entity);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "<!-- richos-interview:complete -->\n# Acme\n\n\
+            Acme runs leadership coaching for managers at mid-size companies.\n\n\
+            Pricing and any spend over $1,000 is his call.\n").unwrap();
+        h.host.set_central_root(central);
+        h.replies.lock().unwrap().push_back("Will and Beth are being hired.".into());
+        h.host.start();
+        h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let brief = h.work_prompts.lock().unwrap()[0].clone();
+        assert!(brief.contains("Acme runs leadership coaching for managers at mid-size companies."), "{brief}");
+        assert!(brief.contains("Pricing and any spend over $1,000 is his call."), "{brief}");
+        assert!(brief.contains(HIRING_NOTES_HEAD), "{brief}");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
