@@ -263,6 +263,12 @@ impl richos_core::output::OutputObserver for TauriOutputEmitter {
 /// exactly that. Nothing else reads it; the visibility is the gate.
 pub const EVENT_WORK_NOTICE: &str = "rich://work-notice";
 
+/// **A job's result was just written into his conversation as Rich's message**, with its words,
+/// so voice mode can say it ([`say_work_results`]; nightly 57's hunt, findings 4 and 6). The
+/// window draws the message from `rich://proactive-message`, which carries no words and speaks
+/// nothing. Emitted once per message written. `pub` for the documentation gate.
+pub const EVENT_WORK_RESULT: &str = "rich://work-result";
+
 /// **His team said something** — an operator install's push lane (the operator-client record's
 /// §7 item 1). Best-effort like `rich://work-notice`: the notice is on disk before this is
 /// emitted, and `take_operator_notices` reads the durable copy. `pub` for the documentation gate.
@@ -4401,9 +4407,9 @@ fn take_work_notices(
 /// turn lets go. Nothing is taken off the assignment until it is being written.
 fn say_work_results(app: &AppHandle, state: &AppState, engine_state: &Path, thread_id: &str) {
     if let Ok(mut spine) = state.spine.try_lock() {
-        if let Err(e) = spine.say_work_results(engine_state, thread_id) {
-            eprintln!("[richos] work: a result could not be written into the conversation ({e}); it waits on its assignment");
-        }
+        let written = spine.say_work_results(engine_state, thread_id);
+        drop(spine);
+        tell_work_results(app, thread_id, written);
         return;
     }
     static WAITING: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
@@ -4416,12 +4422,28 @@ fn say_work_results(app: &AppHandle, state: &AppState, engine_state: &Path, thre
     std::thread::spawn(move || {
         if let Some(state) = app.try_state::<AppState>() {
             let mut spine = take_the_spine(&state.spine);
-            if let Err(e) = spine.say_work_results(&engine_state, &thread_id) {
-                eprintln!("[richos] work: a result could not be written into the conversation ({e}); it waits on its assignment");
-            }
+            let written = spine.say_work_results(&engine_state, &thread_id);
+            drop(spine);
+            tell_work_results(&app, &thread_id, written);
         }
         waiting.lock().unwrap().remove(&thread_id);
     });
+}
+
+/// Each result just written into the conversation, with its words, to the window
+/// ([`EVENT_WORK_RESULT`]), which says it in voice mode; or why none could be written.
+fn tell_work_results(app: &AppHandle, thread_id: &str, written: Result<Vec<String>, richos_core::spine::SpineError>) {
+    match written {
+        Ok(texts) => {
+            for text in texts {
+                // The message is already in the conversation; a lost emit costs only its speech.
+                if let Err(e) = app.emit(EVENT_WORK_RESULT, serde_json::json!({"threadId": thread_id, "text": text})) {
+                    eprintln!("[richos] work: a result was written but could not be handed to the speaker ({e})");
+                }
+            }
+        }
+        Err(e) => eprintln!("[richos] work: a result could not be written into the conversation ({e}); it waits on its assignment"),
+    }
 }
 
 /// **What his team said on this conversation that the window has not shown yet** — the seam

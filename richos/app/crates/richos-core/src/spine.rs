@@ -2094,18 +2094,20 @@ impl Spine {
     /// proactive message ([`Self::raise_proactive`], `Digest`): durable, in the timeline after
     /// a relaunch, in the tail the front desk is primed with, and drawn at once by the window's
     /// `rich://proactive-message`. The notices that say where a job stands now stay on their
-    /// assignments for the window's cards. Answers how many were written.
+    /// assignments for the window's cards. Answers the words written, oldest first, so the shell
+    /// can hand them to the speaker in voice mode (`rich://work-result`): drawing the message
+    /// says nothing out loud.
     ///
     /// Called with the spine held and no turn running, so a result never lands inside a turn.
-    pub fn say_work_results(&mut self, engine_state: &std::path::Path, thread_id: &str) -> Result<usize, SpineError> {
+    pub fn say_work_results(&mut self, engine_state: &std::path::Path, thread_id: &str) -> Result<Vec<String>, SpineError> {
         let binding = self.ledger.thread_binding(thread_id)?;
         let entity = binding.entity_id().as_str().to_string();
         let results = crate::assignment::take_pending_notices_of(engine_state, &entity, thread_id, |kind| kind.is_result())
             .map_err(|e| SpineError::Assignments(e.to_string()))?;
-        let mut written = 0;
-        for notice in results.iter().filter(|notice| !notice.text.trim().is_empty()) {
+        let mut written = Vec::new();
+        for notice in results.into_iter().filter(|notice| !notice.text.trim().is_empty()) {
             self.raise_proactive(Some(thread_id), AttentionTier::Digest, &notice.text)?;
-            written += 1;
+            written.push(notice.text);
         }
         Ok(written)
     }

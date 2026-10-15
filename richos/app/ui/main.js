@@ -4287,6 +4287,11 @@ function sayWorkNotice(text, raisedAt, model = timelineModel, team = null, key =
 }
 
 function flushWorkNotices() {
+  if (heldWorkResults.length && !anyLiveTurn()) {
+    const results = heldWorkResults;
+    heldWorkResults = [];
+    for (const text of results) speakWorkResult(text);
+  }
   if (!heldWorkNotices.length || !calmEnoughForANotice()) return;
   const pending = heldWorkNotices;
   heldWorkNotices = [];
@@ -4303,6 +4308,34 @@ function receiveWorkNotice(text, raisedAt, model = timelineModel, team = null, k
     return;
   }
   sayWorkNotice(text, raisedAt, model, team, key);
+}
+
+/// **A job's result, said in voice mode** (nightly 57's hunt, findings 4 and 6; handover review
+/// rv-20261015T122526Z-558b93b7). The result is written into the conversation as Rich's message
+/// and drawn from `rich://proactive-message`, which speaks nothing, so "Will is on your team now"
+/// was silent to a CEO who was listening. `rich://work-result` carries its words to the speaker
+/// the way a question's are (`voice_speak_delta`, then `voice_speak_end`). Held only while a
+/// turn runs, which shares the speaker's sentence chunker; the speaker itself queues it behind
+/// Rich's own sentences and holds it while he is talking.
+let heldWorkResults = [];
+let workResultsSaid = Promise.resolve();
+
+function receiveWorkResult(text) {
+  if (!voiceMode || !text) return;
+  if (anyLiveTurn()) {
+    heldWorkResults.push(text);
+    return;
+  }
+  speakWorkResult(text);
+}
+
+function speakWorkResult(text) {
+  if (!voiceMode) return;
+  // One after another, so two results are never run together in the chunker.
+  workResultsSaid = workResultsSaid
+    .then(() => Bridge.invoke("voice_speak_delta", { text }))
+    .then(() => Bridge.invoke("voice_speak_end"))
+    .catch(() => {});
 }
 
 /// Everything he has not been told yet on this conversation. Called when a thread opens and
@@ -4844,6 +4877,13 @@ Bridge.listen("rich://work-notice", ({ payload }) => {
   if (!payload || !payload.notice || !payload.notice.text) return;
   if (payload.threadId !== activeThreadId) return;
   drainWorkNotices();
+});
+
+/// **A job's result was written into this conversation** (`main.rs` `EVENT_WORK_RESULT`). The
+/// message is drawn by `rich://proactive-message`; this says it, in voice mode only.
+Bridge.listen("rich://work-result", ({ payload }) => {
+  if (!payload || !payload.text || payload.threadId !== activeThreadId) return;
+  receiveWorkResult(payload.text);
 });
 
 /// **His team said something, pushed** (an operator install only; `app/STREAMING.md` "His

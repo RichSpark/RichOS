@@ -659,8 +659,8 @@ fn a_jobs_result_is_written_into_the_conversation_once_and_is_there_after_a_rela
     assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Held, held).unwrap();
     assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, joined).unwrap();
 
-    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), 1, "the result was not written");
-    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), 0, "the result was written twice");
+    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), [joined], "the result was not written, or not answered for the speaker");
+    assert!(spine.say_work_results(&state, &thread).unwrap().is_empty(), "the result was written twice");
     let cards = assignment::take_pending_notices(&state, "femcboost", &thread).unwrap();
     assert_eq!(cards.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), [held], "the held line is still a card");
 
