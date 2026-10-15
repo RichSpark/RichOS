@@ -1,11 +1,11 @@
 {
-  "version": "1.2.0-nightly.20261014.56",
-  "notes": "Nightly 1.2.0-nightly.20261014.56",
-  "pub_date": "2026-10-14T19:20:41Z",
+  "version": "1.2.0-nightly.20261015.57",
+  "notes": "Nightly 1.2.0-nightly.20261015.57",
+  "pub_date": "2026-10-15T00:12:48Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRSy9TakprWWtoTHdackFIOC9laUlyVkEweDNWa3ZnbHJXRnIxVE9vUnlYTGdkMUMxa3pTd3IvWEczdXpJVU9xTTlPRTZab2xpZFk1b1VjZS96ZkVQQ3pFQWQ2eTlNYVFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDA1NjMwCWZpbGU6UmljaE9TLmFwcC50YXIuZ3oKMkhMUmtIbmpjYzJ3dEw2TDhKSnkwRmN4azJPMWx5Sk94YVRmK1Q5Uk9KZ2FnRHAwMzlQNkcxMEVZZThORVVnWVJVb0pSbnROVWFPMGNDNk5PeGxJQ1E9PQo=",
-      "url": "https://github.com/WebDevBooster/richos/releases/download/v1.2.0-nightly.20261014.56/RichOS.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRSy9TakprWWtoTHk2Njdpd0JlNVZ2enBBbHpUbmFjWEQ2YjE0WlU0S3MwYngybVo3KzFHbEhiMDMzbUZZREMrRzV0elVxV1FuNVkzaG8xVXd4ZlF3aEI0MHhJRVpxTHc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDIzMTU2CWZpbGU6UmljaE9TLmFwcC50YXIuZ3oKNVA3TlNZYzVTUXBkNkF4dlhpQlFQZXExa2NBMDlWU2lNdGhZbmhxUzIwQVlIVVFNYk85WERqZFQxVmdBRXFDd29SdUpzK2FtOVVLTi8wMDR4dEFQREE9PQo=",
+      "url": "https://github.com/WebDevBooster/richos/releases/download/v1.2.0-nightly.20261015.57/RichOS.app.tar.gz"
     }
   }
 }
