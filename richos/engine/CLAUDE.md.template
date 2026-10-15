@@ -410,7 +410,7 @@ never authorizes it.
    where available; check source fingerprints and relevant inputs independently.
    Preserve superseded failures and receipt provenance. Never claim that a
    reconciled result was a single clean invocation. Stop once required evidence
-   is complete. In RichOS repository work, read `AGENTS.md` and
+   is complete. In RichOS repository work, read
    `docs/development/verification-retries.md` before running tests. Instructions
    alone are not a claim of mechanical enforcement.
 
