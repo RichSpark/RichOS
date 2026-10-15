@@ -2758,6 +2758,10 @@
     return frag;
   }
 
+  /// The disclosure's label when its turn has work to show and no number. `updateTimers`
+  /// keeps it on every tick, so a live answered turn does not lose its name a second later.
+  const DISCLOSURE_WITHOUT_NUMBER = "What Rich did";
+
   /// §6 — the working-duration row, and §6.4's disclosure.
   ///
   /// The row IS the disclosure control (§6.4 step 5). What it discloses is the ACTIVITY
@@ -2772,7 +2776,7 @@
     // No number and nothing to disclose: no row at all, rather than one reading "Worked".
     if (!row.label && !hasActivity) return { node: null, row, hasActivity };
     // No number, but work to disclose: the control names what it opens.
-    if (!row.label) row.label = "What Rich did";
+    if (!row.label) row.label = DISCLOSURE_WITHOUT_NUMBER;
     const wrap = elem("div", "tl-duration");
     wrap.dataset.tone = row.tone;
 
@@ -3360,10 +3364,13 @@
       const node = container.querySelector('[data-turn-id="' + cssEscape(turnId) + '"].tl-duration-label');
       if (!node) continue;
       const row = durationRow(t, nowMs);
-      if (node.textContent !== row.label) node.textContent = row.label;
       const btn = node.closest(".tl-duration-btn");
+      // The same fallback `renderDurationRow` gives a disclosure with no number to show
+      // (handover review of 742df82c1): without it, the tick wrote the empty label over it.
+      const label = row.label || (btn && btn.getAttribute("aria-expanded") !== null ? DISCLOSURE_WITHOUT_NUMBER : "");
+      if (node.textContent !== label) node.textContent = label;
       if (btn) {
-        let name = row.label;
+        let name = label;
         if (row.note) name += ". " + row.note;
         const control = btn.getAttribute("aria-expanded");
         if (control !== null) name += control === "true" ? " Hide what Rich did." : " Show what Rich did.";

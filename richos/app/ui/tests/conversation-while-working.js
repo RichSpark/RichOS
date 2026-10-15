@@ -119,6 +119,45 @@ async function main() {
     return "label: " + r.labels[0];
   });
 
+  await run.check('13  an answered turn still working keeps "What Rich did" when its timer ticks', async () => {
+    // The handover review of 742df82c1 (P3): `renderDurationRow` names the disclosure "What Rich
+    // did" when the turn has work to show and no number, but `updateTimers` wrote
+    // `durationRow`'s empty label back over it on the next tick while the turn was still live:
+    // once Rich has answered, the band's second timer is gone (finding 22), so that is every
+    // answered turn that keeps working.
+    const r = await page.evaluate((snapshot) => {
+      const T = window.RichTimeline;
+      const model = T.createModel();
+      T.bind(model, snapshot.entityId, snapshot.threadId, 1);
+      T.applySnapshot(model, snapshot);
+      const fence = { entityId: snapshot.entityId, threadId: snapshot.threadId, bindingRevision: 1, turnId: "turn_ok", visibility: "ceo" };
+      const at = 1787949200000;
+      T.onTurnStatus(model, Object.assign({}, fence, { status: "working", startedAt: at - 9000, at: at - 9000 }));
+      T.onTurnStatus(model, Object.assign({}, fence, { status: "working", answered: true, at }));
+      const container = document.getElementById("messages");
+      T.render(model, container, {
+        now: at,
+        expandedMessages: new Set(),
+        avatarAlreadyShown: true,
+        isExpanded: () => false,
+        toggle: () => {},
+        rerender: () => {},
+        copy: () => {},
+        retry: () => {},
+        openWorker: () => {},
+      });
+      const label = () => Array.from(container.querySelectorAll(".tl-duration-label")).map((n) => n.textContent);
+      const before = label();
+      T.updateTimers(model, container, at + 1000);
+      const btn = container.querySelector(".tl-duration-btn");
+      return { before, after: label(), aria: btn ? btn.getAttribute("aria-label") : null };
+    }, F.snapshot([F.userMessage(), F.activity("m_read", "Read a file", 0), F.richMessage(0, "Here it is.", 1)]));
+    assertEqual(r.before, ["What Rich did"], "drawn with the disclosure's name");
+    assertEqual(r.after, ["What Rich did"], "and a timer tick keeps it");
+    assert(r.aria && r.aria.startsWith("What Rich did"), "its accessible name starts with the same words: " + r.aria);
+    return "before " + JSON.stringify(r.before) + ", after a tick " + JSON.stringify(r.after);
+  });
+
   await run.check("the page rendered all of that without a single script error", async () => {
     assertEqual(JSON.stringify(page.__errors), "[]", "page errors");
     return "no page errors, no console errors";
