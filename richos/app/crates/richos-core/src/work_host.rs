@@ -2146,6 +2146,9 @@ impl WorkHost {
             self.hold(backend, binding, record, HoldCause::SignIn);
             return;
         }
+        // Where the account stood before the latest turn's words: a consult's answer replaces
+        // that turn's words and keeps everything before them (below).
+        let mut before_last_turn = answer.trim_end().len();
         keep_words(&mut answer, &said);
         let mut last_said = said.clone();
         // The back-end turn is over: what it, its workers and its commands wrote so far goes
@@ -2401,6 +2404,8 @@ impl WorkHost {
                     command_ended_continuation(&unreported)
                 }
             };
+            // The teammate this run consulted has ended and its answer is to be read.
+            let consult_answered = continuation == CONSULT_ENDED_CONTINUATION;
             let mut asked_again = 0usize;
             loop {
                 // **FILL-FIRST BEFORE EVERY CONTINUATION TURN**, not only before the run (step
@@ -2447,10 +2452,25 @@ impl WorkHost {
                 };
                 // A helper's continuation adds to the account; a command's report REPLACES
                 // "it has started", which is no longer true and which he already has.
+                //
+                // **AND A CONSULT'S ANSWER REPLACES THE TURN THAT WAITED FOR IT** (Ray's check
+                // of nightly 57, 2026-10-15, `team/hire4-delegate-3-end.png`). That turn said
+                // "They're working on it now, and I'll pass along what they suggest as soon as
+                // they're done."; the answer has arrived, so the sentence is no longer true, and
+                // he was shown it above the answer it promised. Only that turn's words go:
+                // whatever was said before it stays.
                 last_said = said.clone();
-                if helper_turn {
+                if said.trim().is_empty() {
+                    // Nothing said: the account, and where its last turn began, stay as they are.
+                } else if consult_answered {
+                    answer.truncate(before_last_turn);
+                    before_last_turn = answer.trim_end().len();
                     keep_words(&mut answer, &said);
-                } else if !said.trim().is_empty() {
+                } else if helper_turn {
+                    before_last_turn = answer.trim_end().len();
+                    keep_words(&mut answer, &said);
+                } else {
+                    before_last_turn = 0;
                     answer = said;
                 }
                 // Each continuation turn is a back-end turn too (§4.1 (b)).
@@ -8214,6 +8234,59 @@ mod tests {
         assert_eq!(h.host.continuation_after_a_helper_ended(&record, "work-session-one"), WORKER_ENDED_CONTINUATION);
         assert!(!h.host.no_helper_ever_ran(&record));
         std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// **Once a delegated answer has arrived, "They're working on it now" is gone from it**
+    /// (Ray's check of nightly 57, 2026-10-15, `team/hire4-delegate-3-end.png`). The back end
+    /// asked Will, said "They're working on it now, and I'll pass along what they suggest as
+    /// soon as they're done." and ended its turn; Will answered; the next turn gave the answer.
+    /// He was told both, the stale sentence above the answer it promised. The words of the turn
+    /// that waited on the consult are now replaced by the turn that read its answer, as a
+    /// command's report already replaces "it has started".
+    #[test]
+    fn a_consult_s_answer_replaces_what_was_said_while_the_teammate_worked() {
+        const ASKED: &str = "I've asked Will for three subject lines. They're working on it now, and I'll pass \
+                             along what they suggest as soon as they're done.";
+        const ANSWER: &str = "Will suggests these three subject lines: one, two and three.";
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        engine_receipt(&h, "consult-will", "obligation-7", "consult", None, None);
+        {
+            use sha2::{Digest, Sha256};
+            let path = h.state.join("work-receipts")
+                .join(format!("{:x}", Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join("consult-will.json");
+            let mut row: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            row["request"]["repo"] = serde_json::Value::Null;
+            row["end_observation"] = serde_json::json!({"at": 100.0, "signal": "SubagentStop"});
+            row["consult_answer"] = serde_json::json!({"message": "one, two and three", "answered": true});
+            std::fs::write(&path, serde_json::to_vec(&row).unwrap()).unwrap();
+        }
+        journal(&h, &helper_started("will-1"));
+        h.replies.lock().unwrap().extend([
+            format!("{ASKED}\n\nstop-declared: waiting-on-teammate — Will is writing them."),
+            ANSWER.to_string(),
+        ]);
+        h.host.start();
+        let receipt = h.host
+            .register(&h.binding, &Registration { repositories: Vec::new(), ..registration(&h) })
+            .unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        until("the host never waited for Will", || read().detail == "A helper is doing the work.");
+        journal(&h, &helper_stopped("will-1"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 2, "{prompts:?}");
+        assert_eq!(prompts[1], CONSULT_ENDED_CONTINUATION);
+        let done = read();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
+        let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
+        assert!(told.iter().any(|t| t.contains(ANSWER)), "his answer was not told: {told:?}");
+        assert!(
+            !told.iter().any(|t| t.contains("working on it now")),
+            "the answer arrived and he was still told they are working on it: {told:?}"
+        );
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
     }
 
     /// **A work receipt as the ENGINE writes it**, in the partition the engine writes it to
