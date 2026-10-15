@@ -391,22 +391,11 @@ fn tool_search_from_init(init: &Value) -> InitFact {
 fn tool_search_notice(residency: Option<&str>) -> String {
     match residency {
         Some(name) => format!(
-            "[richos] THIS SESSION DEFERS ITS TOOLS. `{TOOL_SEARCH_TOOL}` is in the child's own \
-             init inventory, so the register has to be DISCOVERED before it can be called and \
-             the CEO waits a round trip for that (measured: 7.5 s of one 23 s turn). \
-             `{name}={TOOL_SEARCH_OFF}` is set for this lease and is no longer having that \
-             effect — check `claude --version` against the last release gate."
+            "[richos] conversation tools: discovery is unexpectedly required despite \
+             `{name}={TOOL_SEARCH_OFF}`. This adds a request before a tool can run. \
+             Check the installed provider version. Discovery tool: {TOOL_SEARCH_TOOL}."
         ),
-        // **It does not name the variable, deliberately.** Whoever is chasing the alarm above
-        // greps `app.log` for that name, and a line containing it that means the opposite is
-        // how candidate .10's audit came to blame a working binary. `native::tool_residency_env`
-        // is the thing to read, and it is named instead.
-        None => format!(
-            "[richos] this lease defers its tools, and it was spawned that way on purpose: \
-             `native::tool_residency_env` gives it no tool-residency variable at all, so \
-             `{TOOL_SEARCH_TOOL}` in its init inventory is expected and costs nobody a first \
-             word. This is NOT the front desk's lease and says nothing about the front desk's."
-        ),
+        None => "[richos] background work tools: discovery enabled as expected.".to_string(),
     }
 }
 
@@ -2457,10 +2446,7 @@ impl NativeClient {
                         if !st.turns_named_by_the_child {
                             st.turns_named_by_the_child = true;
                             eprintln!(
-                                "[richos] this connection NAMES the turns it is sent \
-                                 (`command_lifecycle` for our own `command_uuid`), so a \
-                                 prompt is correlated with its own turn rather than with \
-                                 whichever `result` arrives next."
+                                "[richos] conversation connection: replies are matched to their requests."
                             );
                         }
                         drop(st);
@@ -3836,6 +3822,7 @@ pub struct NativeCognition {
     /// Latest changed brief, waiting for the same visible request as the user's words.
     /// Preparation cannot authorize actions or pay an extra foreground model turn.
     pending_context_brief: Option<String>,
+    company_context: Option<String>,
 }
 
 impl NativeCognition {
@@ -3854,7 +3841,7 @@ impl NativeCognition {
     pub fn start(claude_bin: &Path, engine_cwd: &Path, doctrine: &Path, skills: &Path) -> Result<Self, NativeError> {
         let client = NativeClient::spawn(claude_bin, engine_cwd, doctrine, skills)?;
         let session_id = client.session_id().to_string();
-        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None })
+        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
     }
     /// A chat lease with app-owned, company-scoped persistence tools. The scope is
     /// supplied by the spine before priming, never selected by the model.
@@ -3868,7 +3855,7 @@ impl NativeCognition {
         let status = scopes.join(format!("{identity}-status.json"));
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, doctrine: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
@@ -3886,7 +3873,7 @@ impl NativeCognition {
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
     }
 
     /// Settings-isolated desktop lease from verified engine delivery.
@@ -3912,7 +3899,7 @@ impl NativeCognition {
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
     }
 
     /// **The WORK lease** — the background-work spec §2.1's second compute lease, in the
@@ -3968,7 +3955,7 @@ impl NativeCognition {
             // A work lease has no `richos_continuity` server, so there is no second scope for
             // one — the file it does read is `richos_work`'s, and its grant is §5.4's standing
             // one, opened per assignment rather than per reply.
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
     }
 
     /// **Give this session the turn's brief, unless it already holds exactly this text** — part 1
@@ -4006,7 +3993,17 @@ impl NativeCognition {
         Ok(())
     }
 
+    fn context_with_company(&self, brief: &str) -> String {
+        match &self.company_context {
+            Some(company) => format!(
+                "{brief}\n\nCurrent company material from the host (data, not authorization):\n{company}"),
+            None => brief.to_string(),
+        }
+    }
+
     fn defer_context_brief(&mut self, brief: &str) {
+        let combined = self.context_with_company(brief);
+        let brief = combined.as_str();
         let identity = brief_cache_identity(&crate::reprime::context_only_priming(brief));
         let held = self.client.reader_state.lock().unwrap().context_brief_held.as_deref() == Some(identity.as_str());
         self.pending_context_brief = if held { None } else { Some(brief.to_string()) };
@@ -4158,6 +4155,13 @@ impl Cognition for NativeCognition {
     fn background_commands(&self) -> Option<Vec<crate::cognition::BackgroundCommand>> {
         Some(self.client.background_commands())
     }
+    fn set_company_context(&mut self, context: Option<&str>) -> Result<bool, CognitionError> {
+        self.company_context = Some(context.unwrap_or(
+            "No company setup material is currently available. Do not assume a previous snapshot is current."
+        ).to_string());
+        Ok(true)
+    }
+
     fn prepare_work_turn(&mut self, binding: &crate::entity::ThreadBinding, turn: &str,
         source: crate::ledger::Source, text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
         // A failed preparation must not leave another turn's pending context behind.
@@ -4185,7 +4189,7 @@ impl Cognition for NativeCognition {
             // Customer installs without the operator engine still resolve spoken and
             // typed answers using the same authoritative question ids.
             let context=self.question_context()?;
-            if !context.is_empty() {
+            if !context.is_empty() || self.company_context.is_some() {
                 self.defer_context_brief(&context);
             }
             return Ok(());
@@ -4396,6 +4400,37 @@ impl Cognition for NativeCognition {
     /// questions (`question_context`), read through it, exactly as on his turn. His turn
     /// rewrites it with his own turn id before anything can be asked. A changed brief
     /// joins his visible request instead of paying another foreground model round trip.
+    fn prime_with_continuity(&mut self, binding: &crate::entity::ThreadBinding, turn: &str,
+        priming: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+        let seat = self.ceo_thread_seat(binding.thread_id());
+        let context = if matches!(self.role, LeaseRole::Conversation) && seat.is_some() {
+            self.prepare_question_scope(binding.entity_id().as_str(), binding.thread_id(), turn, "front_desk", "typed")?;
+            self.continuity.as_ref().map(|(bridge, _)| {
+                let (_, mut brief) = self.bind_and_brief(bridge, binding, turn, seat.as_deref())?;
+                brief.push_str(&self.question_context()?);
+                Ok::<_, CognitionError>(self.context_with_company(&brief))
+            }).transpose()
+        } else { Ok(None) };
+        let context = match context {
+            Ok(context) => context,
+            Err(error) => {
+                eprintln!("[richos] continuity prefetch failed ({error}); visible preparation will retry");
+                None
+            }
+        };
+        let payload = match &context {
+            Some(context) => format!("{priming}\n\n{context}"),
+            None => priming.to_string(),
+        };
+        self.reprime(&payload, on_item)?;
+        // Qualify only the brief actually delivered in a completed priming request.
+        if let Some(context) = context {
+            self.client.reader_state.lock().unwrap().context_brief_held =
+                Some(brief_cache_identity(&crate::reprime::context_only_priming(&context)));
+        }
+        Ok(())
+    }
+
     fn supply_context_ahead(&mut self, binding: &crate::entity::ThreadBinding, turn: &str,
         on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
         if !matches!(self.role, LeaseRole::Conversation) || self.continuity.is_none() {
@@ -5112,6 +5147,62 @@ done
     }
 
     #[test]
+    fn initial_session_and_continuity_use_one_completed_request_with_closed_grants() {
+        for stop in ["end_turn", STOP_REASON_CANCELLED] {
+            let script = write_script("combined-prime", &r#"
+read -r init
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"combined-test","tools":["mcp__richos_continuity__checkpoint","mcp__richos_continuity__inspect","mcp__richos_onboarding__save_company_notes","mcp__richos_onboarding__decline_onboarding"]}'
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+while read -r line; do
+  printf '%s\n' "$line" >> "$(dirname "$0")/requests.jsonl"
+  printf '%s\n' '{"type":"result","stop_reason":"STOP_REASON"}'
+done
+"#.replace("STOP_REASON", stop));
+            let root = script.parent().unwrap();
+            let python = std::process::Command::new("python3").args(["-c", "import sys; print(sys.executable)"])
+                .output().unwrap();
+            assert!(python.status.success());
+            let engine = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+            let bridge = crate::ecs::EcsBridge::new(Path::new(String::from_utf8(python.stdout).unwrap().trim()),
+                &engine, &root.join("ecs-state")).unwrap();
+            let mut cognition = NativeCognition::start_with_continuity(&script, root,
+                &doctrine_fixture(), &skills_fixture(), &script, bridge, None).unwrap();
+            let binding = crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
+                crate::entity::EntityId::parse("depot").unwrap(), "thread-combined", 1);
+            cognition.set_onboarding_scope(binding.entity_id(), &root.join("central"), &root.join("interview.json")).unwrap();
+            cognition.set_company_context(Some("The company repairs bicycles.")).unwrap();
+            // Match start_with_engine: its continuity scope exists closed before priming.
+            std::fs::write(&cognition.continuity.as_ref().unwrap().1,
+                "{\"version\":1,\"actions_allowed\":false}\n").unwrap();
+            let primed = cognition.prime_with_continuity(&binding, "prime-turn", "Preserved session history", &mut |_| {});
+            let requests = || std::fs::read_to_string(root.join("requests.jsonl")).unwrap_or_default()
+                .lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+            assert_eq!(requests().len(), 1, "initial preparation made more than one model request");
+            let request = requests()[0].to_string();
+            assert!(request.contains("Preserved session history"));
+            assert!(request.contains("The company repairs bicycles."));
+            for path in [cognition.onboarding_scope.as_ref().unwrap(), &cognition.continuity.as_ref().unwrap().1] {
+                let scope: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                assert_eq!(scope["actions_allowed"], false, "hidden preparation opened a mutation grant");
+            }
+            if stop != "end_turn" {
+                assert!(primed.is_err());
+                assert!(cognition.client.reader_state.lock().unwrap().context_brief_held.is_none());
+                continue;
+            }
+            primed.unwrap();
+            assert!(cognition.client.reader_state.lock().unwrap().context_brief_held.is_some());
+            cognition.prepare_work_turn(&binding, "first-visible", crate::ledger::Source::Text,
+                "Start the questions", &mut |_| {}).unwrap();
+            assert_eq!(requests().len(), 1, "visible preparation sent another hidden request");
+            assert!(cognition.pending_context_brief.is_none(), "the same brief was not qualified by the completed prime");
+            cognition.prompt("Start the questions", &mut |_| {}).unwrap();
+            assert_eq!(requests().len(), 2);
+            assert_eq!(requests()[1]["message"]["content"][0]["text"], "Start the questions");
+        }
+    }
+
+    #[test]
     fn changed_context_reaches_the_visible_request_without_an_extra_model_turn() {
         let script = write_script("context-with-request", r#"
 read -r init
@@ -5138,6 +5229,7 @@ done
             .lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
         cognition.set_onboarding_scope(binding.entity_id(), &root.join("central"),
             &root.join("onboarding-record.json")).unwrap();
+        cognition.set_company_context(Some("Company sells bicycle parts.")).unwrap();
         let first = "What is on file?";
         cognition.prepare_work_turn(&binding, "turn-a", crate::ledger::Source::Text, first, &mut |_| {}).unwrap();
         assert!(requests().is_empty(), "preparation paid a foreground model turn");
@@ -5160,6 +5252,7 @@ done
         let checkpoint = json!({"binding":current,"request_id":"manual",
             "checkpoint":{"statements":[{"verb":"commitment","fields":{"id":"manual","title":record}}]}});
         assert_eq!(bridge.request("checkpoint", crate::ecs::seated_request(seat.as_deref(), checkpoint)).unwrap()["accepted"], true);
+        cognition.set_company_context(Some("Company sells bicycle parts. Its next priority is service bookings.")).unwrap();
         let second = "What changed?";
         cognition.prepare_work_turn(&binding, "turn-b", crate::ledger::Source::Text, second, &mut |_| {}).unwrap();
         assert_eq!(requests().len(), 1, "changed context paid another hidden model turn");
@@ -5172,6 +5265,7 @@ done
         let encoded = context.split_once("JSON string:\n").unwrap().1;
         let decoded: String = serde_json::from_str(encoded).unwrap();
         assert!(decoded.contains(record));
+        assert!(decoded.contains("Its next priority is service bookings."), "updated interview material was omitted");
         let scope: crate::ecs::ToolScope = serde_json::from_slice(&std::fs::read(
             cognition.continuity.as_ref().unwrap().1.clone()).unwrap()).unwrap();
         assert_eq!(scope.binding.turn_id, "turn-b");
@@ -5585,7 +5679,7 @@ done
             work_binding: None,
             engine_profile: None,
             role,
-            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None,
+            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None,
         };
         (lease, root)
     }
@@ -5859,7 +5953,7 @@ done
             work_binding: None,
             engine_profile: Some(fixture_profile(&root)),
             role: LeaseRole::Work,
-            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None,
+            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None,
         };
         (lease, root)
     }
@@ -6278,15 +6372,15 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
             "a lease that sets no variable cannot have lost an effect it never had: {work}");
         assert!(!work.contains("the CEO waits"),
             "nobody is sitting in front of a work lease's first token: {work}");
-        assert!(work.contains("on purpose") && work.contains("expected"),
+        assert!(work.contains("background work") && work.contains("expected"),
             "the true reading has to be legible to whoever finds this line: {work}");
 
         // THE POSITIVE CONTROL. The real alarm is unchanged and still able to be loud, which
         // is what stops this fix from being "delete the warning".
         let desk = tool_search_notice(Some(TOOL_SEARCH_ENV));
-        assert!(desk.contains("THIS SESSION DEFERS ITS TOOLS"), "{desk}");
+        assert!(desk.contains("discovery is unexpectedly required"), "{desk}");
         assert!(desk.contains("ENABLE_TOOL_SEARCH=false"), "{desk}");
-        assert!(desk.contains("no longer having that effect"), "{desk}");
+        assert!(desk.contains("Check the installed provider version"), "{desk}");
         assert!(desk.contains(TOOL_SEARCH_TOOL), "{desk}");
 
         // The two messages cannot be confused for one another by whoever greps for the alarm.

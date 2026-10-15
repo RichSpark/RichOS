@@ -1204,6 +1204,22 @@ def open_review_findings(rows):
     return opened
 
 
+def _own_history(repo, other, tip):
+    """Whether a review of the commit `other` belongs to the history of `tip`:
+    the same commit, or one `tip` was built on. A work key can be shared by
+    branches that never met (a manual review's key is its base, so two
+    branches cut from the same main commit share it, 2026-10-15), and another
+    branch's open findings never decide this one. When Git cannot tell (no
+    repository, an unknown commit), the row still counts: a check that cannot
+    decide refuses."""
+    if not other or other == tip:
+        return True
+    if not repo:
+        return True
+    code, _out, _err = git(repo, "merge-base", "--is-ancestor", other, tip)
+    return code != 1
+
+
 def review_of(rows, tip, repo):
     """(the verdict row that decides `tip` in `repo`, the newest mid-job row on
     it). A row of another repository, or with no repository, never counts: the
@@ -1218,7 +1234,7 @@ def review_of(rows, tip, repo):
         # earlier tip. Later source resolutions cannot certify an older source.
         end = max(i for i, r in enumerate(mine) if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)
         works = {r.get("work") for r in land if r.get("work")}
-        history = [r for r in mine[:end+1] if r.get("work") in works or
+        history = [r for r in mine[:end+1] if (r.get("work") in works and _own_history(repo, r.get("tip"), tip)) or
                    (r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)]
         opened = open_review_findings(history)
         blocked = {k: f for k, f in opened.items() if f.get("blocks") is not False}

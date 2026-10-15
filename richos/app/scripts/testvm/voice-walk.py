@@ -92,7 +92,7 @@ VOICE_LINE_MARKERS = ('macOS say', 'with say', 'Daniel', 'Samantha', 'Reed (Engl
 def voice_lines(lines):
     """Every app log line about the voice itself (its name, its state, its loading)."""
     return [l for l in lines if any(marker in l for marker in VOICE_LINE_MARKERS)]
-SPARE_READY = '[richos] a front desk is primed and waiting for the next new thread'
+SPARE_READY = '[richos] next conversation ready for '
 READY = '[richos] voice: ready on this machine'
 NOT_READY = '[richos] voice: not ready on this machine'
 
@@ -648,7 +648,8 @@ class VoiceWalk(adopt_walk.Walk):
         lines say "already holds this context brief" and never "hidden context ... sent". Waits for
         that first turn to end, so the spoken turn after it is the conversation's second."""
         end = time.monotonic() + 300
-        while SPARE_READY not in guest(self.vm, 'cat ' + shlex.quote(self.log) + ' 2>/dev/null || true'):
+        while not any(line.startswith(SPARE_READY) for line in
+                      guest(self.vm, 'cat ' + shlex.quote(self.log) + ' 2>/dev/null || true').splitlines()):
             if time.monotonic() > end:
                 raise StepFailed('no spare desk was primed within 300 s of the relaunch')
             time.sleep(2)
