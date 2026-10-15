@@ -3805,7 +3805,7 @@ module.exports = [
     "why": "A CSS selector used to trap keyboard focus, never displayed as prose."
   },
   {
-    "s": "shown here. Ask Rich about any of them.",
+    "s": "older team shown here. Ask Rich about any of them.",
     "c": "ACTIONABLE",
     "why": "The limit on older team jobs shown directs the user to the normal message composer for any of them (hunt 57, finding 11: plain words, no 'saved records').",
     "control": "#input"
