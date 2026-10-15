@@ -1146,9 +1146,15 @@ class SetupWalk(adopt_walk.Walk):
         # The window settles; then neither the sheet nor the offer may be there.
         time.sleep(20)
         offered = self.present('Turn on dictation') or self.shows_text(R19_OFFER_AX)
-        sheet = self.present('Set it up')
+        # "Set it up" is also the memory question's button, asked again on a relaunch after the
+        # walk answered it "Not now" (nightly 57: the relaunch opened on the conversation with that
+        # question up, and the walk read it as the setup sheet). The setup sheet is the one that
+        # lists the video tools; the memory question is recorded, not judged.
+        memory_question = self.shows_text('Where should I keep what you tell me?')
+        sheet = self.present('Set it up') and self.shows_text(TOOLS_ON_SHEET)
         self.shot('r19-again.png')
-        facts = {'boot': verdict, 'offer_shown': offered, 'sheet_shown': sheet, 'log': launched['log']}
+        facts = {'boot': verdict, 'offer_shown': offered, 'sheet_shown': sheet,
+                 'memory_question_shown': memory_question, 'log': launched['log']}
         self.facts['r19_again'] = facts
         self.save()
         if offered or sheet or not verdict['nothing_missing']:
