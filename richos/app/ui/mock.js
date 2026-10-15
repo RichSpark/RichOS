@@ -3567,8 +3567,7 @@
             return Promise.reject(
               'I couldn\'t use "' + folder + '" as this company\'s folder: it isn\'t a full ' +
                 "path from the top of the disk. Give me a folder that's already on this Mac, " +
-                "or leave it blank: a company works without one, it just won't be picked " +
-                "automatically when you open RichOS from inside it."
+                "or leave it blank: a company works without one."
             );
           entities.push({ id, display_name: displayName, status: "active", roots: folder ? [folder] : [] });
           // The real command makes the first company the one in force and opens a thread in

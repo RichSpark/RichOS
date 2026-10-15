@@ -6408,8 +6408,7 @@ const COMPANY_NAME_REQUIRED_MESSAGE: &str =
 fn company_folder_message(folder: &Path, why: &str) -> String {
     format!(
         "I couldn't use \"{}\" as this company's folder: {why}. Give me a folder that's \
-         already on this Mac, or leave it blank: a company works without one, it just won't \
-         be picked automatically when you open RichOS from inside it.",
+         already on this Mac, or leave it blank: a company works without one.",
         folder.display()
     )
 }

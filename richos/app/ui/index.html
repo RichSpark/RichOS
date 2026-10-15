@@ -1021,11 +1021,11 @@
               spellcheck="false"
               placeholder="Click and select folder"
             />
-            <p class="entity-add-hint">
-              Give me a folder and I'll pick this company on my own whenever you start RichOS
-              from inside it. Leave it blank and you'll just pick it yourself. Everything else
-              works the same.
-            </p>
+            <!-- No promise about the folder (product hunt 2026-10-15, finding 16). This said
+                 "I'll pick this company on my own whenever you start RichOS from inside it",
+                 and a Mac app opened from the Dock or Finder starts from /, never from inside
+                 a folder, so that never happened. Only the reassurance stays. -->
+            <p class="entity-add-hint">You can leave this blank.</p>
             <p id="entity-add-error" class="setup-error" role="alert" hidden></p>
             <div class="memory-setup-actions">
               <button id="entity-add-go" class="desk-btn desk-btn--confirm" type="button">Add this company</button>
