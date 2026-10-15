@@ -1456,10 +1456,12 @@ async function main() {
 
     // THE WINDOW BEHIND THE QUESTION. Ray's three, by their own ids.
     assertEqual(await tryFocus("input"), "refused", "the composer takes focus behind the offer");
+    // The rail's gear was the third of Ray's ids; round 27 removed it, so the rail's own
+    // control at its foot, the nameplate, stands in for it.
     assertEqual(
-      await tryFocus("rail-settings"),
+      await tryFocus("rail-identity"),
       "refused",
-      "the rail's gear takes focus behind the offer"
+      "the rail's nameplate takes focus behind the offer"
     );
     assertEqual(
       await tryFocus("set-btn"),

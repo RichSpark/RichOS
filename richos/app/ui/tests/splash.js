@@ -1815,14 +1815,12 @@ async function main() {
     await page.addInitScript(SEED_THEME, "dark");
     await page.goto(APP);
     await page.waitForSelector(".nav-thread", { state: "attached" });
-    // THE SWITCH THIS CHECK REACHES FOR IS BEHIND THE RAIL'S GEAR, the general settings (CEO
-    // 2026-10-06, feedback item 7: out of the quick settings menu, so it is harder to turn off
-    // by accident). There is still exactly one copy (Ray's candidate .11 defect 3.4).
-    // `leaveHome` is needed because the rail is behind the home screen, which is not
-    // click-through and is not meant to be.
+    // THE SWITCH THIS CHECK REACHES FOR IS IN THE FOOT BAND OF THE ONE SETTINGS PANEL (round 27;
+    // CEO 2026-10-06, feedback item 7: away from the first things Settings shows, so it is
+    // harder to turn off by accident). There is exactly one copy (Ray's candidate .11 defect 3.4).
     await leaveHome(page);
-    await page.click("#rail-settings");
-    await page.waitForSelector("#assertiveness-popover:not([hidden])");
+    await page.click("#set-btn");
+    await page.waitForSelector("#set-menu:not([hidden])");
     const before = await page.isChecked("#splash-enabled");
     assertEqual(before, true, "the opening screen is on by default");
     await page.uncheck("#splash-enabled");
@@ -1840,7 +1838,7 @@ async function main() {
       splashNodes: document.querySelectorAll("#splash, .splash").length,
       shown: window.RichSplash.state.shown,
       declined: window.RichSplash.state.declined,
-      // The gear popover's switch is the one control there is (feedback item 7).
+      // The Settings panel's switch is the one control there is (feedback item 7, round 27).
       checked: (() => {
         const box = document.getElementById("splash-enabled");
         return box ? box.checked : null;
@@ -1855,7 +1853,7 @@ async function main() {
     shotNames.push("splash-04-a-launch-with-it-off.png");
     aside += noErrors(page);
     await ctx.close();
-    return `on by default → unchecked behind the gear → relaunched plain ("${after.declined}"), control still unchecked` + aside;
+    return `on by default → unchecked in Settings → relaunched plain ("${after.declined}"), control still unchecked` + aside;
   });
 
   await run.check("12  the switch is durable in Rust, and both sides agree absent means ON", async () => {
@@ -1950,8 +1948,8 @@ async function main() {
           homeOpen: !!(window.RichHome && window.RichHome.isOpen()),
           homeVisible: !!(cs && cs.display !== "none" && cs.visibility === "visible"),
           // The word the CEO would look for, off the rendered control rather than the source.
-          // It reads the gear popover's group title: that is the one control there is since
-          // the CEO's 2026-10-06 feedback item 7.
+          // It reads the switch's group title in the Settings panel: that is the one control
+          // there is (the CEO's 2026-10-06 feedback item 7, round 27).
           title: (() => {
             const box = document.getElementById("splash-enabled");
             let n = box && box.closest(".popover-option") ? box.closest(".popover-option").previousElementSibling : null;
@@ -3594,7 +3592,9 @@ async function main() {
     assert(afterSpaceInMenu.present, "a space pressed on the settings control resumed the screen out from under him");
     assert(afterSpaceInMenu.state.paused, "a space pressed on the settings control took the hold off");
     // ...and an ordinary click anywhere else still dismisses, exactly as it did before §62.
-    await page.mouse.click(700, 500);
+    // Left of the Settings panel: since round 27 the one panel spans the window's width less
+    // 330px (950px of this 1280px window, from x 315), so the old (700, 500) lands on it.
+    await page.mouse.click(150, 500);
     const dismissed = await page
       .waitForFunction(() => !document.getElementById("splash"), null, { timeout: 30000 })
       .then(() => true)

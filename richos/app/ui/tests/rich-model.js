@@ -11,16 +11,21 @@
 //
 // WHAT THIS SUITE PROVES is the browser half, through the real renderer and mock.js's stand-in
 // for config.rs:
-//   1. the rows show the stored choice, first in Preferences (the rail gear), not in the quick
-//      settings, and Stu is never named;
-//   2. changing a row while Preferences is open changes nothing in use: no command, no write
+//   1. the rows show the stored choice, first under "Working with Rich" in the one Settings
+//      panel (round 27 retired the rail gear's Preferences), never in its first column, and
+//      Stu is never named;
+//   2. changing a row while Settings is open changes nothing in use: no command, no write
 //      to the store, no toast;
-//   3. closing Preferences saves it, by every way it closes (the gear, Escape, a click
+//   3. closing Settings saves it, by every way it closes (the button, Escape, a click
 //      outside), and says what is now true in one toast; a choice flipped and flipped back
 //      saves nothing and says nothing;
 //   4. reopening shows it, and so does the next launch;
 //   5. reopening while the close's save is still on its way never paints the old choice back
-//      (the second review's reproduction, held by a gate rather than a clock).
+//      (the second review's reproduction, held by a gate rather than a clock);
+//   6. at every Text size and every window width down to the 1024 by 700 minimum, in both
+//      themes, the chosen label sits inside its gold thumb and every setting in the panel stays
+//      inside its column and its own box (second review of d623a3f2: 1440 at 135% put a 176px
+//      "Opus · high effort" on a 158.68px thumb, its dark ink past the gold).
 // The APPLYING half — the lease in use moves to the stored model at its next boundary — is
 // Rust: `the_model_he_chose_in_preferences_answers_his_next_reply`
 // (crates/richos-core/tests/rotation_tests.rs, his next reply) and
@@ -53,7 +58,7 @@ const SEED_MODELS = (models) => {
 
 async function openApp(browser, opts) {
   const o = opts || {};
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await browser.newPage({ viewport: o.viewport || { width: 1440, height: 900 }, reducedMotion: o.reducedMotion || "no-preference" });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -88,11 +93,12 @@ const stored = (page) =>
     return { rich: c.rich_model || "opus", stu: c.stu_model || "opus" };
   }, STORE);
 
+/// Round 27: Rich's model lives in the one Settings panel, opened by the button at top right.
 async function openPrefs(page) {
-  await page.click("#rail-settings");
-  await page.waitForSelector("#assertiveness-popover", { state: "visible" });
+  await page.click("#set-btn");
+  await page.waitForSelector("#set-menu", { state: "visible" });
 }
-const isOpen = (page) => page.isVisible("#assertiveness-popover");
+const isOpen = (page) => page.isVisible("#set-menu");
 
 /// What the two rows show: the half each row has checked, and the "default" word beside it.
 async function rows(page) {
@@ -142,10 +148,10 @@ async function toastSays(page, text) {
 async function main() {
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
-  const run = createRun("Rich's model in Preferences (§119): held while open, saved and applied on close");
+  const run = createRun("Rich's model in Settings (§119, round 27): held while open, saved and applied on close");
 
   // ---- 1. the rows show the stored choice ------------------------------------------------
-  await run.check("1. the rows show the stored choice, first in the gear's Preferences, never in quick settings", async () => {
+  await run.check("1. the rows show the stored choice, first under Working with Rich, away from the first column", async () => {
     // A fresh install: both on Opus, both marked default.
     const fresh = await openApp(browser);
     await openPrefs(fresh);
@@ -153,15 +159,20 @@ async function main() {
     const r0 = await rows(fresh);
     assertEqual([r0.rich, r0.stu], [{ chosen: "opus", state: "default" }, { chosen: "opus", state: "default" }], "fresh install");
     assert(r0.note.startsWith("Opus is the default for both."), "the line under the rows: " + r0.note);
-    // First in Preferences: the first section title in the popover is this one.
-    const firstTitle = await fresh.$eval("#assertiveness-popover .popover-title", (n) => n.textContent);
-    assertEqual(firstTitle, "Rich's model", "the first section in Preferences");
+    // Round 27: first in the middle column, "Working with Rich", and never in the first column
+    // of quick controls (§119: "in general settings, not in quick settings").
+    const where = await fresh.evaluate(() => {
+      const col = document.getElementById("md").closest(".sm-col");
+      return {
+        group: col.querySelector(".sm-group").textContent,
+        firstTitle: col.querySelector(".popover-title").textContent,
+        column: [...col.parentElement.children].indexOf(col),
+      };
+    });
+    assertEqual(where, { group: "Working with Rich", firstTitle: "Rich's model", column: 1 }, "where Rich's model sits");
     // The app only ever names Rich (§110): no "Stu" anywhere a person can read.
-    const visible = await fresh.$eval("#assertiveness-popover", (n) => n.innerText);
-    assert(!/\bStu\b/.test(visible), "Stu is named in Preferences");
-    // Not in the quick settings (the sliders menu at top right).
-    const quick = await fresh.evaluate(() => (document.querySelector(".settings") || {}).innerText || "");
-    assert(!/Fable|Opus/.test(quick), "the model choice leaked into quick settings: " + quick);
+    const visible = await fresh.$eval("#set-menu", (n) => n.innerText);
+    assert(!/\bStu\b/.test(visible), "Stu is named in Settings");
     await fresh.close();
 
     // A stored choice of Fable for "talks with you" is what the row shows.
@@ -177,7 +188,7 @@ async function main() {
   });
 
   // ---- 2. changing a row while open changes nothing in use ------------------------------
-  await run.check("2. a row changed while Preferences is open changes nothing in use: no command, no write, no toast", async () => {
+  await run.check("2. a row changed while Settings is open changes nothing in use: no command, no write, no toast", async () => {
     const page = await openApp(browser);
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
@@ -191,24 +202,24 @@ async function main() {
     const r = await rows(page);
     assertEqual([r.rich.chosen, r.stu.chosen], ["fable", "fable"], "the popover shows both picks");
     assert(r.note.startsWith("Rich is on Fable for both."), "and says what they would mean: " + r.note);
-    assert(await isOpen(page), "Preferences is still open");
-    assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Preferences was open");
-    assertEqual(await stored(page), { rich: "opus", stu: "opus" }, "the store changed while Preferences was open");
-    assertEqual(await toastText(page), null, "a toast fired before Preferences closed");
+    assert(await isOpen(page), "Settings is still open");
+    assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Settings was open");
+    assertEqual(await stored(page), { rich: "opus", stu: "opus" }, "the store changed while Settings was open");
+    assertEqual(await toastText(page), null, "a toast fired before Settings closed");
     await page.close();
     return "shown, not sent";
   });
 
-  // ---- 3. closing Preferences saves and applies it ---------------------------------------
-  await run.check("3. closing Preferences saves it by every way it closes, and says what is now true", async () => {
-    // (a) the gear.
+  // ---- 3. closing Settings saves and applies it ------------------------------------------
+  await run.check("3. closing Settings saves it by every way it closes, and says what is now true", async () => {
+    // (a) the Settings button.
     const page = await openApp(browser);
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
-    await page.click("#rail-settings");
+    await page.click("#set-btn");
     await toastSays(page, "Rich now talks with you on Fable.");
-    assertEqual(await isOpen(page), false, "the gear closed Preferences");
+    assertEqual(await isOpen(page), false, "the Settings button closed Settings");
     const sent = await calls(page, "set_lease_models");
     assertEqual(sent.map((c) => c.args), [{ rich: "fable", stu: "opus" }], "one save, both rows, on close");
     assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the store after close");
@@ -222,7 +233,7 @@ async function main() {
     await page.keyboard.press("Escape");
     const both = "Rich talks with you on Opus again, the default. Rich now directs your team on Fable.";
     await toastSays(page, both);
-    assertEqual(await isOpen(page), false, "Escape closed Preferences");
+    assertEqual(await isOpen(page), false, "Escape closed Settings");
     assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after Escape");
     assertEqual(await toastText(page), both, "one toast, both changes");
 
@@ -236,25 +247,25 @@ async function main() {
     await rowsShow(page, { rich: "opus", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     await page.click('#md-rich .seg-opt[data-v="opus"]');
-    await page.mouse.click(1100, 300);
+    await page.mouse.click(1100, 880); // below the panel, which now spans the stage
     // The save is sent synchronously inside the close (`commitModelChoice`), and a toast only
     // follows a sent save, so once the popover is hidden the negatives below are settled.
-    await page.waitForSelector("#assertiveness-popover", { state: "hidden" }).catch(() => {});
-    assertEqual(await isOpen(page), false, "a click outside closed Preferences");
+    await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
+    assertEqual(await isOpen(page), false, "a click outside closed Settings");
     assertEqual(await calls(page, "set_lease_models"), [], "an unchanged choice was saved");
     assertEqual(await toastText(page), null, "an unchanged choice was announced");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
-    return "gear, Escape, outside click";
+    return "the button, Escape, outside click";
   });
 
   // ---- 4. reopening shows it ---------------------------------------------------------------
-  await run.check("4. reopening Preferences shows the saved choice, and so does the next launch", async () => {
+  await run.check("4. reopening Settings shows the saved choice, and so does the next launch", async () => {
     const page = await openApp(browser, { theme: "light" });
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
     await page.click('#md-stu .seg-opt[data-v="fable"]');
-    await page.click("#rail-settings");
+    await page.click("#set-btn");
     await toastSays(page, "Rich now directs your team on Fable.");
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "fable" });
@@ -276,7 +287,7 @@ async function main() {
   });
 
   // ---- 5. a reopen while the save is on its way never paints the old choice back ----------
-  await run.check("5. reopening Preferences while the close's save is still on its way shows the new choice", async () => {
+  await run.check("5. reopening Settings while the close's save is still on its way shows the new choice", async () => {
     // The second review's reproduction (rv-20261011T040418Z): the save is held open, so the
     // read that reopening makes would answer from the store as it was before the save. Held by
     // a gate this check releases, not by a clock, so the order is the same on any host.
@@ -297,7 +308,7 @@ async function main() {
     await openPrefs(page);
     await rowsShow(page, { rich: "opus", stu: "opus" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
-    await page.click("#rail-settings"); // close: the save starts and is held
+    await page.click("#set-btn"); // close: the save starts and is held
     const readsBefore = await page.evaluate(() => window.__readsDone);
     await openPrefs(page); // reopen: its read starts while the save is held
     await page.evaluate(() => window.__releaseSave());
@@ -309,6 +320,75 @@ async function main() {
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "read waited for the save";
+  });
+
+  // ---- 6. every Text size, every window width: the chosen label inside its thumb --------
+  await run.check("6. at every Text size and window width, in both themes, the chosen model sits inside its gold thumb and every setting stays readable", async () => {
+    // 1359/1360 straddle the three-column line at 100%; 1366 is the earlier review's window;
+    // 1440 is round 27's own and this review's; 1024 by 700 is the app's minimum.
+    const widths = [1024, 1280, 1359, 1360, 1366, 1440];
+    const problems = [];
+    let cases = 0;
+    for (const theme of ["dark", "light"]) {
+      for (const width of widths) {
+        const page = await openApp(browser, { theme, viewport: { width, height: 700 }, reducedMotion: "reduce" });
+        await openPrefs(page);
+        await rowsShow(page, { rich: "opus", stu: "opus" });
+        const steps = await page.evaluate(() => window.RichTheme.STEPS);
+        for (const scale of steps) {
+          for (const stu of ["opus", "fable"]) {
+            const seen = await page.evaluate(
+              async ([s, choice]) => {
+                window.RichTheme.setScale(s);
+                document.querySelector(`#md-stu .seg-opt[data-v="${choice}"]`).click();
+                await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+                const bad = [];
+                const menu = document.getElementById("set-menu");
+                // The chosen label of each row, against the gold thumb under it.
+                for (const id of ["md-rich", "md-stu"]) {
+                  const seg = document.getElementById(id);
+                  const thumb = seg.querySelector(".seg-thumb").getBoundingClientRect();
+                  const opt = seg.querySelector('.seg-opt[aria-checked="true"]');
+                  const range = document.createRange();
+                  range.selectNodeContents(opt);
+                  const t = range.getBoundingClientRect();
+                  const gap = Math.min(t.left - thumb.left, thumb.right - t.right, t.top - thumb.top, thumb.bottom - t.bottom);
+                  if (gap < 0) bad.push(`${id} "${opt.textContent}" ${t.width.toFixed(1)}px runs ${(-gap).toFixed(1)}px past a ${thumb.width.toFixed(1)}px thumb`);
+                }
+                // Every line of text inside its column (or foot cell, or heading), and every
+                // control wide enough for what it says.
+                const walker = document.createTreeWalker(menu, NodeFilter.SHOW_TEXT);
+                for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+                  const el = n.parentElement;
+                  if (!n.textContent.trim() || !el.getClientRects().length || el.closest("[hidden], .cx-tip")) continue;
+                  if (getComputedStyle(el).visibility === "hidden") continue;
+                  const box = (el.closest(".sm-col, .sm-foot-cell, .sm-head") || menu).getBoundingClientRect();
+                  const range = document.createRange();
+                  range.selectNodeContents(n);
+                  for (const t of range.getClientRects()) {
+                    if (t.width >= 1 && (t.left < box.left - 0.5 || t.right > box.right + 0.5)) bad.push(`"${n.textContent.trim()}" leaves its column`);
+                  }
+                }
+                for (const c of menu.querySelectorAll("button, select, input")) {
+                  if (!c.getClientRects().length || c.closest("[hidden], .cx-tip")) continue;
+                  if (c.scrollWidth > c.clientWidth + 1) bad.push(`#${c.id || c.className} holds ${c.scrollWidth}px in ${c.clientWidth}px`);
+                }
+                if (menu.scrollWidth > menu.clientWidth) bad.push(`the panel scrolls ${menu.scrollWidth - menu.clientWidth}px sideways`);
+                return { scale: document.documentElement.getAttribute("data-font-scale"), bad };
+              },
+              [scale, stu]
+            );
+            cases++;
+            assertEqual(seen.scale, String(scale), `Text size applied at ${width}px`);
+            for (const b of seen.bad) problems.push(`${theme} ${width}px ${scale}% ${stu}: ${b}`);
+          }
+        }
+        assertEqual(page.__errors, [], "no page errors");
+        await page.close();
+      }
+    }
+    assertEqual(problems, [], "nothing in Settings leaves its place");
+    return `${cases} cases: 2 themes x ${widths.length} widths x 7 Text sizes x both choices for the second row`;
   });
 
   await browser.close();

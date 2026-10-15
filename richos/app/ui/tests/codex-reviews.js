@@ -102,12 +102,12 @@ async function main() {
   await run.check("the row: below Technical view, between two rules; off on first run, Reviewing now: Claude, an ⓘ after Claude; nothing under it", async () => {
     const page = await open("dark", undefined);
     await menu(page);
-    const order = await page.evaluate(() => [...document.querySelectorAll("#set-menu > *")].map(e => e.id || e.className));
-    const techy = order.indexOf("set-techy-row");
-    assert(techy >= 0, "Technical view is in the menu: " + order);
-    // Round 22.1 put the Token spend row directly under Technical view, above this row's rule.
-    assertEqual(order[techy + 1], "set-spend", "Token spend directly after Technical view (round 22.1): " + order);
-    assertEqual(order[techy + 2], "set-codex", "the row comes directly after Token spend: " + order);
+    // Round 27: in the third column, "Your company and team", after Company, Home screen and
+    // Token spend.
+    const order = await page.evaluate(() => [...document.getElementById("set-codex").parentElement.children].map(e => e.id || e.className));
+    const spend = order.indexOf("set-spend");
+    assert(spend > order.indexOf("set-home-row"), "Token spend is under Home screen: " + order);
+    assertEqual(order[spend + 1], "set-codex", "the row comes directly after Token spend: " + order);
     assertEqual(await page.locator("#set-codex > .set-rule").count(), 2, "a rule above and below");
     assertEqual(await text(page, "#cx-title"), "Let Codex review your team's work");
     assertEqual(await text(page, "#cx-who"), "Reviewing now: Claude");
@@ -121,7 +121,22 @@ async function main() {
     });
     assert(geo.sameLine && geo.gap >= 0 && geo.gap < 12, "the ⓘ right after Claude: " + JSON.stringify(geo));
     assert(await page.locator("#cx-tip").isHidden(), "the words are in the tooltip, not under the row");
-    assertEqual(await page.evaluate(() => document.getElementById("set-menu").getBoundingClientRect().width), 372, "the menu widens to 372px, as drawn");
+    // Round 27: the menu no longer widens for this row (the one Settings panel is
+    // min(1100px, 100vw - 330px)). What the row owes instead is that its explanation stays inside
+    // its column and the panel: the second review of d3b1c723 measured the 344px tooltip running
+    // 37px past a 324px column at 1280px wide, where the panel clipped it.
+    for (const width of [1440, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.hover("#cx-info");
+      await page.waitForSelector("#cx-tip:not([hidden])");
+      const fit = await page.evaluate(() => {
+        const tip = document.getElementById("cx-tip");
+        const t = tip.getBoundingClientRect(), c = tip.closest(".sm-col").getBoundingClientRect();
+        const m = document.getElementById("set-menu");
+        return { inColumn: t.left >= c.left - 0.5 && t.right <= c.right + 0.5, sideways: m.scrollWidth - m.clientWidth };
+      });
+      assertEqual(fit, { inColumn: true, sideways: 0 }, width + "px: the tooltip stays inside its column and the panel");
+    }
     await page.close();
   });
 

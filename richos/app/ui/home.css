@@ -1268,7 +1268,9 @@ body.home-open {
   border-radius: 8px;
   padding: 4px 10px;
   cursor: pointer;
-  max-width: 168px;
+  /* 168px at 100%, in rem so it grows with Text size: at a fixed 168px "Company buttons…"
+     (202px at 135%) painted past the button's own border and the panel's edge. */
+  max-width: 10.5rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

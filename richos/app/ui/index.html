@@ -187,45 +187,42 @@
              It carried `assets/rich-hand.png` and the label "Rich", and the round-10.1
              mockups kept that. The CEO's correction supersedes them: this is HIS identity
              at the foot of HIS rail — his initials in a filled circle, then his name, the
-             pattern his Codex app uses. Rich is who the whole surface is a conversation
-             with; a nameplate for him at the bottom of the CEO's own sidebar was the one
-             place the product introduced itself to a person who had already met it.
+             pattern his Codex app uses.
 
-             THE UNSET STATE IS REAL AND IS NOT A GUESS. There was no user-name preference
-             in this product until today, so "nobody has said who this is" is the state
-             almost every install starts in. The circle renders EMPTY — no letters — and
-             the label reads "Set your name", which is true, is not a fabricated identity,
-             and is not "??" (a placeholder pretending to be a value). The row is a button
-             in that state so the sentence is an offer rather than a dead end; it opens the
-             same preferences popover the ⚙ opens, which is where the field lives. -->
+             THE UNSET STATE IS REAL AND IS NOT A GUESS. The circle renders EMPTY — no
+             letters — and the label reads "Set your name", which is true, is not a
+             fabricated identity, and is not "??". The row is a button in that state so the
+             sentence is an offer rather than a dead end.
+
+             ROUND 27 (richos-hq design/mockups/rounds/round-27, product hunt 57 finding 18):
+             the gear that sat here (`#rail-settings`) and its Preferences popover are gone.
+             Settings live in ONE panel, opened by the Settings button at top right; this
+             nameplate, while unset, opens that same panel with the name field focused. -->
         <div id="rail-footer">
-          <button id="rail-settings" class="rail-settings-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Settings">⚙</button>
           <button id="rail-identity" class="rail-identity" type="button">
             <span id="rail-initials" class="rail-initials" aria-hidden="true"></span>
             <span id="rail-user-name" class="rail-user-name"></span>
           </button>
         </div>
 
-        <div id="assertiveness-popover" class="popover prefs" data-dismiss="escape" role="dialog" aria-labelledby="prefs-title" hidden>
-          <!-- ROUND 23 (richos-hq design/mockups/rounds/round-23): Preferences gets a heading
-               and two columns, so a fifth section does not turn the popover into a scrolling
-               tower, and "Rich's model" is the first thing in it (CEO §119: "in general
-               settings, not in quick settings" — this gear is the general settings; the
-               sliders menu at top right is the quick settings and is unchanged). -->
-          <header class="prefs-head"><p class="prefs-title" id="prefs-title">Preferences</p></header>
-          <div class="prefs-cols">
-          <div class="prefs-col">
+        <!-- ROUND 27: WHAT THE PREFERENCES POPOVER HELD, AS PARTS OF THE ONE SETTINGS PANEL.
+
+             `settings-button.js` builds the panel; `main.js` owns these controls (their
+             reads, writes and the model choice saved on close) and hands them to it with
+             `RichSettings.registerPreferences`, which places each part where round 27's
+             NOTES.md table puts it. Until then this holder is hidden, so a page with no
+             shell behind it shows none of them. -->
+        <div id="settings-parts" hidden>
           <!-- RICH'S MODEL (§119): two rows, each Opus (the default) or Fable. Work keeps high effort.
                The app only ever names Rich (§110's addendum: Stu is never named in the app),
-               so the rows are the two halves of Rich, named by what each does: "talks with
-               you" is the conversation, "directs your team" is the team's back end.
+               so the rows are the two halves of Rich, named by what each does.
 
                HELD WHILE OPEN, SAVED AND APPLIED ON CLOSE (the CEO's addendum to §119):
                "Closing the preferences panel IS the confirmation that the settings chosen
                there now need to be saved and implemented." A click here changes only what
-               this popover shows; closing it writes both rows (`set_lease_models`) and says
-               what is now true in one line. There is no confirm step. -->
-          <section class="md" id="md" aria-labelledby="md-title">
+               the panel shows; closing Settings writes both rows (`set_lease_models`) and
+               says what is now true in one line. There is no confirm step. -->
+          <section class="md" id="md" data-settings-part="model" aria-labelledby="md-title">
             <p class="popover-title" id="md-title">Rich's model</p>
             <div class="md-row">
               <p class="md-who" id="md-rich-who"><span>When he <b>talks with you</b></span><span class="md-state" id="md-rich-state">default</span></p>
@@ -246,129 +243,66 @@
             <p class="md-note" id="md-note" aria-live="polite"></p>
           </section>
 
-          <div class="popover-divider" role="presentation"></div>
-          <p class="popover-title">How much should Rich interrupt you?</p>
-          <label class="popover-option"><input type="radio" name="assertiveness" value="quiet" /> Quiet</label>
-          <label class="popover-option"><input type="radio" name="assertiveness" value="balanced" /> Balanced</label>
-          <label class="popover-option"><input type="radio" name="assertiveness" value="urgent-only" /> Only when it's urgent</label>
+          <div data-settings-part="interrupt">
+            <p class="popover-title" id="set-interrupt-title">How much should Rich interrupt you?</p>
+            <div role="radiogroup" aria-labelledby="set-interrupt-title">
+              <label class="popover-option"><input type="radio" name="assertiveness" value="quiet" /> Quiet</label>
+              <label class="popover-option"><input type="radio" name="assertiveness" value="balanced" /> Balanced</label>
+              <label class="popover-option"><input type="radio" name="assertiveness" value="urgent-only" /> Only when it's urgent</label>
+            </div>
           </div>
-          <div class="prefs-col">
 
-          <!-- §3.3: "v1 access = a keyboard shortcut, plus one line in Settings." This is
-               the line. It USED TO BE the global default and nothing else, with the keyboard
-               shortcut as the per-conversation half, because §7.1 — "global default, or
-               per-thread only?" — was the CEO's open question and both halves had to stay
-               reachable while it was.
+          <!-- TECHNICAL VIEW HAS ONE SWITCH (round 27): the panel's own `#set-techy`. The
+               Preferences checkbox that was its second door ("Show it") is gone; this hint,
+               which says which of the CEO's three tiers is holding the view on and that the
+               shortcut asks where, sits directly under that one switch.
 
-               HE ANSWERED IT ON 2026-09-18 and the answer was a tier neither half had: this
-               switch now asks WHERE, in three choices, whenever a conversation is open. THE
-               KEYBOARD SHORTCUT ASKS TOO. It was briefly the one control that did not — on
-               the argument that `#techy-hint` below already named a scope for it — and that
-               argument quoted this app's own sentence back as though it were the CEO's. His
-               has no exception in it, so ⌘⇧T opens the same sheet with the same first
-               option preselected and Enter confirms, and the hint promises the choice.
-               (Round 23: it heads the right-hand column now, so it has no divider above it.) -->
-          <!-- THE LABEL CHANGED ON 2026-09-18 AND HAD TO. It read "In every conversation"
-               while this switch WAS the global default and nothing else. Since the CEO's
-               §7.1 answer it reads and writes the RESOLVED state of the conversation he is
-               looking at, through the three-way scope sheet, so "in every conversation"
-               would be a claim about reach that the switch no longer makes — it is true of
-               exactly one of his three choices. The scope now lives where he chooses it and
-               is reported back in `#techy-hint`, which says which of the three is holding
-               this conversation on.
-
-               THE HEADING AND THE LABEL SPLIT THE WAY THE SPLASH-SCREEN GROUP BELOW
-               ALREADY SPLITS THEM: the title names the SUBJECT ("Splash screen") and the
-               label names the ACT ("Show it when RichOS starts"). This group's old title
-               WAS its act, which is why the first draft of this change deleted the title
-               and then had to put a different one back.
-
-               WHY THIS SWITCH READS THE RESOLVED STATE AND NOT `techy.default`. There is
-               one technical view and there must be one answer to "is it on?" — and the
-               answer a person means is the one they can see. A switch showing the global
-               default over a conversation pinned off would sit ON above a calm screen,
-               which is the two-controls-that-disagree defect in its worst form: not two
-               controls disagreeing with each other, but one control disagreeing with the
-               window. The settings menu's own Techy Mode row (§15) reads through the same
-               accessor, so the two doors cannot drift. -->
-          <p class="popover-title">Technical view</p>
-          <label class="popover-option">
-            <input type="checkbox" id="techy-default" /> Show it
-          </label>
-          <p class="popover-hint" id="techy-hint"></p>
+               The switch reads the RESOLVED state of the conversation on screen, not
+               `techy.default`: there is one technical view and one answer to "is it on?", the
+               one a person can see. -->
+          <p class="popover-hint" id="techy-hint" data-settings-part="techy-hint"></p>
 
           <!-- §7.2's window, as a SETTING — open-items 1.4. The question "how long do raw
                payloads survive?" is the CEO's and is NOT answered here; what is answered is
-               that every answer he could give now costs the same thing. It was
-               `RAW_RETENTION_DAYS` in journal.rs, so "14 days" was free and "forever" was a
-               developer, and a question whose status quo is the only free answer is not
-               really open.
-
-               IT IS HERE, under the technical-view group, because this is the retention of
-               exactly what that view shows — and it is a SEPARATE line rather than part of
-               the toggle above because retention runs ALWAYS (§3.2), whether the view is on
-               or off. That is the only reason "show me the technical view for a conversation
-               I already had" works at all, and a control that implied otherwise would
-               undersell it.
-
-               THREE NAMES, NOT TWO NUMBER FIELDS. The setting has two axes — a day window
-               and a byte ceiling — and asking a CEO to predict "90 days OR 2 GB, whichever
-               binds first" is asking him to hold the implementation in his head. The hint
-               below states the consequence in a sentence instead, including what the store
-               costs right now, because "keep everything" is only a real choice if the person
-               making it can see the bill.
-
-               The divider is not decoration: without it the toggle's own hint ("...for one
-               conversation only.") runs straight into this heading and the two controls read
-               as one. It is the LIGHTER `popover-divider` rather than the `popover-rule`
-               below, because these two belong to the same family — what the technical view
-               shows, and how long it is kept. -->
-          <div class="popover-divider" role="presentation"></div>
-          <p class="popover-title">Keep the stored output</p>
-          <label class="popover-option"><input type="radio" name="raw-retention" value="two-weeks" /> For two weeks</label>
-          <label class="popover-option"><input type="radio" name="raw-retention" value="three-months" /> For three months</label>
-          <label class="popover-option"><input type="radio" name="raw-retention" value="forever" /> Forever</label>
-          <p class="popover-hint" id="retention-hint"></p>
-
-          <!-- THE SPLASH SCREEN'S OFF SWITCH LIVES HERE, AND ONLY HERE (CEO 2026-10-06, feedback
-               item 7): "Move the splash screen toggle to the general settings section (i.e.
-               remove from quick settings because ideally I don't want them to turn it off)".
-               The universal settings menu (settings-button.js) is the QUICK settings, one
-               click from every screen; this gear popover is the general settings. So the
-               switch is in one panel, as Ray's candidate .11 defect 3.4 required, and it is
-               the panel that is harder to reach by accident.
-
-               The title names the SUBJECT ("Splash screen", the CEO's own word for the
-               curtain, audit-10 row 1) and the label names the ACT. It governs the curtain
-               only; the home screen has no switch, by his 2026-09-01 ruling. It is the last
-               group because it is a thing he decides once, not while working. -->
-          <div class="popover-divider" role="presentation"></div>
-          <p class="popover-title">Splash screen</p>
-          <label class="popover-option"><input type="checkbox" id="splash-enabled" /> Show it when RichOS starts</label>
-
-          <div class="popover-divider" role="presentation"></div>
-          <!-- YOUR NAME — the field the rail footer's unset state points at.
-
-               It is here rather than in a settings screen of its own because this popover
-               is already "the app's own preferences", and because the alternative was a
-               footer that says "Set your name" with nowhere to set it. There is deliberately
-               NO placeholder name in the input: the whole point of the unset state is that
-               the product does not invent one.
-
-               ROUND 23: it is not in the round-23 mockup (the app gained it after round
-               10.1), so it closes the right-hand column, after every section the mockup
-               places, which also evens the two columns' heights. -->
-          <p class="popover-title">Your name</p>
-          <input
-            id="user-name-input"
-            class="popover-input"
-            type="text"
-            autocomplete="name"
-            spellcheck="false"
-            aria-label="Your name"
-          />
-          <p class="popover-hint" id="user-name-hint">Shown at the foot of the rail, with your initials.</p>
+               that every answer he could give now costs the same thing. It sits under the
+               technical view because this is the retention of exactly what that view shows,
+               and it is a separate line because retention runs ALWAYS (§3.2), whether the view
+               is on or off. Three names, not two number fields: the hint states the
+               consequence in a sentence, including what the store costs right now. -->
+          <div data-settings-part="retention">
+            <p class="popover-title" id="set-retention-title">Keep the stored output</p>
+            <div role="radiogroup" aria-labelledby="set-retention-title">
+              <label class="popover-option"><input type="radio" name="raw-retention" value="two-weeks" /> For two weeks</label>
+              <label class="popover-option"><input type="radio" name="raw-retention" value="three-months" /> For three months</label>
+              <label class="popover-option"><input type="radio" name="raw-retention" value="forever" /> Forever</label>
+            </div>
+            <p class="popover-hint" id="retention-hint"></p>
           </div>
+
+          <!-- YOUR NAME — the field the rail footer's unset state points at. There is
+               deliberately NO placeholder name in the input: the whole point of the unset state
+               is that the product does not invent one. -->
+          <div data-settings-part="name">
+            <label class="popover-title" for="user-name-input">Your name</label>
+            <input
+              id="user-name-input"
+              class="popover-input"
+              type="text"
+              autocomplete="name"
+              spellcheck="false"
+              aria-describedby="user-name-hint"
+            />
+            <p class="popover-hint" id="user-name-hint">Shown at the foot of the rail, with your initials.</p>
+          </div>
+
+          <!-- THE SPLASH SCREEN'S OFF SWITCH (CEO 2026-10-06, feedback item 7): "remove from
+               quick settings because ideally I don't want them to turn it off". With one
+               Settings there is no quick tier, so round 27 keeps it away from the first things
+               the panel shows: in the band across its foot. The title names the SUBJECT and the
+               label names the ACT. -->
+          <div data-settings-part="splash">
+            <p class="popover-title">Splash screen</p>
+            <label class="popover-option"><input type="checkbox" id="splash-enabled" /> Show it when RichOS starts</label>
           </div>
         </div>
 
