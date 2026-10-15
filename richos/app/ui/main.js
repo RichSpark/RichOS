@@ -6519,10 +6519,11 @@ Bridge.listen("richos://setup", (payload) => {
 // `docs/verification/first-run-provisioning-2026-09-01/`. Nothing in the product created
 // it, and nothing offered to. This is the offer.
 //
-// HIS PART IS ONE CLICK. The location is SHOWN, never typed, and it comes from the backend
-// (`memory_status.offered_location`) rather than being composed here — so the string on
-// screen is the string the command was given, and there is no second opinion about where
-// his record goes.
+// HIS PART IS ONE CLICK, AND HE IS SHOWN NO PATH. The location comes from the backend
+// (`memory_status.offered_location`) rather than being composed here, so there is no second
+// opinion about where his record goes. It is no longer put on the question, and a yes closes
+// the sheet with no second box to dismiss (product hunt 2026-10-15, finding 15: a raw path
+// ending in "RichOS/corpus", then a "That's set up" box that had to be closed).
 // ---------------------------------------------------------------------------------------
 
 let memoryState = null;
@@ -6881,7 +6882,7 @@ function maybeAskAboutMemory() {
     // which opens this same sheet in whatever state the backend reports. That row is the
     // control this state now names.
     if (memorySetupDeclined()) return false;
-    openMemorySetup(MEMORY_ASK, memoryState.offered_location, { canProvision: true });
+    openMemorySetup(MEMORY_ASK, null, { canProvision: true });
     return true;
   }
   // `no-compiler` — SAID ONCE, WHEN HE ASKS FOR IT, AND NEVER AS A NAG.
@@ -7023,16 +7024,12 @@ async function provisionMemory() {
   // watched it be created. `refreshDesk` is idempotent and this is the one moment the fact
   // it caches is known to be stale.
   await refreshDesk();
-  const readable = next.state === "ready";
-  // AND THE HEADING STOPS ASKING A QUESTION HE HAS ANSWERED. It is the dialog's accessible
-  // name and it stayed on "Where should I keep what you tell me?" over both endings, so the
-  // screen he actually reaches read as a question above its own answer — the same defect the
-  // setup sheet's heading had two screens earlier (ray-opus-a1, finding 7). One heading for
-  // both endings, because what follows it is about the folder in either case.
-  memorySetupTitleEl.textContent = "Your memory folder.";
-  // `consented`, and deliberately NOT `next.root`: the two name one directory, and the one he
-  // is owed is the one he answered a question about.
-  openMemorySetup(readable ? MEMORY_DONE : MEMORY_NO_READER, consented, { canProvision: false });
+  // A YES THAT WORKED NEEDS NO SECOND BOX (product hunt 2026-10-15, finding 15): the sheet
+  // closes and the next first-run question, if one was held back, is asked. That holds when
+  // the folder was made and the part that reads it is not on this Mac yet (no engine, the
+  // setup sheet answered "Not now"): MEMORY_NO_READER asks nothing of him, and the
+  // "Memory folder" row in the settings menu still says it when he looks.
+  closeMemorySetup();
 }
 
 memorySetupGoEl.addEventListener("click", provisionMemory);
@@ -7082,7 +7079,7 @@ window.RichSettings.registerMemory({
       return;
     }
     if (memoryState.state === "none") {
-      openMemorySetup(MEMORY_ASK, memoryState.offered_location, { canProvision: true });
+      openMemorySetup(MEMORY_ASK, null, { canProvision: true });
       return;
     }
     memorySetupTitleEl.textContent = "Your memory folder.";

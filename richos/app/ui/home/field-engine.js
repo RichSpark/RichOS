@@ -988,6 +988,10 @@ function setSignals(v, flashIt) {
   put('decisions', fmt(v.decisions)); put('lessons', fmt(v.lessons)); put('hours', fmt(v.hours)); put('memories', fmt(v.memories)); put('months', fmt(v.months));
 }
 {
+  // APP: NOT OVER HIS TEAM (product hunt 2026-10-15, finding 7). When `home.js` has put the
+  // user's own team and numbers in these columns it says so, and the dataset's lines are not
+  // written over them; `setSignals` then finds no counter to write.
+  if (!window.RICHOS_HOME_HUD_OWNED) {
   $('#home-owner').textContent = `for ${USER.name}`;
   $('#home-brand-line').innerHTML = `loro · <span class="v" data-k="months"></span> months · <b><span class="v" data-k="memories"></span> memories</b>`;
   const Vv = (k) => `<span class="v" data-k="${k}"></span>`;
@@ -1001,6 +1005,7 @@ function setSignals(v, flashIt) {
   ROOT.querySelectorAll('.v[data-k]').forEach(el => { vEl[el.dataset.k] = el; });
   setSignals(signalsNow(), false);
   $('#home-working').innerHTML = activeSpecialists.map((sp, i) => `<li id="home-spc-${i}">${sp.codename} <span class="fn">${sp.function}</span><span class="dot"></span></li>`).join('');
+  }
   // APP: `readTickerZone()` — the line re-wraps and moves with the window, so the zone is
   // re-read here for the same reason `quietDirty` is raised here.
   addEventListener('resize', () => { if (!running) return; quietDirty = true; readTickerZone(); resize(); });   // PORT: a resize while put away is re-read by resume()

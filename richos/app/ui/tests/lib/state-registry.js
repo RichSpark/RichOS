@@ -1467,14 +1467,14 @@ module.exports = [
       "leaving that in a hint below it.",
   },
   {
-    s: "Give me a folder and I'll pick this company on my own whenever you start RichOS from inside it. Leave it blank and you'll just pick it yourself. Everything else works the same.",
+    s: "You can leave this blank.",
     c: "INFORMATIONAL",
     fixture: "company-unchosen",
     why:
-      "What the folder DOES, beside the field that takes it. It is not a request: it names " +
-      "the consequence of both answers and says plainly that leaving it blank costs him " +
-      "nothing but the automatic pick. A person who does not know his own folder path must " +
-      "not stop here, and without this sentence he would.",
+      "Beside the folder field: a person who does not know his own folder path must not stop " +
+      "here. It promises nothing about the folder (product hunt 2026-10-15, finding 16: the " +
+      "old sentence promised the company would be picked whenever RichOS started from inside " +
+      "the folder, which a Mac app opened from the Dock or Finder never does).",
   },
   {
     s: "Add this company",
