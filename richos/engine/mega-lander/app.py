@@ -1017,8 +1017,10 @@ def prepare(scope_path, scope, args):
                 refresh(old)
                 if old["status"] in ("preparing","unknown") or (old["status"] == "prepared" and old.get("pierce_refused")):
                     settle_undispatched(scope, old_path, old)
-                if old["status"] in ("preparing","prepared","dispatching","running","unknown"):
-                    raise ValueError("this obligation already has unresolved work; inspect its receipt before retrying")
+                # An assignment may have several independent workers, reviewers or consults.
+                # Reject an exact duplicate under another id, not every request sharing a duty.
+                if old["request"] == normalized and old["status"] in ("preparing","prepared","dispatching","running","unknown"):
+                    raise ValueError("this request already has unresolved work; inspect its receipt before retrying")
         name = f"{teammate}-{model}-{identity[:12]}"
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in

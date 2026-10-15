@@ -840,6 +840,28 @@ class DesktopWork(unittest.TestCase):
         # the workspace the command created was not withdrawn by the second request
         self.assertTrue(Path(self.app.target_workspace(ready)["path"]).is_dir())
 
+    def test_independent_work_in_one_assignment_can_overlap_without_repeating_dispatch(self):
+        for role, teammate in (("worker", "mark"), ("consult", "clark")):
+            with self.subTest(role=role):
+                args = {**self.args, "role": role, "teammate": teammate, "request_id": role + "-first"}
+                if role == "consult":
+                    args.pop("repo")
+                    args.pop("integration")
+                first = self.call("prepare", args)
+                self.start_fixture_worker(first, role + "-first-agent")
+                second = self.call("prepare", {**args, "request_id": role + "-second",
+                    "title": "Answer the independent question", "brief": "Read the independent fictional source and report its date."})
+                self.start_fixture_worker(second, role + "-second-agent")
+                records = {r["id"]: r for r in self.call("inspect")["records"]}
+                self.assertEqual([records[r["id"]]["status"] for r in (first, second)], ["running", "running"])
+                retry = self.call("prepare", args)
+                self.assertEqual(retry["id"], first["id"])
+                self.assertNotIn("agent_payload", retry)
+                with self.assertRaisesRegex(ValueError, "request_id was already used for different work"):
+                    self.call("prepare", {**args, "brief": "Different work under the same request id."})
+                for which in ("first", "second"):
+                    self.finish_fixture_worker(role + "-" + which + "-agent", "The fictional source dates to 2020.")
+
     def test_a_dead_preparers_receipt_is_still_settled_for_a_replacement(self):
         """The owner stamp only protects a preparation that is RUNNING: the receipt of
         a process that is gone (a crash between the two lock holds) is settled as
