@@ -116,6 +116,52 @@ async function main() {
     assertEqual(errors.length,0,"renderer errors"); await page.close();
     return "plain: " + JSON.stringify(chip.trim()) + ", no machinery line; Technical view: the line is back";
   });
+  // **THE ASSIGNMENT ROWS IN THE SAME PANEL, UNDER THE SAME RULE** (hunt 57, finding 11; the
+  // review of 43ab0a0c8). "What you have asked for" said "Getting a workspace ready." and,
+  // after a state's sentence, whatever the back end recorded ("The back end couldn't take it
+  // yet", "Opening the work connection.", "It landed on cc/echo-1 in project."). In the
+  // ordinary view each row is its title and the state's plain sentence; the recorded detail
+  // shows only with Technical view on. The retry sentence is read from `work_host.rs`, so this
+  // check follows the words the back end really writes.
+  await run.check("the assignment rows in Under the hood speak plain words, and the back end's own lines show only in Technical view", async () => {
+    const retry = require("fs").readFileSync(path.join(UI_DIR, "..", "crates", "richos-core", "src", "work_host.rs"), "utf8")
+      .match(/pub const ANSWER_RETRY_DETAIL: &str = "([^"]+)";/)[1];
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript((retry) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [
+      {id: "p", title: "Prepare the report", state: "preparing", detail: "Opening the work connection.",
+       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, awaitingYou: null},
+      {id: "b", title: "Hire a bookkeeper", state: "blocked", detail: retry,
+       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false, awaitingYou: null},
+      {id: "s", title: "The nightly build", state: "settled", detail: "It landed on cc/echo-1 in project.",
+       repositories: [], registeredAtMs: 3, canStop: false, onTheConnection: false, awaitingYou: null},
+    ]}}, retry);
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    await chipWithin(page, "assignment", "on hiring");
+    await page.click(".drill-chip");
+    await page.waitForFunction(() => document.querySelectorAll("#slideover-body .assignment-title").length === 3);
+    const plain = await page.textContent("#slideover-body");
+    for (const words of ["workspace", "back end", "connection", "cc/echo-1", "landed"]) {
+      assert(!plain.toLowerCase().includes(words), "What you have asked for says " + JSON.stringify(words) + ": " + JSON.stringify(plain.trim()));
+    }
+    // The rows are still there, each with its own sentence.
+    for (const sentence of ["Getting ready to start.", "Waiting for your decision.", "Finished."]) {
+      assert(plain.includes(sentence), "a row lost its sentence " + JSON.stringify(sentence) + ": " + JSON.stringify(plain.trim()));
+    }
+    // POSITIVE CONTROL: with Technical view on, every recorded line is back.
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    const technical = await page.textContent("#slideover-body");
+    for (const line of ["Opening the work connection.", retry, "It landed on cc/echo-1 in project."]) {
+      assert(technical.includes(line), "Technical view lost " + JSON.stringify(line) + ": " + JSON.stringify(technical.trim()));
+    }
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "plain: three rows, three plain sentences, no back-end lines; Technical view: all three lines are back";
+  });
   // **THE OTHER TWO THINGS THE CHIP IS BUILT FROM, AND THEY WERE NOT BEING SCOPED.**
   //
   // The check above has guarded `savedWork` across a conversation change since it was

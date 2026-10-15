@@ -3869,7 +3869,7 @@ function renderDrillChip() {
   // failed ... a CEO who reads the first answer and looks away has been told something false."
   // `AssignmentState`'s own doc comments are precise about the difference and `work-summary.js`
   // has always relayed them precisely — `registered` is "Written down. Nothing has been
-  // prepared yet.", `preparing` is "Getting a workspace ready.", `running` is "Running." The
+  // prepared yet.", `preparing` is "Getting ready to start.", `running` is "Running." The
   // chip was the one surface that flattened three states into the strongest of the three.
   //
   // `running` now means what it says on the backend too: it is written once the back end's own
@@ -3971,7 +3971,7 @@ function renderSlideOver() {
   // The assignments, with their own stop control (background-work spec §4.2: "where the
   // work is already visible"). Rendered after the receipts because a receipt is evidence
   // and an assignment is a thing he can still act on.
-  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, answerAssignment);
+  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, answerAssignment, {technical: techyOn()});
 }
 
 /// **His decision on the one step an assignment stopped at** (background-work spec §5.2,

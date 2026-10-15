@@ -4065,7 +4065,7 @@ module.exports = [
       "turn boundary without him doing anything, so there is nothing here for him to act on.",
   },
   {
-    "s": "Getting a workspace ready.",
+    "s": "Getting ready to start.",
     "c": "INFORMATIONAL",
     "why": "The preparing state: the work lease is inside the spawn preparer. Nothing is asked of him.",
   },
