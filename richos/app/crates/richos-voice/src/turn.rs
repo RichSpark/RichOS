@@ -409,6 +409,10 @@ impl<T> AnswerGate<T> {
 pub struct Unheard<T> {
     next_id: u64,
     sent: Vec<Sent<T>>,
+    /// The latest one heard to its last sample. While more of its job result is still unheard,
+    /// that result is still being said, between two of its sentences, and a Stop then ends the
+    /// rest of it ([`Unheard::reclaim`]).
+    last_heard: Option<T>,
 }
 
 #[derive(Debug)]
@@ -425,7 +429,7 @@ struct Sent<T> {
 
 impl<T> Default for Unheard<T> {
     fn default() -> Self {
-        Unheard { next_id: 1, sent: Vec::new() }
+        Unheard { next_id: 1, sent: Vec::new(), last_heard: None }
     }
 }
 
@@ -458,9 +462,17 @@ impl<T> Unheard<T> {
         self.sent.retain(|s| s.id != id);
     }
 
-    /// Forget every one that has played to its last sample.
+    /// Forget every one that has played to its last sample, remembering the latest of them.
     pub fn heard(&mut self, played: u64) {
-        self.sent.retain(|s| !(s.complete && played >= s.through));
+        for s in std::mem::take(&mut self.sent) {
+            if s.complete && played >= s.through {
+                if s.start.is_some() {
+                    self.last_heard = Some(s.item);
+                }
+            } else {
+                self.sent.push(s);
+            }
+        }
     }
 
     /// **The device queue was just cut** (he talked over Rich, his words started a new turn, or he
@@ -469,12 +481,18 @@ impl<T> Unheard<T> {
     /// Stop is what he stopped, so it is not said again, or Stop could never end it; nor is any
     /// later part of the same announcement (`same`: two items are sentences of one job result),
     /// or Stop would end one sentence and the rest of the result would be said after it (review
-    /// rv-20261015T153739Z-e8097367-ffad, finding 1). A separate announcement is still returned.
+    /// rv-20261015T153739Z-e8097367-ffad, finding 1). The result is the one he stopped from its
+    /// first sample until its last sentence has played, so between two of its sentences, with
+    /// nothing of it sounding and the next still being synthesized, it is the one last heard
+    /// (review rv-20261015T162000Z-1749e1d8-d766, finding 1). A separate announcement is still
+    /// returned.
     pub fn reclaim(&mut self, played: u64, he_stopped: bool, same: impl Fn(&T, &T) -> bool) -> Vec<T> {
         let sent: Vec<Sent<T>> = self.sent.drain(..).collect();
+        // A barge-in hands the rest of the result back to be said, so it is still being said.
+        let last_heard = if he_stopped { self.last_heard.take() } else { None };
         let sounding = |s: &Sent<T>| s.start.is_some_and(|start| played > start);
         let stopped: Vec<&T> =
-            if he_stopped { sent.iter().filter(|s| sounding(s)).map(|s| &s.item).collect() } else { Vec::new() };
+            sent.iter().filter(|s| he_stopped && sounding(s)).map(|s| &s.item).chain(last_heard.as_ref()).collect();
         let cut: Vec<bool> = sent
             .iter()
             .map(|s| {

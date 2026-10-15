@@ -4422,35 +4422,106 @@ mod tests {
         assert_eq!(run_speaker(&shared, &speak_rx, &device), vec![JOINED.to_string()]);
     }
 
-    /// INVARIANT — review rv-20261015T153739Z-e8097367-ffad, finding 1 (fixture
-    /// `stop_multisentence_result.py`). Stop while a job's result is being said stops THAT
-    /// RESULT: its later sentences, already with the device, are not handed back and said after
-    /// Stop. A separate result queued behind it is not what he stopped, and is still said, once.
+    /// INVARIANT — reviews rv-20261015T153739Z-e8097367-ffad and rv-20261015T162000Z-1749e1d8-d766,
+    /// finding 1 of each (fixtures `stop_multisentence_result.py`, `stop-between-sentences.py`).
+    /// Stop at ANY moment a job's result is being said ends the rest of THAT RESULT: during any
+    /// of its sentences, between two of them, and while the next one is still being synthesized.
+    /// A separate result behind it is not what he stopped, and is still said, once; so is one
+    /// whose own synthesis is under way after the stopped result's last sentence has played.
+    /// Both pacings of the speaker: synthesis slower than playback (the device runs dry between
+    /// sentences), and synthesis ahead of playback (every sentence already queued at the device).
     /// Through the shipping path: `send_result` (what `speak_result` runs), the speaker's own
     /// `speak_one`, `stop_pressed`, and the floor's release.
     #[test]
     fn stop_during_a_spoken_result_ends_the_rest_of_that_result() {
-        let (shared, device, gate, speak_tx, speak_rx, mut floor) = rig();
-        let report = "The sales report is ready. Revenue increased by ten percent.";
-        send_result(&shared, &gate, &speak_tx, 0, report);
-        send_result(&shared, &gate, &speak_tx, 0, JOINED);
-        assert_eq!(
-            run_speaker(&shared, &speak_rx, &device),
-            vec!["The sales report is ready.".to_string(), "Revenue increased by ten percent.".into(), JOINED.into()],
-            "all three sentences are queued at the device"
-        );
-        device.play(TEST_SENTENCE / 2); // He presses Stop halfway through the first sentence.
-        stop_pressed(&shared, &gate, &device);
-        floor.publish(&shared, false);
-        floor.release(&shared, false);
-        assert_eq!(
-            run_speaker(&shared, &speak_rx, &device),
-            vec![JOINED.to_string()],
-            "the result he stopped went on after Stop, or the separate result was lost"
-        );
-        device.play(TEST_SENTENCE);
-        shared.unheard.lock().unwrap().heard(device.played());
-        assert!(shared.unheard.lock().unwrap().is_empty(), "heard, so not said again");
+        use std::cell::Cell;
+        /// Where he presses Stop; `usize` is the sentence, 0..=2 the result, 3 the separate one.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum At {
+            /// Being synthesized; nothing of it has reached the device.
+            Synthesizing(usize),
+            /// Half of it has played.
+            Sounding(usize),
+            /// All of it has played; the next has not begun.
+            Played(usize),
+        }
+        const REPORT: &str = "The sales report is ready. Revenue increased by ten percent. Costs held steady.";
+
+        // What is said after he presses Stop at `at`. `ahead`: every sentence is synthesized and
+        // queued at the device before any of it plays.
+        let said_after_stop = |at: At, ahead: bool| -> Vec<String> {
+            let (shared, device, gate, speak_tx, speak_rx, mut floor) = rig();
+            send_result(&shared, &gate, &speak_tx, 0, REPORT);
+            send_result(&shared, &gate, &speak_tx, 0, JOINED);
+            let stopped = Cell::new(false);
+            let press = |now: At| {
+                if now == at && !stopped.get() {
+                    stop_pressed(&shared, &gate, &device);
+                    stopped.set(true);
+                }
+            };
+            let msgs: Vec<SpeakMsg> = speak_rx.try_iter().collect();
+            assert_eq!(msgs.len(), 4, "three sentences of the report and the separate result");
+            let synthesize = |i: usize, msg: &SpeakMsg| {
+                speak_one(&shared, msg, &device, &mut |_, emit| {
+                    press(At::Synthesizing(i));
+                    let half = vec![0.0f32; (TEST_SENTENCE / 2) as usize];
+                    let _whole = emit(&half) && emit(&half);
+                    Ok(())
+                })
+                .unwrap();
+            };
+            if ahead {
+                for (i, msg) in msgs.iter().enumerate() {
+                    synthesize(i, msg);
+                }
+            }
+            for (i, msg) in msgs.iter().enumerate() {
+                if !ahead {
+                    synthesize(i, msg);
+                }
+                if stopped.get() {
+                    break;
+                }
+                device.play(TEST_SENTENCE / 2);
+                press(At::Sounding(i));
+                if stopped.get() {
+                    break;
+                }
+                device.play(TEST_SENTENCE / 2);
+                press(At::Played(i));
+                if stopped.get() {
+                    break;
+                }
+            }
+            assert!(stopped.get(), "{at:?} (ahead = {ahead}) was never reached");
+            floor.publish(&shared, false);
+            floor.release(&shared, false);
+            let said = run_speaker(&shared, &speak_rx, &device);
+            device.play(TEST_SENTENCE * 4);
+            shared.unheard.lock().unwrap().heard(device.played());
+            assert!(shared.unheard.lock().unwrap().is_empty(), "{at:?} (ahead = {ahead}): heard, so not said again");
+            said
+        };
+
+        let mut points = Vec::new();
+        for i in 0..3 {
+            if i > 0 {
+                points.push((At::Synthesizing(i), false)); // The device is dry; the next is being made.
+            }
+            points.push((At::Sounding(i), false));
+            points.push((At::Sounding(i), true));
+            points.push((At::Played(i), false)); // Between sentences, before the next is begun.
+            points.push((At::Played(i), true));
+        }
+        points.push((At::Synthesizing(3), false)); // The report is over; the separate result is being made.
+        let wrong: Vec<String> = points
+            .into_iter()
+            .map(|(at, ahead)| (at, ahead, said_after_stop(at, ahead)))
+            .filter(|(_, _, said)| *said != vec![JOINED.to_string()])
+            .map(|(at, ahead, said)| format!("Stop at {at:?} (ahead = {ahead}) then said {said:?}"))
+            .collect();
+        assert!(wrong.is_empty(), "after Stop, only the separate result is to be said:\n{}", wrong.join("\n"));
     }
 
     /// INVARIANT — review rv-20261015T131103Z-6b6f899d, finding 1 (fixture
