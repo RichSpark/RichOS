@@ -33,7 +33,7 @@
 use crate::aec::{ReferenceRing, ReferenceSink};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
@@ -100,6 +100,10 @@ struct Shared {
     queue: Mutex<VecDeque<f32>>,
     /// Mono samples ever queued minus ever played — read without locking for the UI.
     queued: AtomicUsize,
+    /// Mono samples ever handed to the device, counted under the queue lock: a sentence whose
+    /// last sample is at position `p` in this count has played once it reaches `p`
+    /// ([`crate::turn::Unheard`]).
+    played: AtomicU64,
     /// Callback size actually observed, in mono frames. This is the stop latency.
     callback_frames: AtomicUsize,
     /// **THE DEVICE'S OWN REPORTED OUTPUT LATENCY, in microseconds.** Not a guess and not a
@@ -151,6 +155,7 @@ impl Playout {
         let shared = Arc::new(Shared {
             queue: Mutex::new(VecDeque::new()),
             queued: AtomicUsize::new(0),
+            played: AtomicU64::new(0),
             callback_frames: AtomicUsize::new(0),
             device_latency_us: AtomicUsize::new(0),
         });
@@ -180,7 +185,8 @@ impl Playout {
                     // try_lock: an audio callback must never wait on the UI thread.
                     let remaining = match cb_shared.queue.try_lock() {
                         Ok(mut q) => {
-                            fill_output(&mut q, out, channels);
+                            let consumed = fill_output(&mut q, out, channels);
+                            cb_shared.played.fetch_add(consumed as u64, Ordering::Relaxed);
                             q.len()
                         }
                         Err(_) => {
@@ -209,12 +215,20 @@ impl Playout {
         Ok(Playout { shared, _stream: stream, device_rate: rate, channels, device_label: label })
     }
 
-    /// Queue one synthesized sentence (mono, already at [`Playout::device_rate`]).
-    pub fn queue(&self, mono: &[f32]) {
+    /// Queue one synthesized sentence (mono, already at [`Playout::device_rate`]). Returns where
+    /// its last sample sits in [`Playout::played_samples`]'s count.
+    pub fn queue(&self, mono: &[f32]) -> u64 {
         if let Ok(mut q) = self.shared.queue.lock() {
             q.extend(mono.iter().copied());
             self.shared.queued.store(q.len(), Ordering::Relaxed);
+            return self.shared.played.load(Ordering::Relaxed) + q.len() as u64;
         }
+        self.shared.played.load(Ordering::Relaxed)
+    }
+
+    /// Mono samples handed to the device since the stream opened. Cut samples are not counted.
+    pub fn played_samples(&self) -> u64 {
+        self.shared.played.load(Ordering::Relaxed)
     }
 
     /// Mono samples still waiting to be heard.

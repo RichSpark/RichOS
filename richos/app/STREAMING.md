@@ -747,6 +747,18 @@ Three rules for whoever renders it:
 is attempted, and the surface reads the durable store when the conversation opens and again at
 every turn boundary.
 
+**A job's result is not a card: it is written into the conversation as Rich's message**
+(`spine.rs` `say_work_results`, drawn from `rich://proactive-message`), and its words follow:
+
+| Event name | When | Payload |
+|---|---|---|
+| `rich://work-result` | A job's result (`answer`, `settled`, `failed`, `interrupted`) was just written into this conversation as Rich's message. Once per message written. | `{ threadId, text }` |
+
+The window already draws the message; this event is for voice mode, which says `text` whole
+through `voice_speak_result` (`ui/main.js` `receiveWorkResult`), held while a turn runs. It is
+said as words of its own, not as part of an answer, so a Stop he gave an earlier reply does not
+silence it; it still waits while he is talking.
+
 ## His team, on an operator install: `rich://operator-notice`
 
 Added 2026-09-26 with the shell wiring of the operator back end (the operator-client record of

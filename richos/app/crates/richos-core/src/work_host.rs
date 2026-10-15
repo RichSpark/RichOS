@@ -685,8 +685,18 @@ fn waiting_sentence(said: &str) -> Option<String> {
 const HIRING_TITLE: &str = "Hire these AI teammates onto my team:";
 
 /// **What a hiring's brief says before his company notes** ([`WorkHost::hiring_notes`]).
-const HIRING_NOTES_HEAD: &str = "His onboarding interview saved these notes about his business. Fit every \
-     teammate to it, and give each helper the facts from them that its work needs in its brief.";
+const HIRING_NOTES_HEAD: &str = "His onboarding interview saved these notes about his business, in his own answers. \
+     They are facts: fit every teammate to them, and give each helper the facts from them that its work needs in its brief.";
+
+/// **Where a hiring's facts about his business come from, and where they never do** (nightly
+/// 57's hunt, finding 5). With his notes on file the back end still wrote Clark's brief from
+/// a guess off his sign-in email's domain, called his interview answers "unconfirmed" and
+/// stated "US-based", which he never said; the email also went to a researcher with web
+/// access. Said in every hiring's first brief, with his notes or without them.
+const HIRING_FACTS_RULE: &str = "His answers about his business are facts: state them as facts, never as \
+     unconfirmed. Never infer anything about his business from his email address or his sign-in, and never put \
+     either in a brief. State nothing about the business he did not say (where it is, for one): where a teammate \
+     needs a fact he has not given, say it is not known yet.";
 
 /// A hiring's teammates, each as (name as written, job title he was given).
 type Hires = Vec<(String, String)>;
@@ -745,10 +755,13 @@ fn joined_the_team(saved: &[(String, String)]) -> Option<String> {
         .collect();
     match each.len() {
         0 => None,
-        1 => Some(format!("{} is on your team now, ready to take work.", each[0])),
-        _ => Some(format!("{} are on your team now, ready to take work.", names_in_a_sentence(&each))),
+        1 => Some(format!("{} is on your team now{JOINED_TAIL}", each[0])),
+        _ => Some(format!("{} are on your team now{JOINED_TAIL}", names_in_a_sentence(&each))),
     }
 }
+
+/// How every [`joined_the_team`] sentence ends, so the ones already said can be read back.
+const JOINED_TAIL: &str = ", ready to take work.";
 
 /// **The name a saved teammate's definition records**: its `**Name:**` line, as Dean's
 /// definition template writes it under Identity (`engine/agents/dean.md`, `- **Name:** {Name}`)
@@ -2031,6 +2044,9 @@ impl WorkHost {
                 prompt.push_str("\n\n");
                 prompt.push_str(&notes);
             }
+            // His answers are facts, and his email says nothing about his business (finding 5).
+            prompt.push_str("\n\n");
+            prompt.push_str(HIRING_FACTS_RULE);
         }
         // **HIS ANSWERS, CARRIED, AND NOT LET GO UNTIL THE BACK END HAS THEM** (the work-path
         // design D1, D5). Reading them changes nothing on disk: they are let go at this turn's
@@ -2320,6 +2336,8 @@ impl WorkHost {
         // The back-end turn is over: what it, its workers and its commands wrote so far goes
         // on the thread's output list (Output side panel PRD §4.1 (b), the per-turn reader).
         self.project_output(record, &session);
+        // A teammate this turn saved is on his team now, and he hears it now (finding 4).
+        self.tell_who_joined_so_far(record);
         // **Carried and not taken**: the prompt returned and no item of its turn ever arrived.
         // It is no longer in flight, so it is no longer `carrying`; what that means is decided
         // before the settle (D4).
@@ -2470,7 +2488,12 @@ impl WorkHost {
             let continuation = if helper_open {
                 show_waiting(waits, &last_said);
                 waits += 1;
-                if !self.wait_for_owned_workers(backend, record, &session) {
+                // **A HIRING GOES ON AT EACH HELPER'S END, NOT AT THE LAST ONE'S** (finding 4;
+                // mid-job review rv-20261015T111101Z-9144da1e-2fe6): Dean returns Will while
+                // Clark still researches Beth, and the back end saves Will on the turn that
+                // gives it, so he joins without waiting on her research.
+                let one_end = (!self.unsaved_hires(record).is_empty()).then_some(ends_at_turn_start);
+                if !self.wait_for_owned_workers(backend, record, &session, one_end) {
                     break;
                 }
                 // **WHAT THE NEXT STEP ACTUALLY IS, READ OFF THE RECEIPTS.** A worker that has
@@ -2600,8 +2623,11 @@ impl WorkHost {
                 // **AND THE TEAM** (proto-teammate shelf slice 5): a teammate saved during the
                 // turn that just ended is registered here, on a successor carrying the run.
                 // After the account check, because a switch registers the team as it is now.
-                if self.switch_account_between_turns(backend, binding, record, &work, context)
-                    || self.renew_team_between_turns(backend, binding, record, &work, context)
+                // Never while a helper of this back end is still running: its run lives in the
+                // connection a renewal would retire (a hiring's turn between two helpers' ends).
+                if !self.helpers_open(&session)
+                    && (self.switch_account_between_turns(backend, binding, record, &work, context)
+                        || self.renew_team_between_turns(backend, binding, record, &work, context))
                 {
                     chars.set(continuation.len());
                     measured.set(None);
@@ -2637,6 +2663,7 @@ impl WorkHost {
                 fold_turn(&mut answer, &said, helper_turn);
                 // Each continuation turn is a back-end turn too (§4.1 (b)).
                 self.project_output(record, &session);
+                self.tell_who_joined_so_far(record);
                 // **A TURN THAT PRODUCED NOTHING IS A TURN THIS HOST DID NOT GET.** Not
                 // inferred from elapsed time and not inferred from silence on a timer: the
                 // child answered with a terminal `result` and delivered no item at all
@@ -2854,7 +2881,9 @@ impl WorkHost {
                         let said = joined_the_team(&saved).expect("checked by the filter");
                         advance(AssignmentState::Settled, assignment::ANSWERED_DETAIL);
                         self.forget_at_the_desk(record);
-                        self.raise(record, NoticeKind::Answer, &said);
+                        if let Some(news) = joined_the_team(&self.joined_untold(record, saved)) {
+                            self.raise(record, NoticeKind::Answer, &news);
+                        }
                         finished = Some(said);
                     }
                     Some((saved, unsaved)) => {
@@ -2866,7 +2895,7 @@ impl WorkHost {
                         );
                         advance(AssignmentState::Failed, &why);
                         self.forget_at_the_desk(record);
-                        if let Some(joined) = joined_the_team(&saved) {
+                        if let Some(joined) = joined_the_team(&self.joined_untold(record, saved)) {
                             self.raise(record, NoticeKind::Answer, &joined);
                         }
                         self.raise(record, NoticeKind::Failed, &tell(&record.title, &why));
@@ -2999,7 +3028,7 @@ impl WorkHost {
                 );
                 advance(AssignmentState::Failed, &why);
                 self.forget_at_the_desk(record);
-                if let Some(joined) = joined_the_team(&saved) {
+                if let Some(joined) = joined_the_team(&self.joined_untold(record, saved)) {
                     self.raise(record, NoticeKind::Answer, &joined);
                 }
                 self.raise(record, NoticeKind::Failed, &tell(&record.title, &why));
@@ -3012,7 +3041,10 @@ impl WorkHost {
                 let said = joined_the_team(&saved).expect("checked by the guard");
                 advance(AssignmentState::Settled, assignment::ANSWERED_DETAIL);
                 self.forget_at_the_desk(record);
-                self.raise(record, NoticeKind::Answer, &said);
+                // Only who he has not heard about yet: the rest were told as each was saved.
+                if let Some(news) = joined_the_team(&self.joined_untold(record, saved)) {
+                    self.raise(record, NoticeKind::Answer, &news);
+                }
                 self.close_answered(record, &said);
             }
             // ===========================================================================
@@ -3387,8 +3419,12 @@ impl WorkHost {
     /// same positive-signal-only rule the continuity design's §5.2 holds the crash watchdog
     /// to. The poll interval is a read of one small file, so [`WORKER_WAIT_POLL`] is chosen
     /// for how soon the back end is handed its next turn rather than for cost.
+    ///
+    /// **`one_end`: a hiring's wait also ends when a helper run ends** after that many had
+    /// ended (the latest turn's start), with others still open, so the teammate that helper
+    /// fitted is saved at once (finding 4).
     fn wait_for_owned_workers(
-        self: &Arc<Self>, backend: &Arc<Backend>, record: &Assignment, session: &str,
+        self: &Arc<Self>, backend: &Arc<Backend>, record: &Assignment, session: &str, one_end: Option<usize>,
     ) -> bool {
         let budget = *self.worker_wait.lock().unwrap();
         let mut deadline = std::time::Instant::now() + budget;
@@ -3416,6 +3452,9 @@ impl WorkHost {
             if view.active + view.liveness_unknown == 0 {
                 return true;
             }
+            if one_end.is_some_and(|seen| crate::app_workers::run_ends(&self.state, session).is_some_and(|ends| ends > seen)) {
+                return true;
+            }
             // **The bound is where the row says so, never where the wait ends** (hunt part 1
             // finding 06). Ending here used to revoke the grant the helper works under and
             // fail the job on "nothing could be witnessed finishing it", about a helper the
@@ -3437,6 +3476,12 @@ impl WorkHost {
             }
             std::thread::sleep(WORKER_WAIT_POLL);
         }
+    }
+
+    /// Is a helper run of this session witnessed open (or of unknown liveness)?
+    fn helpers_open(&self, session: &str) -> bool {
+        let view = crate::app_workers::status(&self.state, Some(session));
+        view.is_attributed() && view.active + view.liveness_unknown > 0
     }
 
     /// **Wait for the helper the back end said it is waiting on to end a run** — `true` when
@@ -3809,6 +3854,42 @@ impl WorkHost {
         self.hiring_roll(record)
             .map(|(_, unsaved)| unsaved.into_iter().map(|(name, _)| name).collect())
             .unwrap_or_default()
+    }
+
+    /// **A teammate is on his team the moment that one is saved, and he hears it then** (nightly
+    /// 57's hunt, finding 4: two teammates took 16 minutes with nothing but "On it!" on screen,
+    /// and Will, a ready-made teammate, waited for Beth's research). Read after every back-end
+    /// turn of a hiring, the turn that saves the last one included: that one is told here too,
+    /// before the team refresh's handoff, successor and next model turn (handover review
+    /// rv-20261015T113206Z-3b0b1dc0-7844). The settle tells only whoever is left
+    /// ([`Self::joined_untold`]).
+    fn tell_who_joined_so_far(self: &Arc<Self>, record: &Assignment) {
+        let Some((saved, _)) = self.hiring_roll(record) else { return };
+        if let Some(said) = joined_the_team(&self.joined_untold(record, saved)) {
+            self.raise(record, NoticeKind::Answer, &said);
+        }
+    }
+
+    /// **The saved teammates he has not been told about yet**, read off this assignment's own
+    /// answers ([`joined_the_team`]'s sentences), so a later run of the same job (his answer, a
+    /// command's report) never tells one twice.
+    fn joined_untold(&self, record: &Assignment, saved: Hires) -> Hires {
+        let told: Vec<String> = assignment::read(&self.state, &record.entity_id, &record.thread_id, &record.id)
+            .map(|now| {
+                now.notices
+                    .into_iter()
+                    .filter(|notice| notice.kind == NoticeKind::Answer && notice.text.ends_with(JOINED_TAIL))
+                    .map(|notice| notice.text)
+                    .collect()
+            })
+            .unwrap_or_default();
+        saved
+            .into_iter()
+            .filter(|(name, job)| {
+                let said = if job.is_empty() { name.clone() } else { format!("{name} ({job})") };
+                !told.iter().any(|text| text.contains(&said))
+            })
+            .collect()
     }
 
     /// The request this assignment is waiting on him for, if one is on the desk — the head
@@ -8032,7 +8113,11 @@ mod tests {
         assert_eq!(prompts[2], hiring_unfinished_continuation(&["Beth".to_string()]));
         let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        assert_eq!(told(&h), ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
+        // Each as that one was saved (finding 4): Will in turn 2, Beth in turn 3.
+        assert_eq!(told(&h), [
+            "Will (Marketing Director) is on your team now, ready to take work.",
+            "Beth (Bookkeeper) is on your team now, ready to take work.",
+        ]);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
@@ -8498,6 +8583,269 @@ mod tests {
         assert!(brief.contains(HIRING_NOTES_HEAD), "{brief}");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Each teammate is on his team, and he is told so, the moment that one is saved** (nightly
+    /// 57's hunt, finding 4: two teammates took 16 minutes with nothing but "On it!" on screen,
+    /// and Will, a ready-made teammate, waited for Beth's research). Turn 1 saves Will and starts
+    /// Clark's research for Beth; while that research runs he already hears that Will joined.
+    /// When Beth is saved he hears that she joined, and Will is not told twice.
+    #[test]
+    fn each_hired_teammate_is_told_the_moment_that_one_is_saved_without_waiting_on_the_others() {
+        use crate::cognition::ObligationState;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
+        }
+        h.replies.lock().unwrap().extend([
+            format!("Saving Will.{TOOL_CALL}Will is saved; Clark is researching the Bookkeeper role."),
+            format!("Saving Beth.{TOOL_CALL}Beth is saved too. Will and Beth are both on your team now."),
+        ]);
+        journal(&h, &helper_started("clark-beth"));
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        // Turn 1 is over and Clark's research is still running: Will is already told. The
+        // deadline only catches a hang; the verdict is what he was told while Clark still runs.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while told(&h).is_empty() {
+            assert!(std::time::Instant::now() < deadline,
+                "Will was saved, and he was not told while Beth's research ran: {:?} {}", read().state, read().detail);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 1, "the host did not wait for Clark's research");
+        assert_eq!(read().state, AssignmentState::Running, "{}", read().detail);
+        assert_eq!(told(&h), ["Will (Marketing Director) is on your team now, ready to take work."],
+            "Will was saved, and he was not told while Beth's research ran");
+        journal(&h, &helper_stopped("clark-beth"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
+        assert_eq!(told(&h), [
+            "Will (Marketing Director) is on your team now, ready to take work.",
+            "Beth (Bookkeeper) is on your team now, ready to take work.",
+        ]);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Dean's fitting of Will ends while Clark still researches Beth, and Will is saved and
+    /// told at once** (finding 4; mid-job review rv-20261015T111101Z-9144da1e-2fe6). Turn 1
+    /// starts both consults. Dean's run ends first: the back end gets its turn then, with Clark
+    /// still running, saves Will, and he hears that Will joined while Beth's research goes on.
+    /// When Clark's run ends, the next turn saves Beth. The host used to give the back end its
+    /// next turn only once every helper had ended, so Will waited for Beth's research.
+    #[test]
+    fn a_teammate_dean_finished_is_saved_and_told_while_another_consult_still_runs() {
+        use crate::cognition::ObligationState;
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
+        }
+        h.replies.lock().unwrap().extend([
+            format!("Asking Dean to fit Will and Clark to research Beth.{TOOL_CALL}Both are running."),
+            format!("Saving Will.{TOOL_CALL}Will is saved; Clark is still researching Beth."),
+            format!("Saving Beth.{TOOL_CALL}Beth is saved too."),
+        ]);
+        journal(&h, &(helper_started("dean-will") + &helper_started("clark-beth")));
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.work_prompts.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the hiring never reached its back end");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Dean's run ends; Clark's does not. The deadline only catches a hang.
+        journal(&h, &helper_stopped("dean-will"));
+        while told(&h).is_empty() {
+            assert!(std::time::Instant::now() < deadline,
+                "Dean returned Will while Clark still researched Beth, and Will was not saved and told: {} turn(s), {:?} {}",
+                h.work_prompts.lock().unwrap().len(), read().state, read().detail);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
+        assert_eq!(told(&h), ["Will (Marketing Director) is on your team now, ready to take work."]);
+        assert_eq!(read().state, AssignmentState::Running, "{}", read().detail);
+        journal(&h, &helper_stopped("clark-beth"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
+        assert_eq!(h.work_prompts.lock().unwrap().len(), 3);
+        assert_eq!(told(&h), [
+            "Will (Marketing Director) is on your team now, ready to take work.",
+            "Beth (Bookkeeper) is on your team now, ready to take work.",
+        ]);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The last teammate a hiring proposed is told the moment that one is saved, before the
+    /// team is refreshed** (finding 4; handover review rv-20261015T113206Z-3b0b1dc0-7844). With
+    /// the commands read clear, the turn that saves Will is followed by the team renewal: a
+    /// handoff turn, a successor opened and primed, and another model turn. He hears that Will
+    /// joined before any of that, and once.
+    #[test]
+    fn the_last_hire_is_told_when_saved_before_the_team_refresh() {
+        use crate::cognition::ObligationState;
+        /// What had happened when each notice was raised: (text, connections opened, handoff
+        /// turns, work turns).
+        struct AtRaise {
+            spawns: Arc<AtomicUsize>,
+            handoffs: Arc<Mutex<Vec<String>>>,
+            prompts: Arc<Mutex<Vec<String>>>,
+            seen: Mutex<Vec<(String, usize, usize, usize)>>,
+        }
+        impl WorkNotifier for AtRaise {
+            fn raised(&self, _thread: &str, notice: &PendingNotice) {
+                self.seen.lock().unwrap().push((
+                    notice.text.clone(),
+                    self.spawns.load(Ordering::SeqCst),
+                    self.handoffs.lock().unwrap().len(),
+                    self.prompts.lock().unwrap().len(),
+                ));
+            }
+        }
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        witnessed(&h.state, "work-session-rotated-1");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Clear);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([Some(format!("{STOCK_TEAM} will"))]);
+        }
+        h.replies.lock().unwrap().push_back(format!("Saving Will.{TOOL_CALL}Will is saved."));
+        let notifier = Arc::new(AtRaise {
+            spawns: h.spawns.clone(),
+            handoffs: h.handoffs.clone(),
+            prompts: h.work_prompts.clone(),
+            seen: Mutex::new(Vec::new()),
+        });
+        let host = WorkHost::new(&h.state, Box::new(factory_over(&h, 5)), notifier.clone(), Arc::clone(&h.desk));
+        host.start();
+        let receipt = host.register(&h.binding, &Registration {
+            title: "Hire these AI teammates onto my team: Will (Marketing Director)".into(),
+            ..registration(&h)
+        }).unwrap();
+        assert!(host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let row = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        assert_eq!(row.state, AssignmentState::Settled, "{}", row.detail);
+        assert!(!h.handoffs.lock().unwrap().is_empty(), "the team was never refreshed, so this proves nothing");
+        let joined: Vec<(String, usize, usize, usize)> = notifier.seen.lock().unwrap().iter()
+            .filter(|(text, ..)| text.ends_with(JOINED_TAIL)).cloned().collect();
+        assert_eq!(joined, [(
+            "Will (Marketing Director) is on your team now, ready to take work.".to_string(), 1, 0, 1,
+        )], "Will was saved on the first turn and told only after (connections, handoff turns, work turns)");
+        host.shutdown();
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The hiring report is only what is true when it arrives, said once** (nightly 57's
+    /// product hunt, finding 9). Nightly 57's report was the back end's turns joined: it opened
+    /// with progress that had stopped being true ("Neither of them is on the team yet.", "Neither
+    /// one has joined yet.") and wrote its summary of Will and Beth twice. These are its words,
+    /// over the same two turns (Beth's research running after the first). He hears that Will and
+    /// Beth joined, once, and none of the back end's words.
+    #[test]
+    fn the_hiring_report_is_only_what_is_true_when_it_arrives_said_once() {
+        use crate::cognition::ObligationState;
+        const STALE: [&str; 2] = ["Neither of them is on the team yet.", "Neither one has joined yet."];
+        const SUMMARY: [&str; 2] = [
+            "Will and Beth have both joined your team.",
+            "Will and Beth are both on your team now, and both are ready to take work.",
+        ];
+        let h = harness(5);
+        witnessed(&h.state, "work-session-one");
+        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
+        *h.background.lock().unwrap() = Some(Vec::new());
+        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
+        {
+            let mut team = h.team.lock().unwrap();
+            team.named = true;
+            team.digest = Some(STOCK_TEAM.into());
+            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} beth will"))]);
+        }
+        h.replies.lock().unwrap().extend([
+            format!("Starting the research for Beth, the new Bookkeeper.{TOOL_CALL}{}", STALE[0]),
+            format!(
+                "Beth's research is in. {}{TOOL_CALL}{}\n\n- **Will, Marketing Director.**\n- **Beth, Bookkeeper.**\n\n{}\n\n\
+                 - **Will, Marketing Director.**\n- **Beth, Bookkeeper.**",
+                STALE[1], SUMMARY[0], SUMMARY[1]
+            ),
+        ]);
+        journal(&h, &helper_started("clark-beth"));
+        h.host.start();
+        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.work_prompts.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the hiring never reached its back end");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        journal(&h, &helper_stopped("clark-beth"));
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
+        let heard = told(&h);
+        assert_eq!(heard, ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
+        for line in STALE.iter().chain(SUMMARY.iter()) {
+            assert!(heard.iter().all(|t| !t.contains(line)), "he was told {line:?}: {heard:?}");
+        }
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A hiring's brief takes his interview answers as facts and never guesses from his email**
+    /// (nightly 57's hunt, finding 5). The back end's brief for Beth's research read "company
+    /// domain [his sign-in email's domain], likely leadership/consulting services; treat that as
+    /// unconfirmed", and stated "US-based", which he never said. With his notes on file the
+    /// brief says they are his own answers and facts; with or without them it says his email
+    /// and sign-in say nothing about the business and never go in a brief, and that what he did
+    /// not say is not known.
+    #[test]
+    fn a_hiring_brief_takes_his_answers_as_facts_and_never_guesses_from_his_email() {
+        for with_notes in [true, false] {
+            let h = harness(5);
+            if with_notes {
+                let central = h.root.join("central");
+                let entity = crate::entity::EntityId::parse("depot").unwrap();
+                let file = crate::company::company_file(&central, &entity);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(&file, "<!-- richos-interview:complete -->\n# Acme\n\n\
+                    Acme runs leadership coaching for managers at mid-size companies.\n").unwrap();
+                h.host.set_central_root(central);
+            }
+            h.replies.lock().unwrap().push_back("Will and Beth are being hired.".into());
+            h.host.start();
+            h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
+            assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
+            let brief = h.work_prompts.lock().unwrap()[0].clone();
+            if with_notes {
+                assert!(brief.contains("his own answers"), "{brief}");
+            }
+            assert!(brief.contains("never as unconfirmed"), "with notes {with_notes}: {brief}");
+            assert!(brief.contains("Never infer anything about his business from his email address"), "with notes {with_notes}: {brief}");
+            assert!(brief.contains("never put either in a brief"), "with notes {with_notes}: {brief}");
+            assert!(brief.contains("say it is not known yet"), "with notes {with_notes}: {brief}");
+            h.host.shutdown();
+            std::fs::remove_dir_all(&h.root).unwrap();
+        }
     }
 
     /// **The team renewal a hiring needs still happens after six waits** (handover review
