@@ -466,18 +466,24 @@ impl<T> Unheard<T> {
     /// **The device queue was just cut** (he talked over Rich, his words started a new turn, or he
     /// pressed Stop). Every announcement not fully played is returned, in order, to be held and
     /// said again; the rest are forgotten. `he_stopped`: the one that was SOUNDING when he pressed
-    /// Stop is what he stopped, so it is not said again, or Stop could never end it.
-    pub fn reclaim(&mut self, played: u64, he_stopped: bool) -> Vec<T> {
-        let mut again = Vec::new();
-        for s in self.sent.drain(..) {
-            let heard = s.complete && played >= s.through;
-            let sounding = s.start.is_some_and(|start| played > start);
-            let stopped_by_him = he_stopped && sounding;
-            if !heard && !stopped_by_him {
-                again.push(s.item);
-            }
-        }
-        again
+    /// Stop is what he stopped, so it is not said again, or Stop could never end it; nor is any
+    /// later part of the same announcement (`same`: two items are sentences of one job result),
+    /// or Stop would end one sentence and the rest of the result would be said after it (review
+    /// rv-20261015T153739Z-e8097367-ffad, finding 1). A separate announcement is still returned.
+    pub fn reclaim(&mut self, played: u64, he_stopped: bool, same: impl Fn(&T, &T) -> bool) -> Vec<T> {
+        let sent: Vec<Sent<T>> = self.sent.drain(..).collect();
+        let sounding = |s: &Sent<T>| s.start.is_some_and(|start| played > start);
+        let stopped: Vec<&T> =
+            if he_stopped { sent.iter().filter(|s| sounding(s)).map(|s| &s.item).collect() } else { Vec::new() };
+        let cut: Vec<bool> = sent
+            .iter()
+            .map(|s| {
+                let heard = s.complete && played >= s.through;
+                let stopped_by_him = he_stopped && (sounding(s) || stopped.iter().any(|t| same(t, &s.item)));
+                heard || stopped_by_him
+            })
+            .collect();
+        sent.into_iter().zip(cut).filter(|(_, cut)| !cut).map(|(s, _)| s.item).collect()
     }
 
     /// How many are with the speaker or the device and not yet heard.

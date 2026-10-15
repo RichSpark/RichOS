@@ -893,6 +893,16 @@ struct SpeakMsg {
     /// interruption that ends its generation does not end IT; it is said again until heard
     /// (review rv-20261015T132600Z-fdc3dafb, finding 1).
     notice: Option<u64>,
+    /// Which job result an announcement's sentence belongs to: every sentence of one
+    /// [`VoiceController::speak_result`] carries the same number, so a Stop during one of them
+    /// ends the rest of that result and no other ([`Unheard::reclaim`]). `0` for an answer.
+    result: u64,
+}
+
+/// A fresh number for [`SpeakMsg::result`]; never `0`.
+fn next_result() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// **THE ONLY PLACE A SENTENCE ACTUALLY GOES TO THE SPEAKER THREAD**, for the controller and the
@@ -2198,16 +2208,13 @@ impl VoiceController {
     /// It is not part of any answer, so it does not use the answer's chunker, and a Stop he gave
     /// an earlier reply does not silence it (review rv-20261015T125238Z-37f970a3, finding 1:
     /// after tap-to-stop no turn starts, so the mute stayed and the result was dropped). It still
-    /// waits while he has the floor, queues behind Rich's own sentences, and a Stop while it is
-    /// being said stops it, by the generation like any sentence.
+    /// waits while he has the floor, queues behind Rich's own sentences, and a Stop while any
+    /// sentence of it is being said stops the whole result, not just that sentence
+    /// ([`send_result`]).
     pub fn speak_result(&self, text: &str) {
+        let Some(tx) = &self.speak_tx else { return };
         let generation = self.shared.generation.load(Ordering::Relaxed);
-        let mut chunker = SentenceChunker::new();
-        let mut sentences = chunker.push(text);
-        sentences.extend(chunker.flush());
-        for sentence in sentences {
-            self.send_to_speaker(generation, sentence, true);
-        }
+        send_result(&self.shared, &self.gate, tx, generation, text);
     }
 
     /// **The turn DIED. Say so out loud** (row 3.30, answer 1).
@@ -2314,8 +2321,14 @@ fn send_to_speaker(
     text: String,
     announcement: bool,
 ) {
+    let result = if announcement { next_result() } else { 0 };
+    offer_to_speaker(shared, gate, tx, SpeakMsg { generation, text, notice: announcement.then_some(0), result });
+}
+
+/// [`send_to_speaker`] for a message already built.
+fn offer_to_speaker(shared: &Shared, gate: &Mutex<AnswerGate<SpeakMsg>>, tx: &Sender<SpeakMsg>, msg: SpeakMsg) {
     let his_floor = shared.his_floor.load(Ordering::Relaxed);
-    let msg = SpeakMsg { generation, text, notice: announcement.then_some(0) };
+    let announcement = msg.notice.is_some();
     let now = match gate.lock() {
         Ok(mut gate) if announcement => gate.offer_announcement(msg, his_floor),
         Ok(mut gate) => gate.offer(msg, his_floor),
@@ -2324,6 +2337,18 @@ fn send_to_speaker(
     };
     if let Some(msg) = now {
         dispatch(shared, tx, msg);
+    }
+}
+
+/// [`VoiceController::speak_result`]: the result in sentences, each offered as an announcement,
+/// all under ONE result number, so a Stop during any of them ends the rest of it.
+fn send_result(shared: &Shared, gate: &Mutex<AnswerGate<SpeakMsg>>, tx: &Sender<SpeakMsg>, generation: u64, text: &str) {
+    let mut chunker = SentenceChunker::new();
+    let mut sentences = chunker.push(text);
+    sentences.extend(chunker.flush());
+    let result = next_result();
+    for text in sentences {
+        offer_to_speaker(shared, gate, tx, SpeakMsg { generation, text, notice: Some(0), result });
     }
 }
 
@@ -2350,7 +2375,7 @@ fn stop_pressed(shared: &Shared, gate: &Mutex<AnswerGate<SpeakMsg>>, out: &dyn S
 /// copies carry the ended generation, so the speaker drops them. Returns how many.
 fn reclaim_unheard(shared: &Shared, gate: &Mutex<AnswerGate<SpeakMsg>>, played: u64, he_stopped: bool) -> usize {
     let again = match shared.unheard.lock() {
-        Ok(mut u) => u.reclaim(played, he_stopped),
+        Ok(mut u) => u.reclaim(played, he_stopped, |a, b| a.result == b.result),
         Err(_) => return 0,
     };
     let n = again.len();
@@ -4397,6 +4422,37 @@ mod tests {
         assert_eq!(run_speaker(&shared, &speak_rx, &device), vec![JOINED.to_string()]);
     }
 
+    /// INVARIANT — review rv-20261015T153739Z-e8097367-ffad, finding 1 (fixture
+    /// `stop_multisentence_result.py`). Stop while a job's result is being said stops THAT
+    /// RESULT: its later sentences, already with the device, are not handed back and said after
+    /// Stop. A separate result queued behind it is not what he stopped, and is still said, once.
+    /// Through the shipping path: `send_result` (what `speak_result` runs), the speaker's own
+    /// `speak_one`, `stop_pressed`, and the floor's release.
+    #[test]
+    fn stop_during_a_spoken_result_ends_the_rest_of_that_result() {
+        let (shared, device, gate, speak_tx, speak_rx, mut floor) = rig();
+        let report = "The sales report is ready. Revenue increased by ten percent.";
+        send_result(&shared, &gate, &speak_tx, 0, report);
+        send_result(&shared, &gate, &speak_tx, 0, JOINED);
+        assert_eq!(
+            run_speaker(&shared, &speak_rx, &device),
+            vec!["The sales report is ready.".to_string(), "Revenue increased by ten percent.".into(), JOINED.into()],
+            "all three sentences are queued at the device"
+        );
+        device.play(TEST_SENTENCE / 2); // He presses Stop halfway through the first sentence.
+        stop_pressed(&shared, &gate, &device);
+        floor.publish(&shared, false);
+        floor.release(&shared, false);
+        assert_eq!(
+            run_speaker(&shared, &speak_rx, &device),
+            vec![JOINED.to_string()],
+            "the result he stopped went on after Stop, or the separate result was lost"
+        );
+        device.play(TEST_SENTENCE);
+        shared.unheard.lock().unwrap().heard(device.played());
+        assert!(shared.unheard.lock().unwrap().is_empty(), "heard, so not said again");
+    }
+
     /// INVARIANT — review rv-20261015T131103Z-6b6f899d, finding 1 (fixture
     /// `work_result_recognition.rs`). A job's result ("Will is on your team now") that arrives
     /// while he is speaking waits for him, and it is NOT lost when his words are recognized and
@@ -4447,6 +4503,7 @@ mod tests {
                     generation: shared.generation.load(Ordering::Relaxed),
                     text: text.into(),
                     notice: announcement.then_some(0),
+                    result: if announcement { next_result() } else { 0 },
                 };
                 let his = shared.his_floor.load(Ordering::Relaxed);
                 let mut g = gate.lock().unwrap();
