@@ -19,7 +19,7 @@ class TheWordsItReads(unittest.TestCase):
     def test_iris_sentence_is_the_microphone_usage_string(self):
         plist = plistlib.loads((APP / 'src-tauri/Info.plist').read_bytes())
         sentence = plist['NSMicrophoneUsageDescription']
-        self.assertEqual(sentence, 'So you can talk instead of typing. I listen only after you tap F1 or press the talk button.')
+        self.assertEqual(sentence, 'So you can talk instead of typing. I listen only when you ask me to.')
         for fragment in walk.IRIS_FRAGMENTS:
             self.assertIn(fragment, sentence)
 
