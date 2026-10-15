@@ -242,7 +242,7 @@ async function main() {
     // The panel open on the list, as Ray had it.
     if (await page.evaluate(() => document.getElementById("outpanel").hidden)) await page.click("#out-top");
     await page.waitForFunction(() => !document.getElementById("outpanel").hidden);
-    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("saved work record"));
+    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("team job"));
     await page.click(".drill-chip");
     await page.waitForSelector("#slideover:not([hidden])");
     const panes = () =>

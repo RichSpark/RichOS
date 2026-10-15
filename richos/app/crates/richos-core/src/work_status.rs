@@ -58,12 +58,14 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
     // repository, and never a guess at its state. Only a failure about the directory itself
     // (above) still refuses the whole view.
     for path in paths.into_iter().take(100) {
-        let item = read_one(&path, entity, thread, &mut bytes_read).unwrap_or_else(|reason| Some(WorkItem {
-            title: "A saved work record that could not be read".into(),
+        let item = read_one(&path, entity, thread, &mut bytes_read).unwrap_or_else(|_reason| Some(WorkItem {
+            title: "Work whose details couldn't be read".into(),
             repository: "unknown repository".into(),
             role: "unknown role".into(),
             state: "unreadable".into(),
-            detail: format!("{reason} The other saved work is shown as recorded."),
+            // Plain words for a business owner (hunt 57, finding 11): the reader's own reason
+            // is about files and records, which he cannot act on.
+            detail: "Its details are damaged or missing, so none of them are shown. Everything else here is as saved.".into(),
         }));
         summary.items.extend(item);
     }
@@ -99,40 +101,50 @@ fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Re
     // A consult (plan §3, slice 3) has no repository and nothing to integrate: its record
     // is the teammate's answer, handed back to the back end.
     let consult = row["request"]["role"].as_str() == Some("consult");
+    //
+    // **EVERY SENTENCE BELOW IS FOR A BUSINESS OWNER** (hunt 57, finding 11, 2026-10-15): the
+    // Under the hood panel said "consult · no repository", "It changed no repository.",
+    // "Workspace prepared. No worker dispatch has been observed." and "A current running state
+    // is not established by this saved receipt." to a user whose jobs never touched a
+    // repository. Each one now says what he needs to know, in his words, and still claims no
+    // more than the record shows: a start is "started", never "running"; a land is "added to
+    // your project" only with verified integration. Nothing names a repository, a worker, a
+    // receipt, a workspace or a dispatch (`every_saved_work_sentence_is_in_plain_words`).
     let (state, detail) = if consult && row["status"] == "run-ended" {
         if row["consult_answer"]["answered"] == true {
-            ("answered", "The teammate's answer was handed back to Rich. It changed no repository.")
+            ("answered", "Done. The teammate's answer went back to Rich.")
         } else {
-            ("run-ended", "The teammate's run ended with no answer on record. It changed no repository.")
+            ("run-ended", "The teammate stopped without an answer. Ask Rich about it.")
         }
     } else if row["integration"]["verified"] == true {
         if row["integration"]["cleanup_pending"].as_array().is_some_and(|a| a.is_empty()) {
-            ("integrated", "Reviewed commit integrated locally. Workspace cleanup verified. This does not mark the whole assignment complete.")
+            ("integrated", "This part was checked and added to your project. The job as a whole may still be going.")
         } else {
-            ("cleanup-pending", "Reviewed commit integrated locally. Workspace cleanup still needs reconciliation.")
+            ("cleanup-pending", "This part was checked and added to your project. Some tidying up is still left.")
         }
     } else {
         // Every status `engine/mega-lander/app.py` writes into a receipt: `preparing`,
         // `prepared`, `dispatching`, `running`, `blocked`, `unknown`, `interrupted`,
         // `run-ended` and `integrated`.
         match row["status"].as_str() {
-            Some("preparing" | "unknown") => ("unresolved", "Preparation or execution outcome is uncertain. Ask Rich to reconcile the saved work before retrying."),
-            Some("prepared") => ("prepared", "Workspace prepared. No worker dispatch has been observed."),
-            Some("dispatching") => ("dispatching", "Dispatch attempted. Worker acknowledgement has not been reconciled."),
-            Some("running") => ("observed-start", "Worker start recorded. A current running state is not established by this saved receipt."),
+            Some("preparing" | "unknown") => ("unresolved", "It isn't clear how this went. Ask Rich to check it before trying again."),
+            Some("prepared") => ("prepared", "Ready to start. No teammate has picked it up yet."),
+            Some("dispatching") => ("dispatching", "Handed to a teammate, who hasn't confirmed starting yet."),
+            // "Started", never "running": the record shows a start, not that it is still going.
+            Some("running") => ("observed-start", "A teammate started on this."),
             // Both places the engine writes `blocked` come before any dispatch: a preparation
             // that was refused (Pierce's refusal included), and `settle_undispatched` closing
             // one that never reached a worker. So it ended, and it never started.
-            Some("blocked") => ("ended-without-starting", "Ended without starting. Its preparation was refused or closed before any worker was dispatched, so it did no work."),
-            Some("interrupted") => ("interrupted", "Execution was interrupted. Files are retained. Ask Rich to inspect and continue the work."),
+            Some("blocked") => ("ended-without-starting", "Ended without starting. It was stopped before a teammate began, so nothing was done."),
+            Some("interrupted") => ("interrupted", "Interrupted. The work so far is kept. Ask Rich to carry on with it."),
             Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "changes-requested" =>
-                ("changes-requested", "The independent reviewer requested changes. Nothing has been integrated."),
+                ("changes-requested", "A reviewer asked for changes. Nothing has been added to your project yet."),
             Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "passed" =>
-                ("review-passed", "Independent review passed for the recorded commit. Integration is separate."),
-            Some("run-ended") => ("run-ended", "Worker run ended. Review and verified integration are still separate steps."),
+                ("review-passed", "A reviewer approved it. Adding it to your project is a separate step."),
+            Some("run-ended") => ("run-ended", "The teammate finished. It still needs a review before it's added to your project."),
             // The engine writes `integrated` only together with `integration.verified`, which
             // is read above. Without that evidence the land is not claimed.
-            Some("integrated") => ("unresolved", "The receipt says integrated but carries no verified integration. Ask Rich to reconcile the saved work."),
+            Some("integrated") => ("unresolved", "It's marked as added to your project, but that couldn't be confirmed. Ask Rich to check."),
             _ => return Err("A saved work record has an unsupported state.".into()),
         }
     };
@@ -536,6 +548,53 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         }
         let trail = trail(&root, "depot", "thread", "obligation-7").unwrap();
         assert_eq!(trail.lands.len(), 1, "unrelated receipts made the assignment unreadable");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **Hunt 57, finding 11 (2026-10-15): the Under the hood panel speaks to a business
+    /// owner.** Every sentence the saved-work view can put on screen, for every status the
+    /// engine writes, a consult with and without an answer, a land with and without its tidy-up,
+    /// both review verdicts, a record that cannot be read, and the assignment's "started" line,
+    /// says nothing about repositories, workers, receipts, workspaces, dispatch, integration or
+    /// the back end. Nightly 57 showed "It changed no repository.", "Workspace prepared. No worker
+    /// dispatch has been observed." and "The back end has started on it." on a hiring job.
+    #[test] fn every_saved_work_sentence_is_in_plain_words() {
+        let root = temp();
+        let mut rows = Vec::new();
+        for (n, status) in ["preparing", "prepared", "dispatching", "running", "blocked", "unknown",
+                            "interrupted", "run-ended", "integrated"].into_iter().enumerate() {
+            let mut row = receipt(&format!("w{n}"), "o", "worker");
+            row["status"] = status.into();
+            rows.push(row);
+        }
+        for (n, verdict) in ["changes-requested", "passed"].into_iter().enumerate() {
+            let mut row = receipt(&format!("r{n}"), "o", "worker");
+            row["review_observation"] = serde_json::json!({"valid":true,"report":{"verdict":verdict}});
+            rows.push(row);
+        }
+        for (n, cleanup) in [serde_json::json!([]), serde_json::json!(["one left"])].into_iter().enumerate() {
+            let mut row = receipt(&format!("l{n}"), "o", "worker");
+            row["integration"] = serde_json::json!({"verified":true,"cleanup_pending":cleanup});
+            rows.push(row);
+        }
+        for (n, answered) in [true, false].into_iter().enumerate() {
+            let mut row = receipt(&format!("c{n}"), "o", "consult");
+            row["request"]["repo"] = Value::Null;
+            row["consult_answer"] = serde_json::json!({"answered":answered});
+            rows.push(row);
+        }
+        let path = write(&root, &rows);
+        std::fs::write(path.join("damaged.json"), "partial").unwrap();
+        let summary = read(&root, "depot", "thread").unwrap();
+        assert_eq!(summary.items.len(), rows.len() + 1, "a sentence was not produced for every case");
+        let mut said: Vec<String> = summary.items.iter().flat_map(|i| [i.title.clone(), i.detail.clone()]).collect();
+        said.push(crate::work_host::STARTED_DETAIL.to_string());
+        for line in &said {
+            let lower = line.to_lowercase();
+            for word in ["repositor", "worker", "receipt", "workspace", "dispatch", "integrat", "back end", "record"] {
+                assert!(!lower.contains(word), "{line:?} names {word:?} to a business owner");
+            }
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

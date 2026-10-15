@@ -48,10 +48,15 @@ const WORDS = {
 const STATES = [
   ["off (first run)", { on: false, codex: "ready" }, "Claude", false, false, "off"],
   ["on", { on: true, codex: "ready" }, "Codex", true, false, "on"],
-  ["not installed", { on: false, codex: "missing" }, "Claude", false, true, "missing"],
-  ["not signed in", { on: false, codex: "signedout" }, "Claude", false, true, "signedout"],
   ["on, then signed out", { on: true, codex: "signedout" }, "Claude", true, false, "lapsed-signedout"],
   ["on, then removed", { on: true, codex: "missing" }, "Claude", true, false, "lapsed-missing"],
+];
+// **A switch that cannot be used is not shown** (hunt 57, finding 19, 2026-10-15): off, with
+// Codex not installed or not signed in, the row is not in the menu at all. Round 20.2 drew these
+// two as a dashed switch; their words stay in the row's markup for when Codex is ready again.
+const NOT_SHOWN = [
+  ["not installed", { on: false, codex: "missing" }],
+  ["not signed in", { on: false, codex: "signedout" }],
 ];
 const plain = s => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim();
 
@@ -76,7 +81,7 @@ async function main() {
   }
   async function menu(page) {
     if (await page.locator("#set-menu").isHidden()) await page.click("#set-btn");
-    await page.waitForSelector("#set-menu #cx-switch");
+    await page.waitForSelector("#set-menu #cx-switch", { state: "attached" });
     // The row is painted from the status read at open.
     await page.waitForFunction(() => window.RichCodexReviews && window.RichCodexReviews.state());
   }
@@ -193,50 +198,38 @@ async function main() {
     await page.close();
   });
 
-  // ---- 4. the nudge -----------------------------------------------------------------------
-  await run.check("the nudge: pressing the unavailable switch shakes it, tints the row and opens the tooltip with the reason; nothing is turned on", async () => {
-    for (const [codex, reason] of [["missing", "The Codex app isn't on this Mac."], ["signedout", "Codex isn't signed in."]]) {
-      const page = await open("dark", { on: false, codex });
+  // ---- 4. a switch that cannot be used is not shown ---------------------------------------
+  // Hunt 57, finding 19 (2026-10-15): nightly 57 showed a user without Codex "Let Codex review
+  // your team's work · Reviewing now: Claude" beside a switch that could not be turned on.
+  await run.check("off with Codex not installed or not signed in: the row, its switch and its rules are not shown", async () => {
+    const seen = [];
+    for (const [name, preset] of NOT_SHOWN) {
+      const page = await open("dark", preset);
       await menu(page);
-      // The shake lasts 0.38 s and removes itself, so it is recorded as it happens.
-      await page.evaluate(() => {
-        window.__cxSeen = [];
-        new MutationObserver(() => {
-          if (document.getElementById("cx-switch").classList.contains("shake")) window.__cxSeen.push("shake");
-          if (document.getElementById("cx-row").classList.contains("is-nudged")) window.__cxSeen.push("tint");
-        }).observe(document.getElementById("set-codex"), { attributes: true, subtree: true, attributeFilter: ["class"] });
-      });
-      // A real press: `force` only skips Playwright's own wait for aria-disabled to clear, which
-      // a person pressing the unavailable switch never waits for.
-      await page.click("#cx-switch", { force: true });
-      await page.waitForSelector("#cx-tip.is-shown");
-      const seen = await page.evaluate(() => window.__cxSeen);
-      assert(seen.includes("tint"), codex + ": the row is tinted: " + seen);
-      assert(seen.includes("shake"), codex + ": the switch shook: " + seen);
-      assert((await shownWords(page)).map(plain).some(w => w.startsWith(reason)), codex + ": the reason is in the open tooltip");
-      assertEqual(await page.getAttribute("#cx-switch", "aria-checked"), "false", codex + ": still off");
-      assertEqual((await calls(page)).filter(c => c.cmd === "codex_reviews_set"), [], codex + ": nothing was asked to turn on");
-      // It stays open until a press elsewhere.
-      await page.mouse.move(5, 895);
-      await pastGrace(page); // proves the pin holds it past the hover grace
-      assert(await page.locator("#cx-tip").isVisible(), codex + ": stays open off the ⓘ");
-      await page.click(".setmenu-title");
-      await page.waitForSelector("#cx-tip", { state: "hidden" });
+      assert(await page.locator("#set-codex").isHidden(), name + ": the row is shown");
+      assert(await page.locator("#cx-switch").isHidden(), name + ": the switch that cannot be turned on is shown");
+      assertEqual(await page.evaluate(() => [...document.querySelectorAll("#set-codex .set-rule")].filter(r => r.getClientRects().length).length), 0,
+        name + ": a rule of the row is still drawn");
+      assert(!(await page.evaluate(() => document.getElementById("set-menu").innerText)).includes("Codex"), name + ": the menu still names Codex");
+      seen.push(name + ": not shown");
       await page.close();
     }
+    return seen.join("; ");
   });
 
   // The second review of ecb68ec68 (rv-20261009T143828Z-ecb68ec6-82af, finding 2, fixture
-  // unavailable-recovery.js): Settings stays open while the user follows the tooltip's words
-  // (installs Codex, or signs in), then presses the switch. The press asks the app again before
-  // refusing, and turns it on, with no closing and reopening of Settings in between.
-  await run.check("Codex ready while Settings stays open: the next press on the unavailable switch reads Codex again and turns it on", async () => {
+  // unavailable-recovery.js): Settings stays open while the user installs Codex or signs in. The
+  // row was not shown; coming back to the app reads Codex again, the row appears, and it can be
+  // turned on, with no closing and reopening of Settings in between.
+  await run.check("Codex ready while Settings stays open: returning to the app reads Codex again, the row appears and turns on", async () => {
     for (const codex of ["missing", "signedout"]) {
       const page = await open("dark", { on: false, codex });
       await menu(page);
-      assertEqual(await page.getAttribute("#cx-switch", "aria-disabled"), "true", codex + ": unavailable as Settings opens");
+      assert(await page.locator("#set-codex").isHidden(), codex + ": not shown as Settings opens");
       await page.evaluate(() => window.__RICHOS_MOCK__.codexSet("ready"));
-      await page.click("#cx-switch", { force: true });
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.waitForSelector("#cx-switch", { state: "visible" });
+      await page.click("#cx-switch");
       await page.waitForFunction(() => document.getElementById("cx-switch").getAttribute("aria-checked") === "true");
       assertEqual(await text(page, "#cx-who"), "Reviewing now: Codex", codex + ": Codex reviews now");
       assertEqual(await page.getAttribute("#cx-switch", "aria-disabled"), "false", codex + ": the switch is usable");
@@ -282,7 +275,7 @@ async function main() {
   });
 
   // ---- 6. on, then Codex went away --------------------------------------------------------
-  await run.check("on, then signed out: read when Settings opens; the choice stands, Claude covers and says so; it can still be turned off, and then cannot be turned on", async () => {
+  await run.check("on, then signed out: read when Settings opens; the choice stands, Claude covers and says so; it can still be turned off, and then, unusable, is not shown", async () => {
     const page = await open("dark", { on: false, codex: "ready" });
     await menu(page);
     await page.click("#cx-switch");
@@ -299,7 +292,8 @@ async function main() {
     assertEqual((await shownWords(page)).map(plain), WORDS["lapsed-signedout"]);
     await page.click("#cx-switch");
     await page.waitForFunction(() => document.getElementById("cx-switch").getAttribute("aria-checked") === "false");
-    assertEqual(await page.getAttribute("#cx-switch", "aria-disabled"), "true", "off again, and it cannot be turned on while signed out");
+    // Off again, and it cannot be turned on while signed out, so it is no longer shown.
+    await page.waitForSelector("#set-codex", { state: "hidden" });
     await page.close();
   });
 
@@ -355,13 +349,11 @@ async function main() {
     await run.check(theme + ": every state, tooltip open, meets AA contrast (text 4.5:1; the switch, the ⓘ and the rules 3:1) and the 16px floor", async () => {
       const worst = [];
       for (const [name, preset] of STATES) {
-        for (const how of ["hover", "nudge"]) {
-          if (how === "nudge" && preset.codex === "ready") continue;
-          if (how === "nudge" && preset.on) continue;
+        // The nudge belonged to the two states that are no longer shown (NOT_SHOWN above).
+        for (const how of ["hover"]) {
           const page = await open(theme, preset);
           await menu(page);
-          if (how === "hover") await page.hover("#cx-info");
-          else await page.click("#cx-switch", { force: true });
+          await page.hover("#cx-info");
           await page.waitForSelector("#cx-tip.is-shown");
           await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect && a.effect.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => null))));
           await page.addScriptTag({ content: contrast.pageScript() });

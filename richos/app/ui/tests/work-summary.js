@@ -36,19 +36,179 @@ async function main() {
     }});
     await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
     await openThread(page,"hiring");
-    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("2 saved work records"));
+    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("2 team jobs"));
     await page.click(".drill-chip");
     assert((await page.textContent("#slideover-body")).includes("Review is still required"), "run end became success");
     assert((await page.textContent("#slideover-body")).includes("Whole assignment remains open"), "integration became whole-task completion");
     assertEqual(await page.locator("#slideover-body img").count(),0,"receipt rendered as markup");
     await page.click("#slideover-close"); await openThread(page,"acme");
-    assert(!(await page.textContent("#drill-chip-zone")).includes("2 saved work records"),"old-company receipt leaked");
-    await page.evaluate(() => window.__RICHOS_MOCK_PRESET__.workSummaryError = "Synthetic damaged receipt");
-    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("Saved work unavailable"));
+    assert(!(await page.textContent("#drill-chip-zone")).includes("2 team jobs"),"old-company receipt leaked");
+    // A read that fails keeps this conversation's last reading, and says why only in Technical
+    // view (hunt 57, finding 12).
+    await openThread(page,"hiring");
+    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("2 team jobs"));
+    await page.evaluate(async () => { window.__RICHOS_MOCK_PRESET__.workSummaryError = "Synthetic damaged receipt"; await pollWorkerStatus(); });
+    const kept = await page.textContent("#drill-chip-zone");
+    assert(kept.includes("2 team jobs") && !/unavailable/i.test(kept), "a failed read replaced the last reading: " + JSON.stringify(kept.trim()));
     await page.click(".drill-chip");
-    assert((await page.textContent("#slideover-body")).includes("Synthetic damaged receipt"),"damaged receipt looked empty");
+    assert(!(await page.textContent("#slideover-body")).includes("Synthetic damaged receipt"), "the failed read's reason is shown outside Technical view");
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    assert((await page.textContent("#slideover-body")).includes("Synthetic damaged receipt"),"with Technical view on, the failed read is not explained");
     assertEqual(errors.length,0,"renderer errors"); await page.close();
-    return "scoped receipts, explicit outcomes, escaped content and visible read failure";
+    return "scoped receipts, explicit outcomes, escaped content; a failed read keeps the last reading and says why in Technical view";
+  });
+  // **HUNT 57, FINDING 12 (2026-10-15): A BRAND-NEW CONVERSATION SAYS NOTHING ABOUT SAVED WORK.**
+  // Nightly 57 showed "Saved work unavailable" under the very first conversation of 2 fresh
+  // installs: `get_work_status` refuses while Rich's session is being started ("Work status is
+  // changing. Please try again.", `main.rs` `get_work_status`), and the status line printed that
+  // refusal as if something were wrong. A read that fails now keeps what this conversation last
+  // read, which for a new one is nothing, so nothing about saved work is shown.
+  await run.check("a brand-new conversation whose saved-work read is refused while Rich gets ready says nothing about saved work", async () => {
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript(() => window.__RICHOS_MOCK_PRESET__ = {workSummaryError: "Work status is changing. Please try again."});
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    // The read is made and refused here, rather than left to the 3,000 ms refill.
+    const read = await page.evaluate(async () => { await pollWorkerStatus(); return savedWork.error || null; });
+    assert(read && read.includes("Work status is changing"), "the refused read never happened, so this check proves nothing: " + JSON.stringify(read));
+    const chip = (await page.textContent("#drill-chip-zone")) || "";
+    assert(!/unavailable/i.test(chip), "a brand-new conversation's status line reads " + JSON.stringify(chip.trim()));
+    assert(!/team job|saved work/i.test(chip), "the status line speaks of saved work with nothing saved: " + JSON.stringify(chip.trim()));
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "refused read (" + JSON.stringify(read) + "); the status line reads " + JSON.stringify(chip.trim());
+  });
+  // **HUNT 57, FINDING 11 (2026-10-15): THE WORK PANELS SPEAK TO A BUSINESS OWNER.** Nightly 57's
+  // hiring job showed "consult · no repository" under every row of Under the hood and "4 saved
+  // work records" above the message box. The status line now counts team jobs, and the machinery
+  // line (the helper's role and its repository) shows only with Technical view on, where it
+  // still reads exactly as before.
+  await run.check("the status line and Under the hood say nothing about records, consults or repositories unless Technical view is on", async () => {
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript(() => window.__RICHOS_MOCK_PRESET__ = {workSummaries: {
+      hiring: {items:[{title:"Research brief for new teammate Beth, Bookkeeper", role:"consult", repository:"no repository", state:"answered", detail:"Done. The teammate's answer went back to Rich."}], omitted:3}
+    }});
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    const chip = await chipWithin(page, "team job", "on hiring");
+    assert(chip.includes("1 team job"), "the status line reads " + JSON.stringify(chip.trim()));
+    assert(!/record/i.test(chip), "the status line still counts records: " + JSON.stringify(chip.trim()));
+    await page.click(".drill-chip");
+    const plain = await page.textContent("#slideover-body");
+    for (const word of ["repositor", "consult", "record"]) {
+      assert(!plain.toLowerCase().includes(word), "Under the hood names " + JSON.stringify(word) + ": " + JSON.stringify(plain.trim()));
+    }
+    assert(plain.includes("Done. The teammate's answer went back to Rich."), "the row's own sentence is missing: " + JSON.stringify(plain.trim()));
+    assert(plain.includes("3 older team jobs aren't shown here."), "the older jobs are not counted in plain words: " + JSON.stringify(plain.trim()));
+    // POSITIVE CONTROL: with Technical view on, the machinery line is still there, as it was.
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    const technical = await page.textContent("#slideover-body");
+    assert(technical.includes("consult · no repository"), "Technical view lost the machinery line: " + JSON.stringify(technical.trim()));
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "plain: " + JSON.stringify(chip.trim()) + ", no machinery line; Technical view: the line is back";
+  });
+  // **THE ASSIGNMENT ROWS IN THE SAME PANEL, UNDER THE SAME RULE** (hunt 57, finding 11; the
+  // review of 43ab0a0c8). "What you have asked for" said "Getting a workspace ready." and,
+  // after a state's sentence, whatever the back end recorded ("The back end couldn't take it
+  // yet", "Opening the work connection.", "It landed on cc/echo-1 in project."). In the
+  // ordinary view each row is its title and the state's plain sentence; the recorded detail
+  // shows only with Technical view on. The retry sentence is read from `work_host.rs`, so this
+  // check follows the words the back end really writes.
+  await run.check("the assignment rows in Under the hood speak plain words, and the back end's own lines show only in Technical view", async () => {
+    const retry = require("fs").readFileSync(path.join(UI_DIR, "..", "crates", "richos-core", "src", "work_host.rs"), "utf8")
+      .match(/pub const ANSWER_RETRY_DETAIL: &str = "([^"]+)";/)[1];
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript((retry) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [
+      {id: "p", title: "Prepare the report", state: "preparing", detail: "Opening the work connection.",
+       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, awaitingYou: null},
+      {id: "b", title: "Hire a bookkeeper", state: "blocked", detail: retry,
+       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false, awaitingYou: null},
+      {id: "s", title: "The nightly build", state: "settled", detail: "It landed on cc/echo-1 in project.",
+       repositories: [], registeredAtMs: 3, canStop: false, onTheConnection: false, awaitingYou: null},
+    ]}}, retry);
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    await chipWithin(page, "assignment", "on hiring");
+    await page.click(".drill-chip");
+    await page.waitForFunction(() => document.querySelectorAll("#slideover-body .assignment-title").length === 3);
+    const plain = await page.textContent("#slideover-body");
+    for (const words of ["workspace", "back end", "connection", "cc/echo-1", "landed"]) {
+      assert(!plain.toLowerCase().includes(words), "What you have asked for says " + JSON.stringify(words) + ": " + JSON.stringify(plain.trim()));
+    }
+    // The rows are still there, each with its own sentence.
+    for (const sentence of ["Getting ready to start.", "Waiting for your decision.", "Finished."]) {
+      assert(plain.includes(sentence), "a row lost its sentence " + JSON.stringify(sentence) + ": " + JSON.stringify(plain.trim()));
+    }
+    // POSITIVE CONTROL: with Technical view on, every recorded line is back.
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    const technical = await page.textContent("#slideover-body");
+    for (const line of ["Opening the work connection.", retry, "It landed on cc/echo-1 in project."]) {
+      assert(technical.includes(line), "Technical view lost " + JSON.stringify(line) + ": " + JSON.stringify(technical.trim()));
+    }
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "plain: three rows, three plain sentences, no back-end lines; Technical view: all three lines are back";
+  });
+  // **BUT A LINE THAT TELLS HIM WHAT TO DO STAYS IN THE ORDINARY VIEW** (the review of
+  // 25b540804, rv-20261015T113335Z-25b54080-3123). Hiding every recorded line also hid
+  // "Waiting for you to sign in to Claude, in Settings under Claude accounts." under a held job,
+  // which then read only "Written down. Nothing has been prepared yet.", and the long-wait line
+  // that names Stop. The shell marks those rows `forYou` (`work_host.rs`'s
+  // `tells_him_what_to_do`); the sentences are read from `work_host.rs`, so this check follows
+  // the words the back end really writes.
+  await run.check("a line that tells him what to do shows in the ordinary view, and the back end's own lines still do not", async () => {
+    const host = require("fs").readFileSync(path.join(UI_DIR, "..", "crates", "richos-core", "src", "work_host.rs"), "utf8");
+    const constant = (name) => JSON.parse('"' + host.match(new RegExp("pub const " + name + ": &str =\\s*\"([\\s\\S]*?)\";"))[1]
+      .replace(/\\\r?\n\s*/g, "") + '"');
+    const signIn = constant("HELD_FOR_SIGN_IN"), longer = constant("HELPER_TAKING_LONGER_DETAIL");
+    const page = await browser.newPage({viewport: {width:1280, height:900}});
+    const errors = []; page.on("pageerror", e => errors.push(String(e)));
+    await page.addInitScript(({signIn, longer}) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [
+      {id: "h", title: "Prepare the report", state: "registered", detail: signIn, forYou: true,
+       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, held: true, awaitingYou: null},
+      {id: "q", title: "How many invoices are open?", kind: "check", state: "registered", detail: signIn, forYou: true,
+       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false, held: true, awaitingYou: null},
+      {id: "r", title: "Hire a bookkeeper", state: "running", detail: longer, forYou: true,
+       repositories: [], registeredAtMs: 3, canStop: true, onTheConnection: false, awaitingYou: null},
+      {id: "p", title: "The nightly build", state: "preparing", detail: "Opening the work connection.", forYou: false,
+       repositories: [], registeredAtMs: 4, canStop: true, onTheConnection: false, awaitingYou: null},
+    ]}}, {signIn, longer});
+    await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
+    await openThread(page,"hiring");
+    await chipWithin(page, "assignment", "on hiring");
+    await page.click(".drill-chip");
+    await page.waitForFunction(() => document.querySelectorAll("#slideover-body .assignment-title").length === 4);
+    const rows = await page.$$eval("#slideover-body .slide-item", (items) => items.map((n) => n.textContent));
+    const row = (title) => rows.find((text) => text.includes(title)) || "";
+    assert(row("Prepare the report").includes(signIn), "a job held for sign-in hides how to start it: " + JSON.stringify(row("Prepare the report")));
+    assert(row("How many invoices are open?").includes(signIn), "a question held for sign-in hides how to start it: " + JSON.stringify(row("How many invoices are open?")));
+    assert(row("Hire a bookkeeper").includes(longer), "the long wait hides that Stop ends it: " + JSON.stringify(row("Hire a bookkeeper")));
+    // NEGATIVE CONTROL: the back end's own line is still behind Technical view.
+    assert(!row("The nightly build").includes("connection"), "a back-end line shows in the ordinary view: " + JSON.stringify(row("The nightly build")));
+    // Said once, not twice, in Technical view too.
+    await page.evaluate(async () => {
+      await window.RichBridge.invoke("set_techy_default", {enabled: true});
+      await refreshTechy(activeThreadId);
+      renderSlideOver();
+    });
+    const technical = await page.$$eval("#slideover-body .slide-item", (items) => items.map((n) => n.textContent));
+    assertEqual(technical.find((text) => text.includes("Prepare the report")).split(signIn).length - 1, 1, "the sign-in line in Technical view");
+    assert(technical.find((text) => text.includes("The nightly build")).includes("Opening the work connection."), "Technical view lost the back end's line");
+    assertEqual(errors.length,0,"renderer errors"); await page.close();
+    return "ordinary: sign-in on the held job and the held question, the long wait with Stop; the connection line hidden; Technical view: each once";
   });
   // **THE OTHER TWO THINGS THE CHIP IS BUILT FROM, AND THEY WERE NOT BEING SCOPED.**
   //
@@ -124,10 +284,10 @@ async function main() {
     }});
     await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
     await openThread(page,"hiring");
-    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("saved work record"));
+    await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("team job"));
     const one = await page.textContent("#drill-chip-zone");
-    assert(one.includes("1 saved work record"), `the chip reads ${JSON.stringify(one.trim())}`);
-    assert(!one.includes("1 saved work records"), `singular count, plural noun: ${JSON.stringify(one.trim())}`);
+    assert(one.includes("1 team job"), `the chip reads ${JSON.stringify(one.trim())}`);
+    assert(!one.includes("1 team jobs"), `singular count, plural noun: ${JSON.stringify(one.trim())}`);
 
     assertEqual(errors.length,0,"renderer errors"); await page.close();
 
@@ -143,9 +303,9 @@ async function main() {
     }});
     await many.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(many);
     await openThread(many,"hiring");
-    await many.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("saved work record"));
+    await many.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("team job"));
     const two = await many.textContent("#drill-chip-zone");
-    assert(two.includes("2 saved work records"), `two receipts read ${JSON.stringify(two.trim())}`);
+    assert(two.includes("2 team jobs"), `two receipts read ${JSON.stringify(two.trim())}`);
     await many.close();
     return `one receipt reads ${JSON.stringify(one.trim())}; two read ${JSON.stringify(two.trim())}`;
   });
@@ -263,7 +423,7 @@ async function main() {
         }});
         await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
         await openThread(page,"hiring");
-        await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 saved work record"));
+        await page.waitForFunction(() => document.getElementById("drill-chip-zone").textContent.includes("1 team job"));
         await page.click(".drill-chip");
         await page.waitForFunction(() => !document.getElementById("slideover").hidden);
         const m = await page.evaluate(() => {

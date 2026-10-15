@@ -4355,6 +4355,9 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "turnRef": row.instruction_ledger_ref,
                 "state": row.state.as_str(),
                 "detail": row.detail,
+                // **THE DETAIL TELLS HIM WHAT TO DO** (sign in, a helper he may stop, an answer
+                // he owes), so Under the hood shows it without Technical view (hunt 57, finding 11).
+                "forYou": richos_core::work_host::tells_him_what_to_do(&row.detail),
                 // **CLOSED BY AN ANSWER ON HIS TIMELINE, NOT BY WORK THAT FINISHED** — a question
                 // of his, or a task the back end did itself and reported in its own words
                 // (esc-20260927T093052Z-85f3303f). The pane says "it's in your conversation"

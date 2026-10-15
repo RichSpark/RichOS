@@ -183,9 +183,11 @@ async function main() {
     }
     // The record's internal note never reaches him beside a sentence written for him.
     assert(!answered.includes("answered."), "the record's internal detail was shown: " + answered);
-    // POSITIVE CONTROL: a task whose work finished still says so, with what it landed.
+    // POSITIVE CONTROL: a task whose work finished still says so. The branch it landed on is
+    // the back end's line, shown only in Technical view (hunt 57, finding 11; `work-summary.js`
+    // in this directory proves it comes back there).
     const finished = (await rows[1].innerText()).toLowerCase();
-    assert(finished.includes("finished.") && finished.includes("cc/echo-1"), "a finished task lost its sentence: " + finished);
+    assert(finished.includes("finished.") && !finished.includes("cc/echo-1"), "a finished task lost its sentence or names its branch: " + finished);
     assertEqual(errors.length, 0, "renderer errors");
     await page.close();
     return "an answered task reads as answered in his conversation; a finished task still reads as finished";

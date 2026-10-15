@@ -3757,7 +3757,14 @@ async function pollWorkerStatus() {
       savedWork = summary;
     } catch (error) {
       if (!current()) return;
-      savedWork = {items: [], error: String(error)};
+      // **A READ THAT FAILS KEEPS WHAT THIS CONVERSATION LAST READ** (hunt 57, finding 12,
+      // 2026-10-15). `get_work_status` refuses while Rich's session is being started ("Work
+      // status is changing. Please try again.") and while another conversation is working, and
+      // nightly 57 printed that refusal as "Saved work unavailable" under the very first
+      // conversation of a fresh install, where nothing has been saved. `openThread` empties
+      // `savedWork` on every switch, so what is kept is only ever this conversation's own last
+      // reading: nothing at all for a new one. The reason stays for Technical view.
+      savedWork = {items: savedWork.items || [], omitted: savedWork.omitted || 0, error: String(error)};
     }
     // The ASSIGNMENTS he gave — a different thing from the receipts above, and the only
     // surface that can show background work at all. `get_worker_status` returns an empty
@@ -3840,8 +3847,11 @@ function renderDrillChip() {
   quotaWorking = active;
   renderQuotaWorkStatus();
   if (done) parts.push(`${done} done`);
-  if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "saved work record", "saved work records"));
-  if (savedWork.error) parts.push("Saved work unavailable");
+  // "Team jobs", never "saved work records" (hunt 57, finding 11): each saved record is one job
+  // handed to a teammate, and a business owner has no use for the word "record".
+  if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "team job", "team jobs"));
+  // A read that failed is not on this line (hunt 57, finding 12): it keeps the last reading,
+  // and the reason is shown under Technical view in the panel this line opens.
   // THE ASSIGNMENTS, AND THE REASON THEY ARE ON THIS CHIP AT ALL (background-work spec §7's
   // observability note, §7.8). This chip is the only way to open the pane the assignments
   // live in, and every other part of it is fed by `get_worker_status`, which is EMPTY
@@ -3859,7 +3869,7 @@ function renderDrillChip() {
   // failed ... a CEO who reads the first answer and looks away has been told something false."
   // `AssignmentState`'s own doc comments are precise about the difference and `work-summary.js`
   // has always relayed them precisely — `registered` is "Written down. Nothing has been
-  // prepared yet.", `preparing` is "Getting a workspace ready.", `running` is "Running." The
+  // prepared yet.", `preparing` is "Getting ready to start.", `running` is "Running." The
   // chip was the one surface that flattened three states into the strongest of the three.
   //
   // `running` now means what it says on the backend too: it is written once the back end's own
@@ -3957,11 +3967,11 @@ function renderSlideOver() {
     row.textContent = `${marker} ${item.label}${item.state === "paused" ? " · paused" : ""}`;
     slideoverBody.appendChild(row);
   }
-  window.RichWorkSummary.render(savedWork, slideoverBody);
+  window.RichWorkSummary.render(savedWork, slideoverBody, {technical: techyOn()});
   // The assignments, with their own stop control (background-work spec §4.2: "where the
   // work is already visible"). Rendered after the receipts because a receipt is evidence
   // and an assignment is a thing he can still act on.
-  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, answerAssignment);
+  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, answerAssignment, {technical: techyOn()});
 }
 
 /// **His decision on the one step an assignment stopped at** (background-work spec §5.2,
