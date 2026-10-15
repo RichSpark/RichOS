@@ -6543,13 +6543,15 @@ body.home-open {
 .sm-col + .sm-col {
   border-left: 1px solid var(--line-soft);
 }
-/* A NARROW WINDOW, which round 27 does not draw (it is designed at 1440 by 900). Below 1280px
-   wide the panel is under 950px, and three columns no longer hold their rows: measured in
-   WebKit at 1024 by 700 (the app's minimum), the Company select, the Company buttons button and
-   Token spend's figure ran past the third column's edge and "Opus · high effort" overflowed its
-   half of the model row. So there the first two columns keep their places and the third, "Your
-   company and team", runs across the full width under them. */
-@media (max-width: 1279px) {
+/* A NARROW WINDOW, which round 27 does not draw (it is designed at 1440 by 900). Three columns
+   need the middle one wide enough for "Opus · high effort" in half of the model row: measured
+   in WebKit, that half needs 146px, which the column gives from a 1020px panel, i.e. a 1350px
+   window (1366: 148px, fits; 1320 and 1280: the half grew past the gold thumb, which no longer
+   covered the chosen label). At 1024 by 700, the app's minimum, the Company select, the Company
+   buttons button and Token spend's figure also ran past the third column's edge. So below 1360px
+   the first two columns keep their places and the third, "Your company and team", runs across
+   the full width under them. */
+@media (max-width: 1359px) {
   .sm-cols[data-n="3"] {
     grid-template-columns: 1fr 1fr;
   }
@@ -6602,8 +6604,25 @@ body.home-open {
   display: none;
 }
 .sm-col .cx {
+  position: relative;
   margin: 0 -8px;
   padding: 6px 8px 4px;
+}
+/* The explanation tooltip (round 20.2) was 344px wide, hung from "Reviewing now". At 1280px
+   wide this column is 324px, so it ran 37px past the column and the panel clipped it (second
+   review of d3b1c723). In the panel it hangs from the whole Codex row instead and is as wide as
+   the row, up to the round's 344px; `codex-reviews.js` still points its arrow at the info icon from the
+   measured boxes. 8px below the row (4px of the row's padding, then 8px), inside the 14px
+   bridge that lets the pointer cross from the icon into it. */
+.sm-col .cx-who {
+  position: static;
+}
+.sm-col .cx-tip {
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: 344px;
 }
 /* Updates: the slot `updates.js` fills, after the column's last divider. */
 .sm-col .set-updates {
@@ -6664,13 +6683,15 @@ body.home-open {
 }
 
 /* THE FOOT BAND: what is set once (your name, the splash screen) and the floor (Bust a bug,
-   Request a feature), across the panel's three columns.
+   Request a feature), across the panel's three columns. The band itself is the panel's opaque
+   ground and each cell carries the faint wash as a plain translucent color, so the contrast gate
+   can composite it (a gradient is a color it cannot prove).
 
    THE FLOOR STAYS IN VIEW. In a window shorter than the panel's content (the app's smallest is
    1024 by 700) the panel scrolls inside its bound, and this band stays at its bottom edge while
    the columns above it scroll, so Bust a bug, the floor CEO ruling §15 puts on every screen,
-   is in view as the panel comes up. The wash is painted over the panel's own ground, so the
-   band is opaque and nothing changes where the panel is not scrolled. */
+   is in view as the panel comes up. The band is opaque, so nothing scrolling under it shows
+   through, and nothing changes where the panel is not scrolled. */
 .sm-foot {
   position: sticky;
   bottom: 0;
@@ -6678,8 +6699,9 @@ body.home-open {
   display: grid;
   grid-template-columns: 1fr 1.04fr 1.06fr;
   border-top: 1px solid var(--line-soft);
-  background: linear-gradient(var(--tint-weak), var(--tint-weak)), var(--surface);
+  background-color: var(--surface);
   border-radius: 0 0 13px 13px;
+  overflow: hidden;
 }
 .sm-foot[data-n="2"] {
   grid-template-columns: 2.04fr 1.06fr;
@@ -6690,6 +6712,7 @@ body.home-open {
 .sm-foot-cell {
   padding: 10px 22px 12px;
   min-width: 0;
+  background-color: var(--tint-weak);
 }
 .sm-foot-cell + .sm-foot-cell {
   border-left: 1px solid var(--line-soft);

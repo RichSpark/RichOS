@@ -5094,10 +5094,18 @@ function onSettingsOpen() {
 /// choice (round 23), whichever way it closes: the button, Escape, a click outside.
 if (settingsPartsEl) {
   const parts = {};
-  for (const node of Array.from(settingsPartsEl.querySelectorAll(":scope > [data-settings-part]"))) {
-    parts[node.dataset.settingsPart] = node;
+  for (const node of Array.from(settingsPartsEl.children)) {
+    if (node.dataset.settingsPart) parts[node.dataset.settingsPart] = node;
   }
   window.RichSettings.registerPreferences({ parts, onOpen: onSettingsOpen, onClose: commitModelChoice });
+  // Once the panel holds every part, the holder goes, rather than staying in the document as a
+  // hidden panel with nothing in it. The panel is mounted at DOMContentLoaded (settings-button.js
+  // runs before this file and registered its listener first), so that is when the holder empties.
+  const dropEmptyHolder = () => {
+    if (!settingsPartsEl.children.length) settingsPartsEl.remove();
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", dropEmptyHolder);
+  else dropEmptyHolder();
 }
 
 // ---------------------------------------------------------------------------------------
