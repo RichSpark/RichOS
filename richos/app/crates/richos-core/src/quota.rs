@@ -338,12 +338,12 @@ pub struct View {
     pub act_at: BTreeMap<String, f64>,
     /// The rise each speed above was measured over, so the sheet's fast card says round 16's
     /// "took Home's five-hour window from 40% to 71% in 12 minutes" with the same two readings
-    /// the conversation's alert names (`note_speed`).
+    /// the account settings view shows.
     #[serde(default)]
     pub rises: BTreeMap<String, Rise>,
     /// The agents working at the shell's last count (`set_agents_working`), for the same
     /// card's "15 agents reading at once". 0 when none is counted; the card then says the
-    /// rise alone, as the alert does.
+    /// rise alone.
     #[serde(default)]
     pub agents_working: usize,
     /// The last switch between accounts (round 16's card after a switch). `None` with one
@@ -805,15 +805,7 @@ pub struct Service {
     /// are Account 1's, exactly as before; every added account has its own pair here.
     pub accounts: std::sync::Arc<crate::claude_accounts::Accounts>,
     extra: Mutex<BTreeMap<String, AccountReader>>,
-    /// **The high-speed alert** (plan §15 answer 9): written once when the account in use is
-    /// first seen fast, taken once by whoever says it in the conversation.
-    alert: Mutex<Option<String>>,
-    was_fast: std::sync::atomic::AtomicBool,
-    /// Was that alert about the weekly window? The way back names the line the alert named
-    /// (nightly 43 walk, D15).
-    alerted_weekly: std::sync::atomic::AtomicBool,
-    /// Rich's other lines about the quota, said once each at `Digest`: usage back to normal
-    /// (plan answer 11), and every account used up (round 16).
+    /// Notices about work actually being held, delivered once in the conversation.
     notes: Mutex<std::collections::VecDeque<String>>,
     /// Rich's lines about ACCOUNTS (round 18): the one-time suggestion of a second account
     /// (`nudge`) and every account close to its week (`bothNear`), each with its kind, so the
@@ -934,9 +926,6 @@ impl Service {
             refresh_wake: std::sync::Condvar::new(),
             accounts: std::sync::Arc::new(crate::claude_accounts::Accounts::open(data_dir)?),
             extra: Mutex::new(BTreeMap::new()),
-            alert: Mutex::new(None),
-            was_fast: std::sync::atomic::AtomicBool::new(false),
-            alerted_weekly: std::sync::atomic::AtomicBool::new(false),
             notes: Mutex::new(std::collections::VecDeque::new()),
             account_notes: Mutex::new(std::collections::VecDeque::new()),
             was_held: std::sync::atomic::AtomicBool::new(false),
@@ -1078,7 +1067,6 @@ impl Service {
         }
         self.track_tokens();
         self.decide();
-        self.note_speed();
         self.note_held();
         self.note_accounts();
         let _best_effort = self.publish();
@@ -1160,109 +1148,6 @@ impl Service {
         moved
     }
 
-    /// **Detect very high speed once** (plan §15 answer 9, the same detection that moves the
-    /// switch and the pause earlier, `Reading::fast`). The alert is written on the first
-    /// reading that finds the account in use fast, and not again until a reading finds it back
-    /// at normal speed — so one burst is one alert.
-    ///
-    /// **The words are round 16's** (richos-hq `design/mockups/rounds/round-16/`, "Fast
-    /// usage"): what the speed is, that checking is faster now, what will act and at which
-    /// moved point, so it never reaches 100%. Where the mockup states a fact the app measures
-    /// differently, the app's value is said: checking every MINUTE (`FAST_REFRESH_INTERVAL_MS`),
-    /// the agents working at the shell's last count (`set_agents_working`), and the rise
-    /// between the two readings the speed was measured from.
-    /// The way back is said too (plan answer 11): checking every 5 minutes again, the lines back
-    /// at the threshold and 99%.
-    fn note_speed(&self) {
-        let in_use = self.accounts.in_use();
-        let readings = self.readings();
-        let Some(reading) = readings.get(&in_use.id) else { return };
-        let fast = reading.fast();
-        let was = self.was_fast.swap(fast, std::sync::atomic::Ordering::SeqCst);
-        let policy = self.policy.lock().unwrap().clone();
-        let many = self.accounts.count() > 1;
-        if !fast {
-            if was {
-                // The weekly point it moved from: 99, or the test cut-off on the account in use.
-                let week = self.cutoff(&in_use.id).unwrap_or(resets::WEEKLY_THRESHOLD);
-                let weekly = self.alerted_weekly.swap(false, std::sync::atomic::Ordering::SeqCst);
-                let lines = match (many, policy.enabled) {
-                    (true, true) => format!(", and the lines are back at {}% and {week}%", policy.pause_percent),
-                    (true, false) => format!(", and the weekly switch is back at {week}%"),
-                    // One account: the line the alert was about (nightly 43 walk, D15).
-                    (false, true) if weekly => format!(", and the weekly line is back at {week}%"),
-                    (false, true) => format!(", and the line is back at {}%", policy.pause_percent),
-                    (false, false) => String::new(),
-                };
-                self.notes.lock().unwrap().push_back(if reading.interval() == REFRESH_INTERVAL_MS {
-                    format!("Usage is back to normal. I'm checking every 5 minutes again{lines}.")
-                } else {
-                    format!("Usage is back to normal{lines}.")
-                });
-            }
-            return;
-        }
-        if was { return; }
-        let Some((window, per_ms)) = reading.windows.iter()
-            .filter_map(|w| reading.speeds.get(&w.id).map(|s| (w, *s)))
-            .max_by(|a, b| a.1.total_cmp(&b.1)) else { return };
-        let weekly = window.id == "seven_day";
-        let name = if window.id == "five_hour" { "five-hour" } else if weekly { "weekly" } else { window.label.as_str() };
-        let whose = if many { format!("{}'s {name} window", in_use.label) } else { format!("the {name} window") };
-        // The weekly point at normal speed is 99, or the test cut-off on the account it names
-        // (handoff round 1: "pause them at 49%, not 99%" under the cut-off 51).
-        let threshold = if weekly { self.cutoff(&in_use.id).unwrap_or(resets::WEEKLY_THRESHOLD) }
-            else { f64::from(policy.pause_percent) };
-        let act = if weekly { reading.weekly_point(window) } else { reading.act_point(window, threshold) }.floor();
-        let next = self.accounts.next(&readings, policy.line(), crate::util::now_millis()).map(|a| a.label);
-        // What acts on this window: the weekly switch whenever there is a second account; at
-        // the five-hour line the chosen verb, only while the automatic switch is on.
-        let verb = if weekly && many {
-            Some(next.map_or("hold them".to_string(), |n| format!("switch to {n}")))
-        } else if !policy.enabled {
-            None
-        } else if many && self.accounts.at_threshold() == crate::claude_accounts::AtThreshold::Switch {
-            Some(next.map_or("pause them".to_string(), |n| format!("switch to {n}")))
-        } else {
-            Some("pause them".to_string())
-        };
-        // Round 16: "15 agents reading at once took the five-hour window from 40% to 71% in 12
-        // minutes." The count is the agents working at the last count and the rise is the two
-        // readings the speed was measured from; with no agent counted the sentence says the
-        // rise alone.
-        let what = match reading.rises.get(&window.id) {
-            Some(rise) => {
-                let minutes = ((rise.ms + 30_000) / 60_000).max(1); // to the nearest minute
-                let span = format!("from {}% to {}% in {minutes} {}", rise.from.floor(), rise.to.floor(),
-                    if minutes == 1 { "minute" } else { "minutes" });
-                match self.agents_working.load(std::sync::atomic::Ordering::SeqCst) {
-                    0 => format!("{whose} went {span}"),
-                    1 => format!("1 agent took {whose} {span}"),
-                    n => format!("{n} agents reading at once took {whose} {span}"),
-                }
-            }
-            None => format!("{whose} is filling about {}% a minute and is at {}%",
-                (per_ms * 60_000.0).round().max(1.0), window.used_percent.floor()),
-        };
-        let what = format!("Usage is climbing fast: {what}. I'm checking every minute now");
-        // **A point already passed is not said as a point to come** (nightly 43 walk, D15): with
-        // no floor on the weekly point (`weekly_point`), the moved point can be at or below the
-        // figure the window is already at, and the app acts on it at once. The test is the
-        // app's own (`reaches_weekly`, `reaches`), so the words and the action agree.
-        let passed = if weekly { reading.reaches_weekly(window) } else { reading.reaches(window, threshold) };
-        self.alerted_weekly.store(weekly, std::sync::atomic::Ordering::SeqCst);
-        *self.alert.lock().unwrap() = Some(match verb {
-            Some(_) if passed && weekly =>
-                format!("{what}, and the team is being told to hand over now, so it never reaches 100%."),
-            Some(verb) if passed => format!("{what} and will {verb} now, so it never reaches 100%."),
-            Some(verb) => {
-                let not = if act < threshold { format!(", not {threshold}%") } else { String::new() };
-                format!("{what} and will {verb} at {act}%{not}, so it never reaches 100%.")
-            }
-            None => format!("{what}. Automatic pause is off in Settings, so nothing acts before it reaches 100%."),
-        });
-    }
-
     /// **Every account used up** (round 16): said once when the hold begins, naming the account
     /// that comes back first, why, and in how long. Said again only after the hold has ended.
     fn note_held(&self) {
@@ -1295,7 +1180,7 @@ impl Service {
 
     /// **How many of Rich's agents are working**, as the desktop shell last counted them (the
     /// provider's own launch rows with no end observed, `app_workers::status`). Said in the
-    /// speed alert and the every-account-used-up line; 0 leaves the count out.
+    /// settings view and the every-account-used-up line; 0 leaves the count out.
     pub fn set_agents_working(&self, count: usize) {
         self.agents_working.store(count, std::sync::atomic::Ordering::SeqCst);
     }
@@ -1434,11 +1319,6 @@ impl Service {
         let _best_effort = fs::write(&path, b"");
         let at: Vec<u64> = text.lines().filter_map(|l| l.trim().parse().ok()).collect();
         self.started(&at);
-    }
-
-    /// The high-speed alert, taken once by whoever says it in the conversation.
-    pub fn take_alert(&self) -> Option<String> {
-        self.alert.lock().unwrap().take()
     }
 
     fn decide(&self) {
@@ -1657,7 +1537,6 @@ impl Service {
         } else if moved {
             if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
         }
-        self.note_speed();
         self.note_held();
         self.note_accounts();
         self.resets.refresh(bin, force || changed);
@@ -2357,47 +2236,21 @@ pub(crate) mod tests {
         assert_eq!(service.view().leaving, vec!["1".to_string()], "published with one account too");
     }
 
-    /// **Handoff round 1 (2026-10-07), under the test cut-off `1:51`:** the fast-use alert
-    /// said Rich would "pause them at 49%, not 99%". The weekly point at normal speed was 51,
-    /// never 99, on that account. The alert names the point it moved from, so under the cut-off
-    /// it is 51. The week is at 30%, under the moved point 34 (at 45% the point is already
-    /// passed and the alert says the handover is now, D15 below).
     #[test]
-    fn under_the_test_cut_off_the_fast_use_alert_names_the_cut_off_as_the_point_it_moved_from() {
+    fn faster_weekly_checks_keep_the_cutoff_and_do_not_queue_conversation_updates() {
         let dir = Scratch::new();
         let mut service = Service::open(dir.path()).unwrap();
         service.weekly_cutoff = parse_weekly_cutoff("1:51");
         let mut fast = live(30.);
         fast.speeds.insert("seven_day".into(), 3. / 60_000.);
         *service.snapshot.lock().unwrap() = fast;
-        service.note_speed();
-        let alert = service.take_alert().expect("3 points a minute is fast");
-        assert!(alert.contains(", not 51%"), "{alert}");
-        assert!(!alert.contains("99%"), "{alert}");
-    }
-
-    /// **Nightly 43 walk, D15:** one account under the cut-off `1:51`, already at 51% of the
-    /// week and climbing 3 points a minute. The moved point is 51 - (ceil(3 x 1 + 3 x 5) - 1) =
-    /// 34, below the 51% the account is at, so the alert said "will pause them at 34%, not
-    /// 51%", a point already passed. It says the team is being told to hand over now. Back at
-    /// normal speed, the way back named the five-hour line ("the line is back at 93%"); it
-    /// names the weekly line the alert was about, at the point it moved from.
-    #[test]
-    fn a_weekly_point_already_passed_is_said_as_handing_over_now_and_the_way_back_names_the_weekly_line() {
-        let dir = Scratch::new();
-        let mut service = Service::open(dir.path()).unwrap();
-        service.weekly_cutoff = parse_weekly_cutoff("1:51");
-        let mut fast = live(51.);
-        fast.speeds.insert("seven_day".into(), 3. / 60_000.);
-        *service.snapshot.lock().unwrap() = fast;
-        assert_eq!(service.view().act_at["seven_day"], 34., "the moved point, below 51%");
-        service.note_speed();
-        assert_eq!(service.take_alert().as_deref(), Some(
-            "Usage is climbing fast: the weekly window is filling about 3% a minute and is at 51%. I'm checking every minute now, and the team is being told to hand over now, so it never reaches 100%."));
+        assert_eq!(service.view().act_at["seven_day"], 34.);
+        assert_eq!(service.view().refresh_interval_ms, FAST_REFRESH_INTERVAL_MS);
+        assert!(service.take_notes().is_empty());
         service.snapshot.lock().unwrap().speeds.clear();
-        service.note_speed();
-        assert_eq!(service.take_notes(), vec![
-            "Usage is back to normal. I'm checking every 5 minutes again, and the weekly line is back at 51%.".to_string()]);
+        assert_eq!(service.view().act_at["seven_day"], 51.);
+        assert_eq!(service.view().refresh_interval_ms, REFRESH_INTERVAL_MS);
+        assert!(service.take_notes().is_empty());
     }
 
     /// **Plan §15 answer 11: when the speed comes back down, everything resets.** After the
@@ -2694,45 +2547,8 @@ for line in sys.stdin:
         assert_eq!(when_long(now + 3 * 3_600_000, None, now), "in 3 h", "before the webview has said its offset");
     }
 
-    /// **Round 16's lines about speed, said once each.** One account at 4 points a minute (the
-    /// 2026-09-29 run's measured speed): the alert says the speed, the minute cadence, the verb
-    /// and the point. Back under the fast speed, the way back is said once: checking every 5
-    /// minutes again and the line back at 93%. With the pause off, the alert says nothing acts.
     #[test]
-    fn the_speed_alert_and_the_way_back_are_said_once_each_in_round_16s_words() {
-        for enabled in [true, false] {
-            let dir = Scratch::new();
-            let service = Service::open(dir.path()).unwrap();
-            service.set_policy(Policy { enabled, pause_percent: 93 }).unwrap();
-            let now = crate::util::now_millis();
-            service.snapshot.lock().unwrap().accept(five_hour_at(50.), now - 120_000);
-            service.snapshot.lock().unwrap().accept(five_hour_at(54.), now - 60_000);
-            service.note_speed();
-            let alert = service.take_alert();
-            assert_eq!(alert.as_deref(), Some(if enabled {
-                "Usage is climbing fast: the five-hour window went from 50% to 54% in 1 minute. I'm checking every minute now and will pause them at 93%, so it never reaches 100%."
-            } else {
-                "Usage is climbing fast: the five-hour window went from 50% to 54% in 1 minute. I'm checking every minute now. Automatic pause is off in Settings, so nothing acts before it reaches 100%."
-            }));
-            service.note_speed();
-            assert_eq!(service.take_alert(), None, "one burst is one alert");
-            service.snapshot.lock().unwrap().accept(five_hour_at(54.3), now);
-            service.note_speed();
-            assert_eq!(service.take_notes(), vec![if enabled {
-                "Usage is back to normal. I'm checking every 5 minutes again, and the line is back at 93%."
-            } else {
-                "Usage is back to normal. I'm checking every 5 minutes again."
-            }.to_string()]);
-            service.note_speed();
-            assert!(service.take_notes().is_empty(), "said once");
-        }
-    }
-
-    /// Round 16's fast alert with the agents counted: "15 agents reading at once took the
-    /// five-hour window from 40% to 71% in 12 minutes", here from the app's own two readings
-    /// 12 minutes apart (31 points / 12 min = 2.6 a minute, fast) and the shell's count.
-    #[test]
-    fn the_speed_alert_names_the_agents_working_and_the_rise_it_measured() {
+    fn fast_usage_stays_in_the_settings_view_with_the_measured_rise_and_worker_count() {
         let dir = Scratch::new();
         let service = Service::open(dir.path()).unwrap();
         service.set_policy(Policy { enabled: true, pause_percent: 93 }).unwrap();
@@ -2740,16 +2556,11 @@ for line in sys.stdin:
         let now = crate::util::now_millis();
         service.snapshot.lock().unwrap().accept(five_hour_at(40.), now - 13 * 60_000);
         service.snapshot.lock().unwrap().accept(five_hour_at(71.), now - 60_000);
-        service.note_speed();
-        assert_eq!(service.take_alert().as_deref(), Some(
-            "Usage is climbing fast: 15 agents reading at once took the five-hour window from 40% to 71% in 12 minutes. I'm checking every minute now and will pause them at 93%, so it never reaches 100%."));
-        // The sheet's fast card says the same rise and count, so the view carries both.
         let view = service.view();
+        assert_eq!(view.refresh_interval_ms, FAST_REFRESH_INTERVAL_MS);
         assert_eq!(view.agents_working, 15);
         assert_eq!(view.rises.get("five_hour"), Some(&Rise { from: 40., to: 71., ms: 12 * 60_000 }));
-        let json = serde_json::to_value(&view).unwrap();
-        assert_eq!(json["agentsWorking"], 15);
-        assert_eq!(json["rises"]["five_hour"]["from"], 40.);
+        assert!(service.take_notes().is_empty());
     }
 
     /// Clock times as round 16 writes them (`fmtWhen`), at the webview's offset, rounded to
