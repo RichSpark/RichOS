@@ -1510,6 +1510,7 @@ fn send_message(
     // his phone before the spine is free.
     pressed: Option<bool>,
 ) -> Result<Vec<Message>, String> {
+    let _user_priority = state.control.prioritize_user_input();
     let pressed = pressed == Some(true);
     // ===================================================================================
     // HOW LONG HE WAITED BEFORE HIS TURN EVEN STARTED — and why this line exists
@@ -4450,20 +4451,34 @@ fn say_work_results(app: &AppHandle, engine_state: &Path, thread_id: &str) {
     }
     let app = app.clone();
     let (engine_state, thread_id) = (engine_state.to_path_buf(), thread_id.to_string());
-    std::thread::spawn(move || loop {
-        if let Some(state) = app.try_state::<AppState>() {
+    std::thread::spawn(move || {
+      let mut retry_delay = std::time::Duration::from_secs(1);
+      loop {
+        let retry = if let Some(state) = app.try_state::<AppState>() {
             let mut spine = take_the_spine(&state.spine);
             let written = spine.say_work_results(&engine_state, &thread_id);
+            let retry = spine.has_pending_work_results(&engine_state, &thread_id).unwrap_or_else(|error| {
+                eprintln!("[richos] pending report recovery: {error}");
+                true
+            });
             drop(spine);
             tell_work_results(&app, &thread_id, written);
-        }
+            retry
+        } else { false };
         let mut pending = waiting.lock().unwrap();
         if pending.get(&thread_id) == Some(&true) {
             pending.insert(thread_id.clone(), false);
+            retry_delay = std::time::Duration::from_secs(1);
+        } else if retry {
+            drop(pending);
+            // No UI event is required for recovery, and the conversation lock is free.
+            std::thread::sleep(retry_delay);
+            retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(30));
         } else {
             pending.remove(&thread_id);
             break;
         }
+      }
     });
 }
 
@@ -4923,6 +4938,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                 return;
             }
             let state = submit_app.state::<AppState>();
+            let _user_priority = state.control.prioritize_user_input();
             let Some(spine) = take_the_spine_or_give_up(&state.spine) else { return };
             // HIS WHOLE THOUGHT IS ONE REQUEST, even after a wait here: earlier work held the
             // spine, he went on talking meanwhile, and his next turn already carries these words.

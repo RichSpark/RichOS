@@ -631,8 +631,12 @@ impl UnwrapErrTurn for Result<String, richos_core::spine::SpineError> {
 fn a_jobs_result_is_written_into_the_conversation_once_and_is_there_after_a_relaunch() {
     use richos_core::assignment::{self, NoticeKind, Registration};
     struct ReportDesk(MockCognition);
+    struct ImmediateCancel;
+    impl richos_core::steering::TurnCancel for ImmediateCancel { fn cancel(&self) -> bool { false } }
+
     impl Cognition for ReportDesk {
         fn session_id(&self) -> &str { self.0.session_id() }
+        fn cancel_handle(&self) -> Option<std::sync::Arc<dyn richos_core::steering::TurnCancel>> { Some(Arc::new(ImmediateCancel)) }
         fn reprime(&mut self, text: &str, sink: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
             self.0.reprime(text, sink)
         }
@@ -735,4 +739,84 @@ fn go_on_a_proposal_is_interpreted_by_rich_before_any_reply() {
     let again = spine.submit_prompt("Go.", Source::Text).unwrap();
     assert_eq!(spine.ledger().turn(&again).unwrap().assistant_text, "Go where?", "a go on anything else is the model's");
     std::fs::remove_file(&path).unwrap();
+}
+
+
+#[test]
+fn a_user_message_preempts_an_offscreen_report_and_the_report_survives_for_retry() {
+    use richos_core::{assignment::{self, NoticeKind, Registration}, steering::{TurnCancel, TurnControl}};
+    use std::sync::{mpsc, atomic::{AtomicUsize, Ordering}};
+    use std::time::Duration;
+    struct Cancel(mpsc::Sender<()>);
+    impl TurnCancel for Cancel {
+        fn cancel(&self) -> bool { self.0.send(()).is_ok() }
+    }
+    struct Desk {
+        entered: mpsc::Sender<()>, canceled: mpsc::Receiver<()>,
+        cancel: Arc<Cancel>, attempts: Arc<AtomicUsize>,
+    }
+    impl Cognition for Desk {
+        fn session_id(&self) -> &str { "report-priority" }
+        fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> { Some(self.cancel.clone()) }
+        fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+        fn prompt(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            on(TurnItem::Text { seq: 0, text: "Here is your quick answer." });
+            Ok("end_turn".into())
+        }
+        fn prompt_read_only(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                on(TurnItem::Text { seq: 0, text: "INTERNAL PARTIAL REPORT" });
+                self.entered.send(()).unwrap();
+                // load-bound: hang guard only; channel cancellation and durable replies decide correctness, never elapsed time.
+                self.canceled.recv_timeout(Duration::from_secs(5)).unwrap();
+                return Ok("end_turn".into()); // A completion racing cancellation must still yield.
+            }
+            on(TurnItem::Text { seq: 0, text: "The work is complete." });
+            Ok("end_turn".into())
+        }
+    }
+    let (path, ledger) = tmp_ledger("report-priority");
+    let state = path.with_extension("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let control = TurnControl::open(state.join("intake.jsonl")).unwrap();
+    let mut spine = support::spine(ledger);
+    spine.set_turn_control(control.clone());
+    let report_thread = spine.create_thread("Background", &femcboost()).unwrap();
+    let user_thread = spine.create_thread("Current conversation", &femcboost()).unwrap();
+    spine.switch_thread(&user_thread).unwrap();
+    let receipt = assignment::register(&state, &Registration {
+        entity_id: "femcboost".into(), thread_id: report_thread.clone(), obligation_id: "work-report".into(),
+        instruction_ledger_ref: format!("ledger:{report_thread}:request"), instruction_sha256: "a".repeat(64),
+        title: "Check the market".into(), repositories: Vec::new(), needs_screen: false,
+    }).unwrap();
+    assignment::raise_notice(&state, "femcboost", &report_thread, &receipt.id, NoticeKind::Answer, "Stu's report").unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (cancel_tx, cancel_rx) = mpsc::channel();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    spine.attach_lease(Box::new(Desk {
+        entered: entered_tx, canceled: cancel_rx, cancel: Arc::new(Cancel(cancel_tx)), attempts: attempts.clone(),
+    }));
+    let spine = Arc::new(Mutex::new(spine));
+    let worker = {
+        let spine = spine.clone(); let state = state.clone(); let thread = report_thread.clone();
+        std::thread::spawn(move || spine.lock().unwrap().say_work_results(&state, &thread))
+    };
+    // load-bound: hang guard for fixture rendezvous; the actual report-start event establishes ordering.
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let user = control.prioritize_user_input();
+    control.submit_from_desk(&user_thread, Some(femcboost()), "A quick question").unwrap();
+    assert!(worker.join().unwrap().is_err(), "the interrupted report must remain unpublished");
+    let mut spine = spine.lock().unwrap();
+    assert!(spine.has_pending_work_results(&state, &report_thread).unwrap());
+    assert!(spine.messages(&report_thread).unwrap().is_empty(), "partial report text leaked");
+    assert!(control.stop_claim().is_none(), "a new message is not a user Stop");
+    spine.poll_intake().unwrap();
+    assert_eq!(spine.messages(&user_thread).unwrap().last().unwrap().text, "Here is your quick answer.");
+    drop(user);
+    assert_eq!(spine.say_work_results(&state, &report_thread).unwrap(), ["The work is complete."]);
+    assert!(!spine.has_pending_work_results(&state, &report_thread).unwrap());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    drop(spine);
+    std::fs::remove_dir_all(state).unwrap();
+    std::fs::remove_file(path).unwrap();
 }

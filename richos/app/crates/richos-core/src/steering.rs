@@ -61,6 +61,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SteeringError {
@@ -840,7 +841,14 @@ pub enum StopOutcome {
     },
 }
 
+struct ReportRead {
+    turn_id: String,
+    interrupted: bool,
+}
+
 struct Inner {
+    report: Mutex<Option<ReportRead>>,
+    user_waiters: AtomicUsize,
     intake: Mutex<Option<IntakeLog>>,
     active: Mutex<Option<ActiveTurn>>,
     stop: Mutex<Option<StopClaim>>,
@@ -887,6 +895,27 @@ pub struct TurnControl {
     inner: Arc<Inner>,
 }
 
+/// Holds priority while user input waits for or uses the conversation spine.
+#[must_use = "hold the guard while user input waits for the conversation"]
+pub struct UserInputPriority(TurnControl);
+impl Drop for UserInputPriority {
+    fn drop(&mut self) { self.0.inner.user_waiters.fetch_sub(1, Ordering::SeqCst); }
+}
+
+/// A background read can be interrupted without recording a user Stop or touching Stu.
+pub struct ReportReadGuard { control: TurnControl, turn_id: String }
+impl Drop for ReportReadGuard {
+    fn drop(&mut self) {
+        let mut report = self.control.inner.report.lock().unwrap();
+        if report.as_ref().is_some_and(|read| read.turn_id == self.turn_id) {
+            if let Some(handle) = self.control.inner.cancel.lock().unwrap().as_ref() {
+                handle.end_operation();
+            }
+            *report = None;
+        }
+    }
+}
+
 impl std::fmt::Debug for TurnControl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TurnControl").field("active", &self.active_turn()).finish_non_exhaustive()
@@ -899,6 +928,8 @@ impl TurnControl {
         let log = IntakeLog::open(path)?;
         Ok(TurnControl {
             inner: Arc::new(Inner {
+                report: Mutex::new(None),
+                user_waiters: AtomicUsize::new(0),
                 intake: Mutex::new(Some(log)),
                 active: Mutex::new(None),
                 stop: Mutex::new(None),
@@ -916,6 +947,8 @@ impl TurnControl {
     pub fn detached() -> Self {
         TurnControl {
             inner: Arc::new(Inner {
+                report: Mutex::new(None),
+                user_waiters: AtomicUsize::new(0),
                 intake: Mutex::new(None),
                 active: Mutex::new(None),
                 stop: Mutex::new(None),
@@ -924,6 +957,36 @@ impl TurnControl {
                 priming: Mutex::new(None),
             }),
         }
+    }
+
+    pub fn prioritize_user_input(&self) -> UserInputPriority {
+        self.inner.user_waiters.fetch_add(1, Ordering::SeqCst);
+        self.interrupt_report();
+        UserInputPriority(self.clone())
+    }
+
+    fn interrupt_report(&self) {
+        let mut report = self.inner.report.lock().unwrap();
+        if let Some(read) = report.as_mut().filter(|read| !read.interrupted) {
+            read.interrupted = true;
+            if let Some(handle) = self.inner.cancel.lock().unwrap().as_ref() { handle.cancel(); }
+        }
+    }
+
+    pub fn begin_report_read(&self, turn_id: &str) -> Option<ReportReadGuard> {
+        let active = self.inner.active.lock().unwrap();
+        if active.is_some() { return None; }
+        let mut report = self.inner.report.lock().unwrap();
+        if report.is_some() || self.inner.user_waiters.load(Ordering::SeqCst) > 0
+            || !self.pending_intake().is_empty() { return None; }
+        if let Some(handle) = self.inner.cancel.lock().unwrap().as_ref() { handle.begin_operation(); }
+        *report = Some(ReportRead { turn_id: turn_id.to_string(), interrupted: false });
+        Some(ReportReadGuard { control: self.clone(), turn_id: turn_id.to_string() })
+    }
+
+    pub fn report_interrupted(&self, turn_id: &str) -> bool {
+        self.inner.report.lock().unwrap().as_ref()
+            .is_some_and(|read| read.turn_id == turn_id && read.interrupted)
     }
 
     pub fn is_durable(&self) -> bool {
@@ -966,10 +1029,12 @@ impl TurnControl {
 
     pub fn set_cancel(&self, cancel: Option<Arc<dyn TurnCancel>>) {
         let active = self.inner.active.lock().unwrap();
-        if let Some(turn) = active.as_ref() {
-            if let Some(handle) = cancel.as_ref() {
+        let report = self.inner.report.lock().unwrap();
+        if let Some(handle) = cancel.as_ref() {
+            if active.is_some() || report.is_some() {
                 handle.begin_operation();
-                if self.stop_claim_for(&turn.turn_id).is_some() { handle.cancel(); }
+                if active.as_ref().is_some_and(|turn| self.stop_claim_for(&turn.turn_id).is_some())
+                    || report.as_ref().is_some_and(|read| read.interrupted) { handle.cancel(); }
             }
         }
         *self.inner.cancel.lock().unwrap() = cancel;
@@ -1106,7 +1171,10 @@ impl TurnControl {
     ) -> Result<IntakeRecord, SteeringError> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-        log.channel_message_from(thread_id, entity_id, text, channel, client_id, voice_note)
+        let record = log.channel_message_from(thread_id, entity_id, text, channel, client_id, voice_note)?;
+        drop(guard);
+        self.interrupt_report();
+        Ok(record)
     }
 
     /// **The DESK's road in, and it is the same road for the same reason** — the one the
@@ -1138,7 +1206,10 @@ impl TurnControl {
     ) -> Result<IntakeRecord, SteeringError> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-        log.desk_message(thread_id, entity_id, text)
+        let record = log.desk_message(thread_id, entity_id, text)?;
+        drop(guard);
+        self.interrupt_report();
+        Ok(record)
     }
 
     // --- the pre-prime window (CEO §55) -------------------------------------------------
@@ -1301,6 +1372,67 @@ mod tests {
             thread_id: "thr_1".into(),
             entity_id: None,
             started_at: Some(1_000),
+        }
+    }
+
+    #[test]
+    fn user_priority_prevents_a_report_start_and_never_cancels_a_user_turn() {
+        let ctl = TurnControl::detached();
+        let calls = Arc::new(Mutex::new(0));
+        ctl.set_cancel(Some(Arc::new(RecordingCancel(calls.clone(), true))));
+        let user = ctl.prioritize_user_input();
+        assert!(ctl.begin_report_read("report").is_none());
+        assert_eq!(*calls.lock().unwrap(), 0);
+        drop(user);
+        ctl.begin_turn(active());
+        assert!(ctl.begin_report_read("report").is_none());
+        let user = ctl.prioritize_user_input();
+        assert_eq!(*calls.lock().unwrap(), 0, "ordinary conversation turns keep their own stop policy");
+        drop(user);
+        ctl.end_turn("turn_1");
+        let report = ctl.begin_report_read("report").unwrap();
+        let user = ctl.prioritize_user_input();
+        assert!(ctl.report_interrupted("report"));
+        assert_eq!(*calls.lock().unwrap(), 1);
+        assert!(ctl.stop_claim().is_none(), "priority is not a user Stop");
+        drop(report);
+        drop(user);
+        assert!(ctl.begin_report_read("next-report").is_some());
+    }
+
+    #[test]
+    fn durable_desk_and_phone_input_interrupt_reports_and_follow_a_replacement_lease() {
+        struct ReadsInput(PathBuf);
+        impl TurnCancel for ReadsInput {
+            fn cancel(&self) -> bool {
+                let text = std::fs::read_to_string(&self.0).unwrap();
+                assert!(text.lines().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .any(|row| row["text"] == "quick question"));
+                true
+            }
+        }
+        for channel in ["desk", "phone"] {
+            let path = tmp(channel);
+            let ctl = TurnControl::open(&path).unwrap();
+            ctl.set_cancel(Some(Arc::new(ReadsInput(path.clone()))));
+            let report = ctl.begin_report_read("report").unwrap();
+            let record = if channel == "desk" {
+                ctl.submit_from_desk("thread", None, "quick question").unwrap()
+            } else {
+                ctl.submit_from_channel("thread", None, "quick question", channel).unwrap()
+            };
+            assert!(ctl.report_interrupted("report"));
+            assert!(ctl.stop_claim().is_none());
+            let replacement = Arc::new(Mutex::new(0));
+            ctl.set_cancel(Some(Arc::new(RecordingCancel(replacement.clone(), true))));
+            assert_eq!(*replacement.lock().unwrap(), 1, "preparation must not lose the interrupt on lease replacement");
+            drop(report);
+            ctl.set_cancel(Some(Arc::new(RecordingCancel(replacement.clone(), true))));
+            assert_eq!(*replacement.lock().unwrap(), 1, "a finished report must not interrupt a successor");
+            assert!(ctl.begin_report_read("next-report").is_none(), "queued user input has priority");
+            ctl.mark_drained(record.id()).unwrap();
+            assert!(ctl.begin_report_read("next-report").is_some());
+            std::fs::remove_file(path).unwrap();
         }
     }
 

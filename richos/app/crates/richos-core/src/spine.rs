@@ -2076,6 +2076,13 @@ impl Spine {
         Ok(turn_id)
     }
 
+    pub fn has_pending_work_results(&self, engine_state: &std::path::Path, thread_id: &str) -> Result<bool, SpineError> {
+        let binding = self.ledger.thread_binding(thread_id)?;
+        crate::assignment::pending_notices_of(engine_state, binding.entity_id().as_str(), thread_id, |kind| kind.is_result())
+            .map(|notices| notices.iter().any(|notice| !notice.text.trim().is_empty()))
+            .map_err(|error| SpineError::Assignments(error.to_string()))
+    }
+
     /// Stu reports to Rich. Only Rich's reply is published and spoken. A report remains
     /// pending on any failure; its stable delivery identity prevents replay after a crash
     /// between publishing the reply and acknowledging the report.
@@ -2089,7 +2096,6 @@ impl Spine {
             let delivery = notice.delivery_id(&entity, thread_id);
             let delivered = (|| -> Result<Option<String>, SpineError> {
                 if self.ledger.turn(&delivery).is_some() { return Ok(None); }
-                self.prepare_request(&binding)?;
                 let prompt = serde_json::json!({"from": if notice.kind == crate::assignment::NoticeKind::Answer {"stu"} else {"work_host"}, "work_report": {
                     "request": notice.title, "kind": notice.kind, "report": notice.text,
                     "assignment_state": crate::assignment::read(engine_state, &entity, thread_id, &notice.assignment_id)
@@ -4499,11 +4505,30 @@ impl Spine {
     fn request_internal_reply(&mut self, binding: &ThreadBinding, prompt: &str, read_only: bool) -> Result<String, SpineError> {
         let thread_id = binding.thread_id();
         let turn_id = self.ledger.record_prompt_received(binding, prompt, Source::Internal)?;
+        let control = self.control.clone();
+        let _report_read = if read_only {
+            let Some(guard) = control.begin_report_read(&turn_id) else {
+                self.ledger.interrupt_turn(&turn_id, "Report deferred to user input")?;
+                return Err(SpineError::Assignments("Report deferred to user input".into()));
+            };
+            Some(guard)
+        } else { None };
         if read_only {
-            if let Err(error) = self.lease.as_mut().ok_or(SpineError::NoLease)?
-                .prepare_work_turn(binding, &turn_id, Source::Internal, prompt, &mut |_| {}) {
+            let prepared = (|| -> Result<(), SpineError> {
+                self.prepare_request(binding)?;
+                if control.report_interrupted(&turn_id) {
+                    return Err(SpineError::Assignments("Report yielded to user input".into()));
+                }
+                let lease = self.lease.as_mut().ok_or(SpineError::NoLease)?;
+                if lease.cancel_handle().is_none() {
+                    return Err(SpineError::Assignments("Report authoring needs an interruptible conversation lease".into()));
+                }
+                lease.prepare_work_turn(binding, &turn_id, Source::Internal, prompt, &mut |_| {})?;
+                Ok(())
+            })();
+            if let Err(error) = prepared {
                 self.ledger.interrupt_turn(&turn_id, &error.to_string())?;
-                return Err(error.into());
+                return Err(error);
             }
         }
 
@@ -4531,6 +4556,10 @@ impl Spine {
             if read_only { lease.prompt_read_only(prompt, &mut on_item) } else { lease.prompt_context_only(prompt, &mut on_item) }
         };
 
+        if read_only && control.report_interrupted(&turn_id) {
+            self.ledger.interrupt_turn(&turn_id, "Report yielded to user input")?;
+            return Err(SpineError::Assignments("Report yielded to user input".into()));
+        }
         if let Some(error) = persist_error {
             self.ledger.interrupt_turn(&turn_id, &error.to_string())?;
             return Err(error.into());
