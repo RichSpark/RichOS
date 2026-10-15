@@ -723,7 +723,7 @@ fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
     let go = spine.submit_prompt("Go.", Source::Text).unwrap();
     let first = chunks.lock().unwrap().iter().find(|(turn, _, _)| *turn == go).cloned();
     let (_, words, asked) = first.expect("nothing was said on his go");
-    assert_eq!(words, "On it!");
+    assert_eq!(words, "On it! ", "said with the space that lets voice mode speak it at once");
     assert_eq!(asked, 1, "\"On it!\" waited for the model to be asked his go");
     assert_eq!(spine.ledger().turn(&go).unwrap().assistant_text, "On it!", "said once, not twice");
     assert_eq!(prompts.lock().unwrap().last().map(String::as_str), Some("Go."), "the model still gets his go and hires");

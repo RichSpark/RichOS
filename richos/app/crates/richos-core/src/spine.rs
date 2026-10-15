@@ -2916,12 +2916,16 @@ impl Spine {
                 return false;
             }
         };
+        // The chunk carries a space after the words: voice mode speaks `rich://chunk` through
+        // a sentence chunker that holds a full stop until it sees past it, so a bare "On it!"
+        // was spoken only when the turn completed. The window draws from the live surfaces
+        // below and the ledger keeps the words as they are.
         if let Some(observer) = self.observer.as_deref() {
             observer.on_event(&StreamEvent::Chunk {
                 thread_id: binding.thread_id().to_string(),
                 turn_id: turn_id.to_string(),
                 seq: 0,
-                text_delta: GO_RECEIPT.to_string(),
+                text_delta: format!("{GO_RECEIPT} "),
                 at,
             });
         }
