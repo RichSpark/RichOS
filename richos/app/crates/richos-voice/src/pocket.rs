@@ -122,6 +122,17 @@ pub fn verify_file(path: &Path, pin: &PinnedFile) -> Result<(), String> {
     Ok(())
 }
 
+/// `fault` with every pinned file name and every web address taken out, so an install fault
+/// written to the log names no voice (a file name such as `peter_yearsley.wav`, or a download
+/// address that carries one, would).
+pub fn fault_without_names(fault: &str) -> String {
+    let mut out = fault.split(' ').map(|w| if w.contains("://") { "(address)" } else { w }).collect::<Vec<_>>().join(" ");
+    for f in FILES {
+        out = out.replace(f.name, "a file");
+    }
+    out
+}
+
 /// The pinned files not yet in `dir` with the right size. Cheap (one stat each): the full hash is
 /// taken when a file is installed and again by [`PocketSynth::load`] before anything is read.
 pub fn missing_files(dir: &Path) -> Vec<PinnedFile> {
@@ -844,34 +855,43 @@ impl SpeechSynth for PocketSynth {
     }
 
     fn synthesize_stream(&self, text: &str, target_rate: u32, _scratch_dir: &Path, emit: &mut dyn FnMut(&[f32]) -> bool) -> Result<(), TtsError> {
-        let started = Instant::now();
+        // Silent: the caller ([`crate::tts::RichVoice`]) prints the timing figures, naming no voice.
         let mut converter = wav::RateConverter::new(SAMPLE_RATE, target_rate);
-        let mut first = true;
-        let mut samples = 0;
         self.engine.lock().map_err(|_| TtsError::Io("Pocket TTS engine lock poisoned".into()))?
             .synthesize_stream(text, &mut |audio| {
                 let mut pcm = Vec::new();
                 converter.push(audio, &mut pcm);
                 if pcm.is_empty() { return true; }
-                if first {
-                    first = false;
-                    eprintln!("[richos-voice] Pocket TTS first PCM in {} ms", started.elapsed().as_millis());
-                }
-                samples += pcm.len();
                 emit(&pcm)
             }).map_err(TtsError::Decode)?;
-        eprintln!("[richos-voice] tts: {:.2} s of speech streamed in {} ms by {}", samples as f64 / target_rate as f64, started.elapsed().as_millis(), self.voice_label());
         Ok(())
     }
 
     fn voice_label(&self) -> String {
-        format!("Pocket TTS {MODEL_LANGUAGE} INT8 · Peter Yearsley · {} threads", threads())
+        // Rich's voice, by that name and no other (CEO, 2026-10-15).
+        "Rich's voice".into()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_install_fault_names_no_voice_file_and_no_address() {
+        let wav = FILES.iter().find(|f| f.name == "peter_yearsley.wav").expect("the voice recording is pinned");
+        for fault in [
+            format!("error sending request for url ({})", wav.url),
+            format!("{} hashes to 00ff, not the pinned {}", wav.name, wav.sha256),
+            format!("{}: no answer from the server", wav.name),
+        ] {
+            let clean = fault_without_names(&fault).to_lowercase();
+            for name in ["peter_yearsley", "yearsley", "pocket", "huggingface", "://"] {
+                assert!(!clean.contains(name), "{clean:?} still carries {name:?}");
+            }
+        }
+        assert_eq!(fault_without_names("no answer from the server"), "no answer from the server");
+    }
 
     /// Real pinned inference, silent. Opt in with RICHOS_POCKET_TEST_DIR and --ignored.
     #[test]

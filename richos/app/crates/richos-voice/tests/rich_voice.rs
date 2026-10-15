@@ -17,8 +17,8 @@ fn voice_mode_speaks_through_rich_voice_not_say() {
     let src = include_str!("../src/controller.rs");
     let production = src.split("\n#[cfg(test)]").next().unwrap();
     assert!(
-        production.contains("let synth: Arc<dyn SpeechSynth> = Arc::new(RichVoice::new());"),
-        "voice mode must speak through RichVoice (Pocket TTS, Peter Yearsley)"
+        production.contains("let synth: Arc<dyn SpeechSynth> = Arc::new(RichVoice::waiting_while("),
+        "voice mode must speak through RichVoice (Pocket TTS)"
     );
     assert!(!production.contains("Arc::new(MacSay::new())"), "voice mode builds `say` directly again");
 }
@@ -33,13 +33,14 @@ fn rich_speaks_through_pocket_tts_as_peter_yearsley() {
     assert!(pocket::missing_files(&dir).is_empty(), "bundle incomplete at {}", dir.display());
 
     // Waits for the FACT (loaded, or failed), never for a clock: the load is a background thread.
+    tts::warm_rich_voice(); // what the app does when it is up
     let voice = RichVoice::new();
     while !voice.pocket_ready() {
         assert!(!tts::rich_voice_load_failed(), "Pocket TTS failed to load (sha256 or graphs); see stderr");
         std::thread::sleep(Duration::from_millis(50));
     }
     let label = voice.voice_label();
-    assert!(label.contains("Pocket TTS") && label.contains("Peter Yearsley"), "speaking as: {label}");
+    assert_eq!(label, "Rich's voice");
 
     let scratch = std::env::temp_dir().join(format!("richos-rich-voice-{}", std::process::id()));
     let speech = voice

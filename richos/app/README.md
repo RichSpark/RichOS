@@ -693,6 +693,9 @@ richos/app/
     tests/rich_voice.rs      2 tests: voice mode speaks through RichVoice, and with the pinned
                               bundle installed a sentence comes out of Pocket TTS as Peter
                               Yearsley (ignored, never ok, without the bundle)
+    tests/rich_voice_only.rs 1 test: no other voice speaks for Rich or is named for him; a
+                              sentence waits while his voice is installed, and the voice the
+                              install brings speaks it
     tests/self_voice_replay.rs 18 tests replaying the candidate-.5 walk (and the near-end onset control): the shipped rule submitted
                              2.224 s of Rich's own answer as the CEO's message; the audible window
                              (queued OR owed OR within the measured device hold, taint re-evaluated
@@ -1247,7 +1250,7 @@ cargo test -p richos-core                       # 2020 tests + 5 doc-tests (2016
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 407 tests (406 direct, 1 ignored; 4 live-device tests also ignored without a device)
+cargo test -p richos-voice                      # 409 tests (408 direct, 1 ignored; 4 live-device tests also ignored without a device)
 #     The 327 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test

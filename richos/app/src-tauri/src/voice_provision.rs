@@ -528,20 +528,24 @@ static RICH_VOICE_FETCH: AtomicBool = AtomicBool::new(false);
 /// A transfer that delivers no byte for this long has stalled; the attempt ends and is retried.
 const RICH_VOICE_STALL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// **Fetch Rich's voice in the background if any of its pinned files is missing.** Returns at
-/// once and never blocks a screen: until the files are in and verified Rich speaks with `say`.
-/// Loading them is `richos_voice::tts::RichVoice`'s, when a sentence is next spoken, so a Mac
-/// that never talks never holds the model in memory. Called when voice is found ready on this
-/// Mac, when voice mode starts, when a phone reply is spoken, and after first-run setup has
-/// installed the speech models.
+/// **Make Rich's voice ready, in the background: install it if any pinned file is missing, then
+/// load it, and load it at once when it is already here.** Returns at once and never blocks a
+/// screen; a sentence Rich says meanwhile waits for it (no other voice). Loaded when the app is
+/// up, never first at a Talk press (CEO, 2026-10-15). Called when voice is found ready on this
+/// Mac (the window asks at launch), after first-run setup has installed the speech models, when
+/// voice mode starts and when a phone reply is spoken; the last two find it loaded already.
 pub fn fetch_rich_voice_in_background() {
     let Some(dir) = richos_voice::pocket::bundle_dir() else { return };
     if richos_voice::pocket::missing_files(&dir).is_empty() {
+        richos_voice::tts::warm_rich_voice();
         return;
     }
     if RICH_VOICE_FETCH.swap(true, Ordering::SeqCst) {
         return;
     }
+    // Before the thread, so a voice session started right after this call already sees the
+    // install and waits for Rich's voice instead of finding it missing.
+    richos_voice::tts::rich_voice_installing();
     std::thread::spawn(move || {
         let done = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -549,10 +553,14 @@ pub fn fetch_rich_voice_in_background() {
             .map_err(|e| e.to_string())
             .and_then(|rt| rt.block_on(fetch_rich_voice(&dir)));
         RICH_VOICE_FETCH.store(false, Ordering::SeqCst);
-        match done {
-            Ok(()) => eprintln!("[richos] rich voice: Pocket TTS and the Peter Yearsley voice are installed and verified"),
-            Err(e) => eprintln!("[richos] rich voice: not installed this time, speaking with say: {e}"),
+        // Installed in silence (CEO, 2026-10-15: no log lines about the voice); only a fault is
+        // written, because a failed install with nothing on record cannot be diagnosed.
+        if let Err(e) = done {
+            eprintln!("[richos] speech synthesis install failed this time: {e}");
         }
+        richos_voice::tts::rich_voice_install_ended();
+        // Installed: load it now, so it is ready before anyone presses Talk.
+        richos_voice::tts::warm_rich_voice();
     });
 }
 
@@ -561,11 +569,14 @@ async fn fetch_rich_voice(dir: &std::path::Path) -> Result<(), String> {
     let missing = richos_voice::pocket::missing_files(dir);
     let need: u64 = missing.iter().map(|f| f.bytes).sum();
     if let Some(finding) = provision::disk_preflight(provision::free_bytes_for(dir), need.saturating_mul(11).div_ceil(10)) {
-        return Err(finding.describe("Rich's voice", false));
+        return Err(finding.describe("speech synthesis", false));
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    eprintln!("[richos] rich voice: fetching {} file(s), {} bytes, into {}", missing.len(), need, dir.display());
-    for pin in missing {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create the speech synthesis folder: {e}"))?;
+    // A fault is logged by the file's place in the list, never its name or download address:
+    // no log line names the voice.
+    let total = missing.len();
+    for (n, pin) in missing.into_iter().enumerate() {
+        let n = n + 1;
         let mut last = String::new();
         for attempt in 1..=provision::MAX_ATTEMPTS {
             match fetch_rich_voice_file(dir, &pin).await {
@@ -574,13 +585,14 @@ async fn fetch_rich_voice(dir: &std::path::Path) -> Result<(), String> {
                     break;
                 }
                 Err(e) => {
-                    eprintln!("[richos] rich voice: {} attempt {attempt} failed: {e}", pin.name);
+                    let e = richos_voice::pocket::fault_without_names(&e);
+                    eprintln!("[richos] speech synthesis install: file {n} of {total} attempt {attempt} failed: {e}");
                     last = e;
                 }
             }
         }
         if !last.is_empty() {
-            return Err(format!("{}: {last}", pin.name));
+            return Err(format!("file {n} of {total}: {last}"));
         }
     }
     Ok(())
