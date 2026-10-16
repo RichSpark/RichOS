@@ -1208,6 +1208,20 @@ def prepare(scope_path, scope, args):
             raise
 
 
+def workspace_observation(path):
+    result = {"uncommitted_files": None, "head_commit": None}
+    try:
+        if not Path(path).is_dir():
+            raise ValueError("workspace is not available")
+        result["uncommitted_files"] = git(path, "status", "--porcelain", "--untracked-files=all")[:12000]
+        commit, at, subject, files = git(path, "log", "-1", "--format=%H%x00%ct%x00%s%x00", "--name-status").split("\0", 3)
+        result["head_commit"] = {"sha": commit, "committed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(at))),
+                                 "subject": subject[:2000], "changed_files": files.strip()[:12000]}
+    except Exception as error:
+        result["workspace_problem"] = str(error)[-2000:]
+    return result
+
+
 def view(record, include_payload=False):
     result = {key:value for key,value in record.items() if key not in ("payload","ecs_pending","ecs_pending_projection","ecs_projection")}
     if include_payload:
@@ -1219,15 +1233,12 @@ def view(record, include_payload=False):
         try:
             target = target_workspace(record)
             result["retained_target"] = target["path"]
-            if Path(target["path"]).is_dir():
-                result["uncommitted_files"] = git(target["path"], "status", "--porcelain", "--untracked-files=all")[:12000]
+            result.update(workspace_observation(target["path"]))
             if len(request_repos(record)) > 1:
                 # Part 4, finding 2: every repository's workspace, not only the primary's.
                 result["retained_targets"] = {}
                 for target_repo, each in target_workspaces(record).items():
-                    result["retained_targets"][target_repo] = {"path": each["path"], "uncommitted_files": (
-                        git(each["path"], "status", "--porcelain", "--untracked-files=all")[:12000]
-                        if Path(each["path"]).is_dir() else None)}
+                    result["retained_targets"][target_repo] = {"path": each["path"], **workspace_observation(each["path"])}
         except Exception as error:
             result["workspace_problem"] = str(error)[-2000:]
     return result
@@ -2202,7 +2213,8 @@ def inspect_receipts(scope, args, read_only=False):
     offset, limit = args.get("offset", 0), args.get("limit", 20)
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError("invalid inspection page")
-    with locked(scope) as root:
+    # Receipt writers already publish complete files with atomic replace.
+    with (contextlib.nullcontext(folder(scope)) if read_only else locked(scope)) as root:
         obligation = carried_obligation(scope)
         rows = [(path, record) for path, record in receipts(root)
                 if obligation is None or record["request"]["obligation_id"] == obligation]
