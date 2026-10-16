@@ -1173,10 +1173,7 @@ impl WorkHost {
         let Some(input)=input else {return};
         let scope=self.message_scope(binding);
         let result=(|| {
-            let Some((message,through))=crate::session_tools::pending_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
-            // A new execution request gets its own prepared turn and original authority.
-            // Corrections and observations still reach the live session immediately.
-            if message.handoff {return Ok(())}
+            let Some((message,through))=crate::session_tools::pending_live_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
             use sha2::Digest;
             let digest=sha2::Sha256::digest(format!("{}\0{}\0{through}",scope.entity_id,scope.thread_id));
             let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
@@ -5732,7 +5729,14 @@ mod tests {
         crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"New execution request"})).unwrap();
         h.host.wake_messages(&h.binding);
         assert!(matches!(rx.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"new work must wait for a prepared turn, not replace current authority through live input");
-        assert!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().0.handoff);
+        let queued=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Correction to the current job: do not change the date"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: a queued new job must not block a quick correction to current work");
+        assert!(text.contains("do not change the date"));taken();
+        assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1,queued,"the unprepared job was lost behind the correction receipt");
+        crate::session_tools::acknowledge(&scope,"stu",queued).unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"an accepted live correction was replayed after restart");
         drop(running);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 

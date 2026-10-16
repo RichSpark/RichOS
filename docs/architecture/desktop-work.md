@@ -186,6 +186,10 @@ fsync, so simultaneous calls or retries return the same saved handoff. A new use
 turn with identical words remains distinct. Assignment records cannot dispatch it.
 New execution requests wait for Stu's next prepared turn; corrections and reports
 still use live input. Neither agent is the other's provider teammate.
+A queued execution request does not block later live communication. The existing
+inbox cursor retains out-of-order acceptance receipts and advances only across
+consecutively accepted frames. A correction can be accepted while an earlier new
+job stays queued, and restarting cannot lose the job or replay the correction.
 
 Recovered deliveries retain the initial user turn's ledger reference for request
 authority and execution handoff. The continuation's own turn ID still identifies
