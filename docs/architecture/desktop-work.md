@@ -129,8 +129,8 @@ Actual worker starts update their assignment's observed state. Inspection never
 manufactures a new activity timestamp or replaces Stu's own progress report.
 
 A user Stop is recorded durably before cancellation. For independent Stu, the host
-serializes that fact and its launch snapshot through the existing receipt lock,
-then sends the existing native per-task stop control only to that work's observed
+persists revocation before waiting for the existing receipt lock, takes its launch
+snapshot under that lock, then sends the existing native per-task stop control only to that work's observed
 tool calls on their owning session. Missing delivery or ending evidence stays
 unknown. The Stop fact prevents subsequent preparation, dispatch and worker actions
 for that obligation. Stu receives typed user-control facts through the same inbox;

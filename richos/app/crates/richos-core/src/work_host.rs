@@ -4475,9 +4475,10 @@ impl WorkHost {
         if !record.state.is_open() {
             return Err("That assignment has already stopped.".into());
         }
+        // Revocation must outlive a crash even while dispatch holds its receipt lock.
+        let stopped = assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
         let operator = self.operator.lock().unwrap().clone();
         if let Some(operator) = operator {
-            assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
             return operator.stop(entity, thread, id);
         }
         let peer = self.backend(thread).and_then(|backend| {
@@ -4487,7 +4488,6 @@ impl WorkHost {
         });
         if let Some((session, stopper)) = peer {
             let dispatch_lock = crate::work_status::lock_receipts(&self.state, entity, thread)?;
-            let stopped = assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
             let trail = crate::work_status::trail(&self.state, entity, thread, &record.obligation_id)?;
             drop(dispatch_lock);
             let outcomes: Vec<CommandStop> = trail.stop_targets.iter().map(|(owner, tool)| {
@@ -4508,7 +4508,6 @@ impl WorkHost {
             }
             return Ok(());
         }
-        assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
         // **Stopping one assignment takes its question off his screen** (spec §5.4: one
         // grant, one seat, one queue entry, all released together and none of anybody
         // else's). A request left waiting for an assignment that has stopped is a question
@@ -10705,6 +10704,32 @@ mod tests {
         assert!(h.bound.lock().unwrap().is_empty(),"Stu was rebound to a formal assignment");
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    #[test]
+    fn independent_stu_stop_is_durable_while_a_dispatch_writer_is_busy() {
+        struct Noop;
+        impl TurnCancel for Noop { fn cancel(&self) -> bool { false } }
+        let h = harness(0);
+        let receipt = assignment::register(&h.state, &registration(&h)).unwrap();
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().peer_stopper = Some(("independent-stu".into(), Arc::new(Noop)));
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+        let writer = crate::work_status::lock_receipts(&h.state, "depot", "thread-one").unwrap();
+        let host = h.host.clone();
+        let id = receipt.id.clone();
+        let stop = std::thread::spawn(move || host.stop_assignment("depot", "thread-one", &id));
+        // The existing bounded wait is a hang guard. The verdict requires the
+        // actual Stop fact while the dispatch lock is still held, never elapsed time.
+        let durable = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| until(
+            "the Stop fact waited for the dispatch writer", || assignment::read(
+                &h.state, "depot", "thread-one", &receipt.id).unwrap().user_stop_requested_at_ms.is_some()
+        ))).is_ok();
+        drop(writer);
+        stop.join().unwrap().unwrap();
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+        assert!(durable, "the user's Stop must be durable before waiting for a busy dispatch writer");
     }
 
     #[test]

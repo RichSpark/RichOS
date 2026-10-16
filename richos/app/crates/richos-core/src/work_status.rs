@@ -19,9 +19,9 @@ pub struct WorkItem {
     pub detail: String,
 }
 
-/// The existing engine receipt lock, shared with dispatch. Stop records revocation
-/// and snapshots native call identities while holding it, then releases it before
-/// waiting for provider control replies.
+/// The existing engine receipt lock, shared with dispatch. Stop persists revocation
+/// before waiting for it, snapshots native call identities while holding it and
+/// releases it before waiting for provider control replies.
 pub fn lock_receipts(state: &Path, entity: &str, thread: &str) -> Result<std::fs::File, String> {
     let identity = serde_json::to_vec(&[entity, thread]).map_err(|e| e.to_string())?;
     let parent = state.join("work-receipts");
