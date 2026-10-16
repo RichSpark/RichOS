@@ -303,11 +303,14 @@ impl GitHub {
 /// (`bug::writer_input`): the prompt, and the window's picture when there is one. Bounded by
 /// [`WRITE_DEADLINE`]; the child is killed when it outlasts it (CEO §54: whatever this app
 /// starts, it ends).
-fn ask_rich(bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str) -> Result<String, String> {
+fn ask_rich(app: &AppHandle, bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str) -> Result<String, String> {
+    let plugin = app.state::<crate::AppState>().engine_dir.lock().unwrap().join("app");
+    richos_core::skills::verify_present(&plugin)
+        .map_err(|(path, why)| format!("Rich's instructions are unavailable at {}: {why}", path.display()))?;
     let mut command = std::process::Command::new(bin);
     command
         .args(bug::writer_args())
-        .arg("--plugin-dir").arg(richos_core::skills::ensure_for_install().map_err(|e|e.to_string())?)
+        .arg("--plugin-dir").arg(&plugin)
         .args(["--agent", "rich-skills:rich"])
         .env_remove("CLAUDECODE")
         .current_dir(cwd)
@@ -461,8 +464,8 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
         let prompt = bug::writer_prompt_for(post, &answer, &screen, &bugs.version, scrubber.terms(), picture.is_some());
         let input = bug::writer_input(&prompt, picture.as_ref());
         // Rich writes it, the scanner goes over it, and Rich gets the last word (CEO §115).
-        let last = |prompt: &str| ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
-        let check = bug::checked_for(post, ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &input), &screen, looked, &bugs.version, &scrubber, last);
+        let last = |prompt: &str| ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
+        let check = bug::checked_for(post, ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &input), &screen, looked, &bugs.version, &scrubber, last);
         let write_up = bugs.outbox(post).keep_unless_checked(&answer, &screen, check, now_ms()).map_err(|e| {
             eprintln!("[richos] bug report: the report could not be kept on this Mac ({e})");
             "I couldn't check the report or save it on this Mac, so nothing was written up or sent. Tell me again and I'll try once more.".to_string()
@@ -517,7 +520,7 @@ pub async fn bug_report_change(
     off_the_ipc_threads(move || {
         let headings: Vec<String> = sheet.sections.iter().map(|s| s.heading.clone()).collect();
         let input = bug::writer_input(&bug::change_prompt_for(post.unwrap_or_default(), &sheet, &said), None);
-        let change = ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &input)
+        let change = ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &input)
             .and_then(|raw| bug::parse_change(&raw))
             .and_then(|c| if headings.contains(&c.section) { Ok(c) } else { Err(format!("no section {:?}", c.section)) })
             .map_err(|why| {
@@ -592,7 +595,7 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
         let report = report.filter(|r| !r.is_empty()).unwrap_or_else(bug::report_id);
         let app_terms = scrubber.terms().to_vec();
         let check = bugs.checks().get(&report).cloned();
-        let last = |prompt: &str| ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
+        let last = |prompt: &str| ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
         match bug::at_send_for(post, &sheet, check.as_ref(), &app_terms, last) {
             bug::AtSend::Send(public) => {
                 let github = GitHub::from_env();
@@ -745,13 +748,13 @@ fn check_once(app: &AppHandle, bugs: &Arc<BugReports>, post: bug::Post) {
     };
     let (scrubber, (bin, folder), _) = read_state(app);
     // The scanner first, Rich's last word on what it made (CEO §115).
-    let last = |prompt: &str| ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
+    let last = |prompt: &str| ask_rich(app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
     let checked = outbox.check_due(now_ms(), |u| match &u.edited {
         // Words the user changed that he could not check at Send: those, scanned, are his.
         Some(edited) => bug::checked_edit_for(post, edited, scrubber.terms(), last),
         None => {
             let prompt = bug::writer_prompt_for(post, &u.answer, &u.screen, &bugs.version, scrubber.terms(), false);
-            let rich = ask_rich(&bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(&prompt, None));
+            let rich = ask_rich(app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(&prompt, None));
             bug::checked_for(post, rich, &u.screen, !bug::screen_words(&u.screen.content).is_empty(), &bugs.version, &scrubber, last)
         }
     });

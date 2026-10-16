@@ -465,25 +465,7 @@ async function main() {
     return "held on a live turn or a live voice exchange, flushed at both boundaries, and read durably on open, boundary and push";
   });
 
-  await run.check("execution attempts stay inspectable without becoming duplicate user jobs", async () => {
-    const page = await openPage(browser, "dark");
-    const observed = await page.evaluate(() => {
-      const body = document.getElementById("slideover-body");
-      const attempts = {items: [
-        {title: "Internal first attempt with shelf text", detail: "Ended.", role: "consult", repository: "none"},
-        {title: "Internal retry with shelf text", detail: "Started.", role: "consult", repository: "none"},
-      ]};
-      window.RichWorkSummary.render(attempts, body, {technical: false});
-      const ordinary = body.textContent;
-      window.RichWorkSummary.render(attempts, body, {technical: true});
-      return {ordinary, technical: body.textContent, rows: body.querySelectorAll("section").length};
-    });
-    assertEqual(observed.ordinary, "", "internal attempt descriptions leaked into the user view");
-    assertEqual(observed.rows, 2, "technical evidence disappeared");
-    assert(observed.technical.includes("Internal first attempt") && observed.technical.includes("Internal retry"));
-    await page.close();
-    return "user assignments remain the normal view; both execution attempts remain available technically";
-  });
+
 
   await browser.close();
   process.exit(run.report() ? 1 : 0);

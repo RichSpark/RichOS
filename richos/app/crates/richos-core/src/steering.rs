@@ -756,6 +756,13 @@ impl IntakeLog {
 /// stop control runs on a different thread from the turn, and by construction it can never
 /// take the lock the turn is holding.
 pub trait TurnCancel: Send + Sync {
+    /// Queue ordinary input on this same session without interrupting it. The
+    /// callback runs only when the provider identifies the input as consumed.
+    /// False means this provider has no live input path; leave the inbox pending.
+    fn send_input(&self, _id: &str, _text: &str, _taken: Box<dyn FnOnce() + Send>) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// Scope cancellation across preparation and the gaps between wire prompts.
     fn begin_operation(&self) {}
     fn end_operation(&self) {}

@@ -3974,7 +3974,7 @@ function renderSlideOver() {
   for (const record of held) {
     if (!items.some(item => item.agent_id === record.id)) items.push({label: record.name, state: "paused"});
   }
-  for (const item of techyOn() ? items : []) {
+  for (const item of items) {
     const row = document.createElement("div");
     row.className = "slide-item slide-item--" + item.state;
     // `unknown` is a real state from `worker_status.rs` (an open run whose host liveness

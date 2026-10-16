@@ -296,10 +296,13 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     assert!(!args.iter().any(|arg|arg.contains("bypassPermissions")||arg.contains("dangerously-skip")));
     let settings:serde_json::Value=serde_json::from_str(&args[args.iter().position(|arg|arg=="--settings").unwrap()+1]).unwrap();
     assert_eq!(settings["permissions"]["blockReadsOutsideWorkingDirectories"],true);
-    assert_eq!(settings["sandbox"]["filesystem"]["allowRead"],serde_json::json!([profile.runtime.root]));
-    assert_eq!(settings["sandbox"]["filesystem"]["denyWrite"],serde_json::json!([profile.runtime.root]));
+    assert!(settings["sandbox"].is_null(), "the app must preserve the baseline sandbox policy");
     assert_eq!(settings["autoMode"]["classifyAllShell"],true);
-    assert_eq!(settings["autoMode"]["environment"],serde_json::json!(["$defaults"]));
+    let trusted=settings["autoMode"]["environment"].as_array().unwrap();
+    assert_eq!(trusted[0],"$defaults");
+    assert!(trusted[1].as_str().unwrap().contains(a.to_str().unwrap()));
+    assert!(trusted[2].as_str().unwrap().contains(profile.target_state().to_str().unwrap()));
+    assert!(trusted[3].as_str().unwrap().contains(files.to_str().unwrap()));
     assert_eq!(settings["autoMode"]["soft_deny"],serde_json::json!(["$defaults"]));
     assert!(!settings.to_string().contains(b.to_str().unwrap()));
 }

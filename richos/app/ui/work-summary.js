@@ -7,7 +7,6 @@
   // `opts.technical` is `main.js`'s `techyOn()`.
   function render(summary, parent, opts) {
     const technical = !!(opts && opts.technical);
-    if (!technical) return; // Execution receipts belong to the technical view; assignments represent user requests.
     // A read that failed (hunt 57, finding 12) keeps the rows last read, and says why only in
     // Technical view: "Work status is changing" while Rich gets ready is nothing a business
     // owner needs to hear.

@@ -236,6 +236,8 @@ enum CommandWait {
 }
 
 struct Inner {
+    peer_input: Option<Arc<dyn TurnCancel>>,
+    peer_active_through: Option<u64>,
     // Includes pre-lease waits and final receipt writes, not just a live lease.
     processing: bool,
     /// Jobs whose background commands outlived their wait ([`Watched`]).
@@ -348,6 +350,8 @@ impl Backend {
                 watching: Vec::new(),
                 live: None,
                 cancel: None,
+                peer_input: None,
+                peer_active_through: None,
                 lease_session: None,
                 stopped: Vec::new(),
                 screen_wait: None,
@@ -1153,12 +1157,48 @@ impl WorkHost {
         }
     }
 
-    /// Notify the standing operator that its durable inbox changed.
+    /// The existing filesystem watcher wakes the runner and forwards corrections
+    /// through its current session, including while that runner is inside a job.
     pub fn wake_messages(self:&Arc<Self>,binding:&ThreadBinding) {
-        if let Some(backend)=self.backend_for(binding.thread_id()) {
-            backend.inner.lock().unwrap().binding=Some(binding.clone());
-            backend.wake.notify_all();
+        let Some(backend)=self.backend_for(binding.thread_id()) else {return};
+        let (input, after, session) = {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.binding=Some(binding.clone());
+            if inner.closing {return}
+            (inner.peer_input.clone(), inner.peer_active_through.unwrap_or(0), inner.lease_session.clone())
+        };
+        backend.wake.notify_all();
+        let Some(input)=input else {return};
+        let scope=self.message_scope(binding);
+        let result=(|| {
+            let Some((message,through))=crate::session_tools::pending_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
+            use sha2::Digest;
+            let digest=sha2::Sha256::digest(format!("{}\0{}\0{through}",scope.entity_id,scope.thread_id));
+            let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
+            let text=serde_json::to_string(&message).map_err(|e|e.to_string())?;
+            let host=Arc::downgrade(self);
+            let binding=binding.clone();
+            if let Some(session)=session {
+                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),&session)?;
+            }
+            input.send_input(&id,&text,Box::new(move || {
+                if let Err(error)=crate::session_tools::acknowledge(&scope,"stu",through) {
+                    eprintln!("[richos] operator input was taken but its receipt remains pending: {error}");
+                    return;
+                }
+                if let Some(host)=host.upgrade() {host.wake_messages(&binding)}
+            }))?;
+            Ok(())
+        })();
+        if let Err(error)=result {eprintln!("[richos] operator live input remains pending: {error}");}
+    }
+
+    fn publish_peer_input(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding) {
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.peer_input=inner.cancel.clone();
         }
+        self.wake_messages(binding);
     }
 
     fn message_scope(&self,binding:&ThreadBinding)->crate::status_tools::StatusToolScope {
@@ -1172,15 +1212,24 @@ impl WorkHost {
         let mut guard=backend.lease.lock().unwrap();
         let lease=guard.as_mut().ok_or("The operator connection closed")?;
         lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
-        backend.inner.lock().unwrap().cancel=lease.cancel_handle();
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.cancel=lease.cancel_handle();
+            inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
+        }
         let session=lease.session_id().to_string();
         crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
         let mut diagnostics=String::new();
+        let mut published=false;
         let result=lease.prompt(&serde_json::to_string(message).map_err(|e|e.to_string())?,&mut |item| {
+            if !published {published=true;self.publish_peer_input(backend,binding);}
             if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
         });
         let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
-        backend.inner.lock().unwrap().cancel=None;
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.peer_input=None;inner.peer_active_through=None;inner.cancel=None;
+        }
         if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
         let reason=result.map_err(|e|e.to_string())?;
         if reason != "end_turn" {
@@ -1545,11 +1594,17 @@ impl WorkHost {
             // the question is whether anything at all is still registered anywhere — a
             // second conversation's running assignment must keep the app alive just as
             // this one's would.
-            backend.inner.lock().unwrap().processing = false;
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.peer_input=None;inner.peer_active_through=None;inner.processing=false;
+            }
             if self.open_assignments().map(|open| open.is_empty()).unwrap_or(false) {
                 self.notifier.nothing_left_to_do();
             }
-            backend.inner.lock().unwrap().processing = false;
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.peer_input=None;inner.peer_active_through=None;inner.processing=false;
+            }
             backend.wake.notify_all();
         }
     }
@@ -2012,7 +2067,9 @@ impl WorkHost {
                 // Set by anything the turn did between two pieces of its prose (a tool call
                 // above all): the words after it are a new notice ([`add_streamed_words`]).
                 let mut between_notices = false;
+                let mut published=false;
                 let sent = lease.prompt(text, &mut |item: TurnItem| {
+                    if !published {published=true;self.publish_peer_input(backend,binding);}
                     *items += 1;
                     // The back end has his answers: its first item of the turn that carried them.
                     if let Some(ids) = to_take.borrow_mut().take() {
@@ -5599,6 +5656,48 @@ mod tests {
         signed_out: Arc<AtomicBool>,
         fill: Arc<Mutex<FillFirst>>,
         team: Arc<Mutex<TeamScript>>,
+    }
+
+    #[test]
+    fn a_correction_reaches_stus_live_input_while_his_job_owns_the_lease() {
+        type Delivery=(String,String,Box<dyn FnOnce()+Send>);
+        struct Input(std::sync::mpsc::Sender<Delivery>);
+        impl TurnCancel for Input {
+            fn cancel(&self)->bool {panic!("a correction must not cancel the job")}
+            fn send_input(&self,id:&str,text:&str,taken:Box<dyn FnOnce()+Send>)->Result<bool,String> {
+                self.0.send((id.into(),text.into(),taken)).unwrap();Ok(true)
+            }
+        }
+        let h=harness(0);
+        let scope=h.host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Original request"})).unwrap();
+        let original=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        let backend=Backend::new();
+        let (tx,rx)=std::sync::mpsc::channel();
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.processing=true;inner.binding=Some(h.binding.clone());
+            inner.peer_active_through=Some(original);
+            inner.peer_input=Some(Arc::new(Input(tx)));inner.lease_session=Some("same-stu".into());
+        }
+        h.host.backends.lock().unwrap().insert(h.binding.thread_id().into(),backend.clone());
+        let running=backend.lease.lock().unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Correction: keep the existing release date"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: correction must reach input while the job still holds the lease");
+        assert!(text.contains("keep the existing release date"));
+        assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1,original,"writing is not consumption");
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Then retain the current team"})).unwrap();
+        taken();
+        let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: consumption forwards the next durable message");
+        assert!(text.contains("retain the current team"));taken();
+        crate::session_tools::acknowledge(&scope,"stu",original).unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"finishing the original turn must not rewind the consumed cursor");
+        assert!(backend.inner.lock().unwrap().processing,"the running job was not ended to deliver input");
+        assert!(h.host.open_assignments().unwrap().is_empty());
+        drop(running);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]

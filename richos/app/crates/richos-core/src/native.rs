@@ -1230,6 +1230,7 @@ pub struct NativeClient {
 /// starting value is `NotYetReported` and a derived default would be whichever variant happens
 /// to be declared first.
 struct ReaderState {
+    input_taken: std::collections::HashMap<String, Box<dyn FnOnce() + Send>>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1451,6 +1452,7 @@ impl ReaderState {
 impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
+            input_taken: std::collections::HashMap::new(),
             question_scope: None,
             permissions: None,
             work_tools_loaded: InitFact::NotYetReported,
@@ -2212,6 +2214,13 @@ impl NativeClient {
         if ty == "command_lifecycle" {
             let command = msg.get("command_uuid").and_then(|v| v.as_str()).unwrap_or("");
             let lifecycle = msg.get("state").and_then(|v| v.as_str()).unwrap_or("");
+            let taken = if matches!(lifecycle, "started" | "completed") {
+                state.lock().unwrap().input_taken.remove(command)
+            } else { None };
+            if let Some(taken) = taken { taken(); }
+            if matches!(lifecycle, "cancelled" | "discarded" | "refused") { // dialect-exempt: vendor wire states
+                state.lock().unwrap().input_taken.remove(command);
+            }
             let mut terminal: Option<&'static str> = None;
             {
                 let mut guard = current.lock().unwrap();
@@ -2936,6 +2945,24 @@ const STOP_TASK_REPLY_WAIT: Duration = Duration::from_secs(5);
 const STOP_TASK_ENDING_WAIT: Duration = Duration::from_secs(5);
 
 impl TurnCancel for NativeCancelHandle {
+    fn send_input(&self, id: &str, text: &str, taken: Box<dyn FnOnce() + Send>) -> Result<bool, String> {
+        if self.reader_closed.load(Ordering::SeqCst) || self.operation_cancel.lock().unwrap().requested {
+            return Ok(false);
+        }
+        {
+            let mut state = self.reader_state.lock().unwrap();
+            if state.input_taken.contains_key(id) { return Ok(true); }
+            state.input_taken.insert(id.to_string(), taken);
+        }
+        let message = json!({"type":"user", "uuid":id,
+            "message":{"role":"user", "content":[{"type":"text", "text":text}]}});
+        if let Err(error) = NativeClient::write_line(&self.stdin, &message) {
+            self.reader_state.lock().unwrap().input_taken.remove(id);
+            return Err(error.to_string());
+        }
+        Ok(true)
+    }
+
     fn shutdown(&self) {
         let _ = self.cancel();
         self.process_fence.kill();
@@ -4489,6 +4516,50 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn","session_id":"s1","mode
         let per_minute = service.view().speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.;
         assert!((per_minute - 3.).abs() < 1e-9,
             "modelUsage says 3,000,000 Opus tokens at 1,000,000 a point = 3 points a minute, got {per_minute}");
+    }
+
+    #[test]
+    fn live_input_waits_for_its_own_provider_receipt_and_preserves_the_running_prompt() {
+        let script=write_script("live-peer-input", r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r first
+ours=$(printf '%s' "$first" | sed -n 's/.*"uuid":"\([^"]*\)".*/\1/p')
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"FIRST-ACTIVE\n"}]}}'
+read -r second
+peer=$(printf '%s' "$second" | sed -n 's/.*"uuid":"\([^"]*\)".*/\1/p')
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$peer\",\"state\":\"queued\"}"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"PEER-QUEUED\n"}]}}'
+read -r advance
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$peer\",\"state\":\"started\"}"
+read -r finish
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}'
+printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"completed\"}"
+cat >/dev/null
+"#);
+        let mut cognition=NativeCognition::start(&script,script.parent().unwrap(),&doctrine_fixture(),&skills_fixture()).unwrap();
+        let input=cognition.cancel_handle().unwrap();
+        let wire=cognition.client.stdin.clone();
+        let (events,heard)=std::sync::mpsc::channel();
+        let turn=std::thread::spawn(move || cognition.prompt("Keep the original job running",&mut |item| {
+            if let TurnItem::Text {text,..}=item {events.send(text.to_string()).unwrap();}
+        }));
+        // load-bound: hang guard only; the received entry marker, never elapsed time, proves the prompt entered.
+        assert!(heard.recv_timeout(Duration::from_secs(5)).expect("hang guard: first prompt must enter").contains("FIRST-ACTIVE"));
+        let (taken,receipt)=std::sync::mpsc::channel();
+        let id=uuid::Uuid::new_v4().to_string();
+        assert!(input.send_input(&id,"Correction from Rich",Box::new(move || {taken.send(()).unwrap();})).unwrap());
+        // load-bound: hang guard only; the queued marker establishes the protocol state before its receipt is released.
+        assert!(heard.recv_timeout(Duration::from_secs(5)).expect("hang guard: provider must queue correction").contains("PEER-QUEUED"));
+        assert!(matches!(receipt.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"queued is not consumed");
+        assert!(input.send_input(&id,"Correction from Rich",Box::new(||panic!("same input was sent twice"))).unwrap());
+        NativeClient::write_line(&wire,&json!({"type":"user","message":{"role":"user","content":"advance"}})).unwrap();
+        // load-bound: hang guard only; the named receipt proves consumption, with no latency assertion.
+        receipt.recv_timeout(Duration::from_secs(5)).expect("hang guard: receipt names the correction");
+        assert!(!turn.is_finished(),"correction receipt ended the original prompt");
+        NativeClient::write_line(&wire,&json!({"type":"user","message":{"role":"user","content":"finish"}})).unwrap();
+        assert_eq!(turn.join().unwrap().unwrap(),"end_turn");
     }
 
     #[test]

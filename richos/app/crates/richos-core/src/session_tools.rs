@@ -148,9 +148,14 @@ pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Va
 
 /// The cursor is acknowledged only after the receiving path durably accepts the record.
 pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u64)>,String> {
+    pending_after(scope, role, 0)
+}
+
+/// Skip only input already being handled on this live session, without acknowledging it.
+pub(crate) fn pending_after(scope: &StatusToolScope, role: &str, after: u64) -> Result<Option<(Message,u64)>,String> {
     let path=inbox(scope,role)?;
     let mut file=match std::fs::File::open(&path) {Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
-    let cursor=cursor_state(&path)?["through"].as_u64().ok_or("Invalid input cursor")?;
+    let cursor=cursor_state(&path)?["through"].as_u64().ok_or("Invalid input cursor")?.max(after);
     if cursor>file.metadata().map_err(|e|e.to_string())?.len() {return Err("Message input is shorter than its saved cursor".into())}
     file.seek(SeekFrom::Start(cursor)).map_err(|e|e.to_string())?;
     let mut line=String::new();BufReader::new(file.take(256*1024)).read_line(&mut line).map_err(|e|e.to_string())?;
@@ -160,10 +165,22 @@ pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u6
 }
 
 pub fn acknowledge(scope:&StatusToolScope,role:&str,through:u64)->Result<(),String> {
+    update_cursor(scope, role, |cursor| {
+        cursor["through"]=json!(cursor["through"].as_u64().unwrap().max(through));
+        cursor["active"].as_object_mut().unwrap().remove(&format!("peer:{through}"));
+    })
+}
+
+fn update_cursor(scope:&StatusToolScope,role:&str,edit:impl FnOnce(&mut Value))->Result<(),String> {
     let path=inbox(scope,role)?;
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e|e.to_string())?;
+    let lock=std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e|e.to_string())?;
+    #[cfg(unix)] {
+        use std::os::fd::AsRawFd;
+        if unsafe {libc::flock(lock.as_raw_fd(),libc::LOCK_EX)}!=0 {return Err(std::io::Error::last_os_error().to_string())}
+    }
     let mut cursor=cursor_state(&path)?;
-    cursor["through"]=json!(through);
-    cursor["active"].as_object_mut().ok_or("Invalid active input record")?.remove(&format!("peer:{through}"));
+    edit(&mut cursor);
     crate::doctrine::write_verified(&path.with_extension("cursor"),&cursor.to_string()).map_err(|e|e.to_string())
 }
 
@@ -188,19 +205,12 @@ pub fn previous_attempt(scope:&StatusToolScope,role:&str,input:&str)->Result<Opt
 
 /// Keep uncertain peer delivery and question-answer evidence independently until accepted.
 pub fn complete_attempt(scope:&StatusToolScope,role:&str,input:&str)->Result<(),String> {
-    let path=inbox(scope,role)?;
-    let mut cursor=cursor_state(&path)?;
-    cursor["active"].as_object_mut().ok_or("Invalid active input record")?.remove(input);
-    crate::doctrine::write_verified(&path.with_extension("cursor"),&cursor.to_string()).map_err(|e|e.to_string())
+    update_cursor(scope, role, |cursor| { cursor["active"].as_object_mut().unwrap().remove(input); })
 }
 
 /// Preserve the actual native session that may have acted before an interrupted delivery.
 pub fn begin_attempt(scope:&StatusToolScope,role:&str,input:&str,session:&str)->Result<(),String> {
-    let path=inbox(scope,role)?;
-    let mut cursor=cursor_state(&path)?;
-    cursor["active"][input]=json!({"input":input,"session_id":session});
-    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e|e.to_string())?;
-    crate::doctrine::write_verified(&path.with_extension("cursor"),&cursor.to_string()).map_err(|e|e.to_string())
+    update_cursor(scope, role, |cursor| { cursor["active"][input]=json!({"input":input,"session_id":session}); })
 }
 
 #[cfg(test)]
