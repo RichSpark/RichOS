@@ -23,7 +23,7 @@ Branched from `28f07ab53a3d`. Touches four files:
 
 - `richos/app/crates/richos-core/src/doctrine.rs` — merges cleanly
 - `richos/app/README.md` — **conflicts**
-- `richos/app/crates/richos-core/doctrine/inner-doctrine.md` — **conflicts**
+- Historical inner-doctrine file ([preserved changes](0001-Tell-the-inner-Rich-a-stored-entry-can-be-out-of-dat.patch)): **conflicts**
 - `richos/app/crates/richos-core/tests/action_ledger_tests.rs` — **conflicts**
 
 ## Why it does not just merge
