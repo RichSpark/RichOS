@@ -137,8 +137,7 @@ test('managed artifact preserves only server secrets and packages the tested ser
   assert.deepEqual(artifact.metadata.keep_bindings,['secret_text']);
   assert.equal(artifact.metadata.bindings.find(row=>row.name==='ENROLLMENT_OPEN'),undefined,'no admission switch is uploaded');
   assert.equal(artifact.metadata.bindings.find(row=>row.name==='DB').id,profile.databaseId);
-  assert.equal(artifact.modules.length,9);
-  assert.deepEqual(artifact.metadata.bindings.find(row=>row.name==='AI'),{name:'AI',type:'ai'});
+  assert.equal(artifact.modules.length,8); // schema 3 adds connect/fcm.mjs
   assert(artifact.modules.every(row=>/^[a-f0-9]{64}$/.test(row.sha256)));
   // The 10-host lifetime ceiling was the private pilot (CEO 2026-10-06); the profile's number is 1000.
   assert.equal(managedArtifact({...profile,capacity:1000}).metadata.bindings.find(row=>row.name==='HOST_CAPACITY').text,'1000');
@@ -186,28 +185,4 @@ test('obsolete notification route names stay closed', async t => {
     assert.equal((await f.send(await a.request(method,path,'{}'))).status,404);
   }
   assert.equal(f.tunnels.size,0);
-});
-
-
-test('routing authenticates once, classifies without tunnels or stored content and fails safely', async t => {
-  const f=await fixture(t), a=await f.identity();let calls=0;
-  const state={user_request:'Investigate the three proposals',recent_conversation:'The proposals have not been read.',roles:{rich:'Conversation and quick lookups',stu:'Longer work and orchestration'}};
-  let answer={model:'clef-flash',answers:{handler:{type:'choice',choice:'stu',probabilities:{rich:0.01,stu:0.98,uncertain:0.01}}}};
-  f.env.AI={run:async(model,input)=>{calls++;assert.equal(model,'@cf/cloudflare/clef-flash');assert.deepEqual(input.state,state);return answer;}};
-  const request=await a.request('POST','/v1/route',JSON.stringify(state));
-  const unsigned=new Request(request.clone(),{headers:{}});assert.equal((await f.send(unsigned)).status,404);assert.equal(calls,0);
-  let response=await f.send(request.clone());assert.equal(response.status,200);assert.deepEqual(await response.json(),{model:'clef-flash',handler:'stu'});
-  assert.equal((await f.send(request)).status,409);assert.equal(calls,1,'nonce replay must not invoke the model twice');
-  assert.equal(f.calls.length,0);assert.equal(f.tunnels.size,0);assert.equal(f.dns.size,0);
-  const host=await f.store.get(a.id);assert.equal(host.desired,0);assert.equal(host.phase,'disabled');assert(!JSON.stringify(host).includes(state.user_request));
-  for (const choice of ['rich','uncertain']) {
-    answer.answers.handler.choice=choice;
-    response=await f.send(await a.request('POST','/v1/route',JSON.stringify(state)));assert.equal(response.status,200);assert.equal((await response.json()).handler,choice);
-  }
-  answer={answers:{handler:{choice:'stu'}}};assert.equal((await f.send(await a.request('POST','/v1/route',JSON.stringify(state)))).status,503);
-  f.env.AI.run=async()=>{throw Error('provider_unavailable')};assert.equal((await f.send(await a.request('POST','/v1/route',JSON.stringify(state)))).status,503);
-  delete f.env.AI;assert.equal((await f.send(await a.request('POST','/v1/route',JSON.stringify(state)))).status,503);
-  assert.equal((await f.send(await a.request('POST','/v1/route',JSON.stringify({...state,dispatch:true})))).status,400);
-  assert.equal((await f.send(await a.request('POST','/v1/route','x'.repeat(20*1024+1)))).status,413);
-  assert.equal((await f.send(await a.request('POST','/v1/hosts','x'.repeat(8193)))).status,413,'ordinary control limits stay unchanged');
 });

@@ -40,7 +40,7 @@ export function managedArtifact(profile) {
   if (Object.keys(fcm).some(k=>!['projectId','apps'].includes(k)) || (Object.keys(fcm).length && !fcm.projectId)) throw Error('Invalid FCM profile');
   if (fcm.projectId && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(fcm.projectId)) throw Error('Invalid FCM project ID');
   if (fcm.projectId && (!Array.isArray(fcm.apps) || !fcm.apps.length || fcm.apps.some(a=>typeof a !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(a)))) throw Error('Invalid FCM application IDs');
-  const names = ['connect-worker.mjs', 'connect/auth.mjs', 'connect/store.mjs', 'connect/provider.mjs', 'connect/lifecycle.mjs', 'connect/apns.mjs', 'connect/fcm.mjs', 'connect/notifications.mjs', 'connect/routing.mjs'];
+  const names = ['connect-worker.mjs', 'connect/auth.mjs', 'connect/store.mjs', 'connect/provider.mjs', 'connect/lifecycle.mjs', 'connect/apns.mjs', 'connect/fcm.mjs', 'connect/notifications.mjs'];
   return {
     stage: 'managed',
     metadata: {
@@ -48,7 +48,6 @@ export function managedArtifact(profile) {
       keep_bindings: ['secret_text'], observability: { enabled: false }, logpush: false, tail_consumers: [],
       bindings: [
         { name: 'DB', type: 'd1', id: profile.databaseId },
-        { name: 'AI', type: 'ai' },
         { name: 'REQUEST_LIMIT', type: 'ratelimit', namespace_id: '18443', simple: { limit: 60, period: 60 } },
         ...Object.entries({ CF_ACCOUNT_ID: profile.accountId, CF_ZONE_ID: profile.zoneId, CONNECT_DOMAIN: profile.domain,
           HOST_CAPACITY: String(profile.capacity),

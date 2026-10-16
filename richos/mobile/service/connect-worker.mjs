@@ -5,7 +5,6 @@ import { transition, view } from './connect/lifecycle.mjs';
 import { APNs } from './connect/apns.mjs';
 import { FCM } from './connect/fcm.mjs';
 import { Notifications } from './connect/notifications.mjs';
-import { classify } from './connect/routing.mjs';
 
 function json(status, body) {
   return new Response(JSON.stringify(body), { status, headers: {
@@ -16,7 +15,7 @@ function json(status, body) {
   } });
 }
 const routes = new Set(['POST /v1/hosts', 'GET /v1/host', 'DELETE /v1/host', 'POST /v1/host/token', 'PUT /v1/host/device',
-  'POST /v1/push/hosts', 'PUT /v1/push/device', 'POST /v1/push/events', 'POST /v1/route']);
+  'POST /v1/push/hosts', 'PUT /v1/push/device', 'POST /v1/push/events']);
 function configured(env) {
   return !!(env.DB && env.CF_API_TOKEN && /^[a-f0-9]{32}$/.test(env.CF_ACCOUNT_ID)
     && /^[a-f0-9]{32}$/.test(env.CF_ZONE_ID) && /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/.test(env.CONNECT_DOMAIN)
@@ -39,23 +38,21 @@ export async function handle(request, env, ports = {}) {
     // Ephemeral provider counters only. Never persist or log the IP address.
     const key = await digest(request.headers.get('cf-connecting-ip') || 'unknown');
     if (!(await env.REQUEST_LIMIT.limit({ key: 'ip:' + key })).success) return json(429, { error: 'rate_limited' });
-    const routing=url.pathname==='/v1/route';
-    const body = await readBody(request,routing ? 20*1024 : 8192);
-    if (request.method !== 'PUT' && url.pathname !== '/v1/push/events' && !routing && body !== '' && body !== '{}') return json(400, { error: 'invalid_request' });
+    const body = await readBody(request);
+    if (request.method !== 'PUT' && url.pathname !== '/v1/push/events' && body !== '' && body !== '{}') return json(400, { error: 'invalid_request' });
     const identity = await authenticate(request, body, now());
     if (!identity) return json(404, { error: 'not_found' });
     if (!(await env.REQUEST_LIMIT.limit({ key: 'host:' + identity.id })).success) return json(429, { error: 'rate_limited' });
     const store = ports.store || new Store(env.DB, now), provider = ports.provider || new Provider(env);
     let host = await store.get(identity.id);
-    if (!host && !['/v1/hosts','/v1/push/hosts','/v1/route'].includes(url.pathname)) return json(404, { error: 'not_found' });
+    if (!host && !['/v1/hosts','/v1/push/hosts'].includes(url.pathname)) return json(404, { error: 'not_found' });
     if (!host) {
-      host = await store.enroll(identity, env.CONNECT_DOMAIN, Number(env.HOST_CAPACITY), url.pathname === '/v1/push/hosts' || routing);
+      host = await store.enroll(identity, env.CONNECT_DOMAIN, Number(env.HOST_CAPACITY), url.pathname === '/v1/push/hosts');
       // The one reason a signed Mac is not enrolled: the operator's HOST_CAPACITY is used up.
       if (!host) return json(503, { error: 'capacity_reached' });
     }
     if (host.public_key !== identity.key) return json(404, { error: 'not_found' });
     if (!await store.nonce(identity.id, identity.nonce)) return json(409, { error: 'replayed_request' });
-    if (routing) return json(200,await classify(body,env.AI));
     const notifications = new Notifications(store, ports.apns || new APNs(env,{now}),env, ports.fcm || new FCM(env,{now}));
     if (url.pathname === '/v1/push/hosts') return json(200,{hostId:host.id,generation:host.generation});
     if (url.pathname.startsWith('/v1/push/')) {

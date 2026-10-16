@@ -26,8 +26,8 @@ export async function authenticate(request, body, now = Date.now()) {
   } catch { return null; }
 }
 
-export async function readBody(request, limit=8192) {
-  if (Number(request.headers.get('content-length') || 0) > limit) throw Error('body_too_large');
+export async function readBody(request) {
+  if (Number(request.headers.get('content-length') || 0) > 8192) throw Error('body_too_large');
   if (!request.body) return '';
   const reader = request.body.getReader();
   const parts = []; let size = 0;
@@ -36,7 +36,7 @@ export async function readBody(request, limit=8192) {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > limit) { await reader.cancel(); throw Error('body_too_large'); }
+      if (size > 8192) { await reader.cancel(); throw Error('body_too_large'); }
       parts.push(value);
     }
   } finally { reader.releaseLock(); }
