@@ -3328,24 +3328,27 @@ impl NativeCognition {
         Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
     }
     /// A chat lease with app-owned, company-scoped persistence tools. The scope is
-    /// supplied by the spine before priming, never selected by the model.
-    pub fn start_with_onboarding(bin: &Path, cwd: &Path, doctrine: &Path, skills: &Path,
+    /// supplied by the spine before priming, never selected by the model. The host
+    /// supplies its configuration folder explicitly; instruction paths do not locate state.
+    pub fn start_with_onboarding(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
-        let scopes = doctrine.parent().unwrap_or(cwd).join("onboarding-scopes");
+        let doctrine = skills.join("agents/rich.md");
+        let scopes = config_dir.join("onboarding-scopes");
         std::fs::create_dir_all(&scopes)?;
         let identity = uuid::Uuid::new_v4();
         let scope = scopes.join(format!("{identity}.json"));
         let assignments = scopes.join(format!("{identity}-assignments.json"));
         let status = scopes.join(format!("{identity}-status.json"));
-        let client = NativeClient::spawn_with_tools(bin, cwd, Some((doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
+        let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
     }
-    pub fn start_with_continuity(bin: &Path, cwd: &Path, doctrine: &Path, skills: &Path,
+    pub fn start_with_continuity(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
         control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
         bridge.request("hello", json!({})).map_err(|e| NativeError::Protocol(e.to_string()))?;
-        let scopes = doctrine.parent().unwrap_or(cwd).join("onboarding-scopes");
+        let doctrine = skills.join("agents/rich.md");
+        let scopes = config_dir.join("onboarding-scopes");
         std::fs::create_dir_all(&scopes)?;
         let identity = uuid::Uuid::new_v4();
         let scope = scopes.join(format!("{identity}.json"));
@@ -3354,7 +3357,7 @@ impl NativeCognition {
         std::fs::write(&continuity_tools, "{\"version\":1,\"actions_allowed\":false}\n")?;
         let assignments = scopes.join(format!("{identity}-assignments.json"));
         let status = scopes.join(format!("{identity}-status.json"));
-        let client = NativeClient::spawn_with_tools(bin, cwd, Some((doctrine, skills)),
+        let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
@@ -4673,7 +4676,7 @@ done
             let bridge = crate::ecs::EcsBridge::new(Path::new(String::from_utf8(python.stdout).unwrap().trim()),
                 &engine, &root.join("ecs-state")).unwrap();
             let mut cognition = NativeCognition::start_with_continuity(&script, root,
-                &doctrine_fixture(), &skills_fixture(), &script, bridge, None).unwrap();
+                root, &skills_fixture(), &script, bridge, None).unwrap();
             let binding = crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
                 crate::entity::EntityId::parse("depot").unwrap(), "thread-combined", 1);
             cognition.set_onboarding_scope(binding.entity_id(), &root.join("central"), &root.join("interview.json")).unwrap();
@@ -4729,7 +4732,7 @@ done
         let engine = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
         let bridge = crate::ecs::EcsBridge::new(&python, &engine, &root.join("ecs-state")).unwrap();
         let mut cognition = NativeCognition::start_with_continuity(&script, root,
-            &doctrine_fixture(), &skills_fixture(), &script, bridge.clone(), None).unwrap();
+            root, &skills_fixture(), &script, bridge.clone(), None).unwrap();
         let binding = crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
             crate::entity::EntityId::parse("depot").unwrap(), "thread-a", 1);
         let requests = || std::fs::read_to_string(root.join("requests.jsonl")).unwrap_or_default()

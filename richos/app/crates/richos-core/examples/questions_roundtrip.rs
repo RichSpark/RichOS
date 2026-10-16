@@ -10,11 +10,11 @@ use richos_core::{
     Cognition,
 };
 use std::path::{Path, PathBuf};
-fn attach(spine: &mut Spine, root: &Path, doctrine: &Path, skills: &Path) {
+fn attach(spine: &mut Spine, root: &Path, skills: &Path) {
     let lease = NativeCognition::start_with_onboarding(
         &resolve_claude_bin(),
         root,
-        doctrine,
+        root,
         skills,
         &std::env::current_exe().unwrap(),
         None,
@@ -57,11 +57,6 @@ fn main() {
     let root = PathBuf::from(args.first().expect("supply a disposable scratch directory"));
     assert!(root.is_absolute());
     std::fs::create_dir_all(&root).unwrap();
-    let doctrine = richos_core::doctrine::ensure_rendered(
-        &root,
-        &richos_core::doctrine::DoctrineIdentity::new(Some("Fixture CEO")),
-    )
-    .unwrap();
     let skills = richos_core::skills::ensure_rendered(&root, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
     let mut spine = open(&root);
     let thread = spine
@@ -70,7 +65,7 @@ fn main() {
             &EntityId::parse("fixture").unwrap(),
         )
         .unwrap();
-    attach(&mut spine, &root, &doctrine, &skills);
+    attach(&mut spine, &root, &skills);
     let prompt="This is a synthetic UI verification. Ask one prepared question using richos_questions.ask: When should the release ship? Two options: Ship today (Earlier fixes) and Ship tomorrow (More testing). Do not inspect files, run commands or dispatch work. The whole response should be that question.";
     let turn = spine
         .submit_prompt(prompt, Source::Text)
@@ -112,7 +107,7 @@ fn main() {
         .unwrap();
     let mut spine = open(&root);
     spine.switch_thread(&thread).unwrap();
-    attach(&mut spine, &root, &doctrine, &skills);
+    attach(&mut spine, &root, &skills);
     assert_eq!(
         store
             .deliver("fixture", &thread, "front_desk", |d| spine

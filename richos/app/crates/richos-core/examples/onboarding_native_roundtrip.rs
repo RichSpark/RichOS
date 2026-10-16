@@ -3,7 +3,7 @@
 //! scratch directory. Run explicitly; this incurs real model calls.
 //! cargo run -p richos-core --example onboarding_native_roundtrip -- <scratch> <RichOS executable>
 use richos_core::{
-    doctrine::{self, DoctrineIdentity}, entity::{Entity, EntityId, EntityRegistry},
+    entity::{Entity, EntityId, EntityRegistry},
     ledger::{Ledger, Source}, native::{resolve_claude_bin, NativeCognition},
     onboarding::OnboardingState, spine::Spine,
 };
@@ -21,11 +21,10 @@ fn open(root: &Path, executable: &Path) -> Spine {
     spine.set_central_root(root.join("central"));
     spine.set_onboarding_record(root.join("config/onboarding.json"));
     spine.ensure_active_thread_in(&EntityId::parse("northstar-fixture").unwrap()).unwrap();
-    let doctrine = doctrine::ensure_rendered(&config, &DoctrineIdentity::new(Some("Morgan"))).unwrap();
     let skills = richos_core::skills::ensure_rendered(&config, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
     let start = Instant::now();
     spine.attach_lease(Box::new(NativeCognition::start_with_onboarding(
-        &resolve_claude_bin(), &engine, &doctrine, &skills, executable, None).unwrap()));
+        &resolve_claude_bin(), &engine, &config, &skills, executable, None).unwrap()));
     eprintln!("Connected in {} ms", start.elapsed().as_millis());
     spine
 }

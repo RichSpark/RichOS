@@ -50,13 +50,13 @@ class DesktopHooks(unittest.TestCase):
         self.assertFalse((self.root / "state/evidence/fictional-session/callbacks.jsonl").exists())
         self.assertEqual(self.hook("Stop", last_assistant_message="I'm dispatching Worker now.").returncode, 0)
 
-    def test_internal_report_allows_only_host_granted_reads(self):
-        self.scope.write_text(json.dumps({"version": 1, "actions_allowed": False,
-                                          "read_only_tools": ["Read"]}))
-        read = self.hook("PreToolUse", tool_name="Read", tool_use_id="report-read", tool_input={"file_path": str(self.scope)})
+    def test_reading_context_requires_an_open_grant(self):
+        read = self.hook("PreToolUse", tool_name="Read", tool_use_id="open-read",
+                         tool_input={"file_path": str(self.scope)})
         self.assertEqual(read.returncode, 0, read.stderr + read.stdout)
-        for tool in ("Write", "Bash", "Agent", "mcp__richos_assignments__record"):
-            denied = self.hook("PreToolUse", tool_name=tool, tool_use_id="report-action", tool_input={})
+        self.scope.write_text(json.dumps({"version": 1, "actions_allowed": False}))
+        for tool in ("Read", "Write", "Bash", "Agent", "mcp__richos_assignments__record"):
+            denied = self.hook("PreToolUse", tool_name=tool, tool_use_id="closed-action", tool_input={})
             self.assertEqual(denied.returncode, 2, tool + denied.stderr)
             self.assertIn("This app turn is stopped", denied.stderr)
 

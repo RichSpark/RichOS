@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &std::env::current_exe()?, bridge.clone(), profile, None)?)
         } else {
             Ok(NativeCognition::start_with_continuity(&resolve_claude_bin(), &root.0.join("coordination"),
-                &doctrine, &skills, &std::env::current_exe()?, bridge.clone(), None)?)
+                &root.0, &skills, &std::env::current_exe()?, bridge.clone(), None)?)
         }
     };
     let first = start()?;
