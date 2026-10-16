@@ -79,6 +79,9 @@ import json
 import os
 import re
 import sys
+import subprocess
+
+SOURCE_MAX_BYTES = 8_000_000
 import urllib.parse
 
 # --- the recorded-speech shape ---------------------------------------------
@@ -647,7 +650,7 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
                     "does not quote it, so this refuses instead of reporting CLEAN. "
                     "Make it readable, or narrow PRIVATE_SOURCES."
                     % (p, exc.strerror or exc))
-            if size > 8_000_000:
+            if size > SOURCE_MAX_BYTES:
                 raise BrokenCorpus(
                     "the private source %s is %d bytes, over the 8000000-byte per-file "
                     "read limit, so it cannot be held in the corpus and a quotation of "
@@ -662,7 +665,7 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
                     "as clean." % max_bytes)
             try:
                 with open(p, encoding='utf-8', errors='ignore') as fh:
-                    blob = fh.read(8_000_000)
+                    blob = fh.read(SOURCE_MAX_BYTES)
             except FileNotFoundError:
                 continue
             except OSError as exc:
@@ -719,7 +722,7 @@ def build_corpus(sources, min_speech_lines, max_files, max_bytes,
                 # admit nothing.
                 try:
                     with open(p, encoding='utf-8', errors='ignore') as fh:
-                        blob = fh.read(8_000_000)
+                        blob = fh.read(SOURCE_MAX_BYTES)
                 except OSError:
                     continue
                 members.append(p)
@@ -852,7 +855,7 @@ def published_windows(item, n):
         return set()
     try:
         with open(path, 'rb') as fh:
-            text = decode_best(fh.read(8_000_000))
+            text = decode_best(fh.read(SOURCE_MAX_BYTES))
     except OSError:
         return set()
     words = normalise(text)  # dialect-exempt: existing identifier in this file
@@ -929,7 +932,47 @@ def mint(path):
     return 0
 
 
+def check_staged_private_source_sizes():
+    """Refuse an oversized staged text blob before it can break the private corpus."""
+    try:
+        root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.STDOUT).removesuffix(b"\n")
+        def git(*args, data=None):
+            return subprocess.check_output(["git", "-C", os.fsdecode(root), *args], input=data, stderr=subprocess.STDOUT)
+        changed = set(git("diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRT").split(b"\0"))
+        candidates = []
+        for entry in git("ls-files", "--stage", "-z").split(b"\0"):
+            if not entry:
+                continue
+            header, path = entry.split(b"\t", 1)
+            mode, oid, stage = header.split()
+            if path in changed and stage == b"0" and mode in (b"100644", b"100755") \
+                    and os.path.splitext(os.fsdecode(path))[1].lower() in TEXT_EXT:
+                candidates.append((oid, path))
+        if not candidates:
+            return 0
+        sizes = git("cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+                    data=b"".join(oid + b"\n" for oid, _ in candidates)).splitlines()
+        if len(sizes) != len(candidates):
+            raise ValueError("Git did not return every staged object")
+        oversized = []
+        for (oid, path), row in zip(candidates, sizes):
+            actual, kind, size = row.split()
+            if actual != oid or kind != b"blob":
+                raise ValueError("Git did not return the staged blob")
+            if int(size) > SOURCE_MAX_BYTES:
+                oversized.append((path, int(size)))
+        for path, size in oversized:
+            print("Private source commit refused: %r is %d bytes; the existing per-file limit is %d. Compress or split it before committing."
+                  % (os.fsdecode(path), size, SOURCE_MAX_BYTES), file=sys.stderr)
+        return 1 if oversized else 0
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print("Private source commit check could not complete: %s" % error, file=sys.stderr)
+        return 2
+
+
 def main():
+    if sys.argv[1:] == ["--check-staged-private-sizes"]:
+        return check_staged_private_source_sizes()
     # `--digest` before anything else: it is a tool for the operator writing the
     # declaration, not a scan, and it must not need a job file to exist.
     if len(sys.argv) >= 3 and sys.argv[1] == '--digest':
@@ -1052,7 +1095,7 @@ def main():
             # identity detector hashes the bytes, and decode_best is what makes
             # a UTF-16 file yield the words a person wrote instead of a run of
             # single letters.
-            blob = decode_best(raw[:8_000_000])
+            blob = decode_best(raw[:SOURCE_MAX_BYTES])
 
         # Detector 0 — declared private BY IDENTITY. First, because it is the
         # only one that is exact: a digest match is not an opinion about what
