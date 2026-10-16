@@ -479,15 +479,6 @@ module.exports = [
       "Send is required because the same notice restores his words.",
   },
   {
-    s: "I've taken that down, but I haven't got a thread open to show it in. Quit RichOS and open it again; if it still isn't here, whoever set RichOS up needs to look.",
-    c: "NEEDS-SOMEONE-ELSE",
-    party: true,
-    fixture: null,
-    why:
-      "send_message's no-active-thread path. Not drivable from the browser harness: it needs a " +
-      "boot where boot_entity() resolves to None, which the mock bridge cannot produce.",
-  },
-  {
     s: "I can't open this one. It has no entity home: it predates entity scoping, and I won't guess which entity this work belongs to. Filing it under the wrong one would mix up two companies' records, and that's not a mistake worth risking to save you a question.",
     c: "NEEDS-SOMEONE-ELSE",
     explainedBy: "the detail line beneath it, which names whoever set RichOS up",
