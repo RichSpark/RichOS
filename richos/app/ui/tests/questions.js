@@ -1,6 +1,66 @@
 "use strict";
 const path=require("path");
 const {loadPlaywright,createRun,assert,assertEqual,UI_DIR,leaveHome}=require("./lib/harness");
+// Drive the real main.js event handlers, including concurrent prose and activity.
+// The bridge only supplies fixture replies; it does not implement layout behavior.
+async function stableQuestionDuringArrivals(browser, mode) {
+  const page = await browser.newPage({viewport:{width:1280,height:900}});
+  const errors=[];page.on('pageerror', error=>errors.push(String(error)));
+  try {
+  await page.addInitScript(()=>{
+   Object.defineProperty(window,'RichBridge',{configurable:true,set(bridge){
+    window.fixtureHandlers={};const listen=bridge.listen.bind(bridge);
+    bridge.listen=(name,fn)=>{window.fixtureHandlers[name]=fn;return listen(name,fn)};
+    Object.defineProperty(window,'RichBridge',{value:bridge,writable:true,configurable:true});
+   }});
+  });
+  await page.goto('file://'+path.join(UI_DIR,'index.html'));await leaveHome(page);
+  await page.evaluate(()=>openThread('general'));
+  await page.evaluate(()=>{
+   window.fixtureAnswers=[];const invoke=RichBridge.invoke.bind(RichBridge);
+   RichBridge.invoke=async(c,a)=>{if(c==='question_shown')return;if(c==='answer_question'){fixtureAnswers.push(a);return {outcome:'accepted',question:{...fixtureQuestion,state:'answered',revision:1,answer:{...a.answer,method:a.method,surface:'mac'}}}};return invoke(c,a)};
+   const at=Date.now();window.fixtureFence={threadId:activeThreadId,entityId:timelineModel.entityId,bindingRevision:timelineModel.bindingRevision,turnId:'fixture-stream',visibility:'ceo'};
+   fixtureHandlers['rich://turn-status']({payload:{...fixtureFence,status:'working',at,startedAt:at}});
+   fixtureHandlers['rich://message-started']({payload:{...fixtureFence,messageId:'fixture-prose',seq:0,slot:'stream',createdAt:at,at}});
+   window.fixtureQuestion={id:'fixture-question',text:'When should the release ship?',options:[{id:'today',label:'Ship today',description:'Earlier fixes'},{id:'tomorrow',label:'Ship tomorrow',description:'More testing'}],multiple:false,free_answer:true,state:'open',revision:0,delivered:false};
+   fixtureHandlers['rich://question-upserted']({payload:{...fixtureFence,turnId:'fixture-obligation',id:'fixture-question',kind:'question',question:fixtureQuestion,sequence:0,slot:'stream',createdAt:at+1,at:at+1}});
+  });
+  await page.locator('[data-question-id="fixture-question"] .question-option').first().waitFor();
+  await page.locator('[data-question-id="fixture-question"] .question-option').first().scrollIntoViewIfNeeded();
+  const before=await page.locator('[data-question-id="fixture-question"] .question-option').first().boundingBox();
+  if(mode==='keyboard'){await page.locator('[data-question-id="fixture-question"] .question-option').first().focus();await page.mouse.move(50,50)}else{await page.mouse.move(before.x+before.width/2,before.y+before.height/2)};
+  await page.evaluate(()=>{
+   fixtureHandlers['rich://question-upserted']({payload:{...fixtureFence,threadId:'foreign-thread',id:'foreign-question',turnId:'foreign-obligation',kind:'question',question:{...fixtureQuestion,id:'foreign-question'},sequence:0,slot:'stream',createdAt:Date.now(),at:Date.now()}});
+   fixtureHandlers['rich://message-delta']({payload:{...fixtureFence,messageId:'fixture-prose',seq:0,textDelta:'A growing response while the question is waiting. '.repeat(150),at:Date.now()}});
+   fixtureHandlers['rich://activity-upserted']({payload:{...fixtureFence,id:'fixture-activity',kind:'activity',title:'Inspecting progress',status:'running',sequence:1,createdAt:Date.now(),at:Date.now()}});
+   if(!timelineModel.items.has('fixture-activity'))throw new Error('Fixture activity was not accepted');
+  });
+  await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+  const prose=await page.evaluate(()=>timelineModel.items.get('fixture-prose').text);if(prose.length<1000)throw new Error('Fixture did not actually receive the response');
+  const after=await page.locator('[data-question-id="fixture-question"] .question-option').first().boundingBox();
+  if(mode==='composer') {
+   await page.locator('#input').fill('A quick new request');
+  } else if(mode==='withdrawn') {
+   await page.evaluate(()=>fixtureHandlers['rich://question-upserted']({payload:{...fixtureFence,turnId:'fixture-obligation',id:'fixture-question',kind:'question',question:{...fixtureQuestion,state:'withdrawn',revision:1,withdrawal_reason:'The decision is already settled'},sequence:0,slot:'stream',createdAt:Date.now(),at:Date.now()}}));
+  } else if(mode==='threadswitch') {
+   await page.evaluate(()=>openThread('acme'));
+  } else if(mode==='keyboard')await page.keyboard.press('Enter');else await page.mouse.click(before.x+before.width/2,before.y+before.height/2);
+  await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+  const interim=await page.evaluate(()=>({text:document.querySelector('[data-message-id="fixture-prose"]')?.textContent||'',questions:document.querySelectorAll('.question-option').length,state:document.querySelector('[data-question-id="fixture-question"]')?.dataset.state,thread:activeThreadId}));
+  await page.mouse.move(50,50);await page.locator('#input').focus();
+  await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+  const painted=await page.evaluate(()=>document.querySelector('[data-message-id="fixture-prose"]')?.textContent||'');
+  const result={mode,before,after,movedY:after.y-before.y,answers:await page.evaluate(()=>fixtureAnswers),interim,receivedTextLength:prose.length,paintedAfterInteraction:painted.length,errors};
+  if(errors.length || result.movedY!==0)throw new Error('Question moved before an actual change or renderer failed');
+  if(['pointer','keyboard'].includes(mode) && (result.answers.length!==1 || painted.length<1000))throw new Error('Answer missed or paint did not resume');
+  if(mode==='composer' && (interim.text.length<1000 || result.answers.length))throw new Error('Composer interaction still held the reply');
+  if(mode==='withdrawn' && (interim.state!=='withdrawn' || interim.questions || interim.text.length<1000 || result.answers.length))throw new Error('Withdrawal did not update during interaction');
+  if(mode==='threadswitch' && (interim.thread!=='acme' || interim.questions || result.answers.length))throw new Error('Question interaction held another thread on screen');
+
+    return result;
+  } finally { await page.close(); }
+}
+
 async function main(){
  const run=createRun("non-blocking question cards"); const browser=await loadPlaywright().webkit.launch();
  const page=await browser.newPage({viewport:{width:1280,height:900}}); const errors=[];page.on("pageerror",e=>errors.push(String(e)));
@@ -91,6 +151,10 @@ async function main(){
   assertEqual(await page.evaluate(()=>answerCalls[4]),await page.evaluate(()=>uncertainAnswer),"retry changed the saved input");
   await page.evaluate(()=>{RichBridge.invoke=originalAnswerInvoke;});
   return "same submission identity and exact answer after an uncertain receipt";
+ });
+ await run.check("question controls stay stable during arrivals and release for actual changes",async()=>{
+  for(const mode of ["pointer","keyboard","composer","withdrawn","threadswitch"]) await stableQuestionDuringArrivals(browser,mode);
+  return "first click and keyboard answer survive prose/activity; new input, withdrawal and thread switch stay live";
  });
  await run.check("round 13 text, boundaries and font scaling work in both themes",async()=>{
   const C=require("./lib/contrast");await page.addScriptTag({content:C.pageScript()});

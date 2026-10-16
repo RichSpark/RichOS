@@ -1501,6 +1501,40 @@ function announce(text) {
 
 // ---- the render loop ---------------------------------------------------------------------
 
+// Keep controls under the pointer or keyboard focus stable while the user answers.
+// Model events keep arriving; paint catches up when interaction leaves the card.
+let pointerQuestion = null;
+let questionInteractionThread = null;
+let questionPaintDeferred = false;
+let questionUpdatePending = false;
+function answeringQuestion() {
+  if (questionInteractionThread !== activeThreadId) return false;
+  return !!((pointerQuestion?.isConnected && pointerQuestion.matches(":hover") && pointerQuestion.dataset.state === "open") ||
+    document.activeElement?.closest(".question-card"));
+}
+function resumeQuestionPaint() {
+  if (questionPaintDeferred && !answeringQuestion()) {
+    questionPaintDeferred = false;
+    scheduleRender();
+  }
+}
+messagesEl.addEventListener("pointerover", event => {
+  const card = event.target.closest(".question-card");
+  if (card && card !== pointerQuestion) { pointerQuestion = card; questionInteractionThread = activeThreadId; }
+});
+messagesEl.addEventListener("pointerout", event => {
+  if (pointerQuestion && !pointerQuestion.contains(event.relatedTarget)) { pointerQuestion = null; resumeQuestionPaint(); }
+});
+messagesEl.addEventListener("focusin", event => {
+  if (event.target.closest(".question-card")) questionInteractionThread = activeThreadId;
+});
+messagesEl.addEventListener("focusout", () => queueMicrotask(resumeQuestionPaint));
+document.addEventListener("richos-questions-changed", resumeQuestionPaint);
+function releaseQuestionPointer() { pointerQuestion = null; resumeQuestionPaint(); }
+inputEl.addEventListener("focus", releaseQuestionPointer);
+inputEl.addEventListener("input", releaseQuestionPointer);
+
+
 /// A STRUCTURAL change: a new item, a snapshot, a collapse toggle. Coalesced to one frame.
 function scheduleRender() {
   if (renderPending) return;
@@ -1516,6 +1550,7 @@ function scheduleProse(messageId) {
   proseFlushPending = true;
   window.requestAnimationFrame(() => {
     proseFlushPending = false;
+    if (answeringQuestion()) { questionPaintDeferred = true; return; }
     for (const id of proseDirty) {
       const item = timelineModel.items.get(id);
       if (!item) continue;
@@ -1533,6 +1568,8 @@ function scheduleProse(messageId) {
 
 function flushRender() {
   renderPending = false;
+  if (!questionUpdatePending && answeringQuestion()) { questionPaintDeferred = true; return; }
+  questionUpdatePending = false;
   proseDirty.clear();
   if (mainView !== "conversation" && mainView !== "opening") return;
 
@@ -3598,6 +3635,7 @@ Bridge.listen("rich://ceo-message", ({ payload }) => {
   updateCachedThread("onCeoMessage", payload);
   const r = window.RichTimeline.onCeoMessage(timelineModel, payload);
   if (r.rejected) return;
+  releaseQuestionPointer();
   // §18: a message that appeared on this screen without him typing it is a change a screen
   // reader has no other way to learn about. His own optimistic bubble is not announced twice —
   // that path returns `structural: false` and never reaches here.
@@ -3646,6 +3684,7 @@ Bridge.listen("rich://question-upserted", ({payload}) => {
   updateCachedThread("onActivityUpserted",payload);
   const result=window.RichTimeline.onActivityUpserted(timelineModel,payload);
   if(!result.rejected) {
+    questionUpdatePending = true;
     scheduleRender();
     if(voiceMode && payload.question?.state==="open" && !spokenQuestionIds.has(payload.id)) {
       spokenQuestionIds.add(payload.id);
