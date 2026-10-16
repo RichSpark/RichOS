@@ -205,7 +205,9 @@ work tools, hooks, memory files or extra service account. Its plain purpose is i
 The decision is whether this message requires a new Stu execution handoff or
 Rich can handle its next step quickly. A correction to ongoing work can be quick
 communication by Rich without creating another job. The full original request
-and bounded recent visible conversation are supplied as context, without thinking.
+and bounded recent visible conversation are supplied from the existing scoped
+ledger projection. Hidden preparation, peer-input bodies and technical commentary
+are not reconstructed from the native transcript.
 The classifier cannot dispatch. Native handling saves a Stu decision through the
 same inbox operation as Rich and supplies factual ownership with the unchanged
 user message. No extra Rich context-only model request is sent.
@@ -220,3 +222,18 @@ handoff retains ownership across those failures and restart. Stop is checked aga
 under the existing send lock before saving a new handoff. Peer reports and hidden
 preparation never trigger classification. No subsidized routing service, local
 model download or additional socket server is involved.
+
+Rich's conversation lease uses Claude Code's native formatted-output contract with
+one string field, `reply`. That field streams to the conversation, speech and
+phone through the existing text path. Ordinary assistant text stays in the
+existing technical machinery records. No wording heuristic decides what is
+commentary. Missing or invalid formatted output is an explicit provider failure,
+not permission to publish the untyped fallback. Valid native formatted completion
+qualifies `end_turn` even when its underlying model stop reason is `tool_use`.
+
+The provider's local `StructuredOutput` formatter performs no work. The canonical
+hook records its evidence and permits the main session to format output during
+hidden preparation or after an interruption without opening any work grant.
+Shell, reads, worker dispatch and other actions still require their existing
+authority. Hidden preparation remains internal. Partial JSON, escaped strings,
+Unicode, duplicate complete frames and cancellation share the same reply path.

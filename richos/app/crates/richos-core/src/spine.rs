@@ -2993,6 +2993,15 @@ impl Spine {
                 // original user request identity for attestation and handoff deduplication.
                 self.lease.as_mut().ok_or(SpineError::NoLease)?
                     .prepare_work_turn(binding, turn_id, successor, self.ledger.turn(turn_id).ok_or(SpineError::NoLease)?.source, text, &mut on_item).map_err(SpineError::from)?;
+                // Reuse the user-visible ledger view. Native transcripts also contain
+                // preparation and commentary, and formatted replies live in tool input.
+                let mut conversation=String::new();
+                for message in self.ledger.messages_scoped(binding)?.into_iter().filter(|m|m.turn_id!=turn_id) {
+                    conversation.push_str(&format!("{}: {}\n",message.role,message.text));
+                }
+                let mut from=conversation.len().saturating_sub(8192);
+                while !conversation.is_char_boundary(from) {from+=1;}
+                self.lease.as_mut().ok_or(SpineError::NoLease)?.set_conversation_context(&conversation[from..]);
                 // A same-session overload retry already has its own context. Only
                 // a replacement session needs prior native attempts for reconciliation.
                 if let Some(previous) = attempts.first().filter(|previous|

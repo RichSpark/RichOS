@@ -43,6 +43,18 @@ class DesktopHooks(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("dispatch", result.stderr.lower())
 
+    def test_native_response_formatting_records_evidence_without_opening_a_work_grant(self):
+        self.scope.write_text('{"version":1,"actions_allowed":false}')
+        for event in ("PreToolUse", "PostToolUse"):
+            result = self.hook(event, tool_name="StructuredOutput", tool_use_id="format-reply", tool_input={"reply":"Ready."})
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(json.loads(self.scope.read_text())["actions_allowed"])
+        self.assertTrue((self.root / "state/evidence/fictional-session/callbacks.jsonl").exists())
+        denied = self.hook("PreToolUse", tool_name="StructuredOutput", agent_id="a-worker", tool_input={"reply":"Not the main session"})
+        self.assertEqual(denied.returncode, 2)
+        for tool in ("Bash", "Read", "Agent"):
+            self.assertEqual(self.hook("PreToolUse", tool_name=tool, tool_input={}).returncode, 2)
+
     def test_closed_grant_refuses_new_tools_before_recording_an_attempt(self):
         self.scope.write_text('{"version":1,"actions_allowed":false}')
         result = self.hook("PreToolUse", tool_name="Bash", tool_use_id="tool-1", tool_input={"command":"true"})

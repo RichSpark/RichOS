@@ -499,6 +499,7 @@ richos/app/
     tests/onboarding_persistence_tests.rs regressions for verified tool persistence, per-company answers, resumption and MCP transport.
     tests/request_preparation_tests.rs regressions for cancellable connection, priming, rotation, bounded recovery and restart outcomes.
     tests/restart_continuation_tests.rs 7 restart tests for atomic continuation, uncertain native attempts, preserved control provenance and durable Stop across replay.
+    tests/routing_context_tests.rs verifies that classification receives the existing scoped visible conversation, including formatted replies, without hidden inputs.
     tests/onboarding_declination_tests.rs 7 tests over the two spine methods the first-run
                               notice is built on. `record_declination` shipped with no caller
                               anywhere in the product, so `OnboardingState::Declined` and
@@ -1223,7 +1224,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2006 tests + 5 doc-tests (2002 direct, 4 ignored)
+cargo test -p richos-core                       # 2010 tests + 5 doc-tests (2006 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

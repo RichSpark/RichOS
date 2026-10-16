@@ -1238,6 +1238,7 @@ impl StallWatch {
 
 /// A live session to a native `claude` child.
 pub struct NativeClient {
+    formatted_reply: bool,
     stall_watch: Option<StallWatch>,
     child: crate::owned_process::OwnedChild,
     /// The supervisor's per-lease state file, when this lease is supervised (the product reap,
@@ -1830,6 +1831,8 @@ impl NativeClient {
             Some((doctrine, skills)) => chat_child_args(&session_id, doctrine, skills),
             None => child_args(&session_id),
         };
+        let formatted_reply=profile.is_some() && role==LeaseRole::Conversation;
+        if formatted_reply {args.extend(["--json-schema".into(),crate::native_reply::schema().to_string()]);}
         // The selected model, with low effort for replies and high effort for work.
         args.extend(lease_model_args(role, profile));
         if let Some((executable, scope, assignments, status)) = onboarding {
@@ -1992,6 +1995,7 @@ impl NativeClient {
             },
             reap_state,
             settle_workers_on_stop: profile.is_some(),
+            formatted_reply,
             stdin,
             session_id,
             next_id: AtomicI64::new(1),
@@ -2816,6 +2820,17 @@ impl NativeClient {
         // `Done`, the cancel timeout (before the sink is detached), the child vanishing, and a
         // provider result, so partial output is never lost at the boundary.
         let mut spelling = crate::american_spelling::Speller::new();
+        let mut formatted=self.formatted_reply.then(crate::native_reply::ReplyStream::default);
+        fn say(text:&str,seq:&mut u64,on_item:&mut dyn FnMut(TurnItem),spelling:&mut crate::american_spelling::Speller,first_logged:&mut bool) {
+            if text.is_empty() {return}
+            if !*first_logged {
+                *first_logged=true;
+                eprintln!("[richos] {} reply timing: first text from the model",crate::util::wall_clock_utc());
+            }
+            let decided=spelling.push(text);
+            if !decided.is_empty() {on_item(TurnItem::Text {seq:*seq,text:&decided});*seq+=1;}
+        }
+
         fn release(seq: &mut u64, on_item: &mut dyn FnMut(TurnItem), spelling: &mut crate::american_spelling::Speller) {
             let held = spelling.finish();
             if !held.is_empty() {
@@ -2838,29 +2853,24 @@ impl NativeClient {
             };
             match received {
                 Ok(ChunkMsg::Text(t)) => {
-                    if !first_text_logged {
-                        first_text_logged = true;
-                        eprintln!("[richos] {} reply timing: first text from the model", crate::util::wall_clock_utc());
-                    }
-                    let decided = spelling.push(&t);
-                    // Never an empty item: a delta that is all held-back word delivers nothing
-                    // now and consumes no position.
-                    if !decided.is_empty() {
-                        on_item(TurnItem::Text { seq, text: &decided });
-                        seq += 1;
-                    }
+                    if !self.formatted_reply {say(&t,&mut seq,on_item,&mut spelling,&mut first_text_logged);}
                 }
                 Ok(ChunkMsg::Frame(frame)) => {
-                    // A keep-alive `ping` can arrive mid-word and says nothing about the text,
-                    // so it releases nothing; every other frame ends the run of text in front
-                    // of it (`content_block_stop` right after a block's last delta, above all).
-                    if !is_ping(&frame) {
-                        release(&mut seq, on_item, &mut spelling);
-                    }
+                    let typed=if let Some(decoder)=formatted.as_mut() {
+                        decoder.observe(&frame).map_err(NativeError::Protocol)?
+                    } else {None};
+                    let reply_delta=typed.is_some() && frame["type"]=="stream_event"
+                        && frame["event"]["delta"]["type"]=="input_json_delta";
+                    if !reply_delta && !is_ping(&frame) {release(&mut seq,on_item,&mut spelling);}
+                    if let Some(text)=typed {say(&text,&mut seq,on_item,&mut spelling,&mut first_text_logged);}
                     if let Some(resets_at) = usage_limit_signal(&frame) {
                         limit = Some(resets_at);
                     }
-                    for record in MachineryRecord::from_native_event(&frame, &self.session_id, seq) {
+                    // The formatted reply has its own typed carrier. Preserve ordinary
+                    // assistant text as technical commentary through the existing normalizer.
+                    let records=if self.formatted_reply {MachineryRecord::from_native_between_turn(&frame,&self.session_id,seq)}
+                        else {MachineryRecord::from_native_event(&frame,&self.session_id,seq)};
+                    for record in records {
                         seq += 1;
                         on_item(TurnItem::Machinery(record));
                     }
@@ -2894,7 +2904,7 @@ impl NativeClient {
                 }
                 Ok(ChunkMsg::Done(result)) => {
                     release(&mut seq, on_item, &mut spelling);
-                    let reason = stop_reason_of(&result);
+                    let mut reason = stop_reason_of(&result);
                     // **Refused for a usage limit** (fill-first's backstop): said as that, so the
                     // spine and the work host continue on the next account instead of reading an
                     // ordinary failure. Whether the child stays alive afterwards is not known
@@ -2911,6 +2921,17 @@ impl NativeClient {
                         let detail = result.get("errors").or_else(|| result.get("result"))
                             .map(Value::to_string).unwrap_or_else(|| reason.clone());
                         return Err(NativeError::Protocol(detail));
+                    }
+                    if let Some(decoder)=formatted.as_mut() {
+                        if reason!=STOP_REASON_CANCELLED {
+                            if !crate::native_reply::completed(&result) {
+                                return Err(NativeError::Protocol("The provider omitted the formatted reply.".into()));
+                            }
+                            let text=decoder.finish(&result).map_err(NativeError::Protocol)?;
+                            say(&text,&mut seq,on_item,&mut spelling,&mut first_text_logged);
+                            release(&mut seq,on_item,&mut spelling);
+                            reason="end_turn".into();
+                        }
                     }
                     return Ok(reason);
                 }
@@ -3398,6 +3419,7 @@ pub struct NativeCognition {
     pending_context_brief: Option<String>,
     company_context: Option<String>,
     classifier: Option<crate::request_classifier::RequestClassifier>,
+    routing_context: String,
 }
 
 impl NativeCognition {
@@ -3416,7 +3438,7 @@ impl NativeCognition {
     pub fn start(claude_bin: &Path, engine_cwd: &Path, doctrine: &Path, skills: &Path) -> Result<Self, NativeError> {
         let client = NativeClient::spawn(claude_bin, engine_cwd, doctrine, skills)?;
         let session_id = client.session_id().to_string();
-        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
+        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None, routing_context: String::new() })
     }
     /// A chat lease with app-owned, company-scoped persistence tools. The scope is
     /// supplied by the spine before priming, never selected by the model. The host
@@ -3432,7 +3454,7 @@ impl NativeCognition {
         let status = scopes.join(format!("{identity}-status.json"));
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None, routing_context: String::new() })
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
@@ -3451,7 +3473,7 @@ impl NativeCognition {
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None, routing_context: String::new() })
     }
 
     /// Settings-isolated desktop lease from verified engine delivery.
@@ -3478,7 +3500,7 @@ impl NativeCognition {
         let session_id = client.session_id().to_string();
         let classifier=Some(crate::request_classifier::RequestClassifier::new(bin,&profile,skills));
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier, routing_context: String::new() })
     }
 
     /// **The WORK lease** — the background-work spec §2.1's second compute lease, in the
@@ -3520,7 +3542,7 @@ impl NativeCognition {
             // A work lease has no `richos_continuity` server, so there is no second scope for
             // one — the file it does read is `richos_work`'s, and its grant is §5.4's standing
             // one, opened per assignment rather than per reply.
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None, routing_context: String::new() })
     }
 
     /// **Give this session the turn's brief, unless it already holds exactly this text** — part 1
@@ -3638,7 +3660,7 @@ impl NativeCognition {
         let active:crate::ecs::ToolScope=serde_json::from_slice(&std::fs::read(active).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
         let operation=&self.client.operation_cancel;
         let mut saving=None;
-        let result=crate::routing::route(path,&scope,&active,&self.session_id,|original,context| {
+        let result=crate::routing::route(path,&scope,&active,&self.session_id,&self.routing_context,|original,context| {
             let choice=classifier.classify(original,context,|| {
                 let op=operation.lock().unwrap();op.active && op.requested
             });
@@ -3711,6 +3733,8 @@ impl Drop for NativeCognition {
 }
 
 impl Cognition for NativeCognition {
+    fn set_conversation_context(&mut self,context:&str) {self.routing_context=context.to_string();}
+
     fn account(&self) -> Option<&str> {
         self.engine_profile.as_ref()?.claude_account.as_ref().map(|a| a.id.as_str())
     }
@@ -5405,7 +5429,7 @@ exec /bin/sleep 1000
             work_binding: None,
             engine_profile: None,
             role,
-            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None,
+            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None, routing_context: String::new(),
         };
         (lease, root)
     }
@@ -5679,7 +5703,7 @@ exec /bin/sleep 1000
             work_binding: None,
             engine_profile: Some(fixture_profile(&root)),
             role: LeaseRole::Work,
-            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None,
+            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None, routing_context: String::new(),
         };
         (lease, root)
     }
@@ -6816,6 +6840,49 @@ done
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         path
+    }
+
+    #[test]
+    fn formatted_replies_stream_without_promoting_commentary_and_complete_only_after_validation() {
+        let reply="Color 😀 with a \"quote\".\nReady.";
+        let note="Handoff saved. Just acknowledge.";
+        let line=|frame:Value|format!("printf '%s\\n' '{}'\n",frame.to_string().replace('\'',"'\\''"));
+        let mut script=String::from("read -r init\n");
+        script.push_str(&line(json!({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})));
+        for _ in 0..2 {
+            script.push_str("read -r prompt\n");
+            script.push_str(&line(json!({"type":"stream_event","event":{"type":"message_start"}})));
+            script.push_str(&line(json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":note}}})));
+            script.push_str(&line(json!({"type":"assistant","message":{"content":[{"type":"text","text":note}]}})));
+            script.push_str(&line(json!({"type":"stream_event","event":{"type":"message_start"}})));
+            script.push_str(&line(json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"format","name":"StructuredOutput"}}})));
+            for character in json!({"reply":reply}).to_string().chars() {
+                script.push_str(&line(json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":character.to_string()}}})));
+            }
+            script.push_str(&line(json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"format","name":"StructuredOutput","input":{"reply":reply}}]}})));
+            script.push_str(&line(json!({"type":"result","stop_reason":"tool_use","subtype":"success","is_error":false,"structured_output":{"reply":reply}})));
+        }
+        script.push_str("read -r prompt\n");
+        script.push_str(&line(json!({"type":"assistant","message":{"content":[{"type":"text","text":"Plain fallback must stay commentary"}]}})));
+        script.push_str(&line(json!({"type":"result","stop_reason":"end_turn","subtype":"success","is_error":false})));
+        script.push_str("read -r prompt\n");
+        script.push_str(&line(json!({"type":"result","stop_reason":STOP_REASON_CANCELLED})));
+        let script=write_script("formatted-replies",&script);
+        let mut client=NativeClient::spawn(&script,&std::env::temp_dir(),&doctrine_fixture(),&skills_fixture()).unwrap();
+        client.formatted_reply=true;
+        assert_eq!(client.prompt_context_only("Prior context",&mut |_|{}).unwrap(),"end_turn");
+        let mut text=String::new();let mut commentary=Vec::new();
+        assert_eq!(client.prompt("Actual user question",&mut |item|match item {
+            TurnItem::Text {text:delta,..}=>text.push_str(delta),
+            TurnItem::Machinery(record) if record.title=="assistant:text"=>commentary.push(record),
+            _=>{},
+        }).unwrap(),"end_turn");
+        assert_eq!(text,reply);assert_eq!(commentary.len(),1);
+        assert_eq!(commentary[0].summary.as_deref(),Some(note));
+        text.clear();
+        assert!(matches!(client.prompt("Next question",&mut |item|if let TurnItem::Text {text:delta,..}=item {text.push_str(delta)}),Err(NativeError::Protocol(_))));
+        assert!(text.is_empty(),"untyped fallback became a user reply");
+        assert_eq!(client.prompt("An interrupted question",&mut |_|{}).unwrap(),STOP_REASON_CANCELLED);
     }
 
     #[test]
