@@ -29,12 +29,13 @@ impl Cognition for WritesItDown {
     fn prepare_work_turn(
         &mut self,
         binding: &ThreadBinding,
-        turn: &str,
+        _turn: &str,
+        original_turn: &str,
         _source: Source,
         text: &str,
         _on_item: &mut dyn FnMut(TurnItem),
     ) -> Result<(), CognitionError> {
-        self.scope = Some((binding.clone(), turn.to_string(), text.to_string()));
+        self.scope = Some((binding.clone(), original_turn.to_string(), text.to_string()));
         Ok(())
     }
     fn prompt(&mut self, _: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {

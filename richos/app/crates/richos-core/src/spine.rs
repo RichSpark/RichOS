@@ -2975,8 +2975,6 @@ impl Spine {
                         Self::retain_and_emit_machinery(journal, observer, record.stamp(thread_id, Some(turn_id), true));
                     }
                 };
-                self.lease.as_mut().ok_or(SpineError::NoLease)?
-                    .prepare_work_turn(binding, turn_id, self.ledger.turn(turn_id).ok_or_else(|| SpineError::NoLease)?.source, text, &mut on_item).map_err(SpineError::from)?;
                 let mut attempts = Vec::new();
                 let mut successor = turn_id;
                 let mut seen = std::collections::HashSet::new();
@@ -2991,6 +2989,10 @@ impl Spine {
                     }));
                     successor = &previous.id;
                 }
+                // Delivery gets a new lifecycle ID after restart; execution retains the
+                // original user request identity for attestation and handoff deduplication.
+                self.lease.as_mut().ok_or(SpineError::NoLease)?
+                    .prepare_work_turn(binding, turn_id, successor, self.ledger.turn(turn_id).ok_or(SpineError::NoLease)?.source, text, &mut on_item).map_err(SpineError::from)?;
                 // A same-session overload retry already has its own context. Only
                 // a replacement session needs prior native attempts for reconciliation.
                 if let Some(previous) = attempts.first().filter(|previous|

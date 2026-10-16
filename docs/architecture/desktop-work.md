@@ -186,3 +186,8 @@ fsync, so simultaneous calls or retries return the same saved handoff. A new use
 turn with identical words remains distinct. Assignment records cannot dispatch it.
 New execution requests wait for Stu's next prepared turn; corrections and reports
 still use live input. Neither agent is the other's provider teammate.
+
+Recovered deliveries retain the initial user turn's ledger reference for request
+authority and execution handoff. The continuation's own turn ID still identifies
+its native delivery, questions and lifecycle. Recovery never creates new authority
+for an existing user request.

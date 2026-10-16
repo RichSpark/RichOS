@@ -29,10 +29,15 @@ fn saved_inflight_input_is_answered_automatically_once_after_restart() {
     let mut spine = support::spine(Ledger::open(&path).unwrap());
     let mock = MockCognition::new("restarted", vec!["10"]);
     let prompts = mock.prompts.clone();
+    let origins = mock.request_origins.clone();
     spine.attach_lease(Box::new(mock));
     spine.reconcile_intake().unwrap();
     spine.reconcile_intake().unwrap();
     assert_eq!(*prompts.lock().unwrap(), vec!["Also, what is 5 plus 5?"]);
+    let origins=origins.lock().unwrap();
+    assert_eq!(origins.len(),1);
+    assert_eq!(origins[0].1,id,"restart must retain the original request's execution identity");
+    assert_ne!(origins[0].0,id,"the recovered delivery must keep its own lifecycle identity");
     let m = spine.messages(&thread).unwrap();
     assert_eq!(m.iter().filter(|x| x.role == "user").count(), 1);
     assert_eq!(m.iter().find(|x| x.role == "assistant").unwrap().text, "10");

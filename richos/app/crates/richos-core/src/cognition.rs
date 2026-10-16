@@ -285,7 +285,7 @@ pub trait Cognition: Send {
     /// Host-issued visible-turn scope. Hidden preparation records are retained as
     /// internal machinery and never receive a mutation grant.
     fn set_input_channel(&mut self, _channel: Option<&str>) -> Result<(), CognitionError> { Ok(()) }
-    fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
+    fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str, _original_turn: &str,
         _source: crate::ledger::Source, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
 
     /// Previous delivery facts, separate from the unchanged user instruction.
@@ -456,6 +456,7 @@ pub struct MockCognition {
     pub reprimes: Arc<Mutex<Vec<String>>>,
     pub prompts: Arc<Mutex<Vec<String>>>,
     pub recovery_contexts: Arc<Mutex<Vec<String>>>,
+    pub request_origins: Arc<Mutex<Vec<(String,String)>>>,
     /// RAW native frames a test parked as between-turn traffic (§1.5 gap #1).
     ///
     /// Raw wire JSON, NOT pre-built records, deliberately: a test that pushed a finished
@@ -475,6 +476,7 @@ impl MockCognition {
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
             recovery_contexts: Arc::new(Mutex::new(Vec::new())),
+            request_origins: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -490,6 +492,7 @@ impl MockCognition {
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
             recovery_contexts: Arc::new(Mutex::new(Vec::new())),
+            request_origins: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -502,6 +505,11 @@ impl MockCognition {
 }
 
 impl Cognition for MockCognition {
+    fn prepare_work_turn(&mut self, _: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,
+        _: crate::ledger::Source, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+        self.request_origins.lock().unwrap().push((turn.into(),original_turn.into())); Ok(())
+    }
+
     fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
         self.recovery_contexts.lock().unwrap().push(context.into()); Ok(())
     }
