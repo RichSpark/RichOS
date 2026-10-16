@@ -249,7 +249,7 @@ impl ScopedPermissions {
             || (tool == "mcp__richos_work__team" && matches!(request["input"]["action"].as_str(), Some("list" | "show")));
         if work_read { return allow(); }
         // These tools implement their own explicit host scope and write contracts.
-        if matches!(tool,"mcp__richos_work__integrate"|"mcp__richos_work__repositories"|"mcp__richos_work__prepare"|"mcp__richos_work__inspect"|"mcp__richos_work__complete"|
+        if matches!(tool,"mcp__richos_work__integrate"|"mcp__richos_work__repositories"|"mcp__richos_work__prepare"|"mcp__richos_work__inspect"|"mcp__richos_work__complete"|"mcp__richos_work__report"|
             // The team tool (proto-teammate shelf plan slice 4, richos-hq
             // docs/plans/2026-10-06-proto-teammate-shelf.md section 10 point 2: the back end
             // activates a shelf teammate when a job needs it, without asking). It lists and
@@ -464,7 +464,7 @@ impl ScopedPermissions {
         let desk=Arc::new(PermissionDesk::default());
         let (p,work_lease)=joined(&desk,WORK_AUDIENCE,"obligation-7");
         for tool in ["mcp__richos_work__repositories","mcp__richos_work__prepare","mcp__richos_work__inspect",
-                     "mcp__richos_work__complete","mcp__richos_work__integrate","mcp__richos_work__team"] {
+                     "mcp__richos_work__complete","mcp__richos_work__integrate","mcp__richos_work__team","mcp__richos_work__report"] {
             assert_eq!(work_lease.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20)).behavior(),
                 "allow","{tool} asked him for permission to do the job he gave it");
         }
@@ -488,7 +488,7 @@ impl ScopedPermissions {
         // there is no longer a name in this file that a sixth work tool could hide behind.
         // The sixth came (`team`, proto-teammate shelf slice 4) and was added here.
         for tool in ["mcp__richos_work__repositories","mcp__richos_work__prepare","mcp__richos_work__inspect",
-                     "mcp__richos_work__complete","mcp__richos_work__integrate","mcp__richos_work__team"] {
+                     "mcp__richos_work__complete","mcp__richos_work__integrate","mcp__richos_work__team","mcp__richos_work__report"] {
             assert_eq!(conversation.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20)).behavior(),"allow","Rich lost {tool}");
             assert_eq!(work_lease.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20)).behavior(),"allow","back end: {tool}");
         }
