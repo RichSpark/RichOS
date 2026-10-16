@@ -235,22 +235,23 @@ fn repeated_restarts_preserve_every_uncertain_native_attempt() {
     let binding = ledger.thread_binding(&thread).unwrap();
     let original = ledger.record_prompt_received(&binding, "Finish the authorized work", Source::Text).unwrap();
     ledger.mark_turn_started(&original, "first-native-effect").unwrap();
+    ledger.record_prompt_received(&binding, "Actually use Tuesday", Source::Text).unwrap();
     let previous = ledger.replay_turn(&binding, &original).unwrap();
     ledger.mark_turn_started(&previous, "second-native-uncertain").unwrap();
     drop(ledger);
     let mut spine = support::spine(Ledger::open(&path).unwrap());
-    let mock = MockCognition::new("third-native", vec!["Checked all previous attempts"]);
+    let mock = MockCognition::new("third-native", vec!["Checked all previous attempts", "Updated"]);
     let contexts = mock.recovery_contexts.clone();
     let prompts = mock.prompts.clone();
     spine.attach_lease(Box::new(mock));
     spine.reconcile_intake().unwrap();
-    assert_eq!(*prompts.lock().unwrap(), vec!["Finish the authorized work"]);
+    assert_eq!(*prompts.lock().unwrap(), vec!["Finish the authorized work", "Actually use Tuesday"]);
     let facts: serde_json::Value = serde_json::from_str(&contexts.lock().unwrap()[0]).unwrap();
     assert_eq!(facts["previous_delivery_attempt"]["session_id"], "second-native-uncertain");
     assert_eq!(facts["earlier_delivery_attempts"][0]["session_id"], "first-native-effect");
     assert_eq!(facts["earlier_delivery_attempts"][0]["turn_id"], original);
     assert_eq!(facts["earlier_delivery_attempts"][0]["delivery_outcome"], "unknown");
-    assert_eq!(spine.messages(&thread).unwrap().iter().filter(|m| m.role == "user").count(), 1);
+    assert_eq!(spine.messages(&thread).unwrap().iter().filter(|m| m.role == "user").count(), 2);
     drop(spine);
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -1272,7 +1272,8 @@ impl Ledger {
                 self.handoff_summaries.insert(thread_id, summary);
             }
             Event::TurnReplayed { turn_id, by_turn_id, at } => {
-                if let Some(original) = self.turn(&turn_id).cloned() {
+                if let Some(index) = self.turns.iter().position(|turn| turn.id == turn_id) {
+                    let original = self.turns[index].clone();
                     if matches!(original.state, TurnState::Received | TurnState::InFlight) {
                         let retired = self.turn_mut(&turn_id).unwrap();
                         retired.state = TurnState::Interrupted;
@@ -1286,6 +1287,10 @@ impl Ledger {
                         channel: original.channel, client_id: None,
                         voice_note: original.voice_note, pressed: original.pressed,
                     });
+                    // A continuation replaces this request's place in acceptance order.
+                    // Appending it after later requests reverses corrections on another restart.
+                    let continuation = self.turns.pop().unwrap();
+                    self.turns.insert(index + 1, continuation);
                     self.apply(Event::TurnSuperseded { turn_id, by_turn_id, at });
                 }
             }
