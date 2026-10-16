@@ -1210,7 +1210,8 @@ def prepare(scope_path, scope, args):
 
 def view(record, include_payload=False):
     result = {key:value for key,value in record.items() if key not in ("payload","ecs_pending","ecs_pending_projection","ecs_projection")}
-    if include_payload: result["agent_payload"] = record["payload"]
+    if include_payload:
+        result["agent_payload"] = {k:v for k,v in record["payload"].items() if k != "name"}
     result["assignment_completed"] = False
     if record["request"]["role"] == "consult":
         return result                    # no workspace: its answer is `consult_answer`, on the record
@@ -1237,11 +1238,16 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
     if payload.get("agent_id"): raise ValueError("workers cannot dispatch another worker")
     ti = payload.get("tool_input",{})
     with locked(scope) as root:
-        matches = [(p,r) for p,r in receipts(root) if r["name"] == ti.get("name")]
-        if len(matches) != 1: raise ValueError("prepare this assignment with the app work tool before calling Agent")
+        matches = [(p,r) for p,r in receipts(root)
+                   if (r["name"] == ti["name"] if ti.get("name") else
+                       r.get("status") == "prepared" and
+                       {k:v for k,v in r["payload"].items() if k != "name"} == ti)]
+        if len(matches) != 1: raise ValueError("Agent input is absent from or differs from its prepared scoped receipt; prepare this assignment with the app work tool before calling Agent")
         path,record = matches[0]
         if record["binding"] != scope["binding"] or record["status"] != "prepared":
             raise ValueError("this dispatch is stale or already attempted; reconcile before retrying")
+        ti = {"name": record["name"], **ti}
+        payload["tool_input"] = ti
         if ti != record["payload"]: raise ValueError("Agent input differs from its prepared scoped receipt")
         if payload.get("session_id") != scope["binding"]["session_id"] or not payload.get("tool_use_id"):
             raise ValueError("dispatch has no matching native call identity")
@@ -1263,27 +1269,8 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
         save(path,record)
 
 
-def shell_substitution(command):
-    # Only identify active quoting forms; do not interpret or authorize the shell.
-    quote, escaped = None, False
-    for index, char in enumerate(command):
-        if escaped: escaped = False; continue
-        if quote == "'":
-            if char == "'": quote = None
-            continue
-        if char == "\\": escaped = True; continue
-        if char == '"': quote = None if quote == '"' else '"'; continue
-        if char == "'" and quote is None: quote = "'"; continue
-        if char == "`" or (char == "$" and command[index:index+2] == "$("): return True
-    return False
-
-
 def validate_shell_target(payload):
-    """Reject a known non-classifiable Git command form before permission evaluation.
-
-    This is format feedback, not a shell parser, sandbox or permission grant.
-    Literal paths still undergo the provider's independent permission decision.
-    """
+    """Reuse the terminal's inline-shell guard without adding app command parsing."""
     if payload.get("tool_name") != "Bash": return
     command = payload.get("tool_input", {}).get("command", "")
     if not isinstance(command, str): return
@@ -1291,14 +1278,6 @@ def validate_shell_target(payload):
     # Same rule as the operator install's guard-no-shell-c.sh, loaded from the one shared file.
     shell_c = load("richos_shell_c", ENGINE / "scripts/lib/shell_c.py").refusal(command)
     if shell_c: raise ValueError(shell_c)
-    variable_target = re.search(r'\bgit\s+-C\s+(?:"\s*)?\$(?:[A-Za-z_{(])', command)
-    substituted_git = re.search(r"\bgit\s", command) and shell_substitution(command)
-    if variable_target or substituted_git:
-        raise ValueError("Unsupported Git command form: use git -C with the literal absolute target path, "
-                         "not a shell variable or substitution. Use literal commit messages with -m or a literal heredoc on commit -F -. Submit separate direct checks. "
-                         "This formatting refusal occurs before provider permission evaluation; "
-                         "a corrected command still requires the normal scope and permission checks. "
-                         "Never use this guidance to retry an action the user or provider denied.")
 
 
 def worker_context(scope, payload):
@@ -1314,8 +1293,10 @@ def worker_context(scope, payload):
         if len(matches) != 1:
             raise ValueError("worker identity has not joined its app receipt; no tool action is allowed yet")
         record=matches[0]
-        if record["binding"] != scope["binding"]:
-            raise ValueError("this worker belongs to an earlier turn; reconcile it before continuing")
+        # A dispatched worker belongs to this standing session, not its latest input turn.
+        if any(record["binding"][key] != scope["binding"][key]
+               for key in ("entity_id", "thread_id", "session_id")):
+            raise ValueError("this worker belongs to another session or conversation")
         if str(payload.get("tool_name", "")).startswith("mcp__richos_"):
             raise ValueError("CEO-scoped continuity, onboarding and orchestration tools are not worker tools")
         if record["request"]["role"] == "consult":

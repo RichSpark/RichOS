@@ -185,8 +185,9 @@ class DesktopWork(unittest.TestCase):
         ready=self.call("prepare",{**self.args,"teammate":"frank"})
         self.assertRegex(ready["name"],r"^frank-opus-[0-9a-f]{12}$")
         payload=ready["agent_payload"]
-        self.assertEqual((payload["name"],payload["subagent_type"],payload["model"]),
-                         (ready["name"],"richos-app-engine:frank","opus"))
+        self.assertNotIn("name",payload)
+        self.assertNotIn("isolation",payload)
+        self.assertEqual((payload["subagent_type"],payload["model"]),("richos-app-engine:frank","opus"))
         self.assertEqual((ready["request"]["role"],ready["request"]["teammate"]),("worker","frank"))
         duty=(ENGINE/"mega-lander/duties/worker.md").read_text().strip()
         self.assertTrue(duty.startswith(DUTY_TOP["worker"]))
@@ -744,10 +745,10 @@ class DesktopWork(unittest.TestCase):
         self.scope["actions_allowed"]=False;self.scope_path.write_text(json.dumps(self.scope))
         with self.assertRaises(ValueError):self.call("prepare",self.args)
         self.assertFalse((self.root/"engine-state/target-worktrees").exists())
-    def test_variable_git_targets_get_format_feedback_without_a_permission_grant(self):
+    def test_app_does_not_parse_git_commands_for_the_retired_classifier(self):
         for command in ['git -C "$TARGET" status', 'git -C $TARGET status', 'git -C "${TARGET}" log -1', 'git -C "$(pwd)" status', 'git commit -m "$(cat <<EOF\nFixture\nEOF\n)"', 'git commit -m `echo Fixture`']:
-            with self.subTest(command=command), self.assertRaisesRegex(ValueError,"Unsupported Git command form"):
-                self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}})
+            with self.subTest(command=command):
+                self.assertIsNone(self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}}))
         for command in ['git -C "/fictional/target with spaces" status', "git -C '/fictional/$literal' status",  'python3 ./tests.py', "git commit -m 'Fix `marker` and $(literal)'"]:
             self.assertIsNone(self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}}))
         self.assertIsNone(self.app.validate_shell_target({"tool_name":"Read","tool_input":{"command":"git -C $TARGET status"}}))
@@ -779,6 +780,18 @@ class DesktopWork(unittest.TestCase):
         (target/"redirect").symlink_to(self.coord,target_is_directory=True)
         event["tool_input"]["file_path"]=str(target/"redirect/wrong.txt")
         with self.assertRaisesRegex(ValueError,"outside"):self.app.worker_context(self.scope,event)
+
+    def test_dispatched_worker_survives_later_stu_inputs_but_cannot_cross_session_or_conversation(self):
+        ready=self.call("prepare",self.args)
+        self.start_fixture_worker(ready,"standing-worker")
+        target=self.root/"engine-state/target-worktrees"/self.app.folder(self.scope).name/ready["name"]
+        event={"session_id":self.session,"agent_id":"standing-worker","cwd":str(self.coord),
+               "tool_name":"Write","tool_input":{"file_path":str(target/"result.txt")}}
+        later={**self.scope,"binding":{**self.scope["binding"],"turn_id":"next-message","revision":2,"audience":"worker"}}
+        self.assertIn(str(target),self.app.worker_context(later,event)["hookSpecificOutput"]["additionalContext"])
+        for key in ("entity_id","thread_id","session_id"):
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.app.worker_context({**later,"binding":{**later["binding"],key:"another"}},event)
 
     def start_fixture_worker(self, ready, aid):
         payload={"session_id":self.session,"tool_use_id":"call-"+aid,"tool_input":ready["agent_payload"]}

@@ -37,7 +37,7 @@ class PermissionProviderTests(unittest.TestCase):
         init = self.read()
         self.assertEqual((init['type'], init['subtype']), ('system', 'init'))
         self.assertIn({'name': 'richos-app-engine'}, init['plugins'])
-        self.assertEqual(init['permissionMode'], 'auto')
+        self.assertEqual(init['permissionMode'], 'bypassPermissions')
         self.assertIn('mcp__richos_onboarding__save_company_notes', init['tools'])
         self.assertIn('mcp__richos_onboarding__decline_onboarding', init['tools'])
         self.assertIn('mcp__richos_continuity__checkpoint', init['tools'])

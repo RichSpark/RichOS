@@ -37,7 +37,7 @@ for line in sys.stdin:
         emit({'type':'control_response','response':{'subtype':'success','request_id':request['request_id'],'response':{}}})
         continue
     if request['type'] != 'user': continue
-    emit({'type':'system','subtype':'init','plugins':[{'name':'rich-skills'}], 'permissionMode':'auto',
+    emit({'type':'system','subtype':'init','plugins':[{'name':'rich-skills'}], 'permissionMode':'bypassPermissions',
           'tools':['mcp__richos_onboarding__save_company_notes','mcp__richos_onboarding__decline_onboarding',
                    'mcp__richos_assignments__record','mcp__richos_status__background_work']})
     content = request.get('message', {}).get('content', '')

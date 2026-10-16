@@ -7,8 +7,8 @@ this section wins.
 
 The app's dispatch adapter verifies the `cross-repo-worktree:` assignment line
 against its private workspace registry before launching you. That registered
-path is your implementation worktree. The provider's Environment may name a
-separate native coordination worktree; do not implement or commit there. Use
+path is your implementation worktree. The provider's Environment may name the
+conversation coordination directory; do not implement or commit there. Use
 absolute paths under the registered target and `git -C <target>` for Git commands.
 The host's tool hook also supplies your verified target. If those disagree, stop.
 

@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 
 # WHAT THE AGENT HEARS IS WAIT, AND NOTHING ADDED TO IT. The CEO, 2026-09-28: "aha,
@@ -33,7 +34,7 @@ import sys
 # command, because an agent waits by running something: a background subagent that
 # finishes its reply ends its run (Rich, brief addition 1). No prohibitions: they
 # break the agent's normal finishing and a real stop, and naming an act invites it.
-WAIT_COMMAND = "python3 ~/.claude/richos-engine/scripts/lib/agent_hold.py wait"
+WAIT_COMMAND = "python3 " + shlex.quote(os.path.join(os.path.dirname(os.path.realpath(__file__)), "agent_hold.py")) + " wait"
 BODY = "\n".join([
     "WAIT until the orchestrator resumes you, then carry on from where you were.",
     "To wait, run this command with the Bash timeout 600000, and run it again each time it prints STILL WAITING: "

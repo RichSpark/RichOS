@@ -25,12 +25,23 @@ fn prepare_fixture(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result
 }
 
 #[test]
-fn app_profile_creates_neutral_coordination_and_one_hook_per_event() {
+fn app_profile_keeps_app_scope_on_every_tool_and_reuses_terminal_bash_hooks() {
     let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     let hooks = manifest["hooks"].as_object().unwrap();
     assert_eq!(hooks.len(), 9);
-    assert!(hooks.values().all(|groups| groups.as_array().unwrap().len() == 1 && groups[0]["hooks"].as_array().unwrap().len() == 1));
+    for (event, groups) in hooks {
+        assert_eq!(groups.as_array().unwrap().len(), if event == "PreToolUse" { 2 } else { 1 });
+        assert_eq!(groups[0]["hooks"].as_array().unwrap().len(), 1);
+    }
+    let bash = &hooks["PreToolUse"][1];
+    assert_eq!(bash["matcher"], "Bash");
+    let registered = bash["hooks"].as_array().unwrap();
+    for (hook, name) in registered.iter().zip([
+        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh"]) {
+        assert!(hook["command"].as_str().unwrap().contains(engine().join("scripts/hooks").join(name).to_str().unwrap()));
+    }
+    assert_eq!(registered.len(), 3);
     // **NO `matcher`, SO `PreToolUse` COVERS EVERY TOOL.** Asserted rather than left to be
     // inferred: two escalations and one brief on 2026-09-18 were built on the belief that
     // this registration gated only the two continuity tools, and deferring the app's action
@@ -59,6 +70,7 @@ fn app_profile_creates_neutral_coordination_and_one_hook_per_event() {
 fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() {
     let f = Scratch::new();
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let before: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     profile.install_quota_gate(Path::new("/Applications/RichOS Test.app/Contents/MacOS/richos")).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     let group = &manifest["hooks"]["PreToolUse"][0];
@@ -67,6 +79,8 @@ fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() 
     assert!(hook["command"].as_str().unwrap().contains("--claude-quota-gate"));
     assert!(hook["command"].as_str().unwrap().contains("app-engine-hook.py"));
     assert_eq!(hook["timeout"], 21600);
+    assert_eq!(manifest["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest["hooks"]["PreToolUse"][1], before["hooks"]["PreToolUse"][1]);
     assert_eq!(manifest["hooks"].as_object().unwrap().len(), 9);
 }
 
@@ -259,7 +273,7 @@ fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_overri
 }
 
 #[test]
-fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thread() {
+fn bypass_permissions_match_the_terminal_and_keep_company_and_thread_read_roots() {
     use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
     let f=Scratch::new();
     let alpha=EntityId::parse("alpha").unwrap();let beta=EntityId::parse("beta").unwrap();
@@ -274,7 +288,7 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
     let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,Path::new("/fictional/provider"),"session",&f.0.join("scope"));
     let args:Vec<_>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
-    assert!(args.windows(2).any(|pair|pair==["--permission-mode","auto"]));
+    assert!(args.windows(2).any(|pair|pair==["--permission-mode","bypassPermissions"]));
     let start=args.iter().position(|arg|arg=="--add-dir").unwrap()+1;
     let directories:Vec<_>=args[start..].iter().take_while(|arg|!arg.starts_with("--")).map(String::as_str).collect();
     // THIS conversation's attached files (CEO §86): without them in a read root, an attachment
@@ -293,17 +307,11 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     let beta_thread=spine.create_thread("Beta",&beta).unwrap();
     let other=richos_core::attachments::conversation_folder(&f.0,beta_thread.as_str());
     assert!(!args.iter().any(|arg|arg==f.0.join("attachments").to_str().unwrap()||arg==other.to_str().unwrap()));
-    assert!(!args.iter().any(|arg|arg.contains("bypassPermissions")||arg.contains("dangerously-skip")));
     let settings:serde_json::Value=serde_json::from_str(&args[args.iter().position(|arg|arg=="--settings").unwrap()+1]).unwrap();
-    assert_eq!(settings["permissions"]["blockReadsOutsideWorkingDirectories"],true);
+    assert!(settings["permissions"]["blockReadsOutsideWorkingDirectories"].is_null());
     assert!(settings["sandbox"].is_null(), "the app must preserve the baseline sandbox policy");
-    assert_eq!(settings["autoMode"]["classifyAllShell"],true);
-    let trusted=settings["autoMode"]["environment"].as_array().unwrap();
-    assert_eq!(trusted[0],"$defaults");
-    assert!(trusted[1].as_str().unwrap().contains(a.to_str().unwrap()));
-    assert!(trusted[2].as_str().unwrap().contains(profile.target_state().to_str().unwrap()));
-    assert!(trusted[3].as_str().unwrap().contains(files.to_str().unwrap()));
-    assert_eq!(settings["autoMode"]["soft_deny"],serde_json::json!(["$defaults"]));
+    assert!(settings["autoMode"].is_null(), "bypass must not carry classifier configuration");
+    assert_eq!(environment["RICHOS_AGENT_HOLD_DIR"].as_deref(), Some(profile.state.join("agent-hold").to_str().unwrap()));
     assert!(!settings.to_string().contains(b.to_str().unwrap()));
 }
 

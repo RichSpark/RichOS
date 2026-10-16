@@ -453,13 +453,13 @@ fn work_readiness_facts(state: &ReaderState) -> [(InitFact, &'static str); 3] {
     [
         (state.engine_plugin_loaded, ENGINE_PLUGIN_ABSENT),
         (state.work_tools_loaded, WORK_TOOLS_ABSENT),
-        (state.automatic_permissions, AUTOMATIC_PERMISSIONS_ABSENT),
+        (state.permissions_bypassed, BYPASS_PERMISSIONS_ABSENT),
     ]
 }
 
 pub(crate) const ENGINE_PLUGIN_ABSENT: &str = "The desktop engine plugin did not load";
 pub(crate) const WORK_TOOLS_ABSENT: &str = "The desktop work tools did not load";
-pub(crate) const AUTOMATIC_PERMISSIONS_ABSENT: &str = "The provider did not enable automatic permission checks. Update or reconnect a supported provider account before starting app work; no bypass mode was enabled.";
+pub(crate) const BYPASS_PERMISSIONS_ABSENT: &str = "The provider did not enable bypassPermissions as requested. Reconnect with a provider that supports this permission mode before starting app work.";
 
 /// The gate at the BINDING, which runs before the work lease's first turn.
 ///
@@ -1252,8 +1252,8 @@ struct ReaderState {
     /// ASSERTED rather than merely recorded (`requires_status_tool`): it is the front desk's
     /// only read once the work tools are refused.
     status_tool_loaded: bool,
-    /// Did the child come up in `permissionMode: auto`? [`InitFact`], for the same reason.
-    automatic_permissions: InitFact,
+    /// Did the child come up in `permissionMode: bypassPermissions`? [`InitFact`], for the same reason.
+    permissions_bypassed: InitFact,
     /// Host-owned phase, never set by a model frame.
     context_only: bool,
     /// The model this session is running, from `system/init.model`.
@@ -1458,7 +1458,7 @@ impl Default for ReaderState {
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
             status_tool_loaded: false,
-            automatic_permissions: InitFact::NotYetReported,
+            permissions_bypassed: InitFact::NotYetReported,
             context_only: false,
             session_model: None,
             context_window: None,
@@ -2359,7 +2359,7 @@ impl NativeClient {
                     .all(|name| msg["tools"].as_array().is_some_and(|tools| tools.iter().any(|tool| tool.as_str() == Some(name)))));
             st.assignment_tool_loaded = crate::assignment_tools::loaded_from_init(&msg);
             st.status_tool_loaded = crate::status_tools::loaded_from_init(&msg);
-            st.automatic_permissions = InitFact::reported(msg["permissionMode"] == "auto");
+            st.permissions_bypassed = InitFact::reported(msg["permissionMode"] == "bypassPermissions");
             st.engine_plugin_loaded = InitFact::reported(msg["plugins"].as_array().is_some_and(|plugins|
                 plugins.iter().any(|plugin| plugin["name"] == crate::engine_profile::PLUGIN_NAME)));
             // **THE LOUDNESS LAYER FOR [`TOOL_SEARCH_ENV`].** Read every init frame, like the
@@ -3745,8 +3745,8 @@ impl Cognition for NativeCognition {
             && !self.client.reader_state.lock().unwrap().status_tool_loaded {
             return Err(CognitionError::Protocol("The desktop status tool did not load".into()));
         }
-        if self.engine_profile.is_some() && self.client.reader_state.lock().unwrap().automatic_permissions != InitFact::Yes {
-            return Err(CognitionError::Protocol(AUTOMATIC_PERMISSIONS_ABSENT.into()));
+        if self.engine_profile.is_some() && self.client.reader_state.lock().unwrap().permissions_bypassed != InitFact::Yes {
+            return Err(CognitionError::Protocol(BYPASS_PERMISSIONS_ABSENT.into()));
         }
         // ===================================================================================
         // HIS OWN CURSOR, ONE PER CONVERSATION THREAD
@@ -4003,7 +4003,7 @@ impl Cognition for NativeCognition {
     /// `audience: "worker"` (§5.8c) exists precisely to keep this lease out of it.
     ///
     /// **The readiness checks it DOES keep** are the ones about what this lease was given:
-    /// the engine plugin, the work tools, and automatic permission checks. The continuity
+    /// the engine plugin, the work tools, and bypass permissions. The continuity
     /// tools are deliberately absent, so they are deliberately not asserted.
     fn bind_work_assignment(&mut self, work: &crate::cognition::WorkAssignment) -> Result<(), CognitionError> {
         if let Some(refusal) = assignment_binding_refusal(self.role) {
@@ -5683,7 +5683,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         // And the unreported facts are still unreported — the gate passed because it asked
         // about a reported absence, not because the fields were quietly made optimistic.
         let state = lease.client.reader_state.lock().unwrap();
-        for fact in [state.engine_plugin_loaded, state.work_tools_loaded, state.automatic_permissions] {
+        for fact in [state.engine_plugin_loaded, state.work_tools_loaded, state.permissions_bypassed] {
             assert_eq!(fact, InitFact::NotYetReported);
         }
         drop(state);
@@ -5717,7 +5717,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
                  "mcp__richos_work__inspect", "mcp__richos_work__integrate"]
         };
         json!({"type":"system","subtype":"init","plugins":plugins,"tools":tools,
-               "permissionMode": if auto { "auto" } else { "default" }})
+               "permissionMode": if auto { "bypassPermissions" } else { "auto" }})
     }
 
     /// **THE POSITIVE CONTROL, AND IT IS THE HALF THAT MAKES THE FIX A MOVE RATHER THAN A
@@ -5735,7 +5735,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         for (plugin, work_tools, auto, expected) in [
             (false, true, true, Some(ENGINE_PLUGIN_ABSENT)),
             (true, false, true, Some(WORK_TOOLS_ABSENT)),
-            (true, true, false, Some(AUTOMATIC_PERMISSIONS_ABSENT)),
+            (true, true, false, Some(BYPASS_PERMISSIONS_ABSENT)),
             (true, true, true, None),
         ] {
             let frame = work_init_frame(plugin, work_tools, auto);
@@ -5783,7 +5783,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     fn only_a_reported_absence_refuses_a_binding_and_silence_refuses_only_after_a_turn() {
         use InitFact::{No, NotYetReported, Yes};
         let facts = |plugin, tools, auto| {
-            [(plugin, ENGINE_PLUGIN_ABSENT), (tools, WORK_TOOLS_ABSENT), (auto, AUTOMATIC_PERMISSIONS_ABSENT)]
+            [(plugin, ENGINE_PLUGIN_ABSENT), (tools, WORK_TOOLS_ABSENT), (auto, BYPASS_PERMISSIONS_ABSENT)]
         };
 
         // A fresh lease: nothing reported. The binding proceeds; the post-turn gate does not.
@@ -5801,7 +5801,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         for (facts, expected) in [
             (facts(No, Yes, Yes), ENGINE_PLUGIN_ABSENT),
             (facts(Yes, No, Yes), WORK_TOOLS_ABSENT),
-            (facts(Yes, Yes, No), AUTOMATIC_PERMISSIONS_ABSENT),
+            (facts(Yes, Yes, No), BYPASS_PERMISSIONS_ABSENT),
         ] {
             assert_eq!(work_binding_readiness_refusal(facts), Some(expected));
             assert_eq!(work_turn_readiness_refusal(facts), Some(expected));
