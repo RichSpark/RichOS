@@ -42,6 +42,32 @@ def _alive(pid):
 DUTY_TOP={"worker":"# Your duty in this assignment: implement","reviewer":"# Your duty in this assignment: review"}
 
 class DesktopWork(unittest.TestCase):
+    def test_independent_stu_prepares_two_obligations_without_rebinding_to_a_worker(self):
+        seat="stu-thread:thread-a"
+        self.scope["binding"]=self.bind_seat(seat,"peer:1",audience="rich",session=self.session)
+        self.scope["seat"]=seat
+        self.scope["background_work_allowed"]=True
+        self.scope_path.write_text(json.dumps(self.scope))
+        self.assertIsNone(self.app.carried_obligation(self.scope))
+        tool={t["name"]:t for t in self.app.available_tools()}
+        for name in ("prepare","complete"):
+            self.assertIn("independent Stu",tool[name]["description"])
+            self.assertNotIn("leave obligation_id out",tool[name]["description"])
+        self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],"request_id":"second-obligation","checkpoint":{"statements":[{"verb":"commitment","fields":{"id":"fixture-two","title":"A separate result"}}]}})
+        first=self.call("prepare",self.args)
+        second=self.call("prepare",{**self.args,"request_id":"prepare-two","obligation_id":"fixture-two","title":"A separate result"})
+        self.assertNotEqual(first["id"],second["id"])
+        self.start_fixture_worker(first,"independent-one")
+        self.start_fixture_worker(second,"independent-two")
+        rows=self.call("inspect")["records"]
+        self.assertEqual({row["request"]["obligation_id"] for row in rows},{"fixture-task","fixture-two"})
+        self.assertEqual({row["binding"]["audience"] for row in rows},{"rich"})
+        self.assertEqual({row["binding"]["turn_id"] for row in rows},{"peer:1"})
+        self.assertEqual({row["agent_id"] for row in rows},{"independent-one","independent-two"})
+        with self.assertRaises(self.app.ECS.ScopeError):
+            self.call("prepare",{**self.args,"request_id":"invented","obligation_id":"invented"})
+        self.assertEqual(len(self.call("inspect")["records"]),2)
+
     def test_pierce_findings_leave_dispatch_retryable_and_allow_revised_preparation(self):
         ready = self.call("prepare", self.args)
         envelope = {"session_id": self.session, "tool_use_id": "pierce-call",

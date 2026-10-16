@@ -77,12 +77,7 @@ pub fn tools() -> Value {
     ]})
 }
 
-/// One assignment, rendered for the front desk — his words, never an identifier.
-///
-/// **No id, no seat, no obligation, no path.** `desktop-work.md` puts receipt ids on the
-/// app's side of the line and `assignment_tools.rs` already refuses to hand the model one
-/// when it registers; handing one back on the READ would undo that in the other direction.
-/// What the front desk gets is the sentence it would say out loud.
+/// Scoped work facts, including the real identifiers used by independent Stu.
 fn row(item: &Assignment) -> Value {
     let notices: Vec<Value> = item
         .notices
@@ -90,6 +85,9 @@ fn row(item: &Assignment) -> Value {
         .map(|notice| json!({"say": notice.text, "already_told_him": notice.delivered_at_ms.is_some()}))
         .collect();
     json!({
+        "assignment_id": item.id,
+        "obligation_id": item.obligation_id,
+        "instruction_ledger_ref": item.instruction_ledger_ref,
         "what": item.title,
         // **WORK HE ASKED FOR, OR A QUESTION HE ASKED** — the CEO's ruling §58, 2026-09-18.
         //
@@ -575,8 +573,7 @@ mod tests {
         let covers = answer["this_answer_covers"].as_str().unwrap();
         assert!(covers.contains("`check` or `investigate` is a QUESTION"), "{covers}");
         assert!(covers.contains("These kinds describe intent, not a result"), "{covers}");
-        // Still no identifier on the way back out.
-        assert!(!answer.to_string().contains(&quick), "an identifier reached the front desk");
+        assert!(answer.to_string().contains(&quick), "the scoped work identity was lost");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -716,21 +713,16 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// Nothing it returns is an identifier. `assignment_tools.rs` refuses to hand the model
-    /// an id on the WRITE; handing one back on the read would undo that from the other side.
     #[test]
-    fn nothing_in_the_answer_is_an_identifier_he_could_be_read_aloud() {
+    fn work_facts_expose_real_scoped_ids_for_independent_stu() {
         let (root, scope) = fixture();
         let id = register(&root, "thread-one", "landing the three branches");
         let rows = assignment::read_all(&root.join("engine-state"), "depot", "thread-one").unwrap();
-        let seat = rows[0].seat.clone();
-        let obligation = rows[0].obligation_id.clone();
-        let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap().to_string();
-        assert!(!answer.contains(&id), "the assignment id reached the model");
-        assert!(!answer.contains(&seat), "the seat reached the model");
-        assert!(!answer.contains(&obligation), "the obligation id reached the model");
-        // Positive control: the thing that IS meant to be there is there.
-        assert!(answer.contains("landing the three branches"));
+        let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
+        assert_eq!(answer["starting"][0]["assignment_id"],id);
+        assert_eq!(answer["starting"][0]["obligation_id"],rows[0].obligation_id);
+        assert_eq!(answer["starting"][0]["instruction_ledger_ref"],rows[0].instruction_ledger_ref);
+        assert_eq!(answer["starting"][0]["what"],"landing the three branches");
         std::fs::remove_dir_all(root).unwrap();
     }
 

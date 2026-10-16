@@ -72,202 +72,41 @@ A verified work result is not completion of every condition in a broader
 obligation. The adapter does not close the entire obligation automatically.
 Completed work and authority receipts remain inspectable with `include_closed`.
 
-## Background assignments
+## Independent Rich and Stu sessions
 
-Work the CEO asks for runs on a **second compute lease** in the same process, owned by a
-work host that is not the spine. The conversation's lease is held for a whole turn, so work
-leaves the turn only by leaving that lease.
+Each conversation has an independent Rich session and an independent Stu session.
+Rich handles the conversation and quick checks. He decides whether work belongs
+with Stu based on the request and current circumstances. Stu executes delegated
+work, coordinates specialists and reports in his own words. Neither is the
+other's Claude Code teammate or subagent.
 
-A conversation turn ends when the assignment is **registered**, not when it settles.
-`richos_assignments.record` is app-owned, writes one durable record and returns the sentence
-to say; `richos_work.prepare` and everything it costs run afterwards, on the work lease. A
-failed registration is reported as a failed registration and is never softened into a claim
-that work started.
+The app's durable peer inbox is the only desktop handoff path. A peer message
+preserves the sender's complete text and the host-attested original user request.
+The receiving host acknowledges it only after durable acceptance. Uncertain
+provider delivery retains its previous native-session evidence for reconciliation.
+An operational assignment record is bookkeeping, never a second dispatch channel.
+Turn boundaries wake the inbox; they do not independently execute its records.
+The separate declared operator client retains its explicit assignment intake.
 
-The register holds what he asked for in his own terms, the obligation it carries out, and
-the ledger reference and digest of the turn he gave it in, frozen for its life. Each open
-assignment has one ECS seat, spelled from its obligation, bound with a worker audience and
-released with the assignment; a second open assignment on one obligation is refused, because
-one seat shared by two is the collision the seat exists to prevent.
+`richos_assignments.record` opens an ECS obligation and stores the complete handoff,
+original instruction reference and digest. It returns the actual assignment and
+obligation IDs. `richos_status.background_work` exposes those same scoped IDs.
+Stu's independent session can coordinate several obligations and is not bound to
+one assignment. He supplies the selected obligation ID to `richos_work.prepare`
+and `complete`. Legacy assignment-bound clients still derive that ID from their
+host scope. Prepared receipts, dispatch identities, review and integration checks
+continue to enforce their existing contracts.
 
-**Work that needs the Mac's screen waits for the screen, and the wait resolves itself.** An
-assignment says when it is written down whether its work needs the screen unlocked — it drives
-a window, takes a picture of one, or walks a build on screen. Nothing infers that from a title.
-If the screen is locked when such an assignment comes up, it enters a state of its own,
-**waiting for the screen**, and the app watches for the unlock and carries on by itself. He is
-asked nothing and told nothing about it: no notice is raised, and the app never suggests he
-unlock anything. Work that did not declare a screen need never reads the screen at all.
+Rich can inspect scoped operational records, work receipts and the underlying
+native transcripts directly. Reading those facts does not acquire Stu's execution
+lock or require a reply from him. A work record being registered does not prove
+execution started. A worker ending does not prove completion. A local integration
+does not prove publication.
 
-The wait is before the work connection is opened, so nothing has been asked of the back end
-while an assignment sits in it: no provider connection, no seat, nothing in flight. It is open
-work — an update must not install over it — and it is **not** waiting on him, which is a
-different sentence from an assignment stopped at a decision of his and is kept a different
-sentence everywhere it is read. His stop reaches it and reports that nothing was prepared;
-quit reaches it too, and an assignment stopped that way stays stopped even if the screen is
-unlocked afterwards.
-
-A screen this build cannot read is not a locked screen. An unestablished reading never waits —
-the wait has no timeout, so an unbounded wait on something unknown is the worse failure — and a
-platform with no reader loses the feature rather than the work. A sleeping display on an
-unlocked session is reported and does not wait, because it is still a usable session.
-
-A crash while waiting is reconciled like anything else that was open: the assignment comes back
-as unknown, its receipt saying it was waiting for the screen and had not started, and picking it
-up again is his decision. The wait is not re-armed by a relaunch, because nothing restarts work
-by itself and an assignment that had been written down and never started is treated the same
-way.
-
-His next message never cancels an assignment, and Stop stays the conversation's Stop. Each
-assignment carries its own stop control where the work is visible. The work lease is never
-attached to the conversation's turn control, so a conversation Stop cannot reach it, and
-quit stops it by name.
-
-A result reaches him as a durable notice held on its assignment until he has been told, so a
-result that lands while he is away is found when he returns; it is also pushed while he is
-present. A notice arriving during a turn or a spoken exchange waits for the boundary.
-
-**A background job lands on its own, and what he is told is the outcome.** Local integration
-is on the list of actions the back end may take without asking, and it is the only work tool
-granted on the background audience alone: a conversation cannot reach it at all, and a land
-never reaches the permission desk, so it can never become a question for him. What the engine
-requires of a land is unchanged — an observed run end on both the worker and an independent
-reviewer, a passing verdict on the exact reviewed commit, clean checkouts, an unmoved recorded
-tip, a fast-forward, and no push.
-
-An assignment's workers all ending does not settle it. Settled is read from the obligation. An
-assignment whose workers have ended while its obligation is open is one of two things, and
-only the permission desk tells them apart. If a request of his is waiting there, the
-assignment is waiting on his decision and says so, with the approve and decline controls
-beside it. If nothing is waiting there, the job did not finish and is reported as a job that
-did not finish, with the reason: the land lock timed out, the reviewer asked for changes, the
-engine refused the merge, or the run stopped short of closing the assignment. Neither is ever
-described as done.
-
-A finished assignment's sentence names what landed — the branch, the repository by its own
-name rather than its path, and whether an independent review passed it — read off the land
-record the engine writes onto the work receipt, never inferred from the obligation having
-closed. A record that cannot be read says it cannot be read and never that nothing landed. A
-land whose workspace cleanup did not finish is reported as a land with the leftover beside it,
-because telling him his branch had not moved when it had is worse to act on than telling him
-nothing at all.
-
-Each conversation thread holds one front desk and one back end. The conversation talks to the
-CEO and relays; that thread's standing back-end lease starts and stops jobs, dispatches, lands
-and keeps the record, and it is never visible to him. It is opened on the thread's first
-assignment and every assignment on that thread afterwards runs on it, however many there are.
-A second conversation gets its own back end and the two run at the same time, so neither
-waits for the other. A back end is renewed when it has consumed enough of its context window
-to be near its limit, and only between assignments, never inside one: a fresh connection is
-opened first, told what is still open from the record and what the outgoing one says it was
-in the middle of, and only then takes over. An assignment open across a renewal keeps its
-record, its seat and its approval line. An assignment is a bookkeeping unit inside a back end — its own record,
-seat, stop and approval line — and not a second mind.
-
-The front desk gets no orchestration tools. It relays: it writes an assignment down and it
-reports what the record says. A work tool asked for on a conversation's own binding is
-refused at the permission desk as well as absent from what that lease was given, so drifting
-into doing the work takes two mistakes rather than one. Its standing instruction is its own
-job rather than the back end's execution contract, so it is not told to do what it can no
-longer do.
-
-It has one read of its own, and it needs one: with the work tools gone, every other status
-surface in this app is a command reaching the window rather than a tool reaching Rich.
-`richos_status.background_work` is app-owned and read-only, answers what is running, what is
-waiting for him and what finished for **that conversation only**, from the record on disk,
-and calls nothing. It cannot start, stop, approve or retry anything — those are the controls
-on the assignment, or they are relayed — and it returns his own words rather than any
-identifier. A permission request waiting in the running process is not in its answer; the
-durable half of the same fact is, as the assignment that stopped at a step of his.
-
-That read also carries the state of the screen itself, which is the one live reading in an
-answer that is otherwise entirely the record on disk, so work waiting for the screen is
-reported with the reason beside it. It has three answers and not two: locked, unlocked, and
-not established — and the third is never reported as either of the others. The back end has no
-such read. The status server is the front desk's alone by design, so a back end that wanted to
-wait on the screen mid-job would need an app-owned server of its own attached to the work
-audience; that does not exist, and the mechanism that does exist is the declaration made when
-the assignment is written down.
-
-Each conversation's front desk stays resident. Switching conversations parks it alive with
-its own provider session, its own priming and its own context measurement, rather than
-killing it and rebuilding a new one from the ledger, so a conversation he returns to is the
-one he left. The app holds a bounded number of these open at once; past that, the least
-recently spoken one is retired and its next turn starts a fresh desk, which is what every
-conversation did before residency. A message to any conversation is accepted and answered on
-that conversation — never refused because he had moved — and one sent while another
-conversation is mid-reply is durable immediately and answered at that reply's boundary.
-
-Each conversation binds the CEO's cursor on its own seat, `ceo-thread:<thread_id>`, derived
-the same way by the app and by the engine and asked for through the engine's own capability
-answer rather than assumed; an engine without it binds the single legacy cursor. That is what
-lets two conversations hold turns open, checkpoint and read their briefs without disturbing
-each other.
-
-**The limit, stated rather than implied: a conversation's reply may wait behind another
-conversation's reply — seconds — but never behind work.** Work runs on its own lease, one per
-conversation, and takes no part in the conversation's lock. Measured with
-`cargo run -p richos-core --example conversation_wait_behind_another --release`: a message
-sent one second into a scripted three-second reply on another conversation was answered
-2.028 s later, of which 1.996 s was the remainder of that reply and **25–32 ms** across four
-runs was the app's own share.
-
-A request for an action that is not on that list waits for him rather than being refused for
-want of a visible turn. **That, and only that, is what the queue is for** — a command on his
-Mac, a write outside the workspace, any action the desk would have put in front of him in a
-visible turn and cannot because there is no turn. A land is not among them and never was among
-the things he was meant to be asked about; it was only ever held there because the tool that
-performs it had no grant. The permission desk holds one ordered queue for both leases: the
-head of the conversation's requests is shown on the permission sheet, and background work's
-are shown on the assignment they belong to, with the approve and decline controls beside the
-sentence that says the decision is his. A background request is held by the ASSIGNMENT's
-identity rather than by a turn, so it survives the work lease's turn ending, and it is
-released when that assignment settles, fails, is stopped, or is open at quit. A queued
-request blocks only its own worker.
-
-The provider call that raised a request still ends at its deadline, in "not approved" and
-never in approval. The request does not end with it: the receipt says which step it is
-waiting on, and his later answer applies to the assignment. Approved, the assignment goes
-back on the work lease to take the step he approved — one exact action, one exact input, once
-— and the run that resumes has no standing permission for anything else. Declined, it stops
-where it stands with everything it produced kept. Nothing is ever approved on his behalf, and
-nothing restarts by itself: a resume happens because he pressed approve. His approval does not
-outlive the assignment: the resumed turn is the last one, and the desk forgets the assignment
-and any standing decision for it when that turn ends.
-
-The queue lives in the running process. An assignment that stopped at a decision of his
-before a restart is still recorded as waiting, and the surface says so and points at the
-conversation rather than at a control that is not there; carrying the question itself across
-a restart is not built.
-
-At launch, every assignment still open is reconciled — against the work connection's own
-evidence and against Git, never against a clock. Work that was running is reported as
-unknown until something witnesses it again: not finished, not stopped, and never silently
-resumed. What was established is said plainly, including that his repository is where it
-was, or that it has moved and nothing can be attributed to this assignment. An assignment
-that had already stopped at a decision of his is left as it stands, because that was
-recorded while the app was watching. Nothing restarts by itself: picking work back up is his
-decision. Standing action grants left open by a crash are closed in the same sweep, and work
-seats with no assignment behind them are released — his own seat is identified positively
-and never touched, and a seat that cannot be released is reported rather than skipped.
-
-The update gate reads both leases. An update is declined while an assignment is running, while
-an assignment is waiting for his approval, and while the assignment register cannot be read at
-all; the offer stays available, and the reason says which of those it is. Nothing registered
-and no work lease is a clear answer rather than a refusal, so an app that has done no
-background work updates exactly as it did before.
-
-Closing the last window no longer ends the process while work is registered. The work keeps
-running, the app stays in the Dock with no window, and clicking the Dock icon brings the
-window back. With nothing registered, closing the last window quits exactly as it always
-has. When the last registered assignment ends with no window open, the app closes itself: an
-assignment waiting for his approval has not ended, so that one keeps it up — it is holding
-his answer, and the alternatives are to throw the work away or to land it without asking.
-
-Quit still stops the work, and says so first. Choosing Quit with something running names
-what is running and offers two answers: quit and stop it, or keep working. Stopped that way,
-an assignment's receipt reads interrupted and everything it produced is kept. A force quit,
-a logout and a power cut have no such seam; what he is told about those is on the next
-launch, below.
+Stu authors reports to Rich through the peer inbox. Operational result notices do
+not automatically start additional Rich turns. Rich decides what the user needs
+to hear and writes the reply. The application supplies observed facts rather than
+writing either agent's conversational response.
 
 ## Lifecycle
 

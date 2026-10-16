@@ -1237,7 +1237,6 @@ impl WorkHost {
         }
         if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
         drop(guard);
-        self.adopt_registered(binding);
         Ok(session)
     }
 
@@ -1286,19 +1285,14 @@ impl WorkHost {
         Ok(receipt)
     }
 
-    /// **Pick up assignments that were registered by the tool process, at the turn
-    /// boundary.** This is §7.1's decision made literal: the assignment was written down
-    /// inside his turn by the app-owned `richos_assignments` server, the turn ended on that
-    /// receipt, and everything the work costs starts here — after it.
-    ///
-    /// **It is a directory read at a boundary, not a timer.** Spec §6.3 refuses anything
-    /// that restarts work by itself, and the September 9 shape it names is a retry loop.
-    /// Nothing here retries: an assignment is adopted once, when the turn that created it
-    /// ends, and a record already known to this host is skipped.
-    ///
-    /// Returns how many were adopted. Zero is the ordinary answer.
+    /// Wake the peer inbox at a conversation boundary. An operational record never
+    /// independently starts desktop work. Only the separate operator client adopts
+    /// records into its explicit intake; that client has no peer handoff path.
     pub fn adopt_registered(self: &Arc<Self>, binding: &ThreadBinding) -> usize {
         self.wake_messages(binding);
+        // Desktop work is dispatched only through Stu's durable peer input.
+        // The separate operator client retains its explicit assignment intake.
+        if self.operator.lock().unwrap().is_none() { return 0; }
         let Ok(rows) = assignment::read_all(&self.state, &binding.entity_id().to_string(), binding.thread_id())
         else {
             return 0;
@@ -5907,15 +5901,12 @@ mod tests {
         assert_eq!(h.host.stop_assignment("depot", "thread-one", &receipt.id), Ok(()));
         assert_eq!(*intake.stopped.lock().unwrap(), std::slice::from_ref(&receipt.id));
 
-        // The positive control: the same registration on a product host reaches a lease.
+        // Desktop records alone never dispatch. Its peer handoff is tested separately.
         let product = harness(0);
         assignment::register_kind(&product.state, &registration(&product), assignment::AssignmentKind::Task).unwrap();
-        assert_eq!(product.host.adopt_registered(&product.binding), 1);
-        let began = std::time::Instant::now();
-        while product.spawns.load(Ordering::SeqCst) == 0 && began.elapsed() < std::time::Duration::from_secs(10) {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(product.spawns.load(Ordering::SeqCst), 1, "the product host opens its lease");
+        assert_eq!(product.host.adopt_registered(&product.binding), 0);
+        assert_eq!(product.spawns.load(Ordering::SeqCst), 0, "a record is not an execution channel");
+        product.host.shutdown();
     }
 
     #[test]
@@ -9264,7 +9255,10 @@ mod tests {
 
         // His word.
         assignment::pick_up(&h.state, "depot", "thread-one", &record.title).unwrap();
-        assert_eq!(after.adopt_registered(&h.binding), 1);
+        // Explicit legacy intake resumes this saved assignment. Desktop peer
+        // delivery never dispatches an operational record at the boundary.
+        let picked = assignment::read(&h.state, "depot", "thread-one", &record.id).unwrap();
+        assert!(after.enqueue(&h.binding, picked));
         assert!(after.wait_for_completed(1, std::time::Duration::from_secs(10)));
         let prompts = h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 2, "{prompts:?}");
@@ -10660,5 +10654,25 @@ mod tests {
         ] {
             assert!(!tells_him_what_to_do(record), "a back-end record is shown as his to act on: {record:?}");
         }
+    }    #[test]
+    fn peer_handoff_with_operational_record_executes_once() {
+        let h=harness(0);
+        let scope=h.host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        let receipt=assignment::register(&h.state,&registration(&h)).unwrap();
+        assert_eq!(h.host.adopt_registered(&h.binding),0,"an operational record must never dispatch a second execution");
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Inspect the current evidence"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        // load-bound: hang guard only; the verdict is one consumed prompt and an empty inbox, not elapsed time.
+        assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(10)),"hang guard: wait for peer consumption");
+        assert_eq!(h.host.adopt_registered(&h.binding),0);
+        assert_eq!(assignment::read(&h.state,"depot","thread-one",&receipt.id).unwrap().state,AssignmentState::Registered);
+        h.host.shutdown();
+        assert_eq!(h.work_prompts.lock().unwrap().len(),1);
+        assert!(h.bound.lock().unwrap().is_empty(),"Stu was rebound to a formal assignment");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        std::fs::remove_dir_all(&h.root).unwrap();
     }
+
 }
