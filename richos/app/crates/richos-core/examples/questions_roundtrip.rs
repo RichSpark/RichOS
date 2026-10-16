@@ -83,7 +83,7 @@ fn main() {
         .expect("real provider posted a question");
     assert_eq!(
         spine.ledger().turn(&turn).unwrap().stop_reason.as_deref(),
-        Some("question_asked")
+        Some("end_turn")
     );
     assert!(q.shown.is_none());
     drop(spine);

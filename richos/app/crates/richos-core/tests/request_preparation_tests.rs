@@ -495,3 +495,58 @@ fn a_failed_preparation_does_not_strand_durable_steering_behind_it() {
     assert_eq!(turns[1].assistant_text, "the queued request");
     assert_eq!(spine.queue_depth(), 0);
 }
+
+struct GatedReply {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    first: bool,
+}
+impl Cognition for GatedReply {
+    fn session_id(&self) -> &str { "gated-visible-reply" }
+    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+    fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        if std::mem::take(&mut self.first) {
+            self.entered.send(()).unwrap();
+            // Only a hang guard: channel entry and successful try_lock prove availability.
+            self.release.recv_timeout(Duration::from_secs(30)).unwrap();
+        }
+        on_item(TurnItem::Text { seq: 0, text });
+        Ok("end_turn".into())
+    }
+}
+
+#[test]
+fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing_its_destination() {
+    let (mut spine, control, _, _) = fixture();
+    let first_thread=spine.active_thread().unwrap().to_string();
+    let second_thread=spine.create_thread("Other conversation", &EntityId::parse("femcboost").unwrap()).unwrap();
+    let (entered, ready)=mpsc::channel();
+    let (release, gated)=mpsc::channel();
+    spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true}));
+    spine.detach_conversation_io();
+    let first=spine.submit_prompt_to(&first_thread,"first request",Source::Agent).unwrap();
+    let shared=Arc::new(Mutex::new(spine));
+    let driving=shared.clone();
+    let worker=std::thread::spawn(move ||richos_core::spine::drive_shared_turns(&driving));
+    ready.recv_timeout(Duration::from_secs(30)).unwrap();
+    let second={
+        let mut available=shared.try_lock().expect("model reply held the shared conversation lock");
+        assert_eq!(control.active_turn().unwrap().turn_id,first);
+        assert!(available.has_lease(),"an active provider disappeared from availability");
+        available.switch_thread(&second_thread).unwrap();
+        let second=available.submit_prompt_to(&second_thread,"second request",Source::Text).unwrap();
+        assert_eq!(control.active_turn().unwrap().turn_id,first);
+        assert_eq!(available.ledger().turn(&second).unwrap().state,TurnState::Received);
+        second
+    };
+    release.send(()).unwrap();
+    worker.join().unwrap().unwrap();
+    let finished=shared.lock().unwrap();
+    assert!(control.active_turn().is_none());
+    for (id,thread,text) in [(first,first_thread,"first request"),(second,second_thread,"second request")] {
+        let turn=finished.ledger().turn(&id).unwrap();
+        assert_eq!(turn.state,TurnState::Completed);
+        assert_eq!(turn.thread_id,thread);
+        assert_eq!(turn.assistant_text,text);
+    }
+}

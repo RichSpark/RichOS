@@ -296,6 +296,8 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     assert!(!args.iter().any(|arg|arg.contains("bypassPermissions")||arg.contains("dangerously-skip")));
     let settings:serde_json::Value=serde_json::from_str(&args[args.iter().position(|arg|arg=="--settings").unwrap()+1]).unwrap();
     assert_eq!(settings["permissions"]["blockReadsOutsideWorkingDirectories"],true);
+    assert_eq!(settings["sandbox"]["filesystem"]["allowRead"],serde_json::json!([profile.runtime.root]));
+    assert_eq!(settings["sandbox"]["filesystem"]["denyWrite"],serde_json::json!([profile.runtime.root]));
     assert_eq!(settings["autoMode"]["classifyAllShell"],true);
     assert_eq!(settings["autoMode"]["environment"],serde_json::json!(["$defaults"]));
     assert_eq!(settings["autoMode"]["soft_deny"],serde_json::json!(["$defaults"]));

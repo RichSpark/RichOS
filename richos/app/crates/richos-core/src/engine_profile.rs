@@ -429,27 +429,6 @@ impl EngineProfile {
         manifest["hooks"]["PreToolUse"] = json!([{"hooks":[{"type":"command", "command":command, "timeout":21600}]}]);
         write(&path, &manifest.to_string())
     }
-    /// The standing instruction this lease comes up with — **and it is now different for
-    /// the two Riches, because their jobs are.**
-    ///
-    /// The CEO's Two Riches page: *"1) a 'front desk Rich' whose sole job is to talk to the
-    /// CEO and relay information to and from the back-end and 2) a 'back-end Rich' whose
-    /// sole job is to do and manage all the work related to agent team orchestration."*
-    ///
-    /// **Both leases used to get the engine's `mega-lander/DESKTOP.md`**, which is the back
-    /// end's job description in its own words: seven numbered steps, every one of them a
-    /// `richos_work` call. Handing that to a front desk that no longer holds those tools
-    /// (`native.rs`'s `mcp_config`) would produce a Rich instructed to do a job it cannot
-    /// do — the loudest possible version of the drift note 3 exists to prevent, and a
-    /// broken turn rather than a refused one.
-    ///
-    /// So: the back end keeps the execution contract, and the front desk gets
-    /// `doctrine/front-desk.md`, which says what its job is and what it never does.
-    ///
-    /// **And since the CEO's §110 (2026-10-06) the back end has its own name, Stu.** The shared
-    /// `app_doctrine` names neither twin; the back end's assembly opens its own part with
-    /// `doctrine/back-end.md` ("You are Stu"), and the front desk's with "You are Rich".
-    /// **`DESKTOP.md` is read and never written here** — the engine owns that file.
     /// **The files the CEO attached in THIS conversation**, from his phone or his Mac:
     /// `<app data>/attachments/<conversation>`, the folder the attachment desk writes to
     /// (`crate::attachments`). Given to the session as a read root beside the company's
@@ -582,7 +561,8 @@ impl EngineProfile {
             .args(["--permission-mode", "auto"])
             .arg("--settings").arg(json!({"autoMemoryEnabled":false,
                 "permissions":{"blockReadsOutsideWorkingDirectories":true},
-                "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true},
+                "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true,
+                    "filesystem":{"allowRead":[self.runtime.root],"denyWrite":[self.runtime.root]}},
                 "autoMode":{"classifyAllShell":true,"environment":["$defaults"],"soft_deny":["$defaults"]},
                 "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]}).to_string())
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")

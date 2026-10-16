@@ -341,15 +341,6 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// already reasons about.
 pub const STOP_REASON_CANCELLED: &str = "cancelled";
 
-/// A persisted question ended the turn and the provider process is GONE (it did not answer the
-/// interrupt inside the grace window, or it had already exited). The spine schedules a
-/// rotation on this, because the next answer needs a live session.
-pub const STOP_REASON_QUESTION_ASKED: &str = "question_asked";
-
-/// A persisted question ended the turn and the provider ANSWERED the interrupt, so its process
-/// is alive with its live context. Nothing is rotated: the answer goes to the same session.
-pub const STOP_REASON_QUESTION_ASKED_OPEN: &str = "question_asked_open";
-
 /// **Which of the two leases this is** — the background-work spec §2.1's second connection,
 /// made a type rather than a boolean so every place that has to care says which one it
 /// means.
@@ -1163,11 +1154,9 @@ impl ActionGrant {
             // Every caller of this function with `false` is a withdrawal of authority — the
             // CEO's stop (`NativeCancelHandle::cancel`), a shutdown, and the rollback of a
             // turn-start that could not open every grant. An ordinary turn ending does NOT
-            // come through here: `prompt` calls `ecs::set_actions_allowed(path, false)`
-            // directly, which leaves the standing background grant alone so a worker
-            // dispatched in that turn can finish its job (see
-            // `ecs::ToolScope::background_work_allowed`). So a stop revokes both flags and a
-            // turn end revokes one, and the difference is visible here rather than inferred.
+            // come through here. The standing work connection keeps its grants after a
+            // request ends, so native background completions can still use its tools.
+            // A conversation closes only the request grant; a stop revokes both flags.
             Self::Continuity(path) if !allowed =>
                 crate::ecs::revoke(path).map_err(|e| e.to_string()),
             Self::Continuity(path) | Self::ContinuityTools(path) =>
@@ -2737,10 +2726,7 @@ impl NativeClient {
         // THE shared per-turn counter (§1.4 G1). Advanced only when an item is actually
         // delivered — a frame that normalizes to nothing consumes no position.
         let mut seq: u64 = 0;
-        let (question_scope, context_only) = {
-            let state=self.reader_state.lock().unwrap();
-            (if state.context_only {None} else {state.question_scope.clone()}, state.context_only)
-        };
+        let context_only = self.reader_state.lock().unwrap().context_only;
         // **REPLY TIMING, on the voice log's clock** (CEO 2026-10-14: "From barge in to a
         // 10-second delay now?"). Two moments only the client sees: the prompt leaving for the
         // model, and the model's first word coming back. With the voice session's own lines
@@ -2764,7 +2750,7 @@ impl NativeClient {
         // **The held word is released before anything else is delivered and on every way out
         // of this loop** — the next tool row, a permission, a usage reading, `content_block_stop`,
         // `Done`, the cancel timeout (before the sink is detached), the child vanishing, and a
-        // question ending the turn — so §9.3 step 4's partial output is never lost to it.
+        // provider result, so partial output is never lost at the boundary.
         let mut spelling = crate::american_spelling::Speller::new();
         fn release(seq: &mut u64, on_item: &mut dyn FnMut(TurnItem), spelling: &mut crate::american_spelling::Speller) {
             let held = spelling.finish();
@@ -2773,43 +2759,19 @@ impl NativeClient {
                 *seq += 1;
             }
         }
-        // **A QUESTION ENDS THE TURN, AND A COOPERATIVE PROVIDER KEEPS ITS PROCESS** (part 1
-        // hunt finding 31). Persisted questions terminate only the front desk's asking turn, and
-        // a non-cooperative provider must not retain the conversation mutex indefinitely — that
-        // reason is unchanged and it is what the grace window below is for. But a question is an
-        // ordinary pause, so the host first asks the provider to stop (`cancel`: the grants are
-        // revoked and an interrupt goes out) and waits up to [`cancel_grace`] for it to answer.
-        // One that does keeps its live context and the next answer goes to the same process
-        // ([`STOP_REASON_QUESTION_ASKED_OPEN`]); only one that does not answer in time is ended
-        // ([`STOP_REASON_QUESTION_ASKED`], which the spine answers with a rotation).
-        let mut question_ended = false;
         // A usage-limit refusal seen on this turn (`usage_limit_signal`), with its reset time.
         let mut limit: Option<Option<u64>> = None;
         let limit_error = |resets_at: Option<u64>, detail: String| {
             NativeError::Protocol(crate::claude_accounts::usage_limit_error(resets_at, &detail))
         };
         loop {
-            if !question_ended && question_scope.as_deref().is_some_and(crate::question_tools::has_asked) {
-                release(&mut seq, on_item, &mut spelling);
-                question_ended = true;
-                let _ = self.cancel_handle().cancel();
-                cancel_deadline.get_or_insert_with(|| std::time::Instant::now() + cancel_grace());
-            }
             let received = match cancel_deadline {
-                None if question_scope.is_some()=>rx.recv_timeout(Duration::from_millis(40)),
                 None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 Some(deadline) => match deadline.checked_duration_since(std::time::Instant::now()) {
                     Some(remaining) => rx.recv_timeout(remaining),
                     None => Err(RecvTimeoutError::Timeout),
                 },
             };
-            // What the provider says while it winds the asking turn down is not part of his
-            // conversation: the question is the last thing this turn had to say.
-            if question_ended
-                && matches!(received, Ok(ChunkMsg::Text(_) | ChunkMsg::Frame(_) | ChunkMsg::Permission { .. } | ChunkMsg::Usage { .. }))
-            {
-                continue;
-            }
             match received {
                 Ok(ChunkMsg::Text(t)) => {
                     if !first_text_logged {
@@ -2869,16 +2831,6 @@ impl NativeClient {
                 Ok(ChunkMsg::Done(result)) => {
                     release(&mut seq, on_item, &mut spelling);
                     let reason = stop_reason_of(&result);
-                    if question_ended {
-                        // The provider answered the interrupt, so its process is alive and
-                        // holds the conversation's live context; only a process that is gone
-                        // is reported as the ended kind the spine rotates on.
-                        return Ok(if reason == "child_exited" {
-                            STOP_REASON_QUESTION_ASKED
-                        } else {
-                            STOP_REASON_QUESTION_ASKED_OPEN
-                        }.to_string());
-                    }
                     // **Refused for a usage limit** (fill-first's backstop): said as that, so the
                     // spine and the work host continue on the next account instead of reading an
                     // ordinary failure. Whether the child stays alive afterwards is not known
@@ -2899,17 +2851,6 @@ impl NativeClient {
                     return Ok(reason);
                 }
                 Err(RecvTimeoutError::Timeout) if cancel_deadline.is_none() => continue,
-                Err(RecvTimeoutError::Timeout) if question_ended => {
-                    // The provider did not answer the interrupt inside the grace window: this
-                    // is the non-cooperative case the turn-ending rule was written for. The
-                    // process is ended and the spine replaces it on the next turn.
-                    self.cancel_handle().shutdown();
-                    *self.current_prompt.lock().unwrap() = None;
-                    return Ok(STOP_REASON_QUESTION_ASKED.to_string());
-                }
-                Err(RecvTimeoutError::Disconnected) if question_ended => {
-                    return Ok(STOP_REASON_QUESTION_ASKED.to_string());
-                }
                 Err(RecvTimeoutError::Timeout) => {
                     // The agent was told to interrupt and did not answer within the grace
                     // window. Stop rendering this turn — and DETACH the sink first, so
@@ -4246,6 +4187,9 @@ impl Cognition for NativeCognition {
                     Some(brief_cache_identity(&crate::reprime::context_only_priming(&context)));
             }
         }
+        // A standing work grant survives an SDK request ending. Cancellation,
+        // assignment revocation and connection shutdown still withdraw it.
+        if self.role == LeaseRole::Conversation {
         let _operation = self.client.operation_cancel.lock().unwrap();
         for grant in &self.client.action_grants {
             if matches!(grant,ActionGrant::Questions(_)) && grant.set(false).is_err() {
@@ -4284,6 +4228,7 @@ impl Cognition for NativeCognition {
                 let _ = std::fs::remove_file(path);
                 return Err(CognitionError::Io(error));
             }
+        }
         }
         // ===================================================================================
         // WORKER SETTLEMENT AT TURN END — and WHICH of its three readings fired
@@ -4356,22 +4301,6 @@ impl Cognition for NativeCognition {
 #[cfg(test)]
 mod native_driver_tests {
     use super::*;
-
-    /// A turn that ends at the question must not have waited for the provider's `result`.
-    ///
-    /// These fixtures used to send that `result` after `sleep 3` and the tests asserted the
-    /// prompt came back inside 1 s, so the verdict was the speed of the Mac: a test process
-    /// descheduled for a second on a busy nightly failed while the product was right
-    /// (audit `docs/verification/2026-09-29-load-sensitive-checks-audit.md` R9). Now the
-    /// fixture holds its `result` back for a minute and marks the moment it sends it. A
-    /// prompt that returned while the mark is absent returned without the `result`, however
-    /// slow the machine; one that waited for the `result` finds the mark. The minute is only
-    /// the hang guard, so a regression fails in a minute rather than hanging the suite. The
-    /// client's drop kills the fixture's process group, `sleep` included.
-    const RESULT_HELD_BACK: &str = r#"sleep 60
-: > "$(dirname "$0")/result-sent"
-printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
-"#;
 
     /// Process environment is shared by every test in this binary, and libtest runs them side
     /// by side. The tests below set variables to prove `child_args`/`chat_child_args` read
@@ -4559,91 +4488,94 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn","session_id":"s1","mode
             "modelUsage says 3,000,000 Opus tokens at 1,000,000 a point = 3 points a minute, got {per_minute}");
     }
 
-    fn assert_returned_before_the_result(root: &Path) {
-        assert!(!root.join("result-sent").exists(),
-            "the prompt returned only after the provider sent its result: the question retained the asking turn");
-    }
-
     #[test]
-    fn a_vendor_question_is_converted_and_the_host_ends_a_noncooperative_turn() {
-        let script=write_script("nonblocking-vendor-question", &(r#"
+    fn a_vendor_question_is_saved_without_ending_the_providers_turn() {
+        let script=write_script("vendor-question-continues", r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
 read -r prompt
 printf '%s\n' '{"type":"control_request","request_id":"ask","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"When should the release ship?","options":[{"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More testing"}]}]}}}'
 read -r response
-"#.to_string()+RESULT_HELD_BACK));
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Continuing independent work"}]}}'
+printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
+"#);
         let root=script.parent().unwrap();
-        let client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        let mut client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        client.settle_workers_on_stop=true;
         let path=root.join("questions-scope.json");
         let scope=crate::question_tools::Scope{context:crate::questions::AskScope{root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"front_desk".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
         crate::question_tools::write_scope(&path,&scope).unwrap();
         client.reader_state.lock().unwrap().question_scope=Some(path);
-        assert_eq!(client.prompt("Ask one choice",&mut |_|{}).unwrap(),"question_asked");
-        assert_returned_before_the_result(root);
+        let mut said=String::new();
+        assert_eq!(client.prompt("Ask one choice",&mut |item|if let TurnItem::Text{text,..}=item {said.push_str(text)}).unwrap(),"end_turn");
+        assert_eq!(said,"Continuing independent work");
         let qs=crate::questions::Store::new(root).list("company","thread").unwrap();
         assert_eq!(qs.len(),1);assert_eq!(qs[0].state,crate::questions::State::Open);
         assert!(qs[0].shown.is_none(),"persisting a question must not claim it was shown");
     }
 
     #[test]
-    fn app_owned_ask_ends_the_front_desk_without_a_provider_result() {
-        let script=write_script("nonblocking-app-question",&(r#"
+    fn an_app_owned_question_does_not_discard_the_agents_later_prose() {
+        let script=write_script("app-question-continues",r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
 read -r prompt
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Asking now"}]}}'
-"#.to_string()+RESULT_HELD_BACK));
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Independent work continues"}]}}'
+printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
+"#);
         let root=script.parent().unwrap();
-        let client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        let mut client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        client.settle_workers_on_stop=true;
         let path=root.join("scope.json");
-        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"front_desk".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
+        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"stu".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
         crate::question_tools::write_scope(&path,&scope).unwrap();
         client.reader_state.lock().unwrap().question_scope=Some(path.clone());
         let mut asked=false;
-        let reason=client.prompt("Ask one choice",&mut |item|{if matches!(item,TurnItem::Text{..}) && !asked {
-            asked=true;
-            crate::question_tools::call(&path,"ask",json!({"questions":[{"text":"When should the release ship?","options":[{"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More testing"}]}]})).unwrap();
-        }}).unwrap();
-        assert!(asked);assert_eq!(reason,"question_asked");assert_returned_before_the_result(root);
+        let mut said=String::new();
+        let reason=client.prompt("Ask one choice",&mut |item|if let TurnItem::Text{text,..}=item {
+            said.push_str(text);
+            if !asked {
+                asked=true;
+                crate::question_tools::call(&path,"ask",json!({"questions":[{"text":"When should the release ship?","options":[{"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More testing"}]}]})).unwrap();
+            }
+        }).unwrap();
+        assert!(asked);assert_eq!(reason,"end_turn");
+        assert!(said.contains("Independent work continues"));
     }
 
-    /// **PART 1 HUNT FINDING 31.** A question used to kill the provider process every time, so
-    /// the answer had to open and prime a replacement and the live context went with the
-    /// outgoing process. A provider that answers the interrupt keeps its process, and the next
-    /// prompt reaches that same process.
     #[test]
-    fn a_question_ends_the_turn_without_ending_a_cooperative_provider() {
-        let script=write_script("cooperative-question",
-            r#"
+    fn a_question_leaves_the_same_provider_available_for_the_answer() {
+        let script=write_script("question-provider-survives",r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
 read -r prompt
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Asking now"}]}}'
-read -r interrupt
 printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
 read -r answer
+printf '%s\n' "$answer" > "$(dirname "$0")/next-input"
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Still here"}]}}'
 printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
 "#);
         let root=script.parent().unwrap();
-        let client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        let mut client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        client.settle_workers_on_stop=true;
         let path=root.join("scope.json");
         let scope=crate::question_tools::Scope{context:crate::questions::AskScope{root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"front_desk".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
         crate::question_tools::write_scope(&path,&scope).unwrap();
         client.reader_state.lock().unwrap().question_scope=Some(path.clone());
         let mut asked=false;
-        let reason=client.prompt("Ask one choice",&mut |item|{if matches!(item,TurnItem::Text{..}) && !asked {
+        let reason=client.prompt("Ask one choice",&mut |item|if matches!(item,TurnItem::Text{..}) && !asked {
             asked=true;
             crate::question_tools::call(&path,"ask",json!({"questions":[{"text":"When should the release ship?","options":[{"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More testing"}]}]})).unwrap();
-        }}).unwrap();
-        assert!(asked);
-        assert_eq!(reason,STOP_REASON_QUESTION_ASKED_OPEN,"a provider that answered the interrupt was reported as ended");
-        // The same process takes the answer: it is the one holding the conversation's context.
+        }).unwrap();
+        assert!(asked);assert_eq!(reason,"end_turn");
         client.reader_state.lock().unwrap().question_scope=None;
         let mut said=String::new();
-        let next=client.prompt("Ship today",&mut |item|{if let TurnItem::Text{text,..}=item {said.push_str(text)}}).unwrap();
-        assert_eq!((next.as_str(),said.as_str()),("end_turn","Still here"),"the provider process was ended by the question");
+        let next=client.prompt("Ship today",&mut |item|if let TurnItem::Text{text,..}=item {said.push_str(text)}).unwrap();
+        assert_eq!((next.as_str(),said.as_str()),("end_turn","Still here"));
+        let received:Value=serde_json::from_str(&std::fs::read_to_string(root.join("next-input")).unwrap()).unwrap();
+        assert_eq!(received["type"],"user","the host injected an interrupt after the question");
     }
 
     /// **PART 1 HUNT FINDING 29.** The brief goes to the provider as a hidden context-only turn
@@ -5408,7 +5340,7 @@ done
     ///
     /// | event | caller | actions | worker |
     /// |---|---|---|---|
-    /// | a turn ends | `prompt` → `ecs::set_actions_allowed(_, false)` | closed | **kept** |
+    /// | a work turn ends | `prompt` | kept | **kept** |
     /// | the CEO stops | `NativeCancelHandle::cancel` → `ActionGrant::set(false)` | closed | withdrawn |
     /// | the assignment ends | `work_host`'s `run_one` step 4 → `revoke_work_assignment` | closed | withdrawn |
     #[test]
@@ -5433,7 +5365,7 @@ done
             crate::cognition::Cognition::prompt(&mut lease, "do the job", &mut |_| {}).unwrap(),
             "end_turn"
         );
-        assert_eq!(read(&scope), (false, true),
+        assert_eq!(read(&scope), (true, true),
             "the turn's end took the helper's permission with it — the helper is dispatched \
              during a turn and does all of its work after that turn has ended");
 

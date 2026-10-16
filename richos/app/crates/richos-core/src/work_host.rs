@@ -1183,7 +1183,7 @@ impl WorkHost {
         backend.inner.lock().unwrap().cancel=None;
         if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
         let reason=result.map_err(|e|e.to_string())?;
-        if !matches!(reason.as_str(),"end_turn"|"question_asked"|"question_asked_open") {
+        if reason != "end_turn" {
             return Err(format!("Operator input did not complete: {reason}"));
         }
         if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}

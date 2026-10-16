@@ -394,10 +394,6 @@ richos/app/
                               half — `feedback_record` still compares the rendered report
                               against what the webview says it showed him. Each proven to
                               FAIL when broken
-    tests/question_polling.rs 1 test, in its own binary because it reads a
-                              process-wide counter: 50 `has_asked` polls of an unchanged
-                              question history reload it 0 times, and a newly raised
-                              question is still noticed on the next poll
     tests/launch_no_outbound_tests.rs 11 tests holding the LAUNCH RECORD to the identical
                               standard, at the CEO's direction — it is a record of his own
                               working life, so "local only, never outbound" is asserted the

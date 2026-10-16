@@ -505,6 +505,52 @@ pub enum FrontDeskReady {
     NotReady(String),
 }
 
+struct Delivery {
+    turn_id:String,
+    binding:ThreadBinding,
+    text:String,
+    allow_recovery:bool,
+    internal_turn:bool,
+    live_turn:LiveTurn,
+    persist_err:Option<LedgerError>,
+    stopped_before_prompt:bool,
+    preparation_failed:bool,
+    preparation_stop:Option<String>,
+    preparation:Result<(),CognitionError>,
+    lease:Option<Box<dyn Cognition>>,
+    session_id:Option<String>,
+}
+
+fn run_delivery(delivery:&mut Delivery,on_item:&mut dyn FnMut(&mut Delivery,TurnItem))->Result<String,CognitionError> {
+    if delivery.stopped_before_prompt {
+        return Ok(delivery.preparation_stop.take().unwrap_or_else(||crate::native::STOP_REASON_CANCELLED.to_string()));
+    }
+    std::mem::replace(&mut delivery.preparation,Ok(()))?;
+    let mut lease=delivery.lease.take().ok_or_else(||CognitionError::Protocol("No prepared conversation connection".into()))?;
+    let result=lease.prompt(&delivery.text.clone(),&mut |item|on_item(delivery,item));
+    delivery.lease=Some(lease);
+    result
+}
+
+/// Run prepared conversation I/O with the shared state unlocked. Deltas and terminal
+/// state still enter through the same durable ledger and event handlers.
+pub fn drive_shared_turns(spine:&std::sync::Mutex<Spine>)->Result<(),SpineError> {
+    let mut failure=None;
+    loop {
+        let Some(mut delivery)=spine.lock().unwrap().pending_delivery.take() else {break};
+        let binding=delivery.binding.clone();
+        let result=run_delivery(&mut delivery,&mut |delivery,item| {
+            spine.lock().unwrap().capture_delivery_item(delivery,item);
+        });
+        let mut state=spine.lock().unwrap();
+        let delivered=state.finish_delivery(delivery,result);
+        let boundary=state.after_turn_boundary(&binding);
+        let queued=state.drain_queue();
+        if let Err(error)=delivered.and(boundary).and(queued) {if failure.is_none() {failure=Some(error)}}
+    }
+    match failure {Some(error)=>Err(error),None=>Ok(())}
+}
+
 pub struct Spine {
     ledger: Ledger,
     reader: Option<crate::read_view::SpineReader>,
@@ -553,6 +599,8 @@ pub struct Spine {
     /// a turn can END while engine subagents keep running, so delivery/rotation proceeds
     /// the moment the turn ends. Rotation NEVER happens inside a turn.
     turn_in_progress: bool,
+    detached_delivery: bool,
+    pending_delivery: Option<Delivery>,
     queue: VecDeque<Queued>,
     /// **The conversations whose turns have ENDED since the shell last asked** — one binding
     /// per thread, in the order their first turn ended. See [`Spine::take_ended_turns`].
@@ -802,6 +850,8 @@ impl Spine {
             active: None,
             registry: EntityRegistry::empty(),
             turn_in_progress: false,
+            detached_delivery: false,
+            pending_delivery: None,
             control: TurnControl::detached(),
             central_root: None,
             onboarding_record: None,
@@ -1561,7 +1611,7 @@ impl Spine {
     }
 
     pub fn has_lease(&self) -> bool {
-        self.lease.is_some()
+        self.lease.is_some() || self.turn_in_progress
     }
 
     /// Called with the shell's idle lock held and worker observations checked.
@@ -2851,13 +2901,20 @@ impl Spine {
     /// recovery + replay (continuity §5.3) if a lease factory is attached. Pass `false`
     /// from the recovery path itself so a lease that dies immediately on every respawn
     /// surfaces honestly after one attempt rather than looping forever.
-    fn deliver(
-        &mut self,
-        turn_id: &str,
-        binding: &ThreadBinding,
-        text: &str,
-        allow_recovery: bool,
-    ) -> Result<(), SpineError> {
+    fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
+        let mut delivery=self.prepare_delivery(turn_id,binding,text,allow_recovery)?;
+        if self.detached_delivery && !delivery.internal_turn {
+            self.pending_delivery=Some(delivery);
+            return Ok(());
+        }
+        let result=run_delivery(&mut delivery,&mut |delivery,item|self.capture_delivery_item(delivery,item));
+        self.finish_delivery(delivery,result)
+    }
+
+    /// Shared desktop callers drive prepared visible replies after releasing their lock.
+    pub fn detach_conversation_io(&mut self) {self.detached_delivery=true;}
+
+    fn prepare_delivery(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<Delivery,SpineError> {
         // The scope is re-verified at delivery, not merely at acceptance: a queued turn
         // may have waited across an active-context switch, and this is the last point
         // before the text reaches a compute lease.
@@ -2901,7 +2958,7 @@ impl Spine {
         // The additive family's per-turn bookkeeping (§13). Holds no counter of its own:
         // message ids come from the ledger's `text_runs` fold, activity identity and
         // position from `machinery.rs`'s merge rules.
-        let mut live_turn = LiveTurn::new(EventFence::for_turn(binding, turn_id), internal_turn);
+        let live_turn = LiveTurn::new(EventFence::for_turn(binding, turn_id), internal_turn);
 
 
         // Preparation belongs to the accepted request. Its text stays internal, but
@@ -2936,44 +2993,30 @@ impl Spine {
             other => CognitionError::Protocol(other.to_string()),
         });
 
-        // Disjoint field borrows: the closure appends each delta to the ledger AND emits
-        // it live, while `lease` streams — `ledger`, `lease`, `observer`, `machinery_*`
-        // are distinct fields of *self, so all can be borrowed at once.
-        let ledger = &mut self.ledger;
-        let observer = self.observer.as_deref();
-        let journal = self.machinery_journal.as_ref();
-        let machinery_observer = self.machinery_observer.as_deref();
-        let live_observer = self.live.as_deref();
-        // The output record, so witness (a) can record a file the moment the call that wrote
-        // it completes (Output side panel PRD §4.1 (a)).
-        let output_store = self.output.as_ref().map(|(store, _)| store);
-        // The engine's worker-lifecycle stream, borrowed as a distinct field so the closure
-        // below can re-read it DURING the turn — that is what makes a delegation reach the
-        // screen while it is happening rather than at the next `get_timeline`. It is read
-        // lazily (`LiveTurn::on_machinery` calls the thunk only once this turn has a
-        // delegation to resolve), so a turn that never delegates does no extra file I/O.
-        let worker_source = &self.worker_events;
-        // THE MEASURED WATERMARK'S INPUT (Frank F2). Two more disjoint field borrows, so
-        // the drain closure can consume `usage_update` AS IT GOES PAST — which is the
-        // only place it can be consumed: `usage_update` lands in the EVICTABLE Tier B
-        // (`journal.rs`), so reading it back from the journal is reading something that
-        // may legitimately be gone. 50 of these arrived across five probe runs and every
-        // one of them was retained and ignored; this is the line that stops ignoring them.
-        let usage_slot = &mut self.context_usage;
-        let pressure_slot = &mut self.context_pressure;
-        // Captured up front: the borrow checker will not let `self` be touched inside the
-        // stream closure below, and the session identity is what names the team directory.
-        let worker_session = self.lease.as_ref().map(|l| l.session_id().to_string());
-        let lease = self.lease.as_mut();
-        let mut persist_err: Option<LedgerError> = None;
-        let stop = if stopped_before_prompt {
-            // An internal prime completing is not the user's request completing.
-            // Stop at this boundary prevents delivery of the user prompt.
-            Ok(preparation_stop.unwrap_or_else(|| crate::native::STOP_REASON_CANCELLED.to_string()))
-        } else if let Err(error) = preparation {
-            Err(error)
-        } else {
-            let mut on_item = |item: TurnItem| match item {
+        let session_id=self.lease_session_id().map(str::to_string);
+        Ok(Delivery {turn_id:turn_id.into(),binding:binding.clone(),text:text.into(),allow_recovery,
+            internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
+            preparation_stop,preparation,session_id,lease:self.lease.take()})
+    }
+
+    fn capture_delivery_item(&mut self,delivery:&mut Delivery,item:TurnItem) {
+        let turn_id=delivery.turn_id.as_str();
+        let binding=&delivery.binding;
+        let thread_id=binding.thread_id();
+        let internal_turn=delivery.internal_turn;
+        let live_turn=&mut delivery.live_turn;
+        let persist_err=&mut delivery.persist_err;
+        let ledger=&mut self.ledger;
+        let observer=self.observer.as_deref();
+        let journal=self.machinery_journal.as_ref();
+        let machinery_observer=self.machinery_observer.as_deref();
+        let live_observer=self.live.as_deref();
+        let output_store=self.output.as_ref().map(|(store,_)|store);
+        let worker_source=&self.worker_events;
+        let worker_session=&delivery.session_id;
+        let usage_slot=&mut self.context_usage;
+        let pressure_slot=&mut self.context_pressure;
+        match item {
                 // `seq` comes from the LEASE now (§1.4 G1): ONE counter per turn, shared
                 // by text and machinery. The spine no longer counts text items itself —
                 // that would be the second counter G1 exists to forbid.
@@ -2983,7 +3026,7 @@ impl Spine {
                     // interleaving of text and machinery survives the process (§1.4 G1).
                     let at = match ledger.append_assistant_delta(turn_id, c, seq) {
                         Ok(at) => at,
-                        Err(e) => { persist_err = Some(e); return; }
+                        Err(e) => { *persist_err = Some(e); return; }
                     };
                     // Then emit it live (clean output: assistant text only ever reaches here).
                     if let Some(obs) = observer {
@@ -3056,11 +3099,20 @@ impl Spine {
                         }]);
                     }
                 }
-            };
-            lease.expect("successful preparation has a lease").prompt(text, &mut on_item)
-        };
-        // `ledger` / `lease` / `observer` / `machinery_*` borrows end here.
+            }
+    }
 
+    fn finish_delivery(&mut self,mut delivery:Delivery,stop:Result<String,CognitionError>)->Result<(),SpineError> {
+        let turn_id=delivery.turn_id.as_str();
+        let binding=&delivery.binding;
+        let thread_id=binding.thread_id();
+        let text=delivery.text.as_str();
+        let allow_recovery=delivery.allow_recovery;
+        let stopped_before_prompt=delivery.stopped_before_prompt;
+        let preparation_failed=delivery.preparation_failed;
+        let persist_err=delivery.persist_err.take();
+        let live_turn=&mut delivery.live_turn;
+        self.lease=delivery.lease.take();
         self.turn_in_progress = false;
         // Witnesses (b) and (c) of the Output side panel PRD, for the lease that just ran this
         // turn: a front-desk worker's writes (nested inside the lead's turn) and the files the
@@ -3239,9 +3291,6 @@ impl Spine {
                 // of a failure, which is what silence looks like.
                 self.upstream_budget.succeeded();
                 self.ledger.complete_turn(turn_id, &stop_reason)?;
-                if stop_reason == "question_asked" {
-                    self.pending_rotation_reason=Some("question_asked".into());
-                }
                 self.emit(StreamEvent::TurnCompleted {
                     thread_id: thread_id.to_string(),
                     turn_id: turn_id.to_string(),
@@ -3326,7 +3375,7 @@ impl Spine {
                 Err(e.into())
             }
         }
-    }
+        }
 
     /// Retain ONE machinery record, then hand it to the live sink.
     ///
@@ -3819,6 +3868,7 @@ impl Spine {
     /// directly or from draining the queue — both call sites only reach here once
     /// `turn_in_progress` is false, so nothing below ever runs mid-turn.
     fn after_turn_boundary(&mut self, binding: &ThreadBinding) -> Result<(), SpineError> {
+        if self.turn_in_progress {return Ok(())}
         // FIRST, before anything below can fail: this turn has ended, whatever it ended in,
         // so the work it wrote down may now start (`take_ended_turns`, background-work §7.1).
         if !self.ended_turns.iter().any(|known| known.thread_id() == binding.thread_id()) {

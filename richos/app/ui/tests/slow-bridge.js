@@ -460,8 +460,8 @@ async function main() {
       assertEqual(after.thread, other, `the held send landed on ${JSON.stringify(after.thread)} rather than the thread he typed it for`);
       assertEqual(page.__errors, [], "the shell logged errors while the held send was replayed");
 
-      // AND THE HOLD IS DROPPED RATHER THAN GUESSED AT when he edits the sentence after
-      // pressing Return: a send must never submit words he did not submit.
+      // Send submits exactly the words present at the press. Subsequent edits are a
+      // new draft, even if navigation is still loading.
       await page.evaluate(() => document.querySelector('.nav-thread[data-thread-id="hiring"]').click());
       const mode2 = await page.evaluate(() => document.getElementById("composer-row").dataset.mode);
       assertEqual(mode2, "opening", "the second navigation had no opening window, so this half is testing nothing");
@@ -486,8 +486,8 @@ async function main() {
         sent: Array.from(document.querySelectorAll(".tl-user-text")).map((n) => n.textContent.trim()),
       }));
       assert(
-        !edited.sent.includes("half a thought") && !edited.sent.includes("half a thought, changed"),
-        `an edited sentence was sent anyway: ${JSON.stringify(edited.sent.slice(-3))}`
+        edited.sent.includes("half a thought") && !edited.sent.includes("half a thought, changed"),
+        `Send changed the submitted words or sent the later draft: ${JSON.stringify(edited.sent.slice(-3))}`
       );
       assertEqual(edited.box, "half a thought, changed", "his edited sentence is no longer in the composer");
       await page.close();

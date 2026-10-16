@@ -455,7 +455,7 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
             return;
         }
         if self.app.try_state::<AppState>().is_some_and(|state| questions_pending(&state)
-            || state.work.peer_work_pending() || !state.control.pending_intake().is_empty()) {
+            || state.control.active_turn().is_some() || state.work.peer_work_pending() || !state.control.pending_intake().is_empty()) {
             return;
         }
         // **A command Rich started outlives its assignment** (reap gap C5): quitting would end
@@ -1208,6 +1208,9 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
         let verdict = spine.prime_front_desk(&thread_id);
         // Priming drains what he sent while it ran (`prime_front_desk`'s `poll_intake`), and
         // those are real turns: their boundary is here (`adopt_at_the_turn_boundary`).
+        drop(spine);
+        if let Err(error)=richos_core::spine::drive_shared_turns(&state.spine) {eprintln!("[richos] queued reply: {error}");}
+        let spine=take_the_spine(&state.spine);
         adopt_at_the_turn_boundary(spine, &state.work);
         match verdict {
             richos_core::spine::FrontDeskReady::Ready { millis, spawned } => eprintln!(
@@ -1561,8 +1564,9 @@ fn send_message(
     //
     // A write that FAILS is not a refusal of his message either: it falls through to the same
     // old road, and the only thing lost is the wait.
-    let his_words_are_on_the_log = if !pressed && desk_input_can_be_logged(&state.control, &thread_id) {
-        match state.control.submit_from_desk(&thread_id, state.entity.lock().unwrap().clone(), &text)
+    let destination = state.reader.snapshot().ledger().thread_binding(&thread_id).ok();
+    let his_words_are_on_the_log = if !pressed && destination.is_some() && desk_input_can_be_logged(&state.control, &thread_id) {
+        match state.control.submit_from_desk(&thread_id, destination.map(|binding| binding.entity_id().clone()), &text)
         {
             Ok(record) => {
                 // THE PHONE, BEFORE THE LOCK. Inert when nothing is paired, so this costs a
@@ -1688,39 +1692,10 @@ fn send_message(
             .submit_prompt_to(&thread_id, &text, Source::Text)
             .map_err(|e| refused_send("the spine refused the prompt", e.to_string()))?;
     }
-    // "no active thread" used to be the whole sentence here, and it went straight onto the
-    // CEO's screen through `send()`'s `String(e)`. Machinery, and it named neither an action
-    // nor an actor. The prompt IS already submitted by this line, so the sentence must not
-    // claim the message was lost, and must not promise it will reappear — nothing here knows
-    // that.
-    let thread = spine
-        .active_thread()
-        .ok_or(
-            "I've taken that down, but I haven't got a thread open to show it in. Quit RichOS \
-             and open it again; if it still isn't here, whoever set RichOS up needs to look.",
-        )?
-        .to_string();
-    let messages = spine.messages(&thread).map_err(|e| e.to_string())?;
-    // ===================================================================================
-    // THE TURN BOUNDARY, AND THE ONE LINE THAT MAKES §7.1's DECISION REAL
-    // ===================================================================================
-    //
-    // The turn is over: the prompt ran, the reply is reconciled, and the mutex goes back
-    // below. If Rich wrote an assignment down during it — `richos_assignments.record`,
-    // which returns a receipt and nothing else — the work starts HERE, after the turn, on
-    // the work lease. Background-work spec §7.1: *"registration is the receipt, and
-    // `prepare` runs on the work lease after the turn has ended."*
-    //
-    // **The spine lock is dropped first, on purpose.** The work host must never be reached
-    // while it is held; that is §0 row 3's whole point, and doing the adoption inside the
-    // guard would have put the one lock this feature exists to escape back on the path.
-    //
-    // **It is a directory read at a boundary, not a timer.** Adoption happens once per
-    // assignment, at the end of the turn that created it. Nothing here retries and nothing
-    // restarts work by itself (spec §6.3).
-    //
-    // **Every conversation whose turn ended in this call, not the one active afterwards** —
-    // the same door the spoken turn, the phone and the boot use (`adopt_at_the_turn_boundary`).
+    drop(spine);
+    richos_core::spine::drive_shared_turns(&state.spine).map_err(|e|e.to_string())?;
+    let spine=take_the_spine(&state.spine);
+    let messages=spine.messages(&thread_id).map_err(|e|e.to_string())?;
     adopt_at_the_turn_boundary(spine, &state.work);
     Ok(messages)
 }
@@ -1762,36 +1737,33 @@ where
 
 /// **His spoken sentence, as a turn, and then its boundary** — the tail of the voice submit
 /// callback, a function so the adoption it ends with is tested rather than assumed.
-fn run_the_spoken_turn<G>(
-    mut spine: G,
+fn run_the_spoken_turn(
+    shared: &Mutex<Spine>,
     work: &Arc<richos_core::work_host::WorkHost>,
     text: &str,
     rich_audible: bool,
-) where
-    G: std::ops::DerefMut<Target = Spine>,
-{
-    // Source::Jam — voice and text are ONE thread and ONE ledger.
-    //
-    // `submit_prompt_spoken` rather than `submit_prompt`: the latter writes
-    // `rich_audible: None`, which means "not recorded", and would throw away the one fact
-    // about this audio that nothing downstream can reconstruct.
+) {
+    let mut spine=shared.lock().unwrap();
     if let Err(e) = spine.submit_prompt_spoken(text, Source::Jam, rich_audible) {
         eprintln!("[richos] voice turn failed: {e}");
     }
+    drop(spine);
+    if let Err(error)=richos_core::spine::drive_shared_turns(shared) {eprintln!("[richos] spoken reply: {error}");}
+    let spine=shared.lock().unwrap();
     // A failed turn still reaches here: what it wrote down before failing is a receipt.
     adopt_at_the_turn_boundary(spine, work);
 }
 
-/// **The phone's drain: take his words off the intake log, run them, then the boundary.**
-/// Called from `phone::bridge` on its own thread, because the drain runs the turn.
+/// Receive durable input and run its model I/O outside the shared conversation lock.
 fn drain_incoming_messages(
-    spine: &std::sync::Mutex<Spine>,
+    shared: &std::sync::Mutex<Spine>,
     work: &Arc<richos_core::work_host::WorkHost>,
 ) -> Result<(), richos_core::spine::SpineError> {
-    let mut spine = spine.lock().unwrap();
-    let outcome = spine.poll_intake();
+    let outcome=shared.lock().unwrap().poll_intake();
+    let driven=richos_core::spine::drive_shared_turns(shared);
+    let spine=shared.lock().unwrap();
     adopt_at_the_turn_boundary(spine, work);
-    outcome
+    outcome.and(driven)
 }
 
 /// A cold prime starts before its provider has a session id. Its intake marker
@@ -3633,6 +3605,7 @@ fn main() {
                 }
             };
 
+            spine.detach_conversation_io();
             app.manage(AppState {
                 quota: quota.clone(),
                 permissions,
@@ -4955,7 +4928,8 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
             }
             // The turn, and then its boundary: work he gave aloud starts the way typed work
             // does (`adopt_at_the_turn_boundary`, CEO ruling §88).
-            run_the_spoken_turn(spine, &state.work, &text, rich_audible);
+            drop(spine);
+            run_the_spoken_turn(&state.spine, &state.work, &text, rich_audible);
         });
     // Behind this session's gate, which dictation closes when it takes the microphone.
     #[cfg(target_os = "macos")]
@@ -9915,7 +9889,8 @@ fn questions_pending(state: &AppState) -> bool {
 fn registered_work(state: &AppState) -> lifecycle::Registered {
     let work = state.work.background_work();
     lifecycle::Registered {
-        running: work.running + usize::from(state.work.peer_work_pending())
+        running: work.running + usize::from(state.control.active_turn().is_some())
+            + usize::from(state.work.peer_work_pending())
             + usize::from(!state.control.pending_intake().is_empty()),
         awaiting_you: work.awaiting_you,
         readable: work.readable,

@@ -166,7 +166,7 @@ const HIS_TASK: &str = "land the three branches";
 #[test]
 fn work_he_gives_aloud_starts_without_a_typed_message() {
     let mac = a_mac("spoken");
-    run_the_spoken_turn(mac.spine.lock().unwrap(), &mac.work, HIS_TASK, false);
+    run_the_spoken_turn(&mac.spine, &mac.work, HIS_TASK, false);
     assert_eq!(mac.states(&mac.shown).len(), 1, "positive control: the spoken turn wrote the task down");
     assert!(
         mac.work_started_on(&mac.shown, Duration::from_secs(10)),
@@ -320,7 +320,7 @@ fn the_voice_callback_and_the_phone_drain_go_through_their_doors() {
         lines.iter().filter(|(_, _, l)| l.split("//").next().unwrap_or("").contains(door)).count()
     };
     // The voice callback's one call, and the phone drain's.
-    assert_eq!(calls(&main, "run_the_spoken_turn(spine, &state.work"), 1, "the voice callback must end in its door");
+    assert_eq!(calls(&main, "run_the_spoken_turn(&state.spine, &state.work"), 1, "the voice callback must end in its door");
     assert_eq!(calls(&bridge, "crate::dispatch_incoming_messages(&self.app, &thread)"), 1, "the phone must drain through its door");
     // The scan's own negative control: a door removed from the text is seen as missing.
     let broken = include_str!("main.rs").replace("adopt_at_the_turn_boundary(&mut spine, &work);", "");
