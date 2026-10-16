@@ -77,18 +77,6 @@ pub const SERVER_NAME: &str = "richos_assignments";
 pub const RECORD_TOOL_NAME: &str = "record";
 pub const QUALIFIED_RECORD_TOOL: &str = "mcp__richos_assignments__record";
 
-/// **The two fields of the register's answer that the APP now reads back off the wire**, named
-/// once so the host and this server cannot drift about them.
-///
-/// The register runs in its own short-lived process (see the module doc), so its answer reaches
-/// the app the only way anything reaches it: as the `tool_result` frame the child emits on the
-/// conversation's stdio. Since 2026-09-18 the app reads that frame and says the sentence itself
-/// — `first_reply::receipt_sentence` is the reader, and it is the same two field names or it is
-/// nothing. A literal in two files is a rename away from a silent stop.
-pub const RECEIPT_RECORDED_FIELD: &str = "recorded";
-/// The sentence itself. See [`RECEIPT_RECORDED_FIELD`].
-pub const RECEIPT_SAY_FIELD: &str = "say";
-
 const MAX_FRAME_BYTES: usize = 256 * 1024;
 const MAX_SCOPE_BYTES: u64 = 16 * 1024;
 
@@ -268,20 +256,10 @@ struct RecordArguments {
     assignment: String,
     #[serde(default)]
     repositories: Vec<String>,
-    /// **Did he have to answer a question before this could be written down?** The CEO's
-    /// ruling §55 has two replies — *"On it!"*, and *"Got it. On it!"* once the answers are in
-    /// — and only the model knows which turn this is.
-    ///
-    /// It reports a fact and chooses nothing: both sentences are the app's
-    /// ([`assignment::Receipt`]), so a model that gets this wrong says the other three-word
-    /// reply rather than a paragraph of its own. Defaults to `false`, which is the ordinary
-    /// case.
-    #[serde(default)]
-    after_questions: bool,
     /// **Will this work need the Mac's screen?** The CEO's ruling §56's one input — see
     /// [`assignment::Assignment::needs_screen`].
     ///
-    /// A model argument for the same reason `after_questions` is one: the app cannot tell from
+    /// A model argument because the app cannot tell from
     /// a title whether a job will drive a window, take a screenshot or walk a build, and only
     /// the thing that read his request knows. It chooses nothing about WHAT happens — the wait
     /// and the sentence are the app's ([`crate::screen`]) — and getting it wrong loses no work
@@ -315,11 +293,10 @@ struct RecordArguments {
 pub fn tools() -> Value {
     json!({"tools":[
         {"name":RECORD_TOOL_NAME,
-         "description":"Write down a piece of work the CEO has asked for — OR a question of his you cannot answer yourself — so it can run in the background, and END YOUR TURN with what this returns, which is a few words. CALL THIS FIRST, BEFORE ANY OTHER TOOL: he is waiting, and every search, lookup or check you do before it is time he spends looking at nothing. Do not look up status first, do not read anything first, do not plan first, and do not open or save any operational record first — this opens the record for this work itself, so there is nothing whatsoever to do ahead of it. If the request is clear, this is your first call and its answer is your whole reply; if it genuinely is not clear, ask him the question instead and call this once he has answered, with after_questions set. It records the assignment and returns the exact words to say; it does not do the work and does not wait for it. The work, and all the looking, then runs on a separate connection and he is told when there is something for him to look at. Say only what this returns: no restating his task or his question back to him, no claim that the work is running, started, prepared or finished. A question you ALREADY KNOW the answer to is answered on the spot and never written down here.",
+         "description":"Create an operational work record with its original user-request reference and an open obligation. Returns registration facts without waiting for execution. Registration is distinct from peer messaging, execution and completion.",
          "inputSchema":{"type":"object","properties":{
-             "assignment":{"type":"string","minLength":1,"maxLength":4096,"description":"What he asked for, in HIS OWN TERMS, as one plain sentence you would be happy to read back to him. For a question, his question in his own terms. No identifiers, no internal names."},
+             "assignment":{"type":"string","minLength":1,"maxLength":4096,"description":"Your complete handoff to Stu: outcome or question, relevant context, constraints and decisions. Preserved in full; a shortened display title is stored separately."},
              "repositories":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":4096},"description":"Absolute paths of the repositories this assignment touches, if he named any. Omit when he did not. Only a repository connected to this company is kept; any other path is left out of the record."},
-             "after_questions":{"type":"boolean","description":"True only if you asked him a clarifying question about this work and he has now answered it. It changes which short reply you are handed and nothing else. Omit it otherwise."},
              "needs_screen":{"type":"boolean","description":"True if this work needs the Mac's screen to be unlocked: it drives the app's own window, takes screenshots, walks a build on screen, or otherwise cannot be done while the screen is locked. If the screen is locked when this comes up, the app waits for the unlock and carries on by itself; nobody is asked anything. Omit it for ordinary work, which is almost all work."},
              "picks_up":{"type":"string","minLength":1,"maxLength":4096,"description":"Only when he asks you to pick back up work that RichOS closed on: work the read lists under `waiting_for_you` with state `unknown`. Set this to that row's `what`, exactly as the read gave it. It puts THAT work back on, with every answer he already gave it, and opens nothing new; `assignment` is then his request in his own terms as usual. Omit it for anything else."},
              "kind":{"type":"string","enum":["task","check","investigate"],"description":"What this is. `task`: work he asked for; omit it and you get this. `check`: a QUESTION of his whose answer you expect quickly, because it is on file somewhere and only has to be looked up. `investigate`: a QUESTION of his that needs real digging: repositories, logs, the web, several places. A rough estimate of the kind of work is all that is wanted here; nobody is timing it, and the app says the right thing either way if it takes longer than you thought."}
@@ -347,14 +324,10 @@ pub fn call_with(
         return Err("That assignment tool does not exist. Nothing was recorded.".into());
     }
     let args: RecordArguments = serde_json::from_value(arguments).map_err(|_| {
-        "Use only assignment, repositories, after_questions, needs_screen, kind and picks_up. Nothing was recorded."
+        "Use only assignment, repositories, needs_screen, kind and picks_up. Nothing was recorded."
             .to_string()
     })?;
-    let after_questions = args.after_questions;
-    // **An unrecognized kind is refused before anything is written**, rather than quietly
-    // becoming a task. The whole of §58 is that the sentence matches what he actually asked
-    // for, and a typo that fell through to "On it!" would defeat it silently — which is
-    // worse than a refusal the model can see and correct in the same turn.
+    // Reject unknown kinds before opening an obligation.
     let kind = match args.kind.as_deref() {
         None => assignment::AssignmentKind::Task,
         Some(word) => assignment::AssignmentKind::parse(word)
@@ -368,24 +341,7 @@ pub fn call_with(
             "This conversation is not open for new assignments right now. Nothing was recorded.".into(),
         );
     }
-    // ===================================================================================
-    // HIS TEAM TAKES WORK ONLY FROM THE MOUTHS HE LISTED — answered here, in his turn
-    // ===================================================================================
-    //
-    // Operator back-end spec r3 (s) rule 1: *"The front desk answers: 'Your team only takes
-    // work from the Mac. I've noted it; ask me at your desk.'"*, and Sage's front-desk addendum:
-    // *"When the register hands you a sentence instead of 'On it!', say that sentence as it
-    // is."* On an operator install this turn's own mouth is
-    // read from the conversation ledger exactly as his team's desk reads it
-    // (`operator_desk::LedgerOrigins`), and work from any other is answered with the sentence,
-    // nothing opened and nothing written. `recorded: false` keeps the app from saying "On it!"
-    // itself (`first_reply::receipt_sentence`). The desk refuses it again if one ever got by.
-    //
-    // **The listed mouths come from the front desk's operator scope beside this one**
-    // (`operator_desk_tools::listed_origins_beside`), which only an operator install's front
-    // desk writes, every turn, from the same per-lease identity. So this register's own scope
-    // is the product's, field for field, and a product install reads nothing new. An operator
-    // scope that is there and cannot be read refuses the record rather than guessing.
+    // Operator installs accept work only from their declared origins.
     let listed = crate::operator_desk_tools::listed_origins_beside(scope_path)
         .map_err(|_| "RichOS cannot open a record for new work in this conversation right now. Nothing was recorded.".to_string())?;
     if let Some(listed) = &listed {
@@ -395,12 +351,8 @@ pub fn call_with(
         let origin = facts.map_or(crate::operator_host::Origin::NoOrigin,
                                   |f| crate::operator_host::Origin::of_turn(f.source, f.channel.as_deref()));
         if !origin.declared().is_some_and(|mouth| listed.iter().any(|l| l == mouth)) {
-            let say = if origin == crate::operator_host::Origin::NoOrigin {
-                crate::operator_desk::NO_ORIGIN_WORK
-            } else {
-                crate::operator_host::PHONE_ASSIGNMENT
-            };
-            return Ok(json!({RECEIPT_RECORDED_FIELD: false, RECEIPT_SAY_FIELD: say, "say_nothing_else": true}));
+            return Ok(json!({"recorded": false, "reason": "work_origin_not_allowed",
+                "origin": origin.declared(), "allowed_origins": listed}));
         }
     }
     // ===================================================================================
@@ -417,9 +369,8 @@ pub fn call_with(
         let receipt = assignment::pick_up(&scope.state_root, &scope.entity_id, &scope.thread_id, what)
             .map_err(|e| format!("{e}: use the exact `what` of an `unknown` row from the read, or write it down as new work without picks_up. Nothing was recorded."))?;
         return Ok(json!({
-            RECEIPT_RECORDED_FIELD: true,
-            RECEIPT_SAY_FIELD: if after_questions { receipt.sentence_after_questions() } else { receipt.sentence() },
-            "say_nothing_else": true,
+            "recorded": true,
+            "assignment_id": receipt.id, "state": "registered", "kind": receipt.kind.as_str(),
         }));
     }
     // ===================================================================================
@@ -454,7 +405,7 @@ pub fn call_with(
             obligation_id: obligation_id.clone(),
             instruction_ledger_ref: scope.instruction_ledger_ref,
             instruction_sha256: scope.instruction_sha256,
-            title,
+            title: args.assignment,
             repositories,
             needs_screen: args.needs_screen,
         },
@@ -466,16 +417,10 @@ pub fn call_with(
         opener.abandon(&desk, &obligation_id);
         assignment::failed_registration_sentence(&format!("{e}."))
     })?;
-    // **What comes back is the words, not an id.** `desktop-work.md:42-43` puts receipt ids on
-    // Rich's side of that line; a tool result that handed the model an id would be handing it
-    // something to say. Under the CEO's ruling §55 the words are three of them, so there is
-    // nothing left in this payload that could name the assignment even by accident.
+    // Rich interprets these receipt facts and authors his own acknowledgment.
     Ok(json!({
-        RECEIPT_RECORDED_FIELD: true,
-        RECEIPT_SAY_FIELD: if after_questions { receipt.sentence_after_questions() } else { receipt.sentence() },
-        // Said in the payload the model actually reads, not only in the tool description it
-        // may have summarized: §55's reply is the whole turn.
-        "say_nothing_else": true,
+        "recorded": true,
+        "assignment_id": receipt.id, "state": "registered", "kind": receipt.kind.as_str(),
     }))
 }
 
@@ -738,21 +683,15 @@ mod tests {
         fixture
     }
 
-    /// **On an operator install the register answers work his team may not take, in his turn**
-    /// (operator back-end spec r3 (s) rule 1: *"The front desk answers: 'Your team only takes
-    /// work from the Mac. I've noted it; ask me at your desk.'"*; Sage's front-desk addendum:
-    /// *"When the register hands you a sentence instead of 'On it!', say that sentence as it
-    /// is"*). Nothing is opened and nothing is written. The positive control, in the same test:
-    /// the same scope for a turn given at the desk records, and says "On it!".
+    /// Refused operator origins create neither assignments nor obligations.
     #[test]
     fn on_an_operator_install_the_register_answers_phone_or_unrecorded_work_and_writes_nothing() {
-        for (mouth, said) in [(Some("phone"), crate::operator_host::PHONE_ASSIGNMENT),
-                              (None, crate::operator_desk::NO_ORIGIN_WORK)] {
+        for mouth in [Some("phone"), None] {
             let fixture = operator_fixture(mouth);
             let opened = Opened::default();
             let result = call_with(&fixture.scope, RECORD_TOOL_NAME, json!({"assignment":"land it"}), &opened).unwrap();
             assert_eq!(result["recorded"], false, "{mouth:?}: {result}");
-            assert_eq!(result["say"], said, "{mouth:?}");
+            assert_eq!(result["reason"], "work_origin_not_allowed");
             assert!(opened.ids().is_empty(), "{mouth:?}: an obligation was opened");
             assert!(assignment::read_all(&fixture.root.join("engine-state"), "depot", "thread-one").unwrap_or_default().is_empty(),
                     "{mouth:?}: an assignment was written");
@@ -761,7 +700,7 @@ mod tests {
         let opened = Opened::default();
         let result = call_with(&desk.scope, RECORD_TOOL_NAME, json!({"assignment":"land it"}), &opened).unwrap();
         assert_eq!(result["recorded"], true);
-        assert_eq!(result["say"], "On it!");
+        assert!(result.get("say").is_none());
         assert_eq!(opened.ids().len(), 1);
         // An operator scope that is there and unreadable refuses rather than guessing.
         let broken = operator_fixture(Some("desk"));
@@ -793,7 +732,7 @@ mod tests {
         assert_eq!(fixture.rows()[0].state, assignment::AssignmentState::Unknown);
         let result = call_with(&fixture.scope, RECORD_TOOL_NAME,
             json!({"assignment":"pick it back up","picks_up":"land the three branches"}), &opened).unwrap();
-        assert_eq!((result["recorded"].clone(), result["say"].clone()), (json!(true), json!("On it!")));
+        assert_eq!(result["recorded"], true);
         let rows = fixture.rows();
         assert_eq!(rows.len(), 1, "a second assignment was written");
         assert_eq!((rows[0].id.as_str(), rows[0].obligation_id.as_str(), rows[0].state),
@@ -891,7 +830,7 @@ mod tests {
     /// Spec §1.1/§1.2: one call, a durable record, and a sentence to end the turn with — and
     /// since 2026-09-18, the OBLIGATION opened by the same call.
     #[test]
-    fn recording_opens_the_obligation_and_returns_the_sentence_to_say() {
+    fn recording_opens_the_obligation_and_returns_only_registration_facts() {
         let fixture = fixture();
         connect(&fixture, &["/fictional/project"]);
         let desk = Opened::default();
@@ -899,16 +838,9 @@ mod tests {
             json!({"assignment":"landing the three branches","repositories":["/fictional/project"]}), &desk)
             .unwrap();
         assert_eq!(result["recorded"], true);
-        // **This is the wire both defects came off.** `say` is handed to the model verbatim and
-        // `doctrine/front-desk.md` tells it to end the turn with exactly this string, so
-        // whatever is here is what he reads. The CEO's ruling §55 fixes it at three words; his
-        // walk had waited 35 seconds for a paragraph, and the paragraph also said the work was
-        // running three seconds before it failed.
-        let say = result["say"].as_str().unwrap();
-        assert_eq!(say, "On it!");
-        assert_eq!(result["say_nothing_else"], true);
-        assert!(!say.contains("landing the three branches"), "his task was read back to him: {say}");
-        assert!(!say.to_lowercase().contains("running"), "the receipt told him it was running: {say}");
+        assert!(result.get("say").is_none());
+        assert!(result.get("say_nothing_else").is_none());
+        assert_eq!(result["state"], "registered");
         // **THE OBLIGATION WAS OPENED, ONCE, BY THIS CALL, WITH THE RECORD'S OWN ID.** That
         // identity is the join the work lease depends on: `prepare` reads the obligation off
         // the seat's binding and refuses a dispatch unless its item is open
@@ -928,16 +860,14 @@ mod tests {
         assert_eq!(rows[0].state, assignment::AssignmentState::Registered);
         assert_eq!(rows[0].instruction_ledger_ref, "ledger:thread-one:turn-7");
         assert_eq!(rows[0].repositories, vec!["/fictional/project".to_string()]);
-        // §1.2: nothing the model can say back carries an identifier.
-        assert!(!say.contains(&rows[0].id));
-        assert!(!say.contains(&rows[0].seat));
-        assert!(!say.contains(&rows[0].obligation_id));
-        // The other reply, and the only thing that selects it: a fact the model reports, never
-        // words the model composes. It is a second registration, so it opens a second
-        // obligation — a different one, because it is different work.
+        assert_eq!(result["assignment_id"], rows[0].id);
+        let handoff = "The pricing review. Preserve these agreed constraints: ".to_string() + &"context and decisions. ".repeat(30);
         let asked = call_with(&fixture.scope, RECORD_TOOL_NAME,
-            json!({"assignment":"the pricing review","after_questions":true}), &desk).unwrap();
-        assert_eq!(asked["say"], "Got it. On it!");
+            json!({"assignment":handoff}), &desk).unwrap();
+        assert!(asked.get("say").is_none());
+        let saved = fixture.rows().into_iter().find(|row| row.id == asked["assignment_id"].as_str().unwrap()).unwrap();
+        assert_eq!(saved.handoff, handoff);
+        assert!(saved.title.chars().count() <= 161);
         let ids = desk.ids();
         assert_eq!(ids.len(), 2);
         assert_ne!(ids[0], ids[1], "two assignments shared one obligation, and so one seat");
@@ -970,7 +900,7 @@ mod tests {
         // And the description tells it there is nothing to open first — the sentence that used
         // to say the opposite is what produced the pre-reply checkpoint that cost him 3.0 s.
         let description = tools()["tools"][0]["description"].as_str().unwrap().to_string();
-        assert!(description.contains("do not open or save any operational record first"), "{description}");
+        assert!(description.contains("an open obligation"), "{description}");
         // Positive control: the same call without the identifier records.
         assert!(call_with(&fixture.scope, RECORD_TOOL_NAME,
             json!({"assignment":"landing the branches"}), &desk).is_ok());
@@ -1030,64 +960,18 @@ mod tests {
             "the obligation was left open with nothing to carry it out");
     }
 
-    /// **The CEO's ruling §55 reaches the model, not just this file's tests.**
-    ///
-    /// The doctrine is what the conversation lease is actually given
-    /// (`engine_profile.rs:158` hands it `FRONT_DESK_DOCTRINE`), so a rule that lives only in a
-    /// tool description the model may skim is a rule with one carrier. §55's measure is the time
-    /// from his send to "On it!" on screen, and the only thing that can spend that time is a tool
-    /// call made before the register.
+    /// Rich chooses the work kind, which remains factual receipt data.
     #[test]
-    fn the_doctrine_tells_the_front_desk_to_register_first_and_reply_in_three_words() {
-        let doctrine = crate::doctrine::FRONT_DESK_DOCTRINE;
-        // His two replies, verbatim, in the text the model reads.
-        assert!(doctrine.contains("On it!"), "the reply itself is not in the doctrine");
-        assert!(doctrine.contains("Got it. On it!"), "the after-a-question reply is not in the doctrine");
-        // The register is the FIRST call — the half of §55 that costs the 35 seconds.
-        assert!(doctrine.contains("FIRST tool call"), "the ordering rule is not stated");
-        // Wrap-safe: the doctrine is hard-wrapped prose, so assertions stay inside one line.
-        assert!(
-            doctrine.contains("never before writing a new"),
-            "the read is not fenced off from a new work request"
-        );
-        // And the distinction job 2 put on the wire is explained where the model will read it.
-        assert!(doctrine.contains("two different answers"), "starting vs running is not explained");
-        // Negative: the superseded clauses are gone from the doctrine too, not just from the
-        // sentence. A doctrine still promising "the work is written down. Say that" would have
-        // the model narrating instead of saying three words.
-        assert!(!doctrine.contains("you'll find it with your saved work"), "a superseded clause survives");
-        assert!(!doctrine.contains("It's running now"), "a superseded clause survives");
-        // Positive control: the doctrine was actually loaded and is not an empty string.
-        assert!(doctrine.len() > 500, "the doctrine did not load: {} bytes", doctrine.len());
-        assert!(doctrine.contains("richos_assignments.record"));
-    }
-
-    /// **A QUESTION GETS ONE OF TWO EXACT SENTENCES OFF THE WIRE** — the CEO's ruling §58
-    /// (`richos-hq` `wiki/ceo-decisions.md:2884-2914`, 2026-09-18).
-    ///
-    /// This is the same wire §55's defects came off: `say` is handed to the model verbatim
-    /// and the doctrine tells it to end the turn with exactly this string, so whatever is
-    /// here is what he reads and hears.
-    #[test]
-    fn a_question_is_recorded_as_a_question_and_answered_with_its_own_sentence() {
+    fn delegated_questions_keep_richs_kind_without_scripting_his_reply() {
         let fixture = fixture();
         let desk = Opened::default();
         let quick = call_with(&fixture.scope, RECORD_TOOL_NAME,
             json!({"assignment":"whether the pricing review ever landed","kind":"check"}), &desk).unwrap();
-        assert_eq!(quick["say"], "I'll check.");
-        assert_eq!(quick["say_nothing_else"], true);
+        assert_eq!(quick["kind"], "check");
         let deep = call_with(&fixture.scope, RECORD_TOOL_NAME,
-            json!({"assignment":"why the nightly has been red since Tuesday","kind":"investigate"}), &desk)
-            .unwrap();
-        assert_eq!(deep["say"], "I'll investigate.");
-        // Nothing reads his question back, nothing says "working", nothing claims a start.
-        for say in [quick["say"].as_str().unwrap(), deep["say"].as_str().unwrap()] {
-            assert!(!say.contains("pricing"), "his question was read back: {say}");
-            assert!(!say.contains("nightly"), "his question was read back: {say}");
-            assert!(!say.to_lowercase().contains("working"), "a task's word reached a question: {say}");
-            assert!(!say.to_lowercase().contains("running"), "{say}");
-            assert!(!say.contains("On it"), "a question got the task reply: {say}");
-        }
+            json!({"assignment":"why the nightly has been red since Tuesday","kind":"investigate"}), &desk).unwrap();
+        assert_eq!(deep["kind"], "investigate");
+        assert!(quick.get("say").is_none() && deep.get("say").is_none());
         // The kind is on the record, which is what the timer and the status read use.
         let rows = fixture.rows();
         assert_eq!(rows.len(), 2);
@@ -1101,7 +985,7 @@ mod tests {
         // An omitted kind is a task — every caller before today, unchanged.
         let task = call_with(&fixture.scope, RECORD_TOOL_NAME,
             json!({"assignment":"landing the three branches"}), &desk).unwrap();
-        assert_eq!(task["say"], "On it!");
+        assert_eq!(task["kind"], "task");
         // **A kind the model mistyped is REFUSED, not defaulted** — and refused before anything
         // is opened, which is why the kind is parsed ahead of the desk.
         let typo = call_with(&fixture.scope, RECORD_TOOL_NAME,
@@ -1109,32 +993,6 @@ mod tests {
         assert!(typo.contains("Nothing was recorded."), "{typo}");
         assert_eq!(fixture.rows().len(), 3, "a refused kind still wrote a record");
         assert_eq!(desk.ids().len(), 3, "a refused kind still opened an obligation");
-    }
-
-    /// **§58 reaches the model, not only this file's tests.**
-    ///
-    /// The doctrine is what the conversation lease is actually given (`engine_profile.rs:158`),
-    /// so a rule that lives only in a tool description the model may skim is a rule with one
-    /// carrier — the same argument §55's own doctrine test makes.
-    #[test]
-    fn the_doctrine_tells_the_front_desk_what_to_say_to_a_question_it_cannot_answer() {
-        let doctrine = crate::doctrine::FRONT_DESK_DOCTRINE;
-        // His two sentences, verbatim, in the text the model reads.
-        assert!(doctrine.contains("I'll check."), "the quick reply is not in the doctrine");
-        assert!(doctrine.contains("I'll investigate."), "the slower reply is not in the doctrine");
-        // A question it KNOWS the answer to is answered on the spot — the precondition §58
-        // is written on ("doesn't immediately know the answer and therefore has to get it
-        // from the back-end Rich"), without which every question would grow a timer.
-        assert!(doctrine.contains("You know the answer."), "the answer-it-yourself case is not stated");
-        // The two words the register is told, so the model knows what it is reporting.
-        assert!(doctrine.contains("`check`") && doctrine.contains("`investigate`"), "the kinds are not named");
-        // Wrap-safe: the doctrine is hard-wrapped prose, so assertions stay inside one line.
-        assert!(doctrine.contains("You do not write those sentences"), "the words are not claimed by the app");
-        // Negative: the superseded freeform instruction is gone. A doctrine still telling it
-        // to "say plainly that you are handing it over" is a doctrine that composes.
-        assert!(!doctrine.contains("Say plainly that you are handing it over"), "the superseded clause survives");
-        // §55 is untouched by this change.
-        assert!(doctrine.contains("On it!") && doctrine.contains("Got it. On it!"));
     }
 
     /// The model supplies WHAT, never WHERE or WHOSE. Every redirection field is in the

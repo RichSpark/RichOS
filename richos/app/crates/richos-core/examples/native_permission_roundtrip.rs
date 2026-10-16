@@ -15,7 +15,7 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
  let profile=richos_core::engine_profile::EngineProfile::prepare(&engine,&root.0,runtime.clone())?;
  let desk=profile.permissions.clone();
  let doctrine=richos_core::doctrine::ensure_rendered(&root.0,&Default::default())?;
- let skills=richos_core::skills::ensure_rendered(&root.0)?;
+ let skills=richos_core::skills::ensure_rendered(&root.0, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app"))?;
  let bridge=EcsBridge::new(&runtime.python,&engine,&root.0.join("ecs"))?;
  let cognition=NativeCognition::start_with_engine(&resolve_claude_bin(),&doctrine,&skills,&std::env::current_exe()?,bridge,profile,None)?;
  let session=cognition.session_id().to_string();

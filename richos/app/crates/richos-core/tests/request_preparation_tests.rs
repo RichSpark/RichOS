@@ -71,7 +71,7 @@ fn prime_failure_terminalizes_the_accepted_turn_and_survives_reload() {
         .iter()
         .find(|t| t.source == Source::Text)
         .unwrap();
-    assert_eq!(turn.state, TurnState::Interrupted);
+    assert_eq!(turn.state,TurnState::Interrupted);
     assert!(turn.ended_at.is_some());
     assert_eq!(events.statuses(), vec!["queued", "working", "failed"]);
     assert!(control.active_turn().is_none());
@@ -208,15 +208,16 @@ fn restart_marks_orphan_received_and_inflight_requests_failed_without_replaying(
     let prompts = mock.prompts.clone();
     restored.attach_lease(Box::new(mock));
     restored.reconcile_intake().unwrap();
-    for id in [first, second] {
+    for id in [first.clone(), second] {
         let turn = restored.ledger().turn(&id).unwrap();
-        assert_eq!(turn.state, TurnState::Interrupted);
+        assert_eq!(turn.state,if id==first {TurnState::Completed}else{TurnState::Interrupted});
+        if id==first {continue}
         assert_eq!(turn.ended_at, None, "restart cannot know when the process died");
         assert_eq!(turn.active_ms(), None, "closed-app time must never count as work");
         let reloaded = Ledger::open(root.join("ledger.jsonl")).unwrap();
         assert_eq!(reloaded.turn(&id).unwrap().active_ms(), None);
     }
-    assert!(prompts.lock().unwrap().is_empty());
+    assert_eq!(*prompts.lock().unwrap(),vec!["not started"]);
 }
 struct WaitingFactory {
     entered: Mutex<mpsc::Sender<()>>,
@@ -378,7 +379,8 @@ impl Cognition for WaitingHandoff {
         if self.calls == 1 {
             return Ok("end_turn".into());
         }
-        assert!(text.contains("summarize this conversation"));
+        let event: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(event["event"], "session_handoff_requested");
         self.entered.send(()).unwrap();
         self.cancelled.recv_timeout(Duration::from_secs(5)).unwrap();
         Ok("cancelled".into())
@@ -492,4 +494,73 @@ fn a_failed_preparation_does_not_strand_durable_steering_behind_it() {
     assert_eq!(turns[1].state, TurnState::Completed);
     assert_eq!(turns[1].assistant_text, "the queued request");
     assert_eq!(spine.queue_depth(), 0);
+}
+
+struct GatedReply {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    first: bool,
+}
+impl Cognition for GatedReply {
+    fn session_id(&self) -> &str { "gated-visible-reply" }
+    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+    fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        if std::mem::take(&mut self.first) {
+            self.entered.send(()).unwrap();
+            // Only a hang guard: channel entry and successful try_lock prove availability.
+            self.release.recv_timeout(Duration::from_secs(30)).unwrap();
+        }
+        on_item(TurnItem::Text { seq: 0, text });
+        Ok("end_turn".into())
+    }
+}
+
+#[derive(Clone,Default)]
+struct CompletedReplies(Arc<Mutex<Vec<(String,String)>>>);
+impl richos_core::stream::TurnObserver for CompletedReplies {
+    fn on_event(&self,event:&richos_core::stream::StreamEvent) {
+        if let richos_core::stream::StreamEvent::TurnCompleted {thread_id,turn_id,..}=event {
+            self.0.lock().unwrap().push((thread_id.clone(),turn_id.clone()));
+        }
+    }
+}
+
+#[test]
+fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing_its_destination() {
+    let (mut spine, control, _, _) = fixture();
+    let first_thread=spine.active_thread().unwrap().to_string();
+    let second_thread=spine.create_thread("Other conversation", &EntityId::parse("femcboost").unwrap()).unwrap();
+    let (entered, ready)=mpsc::channel();
+    let (release, gated)=mpsc::channel();
+    spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true}));
+    spine.detach_conversation_io();
+    let completed=CompletedReplies::default();
+    spine.set_observer(Box::new(completed.clone()));
+    let first=spine.submit_prompt_to(&first_thread,"first request",Source::Agent).unwrap();
+    let shared=Arc::new(Mutex::new(spine));
+    let driving=shared.clone();
+    let worker=std::thread::spawn(move ||richos_core::spine::drive_shared_turns(&driving));
+    ready.recv_timeout(Duration::from_secs(30)).unwrap();
+    let second={
+        let mut available=shared.try_lock().expect("model reply held the shared conversation lock");
+        assert_eq!(control.active_turn().unwrap().turn_id,first);
+        assert!(available.has_lease(),"an active provider disappeared from availability");
+        available.switch_thread(&second_thread).unwrap();
+        let second=available.submit_prompt_to(&second_thread,"second request",Source::Text).unwrap();
+        assert_eq!(control.active_turn().unwrap().turn_id,first);
+        assert_eq!(available.ledger().turn(&second).unwrap().state,TurnState::Received);
+        second
+    };
+    release.send(()).unwrap();
+    worker.join().unwrap().unwrap();
+    let finished=shared.lock().unwrap();
+    assert!(control.active_turn().is_none());
+    assert_eq!(*completed.0.lock().unwrap(),vec![(first_thread.clone(),first.clone()),(second_thread.clone(),second.clone())],
+        "the ordinary completion observer must see both the original reply and its queued reply");
+    for (id,thread,text) in [(first,first_thread,"first request"),(second,second_thread,"second request")] {
+        let turn=finished.ledger().turn(&id).unwrap();
+        assert_eq!(turn.state,TurnState::Completed);
+        assert_eq!(turn.thread_id,thread);
+        assert_eq!(turn.assistant_text,text);
+    }
 }

@@ -112,6 +112,26 @@ class DesktopWork(unittest.TestCase):
         self.args={"request_id":"prepare-one","obligation_id":"fixture-task","repo":str(self.repo),"title":"Create fictional result","brief":"Create result.txt with FICTIONAL in the assigned target worktree. Commit only that file. Do not publish.","role":"worker","teammate":"mark","integration":"main"}
 
     def call(self,name,args=None):return self.app.call(self.scope_path,name,args or {})
+    def test_rich_reads_the_same_work_evidence_without_changing_stus_records(self):
+        tools = {tool["name"]: tool for tool in self.app.available_tools(read_only=True)}
+        self.assertEqual(set(tools), {"inspect", "repositories", "team"})
+        self.assertEqual(tools["team"]["inputSchema"]["properties"]["action"]["enum"], ["list", "show"])
+        ready = self.call("prepare", self.args)
+        root = self.app.folder(self.scope)
+        expected = self.call("inspect", {})["records"]
+        before = {p.name: p.read_bytes() for p in root.glob("*.json")}
+        actual = self.app.call_read_only(self.scope_path, "inspect", {})["records"]
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual[0]["id"], ready["id"])
+        self.assertEqual(actual[0]["request"]["brief"], self.args["brief"])
+        self.assertEqual({p.name: p.read_bytes() for p in root.glob("*.json")}, before)
+        self.assertEqual(self.app.call_read_only(self.scope_path, "repositories", {}), self.call("repositories", {}))
+        for name, args in (("prepare", self.args), ("integrate", {}), ("complete", {}),
+                           ("team", {"action": "save", "name": "will", "text": "invented"})):
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                self.app.call_read_only(self.scope_path, name, args)
+        self.assertEqual({p.name: p.read_bytes() for p in root.glob("*.json")}, before)
+
     def test_pause_message_is_fixed_and_does_not_claim_delivery(self):
         protocol=self.app.load("pause_message_test",ENGINE/"scripts/lib/pause_protocol.py")
         for reason,reset in [("manual",None),("quota","15:30Z")]:
@@ -165,8 +185,9 @@ class DesktopWork(unittest.TestCase):
         ready=self.call("prepare",{**self.args,"teammate":"frank"})
         self.assertRegex(ready["name"],r"^frank-opus-[0-9a-f]{12}$")
         payload=ready["agent_payload"]
-        self.assertEqual((payload["name"],payload["subagent_type"],payload["model"]),
-                         (ready["name"],"richos-app-engine:frank","opus"))
+        self.assertNotIn("name",payload)
+        self.assertNotIn("isolation",payload)
+        self.assertEqual((payload["subagent_type"],payload["model"]),("richos-app-engine:frank","opus"))
         self.assertEqual((ready["request"]["role"],ready["request"]["teammate"]),("worker","frank"))
         duty=(ENGINE/"mega-lander/duties/worker.md").read_text().strip()
         self.assertTrue(duty.startswith(DUTY_TOP["worker"]))
@@ -354,10 +375,9 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(mine.exists())
         saved=self.call("team",{"action":"save","name":"sage","text":fitted})
         self.assertEqual((saved["saved"],saved["replaced"],saved["registered"]),(str(mine),False,False))
-        # Slice 5: the app renews the connection when the turn ends, so the back end is told to
-        # end it rather than report or try to start the teammate it cannot name yet.
-        self.assertIn("End your turn now without a report",saved["note"])
-        self.assertIn("next turn in this same assignment",saved["note"])
+        # Saving is durable; registration happens on the next provider connection.
+        self.assertEqual(saved["registration_boundary"], "next_provider_connection")
+        self.assertNotIn("note", saved)
         self.assertEqual(mine.read_text(),fitted)
         self.assertEqual(mine.stat().st_mode&0o777,0o600)
         self.assertEqual({row["name"]:row["activated"] for row in self.call("team",{"action":"list"})["shelf"]}["sage"],True)
@@ -725,10 +745,10 @@ class DesktopWork(unittest.TestCase):
         self.scope["actions_allowed"]=False;self.scope_path.write_text(json.dumps(self.scope))
         with self.assertRaises(ValueError):self.call("prepare",self.args)
         self.assertFalse((self.root/"engine-state/target-worktrees").exists())
-    def test_variable_git_targets_get_format_feedback_without_a_permission_grant(self):
+    def test_app_does_not_parse_git_commands_for_the_retired_classifier(self):
         for command in ['git -C "$TARGET" status', 'git -C $TARGET status', 'git -C "${TARGET}" log -1', 'git -C "$(pwd)" status', 'git commit -m "$(cat <<EOF\nFixture\nEOF\n)"', 'git commit -m `echo Fixture`']:
-            with self.subTest(command=command), self.assertRaisesRegex(ValueError,"Unsupported Git command form"):
-                self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}})
+            with self.subTest(command=command):
+                self.assertIsNone(self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}}))
         for command in ['git -C "/fictional/target with spaces" status', "git -C '/fictional/$literal' status",  'python3 ./tests.py', "git commit -m 'Fix `marker` and $(literal)'"]:
             self.assertIsNone(self.app.validate_shell_target({"tool_name":"Bash","tool_input":{"command":command}}))
         self.assertIsNone(self.app.validate_shell_target({"tool_name":"Read","tool_input":{"command":"git -C $TARGET status"}}))
@@ -760,6 +780,18 @@ class DesktopWork(unittest.TestCase):
         (target/"redirect").symlink_to(self.coord,target_is_directory=True)
         event["tool_input"]["file_path"]=str(target/"redirect/wrong.txt")
         with self.assertRaisesRegex(ValueError,"outside"):self.app.worker_context(self.scope,event)
+
+    def test_dispatched_worker_survives_later_stu_inputs_but_cannot_cross_session_or_conversation(self):
+        ready=self.call("prepare",self.args)
+        self.start_fixture_worker(ready,"standing-worker")
+        target=self.root/"engine-state/target-worktrees"/self.app.folder(self.scope).name/ready["name"]
+        event={"session_id":self.session,"agent_id":"standing-worker","cwd":str(self.coord),
+               "tool_name":"Write","tool_input":{"file_path":str(target/"result.txt")}}
+        later={**self.scope,"binding":{**self.scope["binding"],"turn_id":"next-message","revision":2,"audience":"worker"}}
+        self.assertIn(str(target),self.app.worker_context(later,event)["hookSpecificOutput"]["additionalContext"])
+        for key in ("entity_id","thread_id","session_id"):
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.app.worker_context({**later,"binding":{**later["binding"],key:"another"}},event)
 
     def start_fixture_worker(self, ready, aid):
         payload={"session_id":self.session,"tool_use_id":"call-"+aid,"tool_input":ready["agent_payload"]}
@@ -839,6 +871,28 @@ class DesktopWork(unittest.TestCase):
         self.assertNotIn("preparing_by", self.call("inspect")["records"][0])
         # the workspace the command created was not withdrawn by the second request
         self.assertTrue(Path(self.app.target_workspace(ready)["path"]).is_dir())
+
+    def test_independent_work_in_one_assignment_can_overlap_without_repeating_dispatch(self):
+        for role, teammate in (("worker", "mark"), ("consult", "clark")):
+            with self.subTest(role=role):
+                args = {**self.args, "role": role, "teammate": teammate, "request_id": role + "-first"}
+                if role == "consult":
+                    args.pop("repo")
+                    args.pop("integration")
+                first = self.call("prepare", args)
+                self.start_fixture_worker(first, role + "-first-agent")
+                second = self.call("prepare", {**args, "request_id": role + "-second",
+                    "title": "Answer the independent question", "brief": "Read the independent fictional source and report its date."})
+                self.start_fixture_worker(second, role + "-second-agent")
+                records = {r["id"]: r for r in self.call("inspect")["records"]}
+                self.assertEqual([records[r["id"]]["status"] for r in (first, second)], ["running", "running"])
+                retry = self.call("prepare", args)
+                self.assertEqual(retry["id"], first["id"])
+                self.assertNotIn("agent_payload", retry)
+                with self.assertRaisesRegex(ValueError, "request_id was already used for different work"):
+                    self.call("prepare", {**args, "brief": "Different work under the same request id."})
+                for which in ("first", "second"):
+                    self.finish_fixture_worker(role + "-" + which + "-agent", "The fictional source dates to 2020.")
 
     def test_a_dead_preparers_receipt_is_still_settled_for_a_replacement(self):
         """The owner stamp only protects a preparation that is RUNNING: the receipt of

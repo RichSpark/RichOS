@@ -60,9 +60,10 @@ def ecs(scope, request):
 SCOPE_LIMIT = 256 * 1024
 
 
-def read_scope(path, require_action=True):
+def read_scope(path, require_action=True, allow_read_only=False):
     value = bounded(Path(path), SCOPE_LIMIT)
-    if value.get("version") != 1 or (require_action and value.get("actions_allowed") is not True):
+    if value.get("version") != 1 or (require_action and value.get("actions_allowed") is not True
+            and not (allow_read_only and value.get("read_only_tools"))):
         raise ValueError("work tools require a current visible app turn")
     if require_action:
         if any(value["binding"][key] != os.environ.get(env) for key, env in (("entity_id", "RICHOS_APP_ENTITY"), ("thread_id", "RICHOS_APP_THREAD"))):
@@ -865,9 +866,8 @@ def team(args):
             temporary.unlink(missing_ok=True)
         return {"saved": str(path), "name": name, "replaced": existed,
                 "registered": False,
-                "note": (f"{name} is not in your Agent listing yet, and prepare refuses the name until it is. "
-                         "End your turn now without a report: the app renews your connection with "
-                         f"{name} registered and gives you the next turn in this same assignment.")}
+                "registration_boundary": "next_provider_connection"}
+
     raise ValueError("action must be list, show or save")
 
 
@@ -1017,8 +1017,10 @@ def prepare(scope_path, scope, args):
                 refresh(old)
                 if old["status"] in ("preparing","unknown") or (old["status"] == "prepared" and old.get("pierce_refused")):
                     settle_undispatched(scope, old_path, old)
-                if old["status"] in ("preparing","prepared","dispatching","running","unknown"):
-                    raise ValueError("this obligation already has unresolved work; inspect its receipt before retrying")
+                # An assignment may have several independent workers, reviewers or consults.
+                # Reject an exact duplicate under another id, not every request sharing a duty.
+                if old["request"] == normalized and old["status"] in ("preparing","prepared","dispatching","running","unknown"):
+                    raise ValueError("this request already has unresolved work; inspect its receipt before retrying")
         name = f"{teammate}-{model}-{identity[:12]}"
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
@@ -1208,7 +1210,8 @@ def prepare(scope_path, scope, args):
 
 def view(record, include_payload=False):
     result = {key:value for key,value in record.items() if key not in ("payload","ecs_pending","ecs_pending_projection","ecs_projection")}
-    if include_payload: result["agent_payload"] = record["payload"]
+    if include_payload:
+        result["agent_payload"] = {k:v for k,v in record["payload"].items() if k != "name"}
     result["assignment_completed"] = False
     if record["request"]["role"] == "consult":
         return result                    # no workspace: its answer is `consult_answer`, on the record
@@ -1235,11 +1238,16 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
     if payload.get("agent_id"): raise ValueError("workers cannot dispatch another worker")
     ti = payload.get("tool_input",{})
     with locked(scope) as root:
-        matches = [(p,r) for p,r in receipts(root) if r["name"] == ti.get("name")]
-        if len(matches) != 1: raise ValueError("prepare this assignment with the app work tool before calling Agent")
+        matches = [(p,r) for p,r in receipts(root)
+                   if (r["name"] == ti["name"] if ti.get("name") else
+                       r.get("status") == "prepared" and
+                       {k:v for k,v in r["payload"].items() if k != "name"} == ti)]
+        if len(matches) != 1: raise ValueError("Agent input is absent from or differs from its prepared scoped receipt; prepare this assignment with the app work tool before calling Agent")
         path,record = matches[0]
         if record["binding"] != scope["binding"] or record["status"] != "prepared":
             raise ValueError("this dispatch is stale or already attempted; reconcile before retrying")
+        ti = {"name": record["name"], **ti}
+        payload["tool_input"] = ti
         if ti != record["payload"]: raise ValueError("Agent input differs from its prepared scoped receipt")
         if payload.get("session_id") != scope["binding"]["session_id"] or not payload.get("tool_use_id"):
             raise ValueError("dispatch has no matching native call identity")
@@ -1261,27 +1269,8 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
         save(path,record)
 
 
-def shell_substitution(command):
-    # Only identify active quoting forms; do not interpret or authorize the shell.
-    quote, escaped = None, False
-    for index, char in enumerate(command):
-        if escaped: escaped = False; continue
-        if quote == "'":
-            if char == "'": quote = None
-            continue
-        if char == "\\": escaped = True; continue
-        if char == '"': quote = None if quote == '"' else '"'; continue
-        if char == "'" and quote is None: quote = "'"; continue
-        if char == "`" or (char == "$" and command[index:index+2] == "$("): return True
-    return False
-
-
 def validate_shell_target(payload):
-    """Reject a known non-classifiable Git command form before permission evaluation.
-
-    This is format feedback, not a shell parser, sandbox or permission grant.
-    Literal paths still undergo the provider's independent permission decision.
-    """
+    """Reuse the terminal's inline-shell guard without adding app command parsing."""
     if payload.get("tool_name") != "Bash": return
     command = payload.get("tool_input", {}).get("command", "")
     if not isinstance(command, str): return
@@ -1289,14 +1278,6 @@ def validate_shell_target(payload):
     # Same rule as the operator install's guard-no-shell-c.sh, loaded from the one shared file.
     shell_c = load("richos_shell_c", ENGINE / "scripts/lib/shell_c.py").refusal(command)
     if shell_c: raise ValueError(shell_c)
-    variable_target = re.search(r'\bgit\s+-C\s+(?:"\s*)?\$(?:[A-Za-z_{(])', command)
-    substituted_git = re.search(r"\bgit\s", command) and shell_substitution(command)
-    if variable_target or substituted_git:
-        raise ValueError("Unsupported Git command form: use git -C with the literal absolute target path, "
-                         "not a shell variable or substitution. Use literal commit messages with -m or a literal heredoc on commit -F -. Submit separate direct checks. "
-                         "This formatting refusal occurs before provider permission evaluation; "
-                         "a corrected command still requires the normal scope and permission checks. "
-                         "Never use this guidance to retry an action the user or provider denied.")
 
 
 def worker_context(scope, payload):
@@ -1312,8 +1293,10 @@ def worker_context(scope, payload):
         if len(matches) != 1:
             raise ValueError("worker identity has not joined its app receipt; no tool action is allowed yet")
         record=matches[0]
-        if record["binding"] != scope["binding"]:
-            raise ValueError("this worker belongs to an earlier turn; reconcile it before continuing")
+        # A dispatched worker belongs to this standing session, not its latest input turn.
+        if any(record["binding"][key] != scope["binding"][key]
+               for key in ("entity_id", "thread_id", "session_id")):
+            raise ValueError("this worker belongs to another session or conversation")
         if str(payload.get("tool_name", "")).startswith("mcp__richos_"):
             raise ValueError("CEO-scoped continuity, onboarding and orchestration tools are not worker tools")
         if record["request"]["role"] == "consult":
@@ -2209,25 +2192,40 @@ def call(scope_path, name, args):
     if name == "integrate": return integrate(scope_path,scope,args)
     if name == "complete": return complete(scope_path,scope,args)
     if name == "team": return team(args)
-    if name == "inspect":
-        if set(args) - {"offset","limit"}: raise ValueError("unsupported inspection fields")
-        offset,limit = args.get("offset",0),args.get("limit",20)
-        if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=50: raise ValueError("invalid inspection page")
-        with locked(scope) as root:
-            obligation = carried_obligation(scope)
-            rows = [(path,record) for path,record in receipts(root)
-                    if obligation is None or record["request"]["obligation_id"] == obligation]; result=[]
-            for path,record in rows[offset:offset+limit]:
-                refresh(record);save(path,record);project(scope,path,record);result.append(view(record))
-            page = {"records":result,"next_offset":offset+limit if offset+limit<len(rows) else None}
-            # Seats are reconciled with receipts, on the sweep rather than per
-            # page, and only from the conversation's own scope: enumerating or
-            # releasing seats is the host's job and the engine refuses it to a
-            # work seat.
-            if offset == 0 and scope.get("seat") is None:
-                page["seats"] = reconcile_seats(scope)
-            return page
+    if name == "inspect": return inspect_receipts(scope, args)
     raise ValueError("unknown app work tool")
+
+
+def inspect_receipts(scope, args, read_only=False):
+    """One evidence reader for Rich and Stu. Observation never needs Stu to respond."""
+    if set(args) - {"offset", "limit"}: raise ValueError("unsupported inspection fields")
+    offset, limit = args.get("offset", 0), args.get("limit", 20)
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("invalid inspection page")
+    with locked(scope) as root:
+        obligation = carried_obligation(scope)
+        rows = [(path, record) for path, record in receipts(root)
+                if obligation is None or record["request"]["obligation_id"] == obligation]
+        result = []
+        for path, record in rows[offset:offset + limit]:
+            refresh(record)
+            if not read_only:
+                save(path, record)
+                project(scope, path, record)
+            result.append(view(record))
+        page = {"records": result, "next_offset": offset + limit if offset + limit < len(rows) else None}
+        if not read_only and offset == 0 and scope.get("seat") is None:
+            page["seats"] = reconcile_seats(scope)
+        return page
+
+
+def call_read_only(scope_path, name, args):
+    scope = read_scope(scope_path, allow_read_only=True)
+    if not isinstance(args, dict): raise ValueError("tool arguments must be an object")
+    if name == "repositories": return {"repositories": repositories(scope)}
+    if name == "inspect": return inspect_receipts(scope, args, read_only=True)
+    if name == "team" and args.get("action") in ("list", "show"): return team(args)
+    raise ValueError("Rich's evidence connection is read-only")
 
 
 TOOLS = [
@@ -2237,10 +2235,26 @@ TOOLS = [
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
     {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the assignment this connection is carrying. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs on its own model with its own definition, and the duty's app instructions are put at the top of your brief for you. Your connection already knows which assignment that is, so leave obligation_id out; never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A failed preparation that never dispatched is settled when a new request_id prepares a replacement: anything it created is withdrawn, and dirty files are refused rather than discarded. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, fast-forward the recorded clean integration branch to the exact reviewed commit and clean up through Mega Lander. If the branch moved since the work started, the reviewed commit is merged with a merge commit only when Git merges the two without a conflict. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
-    {"name":"team","description":"The shelf of named teammates not yet active, and the user's own team. action list: every shelf teammate with its description, model and whether the user already has an activated copy. action show: one shelf teammate's whole definition, by name. action save: write a definition as the user's own teammate, team/<name>.md, from name and text (the definition itself, starting at its --- line, its name: line equal to name, with a description and a model). name is the teammate's first name in lowercase letters a to z and digits only, at most 16: accents dropped, and any hyphen, space or apostrophe left out (Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn). To activate a shelf teammate, show it, consult Dean with that text and the job, and save the definition he returns (the text inside his code fence) under the same name. A saved copy is the user's and a later shelf update never replaces it; saving over it is refused unless replace is true, which is only for a change the user asked for. A saved teammate is registered once your turn ends: end it after saving, and the app renews your connection and gives you the next turn in the same assignment, with the teammate in your Agent listing.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
+    {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. Saved definitions become available to Agent after this turn, when the provider connection is renewed.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
 ]
+def available_tools(read_only=False):
+    if not read_only: return TOOLS
+    result = []
+    for tool in TOOLS:
+        if tool["name"] not in ("inspect", "repositories", "team"): continue
+        if tool["name"] == "team":
+            tool = {**tool, "description": "Read the shelf and the user's saved team. list returns names, descriptions, models and activated copies; show returns a full definition by name.",
+                    "inputSchema": {"type": "object", "properties": {
+                        "action": {"type": "string", "enum": ["list", "show"]},
+                        "name": {"type": "string"}}, "required": ["action"], "additionalProperties": False}}
+        result.append(tool)
+    return result
+
+
 if __name__ == "__main__":
-    if len(sys.argv)!=2: raise SystemExit("an explicit app scope is required")
+    read_only = len(sys.argv) == 3 and sys.argv[2] == "--read-only"
+    if len(sys.argv) != 2 and not read_only: raise SystemExit("an explicit app scope is required")
     transport=load("richos_work_mcp_transport",ENGINE / "ecs/adapters/mcp.py")
-    transport.serve(sys.argv[1],sys.stdin.buffer,sys.stdout,tools=TOOLS,handler=call,server_name="richos_work")
+    transport.serve(sys.argv[1],sys.stdin.buffer,sys.stdout,tools=available_tools(read_only),
+                    handler=call_read_only if read_only else call,server_name="richos_work")

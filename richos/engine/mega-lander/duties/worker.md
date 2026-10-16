@@ -7,8 +7,8 @@ this section wins.
 
 The app's dispatch adapter verifies the `cross-repo-worktree:` assignment line
 against its private workspace registry before launching you. That registered
-path is your implementation worktree. The provider's Environment may name a
-separate native coordination worktree; do not implement or commit there. Use
+path is your implementation worktree. The provider's Environment may name the
+conversation coordination directory; do not implement or commit there. Use
 absolute paths under the registered target and `git -C <target>` for Git commands.
 The host's tool hook also supplies your verified target. If those disagree, stop.
 
@@ -27,17 +27,6 @@ If video is relevant, use the available `watch-video` skill; if audio is
 relevant, use the available `audio-transcription` skill. If the required skill
 or access is unavailable, state the affected evidence gap and continue
 independent authorized work. Do not claim inspection you could not perform.
-
-For shell tools, use direct commands with literal absolute paths, such as
-`git -C "/absolute/assigned/worktree" status --short`. Submit separate tool
-calls for separate checks. Avoid shell variables, loops and wrapper scripts for
-ordinary Git or file checks: the provider cannot automatically authorize some
-of those forms even when their intended operation is routine. This is command
-construction guidance before execution, not permission to retry a denied action.
-
-Pass Git commit messages literally with `-m` or a literal heredoc into `commit -F -`.
-Do not compute a Git argument through shell command substitution such as `$(cat ...)`.
-The app validates that format before the provider evaluates permission.
 
 ## Verification retries — mandatory
 

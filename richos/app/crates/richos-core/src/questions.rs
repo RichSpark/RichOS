@@ -185,10 +185,6 @@ struct Data {
     #[serde(default)]
     notified_sets: Vec<String>,
 }
-/// How many times any store has loaded `store.json` in this process. Lets a test prove a
-/// polling path does not reload an unchanged history.
-#[doc(hidden)]
-pub static STORE_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[derive(Clone)]
 pub struct Store {
     directory: PathBuf,
@@ -215,7 +211,6 @@ impl Store {
             .map_err(|e| e.to_string())?;
         lock.lock().map_err(|e| e.to_string())?;
         let path = self.directory.join("store.json");
-        STORE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut data = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice::<Data>(&bytes)
                 .map_err(|e| format!("Question history could not be read: {e}"))?,
@@ -261,18 +256,6 @@ impl Store {
             saved?;
         }
         Ok(result)
-    }
-    /// A cheap identity of the stored history: modification time, length and inode of
-    /// `store.json`, or `None` when it cannot be stat-ed. Every write replaces the file by
-    /// rename (see `transaction`), which gives it a new inode, so an unchanged fingerprint
-    /// means an unchanged history. Polling callers compare this instead of reloading.
-    pub fn fingerprint(&self) -> Option<(std::time::SystemTime, u64, u64)> {
-        let meta = std::fs::metadata(self.directory.join("store.json")).ok()?;
-        #[cfg(unix)]
-        let inode = std::os::unix::fs::MetadataExt::ino(&meta);
-        #[cfg(not(unix))]
-        let inode = 0;
-        Some((meta.modified().ok()?, meta.len(), inode))
     }
     pub fn list(&self, entity: &str, thread: &str) -> Result<Vec<Question>> {
         self.transaction(false, |d| {

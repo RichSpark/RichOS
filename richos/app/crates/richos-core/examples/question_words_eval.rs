@@ -11,7 +11,7 @@ fn main() {
         &richos_core::doctrine::DoctrineIdentity::new(Some("Fixture CEO")),
     )
     .unwrap();
-    let skills = richos_core::skills::ensure_rendered(&root).unwrap();
+    let skills = richos_core::skills::ensure_rendered(&root, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
     let fixtures = [
         "Ship today.",
         "Ship tomorrow.",

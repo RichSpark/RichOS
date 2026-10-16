@@ -263,6 +263,78 @@ tick() { # <now-offset-seconds>
 }
 
 echo "=== stall-watch tests ==="
+
+# I01: controlled CPU samples cover a disappearing child without racing real time.
+python3 - "$SCRIPT_DIR/lib" "$SB" <<'PY_IDLE'
+import os,sys,types,unittest
+from unittest.mock import patch
+sys.path.insert(0,sys.argv.pop(1))
+import stall_watch
+scratch=sys.argv.pop(1)
+
+class IdleSamples(unittest.TestCase):
+    def setUp(self):
+        self.state={};self.ended=[];self.cpu=0.0;self.missing=False
+        record={'key':'fixture','session_id':'session','agent_id':'agent',
+                'history':[{'fact':'deferred','at':'1970-01-01T00:01:40Z'}]}
+        ws=types.SimpleNamespace(END_DEFERRED_FACT='deferred',all_agents=lambda:[record],
+            finished_state=lambda *_:(False,False,''),platform_agent_transcript=lambda _:None)
+        def end(*args,**kwargs):
+            self.assertTrue(kwargs['spare_foreign'])
+            self.ended.append(self.now)
+            return {'ended':[101]}
+        ah=types.SimpleNamespace(_held_path=lambda *_:os.path.join(scratch,'no-held-agent'),
+            snapshot=lambda:{p:{'birth':1} for p in ([101,102] if self.missing else [101])},
+            work_tree=lambda _s,_a,table:set(table),cpu_used=lambda p:None if p==102 else self.cpu,
+            calls=lambda *_:[],end_owned=end,describe_end=lambda _:'owned idle command ended')
+        self.src=types.SimpleNamespace(ws=ws,agent_hold=ah,transcripts={})
+
+    def look(self,now,cpu=0.0,missing=False):
+        self.now=now;self.cpu=cpu;self.missing=missing
+        with patch.object(stall_watch.resource_waits,'read_records',return_value=([],[])),patch.object(stall_watch.time,'time',return_value=float(now)):
+            _,self.state=stall_watch.idle_end(self.src,now,'session',self.state)
+
+    def test_a_vanished_child_does_not_erase_the_measured_idle_interval(self):
+        self.look(1000)
+        self.look(1060,missing=True)
+        self.assertEqual(self.ended,[])
+        for now in range(1120,1600,60):self.look(now)
+        self.assertEqual(self.ended,[])
+        self.look(1600)
+        self.assertEqual(self.ended,[1600])
+
+    def test_work_during_the_unreadable_interval_still_resets_the_idle_count(self):
+        self.look(1000)
+        self.look(1060,missing=True)
+        self.look(1120,cpu=2.0)
+        for now in range(1180,1660,60):self.look(now,cpu=2.0)
+        self.assertEqual(self.ended,[])
+        self.look(1660,cpu=2.0)
+        self.assertEqual(self.ended,[])
+        self.look(1720,cpu=2.0)
+        self.assertEqual(self.ended,[1720])
+
+    def test_an_unreadable_look_never_advances_the_last_valid_sample(self):
+        self.look(1000)
+        for now in range(1060,1300,60):self.look(now,missing=True)
+        self.look(1300)
+        for now in range(1360,1900,60):self.look(now)
+        self.assertEqual(self.ended,[])
+        self.look(1900)
+        self.assertEqual(self.ended,[1900])
+
+    def test_only_a_valid_reading_can_end_work_when_the_interval_is_complete(self):
+        for now in range(1000,1600,60):self.look(now)
+        self.look(1600,missing=True)
+        self.assertEqual(self.ended,[])
+        self.look(1660)
+        self.assertEqual(self.ended,[1660])
+
+unittest.main()
+PY_IDLE
+RC=$?
+check "I01  missing CPU samples preserve measured intervals, busy-work protection and the maximum look gap" "$RC" "controlled idle-sample regressions"
+
 [ -f "$SW" ] || echo "  (scripts/stall-watch.sh is missing: every case below fails)"
 [ -d "$APP_LIB" ] || echo "  (the app tree is not beside this engine: the S and X cases fail)"
 

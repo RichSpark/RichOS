@@ -223,6 +223,7 @@ pub mod permissions;
 pub mod assignment;
 pub mod assignment_tools;
 pub mod status_tools;
+pub mod session_tools;
 pub mod work_host;
 /// `review_watch` — the engine's review-watch run as the HOST's own child (automatic second
 /// review, slice 4): mid-job reviews of the app's workers, and on an operator install the

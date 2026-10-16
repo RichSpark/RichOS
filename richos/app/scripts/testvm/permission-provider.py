@@ -48,7 +48,7 @@ def serve(lines):
             # fixture declarations; the scenario executes none of these tools.
             emit({'type': 'system', 'subtype': 'init', 'model': 's7-fixture',
                   'plugins': [{'name': 'rich-skills'}, {'name': 'richos-app-engine'}],
-                  'permissionMode': 'auto', 'tools': TOOLS})
+                  'permissionMode': 'bypassPermissions', 'tools': TOOLS})
             # The app also supplies hidden context. Only an explicit visible
             # walk marker asks for permission; other turns have no tool action.
             content = frame.get('message', {}).get('content', '')

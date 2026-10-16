@@ -42,7 +42,7 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
  }
  registry.save(&data.join("entities.json"))?;
  let doctrine=richos_core::doctrine::ensure_rendered(&data,&Default::default())?;
- let skills=richos_core::skills::ensure_rendered(&data)?;
+ let skills=richos_core::skills::ensure_rendered(&data, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app"))?;
  let bridge=EcsBridge::new(&runtime.python,&engine,&data.join("ecs"))?;
  let mut spine=Spine::new(Ledger::open(&data.join("ledger.jsonl"))?);spine.set_entity_registry(registry);spine.set_machinery_journal(richos_core::journal::MachineryJournal::new(data.join("machinery")));spine.set_machinery_observer(Box::new(PermissionTrace));
  let thread=spine.create_thread("Fictional dispatch probe",&EntityId::parse("depot")?)?;

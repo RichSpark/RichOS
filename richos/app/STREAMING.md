@@ -747,17 +747,12 @@ Three rules for whoever renders it:
 is attempted, and the surface reads the durable store when the conversation opens and again at
 every turn boundary.
 
-**A job's result is not a card: it is written into the conversation as Rich's message**
-(`spine.rs` `say_work_results`, drawn from `rich://proactive-message`), and its words follow:
-
-| Event name | When | Payload |
-|---|---|---|
-| `rich://work-result` | A job's result (`answer`, `settled`, `failed`, `interrupted`) was just written into this conversation as Rich's message. Once per message written. | `{ threadId, text }` |
-
-The window already draws the message; this event is for voice mode, which says `text` whole
-through `voice_speak_result` (`ui/main.js` `receiveWorkResult`), held while a turn runs. It is
-said as words of its own, not as part of an answer, so a Stop he gave an earlier reply does not
-silence it; it still waits while he is talking.
+**Stu's reports enter the ordinary conversation.** The host accepts each peer message
+through durable intake with agent provenance and a stable delivery key. Rich receives it
+on his normal conversation connection and decides what to tell the user. His authored
+reply follows the ordinary turn, streaming and voice paths. There is no separate result
+writer or work-result speech event. Opening a conversation or restarting the app retains
+accepted input and pending peer messages.
 
 ## His team, on an operator install: `rich://operator-notice`
 

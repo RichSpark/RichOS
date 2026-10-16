@@ -141,7 +141,7 @@ fn replay(capture: &str, speed: f64, requests: &[&str]) -> Replay {
     }
     let doctrine = richos_core::doctrine::ensure_rendered(&root, &richos_core::doctrine::DoctrineIdentity::default())
         .expect("the doctrine fixture must render");
-    let skills = richos_core::skills::ensure_rendered(&root).expect("the skills fixture must render");
+    let skills = richos_core::skills::ensure_rendered(&root, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).expect("the skills fixture must render");
     // A conversation in the company, as the spine opens one; only the spine mints a binding.
     let mut spine = support::spine(Ledger::open(root.join("spine-ledger.jsonl")).unwrap());
     let binding = spine.ensure_active_thread_in(&EntityId::parse(COMPANY).unwrap()).unwrap();
@@ -282,7 +282,7 @@ fn the_finish_he_never_heard_reaches_him_as_the_report_when_the_provider_says_it
     assert_eq!(told.first().map(String::as_str), Some("Background command started."), "{told:?}");
     let sent = r.sent();
     assert_eq!(sent.len(), 2, "{sent:?}");
-    assert!(sent[1].contains("that is this app telling you"), "the second message was not the report request: {}", sent[1]);
+    assert!(sent[1].contains("Background commands ended (provider observations):"), "the second message was not the report request: {}", sent[1]);
     assert!(r.events("divergence").is_empty(), "the host left the recording: {:#?}", r.events("divergence"));
     r.end();
 }
@@ -318,7 +318,7 @@ fn after_the_providers_own_finish_turn_the_host_asks_for_the_report() {
          (he was told only {:?})", r.told_about(&job)
     );
     assert_eq!(asked[0]["why"], "the recording has no more sends");
-    assert!(asked[0]["text"].as_str().unwrap_or_default().contains("that is this app telling you"), "{:#?}", asked[0]);
+    assert!(asked[0]["text"].as_str().unwrap_or_default().contains("Background commands ended (provider observations):"), "{:#?}", asked[0]);
     r.end();
 }
 
@@ -376,9 +376,9 @@ fn a_long_session_reports_each_late_finish_on_its_own_job() {
 
     let sent = r.sent();
     assert_eq!(sent.len(), 6, "{sent:#?}");
-    let reports: Vec<usize> = (0..sent.len()).filter(|&i| sent[i].contains("that is this app telling you")).collect();
+    let reports: Vec<usize> = (0..sent.len()).filter(|&i| sent[i].contains("Background commands ended (provider observations):")).collect();
     assert_eq!(reports, [2, 5], "the report requests are not where the provider was recorded taking them");
-    assert!(sent[1].contains("still running") && sent[1].contains("leave it out"),
+    assert!(sent[1].contains("Other assignments' background commands (observed)") && sent[1].contains(A.trim_end_matches('.')),
             "B was not told A's command was still running: {}", sent[1]);
     assert!(r.events("divergence").is_empty(), "the host left the recording: {:#?}", r.events("divergence"));
     r.end();

@@ -253,7 +253,7 @@ class Child(unittest.TestCase):
         self.assertEqual(p.wait(), 3)
         events = lines_of(transcript)
         self.assertEqual(events[-1]['event'], 'divergence')
-        self.assertIn('that is this app telling you', events[-1]['why'])
+        self.assertIn('Background commands ended (provider observations):', events[-1]['why'])
 
     def test_closed_input_ends_it_cleanly_and_an_unreadable_capture_is_refused(self):
         p, _, transcript = self.start(FIXTURES / '2026-09-27-cap-plain.jsonl')

@@ -932,12 +932,7 @@ impl CliContextCompiler {
         if owner == entity_id {
             return None;
         }
-        Some(format!(
-            "COMPANY MEMORY PROVENANCE: this install's loro corpus is {owner}'s own record, kept in \
-             {owner}'s repository — it is not partitioned by company and holds no {entity_id} \
-             partition. Everything below is {owner}'s memory. Do not state any of it as a fact \
-             about {entity_id}."
-        ))
+        Some(serde_json::json!({"source":"memory_corpus","owner":owner,"requested_entity":entity_id,"partitioned":false}).to_string())
     }
 
     /// Retain the items of every ACCEPTED slice here, keyed by thread.
@@ -1189,8 +1184,7 @@ impl CliContextCompiler {
             // defect, so it degrades to the same honest state rather than to silence.
             let text = if slice.text.trim().is_empty() {
                 format!(
-                    "COMPANY MEMORY (loro): nothing recorded bears on \"{}\". Do not assume company \
-                     facts — ask the CEO or check a live system.",
+                    "COMPANY MEMORY (loro): nothing recorded bears on \"{}\".",
                     req.topic
                 )
             } else {

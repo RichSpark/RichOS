@@ -394,10 +394,6 @@ richos/app/
                               half — `feedback_record` still compares the rendered report
                               against what the webview says it showed him. Each proven to
                               FAIL when broken
-    tests/question_polling.rs 1 test, in its own binary because it reads a
-                              process-wide counter: 50 `has_asked` polls of an unchanged
-                              question history reload it 0 times, and a newly raised
-                              question is still noticed on the next poll
     tests/launch_no_outbound_tests.rs 11 tests holding the LAUNCH RECORD to the identical
                               standard, at the CEO's direction — it is a record of his own
                               working life, so "local only, never outbound" is asserted the
@@ -1226,7 +1222,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2048 tests + 5 doc-tests (2044 direct, 4 ignored)
+cargo test -p richos-core                       # 1987 tests + 5 doc-tests (1983 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

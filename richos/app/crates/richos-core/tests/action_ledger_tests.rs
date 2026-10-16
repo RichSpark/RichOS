@@ -258,7 +258,7 @@ fn a_ceo_facing_action_recorded_by_production_code_reaches_the_successors_primin
     assert_eq!(successor_reprimes.len(), 1, "primed exactly once, before any CEO turn");
     let priming = &successor_reprimes[0];
 
-    assert!(priming.contains("ACTION LEDGER"), "the section the identity assertion points at exists");
+    assert!(priming.contains("action_ledger_digest"), "the section the identity assertion points at exists");
     assert!(
         priming.contains("Told the CEO the Acme counter expires at noon."),
         "the action recorded by production code SURVIVED into the successor's ground truth:\n{priming}"
@@ -319,9 +319,9 @@ fn the_action_ledger_section_is_always_rendered_so_the_assertion_never_points_at
         let payload = RePrimePayload::assemble(&l, &l.thread_binding(&t).unwrap(), 8, None).unwrap();
         assert!(payload.action_ledger_digest.is_empty());
         let priming = payload.to_priming_prompt();
-        assert!(priming.contains("ACTION LEDGER"), "the section is present even when empty");
+        assert!(priming.contains("action_ledger_digest"), "the section is present even when empty");
         assert!(
-            priming.contains("NOTHING HAS BEEN RECORDED, not that nothing was done"),
+            serde_json::from_str::<serde_json::Value>(&priming).unwrap()["context"]["action_ledger_digest"]==serde_json::json!([]),
             "and it says explicitly what an empty ledger does and does not prove:\n{priming}"
         );
         t
@@ -332,48 +332,13 @@ fn the_action_ledger_section_is_always_rendered_so_the_assertion_never_points_at
 
 #[test]
 fn the_ledgers_partial_coverage_is_stated_rather_than_overclaimed() {
-    // Honesty about the KNOWN gap: tool calls made inside a session are still dropped at
-    // `native::decide_permission` (documented in the business-action-governance plan, 2026-08-24
-    // and deliberately out of scope here). So the ledger is authoritative for what it
-    // records and silent elsewhere — and the successor is told exactly that, so an absent
-    // entry can never be read as proof an action did not happen.
-    //
-    // THE GUARANTEE MOVED CHANNEL ON 2026-09-06 AND THIS TEST MOVED WITH IT. It used to be
-    // asserted in the priming TURN and it is now in the standing instruction (`doctrine.rs`),
-    // which is delivered as a system prompt — fixed at spawn, not subject to compaction, not
-    // re-spent on every rotation (inner-doctrine design §4.2 item 3, §5.1). A test that had
-    // simply been deleted alongside the sentence it checked would have retired a guarantee
-    // while looking like a tidy-up, so this one names the same fact in its new home.
-    //
-    // THE SENTENCE GREW A SECOND HALF ON 2026-09-08 AND THESE PINS MOVED WITH IT. It used to
-    // say only that the record was INCOMPLETE, which left "an entry is proof" standing alone —
-    // and a present entry that had stopped being true was then something the successor was
-    // instructed to believe. The asymmetry below is still the one this test was written for;
-    // the clause about an entry not proving the present is the half that was missing. The line
-    // breaks are part of the pins because the file is wrapped prose and the exact sentence is
-    // what is being held, exactly as `An\nentry` was held before.
-    let doctrine = richos_core::doctrine::render(&richos_core::doctrine::DoctrineIdentity::default());
-    assert!(doctrine.contains("That record is partial"), "{doctrine}");
-    assert!(
-        doctrine.contains("An entry in it is proof the thing happened; it is not proof the thing is\nstill true, and the absence of an entry is not proof that it did not."),
-        "the ledger's asymmetry must be stated, not implied — and an entry must not be read as \
-         proof of the present:\n{doctrine}"
-    );
-    assert!(doctrine.contains("never tell him nothing\nwas done"), "{doctrine}");
-    assert!(doctrine.contains("Say you are\nnot certain, and offer to check."), "{doctrine}");
-
-    // And the turn keeps ONLY what a system prompt cannot say: which conversation this is,
-    // and that the ledger meant is the one printed below. §5.1's acceptance condition is that
-    // the assertion got SHORTER; 980 characters became 197 for this conversation id.
-    let assertion = RePrimePayload::identity_assertion("thr_demo");
-    assert_eq!(assertion.len(), 197, "the assertion is: {assertion}");
-    assert!(assertion.contains("conversation thr_demo"));
-    assert!(assertion.contains("ground truth for the actions it records"));
-    // Moved, not copied — two copies of one rule, one in Rust and one in Markdown, could not
-    // even be diffed by a grep.
-    assert!(!assertion.contains("COVERAGE IS PARTIAL"), "the moved clause was left behind: {assertion}");
-    assert!(!assertion.contains("session rotation"), "the moved clause was left behind: {assertion}");
-    assert!(!assertion.contains("Chief of Staff"), "the moved clause was left behind: {assertion}");
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app");
+    let definition = std::fs::read_to_string(plugin.join("agents/rich.md")).unwrap();
+    assert!(definition.contains("Records can be partial or stale"));
+    assert!(definition.contains("missing records do not prove nothing happened"));
+    assert!(definition.contains("Distinguish an unknown from a negative finding"));
+    let assertion: serde_json::Value = serde_json::from_str(&RePrimePayload::identity_assertion("thr_demo")).unwrap();
+    assert_eq!(assertion, serde_json::json!({"thread_id":"thr_demo"}));
 }
 
 #[test]
@@ -405,11 +370,11 @@ fn a_proactive_turn_in_the_verbatim_tail_carries_no_phantom_ceo_line() {
     let priming = payload.to_priming_prompt();
     assert!(!priming.contains("  user: \n"), "no phantom blank CEO line:\n{priming}");
     assert!(
-        priming.contains("assistant (unprompted): Acme counter expires at noon."),
+        serde_json::from_str::<serde_json::Value>(&priming).unwrap()["context"]["recent_tail"].as_array().unwrap().iter().any(|row|row["role"]=="assistant (unprompted)" && row["text"]=="Acme counter expires at noon."),
         "Rich's unprompted message is labelled as his own initiative:\n{priming}"
     );
     // The real CEO turn is untouched.
-    assert!(priming.contains("user: what's on my plate?"));
+    assert!(serde_json::from_str::<serde_json::Value>(&priming).unwrap()["context"]["recent_tail"].as_array().unwrap().iter().any(|row|row["role"]=="user" && row["text"]=="what's on my plate?"));
     let _ = std::fs::remove_file(&path);
 }
 

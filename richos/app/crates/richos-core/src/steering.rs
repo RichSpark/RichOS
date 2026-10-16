@@ -162,6 +162,8 @@ pub enum IntakeRecord {
         /// build reading a record that has it ignores the key.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         voice_note: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<crate::ledger::Source>,
     },
     /// **The desktop composer's own words, written here because the front desk was being
     /// primed when he pressed Send** — the CEO's §55.
@@ -660,6 +662,7 @@ impl IntakeLog {
             channel: channel.to_string(),
             client_id: client_id.map(str::to_string),
             voice_note,
+            source: None,
         };
         self.write(&rec)?;
         self.next_id += 1;
@@ -753,6 +756,13 @@ impl IntakeLog {
 /// stop control runs on a different thread from the turn, and by construction it can never
 /// take the lock the turn is holding.
 pub trait TurnCancel: Send + Sync {
+    /// Queue ordinary input on this same session without interrupting it. The
+    /// callback runs only when the provider identifies the input as consumed.
+    /// False means this provider has no live input path; leave the inbox pending.
+    fn send_input(&self, _id: &str, _text: &str, _taken: Box<dyn FnOnce() + Send>) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// Scope cancellation across preparation and the gaps between wire prompts.
     fn begin_operation(&self) {}
     fn end_operation(&self) {}
@@ -1093,6 +1103,16 @@ impl TurnControl {
         client_id: Option<&str>,
     ) -> Result<IntakeRecord, SteeringError> {
         self.submit_channel_record(thread_id, entity_id, text, channel, client_id, true)
+    }
+
+    pub fn submit_agent_message(&self, thread_id: &str, entity_id: Option<EntityId>, text: &str, sender: &str, message_id: &str) -> Result<IntakeRecord, SteeringError> {
+        let mut guard = self.inner.intake.lock().unwrap();
+        let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
+        let rec = IntakeRecord::Channel { id: log.next_id, thread_id: thread_id.into(), entity_id, text: text.into(), at: now_millis(), channel: sender.into(), client_id: Some(message_id.into()), voice_note: false, source: Some(crate::ledger::Source::Agent) };
+        log.write(&rec)?;
+        log.next_id += 1;
+        log.pending.push(rec.clone());
+        Ok(rec)
     }
 
     fn submit_channel_record(

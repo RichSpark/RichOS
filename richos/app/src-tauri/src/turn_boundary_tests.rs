@@ -166,7 +166,7 @@ const HIS_TASK: &str = "land the three branches";
 #[test]
 fn work_he_gives_aloud_starts_without_a_typed_message() {
     let mac = a_mac("spoken");
-    run_the_spoken_turn(mac.spine.lock().unwrap(), &mac.work, HIS_TASK, false);
+    run_the_spoken_turn(&mac.spine, &mac.work, HIS_TASK, false);
     assert_eq!(mac.states(&mac.shown).len(), 1, "positive control: the spoken turn wrote the task down");
     assert!(
         mac.work_started_on(&mac.shown, Duration::from_secs(10)),
@@ -183,7 +183,7 @@ fn work_he_gives_from_the_phone_starts_without_a_typed_message() {
     mac.control
         .submit_from_channel(&mac.other, Some(EntityId::parse("alpha").unwrap()), HIS_TASK, "phone")
         .unwrap();
-    drain_the_phone(&mac.spine, &mac.work).unwrap();
+    drain_incoming_messages(&mac.spine, &mac.work).unwrap();
     assert_eq!(mac.states(&mac.other).len(), 1, "positive control: the phone's turn wrote the task down");
     assert!(
         mac.work_started_on(&mac.other, Duration::from_secs(10)),
@@ -226,7 +226,7 @@ const RUNS_HIS_TURNS: [&str; 6] = [
 ];
 
 /// The doors: the one function that adopts, and the two entrance functions that end in it.
-const DOORS: [&str; 3] = ["adopt_at_the_turn_boundary(", "run_the_spoken_turn(", "drain_the_phone("];
+const DOORS: [&str; 3] = ["adopt_at_the_turn_boundary(", "run_the_spoken_turn(", "drain_incoming_messages("];
 
 /// The shell's shipped source with every `#[cfg(test)]` item removed, as `(file, line no, line)`.
 /// Braces are counted per line outside `//` comments; test items here are ordinary modules.
@@ -320,8 +320,8 @@ fn the_voice_callback_and_the_phone_drain_go_through_their_doors() {
         lines.iter().filter(|(_, _, l)| l.split("//").next().unwrap_or("").contains(door)).count()
     };
     // The voice callback's one call, and the phone drain's.
-    assert_eq!(calls(&main, "run_the_spoken_turn(spine, &state.work"), 1, "the voice callback must end in its door");
-    assert_eq!(calls(&bridge, "crate::drain_the_phone(&state.spine, &state.work)"), 1, "the phone must drain through its door");
+    assert_eq!(calls(&main, "run_the_spoken_turn(&state.spine, &state.work"), 1, "the voice callback must end in its door");
+    assert_eq!(calls(&bridge, "crate::dispatch_incoming_messages(&self.app, &thread)"), 1, "the phone must drain through its door");
     // The scan's own negative control: a door removed from the text is seen as missing.
     let broken = include_str!("main.rs").replace("adopt_at_the_turn_boundary(&mut spine, &work);", "");
     let lines = shipped_lines("src/main.rs", &broken);
@@ -333,4 +333,3 @@ fn the_voice_callback_and_the_phone_drain_go_through_their_doors() {
         .any(|(_, _, l)| DOORS.iter().any(|d| l.split("//").next().unwrap_or("").contains(d)));
     assert!(!adopted, "the scan must notice a missing door, or it proves nothing");
 }
-

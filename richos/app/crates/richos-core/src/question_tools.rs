@@ -44,54 +44,13 @@ pub fn set_actions_allowed(path: &Path, allowed: bool) -> Result<(), String> {
     scope.actions_allowed = allowed;
     write_scope(path, &scope)
 }
-type Fingerprint = (std::time::SystemTime, u64, u64);
-type AskedKey = (PathBuf, String, String, String);
-/// The last answer per asking turn, with the history fingerprint it was computed from.
-static ASKED: std::sync::Mutex<Vec<(AskedKey, Fingerprint, bool)>> = std::sync::Mutex::new(Vec::new());
-
-/// Whether the front desk's turn has raised a question. The native turn loop polls this every
-/// 40 ms, so the question history is reloaded only when `store.json` has actually changed
-/// (its fingerprint differs); an unchanged file answers from the last result. The
-/// fingerprint is taken BEFORE the load, so a write racing the load leaves a stale
-/// fingerprint and the next poll reloads.
-pub fn has_asked(path: &Path) -> bool {
-    let Some(s) = read_scope(path).ok().filter(|s| s.context.asker == "front_desk") else {
-        return false;
-    };
-    let store = Store::new(&s.context.root);
-    let key: AskedKey = (
-        s.context.root.clone(),
-        s.context.entity_id.clone(),
-        s.context.thread_id.clone(),
-        s.context.turn_id.clone(),
-    );
-    let fingerprint = store.fingerprint();
-    if let Some(fp) = fingerprint {
-        let cache = ASKED.lock().unwrap();
-        if let Some((_, _, asked)) = cache.iter().find(|(k, f, _)| *k == key && *f == fp) {
-            return *asked;
-        }
-    }
-    let asked = store
-        .list(&s.context.entity_id, &s.context.thread_id)
-        .is_ok_and(|qs| qs.iter().any(|q| q.turn_id == s.context.turn_id));
-    if let Some(fp) = fingerprint {
-        let mut cache = ASKED.lock().unwrap();
-        cache.retain(|(k, _, _)| *k != key);
-        if cache.len() >= 64 {
-            cache.remove(0);
-        }
-        cache.push((key, fp, asked));
-    }
-    asked
-}
 pub fn tools() -> Value {
     let option = json!({"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label","description"],"additionalProperties":false});
     let question = json!({"type":"object","properties":{"text":{"type":"string"},"options":{"type":"array","minItems":2,"maxItems":4,"items":option},"multiple":{"type":"boolean"},"free_answer":{"type":"boolean"},"recommended":{"type":"integer","minimum":0,"maximum":3}},"required":["text","options"],"additionalProperties":false});
     json!({"tools":[
-        {"name":"ask","description":"Ask a real unresolved choice with two to four spoken-safe options. One question unless several are necessary. Returns immediately. The front desk ends its turn; backend work independent of the answer continues. Never use AskUserQuestion.","inputSchema":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":question}},"required":["questions"],"additionalProperties":false}},
-        {"name":"withdraw","description":"Withdraw one of your own open questions with a readable reason when it no longer matters.","inputSchema":{"type":"object","properties":{"question_id":{"type":"string"},"reason":{"type":"string"}},"required":["question_id","reason"],"additionalProperties":false}},
-        {"name":"answer","description":"Front desk only: record the user's typed or spoken answer to an open question. Resolve only an unmistakable choice; ask back when ambiguous. Use app option ids. The complete resolved set is returned, including earlier taps. Do not invent an answer.","inputSchema":{"type":"object","properties":{"question_id":{"type":"string"},"client_id":{"type":"string"},"option_ids":{"type":"array","items":{"type":"string"}},"text":{"type":"string"},"expected_revision":{"type":"integer"}},"required":["question_id","client_id"],"additionalProperties":false}}
+        {"name":"ask","description":"Save questions with two to four spoken-safe options. Returns the saved records immediately; answers arrive separately.","inputSchema":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":question}},"required":["questions"],"additionalProperties":false}},
+        {"name":"withdraw","description":"Withdraw one of the current agent's open questions with a recorded reason.","inputSchema":{"type":"object","properties":{"question_id":{"type":"string"},"reason":{"type":"string"}},"required":["question_id","reason"],"additionalProperties":false}},
+        {"name":"answer","description":"Record the user's typed or spoken answer using app option ids. Available to the front desk. Returns the complete resolved set, including earlier taps.","inputSchema":{"type":"object","properties":{"question_id":{"type":"string"},"client_id":{"type":"string"},"option_ids":{"type":"array","items":{"type":"string"}},"text":{"type":"string"},"expected_revision":{"type":"integer"}},"required":["question_id","client_id"],"additionalProperties":false}}
     ]})
 }
 pub fn call(path: &Path, name: &str, args: Value) -> Result<Value, String> {
@@ -126,7 +85,7 @@ pub fn call(path: &Path, name: &str, args: Value) -> Result<Value, String> {
                     .map_err(|e| e.to_string())?;
             let questions = store.ask(s, qs)?;
             Ok(
-                json!({"recorded":true,"questions":questions,"instruction":if s.asker=="front_desk" {"The questions are recorded for display. End your turn now. His answer arrives later; do not wait for it."} else {"The questions are recorded for display. Continue work that does not depend on the answer."}}),
+                json!({"recorded":true,"questions":questions,"answer_delivery":"later_turn"}),
             )
         }
         "withdraw" => {
@@ -195,7 +154,7 @@ pub fn convert_vendor_scoped(context: &AskScope, input: &Value) -> Result<Value,
         std::time::Duration::from_millis(800),
     )?;
     Ok(
-        json!({"recorded":true,"questions":questions,"instruction":if context.asker=="front_desk"{"The questions are recorded for display. End your turn now. His answer arrives later; do not wait for it."}else{"The questions are recorded for display. Continue work that does not depend on the answer."}}),
+        json!({"recorded":true,"questions":questions,"answer_delivery":"later_turn"}),
     )
 }
 pub fn run_stdio(path: &Path) -> io::Result<()> {

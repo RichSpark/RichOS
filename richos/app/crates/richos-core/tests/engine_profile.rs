@@ -25,12 +25,23 @@ fn prepare_fixture(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result
 }
 
 #[test]
-fn app_profile_creates_neutral_coordination_and_one_hook_per_event() {
+fn app_profile_keeps_app_scope_on_every_tool_and_reuses_terminal_bash_hooks() {
     let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     let hooks = manifest["hooks"].as_object().unwrap();
     assert_eq!(hooks.len(), 9);
-    assert!(hooks.values().all(|groups| groups.as_array().unwrap().len() == 1 && groups[0]["hooks"].as_array().unwrap().len() == 1));
+    for (event, groups) in hooks {
+        assert_eq!(groups.as_array().unwrap().len(), if event == "PreToolUse" { 2 } else { 1 });
+        assert_eq!(groups[0]["hooks"].as_array().unwrap().len(), 1);
+    }
+    let bash = &hooks["PreToolUse"][1];
+    assert_eq!(bash["matcher"], "Bash");
+    let registered = bash["hooks"].as_array().unwrap();
+    for (hook, name) in registered.iter().zip([
+        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh"]) {
+        assert!(hook["command"].as_str().unwrap().contains(engine().join("scripts/hooks").join(name).to_str().unwrap()));
+    }
+    assert_eq!(registered.len(), 3);
     // **NO `matcher`, SO `PreToolUse` COVERS EVERY TOOL.** Asserted rather than left to be
     // inferred: two escalations and one brief on 2026-09-18 were built on the belief that
     // this registration gated only the two continuity tools, and deferring the app's action
@@ -59,6 +70,7 @@ fn app_profile_creates_neutral_coordination_and_one_hook_per_event() {
 fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() {
     let f = Scratch::new();
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let before: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     profile.install_quota_gate(Path::new("/Applications/RichOS Test.app/Contents/MacOS/richos")).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     let group = &manifest["hooks"]["PreToolUse"][0];
@@ -67,6 +79,8 @@ fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() 
     assert!(hook["command"].as_str().unwrap().contains("--claude-quota-gate"));
     assert!(hook["command"].as_str().unwrap().contains("app-engine-hook.py"));
     assert_eq!(hook["timeout"], 21600);
+    assert_eq!(manifest["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest["hooks"]["PreToolUse"][1], before["hooks"]["PreToolUse"][1]);
     assert_eq!(manifest["hooks"].as_object().unwrap().len(), 9);
 }
 
@@ -227,97 +241,19 @@ fn workspace_partitions_are_stable_per_company_thread_and_distinct_across_thread
 }
 
 #[test]
-fn standing_instruction_combines_app_identity_with_delivered_execution_contract() {
-    let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    let app=f.0.join("app-doctrine.md");
-    assert!(profile.standing_doctrine(&app, LeaseRole::Work).is_err());
-    std::fs::write(&app,"Fictional app identity").unwrap();
-    let path=profile.standing_doctrine(&app, LeaseRole::Work).unwrap();
-    let body=std::fs::read_to_string(&path).unwrap();
-    assert!(body.starts_with("Fictional app identity\n\n"));
-    assert!(body.ends_with(&std::fs::read_to_string(engine().join("mega-lander/DESKTOP.md")).unwrap()));
-    assert!(path.starts_with(&profile.plugin));
-    std::fs::write(&app,"").unwrap();
-    assert!(profile.standing_doctrine(&app, LeaseRole::Work).is_err());
-}
-
-/// **THE TWO RICHES ARE TOLD TWO DIFFERENT JOBS**, and this is the assertion of that.
-///
-/// The CEO's Two Riches page gives the front desk one job — *"solely talking to the CEO and
-/// relaying info to and from the back-end Rich"* — and the back end the other. Both leases
-/// used to come up with the engine's `mega-lander/DESKTOP.md`, whose seven numbered steps
-/// are `richos_work` calls, so the front desk was instructed to do the job it is now
-/// refused the tools for (`native.rs`'s `mcp_config`, `permissions.rs`'s role refusal).
-///
-/// Each half is asserted against the other, because either one alone can pass for the wrong
-/// reason: a front desk given an empty instruction would satisfy the negative, and a back
-/// end given the front desk's would satisfy nothing at all while the app stopped working.
-#[test]
-fn the_front_desk_is_told_its_own_job_and_never_the_back_ends_execution_contract() {
-    let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    let app=f.0.join("app-doctrine.md");
-    std::fs::write(&app,"Fictional app identity").unwrap();
-
-    let desk=std::fs::read_to_string(profile.standing_doctrine(&app, LeaseRole::Conversation).unwrap()).unwrap();
-    let back=std::fs::read_to_string(profile.standing_doctrine(&app, LeaseRole::Work).unwrap()).unwrap();
-
-    // The front desk is told what it HAS: hand the work over, and look at what is running.
-    assert!(desk.contains("richos_assignments.record"),"the front desk is not told how to hand work over");
-    assert!(desk.contains("richos_status.background_work"),"the front desk is not told how to look");
-    // And it is never told to do the work itself. **The negative is about the whole server,
-    // not a list of tool names** — a doctrine that named one more work tool tomorrow would
-    // slip past a list and not past this.
-    assert!(!desk.contains("richos_work"),"the front desk is still instructed to do the work itself");
-    // The positive controls are the four the engine's contract names literally. The fifth,
-    // `inspect`, appears in DESKTOP.md as prose ("Inspect saved work") rather than as a
-    // qualified name, and asserting it here would be asserting about a sentence the engine
-    // is free to rewrite — the test found that itself on its first run.
-    // `richos_work.team` is the shelf line (proto-teammate shelf plan slice 4): the back end
-    // is told the shelf exists and which tool reaches it.
-    for tool in ["richos_work.prepare","richos_work.integrate","richos_work.complete","richos_work.repositories","richos_work.team"] {
-        assert!(back.contains(tool),"the back end lost its instruction for {tool}");
+fn the_engine_delivers_distinct_plain_definitions_without_composing_them() {
+    let plugin = engine().join("app");
+    richos_core::skills::verify_present(&plugin).unwrap();
+    let rich = std::fs::read_to_string(plugin.join("agents/rich.md")).unwrap();
+    let stu = std::fs::read_to_string(plugin.join("agents/stu.md")).unwrap();
+    assert!(rich.contains("You are Rich"));
+    assert!(!rich.contains("You are Stu"));
+    assert!(stu.contains("You are Stu"));
+    assert!(!stu.contains("You are Rich"));
+    for body in [&rich, &stu] {
+        assert!(body.contains("RichOS"));
+        assert!(body.contains("top-level agents"));
     }
-    // Both still carry the app's own identity: the job changed, Rich did not.
-    assert!(desk.starts_with("Fictional app identity\n\n"));
-    assert!(back.starts_with("Fictional app identity\n\n"));
-}
-
-/// **THE BACK END IS STU, AND THE FRONT DESK IS RICH** — the CEO's §110, 2026-10-06: *"the
-/// "front-desk Rich" will remain tied to the name Rich. But the "back-end Rich" should from
-/// now on be called Stu."* And the addendum: *"This is RichOS. So, it's all about Rich."* —
-/// the user only ever meets Rich.
-///
-/// Asserted on the instruction each lease is ACTUALLY assembled with, from the shipping
-/// rendered template rather than a fixture string, because the defect this closes lived in
-/// the shared template: until this change the back end opened with "You are Rich" and a
-/// "How you talk to him" section, though it never talks to him.
-#[test]
-fn the_back_end_is_told_it_is_stu_and_the_front_desk_that_it_is_rich() {
-    let f=Scratch::new(); let profile=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    let app=richos_core::doctrine::ensure_rendered(&f.0.join("config"),
-        &richos_core::doctrine::DoctrineIdentity::new(Some("Nadia Kessler"))).unwrap();
-
-    let back=std::fs::read_to_string(profile.standing_doctrine(&app, LeaseRole::Work).unwrap()).unwrap();
-    let desk=std::fs::read_to_string(profile.standing_doctrine(&app, LeaseRole::Conversation).unwrap()).unwrap();
-
-    // The back end: Stu, Rich's twin, who runs the work and talks only to Rich and to its
-    // teammates — and nothing that tells it how to talk to the user, or that it is Rich.
-    assert!(back.contains("You are Stu"),"the back end is not told it is Stu:\n{back}");
-    assert!(!back.contains("How you talk to him"),"the back end is still told how to talk to the user:\n{back}");
-    assert!(!back.contains("You are Rich"),"the back end is still told it is Rich:\n{back}");
-    assert!(back.contains("talk only to Rich and to your teammates"),"the back end is not told whom it talks to:\n{back}");
-    assert!(back.contains("His name is Nadia Kessler."),"the back end lost the shared identity of the person it works for");
-
-    // The front desk: Rich, still told how to talk to him, and the back end it hands work to
-    // is named Stu — and Stu is never named to the user.
-    assert!(desk.contains("You are Rich"),"the front desk is not told it is Rich:\n{desk}");
-    assert!(desk.contains("How you talk to him"),"the front desk lost how it talks to him");
-    assert!(desk.contains("Stu"),"the front desk does not name the back end Stu");
-    assert!(!desk.contains("the other one") && !desk.contains("the other connection"),
-        "the front desk still calls the back end something other than Stu:\n{desk}");
-    assert!(desk.contains("Never mention Stu to him"),"the front desk is not told to keep Stu from the user:\n{desk}");
-    assert!(!desk.contains("You are Stu"),"the front desk is told it is Stu");
-    assert!(desk.contains("His name is Nadia Kessler."));
 }
 
 #[test]
@@ -337,7 +273,7 @@ fn generic_git_identity_is_a_default_and_explicit_assignment_identity_can_overri
 }
 
 #[test]
-fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thread() {
+fn bypass_permissions_match_the_terminal_and_keep_company_and_thread_read_roots() {
     use richos_core::{EntityId, EntityRegistry, Ledger, Spine};
     let f=Scratch::new();
     let alpha=EntityId::parse("alpha").unwrap();let beta=EntityId::parse("beta").unwrap();
@@ -352,7 +288,7 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     profile.scope_to(&spine.ledger().thread_binding(&thread).unwrap()).unwrap();
     let mut command=std::process::Command::new("/fictional/provider");profile.configure(&mut command,Path::new("/fictional/provider"),"session",&f.0.join("scope"));
     let args:Vec<_>=command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
-    assert!(args.windows(2).any(|pair|pair==["--permission-mode","auto"]));
+    assert!(args.windows(2).any(|pair|pair==["--permission-mode","bypassPermissions"]));
     let start=args.iter().position(|arg|arg=="--add-dir").unwrap()+1;
     let directories:Vec<_>=args[start..].iter().take_while(|arg|!arg.starts_with("--")).map(String::as_str).collect();
     // THIS conversation's attached files (CEO §86): without them in a read root, an attachment
@@ -371,13 +307,11 @@ fn classified_permissions_keep_defaults_and_only_add_the_current_company_and_thr
     let beta_thread=spine.create_thread("Beta",&beta).unwrap();
     let other=richos_core::attachments::conversation_folder(&f.0,beta_thread.as_str());
     assert!(!args.iter().any(|arg|arg==f.0.join("attachments").to_str().unwrap()||arg==other.to_str().unwrap()));
-    assert!(!args.iter().any(|arg|arg.contains("bypassPermissions")||arg.contains("dangerously-skip")));
     let settings:serde_json::Value=serde_json::from_str(&args[args.iter().position(|arg|arg=="--settings").unwrap()+1]).unwrap();
-    assert_eq!(settings["permissions"]["blockReadsOutsideWorkingDirectories"],true);
-    assert_eq!(settings["autoMode"]["classifyAllShell"],true);
-    assert_eq!(settings["autoMode"]["environment"][0],"$defaults");
-    assert!(settings["autoMode"]["environment"][3].as_str().unwrap().contains(files.to_str().unwrap()));
-    assert_eq!(settings["autoMode"]["soft_deny"][0],"$defaults");
+    assert!(settings["permissions"]["blockReadsOutsideWorkingDirectories"].is_null());
+    assert!(settings["sandbox"].is_null(), "the app must preserve the baseline sandbox policy");
+    assert!(settings["autoMode"].is_null(), "bypass must not carry classifier configuration");
+    assert_eq!(environment["RICHOS_AGENT_HOLD_DIR"].as_deref(), Some(profile.state.join("agent-hold").to_str().unwrap()));
     assert!(!settings.to_string().contains(b.to_str().unwrap()));
 }
 
@@ -522,11 +456,7 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
         assert_eq!(std::fs::read(roster.join(format!("{stock}.md"))).unwrap(), shipped);
     }
     for user in ["mark", "dean"] {
-        // As written, plus the media-skills sentence these fixtures lack (see
-        // a_teammate_saved_before_the_media_skills_gets_..._on_its_next_start).
-        let own = std::fs::read_to_string(team.join(format!("{user}.md"))).unwrap();
-        let want = richos_core::engine_profile::with_media_skills(&own);
-        assert_eq!(want.replace(&format!("\n\n{}\n", richos_core::engine_profile::MEDIA_SKILLS_SENTENCE), "\n"), own);
+        let want = std::fs::read_to_string(team.join(format!("{user}.md"))).unwrap();
         assert_eq!(std::fs::read_to_string(first.plugin.join(format!("agents/{user}.md"))).unwrap(), want,
             "the user's {user} is registered as written");
         assert_eq!(std::fs::read_to_string(roster.join(format!("{user}.md"))).unwrap(), want);
@@ -557,72 +487,26 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
     assert_eq!(registered(&profile), stock);
 }
 
-/// **A teammate the user saved before the media skills gets both on its next start** (CEO
-/// 2026-10-10: every RichOS teammate uses `watch-video` and `audio-transcription`). A saved
-/// copy is the user's and an engine update never rewrites it (plan §10 point 3), so a Ray
-/// activated from the shelf before 2026-10-10 kept a `tools:` list without `Skill` and no word
-/// about either skill, and every lease registered it so. The lease now registers it with
-/// `Skill` back in its list and the media-skills sentence as its last paragraph, and the
-/// user's file stays as written. A definition with no `tools:` line already has every tool and
-/// gets no list; one that already mentions `watch-video` is registered unchanged.
+/// Native definitions retain the user's chosen tools and instructions byte for byte.
 #[test]
-fn a_teammate_saved_before_the_media_skills_gets_the_skill_tool_and_the_sentence_on_its_next_start() {
-    use richos_core::engine_profile::MEDIA_SKILLS_SENTENCE;
+fn saved_teammate_instructions_and_tool_lists_are_registered_unchanged() {
     let f = Scratch::new();
     let team = f.0.join("team");
     std::fs::create_dir_all(&team).unwrap();
-    let shelf = std::fs::read_to_string(engine().join("team/shelf/ray.md")).unwrap();
-    let in_place = format!("{MEDIA_SKILLS_SENTENCE}\n\n");
-    assert_eq!(shelf.matches(&in_place).count(), 1, "the shelf Ray carries the sentence once, in his own section");
-    // Ray as the shelf shipped him before 2026-10-10 (a6cf87db8^): no Skill, no sentence.
-    let saved = shelf.replace(", Skill\n", "\n").replace(&in_place, "");
-    assert!(!saved.contains("Skill\n") && !saved.contains("watch-video"), "the fixture is the old Ray");
-    std::fs::write(team.join("ray.md"), &saved).unwrap();
-    let open = "---\nname: scout\nmodel: sonnet\n---\nFictional teammate with every tool.\n";
-    std::fs::write(team.join("scout.md"), open).unwrap();
-
-    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    let roster = profile.coordination.join(".claude/agents");
-    let refreshed = format!("{}\n{MEDIA_SKILLS_SENTENCE}\n", shelf.replace(&in_place, ""));
-    for registered in [profile.plugin.join("agents/ray.md"), roster.join("ray.md")] {
-        assert_eq!(std::fs::read_to_string(&registered).unwrap(), refreshed,
-            "{} must be the saved Ray with the Skill tool and the sentence as his last paragraph", registered.display());
+    for (name, body) in [
+        ("scout", "---\nname: scout\ntools: [Read, Bash]\n---\nUser instructions.\n"),
+        ("writer", "---\nname: writer\ntools:\n  - Read\n---\nDifferent instructions.\n"),
+    ] {
+        std::fs::write(team.join(format!("{name}.md")), body).unwrap();
     }
-    let scout = std::fs::read_to_string(profile.plugin.join("agents/scout.md")).unwrap();
-    assert_eq!(scout, format!("{open}\n{MEDIA_SKILLS_SENTENCE}\n"),
-        "a definition with no tools line gets the sentence and no tools list");
-    assert_eq!(std::fs::read_to_string(team.join("ray.md")).unwrap(), saved, "the user's own file is never rewritten");
-    assert_eq!(std::fs::read_to_string(team.join("scout.md")).unwrap(), open, "the user's own file is never rewritten");
-
-    // Already current: registered exactly as written, so the digest does not move for nothing.
-    std::fs::write(team.join("ray.md"), &shelf).unwrap();
-    let again = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    assert_eq!(std::fs::read_to_string(again.plugin.join("agents/ray.md")).unwrap(), shelf);
-}
-
-/// The sentence a lease adds to a user's older teammate is the one every shipped definition
-/// carries in its own working rules, never in a banner above who the teammate is, so a
-/// refreshed teammate reads what a new one does; and the other `tools:` spellings get `Skill`
-/// too.
-#[test]
-fn the_sentence_a_lease_adds_is_the_shipped_one_and_every_tools_spelling_gets_skill() {
-    use richos_core::engine_profile::{with_media_skills, MEDIA_SKILLS_SENTENCE};
-    for folder in ["agents", "team/shelf"] {
-        for entry in std::fs::read_dir(engine().join(folder)).unwrap() {
-            let path = entry.unwrap().path();
-            let body = std::fs::read_to_string(&path).unwrap();
-            let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(flat.contains(MEDIA_SKILLS_SENTENCE), "{} must carry the sentence", path.display());
-            assert!(!body.contains("Standing instruction"), "{} still carries the banner", path.display());
-            assert_eq!(with_media_skills(&body), body, "{} is current and must be registered unchanged", path.display());
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    for name in ["scout", "writer"] {
+        let original = std::fs::read(team.join(format!("{name}.md"))).unwrap();
+        for registered in [profile.plugin.join(format!("agents/{name}.md")),
+                           profile.coordination.join(format!(".claude/agents/{name}.md"))] {
+            assert_eq!(std::fs::read(registered).unwrap(), original);
         }
     }
-    let flow = with_media_skills("---\nname: a\ntools: [Read, Bash]\n---\n# A\n\nText.\n");
-    assert_eq!(flow, format!("---\nname: a\ntools: [Read, Bash, Skill]\n---\n# A\n\nText.\n\n{MEDIA_SKILLS_SENTENCE}\n"));
-    let block = with_media_skills("---\nname: a\ntools:\n  - Read\n  - Bash\nmodel: opus\n---\n# A\n\nText.\n");
-    assert_eq!(block, format!("---\nname: a\ntools:\n  - Read\n  - Bash\n  - Skill\nmodel: opus\n---\n# A\n\nText.\n\n{MEDIA_SKILLS_SENTENCE}\n"));
-    let scoped = "---\nname: a\ntools: Read, Skill(watch-video)\n---\n";
-    assert!(with_media_skills(scoped).starts_with(scoped), "a Skill(...) entry is the user's own choice and is kept");
 }
 
 /// **Slice 5: the digest that renews a back end when its team changed** (plan §1, §6). It

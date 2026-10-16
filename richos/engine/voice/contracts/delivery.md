@@ -56,7 +56,7 @@ activation continue to belong to the existing app packaging system.
 `tests/relocation.test.mjs` runs core tests from an engine-only copy, then service/HUD
 checks from a copied product layout containing spaces. Missing canonical files
 must fail even while the original checkout remains available. The app script
-`app/scripts/voice-component.test.sh` runs full consumer conformance, relocation
+`richos/app/scripts/voice-component.test.sh` runs full consumer conformance, relocation
 and mutation-runner failure/interruption checks. Existing local test discovery
 finds the core shell suite; voice source/data changes select it explicitly.
 

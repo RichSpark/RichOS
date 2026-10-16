@@ -159,7 +159,7 @@ def handle(payload):
             out["additionalContext"] = (out.get("additionalContext") + "\n\n" if out.get("additionalContext") else "") + notice
             sys.stdout.write(json.dumps(answer) + "\n")
             sys.stdout.flush()
-        if not mid_job_notice(work, active, payload, root, emit) and context:
+        if not mid_job_notice(work, active, payload, root, emit) and context and payload.get("tool_name") != "Agent":
             print(json.dumps(context))
     if event == "PreToolUse" and payload.get("tool_name") == "Agent":
         payload["richos_recovery_assignment"] = work.dispatch_intent(active, payload, inspect_only=True)
@@ -194,6 +194,9 @@ def handle(payload):
         # Only a call that passed every control is a dispatch attempt. In particular,
         # returning findings must leave the prepared receipt available for dismissal.
         work.dispatch_intent(active, payload)
+        answer = context or {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+        answer["hookSpecificOutput"]["updatedInput"] = payload["tool_input"]
+        print(json.dumps(answer))
     if event in ("SessionStart", "SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure", "SessionEnd"):
         run(ws + ["hook"], payload)
     if event == "PostToolUse" and payload.get("tool_name") == "Agent":

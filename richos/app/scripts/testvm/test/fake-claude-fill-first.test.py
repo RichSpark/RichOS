@@ -97,7 +97,7 @@ with tempfile.TemporaryDirectory() as root:
     check(answers(proc) == 'On it. I have three people on it.', 'the user turn answers with reply.txt')
     # 4: every turn reports Claude Code's inventory first, or the app refuses a company turn
     # (native.rs ensure_onboarding_tools_loaded reads both exact tool names from system/init).
-    check(len(inits) == 2 and all(ONBOARDING <= set(i.get('tools', [])) and i.get('permissionMode') == 'auto' for i in inits),
+    check(len(inits) == 2 and all(ONBOARDING <= set(i.get('tools', [])) and i.get('permissionMode') == 'bypassPermissions' for i in inits),
           'each turn reports the onboarding tools in a system/init frame before it answers', inits)
 
     # A second user turn adds no second set of agents.

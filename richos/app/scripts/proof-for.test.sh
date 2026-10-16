@@ -257,6 +257,16 @@ else
   bad "E4 a suite that landed with no row refuses" "exit $E_RC"
 fi
 
+# A shared integration module is compiled through its consumers, not cargo --test mod.
+run_pf "$WORK/helper.out" --paths richos/app/crates/richos-core/tests/support/mod.rs
+if [ "$RC" -eq 0 ] && grep -q -- '--test action_ledger_tests' "$WORK/helper.out" \
+   && grep -q -- '--test questions' "$WORK/helper.out" \
+   && ! grep -qE -- '--test (mod|support)( |$)' "$WORK/helper.out"; then
+  ok "K0 shared Rust integration helpers select surviving consumer targets"
+else
+  bad "K0 a helper was selected as a nonexistent standalone Cargo target" "$(tr '\n' ' ' < "$WORK/helper.out")"
+fi
+
 # The positive probe for E: unmutated, the same invocation must succeed. Four refusals that
 # fire on everything would pass E1-E4 and mean nothing.
 OUT="$("$PF" --paths richos/app/ui/main.js 2>&1)"; E0_RC=$?
@@ -317,11 +327,12 @@ fi
 #    Deleting a script no suite covers refused the commit and the land as UNCOVERED, though
 #    no code was left to prove, and deleting a suite selected a suite that is gone. Two
 #    commits are built from HEAD's tree in a scratch index: ADD holds an uncovered script and
-#    a suite nobody declares, DEL is ADD with both deleted. Neither the working tree, the real
+#    a suite nobody declares and a Rust target, DEL is ADD with all three deleted. Neither the working tree, the real
 #    index nor any ref is touched; the objects are unreferenced and git collects them.
 # -----------------------------------------------------------------------------------------
 L_PROBE=richos/app/.proof-for-probe/deleted-orphan.sh
 L_SUITE=richos/app/scripts/a-deleted-probe.test.sh
+L_RUST=richos/app/crates/richos-core/tests/a_deleted_probe.rs
 lgit() { GIT_INDEX_FILE="$WORK/l-index" git -C "$ROOT" -c user.name='proof-for fixture' \
            -c user.email=proof-for@example.invalid "$@"; }
 L_ADD=""; L_DEL=""
@@ -329,19 +340,27 @@ if L_BLOB="$(printf '#!/bin/sh\nexit 0\n' | git -C "$ROOT" hash-object -w --stdi
    && lgit read-tree HEAD \
    && lgit update-index --add --cacheinfo "100755,$L_BLOB,$L_PROBE" \
    && lgit update-index --add --cacheinfo "100755,$L_BLOB,$L_SUITE" \
+   && lgit update-index --add --cacheinfo "100644,$L_BLOB,$L_RUST" \
    && L_ADD="$(lgit commit-tree "$(lgit write-tree)" -p HEAD -m 'proof-for fixture: add')" \
-   && lgit update-index --force-remove "$L_PROBE" "$L_SUITE" \
+   && lgit update-index --force-remove "$L_PROBE" "$L_SUITE" "$L_RUST" \
    && L_DEL="$(lgit commit-tree "$(lgit write-tree)" -p "$L_ADD" -m 'proof-for fixture: delete')"; then
   run_pf "$WORK/l1.out" "$L_DEL"; L1_RC=$RC
-  if [ "$L1_RC" -eq 0 ] && grep -q '^REMOVED — 2' "$WORK/l1.out" && grep -q 'deleted-orphan.sh' "$WORK/l1.out" \
-     && ! grep -q 'UNCOVERED' "$WORK/l1.out" && ! grep -q 'a-deleted-probe.test.sh' <(grep -- '--only' "$WORK/l1.out"); then
+  if [ "$L1_RC" -eq 0 ] && grep -q '^REMOVED — 3' "$WORK/l1.out" && grep -q 'deleted-orphan.sh' "$WORK/l1.out" \
+     && ! grep -q 'UNCOVERED' "$WORK/l1.out" && ! grep -q 'a-deleted-probe.test.sh' <(grep -- '--only' "$WORK/l1.out") \
+     && ! grep -q -- '--test a_deleted_probe' "$WORK/l1.out"; then
     ok "L1 a commit that deletes an uncovered script and a suite maps cleanly, listed under REMOVED"
   else
     bad "L1 a commit that deletes an uncovered script and a suite maps cleanly" "exit $L1_RC: $(tr '\n' ' ' < "$WORK/l1.out")"
   fi
+  run_pf "$WORK/l5.out" "$L_ADD"
+  if grep -q -- '--test a_deleted_probe' "$WORK/l5.out"; then
+    ok "L5 a Rust integration target that exists in the selected revision is still selected"
+  else
+    bad "L5 an existing Rust integration target disappeared from selection"
+  fi
   # The land's form: a range whose head lacks the paths.
   run_pf "$WORK/l2.out" "$L_ADD..$L_DEL"; L2_RC=$RC
-  if [ "$L2_RC" -eq 0 ] && grep -q '^REMOVED — 2' "$WORK/l2.out" && ! grep -q 'UNCOVERED' "$WORK/l2.out"; then
+  if [ "$L2_RC" -eq 0 ] && grep -q '^REMOVED — 3' "$WORK/l2.out" && ! grep -q 'UNCOVERED' "$WORK/l2.out"; then
     ok "L2 the same deletion as a land's range maps cleanly"
   else
     bad "L2 the same deletion as a land's range maps cleanly" "exit $L2_RC: $(tr '\n' ' ' < "$WORK/l2.out")"

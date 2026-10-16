@@ -261,7 +261,7 @@ while (my $line = <STDIN>) {
     # its turn ("The desktop work tools did not load", native.rs work_readiness_facts).
     my @work = $backend ? map { "mcp__richos_work__$_" } qw(repositories prepare inspect integrate complete) : ();
     print $json->encode({ type => 'system', subtype => 'init', model => 'fill-first-fixture',
-      plugins => [ { name => 'rich-skills' }, { name => 'richos-app-engine' } ], permissionMode => 'auto',
+      plugins => [ { name => 'rich-skills' }, { name => 'richos-app-engine' } ], permissionMode => 'bypassPermissions',
       tools => [ 'Bash', 'mcp__richos_onboarding__save_company_notes', 'mcp__richos_onboarding__decline_onboarding',
         'mcp__richos_continuity__checkpoint', 'mcp__richos_continuity__inspect',
         'mcp__richos_assignments__record', 'mcp__richos_status__background_work', @work ] }), "\n";

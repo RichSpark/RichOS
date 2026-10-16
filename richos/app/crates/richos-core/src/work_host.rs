@@ -236,6 +236,8 @@ enum CommandWait {
 }
 
 struct Inner {
+    peer_input: Option<Arc<dyn TurnCancel>>,
+    peer_active_through: Option<u64>,
     // Includes pre-lease waits and final receipt writes, not just a live lease.
     processing: bool,
     /// Jobs whose background commands outlived their wait ([`Watched`]).
@@ -348,6 +350,8 @@ impl Backend {
                 watching: Vec::new(),
                 live: None,
                 cancel: None,
+                peer_input: None,
+                peer_active_through: None,
                 lease_session: None,
                 stopped: Vec::new(),
                 screen_wait: None,
@@ -434,8 +438,8 @@ pub struct WorkHost {
     /// ([`AnsweredClose`]); `None` leaves it open, as every build before this did.
     answered_close: Mutex<Option<Arc<dyn AnsweredClose>>>,
     /// **The central folder his company notes are saved in** (`company.rs`,
-    /// `<central>/companies/<entity>/company.md`), or `None` when the shell has not said. A
-    /// hiring's brief carries those notes ([`Self::hiring_notes`]); without it, it carries none.
+    /// `<central>/companies/<entity>/company.md`), or `None` when the shell has not said. Every
+    /// assignment carries the scoped facts ([`Self::company_notes`]).
     central_root: Mutex<Option<PathBuf>>,
     /// [`COMMAND_WAIT_BUDGET`] in production; shortened by tests, like `screen_poll`.
     command_wait: Mutex<std::time::Duration>,
@@ -485,28 +489,17 @@ pub const ROTATION_WAITS_FOR_COMMANDS: std::time::Duration = std::time::Duration
 /// It does not ask for a summary of the assignments, because those are read off disk and a
 /// model's recollection of them would be a second, softer copy of a record that already
 /// exists.
-const HANDOFF_ASK: &str = "You are about to hand this conversation's background work to a \
-    fresh connection. In at most five sentences, say what you were in the middle of that is \
-    not already written down in the assignment record: what you had worked out, what you \
-    were about to do next, and anything you had decided not to do and why. No preamble, and \
-    nothing you are only guessing at.";
+const HANDOFF_ASK: &str = r#"{"event":"session_handoff_requested","max_chars":1500}"#;
 
 /// Added to [`HANDOFF_ASK`] when the hand-over is in the MIDDLE of an assignment (fill-first
 /// between continuation turns): the next turn may need a file only the outgoing back end
 /// knows the name of — a background command's output is *"in the file named when it
 /// started"* ([`COMMAND_ENDED_TAIL`]).
-const HANDOFF_ASK_MID_RUN: &str = "You are in the middle of an assignment, and the fresh \
-    connection carries it on from the next step: give the full path of every file that next \
-    step needs, such as where a command you started writes its output.";
+const HANDOFF_ASK_MID_RUN: &str = r#"{"carrying_assignment":true}"#;
 
 /// How a successor that takes an assignment over part-way is told so, and what it does next.
-const MID_RUN_HANDOVER_OPENING: &str = "You are the standing background worker for one of the \
-    CEO's conversations, and this connection is taking over from the previous one in the \
-    middle of an assignment, because the Claude account the previous one ran under is being \
-    left before its limit. The assignment is yours now, part-way through: what its earlier \
-    turns did is done, and none of it is to be started again.\n";
-const MID_RUN_HANDOVER_CLOSING: &str = "\nThe next message continues this assignment from where \
-    it is, on the same seat. Carry it on from there, as its brief says.\n";
+const MID_RUN_HANDOVER_OPENING: &str = r#"{"event":"session_replaced","reason":"account_changed","carrying_assignment":true}"#;
+const MID_RUN_HANDOVER_CLOSING: &str = r#""#;
 
 /// The bound on that answer, so one back end's verbosity cannot become the next one's
 /// priming. Roughly five sentences of prose.
@@ -524,12 +517,7 @@ const HANDOFF_BUDGET_CHARS: usize = 1500;
 /// its workspace. `DESKTOP.md` step 5 says a reviewer comes next; this says it at the one
 /// moment it applies, the same argument as the async-launch sentence in the brief.
 const WORKER_ENDED_CONTINUATION: &str =
-    "The helper you started has ended. That is this app telling you, from its own record of \
-     the run, not a guess. Read its receipt with the desktop work tools and carry this \
-     assignment on from there: if it did the work, the next step is an independent REVIEWER \
-     (`prepare` with `role: reviewer` and `review_of` that helper's receipt), then the land, \
-     then closing the assignment. Do not prepare another worker for work that is already \
-     done. Nothing about the assignment has changed and your seat is the same one.";
+    r#"{"event":"helper_finished","duty":"worker"}"#;
 
 /// **What the back end is told when helpers it started were handed off at the weekly switch**
 /// (richos-hq `docs/plans/2026-10-07-weekly-switch-handoff.md` §2). The quota gate ordered
@@ -539,17 +527,9 @@ const WORKER_ENDED_CONTINUATION: &str =
 /// consult and review-passed sentences, and sent only once this back end is off the account
 /// being left (`wait_for_the_switch`).
 const HANDOFF_CONTINUATION_HEAD: &str =
-    "Helpers you started were stopped because the Claude account they ran on is being left \
-     before its weekly limit. Each was told to commit what it had, then make one more commit \
-     starting `RichOS handoff:` that says what is done, what is left and the next step, and \
-     end. That is this app telling you, from its own record of the run, not a guess. Continue \
-     each of them now, on the account this seat is on:";
+    r#"Helpers handed off at an account switch (recorded facts):"#;
 const HANDOFF_CONTINUATION_TAIL: &str =
-    "A worker: `prepare` with `continue_of` set to its receipt (the same teammate, repositories \
-     and brief), then launch it; it starts at the saved commit with the handoff in its brief. \
-     A reviewer: prepare it again for the same commit. A consult: ask it again. Do not review \
-     or land work that was handed off part-way. Nothing about the assignment has changed and \
-     your seat is the same one.";
+    r#"End of recorded handoffs."#;
 
 /// **What the back end is told when the helper that ended was the REVIEWER, and it passed.**
 ///
@@ -565,24 +545,14 @@ const HANDOFF_CONTINUATION_TAIL: &str =
 /// and that no land is recorded against the worker. A host that guessed from "how many times
 /// have I waited" would say this on a second worker's first pass.
 const REVIEW_PASSED_CONTINUATION: &str =
-    "The helper you started has ended. That is this app telling you, from its own record of \
-     the run, not a guess. A reviewer's own receipt says it PASSED this work, and the app's \
-     records carry no land for it: the next step is the land itself (`integrate`), and then \
-     closing the assignment. Do not prepare another helper and do not prepare another \
-     reviewer for work that has already passed. Nothing about the assignment has changed and \
-     your seat is the same one.";
+    r#"{"event":"helper_finished","review":"passed","integration_recorded":false}"#;
 
 /// **What the back end is told when the helper that ended was a CONSULT** (proto-teammate shelf
 /// plan §3, slice 3): a named teammate asked on a job that changes no repository, whose final
 /// message is the deliverable. The worker sentence above would send the back end to prepare a
 /// reviewer for an answer, which has nothing to review and nothing to land.
 const CONSULT_ENDED_CONTINUATION: &str =
-    "The teammate you consulted has ended: that is this app telling you, from its own record \
-     of the run, not a guess. Its final message is your deliverable: read it with the desktop \
-     work tools (`inspect` returns it as `consult_answer` on that teammate's receipt) and carry \
-     this assignment on from there. A consult changes no repository, so it needs no reviewer, \
-     no land and no `complete`. Nothing about the assignment has changed and your seat is the \
-     same one.";
+    r#"{"event":"helper_finished","duty":"consult"}"#;
 
 /// How many times ONE continuation may be asked again after a turn that produced nothing.
 ///
@@ -597,24 +567,6 @@ const CONSULT_ENDED_CONTINUATION: &str =
 /// turn on a real subscription. One re-ask covers a single stolen result; a second would be
 /// this host guessing, and a loop would be this host paying for its own guess.
 const CONTINUATION_REASK_LIMIT: usize = 1;
-
-/// How many times one assignment's turn may be resumed after waiting for a helper.
-///
-/// Six is the shape of the flow rather than a round number: a worker, a reviewer, a revision
-/// and a re-review is four, and the two spare are for a second revision. An assignment that
-/// wants a seventh is not a slow one, it is a loop, and the readings after the wait report it
-/// as what could be witnessed rather than spinning.
-///
-/// **It never cuts off a helper the journal shows still at work.** A hiring spends rounds on
-/// research, fitting retries and team renewals, and nightly 56's hire needed exactly six (its
-/// handover review, rv-20261014T210558Z-b7ebe6ad-571c): one more fitting attempt launched in
-/// the sixth continuation used to end the loop, revoke the grant that attempt saves under and
-/// close the job with a promised teammate unsaved. So past the bound an open helper is still
-/// waited for, on its own `SubagentStop` as always, and the back end gets the turn after it;
-/// the bound ends the loop only once nothing is open. Nor does it end a hiring with a proposed
-/// teammate still unsaved (rv-20261014T212111Z-1a81cf94-9653): the save turn after six waits
-/// still gets its team renewal. His Stop and a quit end it at any time.
-const WORKER_WAIT_ROUNDS: usize = 6;
 
 /// How long ONE wait for a helper lasts before the row says it is taking longer than usual.
 ///
@@ -679,180 +631,6 @@ fn waiting_sentence(said: &str) -> Option<String> {
     (!why.is_empty()).then(|| why.to_string())
 }
 
-/// **How a hiring is written down** (the interview skill, `skills/bootstrap-interview`): a task
-/// titled with this, then the proposed names and job titles, "Nora (Marketing Lead), Mark
-/// (Backend Engineer)". His go is that task, so it is finished only when each of them is saved.
-const HIRING_TITLE: &str = "Hire these AI teammates onto my team:";
-
-/// **What a hiring's brief says before his company notes** ([`WorkHost::hiring_notes`]).
-const HIRING_NOTES_HEAD: &str = "His onboarding interview saved these notes about his business, in his own answers. \
-     They are facts: fit every teammate to them, and give each helper the facts from them that its work needs in its brief.";
-
-/// **Where a hiring's facts about his business come from, and where they never do** (nightly
-/// 57's hunt, finding 5). With his notes on file the back end still wrote Clark's brief from
-/// a guess off his sign-in email's domain, called his interview answers "unconfirmed" and
-/// stated "US-based", which he never said; the email also went to a researcher with web
-/// access. Said in every hiring's first brief, with his notes or without them.
-const HIRING_FACTS_RULE: &str = "His answers about his business are facts: state them as facts, never as \
-     unconfirmed. Never infer anything about his business from his email address or his sign-in, and never put \
-     either in a brief. State nothing about the business he did not say (where it is, for one): where a teammate \
-     needs a fact he has not given, say it is not known yet.";
-
-/// A hiring's teammates, each as (name as written, job title he was given).
-type Hires = Vec<(String, String)>;
-
-/// **The teammates a hiring proposed**, by name as written and with the job title he was given,
-/// read off its title: every name followed by its job title in brackets. A name the register's
-/// 160-character cut left without its job title is not read, a job title it cut short is left
-/// out, and a title of any other shape names nobody.
-fn proposed_hires(title: &str) -> Hires {
-    let Some(list) = title.strip_prefix(HIRING_TITLE) else { return Vec::new() };
-    let (mut hires, mut before, mut job, mut depth) = (Vec::new(), String::new(), String::new(), 0usize);
-    let mut named = false;
-    for c in list.chars() {
-        match c {
-            '(' if depth == 0 => {
-                depth = 1;
-                let item = before.rsplit(',').next().unwrap_or("").trim();
-                let name = item.strip_prefix("and ").unwrap_or(item).trim();
-                named = !name.is_empty();
-                if named {
-                    hires.push((name.to_string(), String::new()));
-                }
-                before.clear();
-                job.clear();
-            }
-            ')' if depth == 1 => {
-                depth = 0;
-                if let (true, Some(last)) = (named, hires.last_mut()) {
-                    last.1 = job.trim().to_string();
-                }
-            }
-            '(' => {
-                depth += 1;
-                job.push(c);
-            }
-            ')' if depth > 1 => {
-                depth -= 1;
-                job.push(c);
-            }
-            _ if depth == 0 => before.push(c),
-            _ => job.push(c),
-        }
-    }
-    hires
-}
-
-/// **What he is told a hiring did, said from what the app saved**: who joined, each with the
-/// job title he was given, and nothing of how. Nightly 57's check (runs 1, 3 and 4) joined the
-/// back end's turns into this message, and he read its working notes as the news: "No business
-/// notes on hand, so Clark researches…", "Pierce flagged…", "Dean couldn't open the shelf file",
-/// "Both saved; ending the turn so the app can register them." `None` when nobody joined.
-fn joined_the_team(saved: &[(String, String)]) -> Option<String> {
-    let each: Vec<String> = saved
-        .iter()
-        .map(|(name, job)| if job.is_empty() { name.clone() } else { format!("{name} ({job})") })
-        .collect();
-    match each.len() {
-        0 => None,
-        1 => Some(format!("{} is on your team now{JOINED_TAIL}", each[0])),
-        _ => Some(format!("{} are on your team now{JOINED_TAIL}", names_in_a_sentence(&each))),
-    }
-}
-
-/// How every [`joined_the_team`] sentence ends, so the ones already said can be read back.
-const JOINED_TAIL: &str = ", ready to take work.";
-
-/// **The name a saved teammate's definition records**: its `**Name:**` line, as Dean's
-/// definition template writes it under Identity (`engine/agents/dean.md`, `- **Name:** {Name}`)
-/// and every stock definition carries it. This, not the file name, is what a hiring's proposed
-/// names are checked against: the team tool saves a file only as 2 to 16 lowercase letters and
-/// digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so Bjørn, Renée and Anne-Marie are
-/// `bjorn`, `renee` and `annemarie` on disk, and no rule that rebuilds a file name from the
-/// proposed name holds for every name (handover reviews rv-20261014T223234Z-0c3a1cec-845b and
-/// rv-20261014T224455Z-5f5bd3c7-ee90). A definition without that line records no name.
-fn recorded_name(definition: &str) -> Option<&str> {
-    definition.lines().find_map(|line| {
-        let line = line.trim_start();
-        let line = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).unwrap_or(line);
-        line.strip_prefix("**Name:**").map(str::trim).filter(|name| !name.is_empty())
-    })
-}
-
-/// **The name a saved definition was saved under**: its frontmatter `name:`, which the team
-/// tool refuses to save unless it is the file name (`engine/mega-lander/app.py`,
-/// `definition_model`), read as that tool reads it (keys lowercased, quotes stripped). `None`
-/// for a text without a frontmatter block or a `name:` in it.
-fn saved_under(definition: &str) -> Option<&str> {
-    let mut lines = definition.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    lines
-        .take_while(|line| line.trim() != "---")
-        .find_map(|line| {
-            let (key, value) = line.split_once(':')?;
-            (key.trim().eq_ignore_ascii_case("name")).then(|| value.trim().trim_matches(|c| c == '"' || c == '\''))
-        })
-        .filter(|name| !name.is_empty())
-}
-
-/// **The name a proposed teammate is saved under, by the one rule the hiring is given**: his
-/// first name in lowercase letters a to z and digits, accents dropped and everything else (a
-/// hyphen, a space, an apostrophe) left out, at most 16. Anne-Marie is `annemarie`, Renée is
-/// `renee`, Bjørn is `bjorn`. Dean's definition template states it (`engine/agents/dean.md`,
-/// the `name` rule) and the team tool saves nothing else (`engine/mega-lander/app.py`,
-/// `TEAMMATE_NAME`).
-fn save_name(name: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    let mut saved = String::new();
-    for c in name.nfkd().flat_map(char::to_lowercase) {
-        match c {
-            'a'..='z' | '0'..='9' => saved.push(c),
-            'ø' => saved.push('o'),
-            'æ' => saved.push_str("ae"),
-            'œ' => saved.push_str("oe"),
-            'ß' => saved.push_str("ss"),
-            'ł' => saved.push('l'),
-            'đ' | 'ð' => saved.push('d'),
-            'þ' => saved.push_str("th"),
-            'ı' => saved.push('i'),
-            // An accent NFKD split off, and every character that is no letter or digit.
-            _ => {}
-        }
-    }
-    saved.chars().take(16).collect()
-}
-
-/// A name as compared: Unicode-composed (so an é typed as e plus an accent is the same é) and
-/// lowercased.
-fn compared_name(name: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    name.trim().nfc().collect::<String>().to_lowercase()
-}
-
-/// **What the back end is told when a hiring is not finished and its last turn left nothing
-/// running**: who is not saved yet, read off the team folder. Run 3 of nightly 56's check
-/// (2026-10-14) ended a turn "Will's definition is saved; ending the turn so the app can register
-/// him, then Beth's research goes next.", nothing went on, and the job closed with Beth unsaved.
-fn hiring_unfinished_continuation(unsaved: &[String]) -> String {
-    format!(
-        "This hiring is not finished: the app's team has no saved definition yet for {}. This is \
-         the same assignment on the same seat. Carry on hiring from where you were, the way this \
-         install hires, and save each teammate with `richos_work.team` when Dean has written them.",
-        names_in_a_sentence(unsaved)
-    )
-}
-
-/// "Beth", "Beth and Nora", "Beth, Nora and Mark".
-fn names_in_a_sentence(names: &[String]) -> String {
-    match names {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
-}
-
 /// **The work path's one injected fault** (the VM crash matrix's P4e cell, design §4.2): with the
 /// `crash-points` feature and `RICHOS_CRASH_POINT` naming it, it is true ONCE per process. Every
 /// product build compiles it to `false`. The aborts are `operator_host::crash_point`'s.
@@ -872,7 +650,7 @@ fn work_fault(_name: &str) -> bool {
 /// **The one line before the brief of work he picked back up after RichOS closed on it** (the
 /// work-path design's D6 note, on C6's option B path).
 pub const PICKED_UP_NOTE: &str =
-    "RichOS closed while this was running. Check what it already did before redoing anything.";
+    r#"{"event":"resumed_after_interruption","prior_effects_may_exist":true}"#;
 
 /// **Where an answer to his team goes** from the question worker's pass
 /// ([`WorkHost::deliver_team_answers`]): the operator desk's inbox, which returns its receipt.
@@ -1009,21 +787,12 @@ pub const TEAM_CHANGED: &str = "team-changed";
 
 /// **How a successor renewed for its team in the middle of an assignment is told so** (slice
 /// 5): the account-switch opening's words, with the reason that is true here.
-const MID_RUN_TEAM_HANDOVER_OPENING: &str = "You are the standing background worker for one of \
-    the CEO's conversations, and this connection is taking over from the previous one in the \
-    middle of an assignment, because the team changed while it worked: a connection registers \
-    its teammates once, when it opens, and this one has the team as it is now. The assignment \
-    is yours now, part-way through: what its earlier turns did is done, and none of it is to \
-    be started again.\n";
+const MID_RUN_TEAM_HANDOVER_OPENING: &str = r#"{"event":"session_replaced","reason":"team_changed","carrying_assignment":true}"#;
 
 /// **What the back end is told on the turn a team renewal gave it** (slice 5): nothing was
 /// open, its last turn changed the team, and the host renewed it so the change is registered.
 /// A saved teammate is now one it can name; the assignment goes on from where it was.
-const TEAM_CHANGED_CONTINUATION: &str = "The team changed during your last turn, and this app \
-    has renewed your connection so the change is registered: every teammate saved with \
-    `richos_work.team` is now in your Agent tool listing, and `richos_work.prepare` takes its \
-    name. This is the same assignment on the same seat. Carry it on from where you were; if \
-    nothing of it remains, give the report you would have given.";
+const TEAM_CHANGED_CONTINUATION: &str = r#"{"event":"team_changed","registered":true}"#;
 
 /// What the Under the hood pane says while an assignment waits on a command its back end
 /// started in the background.
@@ -1047,16 +816,9 @@ const COMMAND_WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(
 /// `run_one` step 3c. The first half is what the host knows, from the provider's own
 /// `task_notification`; the list of commands goes between the two halves.
 const COMMAND_ENDED_HEAD: &str =
-    "What you started in the background for this assignment has ended — that is this app \
-     telling you, from the provider's own notice, not a guess:";
+    r#"Background commands ended (provider observations):"#;
 const COMMAND_ENDED_TAIL: &str =
-    "Its output is in the file named when it started. Give him your report on this \
-     assignment now, in plain words: what ran, how it ended, and what it printed that matters \
-     to him. If he asked what it printed, quote the printed lines themselves, as they are, \
-     then say what they mean; a description of them is not what he asked for. This is the \
-     report he will read, so make it complete, and leave out reviews, \
-     lands and closing the assignment: the app closes it from this report. Nothing about the \
-     assignment has changed and your seat is the same one.";
+    r#""#;
 
 fn command_ended_continuation(ended: &[&crate::cognition::BackgroundCommand]) -> String {
     let each: Vec<String> = ended
@@ -1087,12 +849,12 @@ fn still_running_for_others(watching: &[Watched]) -> String {
     if each.is_empty() {
         return String::new();
     }
-    format!(
-        "\n\nCommands you started in the background for his other requests are still running: {}. \
-         If you are told one of them has ended while you work on this, leave it out of this \
-         report entirely: this app will ask you for that request's report on its own.",
-        and_list(&each)
-    )
+    format!("\n\nOther assignments' background commands (observed): {}", and_list(&each))
+}
+
+fn with_report(evidence: &str, report: &str) -> String {
+    let report = report.trim();
+    if report.is_empty() { evidence.to_string() } else { format!("{evidence}\n\nStu's report:\n{report}") }
 }
 
 /// Add one turn's words to the account, bounded the way the stream was: 64 KiB is eight times
@@ -1128,17 +890,10 @@ fn words_for_him(said: &str) -> String {
     said.lines().filter(|line| declared_wait(line).is_none()).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
-/// **One continuation turn's words into the account.** A helper's continuation adds to it
-/// ([`keep_words`]); a command's report REPLACES "it has started", which is no longer true and
-/// which he already has. Either way the declared wait stays out of his answer (second review
-/// rv-20261015T110858Z-a5f8a28b-a1ab: a command's report turn that starts a consult kept "Will
-/// is working on the outreach recommendation now." above Will's answer). A report that holds
-/// ONLY its declared wait still replaces it (handover review rv-20261015T120013Z-7ade25c4-de05:
-/// "The analysis is running." stayed above Will's answer); a turn that said nothing does not.
-fn fold_turn(answer: &mut String, said: &str, adds: bool) {
-    if adds {
-        keep_words(answer, said);
-    } else if !words_for_him(said).is_empty() || declares_waiting_on_a_helper(said) {
+/// A report describes the current outcome. Earlier turns remain in the agent's context,
+/// not concatenated into a later report as if their progress were still current.
+fn fold_turn(answer: &mut String, said: &str) {
+    if !said.trim().is_empty() {
         answer.clear();
         keep_words(answer, said);
     }
@@ -1158,9 +913,8 @@ fn add_streamed_words(said: &mut String, text: &str, between_notices: &mut bool)
         }
         return;
     }
-    if std::mem::take(between_notices) && !said.trim().is_empty() {
-        said.truncate(said.trim_end().len());
-        said.push_str("\n\n");
+    if std::mem::take(between_notices) {
+        said.clear();
         said.push_str(text.trim_start());
     } else {
         said.push_str(text);
@@ -1282,7 +1036,7 @@ impl WorkHost {
     }
 
     /// **Where his company notes are** (the shell's `company::install_central_root`, the same
-    /// folder the interview saves them in), so a hiring is briefed with them.
+    /// folder the interview saves them in), so every assignment receives the same scoped facts.
     pub fn set_central_root(&self, root: PathBuf) {
         *self.central_root.lock().unwrap() = Some(root);
     }
@@ -1403,6 +1157,90 @@ impl WorkHost {
         }
     }
 
+    /// The existing filesystem watcher wakes the runner and forwards corrections
+    /// through its current session, including while that runner is inside a job.
+    pub fn wake_messages(self:&Arc<Self>,binding:&ThreadBinding) {
+        let Some(backend)=self.backend_for(binding.thread_id()) else {return};
+        let (input, after, session) = {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.binding=Some(binding.clone());
+            if inner.closing {return}
+            (inner.peer_input.clone(), inner.peer_active_through.unwrap_or(0), inner.lease_session.clone())
+        };
+        backend.wake.notify_all();
+        let Some(input)=input else {return};
+        let scope=self.message_scope(binding);
+        let result=(|| {
+            let Some((message,through))=crate::session_tools::pending_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
+            use sha2::Digest;
+            let digest=sha2::Sha256::digest(format!("{}\0{}\0{through}",scope.entity_id,scope.thread_id));
+            let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
+            let text=serde_json::to_string(&message).map_err(|e|e.to_string())?;
+            let host=Arc::downgrade(self);
+            let binding=binding.clone();
+            if let Some(session)=session {
+                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),&session)?;
+            }
+            input.send_input(&id,&text,Box::new(move || {
+                if let Err(error)=crate::session_tools::acknowledge(&scope,"stu",through) {
+                    eprintln!("[richos] operator input was taken but its receipt remains pending: {error}");
+                    return;
+                }
+                if let Some(host)=host.upgrade() {host.wake_messages(&binding)}
+            }))?;
+            Ok(())
+        })();
+        if let Err(error)=result {eprintln!("[richos] operator live input remains pending: {error}");}
+    }
+
+    fn publish_peer_input(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding) {
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.peer_input=inner.cancel.clone();
+        }
+        self.wake_messages(binding);
+    }
+
+    fn message_scope(&self,binding:&ThreadBinding)->crate::status_tools::StatusToolScope {
+        crate::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),
+            entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()}
+    }
+
+    fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
+        message:&crate::session_tools::Message,turn:&str)->Result<String,String> {
+        self.ensure_lease(backend,binding)?;
+        let mut guard=backend.lease.lock().unwrap();
+        let lease=guard.as_mut().ok_or("The operator connection closed")?;
+        lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.cancel=lease.cancel_handle();
+            inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
+        }
+        let session=lease.session_id().to_string();
+        crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
+        let mut diagnostics=String::new();
+        let mut published=false;
+        let result=lease.prompt(&serde_json::to_string(message).map_err(|e|e.to_string())?,&mut |item| {
+            if !published {published=true;self.publish_peer_input(backend,binding);}
+            if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
+        });
+        let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.peer_input=None;inner.peer_active_through=None;inner.cancel=None;
+        }
+        if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
+        let reason=result.map_err(|e|e.to_string())?;
+        if reason != "end_turn" {
+            return Err(format!("Operator input did not complete: {reason}"));
+        }
+        if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
+        drop(guard);
+        self.adopt_registered(binding);
+        Ok(session)
+    }
+
     /// **The turn boundary, and the whole of it.** Spec §1.1: the assignment is recorded,
     /// the receipt is written, and the turn is over.
     ///
@@ -1460,6 +1298,7 @@ impl WorkHost {
     ///
     /// Returns how many were adopted. Zero is the ordinary answer.
     pub fn adopt_registered(self: &Arc<Self>, binding: &ThreadBinding) -> usize {
+        self.wake_messages(binding);
         let Ok(rows) = assignment::read_all(&self.state, &binding.entity_id().to_string(), binding.thread_id())
         else {
             return 0;
@@ -1560,6 +1399,8 @@ impl WorkHost {
     fn run(self: Arc<Self>, backend: Arc<Backend>) {
         enum Next {
             Work(Scheduled),
+            Message(ThreadBinding,crate::session_tools::Message,u64),
+            Answer(ThreadBinding,crate::questions::Delivery),
             Report(Watched, Vec<String>),
             Lost(Watched),
         }
@@ -1569,6 +1410,18 @@ impl WorkHost {
                 loop {
                     if inner.closing {
                         return;
+                    }
+                    if let Some(binding)=inner.binding.clone() {
+                        if let Ok(answers)=crate::question_work::pending(&self.state) {
+                            if let Some(answer)=answers.into_iter().find(|d|d.asker=="stu" && d.entity_id==binding.entity_id().as_str() && d.thread_id==binding.thread_id()) {
+                                inner.processing=true;break Next::Answer(binding,answer)
+                            }
+                        }
+                        match crate::session_tools::pending(&self.message_scope(&binding),"stu") {
+                            Ok(Some((message,through)))=>{inner.processing=true;break Next::Message(binding,message,through)},
+                            Ok(None)=>{},
+                            Err(error)=>eprintln!("[richos] operator inbox: {error}"),
+                        }
                     }
                     // **A WATCHED JOB WHOSE COMMAND HAS ENDED GOES FIRST** ([`Watched`]): it
                     // ended before the next job starts, and its report is one short turn. The
@@ -1638,6 +1491,39 @@ impl WorkHost {
                 }
             };
             let binding = match next {
+                Next::Message(binding,message,through)=>{
+                    if let Err(error)=self.run_message(&backend,&binding,&message,&format!("peer:{through}"))
+                        .and_then(|_|crate::session_tools::acknowledge(&self.message_scope(&binding),"stu",through)) {
+                        eprintln!("[richos] operator message remains pending: {error}");
+                        // The ordinary host owns retry and shutdown. No message is acknowledged on failure.
+                        let mut inner=backend.inner.lock().unwrap();
+                        inner.processing=false;
+                        if inner.closing {return}
+                        inner=backend.wake.wait_timeout(inner,*self.hold_check.lock().unwrap()).unwrap().0;
+                        drop(inner);
+                    }
+                    backend.inner.lock().unwrap().completed+=1;
+                    backend.wake.notify_all();
+                    binding
+                }
+                Next::Answer(binding,delivery)=>{
+                    let message=crate::session_tools::Message {from:"user".into(),text:delivery.text.clone(),instruction:None};
+                    match self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id)) {
+                        Ok(session)=>if let Err(error)=crate::question_work::taken(&self.state,std::slice::from_ref(&delivery.id),&session)
+                            .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id))) {
+                            eprintln!("[richos] operator answer acknowledgement: {error}");
+                        },
+                        Err(error)=>{
+                            eprintln!("[richos] operator answer remains saved: {error}");
+                            let inner=backend.inner.lock().unwrap();
+                            if inner.closing {return}
+                            drop(backend.wake.wait_timeout(inner,*self.hold_check.lock().unwrap()).unwrap());
+                        }
+                    }
+                    backend.inner.lock().unwrap().completed+=1;
+                    backend.wake.notify_all();
+                    binding
+                }
                 Next::Work(Scheduled { binding, record, resumed }) => {
                     // **A stop that landed between the dequeue and the start.** The ordinary
                     // queued-stop path never reaches here — `stop_assignment` takes that
@@ -1708,10 +1594,17 @@ impl WorkHost {
             // the question is whether anything at all is still registered anywhere — a
             // second conversation's running assignment must keep the app alive just as
             // this one's would.
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.peer_input=None;inner.peer_active_through=None;inner.processing=false;
+            }
             if self.open_assignments().map(|open| open.is_empty()).unwrap_or(false) {
                 self.notifier.nothing_left_to_do();
             }
-            backend.inner.lock().unwrap().processing = false;
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.peer_input=None;inner.peer_active_through=None;inner.processing=false;
+            }
             backend.wake.notify_all();
         }
     }
@@ -2040,20 +1933,9 @@ impl WorkHost {
             }
             None => brief_for(record, resumed, &instruction),
         };
-        // **A HIRING IS BRIEFED WITH WHAT HIS INTERVIEW SAVED** (nightly 57's check, run 1). The
-        // brief was the title and his "Go." and nothing else: the work lease is never primed
-        // with his company notes (only the conversation is, `company.rs` `render_for_priming`),
-        // so the back end opened "No business notes on hand, so Clark researches the Bookkeeper
-        // role generically" straight after the interview had saved them, and only Pierce, who
-        // reads the conversation, could see what was left out.
-        if report.is_none() && !resumed && !proposed_hires(&record.title).is_empty() {
-            if let Some(notes) = self.hiring_notes(record) {
-                prompt.push_str("\n\n");
-                prompt.push_str(&notes);
-            }
-            // His answers are facts, and his email says nothing about his business (finding 5).
+        if let Some(notes) = self.company_notes(record) {
             prompt.push_str("\n\n");
-            prompt.push_str(HIRING_FACTS_RULE);
+            prompt.push_str(&notes);
         }
         // **HIS ANSWERS, CARRIED, AND NOT LET GO UNTIL THE BACK END HAS THEM** (the work-path
         // design D1, D5). Reading them changes nothing on disk: they are let go at this turn's
@@ -2107,9 +1989,6 @@ impl WorkHost {
         // session consumed is not the new one's.
         let chars = std::cell::Cell::new(prompt.len());
         let measured: std::cell::Cell<Option<crate::machinery::ContextUsage>> = std::cell::Cell::new(None);
-        // How many tool calls the back end itself (not a helper inside it) made in the latest
-        // continuation turn: zero is the only stall a hiring continuation has (step 3b).
-        let tool_calls = std::cell::Cell::new(0usize);
         // **THE ANSWER TO A QUESTION, KEPT — the CEO's ruling §58, 2026-09-18.**
         //
         // The back end's assistant text has always come past this closure and has only ever
@@ -2188,7 +2067,9 @@ impl WorkHost {
                 // Set by anything the turn did between two pieces of its prose (a tool call
                 // above all): the words after it are a new notice ([`add_streamed_words`]).
                 let mut between_notices = false;
+                let mut published=false;
                 let sent = lease.prompt(text, &mut |item: TurnItem| {
+                    if !published {published=true;self.publish_peer_input(backend,binding);}
                     *items += 1;
                     // The back end has his answers: its first item of the turn that carried them.
                     if let Some(ids) = to_take.borrow_mut().take() {
@@ -2213,11 +2094,11 @@ impl WorkHost {
                         // A usage reading or a keep-alive (`Unknown`) can land between two
                         // deltas of one sentence and ends nothing; every other kind ends the
                         // run of prose in front of it, as the ledger's `text_runs` fold does.
-                        if record.kind != crate::machinery::MachineryKind::Unknown {
+                        if record.kind == crate::machinery::MachineryKind::ToolCall
+                            && record.parent_tool_use_id.is_none()
+                            && record.status == Some(crate::machinery::ToolStatus::Pending)
+                        {
                             between_notices = true;
-                        }
-                        if record.kind == crate::machinery::MachineryKind::ToolCall && record.parent_tool_use_id.is_none() {
-                            tool_calls.set(tool_calls.get() + 1);
                         }
                         // **The one machinery record that is READ rather than retained**,
                         // same as `spine.rs:2034`. The back end's own machinery is not
@@ -2344,8 +2225,6 @@ impl WorkHost {
         // The back-end turn is over: what it, its workers and its commands wrote so far goes
         // on the thread's output list (Output side panel PRD §4.1 (b), the per-turn reader).
         self.project_output(record, &session);
-        // A teammate this turn saved is on his team now, and he hears it now (finding 4).
-        self.tell_who_joined_so_far(record);
         // **Carried and not taken**: the prompt returned and no item of its turn ever arrived.
         // It is no longer in flight, so it is no longer `carrying`; what that means is decided
         // before the settle (D4).
@@ -2425,38 +2304,6 @@ impl WorkHost {
         // a command that never ends — a server he asked to have started — must not hold his
         // back end, and he already has its words.
         let mut waits = 0usize;
-        // **A HIRING IS FINISHED WHEN EVERY TEAMMATE IT PROPOSED IS SAVED** (nightly 56's check,
-        // runs 1 and 3, esc-20261014T202736Z-38bde06b; handover review
-        // rv-20261014T212111Z-1a81cf94-9653). The back end saves a teammate and ends its turn so
-        // the app registers him, with nothing open; whether its connection is then renewed or
-        // not, and however many waits it took, a teammate still unsaved means the job goes on.
-        // The back end is told who is still unsaved once per stall: a turn answering that in
-        // which it made no tool call at all ends the run, and the hiring is then reported as
-        // not finished, never as done. Any tool call is progress (fetching a definition,
-        // starting a helper, saving someone), and the next stall is told again (handover
-        // reviews rv-20261014T220435Z-3ec975bc-d575, rv-20261014T222015Z-4e627aa2-62b3). His
-        // Stop, a quit, a question of his and a closed obligation end it as they end every run.
-        //
-        // Set when the hiring continuation is sent.
-        let mut nudged = false;
-        let hiring_goes_on = |stalled: bool| -> Option<String> {
-            let unsaved = self.unsaved_hires(record);
-            if unsaved.is_empty() || stalled || matches!(self.outcome(backend, record), Outcome::Settled)
-                || self.pending_decision(record).is_some()
-                || crate::questions::Store::new(&self.state).list(&record.entity_id, &record.thread_id).is_ok_and(|qs| {
-                    qs.iter().any(|q| q.asker == record.obligation_id && !q.delivered && q.state != crate::questions::State::Withdrawn)
-                })
-            {
-                return None;
-            }
-            {
-                let inner = backend.inner.lock().unwrap();
-                if inner.closing || inner.stopped.contains(&record.id) {
-                    return None;
-                }
-            }
-            Some(hiring_unfinished_continuation(&unsaved))
-        };
         // **RICH'S WAITING SENTENCE, ON HIS ROW WHILE THE TEAMMATE WORKS** (CEO, 2026-10-15,
         // "1 and 3"; Ray's check of nightly 57, `team/hire4-delegate-3-end.png`, where "They're
         // working on it now" stood above the answer it promised). On a job that only consults,
@@ -2488,24 +2335,15 @@ impl WorkHost {
             // could wait on forever, and `settlement` below already reads it as unsettled and
             // says so. Only a run this host can see open is worth waiting for.
             let helper_open = view.is_attributed() && view.active + view.liveness_unknown > 0;
-            // Only the turn straight after the hiring continuation can leave this set. That turn
-            // STALLED only if the back end made no tool call at all in it.
-            let stalled = std::mem::take(&mut nudged) && tool_calls.get() == 0;
-            // The bound stops more turns, never a helper still at work ([`WORKER_WAIT_ROUNDS`])
-            // and never a hiring with a proposed teammate unsaved.
-            if waits >= WORKER_WAIT_ROUNDS && !helper_open && self.unsaved_hires(record).is_empty() {
-                break;
-            }
-            // A helper's continuation adds to the account (below); a declared wait is one.
-            let mut helper_turn = helper_open;
             let continuation = if helper_open {
+                let report = words_for_him(&last_said);
+                if !report.is_empty() && told_while_running.as_deref() != Some(report.as_str()) {
+                    self.raise(record, NoticeKind::Answer, &report);
+                    told_while_running = Some(report);
+                }
                 show_waiting(waits, &last_said);
                 waits += 1;
-                // **A HIRING GOES ON AT EACH HELPER'S END, NOT AT THE LAST ONE'S** (finding 4;
-                // mid-job review rv-20261015T111101Z-9144da1e-2fe6): Dean returns Will while
-                // Clark still researches Beth, and the back end saves Will on the turn that
-                // gives it, so he joins without waiting on her research.
-                let one_end = (!self.unsaved_hires(record).is_empty()).then_some(ends_at_turn_start);
+                let one_end = Some(ends_at_turn_start);
                 if !self.wait_for_owned_workers(backend, record, &session, one_end) {
                     break;
                 }
@@ -2540,27 +2378,14 @@ impl WorkHost {
                     let next = if self.renew_team_between_turns(backend, binding, record, &work, context) {
                         TEAM_CHANGED_CONTINUATION.to_string()
                     } else {
-                        let Some(next) = hiring_goes_on(stalled) else { break };
-                        nudged = true;
-                        next
+                        break;
                     };
                     waits += 1;
-                    // Its words add to the account, as a helper's continuation's do.
-                    helper_turn = true;
                     chars.set(next.len());
                     measured.set(None);
                     next
                 } else if mine.is_empty() && !declares_waiting_on_a_helper(&last_said) {
-                    // **NOTHING IS OPEN AND NOTHING IS DECLARED, ON A HIRING STILL UNFINISHED**:
-                    // run 3 of nightly 56's check ended a turn with Will saved and Beth's research
-                    // "next", the team renewal above did not happen, and the job closed there.
-                    let Some(next) = hiring_goes_on(stalled) else { break };
-                    nudged = true;
-                    waits += 1;
-                    helper_turn = true;
-                    chars.set(next.len());
-                    measured.set(None);
-                    next
+                    break;
                 } else if mine.is_empty() {
                     // **NOTHING IS OPEN, AND THE BACK END SAID IT IS WAITING ON A HELPER**
                     // ([`declares_waiting_on_a_helper`]): the job is not over, so it is not
@@ -2578,7 +2403,6 @@ impl WorkHost {
                     if !self.wait_for_a_helper_run_to_end(backend, record, &session, ends_at_turn_start) {
                         break;
                     }
-                    helper_turn = true;
                     self.continuation_after_a_helper_ended(record, &session)
                 } else {
                     waits += 1;
@@ -2587,12 +2411,8 @@ impl WorkHost {
                     if !running.is_empty() {
                         advance(AssignmentState::Running, COMMAND_STILL_RUNNING_DETAIL);
                         let words = assignment::sanitize_answer(&answer);
-                        // Whatever the back end has said that he has not yet been told — its
-                        // first words, or a report that started another command. Never a hiring's:
-                        // its words are working notes, and he hears who joined at its end
-                        // ([`joined_the_team`]; mid-job review rv-20261015T074838Z-f331c1f0-3d96).
-                        let hiring = !record.kind.is_question() && !proposed_hires(&record.title).is_empty();
-                        if !hiring && told_while_running.as_deref() != Some(words.as_str()) && !words.trim().is_empty() {
+                        // Stu's report reaches Rich through the common message channel.
+                        if told_while_running.as_deref() != Some(words.as_str()) && !words.trim().is_empty() {
                             self.raise(record, NoticeKind::Answer, &assignment::says::answered(&record.title, &words));
                             told_while_running = Some(words);
                         }
@@ -2637,7 +2457,7 @@ impl WorkHost {
                 // turn that just ended is registered here, on a successor carrying the run.
                 // After the account check, because a switch registers the team as it is now.
                 // Never while a helper of this back end is still running: its run lives in the
-                // connection a renewal would retire (a hiring's turn between two helpers' ends).
+                // connection a renewal would retire (a turn between two helpers' ends).
                 if !self.helpers_open(&session)
                     && (self.switch_account_between_turns(backend, binding, record, &work, context)
                         || self.renew_team_between_turns(backend, binding, record, &work, context))
@@ -2662,7 +2482,6 @@ impl WorkHost {
                 let mut items = 0usize;
                 let mut said = String::new();
                 ends_at_turn_start = ends_now();
-                tool_calls.set(0);
                 outcome = {
                     let mut lease = backend.lease.lock().unwrap();
                     match lease.as_mut() {
@@ -2670,14 +2489,12 @@ impl WorkHost {
                         None => Err(CognitionError::Protocol("The work connection closed.".into())),
                     }
                 };
-                // A helper's continuation adds to the account; a command's report REPLACES
-                // "it has started", which is no longer true and which he already has.
+                // The current report replaces earlier working notes.
                 last_said = said.clone();
-                fold_turn(&mut answer, &said, helper_turn);
+                fold_turn(&mut answer, &said);
                 // Each continuation turn is a back-end turn too (§4.1 (b)).
                 self.project_output(record, &session);
-                self.tell_who_joined_so_far(record);
-                // **A TURN THAT PRODUCED NOTHING IS A TURN THIS HOST DID NOT GET.** Not
+                        // **A TURN THAT PRODUCED NOTHING IS A TURN THIS HOST DID NOT GET.** Not
                 // inferred from elapsed time and not inferred from silence on a timer: the
                 // child answered with a terminal `result` and delivered no item at all
                 // between the send and it, which no turn that prepares, reviews or lands
@@ -2860,8 +2677,6 @@ impl WorkHost {
         // a job's name goes. The dispatch is in `says::failure` so a fourth failure path
         // added later cannot forget the rule.
         let tell = |title: &str, why: &str| assignment::says::failure(record.kind, title, why, took_the_turn);
-        // A hiring's saved and unsaved teammates, read once for the two hiring arms below.
-        let hiring = self.hiring_roll(record);
         match outcome {
             // **His Stop, or a quit, ended the back end, and he is told he stopped it.** On the
             // real work lease a stop kills the child inside `cancel()` (`native.rs`,
@@ -2882,43 +2697,9 @@ impl WorkHost {
             }
             Err(why) => {
                 let sentence = honest(&why.to_string());
-                // **A hiring the back end failed after teammates were saved still tells him who
-                // joined** (handover review rv-20261015T085117Z-b82e5a0c-20fb): the same words as
-                // the two hiring arms below, read off what the app saved. Every proposed teammate
-                // saved is a finished hiring, whatever broke afterwards; otherwise he hears who
-                // joined, then who was not saved and why it stopped.
-                let joined = hiring.clone().filter(|(saved, _)| !saved.is_empty());
-                let mut finished = None;
-                match joined {
-                    Some((saved, unsaved)) if unsaved.is_empty() => {
-                        let said = joined_the_team(&saved).expect("checked by the filter");
-                        advance(AssignmentState::Settled, assignment::ANSWERED_DETAIL);
-                        self.forget_at_the_desk(record);
-                        if let Some(news) = joined_the_team(&self.joined_untold(record, saved)) {
-                            self.raise(record, NoticeKind::Answer, &news);
-                        }
-                        finished = Some(said);
-                    }
-                    Some((saved, unsaved)) => {
-                        let unsaved: Vec<String> = unsaved.into_iter().map(|(name, _)| name).collect();
-                        let why = format!(
-                            "{} {} not saved to your team. {sentence}",
-                            names_in_a_sentence(&unsaved),
-                            if unsaved.len() == 1 { "was" } else { "were" }
-                        );
-                        advance(AssignmentState::Failed, &why);
-                        self.forget_at_the_desk(record);
-                        if let Some(joined) = joined_the_team(&self.joined_untold(record, saved)) {
-                            self.raise(record, NoticeKind::Answer, &joined);
-                        }
-                        self.raise(record, NoticeKind::Failed, &tell(&record.title, &why));
-                    }
-                    None => {
-                        advance(AssignmentState::Failed, &sentence);
-                        self.forget_at_the_desk(record);
-                        self.raise(record, NoticeKind::Failed, &tell(&record.title, &sentence));
-                    }
-                }
+                advance(AssignmentState::Failed, &sentence);
+                self.forget_at_the_desk(record);
+                self.raise(record, NoticeKind::Failed, &tell(&record.title, &sentence));
                 // **A BACK END THAT FAILED A TURN IS RETIRED, NOT HANDED THE NEXT ONE.**
                 //
                 // `ensure_lease` short-circuits on `lease.is_some()` — *"this conversation's
@@ -2950,11 +2731,6 @@ impl WorkHost {
                     inner.lease_session = None;
                     inner.context_chars = 0;
                     inner.context_usage = None;
-                }
-                // A finished hiring's obligation closes on his words, as in the arm below; LAST,
-                // because the close is subprocess calls and his words must never wait on it.
-                if let Some(said) = finished {
-                    self.close_answered(record, &said);
                 }
             }
             Ok(reason) if stopped || reason == crate::native::STOP_REASON_CANCELLED => {
@@ -3028,38 +2804,6 @@ impl WorkHost {
                 self.forget_at_the_desk(record);
                 self.raise(record, NoticeKind::Failed, &tell(&record.title, &sentence));
             }
-            // **A HIRING THAT ENDED WITH A PROPOSED TEAMMATE UNSAVED IS NOT DONE** (step 3b's
-            // `hiring_goes_on`): he hears who joined, then who was not saved. Never the back
-            // end's words: they are its working notes ([`joined_the_team`]).
-            Ok(_) if hiring.as_ref().is_some_and(|(_, unsaved)| !unsaved.is_empty()) => {
-                let (saved, unsaved) = hiring.clone().expect("checked by the guard");
-                let unsaved: Vec<String> = unsaved.into_iter().map(|(name, _)| name).collect();
-                let why = format!(
-                    "{} {} not saved to your team.",
-                    names_in_a_sentence(&unsaved),
-                    if unsaved.len() == 1 { "was" } else { "were" }
-                );
-                advance(AssignmentState::Failed, &why);
-                self.forget_at_the_desk(record);
-                if let Some(joined) = joined_the_team(&self.joined_untold(record, saved)) {
-                    self.raise(record, NoticeKind::Answer, &joined);
-                }
-                self.raise(record, NoticeKind::Failed, &tell(&record.title, &why));
-            }
-            // **A HIRING THAT SAVED EVERY TEAMMATE IT PROPOSED IS DONE**, and he hears who joined,
-            // with the job titles he was given, said from what the app saved ([`joined_the_team`]).
-            // The obligation closes on those words, as an assignment the back end did itself does.
-            Ok(_) if hiring.as_ref().is_some_and(|(saved, unsaved)| unsaved.is_empty() && !saved.is_empty()) => {
-                let (saved, _) = hiring.clone().expect("checked by the guard");
-                let said = joined_the_team(&saved).expect("checked by the guard");
-                advance(AssignmentState::Settled, assignment::ANSWERED_DETAIL);
-                self.forget_at_the_desk(record);
-                // Only who he has not heard about yet: the rest were told as each was saved.
-                if let Some(news) = joined_the_team(&self.joined_untold(record, saved)) {
-                    self.raise(record, NoticeKind::Answer, &news);
-                }
-                self.close_answered(record, &said);
-            }
             // ===========================================================================
             // A TASK THE BACK END DID ITSELF — esc-20260927T093052Z-85f3303f
             // ===========================================================================
@@ -3117,7 +2861,7 @@ impl WorkHost {
                     let landed = self.what_happened(record);
                     advance(AssignmentState::Settled, &landed);
                     self.forget_at_the_desk(record);
-                    self.raise(record, NoticeKind::Settled, &assignment::says::settled(&record.title, &landed));
+                    self.raise(record, NoticeKind::Settled, &with_report(&assignment::says::settled(&record.title, &landed), &answer));
                 }
                 // **A REAL QUESTION OF HIS IS WAITING.** The only thing `blocked` means
                 // now: the run asked for something the desk would have put in front of him
@@ -3157,7 +2901,7 @@ impl WorkHost {
                     let why = self.what_happened(record);
                     advance(AssignmentState::Failed, &why);
                     self.forget_at_the_desk(record);
-                    self.raise(record, NoticeKind::Failed, &tell(&record.title, &why));
+                    self.raise(record, NoticeKind::Failed, &with_report(&tell(&record.title, &why), &answer));
                 }
                 // **NOTHING COULD BE WITNESSED FINISHING IT — AND THE TURN HAS ENDED, SO
                 // THAT IS A FAILURE AND NEVER "STILL RUNNING".**
@@ -3433,9 +3177,8 @@ impl WorkHost {
     /// to. The poll interval is a read of one small file, so [`WORKER_WAIT_POLL`] is chosen
     /// for how soon the back end is handed its next turn rather than for cost.
     ///
-    /// **`one_end`: a hiring's wait also ends when a helper run ends** after that many had
-    /// ended (the latest turn's start), with others still open, so the teammate that helper
-    /// fitted is saved at once (finding 4).
+    /// `one_end` also returns after one new helper end, so Stu can process that
+    /// result while independent helpers remain active.
     fn wait_for_owned_workers(
         self: &Arc<Self>, backend: &Arc<Backend>, record: &Assignment, session: &str, one_end: Option<usize>,
     ) -> bool {
@@ -3811,98 +3554,11 @@ impl WorkHost {
         )
     }
 
-    /// **A hiring's proposed teammates, split into the saved and the not yet saved**, each by
-    /// name as written with its job title ([`proposed_hires`]): a proposed name is saved when a
-    /// definition on the team records it ([`recorded_name`]), whatever file it was saved under,
-    /// or when a definition was saved under the name the hiring gives it ([`save_name`]),
-    /// whatever its `**Name:**` line says, or with none.
-    /// `None` for any other assignment, and when the team cannot be read: a hiring is held open,
-    /// and reported, only on a team this host could read.
-    fn hiring_roll(&self, record: &Assignment) -> Option<(Hires, Hires)> {
-        let proposed = proposed_hires(&record.title);
-        if proposed.is_empty() || record.kind.is_question() {
-            return None;
-        }
-        let team = self.factory.lock().unwrap().team_definitions()?;
-        // One definition is one hire: each answers at most one proposal, by the name it was saved
-        // under first, then by its Name line (mid-job review rv-20261015T074838Z-f331c1f0-3d96:
-        // `beth.md` naming Will on its Name line counted for both).
-        let mut used = vec![false; team.len()];
-        let mut matched = vec![false; proposed.len()];
-        for by_saved_name in [true, false] {
-            for (at, (name, _)) in proposed.iter().enumerate() {
-                if matched[at] {
-                    continue;
-                }
-                let fits = |definition: &str| {
-                    if by_saved_name {
-                        saved_under(definition) == Some(save_name(name).as_str())
-                    } else {
-                        recorded_name(definition).map(compared_name) == Some(compared_name(name))
-                    }
-                };
-                if let Some(slot) = (0..team.len()).find(|&d| !used[d] && fits(&team[d])) {
-                    used[slot] = true;
-                    matched[at] = true;
-                }
-            }
-        }
-        let mut matched = matched.into_iter();
-        Some(proposed.into_iter().partition(|_| matched.next().unwrap_or(false)))
-    }
-
-    /// **His company notes, as a hiring's brief carries them**: what his interview saved for this
-    /// assignment's company, introduced as what every teammate is fitted to. `None` when the
-    /// shell gave no central folder or the company has no notes that reach a model.
-    fn hiring_notes(&self, record: &Assignment) -> Option<String> {
+    /// The same scoped company facts are available for every assignment.
+    fn company_notes(&self, record: &Assignment) -> Option<String> {
         let root = self.central_root.lock().unwrap().clone()?;
         let entity = crate::entity::EntityId::parse(&record.entity_id).ok()?;
-        let notes = crate::company::CompanyLayer::read(&root, &entity).render_for_priming(&entity)?;
-        Some(format!("{HIRING_NOTES_HEAD}\n\n{}", notes.trim_end()))
-    }
-
-    /// **The teammates a hiring proposed that are not saved yet**, by name as written
-    /// ([`Self::hiring_roll`]). Empty for any other assignment and when the team cannot be read.
-    fn unsaved_hires(&self, record: &Assignment) -> Vec<String> {
-        self.hiring_roll(record)
-            .map(|(_, unsaved)| unsaved.into_iter().map(|(name, _)| name).collect())
-            .unwrap_or_default()
-    }
-
-    /// **A teammate is on his team the moment that one is saved, and he hears it then** (nightly
-    /// 57's hunt, finding 4: two teammates took 16 minutes with nothing but "On it!" on screen,
-    /// and Will, a ready-made teammate, waited for Beth's research). Read after every back-end
-    /// turn of a hiring, the turn that saves the last one included: that one is told here too,
-    /// before the team refresh's handoff, successor and next model turn (handover review
-    /// rv-20261015T113206Z-3b0b1dc0-7844). The settle tells only whoever is left
-    /// ([`Self::joined_untold`]).
-    fn tell_who_joined_so_far(self: &Arc<Self>, record: &Assignment) {
-        let Some((saved, _)) = self.hiring_roll(record) else { return };
-        if let Some(said) = joined_the_team(&self.joined_untold(record, saved)) {
-            self.raise(record, NoticeKind::Answer, &said);
-        }
-    }
-
-    /// **The saved teammates he has not been told about yet**, read off this assignment's own
-    /// answers ([`joined_the_team`]'s sentences), so a later run of the same job (his answer, a
-    /// command's report) never tells one twice.
-    fn joined_untold(&self, record: &Assignment, saved: Hires) -> Hires {
-        let told: Vec<String> = assignment::read(&self.state, &record.entity_id, &record.thread_id, &record.id)
-            .map(|now| {
-                now.notices
-                    .into_iter()
-                    .filter(|notice| notice.kind == NoticeKind::Answer && notice.text.ends_with(JOINED_TAIL))
-                    .map(|notice| notice.text)
-                    .collect()
-            })
-            .unwrap_or_default();
-        saved
-            .into_iter()
-            .filter(|(name, job)| {
-                let said = if job.is_empty() { name.clone() } else { format!("{name} ({job})") };
-                !told.iter().any(|text| text.contains(&said))
-            })
-            .collect()
+        crate::company::CompanyLayer::read(&root, &entity).render_for_priming(&entity)
     }
 
     /// The request this assignment is waiting on him for, if one is on the desk — the head
@@ -3967,6 +3623,11 @@ impl WorkHost {
             || binding.thread_id() != delivery.thread_id
         {
             return Err("Question scope mismatch".into());
+        }
+        if delivery.asker=="stu" {
+            crate::question_work::enqueue(&self.state,delivery)?;
+            self.wake_messages(binding);
+            return Ok(format!("work-input:{}",delivery.id));
         }
         let record = assignment::read_all(&self.state, &delivery.entity_id, &delivery.thread_id)
             .map_err(|e| e.to_string())?
@@ -4300,9 +3961,7 @@ impl WorkHost {
     fn handover_payload_with(&self, binding: &ThreadBinding, handoff: &str, carrying: Option<&str>, reason: &str) -> String {
         let mut payload = String::from(match carrying {
             None => {
-                "You are the standing background worker for one of the CEO's conversations, and \
-                 this connection is taking over from the previous one. Nothing is running on you \
-                 yet.\n"
+                r#"{"event":"session_replaced","carrying_assignment":false}"#
             }
             Some(_) if reason == TEAM_CHANGED => MID_RUN_TEAM_HANDOVER_OPENING,
             Some(_) => MID_RUN_HANDOVER_OPENING,
@@ -4345,8 +4004,7 @@ impl WorkHost {
         // result and never to claim a land it did not make.
         payload.push_str(match carrying {
             None => {
-                "\nWait for the assignment you are given, and carry it out as the brief it comes \
-                 with says.\n"
+                ""
             }
             Some(_) => MID_RUN_HANDOVER_CLOSING,
         });
@@ -4973,6 +4631,18 @@ impl WorkHost {
         }
     }
 
+    pub fn peer_work_pending(&self)->bool {
+        let backends:Vec<_>=self.backends.lock().unwrap().values().cloned().collect();
+        backends.into_iter().any(|backend| {
+            let inner=backend.inner.lock().unwrap();
+            if inner.processing && inner.live.is_none() {return true}
+            inner.binding.as_ref().is_some_and(|binding| {
+                let scope=self.message_scope(binding);
+                ["rich","stu"].iter().any(|role|crate::session_tools::pending(&scope,role).map(|m|m.is_some()).unwrap_or(true))
+            })
+        })
+    }
+
     /// The ids of the fresh jobs waiting in a queue held because the back end would not open
     /// ([`HoldCause::BackEnd`]); see [`Self::background_work`].
     fn back_end_held_ids(&self) -> std::collections::HashSet<String> {
@@ -5200,12 +4870,16 @@ pub enum Outcome {
 /// assignment, Rich owns internal obligation and receipt ids. The seat and the frozen
 /// instruction reference reach the child through its scope file, not through its prompt,
 /// so a model that decided to quote its own prompt back cannot leak either.
-fn instruction_for(state: &Path, record: &Assignment) -> Result<String, &'static str> {
+fn instruction_for(state:&Path,record:&Assignment)->Result<String,&'static str> {
+    verified_instruction(state,&record.entity_id,&record.thread_id,&record.instruction_ledger_ref,&record.instruction_sha256)
+}
+
+pub(crate) fn verified_instruction(state:&Path,entity:&str,thread:&str,ledger_ref:&str,sha256:&str)->Result<String,&'static str> {
     use sha2::{Digest, Sha256};
     use std::io::BufRead;
     const UNAVAILABLE: &str = "The original request could not be verified. Nothing was started.";
-    let prefix = format!("ledger:{}:", record.thread_id);
-    let turn = record.instruction_ledger_ref.strip_prefix(&prefix)
+    let prefix = format!("ledger:{thread}:");
+    let turn = ledger_ref.strip_prefix(&prefix)
         .filter(|turn| !turn.is_empty()).ok_or(UNAVAILABLE)?;
     let path = state.parent().ok_or(UNAVAILABLE)?.join("conversation-ledger.jsonl");
     let file = std::fs::File::open(path).map_err(|_| UNAVAILABLE)?;
@@ -5220,10 +4894,10 @@ fn instruction_for(state: &Path, record: &Assignment) -> Result<String, &'static
         let Ok(row) = serde_json::from_str::<serde_json::Value>(&line) else { continue; };
         if row["event"] != "PromptReceived" || row["turn_id"] != turn { continue; }
         let text = row["text"].as_str().ok_or(UNAVAILABLE)?;
-        if found.is_some() || row["thread_id"] != record.thread_id
-            || row["entity_id"] != record.entity_id
+        if found.is_some() || row["thread_id"] != thread
+            || row["entity_id"] != entity
             || !matches!(row["source"].as_str(), Some("text" | "jam"))
-            || format!("{:x}", Sha256::digest(text.as_bytes())) != record.instruction_sha256
+            || format!("{:x}", Sha256::digest(text.as_bytes())) != sha256
         { return Err(UNAVAILABLE); }
         found = Some(text.to_owned());
     }
@@ -5231,99 +4905,13 @@ fn instruction_for(state: &Path, record: &Assignment) -> Result<String, &'static
 }
 
 fn brief_for(record: &Assignment, resumed: bool, instruction: &str) -> String {
-    let request = format!("{}\n\nOriginal request (verbatim):\n{}", record.title, instruction);
-    let repositories = if record.repositories.is_empty() {
-        String::new()
-    } else {
-        format!("\nRepositories: {}", record.repositories.join(", "))
-    };
-    if resumed {
-        // **The resumed run is told what he decided and nothing more.** It carries no
-        // approval of its own: the one exact action he approved is held at the desk and is
-        // spent the first time this run asks for it (`permissions.rs`'s standing decision).
-        // If it asks for anything else, that is a new question and it waits for him again.
-        return format!(
-            "This is a background assignment from the CEO that stopped at a step only he \
-             could approve. He has now approved it.{repositories}\n\nThe assignment: {}\n\n\
-             Carry out the step it stopped at and then report. Everything else still needs \
-             his approval, and nothing about this approval carries to another action.",
-            request
-        );
-    }
-    // **A QUESTION IS ASKED AS A QUESTION — the CEO's ruling §58, 2026-09-18.**
-    //
-    // The work brief below tells the back end to do the work, get a review, LAND it and close
-    // the assignment. Handing that to a question — *"why has the nightly been red since
-    // Tuesday"* — would tell it to land something, and the thing he would get back is a
-    // branch rather than an answer.
-    //
-    // Three instructions, and each one removes a way the answer comes back wrong:
-    //   * the answer is its LAST WORDS, because the last words are what this host keeps
-    //     (`run_one`'s `answer`) and what reaches his timeline verbatim;
-    //   * it is in HIS terms, with no identifier, because it is said to him and may be read
-    //     aloud — the same rule every sentence in `assignment::says` keeps;
-    //   * it changes nothing, because he asked a question. A question that turns out to need
-    //     work is reported as that, and the work is his to ask for.
-    //
-    // **The kind is NOT in the brief, and that is on purpose.** `check` and `investigate`
-    // differ only in what the front desk said and what his timer reads; telling the back end
-    // "this one is expected to be quick" would invite a thinner answer to a question he
-    // happened to phrase simply, which is the front desk's rough guess leaking into the work.
-    if record.kind.is_question() {
-        return format!(
-            "This is a QUESTION from the CEO, not a piece of work. Find out the answer and \
-             tell him.{repositories}\n\nHis question: {}\n\nAnswer it in your last words of \
-             this turn: that is what he is shown, exactly as you write it. Answer in his own \
-             terms, in plain sentences, with no identifiers, no file paths and no branch \
-             names: he may hear this read aloud. Say what you actually established and say \
-             plainly where you could not establish something; never guess and never present \
-             a likely answer as a settled one. Do not do any work, do not change anything, \
-             do not land anything and do not open an assignment of your own: if answering \
-             him reveals work that needs doing, say so in the answer and leave it to him.",
-            request
-        );
-    }
-    // **THE SENTENCE THE CEO'S RULING §52 REPLACED, and it is the whole feature in one
-    // instruction.** It read: *"Stop at the step that would change his repository and wait
-    // for him to approve it. Do not report this as done."* His ruling of 2026-09-18 —
-    // *"There's nothing that ever not lands on its own here in the terminal … So, yes, always
-    // land on its own"* — makes the land the job rather than a question, so the brief now
-    // tells the back end to finish, and the two claims it must still never make are spelled
-    // out: never report a land it did not perform, and never close an assignment it did not
-    // finish.
-    // **THE ASYNC LAUNCH IS NAMED IN THE BRIEF, NOT ONLY IN THE STANDING INSTRUCTION.**
-    //
-    // `DESKTOP.md` step 4 is the back end's job description and it says this too. It is said
-    // again HERE because the message a turn opens with is the one it is read against, and
-    // because the sentence it replaced was the exact belief that broke candidate .10: the
-    // back end took `{"status": "async_launched"}` for a result and had nowhere to go with
-    // it. Neither this nor step 4 asks it to WAIT — it has no tool that can (the lease's init
-    // frame carries no `TaskOutput` and no `BashOutput`) — they tell it the opposite, that
-    // ending the turn is correct and the app will bring it back.
-    format!(
-        "This is a background assignment from the CEO. Carry it out with the desktop work \
-         tools.{repositories}\n\nThe assignment: {}\n\nCarry it through to the end: do the \
-         work, get an independent review, land the reviewed result, and close the \
-         assignment. Do not ask him to approve the land: that is your job, not his.\n\nWhen \
-         you submit a prepared payload to Agent it comes back at once as `async_launched`: \
-         that is the helper STARTING and it has done nothing yet. Do not report on it, do not \
-         read its receipt for an outcome, and do not try to wait for it: end your turn \
-         instead. This app is watching the run and will give you another turn the moment the \
-         helper has actually ended, and you carry on from there. The same goes for the \
-         reviewer.\n\nIf the job changes no repository (running a command he asked for, \
-         finding something out, or a job you cannot begin), do it yourself, with no helper, \
-         or, when its work fits an active teammate's role (research, reading sources, a \
-         stress test, a teammate definition), consult that teammate with `prepare` and \
-         `role: consult`, which needs no repository and whose final message comes back to \
-         you. Then report in his terms what was done and what it showed, or what is needed \
-         and from whom. The app closes an assignment like that from your report: do not call \
-         `complete` for it, and say nothing to him about reviews, lands, branches or closing \
-         the assignment, because none of that is his.\n\nWhen you changed a repository, report \
-         what you actually landed: the branch, the repository and the reviewer's verdict. If \
-         the land did not go through, say so and say why, and never describe unlanded work \
-         as landed or an open assignment as finished.",
-        request
-    )
+    serde_json::json!({"from":"rich", "assignment": {
+        "message": if record.handoff.is_empty() { &record.title } else { &record.handoff },
+        "user_request": instruction,
+        "repositories": record.repositories,
+        "question": record.kind.is_question(),
+        "resumed_after_approval": resumed,
+    }}).to_string()
 }
 
 /// **A provider tool name, in his language.** `Bash` is a wire identifier; what he is being
@@ -5628,13 +5216,6 @@ mod tests {
         model: Option<crate::config::ModelChoice>,
         digest: Option<String>,
         in_turn: VecDeque<Option<String>>,
-        /// Set, `team_definitions` reads the digest as the file names on the team, separated by
-        /// spaces, each one's definition being `<folder>/<file>.md` when a test wrote it there
-        /// and otherwise a stand-in recording the file name capitalized (`will` is Will);
-        /// unset, it cannot say, as every test written before the hiring check.
-        named: bool,
-        /// The harness's `<root>/team`, where a test writes the definitions it saves.
-        folder: std::path::PathBuf,
         /// Rows each work turn appends to a journal while it runs, one entry per turn (`None`
         /// appends nothing): a helper that starts and ends inside the turn.
         journal_in_turn: VecDeque<Option<(std::path::PathBuf, String)>>,
@@ -5698,19 +5279,17 @@ mod tests {
     /// one notice, starts a tool, and says the next; a keep-alive between two deltas of one
     /// notice breaks nothing.
     #[test]
-    fn two_notices_of_one_turn_are_two_paragraphs_and_one_notice_stays_one_sentence() {
+    fn the_closing_report_replaces_working_notes_and_keepalives_do_not_split_it() {
         let h = harness(5);
         every_worker_observed_ending(&h);
         *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Open);
         h.replies.lock().unwrap().push_back(format!(
             "I will transcribe it in the background{PING} because the video runs for an hour.{TOOL_CALL}\
-             The transcription is running now."));
+             The transcription{PING} is running now."));
         h.host.start();
         h.host.register(&h.binding, &registration(&h)).unwrap();
         let notices = until_notices(&h, 1);
-        assert_eq!(notices[0].text,
-            "I will transcribe it in the background because the video runs for an hour.\n\n\
-             The transcription is running now.");
+        assert_eq!(notices[0].text, "The transcription is running now.");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
@@ -5974,15 +5553,6 @@ mod tests {
         fn team_digest(&self) -> Option<String> {
             self.team.lock().unwrap().digest.clone()
         }
-        fn team_definitions(&self) -> Option<Vec<String>> {
-            let team = self.team.lock().unwrap();
-            team.named.then(|| team.digest.as_deref().unwrap_or("").split_whitespace().map(|file| {
-                std::fs::read_to_string(team.folder.join(format!("{file}.md"))).unwrap_or_else(|_| {
-                    let name = file[..1].to_uppercase() + &file[1..];
-                    format!("---\nname: {file}\n---\n\n# {name}\n\n## Identity\n- **Name:** {name}\n")
-                })
-            }).collect())
-        }
         fn lease_models(&self) -> Option<crate::config::LeaseModels> {
             let stu = self.team.lock().unwrap().model?;
             Some(crate::config::LeaseModels { rich: crate::config::ModelChoice::Opus, stu })
@@ -6088,6 +5658,83 @@ mod tests {
         team: Arc<Mutex<TeamScript>>,
     }
 
+    #[test]
+    fn a_correction_reaches_stus_live_input_while_his_job_owns_the_lease() {
+        type Delivery=(String,String,Box<dyn FnOnce()+Send>);
+        struct Input(std::sync::mpsc::Sender<Delivery>);
+        impl TurnCancel for Input {
+            fn cancel(&self)->bool {panic!("a correction must not cancel the job")}
+            fn send_input(&self,id:&str,text:&str,taken:Box<dyn FnOnce()+Send>)->Result<bool,String> {
+                self.0.send((id.into(),text.into(),taken)).unwrap();Ok(true)
+            }
+        }
+        let h=harness(0);
+        let scope=h.host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Original request"})).unwrap();
+        let original=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        let backend=Backend::new();
+        let (tx,rx)=std::sync::mpsc::channel();
+        {
+            let mut inner=backend.inner.lock().unwrap();
+            inner.processing=true;inner.binding=Some(h.binding.clone());
+            inner.peer_active_through=Some(original);
+            inner.peer_input=Some(Arc::new(Input(tx)));inner.lease_session=Some("same-stu".into());
+        }
+        h.host.backends.lock().unwrap().insert(h.binding.thread_id().into(),backend.clone());
+        let running=backend.lease.lock().unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Correction: keep the existing release date"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: correction must reach input while the job still holds the lease");
+        assert!(text.contains("keep the existing release date"));
+        assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1,original,"writing is not consumption");
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Then retain the current team"})).unwrap();
+        taken();
+        let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: consumption forwards the next durable message");
+        assert!(text.contains("retain the current team"));taken();
+        crate::session_tools::acknowledge(&scope,"stu",original).unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"finishing the original turn must not rewind the consumed cursor");
+        assert!(backend.inner.lock().unwrap().processing,"the running job was not ended to deliver input");
+        assert!(h.host.open_assignments().unwrap().is_empty());
+        drop(running);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn ordinary_peer_input_runs_without_an_assignment_and_is_not_replayed_after_ack() {
+        let h=harness(0);
+        let scope=h.host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Inspect the current evidence"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(10)),"hang guard: wait for the receiving turn to complete");
+        assert!(h.bound.lock().unwrap().is_empty(),"communication manufactured an assignment");
+        assert!(h.host.open_assignments().unwrap().is_empty());
+        assert_eq!(h.work_prompts.lock().unwrap().len(),1);
+        assert!(h.work_prompts.lock().unwrap()[0].contains("Inspect the current evidence"));
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        h.host.shutdown();
+    }
+
+    #[test]
+    fn a_standing_stu_question_answer_reaches_his_turn_without_an_assignment() {
+        let h=harness(0);
+        let answer=crate::questions::Delivery {id:"standing-answer".into(),entity_id:"depot".into(),
+            thread_id:"thread-one".into(),asker:"stu".into(),set_id:Some("standing-choice".into()),
+            text:"Use the existing launch date".into(),receipt:None};
+        h.host.queue_question_answer(&h.binding,&answer).unwrap();
+        assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(10)),"hang guard: wait for the answer turn");
+        assert!(h.host.open_assignments().unwrap().is_empty());
+        assert!(h.bound.lock().unwrap().is_empty());
+        assert_eq!(h.work_prompts.lock().unwrap().len(),1);
+        assert!(h.work_prompts.lock().unwrap()[0].contains(&answer.text));
+        assert!(crate::question_work::pending(&h.state).unwrap().is_empty());
+        let wrong=ThreadBinding::new(PersonId::default_ceo(),EntityId::parse("depot").unwrap(),"thread-two",1);
+        assert!(h.host.queue_question_answer(&wrong,&answer).is_err());
+        h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
     fn harness(step_ms: u64) -> Harness {
         let root = std::env::temp_dir().join(format!("work-host-{}", uuid::Uuid::new_v4()));
         let state = root.join("engine-state");
@@ -6129,7 +5776,7 @@ mod tests {
         let broken = Arc::new(AtomicBool::new(false));
         let attempts = Arc::new(AtomicUsize::new(0));
         let fill = Arc::new(Mutex::new(FillFirst::default()));
-        let team = Arc::new(Mutex::new(TeamScript { folder: root.join("team"), ..TeamScript::default() }));
+        let team = Arc::new(Mutex::new(TeamScript::default()));
         let factory = WorkFactory {
             signed_out: signed_out.clone(),
             team: team.clone(),
@@ -6291,7 +5938,9 @@ mod tests {
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
         let prompts = h.work_prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
-        assert!(prompts[0].contains(&text), "the actual work lease lost the original constraints");
+        let input: serde_json::Value = serde_json::from_str(&prompts[0]).unwrap();
+        assert_eq!(input["assignment"]["user_request"], text, "the actual work lease lost the original constraints");
+        assert_eq!(input["assignment"]["message"], text, "Rich's full handoff was shortened");
         // Second review, slice 4: the same verified words reach the lease's scope, beside their
         // hash, so a reviewer it prepares is briefed with them verbatim.
         let bound = h.bound.lock().unwrap().clone();
@@ -6299,6 +5948,32 @@ mod tests {
         assert_eq!(bound[0].instruction_text.as_deref(), Some(text.as_str()));
         let saved = assignment::read(&h.state,"depot","thread-one",&receipt.id).unwrap();
         assert!(!saved.title.contains("integration"), "positive control: title must be truncated");
+        drop(prompts);
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn an_ordinary_assignment_receives_its_company_facts_without_title_routing() {
+        let h = harness(1);
+        let central = h.root.join("central");
+        let entity = crate::entity::EntityId::parse("depot").unwrap();
+        crate::company::save_company_notes(&central, &entity,
+            "The business serves independent garden centers. Preserve the existing subscription prices.",
+            crate::company::InterviewProgress::Complete).unwrap();
+        let other = crate::entity::EntityId::parse("other").unwrap();
+        crate::company::save_company_notes(&central, &other, "UNRELATED COMPANY FACTS",
+            crate::company::InterviewProgress::Complete).unwrap();
+        h.host.set_central_root(central);
+        witnessed(&h.state, "work-session-one");
+        h.host.start();
+        h.host.register(&h.binding, &registration(&h)).unwrap();
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
+        let prompts = h.work_prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("independent garden centers"));
+        assert!(prompts[0].contains("Preserve the existing subscription prices"));
+        assert!(!prompts[0].contains("UNRELATED COMPANY FACTS"));
         drop(prompts);
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
@@ -6946,7 +6621,7 @@ mod tests {
         assert_eq!(h.host.rotations("thread-one"), (1, Some(crate::spine::ACCOUNT_SWITCH.to_string())));
         let prompts = h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 3, "never started again: {prompts:?}");
-        assert_eq!(prompts.iter().filter(|p| p.contains("Original request (verbatim)")).count(), 1, "the brief was sent once");
+        assert_eq!(prompts.iter().filter(|p| p.contains("\"user_request\"")).count(), 1, "the brief was sent once");
         assert!(prompts[2].contains("npm run e2e") && prompts[2].starts_with(COMMAND_ENDED_HEAD), "{}", prompts[2]);
         let handoffs = h.handoffs.lock().unwrap().clone();
         assert_eq!(handoffs.len(), 1);
@@ -6954,7 +6629,7 @@ mod tests {
         let primed = h.reprimes.lock().unwrap().clone();
         assert_eq!(primed.len(), 1);
         assert!(primed[0].starts_with(MID_RUN_HANDOVER_OPENING), "{}", primed[0]);
-        for carried in ["run both test suites and tell me how they end", "Original request (verbatim)", SECOND, HANDOFF] {
+        for carried in ["run both test suites and tell me how they end", "\"user_request\"", SECOND, HANDOFF] {
             assert!(primed[0].contains(carried), "the successor was not told {carried:?}: {}", primed[0]);
         }
         let bound = h.bound.lock().unwrap().clone();
@@ -7627,6 +7302,7 @@ mod tests {
             instruction_ledger_ref: "ledger:thread-one:turn-7".into(),
             instruction_sha256: "abc".into(),
             title: "landing the three branches".into(),
+            handoff: String::new(),
             kind: assignment::AssignmentKind::Task,
             repositories: vec!["/fictional/project".into()],
             state: AssignmentState::Registered,
@@ -7646,29 +7322,14 @@ mod tests {
         assert!(!brief.contains("work-seat:"));
         assert!(!brief.contains("obligation-that-must-not-appear"));
         assert!(!brief.contains("ledger:"));
-        // **THE INSTRUCTION §52 REPLACED, asserted in both directions.** It used to be
-        // "wait for him to approve" plus "Do not report this as done."; a job lands on its
-        // own now, so the brief tells it to finish and to report what it landed — and the
-        // old sentence must be GONE rather than merely joined, because a brief carrying both
-        // would leave the back end to pick.
-        assert!(brief.contains("land the reviewed result"), "{brief}");
-        assert!(brief.contains("Do not ask him to approve the land"), "{brief}");
-        assert!(brief.contains("the branch, the repository and the reviewer's verdict"), "{brief}");
-        assert!(!brief.contains("wait for him to approve"), "the brief still holds the work at his approval: {brief}");
-        assert!(!brief.contains("Stop at the step"), "the brief still tells it to stop before landing: {brief}");
-        // The two claims it must still never make.
-        assert!(brief.contains("never describe unlanded work as landed"), "{brief}");
-        assert!(brief.contains("or an open assignment as finished"), "{brief}");
+        let input: serde_json::Value = serde_json::from_str(&brief).unwrap();
+        assert_eq!(input["from"], "rich");
+        assert_eq!(input["assignment"]["message"], record.title);
+        assert_eq!(input["assignment"]["question"], false);
+        let resumed: serde_json::Value = serde_json::from_str(&brief_for(&record, true, &record.title)).unwrap();
+        assert_eq!(resumed["assignment"]["resumed_after_approval"], true);
+        assert_eq!(resumed["assignment"]["user_request"], record.title);
 
-        // **The resumed brief carries the same discretion and one fact more**, and it names
-        // the boundary of what he approved: the approval is for the step it stopped at and
-        // for nothing else (spec §5.7's standing decision is one action, once).
-        let resumed = brief_for(&record, true, &record.title);
-        assert!(resumed.contains("landing the three branches"));
-        assert!(!resumed.contains("assignment-id-that-must-not-appear"));
-        assert!(!resumed.contains("work-seat:"));
-        assert!(resumed.contains("He has now approved it."));
-        assert!(resumed.contains("Everything else still needs his approval"));
     }
 
     // ---- §5.2/§5.7: his decision, and the assignment it belongs to ----------------------
@@ -8024,7 +7685,7 @@ mod tests {
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
-    /// **A hiring that needs more than [`WORKER_WAIT_ROUNDS`] waits stays open while Beth is
+    /// A long sequence stays open while its helper is still active. Beth is
     /// still being fitted** (handover review rv-20261014T210558Z-b7ebe6ad-571c: nightly 56's
     /// hire needed exactly six). Seven fitting attempts, each launched in the turn after the
     /// last one ended; the seventh is launched in the sixth continuation. The host used to stop
@@ -8032,7 +7693,7 @@ mod tests {
     /// attempt too, and the job ends on the turn after it, in which Beth is saved.
     #[test]
     fn a_hiring_still_fitting_a_teammate_after_six_waits_stays_open_until_she_is_saved() {
-        let attempts = WORKER_WAIT_ROUNDS + 1;
+        let attempts = 8; // Beyond the former six-continuation cutoff.
         let h = harness(5);
         witnessed(&h.state, "work-session-one");
         h.replies.lock().unwrap().extend(
@@ -8078,850 +7739,6 @@ mod tests {
         assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
         assert!(told.iter().any(|t| t.contains("Beth saved.")), "{told:?}");
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    const HIRING: &str = "Hire these AI teammates onto my team: Will (Marketing Director), Beth (Bookkeeper)";
-    const STOCK_TEAM: &str = "clark dean frank pierce reed";
-
-    /// **Run 3 of nightly 56's check (2026-10-14, esc-20261014T202736Z-38bde06b): the hiring
-    /// closed when the back end ended a turn on purpose with nothing open.** Dean fitted Will,
-    /// the back end saved him and ended its turn "so the app can register him, then Beth's
-    /// research goes next", the team renewal did not happen (here: deferred, the command
-    /// reading unreadable), and the job settled "Answered." with Beth unsaved. Now the back
-    /// end is told Beth is not saved yet and gets the turn in which she is.
-    #[test]
-    fn a_hiring_whose_back_end_ends_a_turn_with_nothing_open_goes_on_until_every_teammate_is_saved() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
-        }
-        h.replies.lock().unwrap().extend([
-            "Will's hire has started, but neither hire is finished yet.".to_string(),
-            "Will's definition is saved; ending the turn so the app can register him, then Beth's research goes next.".to_string(),
-            "Beth is saved too. Will and Beth are both on your team now.".to_string(),
-        ]);
-        journal(&h, &helper_started("dean-will"));
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while h.work_prompts.lock().unwrap().is_empty() {
-            assert!(std::time::Instant::now() < deadline, "the hiring never reached its back end");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        journal(&h, &helper_stopped("dean-will"));
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), 3, "the hiring closed with Beth unsaved: {:?}",
-            assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap());
-        assert_eq!(prompts[2], hiring_unfinished_continuation(&["Beth".to_string()]));
-        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        // Each as that one was saved (finding 4): Will in turn 2, Beth in turn 3.
-        assert_eq!(told(&h), [
-            "Will (Marketing Director) is on your team now, ready to take work.",
-            "Beth (Bookkeeper) is on your team now, ready to take work.",
-        ]);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A turn answering the hiring continuation that made progress is not a stall** (handover
-    /// review rv-20261014T220435Z-3ec975bc-d575). The first turn ends with nothing open and nobody
-    /// saved, and the back end is told Will and Beth are unsaved. Its answer runs Clark's research
-    /// inside the turn (a helper that starts and ends before the turn does) and saves nobody; the
-    /// next saves Will with the renewal deferred. Each is progress, so each stall is told again,
-    /// and the turn after the last saves Beth. The host used to end the run after the first
-    /// answer, whatever it did, and mark the hiring Failed with both unsaved.
-    #[test]
-    fn a_hiring_that_makes_progress_after_a_turn_with_none_still_finishes() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        let path = h.state.join("evidence").join("work-session-one").join("callbacks.jsonl");
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
-            team.journal_in_turn.extend([None, Some((path, helper_started("clark-research") + &helper_stopped("clark-research")))]);
-        }
-        h.replies.lock().unwrap().extend([
-            "I'll start on Will and Beth.".to_string(),
-            format!("Asking Clark.{TOOL_CALL}Clark has researched both roles; Dean fits Will next."),
-            format!("Saving Will.{TOOL_CALL}Will's definition is saved; ending the turn so the app can register him."),
-            format!("Saving Beth.{TOOL_CALL}Beth is saved too. Will and Beth are both on your team now."),
-        ]);
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), 4, "the hiring ended after a turn that made progress: {:?}", read());
-        let both = ["Will".to_string(), "Beth".to_string()];
-        assert_eq!(prompts[1], hiring_unfinished_continuation(&both));
-        assert_eq!(prompts[2], hiring_unfinished_continuation(&both));
-        assert_eq!(prompts[3], hiring_unfinished_continuation(&["Beth".to_string()]));
-        let done = read();
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A turn answering the hiring continuation that only prepares a hire is not a stall**
-    /// (handover review rv-20261014T222015Z-4e627aa2-62b3). The first turn ends with nothing
-    /// open and nobody saved. Its answer fetches Will's shelf definition (one tool call) and
-    /// ends before Dean is dispatched: nobody saved, no helper run ended. It made a tool call,
-    /// so it is progress and the next stall is told again; the next turn saves Will with the
-    /// renewal deferred, and the last saves Beth. The host used to end the run after the fetch
-    /// and mark the hiring Failed with both unsaved.
-    #[test]
-    fn a_hiring_whose_continuation_only_fetches_a_definition_still_finishes() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
-        }
-        h.replies.lock().unwrap().extend([
-            "I'll start on Will and Beth.".to_string(),
-            format!("Fetching Will's definition from the shelf.{TOOL_CALL}Dean fits him next."),
-            format!("Saving Will.{TOOL_CALL}Will's definition is saved; ending the turn so the app can register him."),
-            format!("Saving Beth.{TOOL_CALL}Beth is saved too. Will and Beth are both on your team now."),
-        ]);
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), 4, "the hiring ended after a turn that fetched a definition: {:?}", read());
-        let both = ["Will".to_string(), "Beth".to_string()];
-        assert_eq!(prompts[1], hiring_unfinished_continuation(&both));
-        assert_eq!(prompts[2], hiring_unfinished_continuation(&both));
-        assert_eq!(prompts[3], hiring_unfinished_continuation(&["Beth".to_string()]));
-        let done = read();
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A proposed teammate counts as saved by the name its saved definition records, whatever
-    /// its file is called** (handover reviews rv-20261014T223234Z-0c3a1cec-845b and
-    /// rv-20261014T224455Z-5f5bd3c7-ee90). The team tool saves only 2 to 16 lowercase letters
-    /// and digits (`engine/mega-lander/app.py`, `TEAMMATE_NAME`), so Bjørn, Renée and Anne-Marie
-    /// are saved as `bjorn`, `renee` and `annemarie`, each definition saying who it is on its
-    /// `**Name:**` line as Dean's template writes it. The check used to derive a file name from
-    /// the proposed name, and Bjørn's came out `bjrn`, which no save writes: the hiring never
-    /// finished. The three definitions are on disk from the start; the team's digest, as the
-    /// fake back end changes it turn by turn, says which of them are saved.
-    #[test]
-    fn a_hiring_of_bjorn_renee_and_anne_marie_finishes_once_all_three_are_saved() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        let folder = h.root.join("team");
-        std::fs::create_dir_all(&folder).unwrap();
-        for (file, name, role) in [("bjorn", "Bjørn", "Office Manager"), ("renee", "Renée", "Bookkeeper"), ("annemarie", "Anne-Marie", "Copywriter")] {
-            std::fs::write(folder.join(format!("{file}.md")), format!(
-                "---\nname: {file}\ndescription: {role} for the user's company.\nmodel: sonnet\n---\n\n# {name} — {role}\n\n\
-                 You are **{name}**, the team's {role}.\n\n## Identity\n- **Name:** {name}\n- **Role:** {role}\n")).unwrap();
-        }
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} bjorn renee")), Some(format!("{STOCK_TEAM} annemarie bjorn renee"))]);
-        }
-        h.replies.lock().unwrap().extend([
-            "I'll start on Bjørn, Renée and Anne-Marie.".to_string(),
-            format!("Saving Bjørn and Renée.{TOOL_CALL}Both are saved; ending the turn so the app can register them."),
-            format!("Saving Anne-Marie.{TOOL_CALL}Bjørn, Renée and Anne-Marie are all on your team now."),
-        ]);
-        h.host.start();
-        let title = "Hire these AI teammates onto my team: Bjørn (Office Manager), Renée (Bookkeeper), Anne-Marie (Copywriter)";
-        let receipt = h.host.register(&h.binding, &Registration { title: title.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), 3, "the hiring did not finish when all three were saved: {:?} {prompts:#?}", read());
-        assert_eq!(prompts[1], hiring_unfinished_continuation(&["Bjørn".to_string(), "Renée".to_string(), "Anne-Marie".to_string()]));
-        assert_eq!(prompts[2], hiring_unfinished_continuation(&["Anne-Marie".to_string()]));
-        let done = read();
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// What nightly 57's hire walk heard from the back end along the way (Ray's check57 record,
-    /// richos-hq `docs/verification/2026-10-15-check57-walk.md`, runs 1, 3 and 4): his own
-    /// internal steps and his teammates' working notes, none of it for a business owner.
-    const WORKING_NOTES: [&str; 4] = [
-        "No business notes on hand, so Clark researches the Bookkeeper role generically for a small owner-run business.",
-        "Pierce flagged that the brief withheld business facts and standing rules the owner already gave.",
-        "Dean couldn't open the shelf file, but I already have Will's full shelf text.",
-        "Both saved; ending the turn so the app can register them.",
-    ];
-
-    /// **A finished hiring tells him who joined, in his words, and nothing of how** (nightly
-    /// 57's check, run 1). The back end's turns were joined into one message, so he read "No
-    /// business notes on hand, so Clark researches…", "Pierce flagged…" and "Both saved; ending
-    /// the turn so the app can register them." as the news that Will and Beth were hired. Now
-    /// the app says it from what it saved: who joined, with the job title he was given.
-    #[test]
-    fn a_finished_hiring_tells_him_who_joined_and_none_of_the_working_notes() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} beth will"))]);
-        }
-        h.replies.lock().unwrap().extend([format!(
-            "{}{TOOL_CALL}{}{TOOL_CALL}{}{TOOL_CALL}{}",
-            WORKING_NOTES[0], WORKING_NOTES[1], WORKING_NOTES[2], WORKING_NOTES[3]
-        )]);
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        assert_eq!(told(&h), ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A hiring that ends with somebody unsaved tells him who joined and who did not, and
-    /// nothing of how.** Will is saved, Beth is not, and the turn answering the hiring
-    /// continuation is a working note with no tool call, so the run ends there. He used to be
-    /// handed the back end's words before the failure; now he hears that Will joined, then that
-    /// Beth was not saved.
-    #[test]
-    fn an_unfinished_hiring_tells_him_who_joined_and_who_did_not_and_none_of_the_working_notes() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} will")), None]);
-        }
-        h.replies.lock().unwrap().extend([
-            format!("{}{TOOL_CALL}{}", WORKING_NOTES[0], WORKING_NOTES[3]),
-            WORKING_NOTES[2].to_string(),
-        ]);
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
-        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(done.state, AssignmentState::Failed, "{}", done.detail);
-        let told = told(&h);
-        assert_eq!(told.len(), 2, "{told:?}");
-        assert_eq!(told[0], "Will (Marketing Director) is on your team now, ready to take work.");
-        assert!(told[1].contains("Beth was not saved to your team."), "{told:?}");
-        for note in WORKING_NOTES {
-            assert!(told.iter().all(|t| !t.contains(note)), "he was told {note:?}: {told:?}");
-        }
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A hiring the back end fails after teammates were saved still tells him who joined**
-    /// (handover review rv-20261015T085117Z-b82e5a0c-20fb, "joined-team notices=0"). Both hiring
-    /// reports used to need the turn to answer, so a lost connection after Will was saved said
-    /// only that the job stopped, and one after both were saved called a finished hiring a
-    /// failure. Case 1: turn 1 saves Will, the continuation turn loses its connection; he hears
-    /// Will joined, then that Beth was not saved and why it stopped. Case 2: both are saved and
-    /// the turn loses its connection; the hiring is finished and he hears both joined.
-    #[test]
-    fn a_hiring_the_back_end_fails_after_saving_teammates_still_tells_him_who_joined() {
-        use crate::cognition::ObligationState;
-        let ready = || {
-            let h = harness(5);
-            witnessed(&h.state, "work-session-one");
-            *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-            *h.background.lock().unwrap() = Some(Vec::new());
-            *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-            h.team.lock().unwrap().named = true;
-            h
-        };
-
-        // Case 1: Will saved by turn 1, the connection lost on the continuation turn.
-        let h = ready();
-        {
-            let mut team = h.team.lock().unwrap();
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} will"))]);
-        }
-        h.replies.lock().unwrap().extend([format!("{}{TOOL_CALL}{}", WORKING_NOTES[0], WORKING_NOTES[3])]);
-        h.first_item_gate.shut();
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        // Turn 1 is held at its first item, past the point a failure is taken: the next turn fails.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while h.work_prompts.lock().unwrap().is_empty() {
-            assert!(std::time::Instant::now() < deadline, "turn 1 never came");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        h.fail_next.lock().unwrap().push_back("connection lost".into());
-        h.first_item_gate.release();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
-        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(done.state, AssignmentState::Failed, "{}", done.detail);
-        let heard = told(&h);
-        println!("case 1 told: {heard:?}");
-        assert_eq!(heard.len(), 2, "{heard:?}");
-        assert_eq!(heard[0], "Will (Marketing Director) is on your team now, ready to take work.");
-        assert!(heard[1].contains("Beth was not saved to your team. Connection lost."), "{heard:?}");
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-
-        // Case 2: Will and Beth both saved, and the turn loses its connection.
-        let h = ready();
-        h.team.lock().unwrap().digest = Some(format!("{STOCK_TEAM} beth will"));
-        h.fail_next.lock().unwrap().push_back("connection lost".into());
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let heard = told(&h);
-        println!("case 2 told: {heard:?} state: {:?}", done.state);
-        assert_eq!(heard, ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **The name a hiring checks a saved teammate by is the name Dean is told to write**: every
-    /// example in Dean's `name` rule (`engine/agents/dean.md`) is what [`save_name`] gives for
-    /// that name, so the instructions, the team tool and this check keep one rule. Dean's template
-    /// used to say "lowercase kebab slug", which writes Anne-Marie as `anne-marie`, a name the
-    /// team tool refuses.
-    #[test]
-    fn the_name_a_hiring_checks_is_the_name_dean_is_told_to_write() {
-        let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
-        let dean = std::fs::read_to_string(engine.join("agents/dean.md")).unwrap();
-        let rule = dean.lines().find(|line| line.starts_with("- **`name`:**")).unwrap();
-        let examples: Vec<(&str, &str)> = rule
-            .match_indices(" is `")
-            .filter_map(|(at, marker)| {
-                let name = rule[..at].rsplit([' ', '(']).next()?;
-                let rest = &rule[at + marker.len()..];
-                Some((name, &rest[..rest.find('`')?]))
-            })
-            .collect();
-        assert!(examples.iter().any(|(name, _)| *name == "Anne-Marie"), "Dean's name rule shows no hyphenated name: {rule}");
-        for (name, saved_as) in examples {
-            assert_eq!(save_name(name), saved_as, "Dean writes {name} as {saved_as}");
-        }
-    }
-
-    /// **A teammate saved without a `**Name:**` line, or with one naming them differently from
-    /// the proposal, still counts as hired**, by the name it was saved under. Will's definition
-    /// has no Identity line at all; Beth's says she is Elizabeth. Both were saved under the names
-    /// the hiring gives them (`will`, `beth`), so the hiring is finished on the first turn. The
-    /// check used to read only the `**Name:**` line: Will and Beth stayed "not saved", the back
-    /// end was sent after them again, and the hiring ended Failed with both on the team.
-    #[test]
-    fn a_hiring_counts_a_teammate_saved_without_a_name_line_or_under_another_name() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        let folder = h.root.join("team");
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("will.md"),
-            "---\nname: will\ndescription: Marketing Director. Use for filling the cohorts.\nmodel: sonnet\n---\n\n\
-             # Will, Marketing Director\n\nYou fill the coaching cohorts.\n").unwrap();
-        std::fs::write(folder.join("beth.md"),
-            "---\nname: beth\ndescription: Bookkeeper. Use for the books.\nmodel: sonnet\n---\n\n\
-             # Elizabeth, Bookkeeper\n\n## Identity\n- **Name:** Elizabeth\n- **Role:** Bookkeeper\n").unwrap();
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} beth will"))]);
-        }
-        h.replies.lock().unwrap().extend([format!("Saving Will and Beth.{TOOL_CALL}Will and Beth are saved.")]);
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), 1, "the back end was sent after teammates already saved: {:?} {prompts:#?}", read());
-        assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
-        assert_eq!(told(&h), ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **One saved definition is one hire** (mid-job review rv-20261015T074838Z-f331c1f0-3d96,
-    /// finding 1). Only `beth.md` is saved, and its `**Name:**` line says Will. The check used to
-    /// let it count twice, once for Beth by the name it was saved under and once for Will by its
-    /// Name line, so the hiring finished with Will never saved. Now each definition answers one
-    /// proposal, its saved name first: Beth is hired, the back end is told Will is not saved, and
-    /// the job ends saying so.
-    #[test]
-    fn one_saved_definition_never_counts_as_two_hires() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        let folder = h.root.join("team");
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("beth.md"),
-            "---\nname: beth\ndescription: Bookkeeper. Use for the books.\nmodel: sonnet\n---\n\n\
-             ## Identity\n- **Name:** Will\n- **Role:** Bookkeeper\n").unwrap();
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} beth")), None]);
-        }
-        h.replies.lock().unwrap().extend([
-            format!("Saving Beth.{TOOL_CALL}Beth is saved."),
-            "Will is next.".to_string(),
-        ]);
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), 2, "the hiring finished with Will unsaved: {:?}", read());
-        assert_eq!(prompts[1], hiring_unfinished_continuation(&["Will".to_string()]));
-        assert_eq!(read().state, AssignmentState::Failed, "{}", read().detail);
-        let told = told(&h);
-        assert_eq!(told[0], "Beth (Bookkeeper) is on your team now, ready to take work.", "{told:?}");
-        assert!(told[1].contains("Will was not saved to your team."), "{told:?}");
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A hiring that runs a command tells him nothing of its working notes while it waits**
-    /// (mid-job review rv-20261015T074838Z-f331c1f0-3d96, finding 2). The back end starts a
-    /// background command in a hiring and ends its turn on a working note. The command wait
-    /// used to hand him those words at once ("Dean couldn't open the shelf file") before
-    /// anything was decided. Now a hiring says nothing while it waits, and when it finishes
-    /// he hears who joined, and only that.
-    #[test]
-    fn a_hiring_waiting_on_a_command_tells_him_none_of_the_working_notes() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        every_worker_observed_ending(&h);
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} beth will"))]);
-        }
-        h.replies.lock().unwrap().extend([WORKING_NOTES[2].to_string(), format!("Saving both.{TOOL_CALL}{}", WORKING_NOTES[3])]);
-        h.start_in_turn.lock().unwrap().push_back(vec![background_command("bshelf", "cat shelf.md")]);
-        h.host.start();
-        let job = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while assignment::read(&h.state, "depot", "thread-one", &job.id).unwrap().detail != COMMAND_STILL_RUNNING_DETAIL {
-            assert!(std::time::Instant::now() < deadline, "the hiring never waited on its command");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        background_command_ends(&h, "bshelf", false);
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)), "the ending was never acted on");
-        // Every notice he was ever handed is recorded, so this is the whole of what he heard.
-        assert_eq!(told(&h), ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."],
-            "he was handed the back end's working notes while it waited");
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A hiring is briefed with the business notes his interview saved** (nightly 57's check,
-    /// run 1: "No business notes on hand, so Clark researches the Bookkeeper role generically",
-    /// straight after the interview said everything was saved). The notes are in the company
-    /// file the interview writes; the hiring's first brief carries them, so Clark and Dean are
-    /// briefed with his business rather than a generic one.
-    #[test]
-    fn a_hiring_is_briefed_with_the_business_notes_his_interview_saved() {
-        let h = harness(5);
-        let central = h.root.join("central");
-        let entity = crate::entity::EntityId::parse("depot").unwrap();
-        let file = crate::company::company_file(&central, &entity);
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, "<!-- richos-interview:complete -->\n# Acme\n\n\
-            Acme runs leadership coaching for managers at mid-size companies.\n\n\
-            Pricing and any spend over $1,000 is his call.\n").unwrap();
-        h.host.set_central_root(central);
-        h.replies.lock().unwrap().push_back("Will and Beth are being hired.".into());
-        h.host.start();
-        h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let brief = h.work_prompts.lock().unwrap()[0].clone();
-        assert!(brief.contains("Acme runs leadership coaching for managers at mid-size companies."), "{brief}");
-        assert!(brief.contains("Pricing and any spend over $1,000 is his call."), "{brief}");
-        assert!(brief.contains(HIRING_NOTES_HEAD), "{brief}");
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **Each teammate is on his team, and he is told so, the moment that one is saved** (nightly
-    /// 57's hunt, finding 4: two teammates took 16 minutes with nothing but "On it!" on screen,
-    /// and Will, a ready-made teammate, waited for Beth's research). Turn 1 saves Will and starts
-    /// Clark's research for Beth; while that research runs he already hears that Will joined.
-    /// When Beth is saved he hears that she joined, and Will is not told twice.
-    #[test]
-    fn each_hired_teammate_is_told_the_moment_that_one_is_saved_without_waiting_on_the_others() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
-        }
-        h.replies.lock().unwrap().extend([
-            format!("Saving Will.{TOOL_CALL}Will is saved; Clark is researching the Bookkeeper role."),
-            format!("Saving Beth.{TOOL_CALL}Beth is saved too. Will and Beth are both on your team now."),
-        ]);
-        journal(&h, &helper_started("clark-beth"));
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        // Turn 1 is over and Clark's research is still running: Will is already told. The
-        // deadline only catches a hang; the verdict is what he was told while Clark still runs.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while told(&h).is_empty() {
-            assert!(std::time::Instant::now() < deadline,
-                "Will was saved, and he was not told while Beth's research ran: {:?} {}", read().state, read().detail);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(h.work_prompts.lock().unwrap().len(), 1, "the host did not wait for Clark's research");
-        assert_eq!(read().state, AssignmentState::Running, "{}", read().detail);
-        assert_eq!(told(&h), ["Will (Marketing Director) is on your team now, ready to take work."],
-            "Will was saved, and he was not told while Beth's research ran");
-        journal(&h, &helper_stopped("clark-beth"));
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
-        assert_eq!(told(&h), [
-            "Will (Marketing Director) is on your team now, ready to take work.",
-            "Beth (Bookkeeper) is on your team now, ready to take work.",
-        ]);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **Dean's fitting of Will ends while Clark still researches Beth, and Will is saved and
-    /// told at once** (finding 4; mid-job review rv-20261015T111101Z-9144da1e-2fe6). Turn 1
-    /// starts both consults. Dean's run ends first: the back end gets its turn then, with Clark
-    /// still running, saves Will, and he hears that Will joined while Beth's research goes on.
-    /// When Clark's run ends, the next turn saves Beth. The host used to give the back end its
-    /// next turn only once every helper had ended, so Will waited for Beth's research.
-    #[test]
-    fn a_teammate_dean_finished_is_saved_and_told_while_another_consult_still_runs() {
-        use crate::cognition::ObligationState;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
-        }
-        h.replies.lock().unwrap().extend([
-            format!("Asking Dean to fit Will and Clark to research Beth.{TOOL_CALL}Both are running."),
-            format!("Saving Will.{TOOL_CALL}Will is saved; Clark is still researching Beth."),
-            format!("Saving Beth.{TOOL_CALL}Beth is saved too."),
-        ]);
-        journal(&h, &(helper_started("dean-will") + &helper_started("clark-beth")));
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while h.work_prompts.lock().unwrap().is_empty() {
-            assert!(std::time::Instant::now() < deadline, "the hiring never reached its back end");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        // Dean's run ends; Clark's does not. The deadline only catches a hang.
-        journal(&h, &helper_stopped("dean-will"));
-        while told(&h).is_empty() {
-            assert!(std::time::Instant::now() < deadline,
-                "Dean returned Will while Clark still researched Beth, and Will was not saved and told: {} turn(s), {:?} {}",
-                h.work_prompts.lock().unwrap().len(), read().state, read().detail);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(h.work_prompts.lock().unwrap().len(), 2);
-        assert_eq!(told(&h), ["Will (Marketing Director) is on your team now, ready to take work."]);
-        assert_eq!(read().state, AssignmentState::Running, "{}", read().detail);
-        journal(&h, &helper_stopped("clark-beth"));
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        assert_eq!(read().state, AssignmentState::Settled, "{}", read().detail);
-        assert_eq!(h.work_prompts.lock().unwrap().len(), 3);
-        assert_eq!(told(&h), [
-            "Will (Marketing Director) is on your team now, ready to take work.",
-            "Beth (Bookkeeper) is on your team now, ready to take work.",
-        ]);
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **The last teammate a hiring proposed is told the moment that one is saved, before the
-    /// team is refreshed** (finding 4; handover review rv-20261015T113206Z-3b0b1dc0-7844). With
-    /// the commands read clear, the turn that saves Will is followed by the team renewal: a
-    /// handoff turn, a successor opened and primed, and another model turn. He hears that Will
-    /// joined before any of that, and once.
-    #[test]
-    fn the_last_hire_is_told_when_saved_before_the_team_refresh() {
-        use crate::cognition::ObligationState;
-        /// What had happened when each notice was raised: (text, connections opened, handoff
-        /// turns, work turns).
-        struct AtRaise {
-            spawns: Arc<AtomicUsize>,
-            handoffs: Arc<Mutex<Vec<String>>>,
-            prompts: Arc<Mutex<Vec<String>>>,
-            seen: Mutex<Vec<(String, usize, usize, usize)>>,
-        }
-        impl WorkNotifier for AtRaise {
-            fn raised(&self, _thread: &str, notice: &PendingNotice) {
-                self.seen.lock().unwrap().push((
-                    notice.text.clone(),
-                    self.spawns.load(Ordering::SeqCst),
-                    self.handoffs.lock().unwrap().len(),
-                    self.prompts.lock().unwrap().len(),
-                ));
-            }
-        }
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        witnessed(&h.state, "work-session-rotated-1");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Clear);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} will"))]);
-        }
-        h.replies.lock().unwrap().push_back(format!("Saving Will.{TOOL_CALL}Will is saved."));
-        let notifier = Arc::new(AtRaise {
-            spawns: h.spawns.clone(),
-            handoffs: h.handoffs.clone(),
-            prompts: h.work_prompts.clone(),
-            seen: Mutex::new(Vec::new()),
-        });
-        let host = WorkHost::new(&h.state, Box::new(factory_over(&h, 5)), notifier.clone(), Arc::clone(&h.desk));
-        host.start();
-        let receipt = host.register(&h.binding, &Registration {
-            title: "Hire these AI teammates onto my team: Will (Marketing Director)".into(),
-            ..registration(&h)
-        }).unwrap();
-        assert!(host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let row = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(row.state, AssignmentState::Settled, "{}", row.detail);
-        assert!(!h.handoffs.lock().unwrap().is_empty(), "the team was never refreshed, so this proves nothing");
-        let joined: Vec<(String, usize, usize, usize)> = notifier.seen.lock().unwrap().iter()
-            .filter(|(text, ..)| text.ends_with(JOINED_TAIL)).cloned().collect();
-        assert_eq!(joined, [(
-            "Will (Marketing Director) is on your team now, ready to take work.".to_string(), 1, 0, 1,
-        )], "Will was saved on the first turn and told only after (connections, handoff turns, work turns)");
-        host.shutdown();
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **The hiring report is only what is true when it arrives, said once** (nightly 57's
-    /// product hunt, finding 9). Nightly 57's report was the back end's turns joined: it opened
-    /// with progress that had stopped being true ("Neither of them is on the team yet.", "Neither
-    /// one has joined yet.") and wrote its summary of Will and Beth twice. These are its words,
-    /// over the same two turns (Beth's research running after the first). He hears that Will and
-    /// Beth joined, once, and none of the back end's words.
-    #[test]
-    fn the_hiring_report_is_only_what_is_true_when_it_arrives_said_once() {
-        use crate::cognition::ObligationState;
-        const STALE: [&str; 2] = ["Neither of them is on the team yet.", "Neither one has joined yet."];
-        const SUMMARY: [&str; 2] = [
-            "Will and Beth have both joined your team.",
-            "Will and Beth are both on your team now, and both are ready to take work.",
-        ];
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        *h.commands.lock().unwrap() = Some(crate::lease_commands::CommandReading::Unreadable);
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend([None, Some(format!("{STOCK_TEAM} beth will"))]);
-        }
-        h.replies.lock().unwrap().extend([
-            format!("Starting the research for Beth, the new Bookkeeper.{TOOL_CALL}{}", STALE[0]),
-            format!(
-                "Beth's research is in. {}{TOOL_CALL}{}\n\n- **Will, Marketing Director.**\n- **Beth, Bookkeeper.**\n\n{}\n\n\
-                 - **Will, Marketing Director.**\n- **Beth, Bookkeeper.**",
-                STALE[1], SUMMARY[0], SUMMARY[1]
-            ),
-        ]);
-        journal(&h, &helper_started("clark-beth"));
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while h.work_prompts.lock().unwrap().is_empty() {
-            assert!(std::time::Instant::now() < deadline, "the hiring never reached its back end");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        journal(&h, &helper_stopped("clark-beth"));
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let done = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
-        let heard = told(&h);
-        assert_eq!(heard, ["Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work."]);
-        for line in STALE.iter().chain(SUMMARY.iter()) {
-            assert!(heard.iter().all(|t| !t.contains(line)), "he was told {line:?}: {heard:?}");
-        }
-        h.host.shutdown();
-        std::fs::remove_dir_all(&h.root).unwrap();
-    }
-
-    /// **A hiring's brief takes his interview answers as facts and never guesses from his email**
-    /// (nightly 57's hunt, finding 5). The back end's brief for Beth's research read "company
-    /// domain [his sign-in email's domain], likely leadership/consulting services; treat that as
-    /// unconfirmed", and stated "US-based", which he never said. With his notes on file the
-    /// brief says they are his own answers and facts; with or without them it says his email
-    /// and sign-in say nothing about the business and never go in a brief, and that what he did
-    /// not say is not known.
-    #[test]
-    fn a_hiring_brief_takes_his_answers_as_facts_and_never_guesses_from_his_email() {
-        for with_notes in [true, false] {
-            let h = harness(5);
-            if with_notes {
-                let central = h.root.join("central");
-                let entity = crate::entity::EntityId::parse("depot").unwrap();
-                let file = crate::company::company_file(&central, &entity);
-                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-                std::fs::write(&file, "<!-- richos-interview:complete -->\n# Acme\n\n\
-                    Acme runs leadership coaching for managers at mid-size companies.\n").unwrap();
-                h.host.set_central_root(central);
-            }
-            h.replies.lock().unwrap().push_back("Will and Beth are being hired.".into());
-            h.host.start();
-            h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-            assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-            let brief = h.work_prompts.lock().unwrap()[0].clone();
-            if with_notes {
-                assert!(brief.contains("his own answers"), "{brief}");
-            }
-            assert!(brief.contains("never as unconfirmed"), "with notes {with_notes}: {brief}");
-            assert!(brief.contains("Never infer anything about his business from his email address"), "with notes {with_notes}: {brief}");
-            assert!(brief.contains("never put either in a brief"), "with notes {with_notes}: {brief}");
-            assert!(brief.contains("say it is not known yet"), "with notes {with_notes}: {brief}");
-            h.host.shutdown();
-            std::fs::remove_dir_all(&h.root).unwrap();
-        }
-    }
-
-    /// **The team renewal a hiring needs still happens after six waits** (handover review
-    /// rv-20261014T212111Z-1a81cf94-9653). Six fitting rounds use the wait budget; the sixth
-    /// continuation saves Will and ends its turn, as the team tool asks, with Beth unsaved. The
-    /// host used to stop at the bound there, revoke the grant and close the job; now it renews
-    /// the back end and gives it the turn in which Beth is saved.
-    #[test]
-    fn a_hiring_that_used_its_six_waits_still_renews_the_team_and_saves_the_rest() {
-        use crate::cognition::ObligationState;
-        let attempts = WORKER_WAIT_ROUNDS;
-        let h = harness(5);
-        witnessed(&h.state, "work-session-one");
-        *h.obligation.lock().unwrap() = Some(ObligationState::Open);
-        *h.background.lock().unwrap() = Some(Vec::new());
-        {
-            let mut team = h.team.lock().unwrap();
-            team.named = true;
-            team.digest = Some(STOCK_TEAM.into());
-            team.in_turn.extend((0..attempts).map(|_| None));
-            team.in_turn.extend([Some(format!("{STOCK_TEAM} will")), Some(format!("{STOCK_TEAM} will beth"))]);
-        }
-        h.replies.lock().unwrap().extend(
-            (0..attempts).map(|n| format!("Dean is fitting Will and researching Beth (round {}).", n + 1))
-                .chain([
-                    "Will's definition is saved; ending the turn so the app can register him.".to_string(),
-                    "Beth is saved too. Will and Beth are both on your team now.".to_string(),
-                ]),
-        );
-        let round = |n: usize| format!("dean-round-{n}");
-        journal(&h, &helper_started(&round(0)));
-        h.host.start();
-        let receipt = h.host.register(&h.binding, &Registration { title: HIRING.into(), ..registration(&h) }).unwrap();
-        let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
-        let turns_reach = |n: usize| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            while h.work_prompts.lock().unwrap().len() < n {
-                assert!(std::time::Instant::now() < deadline, "turn {n} never came: {:?} {}", read().state, read().detail);
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        };
-        for n in 0..attempts {
-            turns_reach(n + 1);
-            if n > 0 {
-                journal(&h, &helper_started(&round(n)));
-                h.first_item_gate.release();
-            }
-            // Seen open on the read at the turn's end or the next poll (WORKER_WAIT_POLL, 2 s).
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            h.first_item_gate.shut();
-            journal(&h, &helper_stopped(&round(n)));
-        }
-        // The sixth continuation saves Will with nothing open; the renewal's turn saves Beth.
-        turns_reach(attempts + 1);
-        h.first_item_gate.release();
-        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(60)));
-        let prompts = h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(), attempts + 2, "the hiring closed at the bound with Beth unsaved: {:?}", read());
-        assert_eq!(prompts[attempts + 1], TEAM_CHANGED_CONTINUATION);
-        assert_eq!(h.host.rotations("thread-one").0, 1, "the back end was not renewed for Will");
-        let done = read();
-        assert_eq!(done.state, AssignmentState::Settled, "{}", done.detail);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
@@ -9249,8 +8066,8 @@ mod tests {
         assert_eq!(prompts.len(), 3, "{prompts:?}");
         assert_eq!(&prompts[1..], [CONSULT_ENDED_CONTINUATION, CONSULT_ENDED_CONTINUATION]);
         let told: Vec<_> = h.notices.0.lock().unwrap().iter().map(|(_, n)| n.text.clone()).collect();
-        let delivered = format!("{WILL_SAID}\n\n{BETH_SAID}");
-        assert!(told.iter().any(|t| t.contains(&delivered)), "his answer was not delivered as written: {told:?}");
+        assert!(told.iter().any(|t| t == WILL_SAID), "the first result was not passed to Rich while work continued: {told:?}");
+        assert!(told.iter().any(|t| t == BETH_SAID), "the last result was not passed to Rich: {told:?}");
         let all = told.join("\n");
         assert!(!all.contains("working on it now") && !all.contains("stop-declared"),
             "a waiting sentence is in his answer: {told:?}");
@@ -9265,10 +8082,10 @@ mod tests {
         // (second review rv-20261015T110858Z-a5f8a28b-a1ab, fixture command_then_consult.py).
         let mut account = "The analysis is running.".to_string();
         fold_turn(&mut account, "The analysis found 12 qualified leads.\n\nstop-declared: waiting-on-teammate — \
-            Will is working on the outreach recommendation now.", false);
-        fold_turn(&mut account, "Will recommends starting with the three largest leads.", true);
-        assert_eq!(account, "The analysis found 12 qualified leads.\n\nWill recommends starting with the three largest leads.",
-            "a command's report kept its waiting sentence above the answer");
+            Will is working on the outreach recommendation now.");
+        fold_turn(&mut account, "Will recommends starting with the three largest leads.");
+        assert_eq!(account, "Will recommends starting with the three largest leads.",
+            "earlier progress was concatenated into a newer report");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
@@ -9280,12 +8097,12 @@ mod tests {
     #[test]
     fn a_report_that_only_declares_its_wait_replaces_the_command_kickoff() {
         let mut account = "The analysis is running.".to_string();
-        fold_turn(&mut account, "stop-declared: waiting-on-teammate — Will is working on the outreach recommendation now.", false);
-        fold_turn(&mut account, "Will recommends starting with the three largest leads.", true);
+        fold_turn(&mut account, "stop-declared: waiting-on-teammate — Will is working on the outreach recommendation now.");
+        fold_turn(&mut account, "Will recommends starting with the three largest leads.");
         assert_eq!(account, "Will recommends starting with the three largest leads.",
             "a finished command is still reported as running above the answer");
         let mut account = "The analysis is running.".to_string();
-        fold_turn(&mut account, "  \n", false);
+        fold_turn(&mut account, "  \n");
         assert_eq!(account, "The analysis is running.", "a turn that said nothing emptied the account");
     }
 
@@ -9737,24 +8554,14 @@ mod tests {
         let receipt = assignment::register_kind(&h.state, &registration(&h), assignment::AssignmentKind::Task).unwrap();
         let record = assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
         let brief = brief_for(&record, false, &record.title);
-        for said in [
-            "If the job changes no repository",
-            "do it yourself, with no helper",
-            "The app closes an assignment like that from your report",
-            "do not call `complete` for it",
-            "say nothing to him about reviews, lands, branches or closing the assignment",
-            "When you changed a repository, report what you actually landed",
-        ] {
-            assert!(brief.contains(said), "the task brief does not say: {said}\n{brief}");
-        }
+        let input: serde_json::Value = serde_json::from_str(&brief).unwrap();
+        assert_eq!(input["assignment"]["message"], record.title);
+        assert_eq!(input["assignment"]["question"], false);
         let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine/mega-lander");
         let desktop = std::fs::read_to_string(engine.join("DESKTOP.md")).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(desktop.contains("A job that changes no repository needs no worker and no `complete`: \
-                                 do it yourself, or consult a teammate (below), and report it in his terms; \
-                                 the app closes it from your report."),
-                "DESKTOP.md step 7 still says only a code assignment closes");
-        // Slice 3 of the proto-teammate shelf plan: such a job may go to a named teammate.
-        assert!(brief.contains("consult that teammate with `prepare` and `role: consult`"), "{brief}");
+        assert!(desktop.contains("Work that changes no repository needs no code worker or `complete`"),
+                "the tool contract wrongly requires code work for a non-repository assignment");
+        assert!(desktop.contains("the host records its established outcome from your report"));
         assert!(desktop.contains("A consult needs no reviewer, no `integrate` and no `complete`."));
         let tools = std::fs::read_to_string(engine.join("app.py")).unwrap();
         assert!(tools.contains("An assignment you handled yourself, with no worker, is closed by the app from your report: do not call this for it."),
@@ -9960,8 +8767,7 @@ mod tests {
         assert!(prompts[1].contains("npm test") && prompts[1].contains("exit code 0"), "{}", prompts[1]);
         // VM run 6 (2026-09-27): he asked "what it printed" and the report described the output
         // ("one entry, labeled init") instead of quoting it. His words are what the report owes.
-        assert!(prompts[1].contains("If he asked what it printed, quote the printed lines themselves"),
-                "the report is not asked for the output he asked for: {}", prompts[1]);
+        assert!(!prompts[1].contains("Give him your report"), "a factual event still supplies a workflow script");
         let row = assignment::read(&h.state, "depot", "thread-one", &job.id).unwrap();
         assert!(row.was_answered(), "{:?}: {}", row.state, row.detail);
         let notices = until_notices(&h, 2);
@@ -10042,7 +8848,7 @@ mod tests {
         let prompts = h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 2);
         assert!(!prompts[1].contains(COMMAND_ENDED_HEAD), "the second job's turn was spent on the first's command");
-        assert!(prompts[1].contains("\"npm run dev\" (for \"start the dev server\")") && prompts[1].contains("leave it out of this report"),
+        assert!(prompts[1].contains("\"npm run dev\" (for \"start the dev server\")") && prompts[1].contains("Other assignments' background commands (observed)"),
                 "the second job's back end was not told to keep the first job's finish out of its answer: {}", prompts[1]);
         let row = assignment::read(&h.state, "depot", "thread-one", &next.id).unwrap();
         assert!(!row.state.is_open(), "{:?}", row.state);
@@ -10910,6 +9716,7 @@ mod tests {
             instruction_ledger_ref: "ledger:thread-one:turn-7".into(),
             instruction_sha256: "abc".into(),
             title: "why the nightly has been red since Tuesday".into(),
+            handoff: String::new(),
             kind: assignment::AssignmentKind::Check,
             // §56's field, false here: answering a question does not need the Mac's screen,
             // and this test is about what the brief says rather than about the screen.
@@ -10925,21 +9732,11 @@ mod tests {
             waiting_sentence: false,
         };
         let brief = brief_for(&record, false, &record.title);
-        assert!(brief.contains("This is a QUESTION from the CEO"));
-        assert!(brief.contains("why the nightly has been red since Tuesday"));
-        assert!(brief.contains("/fictional/project"), "a repository he named did not travel");
-        // The work brief's instructions are absent: a question that was told to land would
-        // hand him a branch instead of an answer.
-        for work_word in ["get an independent review", "land the reviewed result", "close the assignment"] {
-            assert!(!brief.contains(work_word), "a question was briefed as work: {work_word}");
-        }
-        assert!(brief.contains("Do not do any work"));
-        // The answer is its LAST WORDS, because that is what this host keeps and shows.
-        assert!(brief.contains("last words"));
-        // **The kind is deliberately NOT in the brief**: `check` and `investigate` differ only
-        // in what the front desk said and what his timer reads. A back end told "this one is
-        // expected to be quick" would give a thinner answer to a simply-phrased question.
-        assert!(!brief.contains("check") && !brief.contains("investigate"), "the front desk's guess leaked into the work");
+        let input: serde_json::Value = serde_json::from_str(&brief).unwrap();
+        assert_eq!(input["assignment"]["question"], true);
+        assert_eq!(input["assignment"]["user_request"], record.title);
+        assert_eq!(input["assignment"]["repositories"][0], "/fictional/project");
+        assert!(!brief.contains("check") && !brief.contains("investigate"));
         // No identifier travels, exactly as with a task.
         assert!(!brief.contains("assignment-id-that-must-not-appear"));
         assert!(!brief.contains("obligation-that-must-not-appear"));
@@ -11383,8 +10180,8 @@ mod tests {
         // sentence must be GONE, not merely joined, or the successor is left to pick.
         assert!(!priming.contains("wait for him to approve"), "the handover still holds work at his approval: {priming}");
         assert!(!priming.contains("Stop at any step"), "the handover still tells it to stop before a land: {priming}");
-        assert!(priming.contains("Wait for the assignment you are given"), "{priming}");
-        assert!(priming.contains("the brief it comes with"), "{priming}");
+        assert!(priming.contains("\"event\":\"session_replaced\""), "{priming}");
+        assert!(priming.contains("\"carrying_assignment\":false"), "{priming}");
         assert_eq!(h.handoffs.lock().unwrap().len(), 1, "the outgoing back end was not asked for a handoff");
 
         // HIS ANSWER, AFTER THE ROTATION. The same assignment goes back on the NEW back
@@ -11684,7 +10481,7 @@ mod tests {
         assert_eq!(h.spawns.load(Ordering::SeqCst), 2);
         let prompts = h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 2, "the run did not go on after the turn that saved Mark: {prompts:?}");
-        assert_eq!(prompts.iter().filter(|p| p.contains("Original request (verbatim)")).count(), 1, "the brief was sent again");
+        assert_eq!(prompts.iter().filter(|p| p.contains("\"user_request\"")).count(), 1, "the brief was sent again");
         assert_eq!(prompts[1], TEAM_CHANGED_CONTINUATION);
         let handoffs = h.handoffs.lock().unwrap().clone();
         assert_eq!(handoffs.len(), 1);
@@ -11692,7 +10489,7 @@ mod tests {
         let primed = h.reprimes.lock().unwrap().clone();
         assert_eq!(primed.len(), 1);
         assert!(primed[0].starts_with(MID_RUN_TEAM_HANDOVER_OPENING), "{}", primed[0]);
-        for carried in ["add a health check endpoint", "Original request (verbatim)", SAVED, HANDOFF] {
+        for carried in ["add a health check endpoint", "\"user_request\"", SAVED, HANDOFF] {
             assert!(primed[0].contains(carried), "the successor was not told {carried:?}: {}", primed[0]);
         }
         let bound = h.bound.lock().unwrap().clone();

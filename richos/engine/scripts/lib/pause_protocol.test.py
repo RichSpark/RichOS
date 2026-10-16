@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -155,7 +156,7 @@ class PauseMessage(unittest.TestCase):
                 for word in ("do not", "don't", "never", "restart", "pause"):
                     self.assertNotIn(word, resume.split("\n" + protocol.RESUME_MARKER)[0].lower(), word)
         # The command it names is the engine's own, loaded by reference.
-        self.assertTrue(protocol.WAIT_COMMAND.endswith("~/.claude/richos-engine/scripts/lib/agent_hold.py wait"))
+        self.assertEqual(shlex.split(protocol.WAIT_COMMAND), ["python3", str(HERE / "agent_hold.py"), "wait"])
         self.assertTrue((ENGINE / "scripts/lib/agent_hold.py").is_file())
         self.assertIn("RESUMED", (ENGINE / "scripts/lib/agent_hold.py").read_text())
         self.assertIn("STILL WAITING", (ENGINE / "scripts/lib/agent_hold.py").read_text())

@@ -131,7 +131,7 @@ fn connect(script: &PathBuf) -> NativeClient {
     )
     .expect("the doctrine fixture must render");
     let skills =
-        richos_core::skills::ensure_rendered(&dir).expect("the skills fixture must render");
+        richos_core::skills::ensure_rendered(&dir, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).expect("the skills fixture must render");
     match NativeClient::spawn(script, std::path::Path::new("/tmp"), &doctrine, &skills) {
         Ok(c) => c,
         Err(e) => panic!("the fake agent should have completed the handshake: {e}"),
@@ -334,7 +334,7 @@ fn chat_priming_rejects_an_incomplete_terminal() {
     let (script, _) = terminal_agent(r#"{"type":"result","stop_reason":"max_tokens"}"#);
     let dir = script.parent().unwrap();
     let doctrine = richos_core::doctrine::ensure_rendered(dir, &Default::default()).unwrap();
-    let skills = richos_core::skills::ensure_rendered(dir).unwrap();
+    let skills = richos_core::skills::ensure_rendered(dir, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
     let mut lease =
         richos_core::native::NativeCognition::start(&script, dir, &doctrine, &skills).unwrap();
     assert!(

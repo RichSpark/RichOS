@@ -51,7 +51,7 @@ def last_step(targets=None):
             "your merge, do not merge again. Then hand over." % (which, theirs, moves))
 
 
-def prepare(value, targets=None):
+def prepare(value, targets=None, *, native_isolation=True):
     """`targets`: [(repository, the branch its work lands on)]; see last_step."""
     if not isinstance(value, dict):
         raise ValueError("input must be an Agent tool-input object")
@@ -65,7 +65,7 @@ def prepare(value, targets=None):
         problems.append("this helper prepares isolation=worktree only; it will not override another isolation mode")
     if problems:
         raise ValueError("; ".join(problems))
-    result = dict(value, isolation="worktree")
+    result = dict(value, isolation="worktree") if native_isolation else dict(value)
     result.pop("cwd", None)
     named = [b for _r, b in targets or [] if b] or ["main"]
     if not re.search(r"inflight-ack\.sh|inflight-acks/", result["prompt"]) and \

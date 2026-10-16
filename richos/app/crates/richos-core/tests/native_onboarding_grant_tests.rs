@@ -69,12 +69,11 @@ done
 "#).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let doctrine = richos_core::doctrine::ensure_rendered(&dir, &Default::default()).unwrap();
-        let skills = richos_core::skills::ensure_rendered(&dir).unwrap();
+        let skills = richos_core::skills::ensure_rendered(&dir, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
         let lease = NativeCognition::start_with_onboarding(
             &script,
             &dir,
-            &doctrine,
+            &dir,
             &skills,
             Path::new("/fixture/onboarding-server"),
             None,

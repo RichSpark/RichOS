@@ -59,6 +59,16 @@ pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
     out
 }
 
+/// Select the completed turn's reply without renumbering its conversation cursor.
+pub fn reply_for_turn(payload: &Value, turn: &str) -> Option<Value> {
+    let ids: std::collections::HashSet<&str> = payload.get("items")?.as_array()?.iter()
+        .filter(|item| item["turnId"] == turn)
+        .filter_map(|item| item["id"].as_str()).collect();
+    rows_from_payload(payload).into_iter().rev().find(|row|
+        row["role"] == "rich" && row["kind"] != "question"
+            && row["id"].as_str().is_some_and(|id| ids.contains(id)))
+}
+
 /// One gated timeline item as a phone row, or `None` when it is not a message.
 pub fn row_from_item(item: &Value) -> Option<Value> {
     let kind = item.get("kind").and_then(|v| v.as_str())?;
@@ -307,6 +317,22 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_completed_turns_push_keeps_its_reply_when_a_later_turn_is_already_streaming() {
+        let payload=json!({"items":[
+            {"kind":"user_message","id":"a:user","threadId":"thread","turnId":"a","text":"First"},
+            {"kind":"rich_message","id":"a:reply","threadId":"thread","turnId":"a","text":"First done"},
+            {"kind":"user_message","id":"b:user","threadId":"thread","turnId":"b","text":"Second"},
+            {"kind":"rich_message","id":"b:reply","threadId":"thread","turnId":"b","text":"Second still writing"}
+        ]});
+        let first=reply_for_turn(&payload,"a").unwrap();
+        assert_eq!(first["id"],"a:reply");
+        assert_eq!(first["text"],"First done");
+        assert_eq!(first["cursor"],2,"a push retains its position in the whole conversation");
+        assert!(reply_for_turn(&payload,"unanswered").is_none());
+        assert_eq!(reply_for_turn(&payload,"b").unwrap()["id"],"b:reply");
+    }
 
     /// A gated CEO timeline payload with both message kinds and three machinery rows, in the
     /// shape `Timeline::view(ViewMode::Ceo).payload()` actually produces (`kind` is the serde

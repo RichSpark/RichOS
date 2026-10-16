@@ -144,9 +144,7 @@ DETACHED_KEEP = 86400.0    # an uncollected frozen command's output is kept this
 REFUSED_EXIT = 75          # EX_TEMPFAIL: the command did not run; run it again after RESUME
 
 # The one command a held agent runs. Same text as the generated WAIT (pause_protocol.py).
-WAIT_COMMAND = "python3 ~/.claude/richos-engine/scripts/lib/agent_hold.py wait"
-WAIT_CALL = re.compile(r"\s*(?:python3\s+)?(?:\S*/)?agent_hold\.py\s+wait"
-                       r"(?:\s+--max-seconds\s+\d+(?:\.\d+)?)?\s*(?:2>&1\s*)?\Z")
+WAIT_COMMAND = "python3 " + shlex.quote(os.path.realpath(__file__)) + " wait"
 TOOL_MAX_TIMEOUT_MS = 600000   # the Bash tool's ceiling unless BASH_MAX_TIMEOUT_MS says otherwise
 WAIT_MARGIN_SECONDS = 15       # the wait returns this long before its call's timeout
 # Each STILL WAITING / STILL RUNNING is one model turn. Measured 2026-09-28: after a 25 s gap the
@@ -294,8 +292,27 @@ def _wait_bound_seconds():
     return ceiling, bound
 
 
+def _wait_args(command):
+    if not isinstance(command, str):
+        return None
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        return None
+    if args[:1] == ["python3"]:
+        args = args[1:]
+    if not args or os.path.basename(args.pop(0)) != "agent_hold.py":
+        return None
+    if args[-1:] == ["2>&1"]:
+        args = args[:-1]
+    if args == ["wait"] or (len(args) == 3 and args[:2] == ["wait", "--max-seconds"]
+                            and re.fullmatch(r"\d+(?:\.\d+)?", args[2])):
+        return args
+    return None
+
+
 def is_wait_call(command):
-    return isinstance(command, str) and bool(WAIT_CALL.match(command))
+    return _wait_args(command) is not None
 
 
 def _record(payload, mode, command, foreground=False):
@@ -339,7 +356,7 @@ def _head(stem, payload):
     ordinary isolated git calls. The helper records its own parent instead.
     """
     return ("python3 %s mark --state %s %s\nexport %s=%s %s=%s\n"
-            % (shlex.quote(os.path.abspath(__file__)), shlex.quote(state_dir()), shlex.quote(stem),
+            % (shlex.quote(os.path.realpath(__file__)), shlex.quote(state_dir()), shlex.quote(stem),
                TAG, payload["agent_id"], SESSION_TAG, payload["session_id"]))
 
 
@@ -443,9 +460,9 @@ def rewrite(payload):
         # The wait runs THIS file, whatever path the agent typed: the code that wrapped its
         # calls is the code that collects them.
         ceiling, bound = _wait_bound_seconds()
-        args = command.split("agent_hold.py", 1)[1].replace("2>&1", "").split()
+        args = _wait_args(command)
         return {"command": head + "export RICHOS_AGENT_HOLD_WAIT_SECONDS=%d\n" % bound
-                + " ".join(["python3", shlex.quote(os.path.abspath(__file__))] + [shlex.quote(a) for a in args]),
+                + " ".join(["python3", shlex.quote(os.path.realpath(__file__))] + [shlex.quote(a) for a in args]),
                 "input": {"timeout": ceiling, "run_in_background": False}}
     if os.path.exists(held):
         _unlink_call(stem)  # the hook refuses this call, so no native task can start
@@ -1837,7 +1854,7 @@ def describe_end(result):
 def end_command(session_id, agent_id, name=""):
     """The one command that ends this agent's own commands by hand (stall-watch names it)."""
     return "python3 %s end --session %s --agent %s%s" % (
-        shlex.quote(os.path.abspath(__file__)), shlex.quote(session_id), shlex.quote(agent_id),
+        shlex.quote(os.path.realpath(__file__)), shlex.quote(session_id), shlex.quote(agent_id),
         (" --name " + shlex.quote(name)) if name else "")
 
 

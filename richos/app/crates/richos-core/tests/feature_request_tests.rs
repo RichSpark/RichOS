@@ -290,9 +290,7 @@ fn screen() -> Screen {
 
 /// Rich, last, finding nothing more to clean up: his words are the scanner's.
 fn rich_keeps(prompt: &str) -> Result<String, String> {
-    let start = prompt.find("<<<\n").expect("the post") + 4;
-    let end = start + prompt[start..].find("\n>>>").expect("the post's end");
-    let mut report: serde_json::Value = serde_json::from_str(&prompt[start..end]).expect("the post as JSON");
+    let mut report=serde_json::from_str::<serde_json::Value>(prompt).unwrap()["draft"].clone();
     report["private"] = serde_json::json!([]);
     Ok(report.to_string())
 }
@@ -338,11 +336,10 @@ fn private_names_are_left_out_of_an_idea_as_in_a_bug_report_and_its_sections_are
 #[test]
 fn the_ideas_prompts_ask_for_an_idea_and_a_change_is_about_the_post() {
     let prompt = writer_prompt_for(Post::Idea, "a weekly summary", &screen(), VERSION, &[], false);
-    assert!(prompt.contains("pressed \"Request a feature\""), "{prompt}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&prompt).unwrap()["kind"],"feature idea");
+
     assert!(prompt.contains("\"idea\"") && prompt.contains("\"why\"") && prompt.contains("\"pictured\""), "{prompt}");
-    assert!(prompt.contains("posted in RichOS's GitHub Discussions, under Ideas"), "{prompt}");
     let change = change_prompt_for(Post::Idea, &idea(), "also say I'd like to pick the day myself");
-    assert!(change.contains("You wrote this feature idea and the user has not posted it yet"), "{change}");
     assert!(!change.contains("bug report"), "{change}");
     // An answer with no idea is refused, as a report with nothing that happened is.
     assert!(parse_written_for(Post::Idea, r#"{"title": "T", "idea": "", "private": []}"#).is_err());

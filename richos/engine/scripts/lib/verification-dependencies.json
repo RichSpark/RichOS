@@ -1218,8 +1218,8 @@
     },
     "scripts/lib/pause_protocol.py": {
       "source": "scripts/lib/pause_protocol.py",
-      "sha256": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
-      "evidence": "Renders and validates strings using arguments and standard-library modules; rendering, --check and preview validation read no settings, file or subprocess. Renewal 2026-10-11 (the hold never depends on the message): the CLI's --to and --resume --to paths, before printing, import mega-lander/workspaces.py by fixed path and call current_session, pause(control=True) or resume, which for a REGISTERED agent reach agent_hold.py's hold or release and its state directory. With no registered agent (the only CLI case of a consumer that does not register agents: pause_protocol.test.py, with an explicit session ID and a private empty registry) they stop at the registry lookup, reading no config and no real registry. Every consumer that registers agents and then runs this CLI (workspace-pause-hold.test.sh, pause-acceptance.test.sh) already declares mega-lander/workspaces.py#lifecycle-fixtures, the reviewed pause/resume/agent_hold closure. No orchestration.config read of its own. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): that path is now the function issue, called by the CLI and by mega-lander/app.py's pause_message and resume_message tools; the reads are unchanged.",
+      "sha256": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
+      "evidence": "Renders and validates strings using arguments and standard-library modules; rendering, --check and preview validation read no settings, file or subprocess. Renewal 2026-10-11 (the hold never depends on the message): the CLI's --to and --resume --to paths, before printing, import mega-lander/workspaces.py by fixed path and call current_session, pause(control=True) or resume, which for a REGISTERED agent reach agent_hold.py's hold or release and its state directory. With no registered agent (the only CLI case of a consumer that does not register agents: pause_protocol.test.py, with an explicit session ID and a private empty registry) they stop at the registry lookup, reading no config and no real registry. Every consumer that registers agents and then runs this CLI (workspace-pause-hold.test.sh, pause-acceptance.test.sh) already declares mega-lander/workspaces.py#lifecycle-fixtures, the reviewed pause/resume/agent_hold closure. No orchestration.config read of its own. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): that path is now the function issue, called by the CLI and by mega-lander/app.py's pause_message and resume_message tools; the reads are unchanged. Renewal 2026-10-16: generated wait command names the sibling installed helper through realpath(__file__), with shell quoting. Rendering still reads no helper content or settings.",
       "keys": [],
       "edges": []
     },
@@ -1376,7 +1376,7 @@
     },
     "scripts/app-engine-hook.py#pause-rejection": {
       "source": "scripts/app-engine-hook.py",
-      "sha256": "14b14cb6a3cc4f2bcbb5d41146841e4f0896ce6fccb62585ee85480faeb5e56a",
+      "sha256": "9dc468c3174f756a8220e01798ab84150a2e5b3b9164d72b09c3cf6f97577d97",
       "evidence": "The fixture loads the standard-library-only module, supplies explicit roots and calls handle with PreToolUse SendMessage. Invalid pause fails before scope; valid pause reaches the mocked scope exception. No evidence/workspace helper is loaded. Renewed 2026-10-09 (second review slice 4): the scope bound is 256 KiB, and a new mid_job_notice (loads scripts/lib/app_review.py) runs only after worker_context on PreToolUse, outside this fixture's path, which fails before scope. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): outside this fixture's region: on PreToolUse after worker_context, the mid-job notice is written and flushed by an emit closure and then recorded delivered; the region from handle to the evidence load is unchanged.",
       "keys": [],
       "edges": [
@@ -1405,7 +1405,7 @@
     },
     "scripts/lib/pause_protocol.test.py": {
       "source": "scripts/lib/pause_protocol.test.py",
-      "sha256": "8d0dbe19f2abec559f34f2274d52fe4ef55dc2d8abc17bc69e6c90c9ba8c75ce",
+      "sha256": "66501bd6afd23573c401d02e1cf08025d3337eab84ee0638f6b541b95a889f27",
       "evidence": "Standard-message fixtures invoke pause_protocol, literal-time watcher message formatting, terminal early rejection and desktop early rejection. Real guard/template source assertions read code, not config values. Captured accepted terminal payloads continue through recipient/identity handling with an explicitly private empty registry; that expanded call closure is declared separately. WAIT branch: the generated-RESUME terminal case uses the same empty private registry, and agent_hold.py is read as text only. Renewal 2026-10-11: the two CLI cases (--to, --resume --to) run with CLAUDE_CONFIG_DIR, RICHOS_WORKSPACES_DIR and RICHOS_AGENT_HOLD_DIR in a private empty directory and RICHOS_SESSION_ID literal, so the hold the CLI attempts first finds no agent and touches no real registry.",
       "keys": [],
       "edges": [
@@ -3656,8 +3656,8 @@
     },
     "scripts/hooks/detect-nonnative-worktree.sh": {
       "source": "scripts/hooks/detect-nonnative-worktree.sh",
-      "sha256": "11fe1d4301e448a709fa0117b1b7df797f3dc7750233d275f09b4d749a150dee",
-      "evidence": "Reads resolved entity allowlist/team config, parses the Agent payload and reads Git/worktree/process metadata. Workspaces and kill commands in notices are text, never executed. Calls only root and unevaluated-payload helpers.",
+      "sha256": "929a3def7667c4c0aaf23d1100d9cfeb90535730db1d6dca486cc437ff9e7387",
+      "evidence": "Reads resolved entity allowlist/team config, parses the Agent payload and reads Git/worktree/process metadata. Workspaces and kill commands in notices are text, never executed. Calls only root and unevaluated-payload helpers. Renewal 2026-10-16: reads only the presence of RICHOS_APP_SCOPE, not its file, to recognize app cross-repo target payloads already verified before dispatch. No new file or subprocess read.",
       "keys": [
         "READONLY_ALLOWLIST",
         "SESSION_TEAMS_DIR"
@@ -4135,8 +4135,8 @@
     },
     "scripts/hooks/guard-worktree-isolation.sh": {
       "source": "scripts/hooks/guard-worktree-isolation.sh",
-      "sha256": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
-      "evidence": "Sources governed entity settings, checks model/name/isolation against fixed helper calls and reads session team records. Agent payload text is parsed as data, never dispatched. CLI register-readonly/register-spawn/check-spawn share reviewed workspace registration. Lifecycle and sealed-worktree scripts are checked for existence/mode only, not executed here.",
+      "sha256": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
+      "evidence": "Sources governed entity settings, checks model/name/isolation against fixed helper calls and reads session team records. Agent payload text is parsed as data, never dispatched. CLI register-readonly/register-spawn/check-spawn share reviewed workspace registration. Lifecycle and sealed-worktree scripts are checked for existence/mode only, not executed here. Renewal 2026-10-16: a cross-repo target prompt line can satisfy the isolation form; existing downstream physical-worktree, owner and native-call checks remain. No new input read.",
       "keys": [
         "READONLY_ALLOWLIST",
         "HARNESS_UTILITY_TYPES",
@@ -9817,7 +9817,7 @@
     },
     "ecs/adapters/app.py#load": {
       "source": "ecs/adapters/app.py",
-      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
+      "sha256": "9d6cbbed4c446b93eae5989496ae24e7412c858016f4f7c86c1add20f0b79b46",
       "evidence": "Module-load imports and initializers reviewed: stdlib/core/checkpoint/inspect, constants and definitions. No adapter entrypoint runs. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -9845,7 +9845,7 @@
     },
     "mega-lander/app.py#land-lock-fixtures": {
       "source": "mega-lander/app.py",
-      "sha256": "80a2bfe1c8f443fca5e46bae4a4e40490468300cfbbf7d8cc82219ca181e56d5",
+      "sha256": "3143f0e816bccceba33fa0f9dbb6f497c0beddceebc0d625fbc86fa2850b3ab1",
       "evidence": "Fixture calls only land_lock and _live_fence_lease. Full local closure reviewed: lock metadata, flock, process liveness and repository lease/history reads. Workspaces and ECS imports are bound; ECS runtime operations are not invoked. Renewed 2026-10-15 (echo-opus-hire57): the team tool's description text only; nothing read changed.",
       "keys": [],
       "edges": [
@@ -11510,7 +11510,7 @@
     },
     "scripts/prepare-agent-spawn.py": {
       "source": "scripts/prepare-agent-spawn.py",
-      "sha256": "5c8ebac6082cdf7420658c3453b88eee017838c9f331e70f300ba5b91e177b9a",
+      "sha256": "916ec2a2f12b877e5820edf1d90bd9cce06117117573e652d5c344393ce79e85",
       "evidence": "Full prepare module reviewed: literal JSON validation and acknowledgement text construction. No command in the prepared prompt is executed.",
       "keys": [],
       "edges": []
@@ -11569,7 +11569,7 @@
     },
     "scripts/lib/spawn.py#fixture-guards": {
       "source": "scripts/lib/spawn.py",
-      "sha256": "73ebada7af9d7fe2d6d294e26b8b51e275ef44872447a23d7a45aee36a410697",
+      "sha256": "3f5b489bc1684909bd8b3d63a8c083921ef845cfb3ea43b9e6bc53cd7c353c56",
       "evidence": "All import/execution sites and full main/rollback reviewed. Fixture calls pin hook sources to literal verdict scripts plus real isolation guard. Real-surface collector calls only read hook JSON without execution. Creator runs only on plain private repositories. Prompt annotators produce data, never spawn model agents. Renewed 2026-09-28 (af7d7c93): for the operator audience it also loads brief-done.py, whose annotate runs the brief's quoted read-only evidence commands from its allowlist and appends their output.",
       "keys": [],
       "edges": [
@@ -12092,32 +12092,32 @@
     },
     "scripts/lib/agent_hold.py": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#recipient"
         }
       ],
-      "evidence": "Full program reviewed (hold, release, watchdog, wait and CLI). Inputs: the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), this user's ps table, recorded shell PID files, other processes' environments read through the kernel only to match the agent's own inherited tag (never printed), test-VM slot records under TESTVM_ROOT or HOME and lock-file paths through libproc. It signals only processes under the agent's recorded shells. hold() starts a detached watchdog, which runs the workspace recipient CLI as its one engine execution. No orchestration.config read. Renewal 2026-09-28 (b92c21f8..1b7aa978): a subagent's foreground Bash call now runs as a native background task with its record, job, output and status files in its shell directory; wait reads that host-owned result through the agent's own transcript (the payload's transcript_path, bound by session, agent and tool-use id, read as data) and the task output file named there; BASH_MAX_TIMEOUT_MS and RICHOS_AGENT_HOLD_WAIT_SECONDS bound the wait; wait notices live in the state directory; a held call's job is detached with SIGUSR1 and stopped. Still no orchestration.config read, and the watchdog's recipient CLI is still the one engine execution. Renewal 2026-10-11 (end_owned): before each signal it re-reads that process's start time through libproc (proc_pidinfo PROC_PIDTBSDINFO; a one-process ps elsewhere) and signals only the process recorded. No new input, no config read, no engine execution."
+      "evidence": "Full program reviewed (hold, release, watchdog, wait and CLI). Inputs: the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), this user's ps table, recorded shell PID files, other processes' environments read through the kernel only to match the agent's own inherited tag (never printed), test-VM slot records under TESTVM_ROOT or HOME and lock-file paths through libproc. It signals only processes under the agent's recorded shells. hold() starts a detached watchdog, which runs the workspace recipient CLI as its one engine execution. No orchestration.config read. Renewal 2026-09-28 (b92c21f8..1b7aa978): a subagent's foreground Bash call now runs as a native background task with its record, job, output and status files in its shell directory; wait reads that host-owned result through the agent's own transcript (the payload's transcript_path, bound by session, agent and tool-use id, read as data) and the task output file named there; BASH_MAX_TIMEOUT_MS and RICHOS_AGENT_HOLD_WAIT_SECONDS bound the wait; wait notices live in the state directory; a held call's job is detached with SIGUSR1 and stopped. Still no orchestration.config read, and the watchdog's recipient CLI is still the one engine execution. Renewal 2026-10-11 (end_owned): before each signal it re-reads that process's start time through libproc (proc_pidinfo PROC_PIDTBSDINFO; a one-process ps elsewhere) and signals only the process recorded. No new input, no config read, no engine execution. Renewal 2026-10-16: generated wait command names this installed helper through realpath(__file__), with shell quoting. No new state or process read."
     },
     "scripts/lib/agent_hold.py#release": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
       "keys": [],
       "edges": [],
       "evidence": "release, records, release_session, release_orphans and describe_* only: read hold records in the agent-hold state directory, this user's ps table and recorded shell PID files, and continue recorded processes. No watchdog, engine execution or orchestration.config read. Renewed 2026-10-11 (zach-opus-heldwait1): release also appends one line per released hold to hold-history.jsonl in the same state directory (pruned to 14 days once over 256 KiB), and history() reads it back; nothing new is read or executed."
     },
     "scripts/lib/agent_hold.py#gate": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
       "keys": [],
       "edges": [],
       "evidence": "gate only (2026-10-04), run by shell-evidence.py before its rewrite: for a subagent's own wait call it reads that agent's hold record and wait-notice file in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), sleeps one second between reads while the hold stands and returns when it is gone, when the notice is not this hold's or when its parent process is gone. It starts no process, signals nothing and never reaches the watchdog or the workspace recipient CLI (watch and _registry_finished are not called). No engine execution and no orchestration.config read."
     },
     "scripts/lib/agent_hold.py#capture": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
       "keys": [],
       "edges": [],
       "evidence": "capture and rewrite (renewed 2026-09-28): for a Bash payload with valid session, agent and tool-use ids it creates call records in the agent-hold state directory, notes the size of the agent's transcript named by the payload, prunes records of ended calls (a signal-0 probe of recorded PIDs) and returns shell text or a deny as data. Pruning a dead call that carried a process identity takes this user's ps table and reads tagged processes' environments through the kernel, to keep ownership of live descendants. No engine execution and no orchestration.config read."
@@ -12863,7 +12863,7 @@
     },
     "ecs/adapters/app.py#answer-operator-fixture": {
       "source": "ecs/adapters/app.py",
-      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
+      "sha256": "9d6cbbed4c446b93eae5989496ae24e7412c858016f4f7c86c1add20f0b79b46",
       "evidence": "Only bind/checkpoint/observe(started)/hello/answer-complete/operator-complete from named completion fixtures. Git ancestry uses fixed git commands. Does not enter complete-obligation or verified-work, the only dynamic Mega Lander imports. No config lookup. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -12902,7 +12902,7 @@
     },
     "ecs/tests/test_app.py#answer-operator": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "4c3c0563d91f1c6eb06758ef4a774250f0f300b259a8a1fc6dce5f0e92c4ac76",
+      "sha256": "6e78e8292cb27651627754e13e8e2203cd594f87afb16c8075b7a0cd3880c013",
       "evidence": "Only AnswerCompleteTests/OperatorCompleteTests and inherited WorkSeatTests call/bind/rows/observe helpers run. Private SQLite and Git fixtures, fixed CLI requests, host-only MCP refusal controls. No complete-obligation/verified-work command or other test class runs. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -13925,7 +13925,7 @@
     },
     "ecs/adapters/app.py#desktop-work-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
+      "sha256": "9d6cbbed4c446b93eae5989496ae24e7412c858016f4f7c86c1add20f0b79b46",
       "evidence": "Finite desktop fixture requests: bind/checkpoint/brief/inspect/observe/verified-work/observation-receipt/seats/release-seat/complete-obligation. Reached dynamic imports return to the bound Mega Lander app for receipt verification. Import-preview/import-apply/sync-loro-receipts are not invoked. Core uses private SQLite/JSON and fixed SQL; no config value is sourced. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -13945,7 +13945,7 @@
     },
     "mega-lander/app.py#desktop-work-fixtures": {
       "source": "mega-lander/app.py",
-      "sha256": "80a2bfe1c8f443fca5e46bae4a4e40490468300cfbbf7d8cc82219ca181e56d5",
+      "sha256": "3143f0e816bccceba33fa0f9dbb6f497c0beddceebc0d625fbc86fa2850b3ab1",
       "evidence": "All call entrypoints plus observe, dispatch_intent, lock and receipt helpers run against source-bound private fixtures. Subprocesses are Git or fixed spawn.py; the test failure override is literal Python. Spawn hook sources are explicitly fixed to actual isolation guard. The module is imported, never launched as its MCP server. Retain every actual workspace/spawn configuration dependency. Renewed 2026-09-30 (hunt part 4, findings 18, 22, 23): run() exports RICHOS_OPERATION_DEADLINE to the command and, on timeout, reads ps to stop the process tree it started; prepare() releases the conversation lock while the spawn command runs and stamps its receipt with its own pid and start time; observe() saves only the receipts that changed. No configuration read is added. Renewed 2026-10-05 (Output side panel slice S2b): integrate's land witness loads scripts/lib/app-evidence.py by fixed path, runs git diff --name-only in the landed repository and appends land rows through append_land_rows under the fixture's private engine-state/evidence; a failure there is reported on stderr and never fails the land. No configuration read is added. Renewed 2026-10-06 (proto-teammate shelf slice 2): prepare reads the named teammate's definition off the fixture's private roster <entity root>/.claude/agents/, ALLOWED_MODELS from the fixture's private orchestration.config, and the duty text mega-lander/duties/<role>.md by fixed engine path, which it writes at the top of the brief; build_spawn_command passes richos-app-engine:<teammate> and that definition's model to the same fixed spawn.py. Renewed 2026-10-06 (proto-teammate shelf slice 3): role consult reads mega-lander/duties/consult.md by the same fixed path, names no repository, and passes the fixture's RICHOS_ENTITY_ROOT as the one --repo with no --dir to the same fixed spawn.py; worker_context refuses a consult's file edits; observe keeps a consult's handback or SubagentStop message on its receipt; project writes no ECS work unit for a consult. No configuration read is added. Renewed 2026-10-06 (proto-teammate shelf slice 4): the team tool lists and reads team/shelf/*.md by fixed engine path, reads the fixture's private orchestration.config ALLOWED_MODELS (the same key prepare reads) to check a definition before saving it, and writes <app data>/team/<name>.md, the parent of the fixture's RICHOS_APP_STATE, through a temporary file and a rename. No new configuration key is read. Renewed 2026-10-07 (weekly-switch handoff slice 4): prepare with continue_of checks for the app quota gate's marker <RICHOS_APP_STATE>/handoffs/<agent_id>.json under the fixture's private engine-state, reads the saved commit's message with git log, and for a marked worker runs git status, git add -A and git commit in its target workspaces, authored by that repository's own Git configuration as merge_commit already is. No configuration read is added. Renewed 2026-10-09 (zach-sonnet-shellc1): validate_shell_target loads scripts/lib/shell_c.py by fixed engine path and refuses a Bash command that wraps an inline script in bash -c, sh -c or zsh -c; the module reads only the command text, no configuration. Renewed 2026-10-09 (second review slice 4): prepare checks the scope's user_instruction.text against its sha256, starts a reviewer's brief with it and writes it beside the receipt (<id>.words, private); worker_spaces reads receipts and the canonical record read only. No new module, key or environment variable. Renewed 2026-10-15 (echo-opus-hire57): the team tool's description states the save-name rule in words; no code path, key or environment variable changed.",
       "keys": [
         "ALLOWED_MODELS"
@@ -13973,7 +13973,7 @@
     },
     "mega-lander/tests/app.test.py": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "5fa411735499902f8ea50f7e4f8ad4711bdad090563e2deff8c74fc4f08d4ab0",
+      "sha256": "0827854c6b4fcb0353434d00588f27cbbe539d4d52e17a5583bf8027a2411e28",
       "evidence": "Full fixed unittest fixture, literal holder/probe subprocess programs and one literal spawn failure override. Private Git, ECS stores, registry, scope, land locks and explicit single-hook manifest bind the app/adapter entrypoint guarantees. No agent, model, arbitrary setup or MCP server is invoked. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): setUp copies the always-active five (engine/agents/{dean,clark,reed,frank,pierce}.md) as data and writes one literal fictional teammate, mark.md, into the private roster; cases name a teammate in prepare and read the duty texts mega-lander/duties/*.md as data. Renewed 2026-10-06 (proto-teammate shelf slice 3): one case prepares Clark with role consult and no repository, starts and ends it through the existing fixture helpers with literal fictional messages, and reads the fixture's private ECS store for work units. Renewed 2026-10-06 (proto-teammate shelf slice 4): one case lists and shows the shipped shelf (team/shelf/*.md read as data), saves literal fictional definitions into the fixture's private <app data>/team/ and calls prepare once more against the private roster. Renewed 2026-10-09 (echo-opus-review4, second review slice 4): cases write the scope's user words (literal fictional text and its hash) and read the brief and <id>.words prepare writes; one case loads scripts/app-engine-hook.py and calls only its mid_job_notice, which loads scripts/lib/app_review.py over a literal private ledger; one case loads scripts/lib/review_watch.py and runs app_mode --tick (AppWorld over the fixture's private registry partition, with REVIEW_WATCH_SECOND_REVIEW a literal fake script that records its arguments and sleeps) and Watcher.stop_own on that fake's recorded pid. No model, Claude CLI or real review runs. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case passes a list's append as mid_job_notice's emit and reads the text from it; nothing else changes. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): the app-watcher case also gives app_mode a fixture path as accounts (never created) and checks the fake second-review's recorded --accounts argument; nothing new is read. Renewed 2026-10-11 (echo-opus-skills2, second review of 79ba6eb7e, finding 2): one more case reads mega-lander/duties/consult.md as data, as the consult case already does, and the module imports re; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-11 (echo-opus-skills2, mid-job review of 7f6ea1dd8): that case asserts more words of the same consult.md text; nothing new is read. Renewed 2026-10-14 (echo-opus-hiresnag55b): one test also runs ecs/adapters/mcp.py serve in process (no server process) to prove a brief the limit accepts fits the transport's request line. Renewed 2026-10-15 (echo-opus-hire57): one case reads engine/agents/dean.md as data (setUp already copies it) and saves literal fictional definitions into the fixture's private <app data>/team/ through the team tool; nothing new is read: no configuration key, environment variable, subprocess or outside file.",
       "keys": [],
       "edges": [
@@ -14006,7 +14006,7 @@
     },
     "scripts/app-engine-hook.py": {
       "source": "scripts/app-engine-hook.py",
-      "sha256": "14b14cb6a3cc4f2bcbb5d41146841e4f0896ce6fccb62585ee85480faeb5e56a",
+      "sha256": "9dc468c3174f756a8220e01798ab84150a2e5b3b9164d72b09c3cf6f97577d97",
       "evidence": "Added 2026-10-09 (second review slice 4; app.test.py's edge to it came with 8a433f70e and had no row). This row is what app.test.py reaches: it loads the module (standard-library imports; the module level only computes ENGINE from its own path) and calls only mid_job_notice, never handle, scope or main. mid_job_notice returns for a call without agent_id, loads scripts/lib/app_review.py by fixed path, stats the app's review ledger under the root it is given, calls worker_spaces on the work module it is passed (the fixture's own loaded mega-lander/app.py) and returns app_review.mid_job_notice's text; any exception is printed to stderr and yields empty text. No orchestration.config read, environment variable, subprocess or guard runs on this path. handle(), which reads RICHOS_APP_SCOPE/RICHOS_APP_STATE/RICHOS_ENTITY_ROOT and runs the guards, workspaces.py, app-evidence.py and guard-stated-actions.py, is bound separately by scripts/app-engine-hook.py#pause-rejection for its pause path and is not covered by this row. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): mid_job_notice takes emit and returns True once app_review.mid_job_notice called it; app.test.py passes a list's append as emit. An exception raised after emit was called is re-raised instead of printed (an output failure); any other still prints to stderr and returns False. Nothing new is read.",
       "keys": [],
       "edges": [
@@ -14042,7 +14042,7 @@
     },
     "scripts/lib/stall_watch.py#review-watch-helpers": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "af1278ebcc96ce0da7991eb8e1a169e8f3c235436748683a179ef6c4ebfc9bf8",
+      "sha256": "6ae250bfe2f321baef43df6e99a3f8eadf0174a551fe53a9533485e634af882d",
       "evidence": "Added 2026-10-09 (second review slice 4) for review_watch.py, which imports this module and uses its helpers; the --notice path stays bound by scripts/lib/stall_watch.py#notice. Module load: standard-library imports, the sibling imports resource_waits and escalations (neither reads configuration at import), constants. Helpers review_watch.py calls: hhmm, _env_float, _read_json/_write_json (JSON state files it names), _load (a module by fixed path, None when absent), Sources(engine_root) (loads mega-lander/workspaces.py by fixed path, loads richos/app/scripts/lib/proof_slots.py beside the engine without calling it, imports sibling agent_hold.py without calling it; reserve.py is loaded only by cpu_busy, which review_watch never calls), thresholds (environment STALL_WATCH_SILENT_MINUTES, STALL_WATCH_SELF_WAIT_MINUTES, STALL_WATCH_REPEAT_MINUTES and, through resource_waits.wait_minutes, RICHOS_RESOURCE_WAIT_MINUTES), _git_last_commit (git log -1 in the workspace), _transcript (workspaces.platform_agent_transcript), _try_lock/lock_held (flock on a named file), and in the monitor loop only session_alive_check (ps) and _nap. No orchestration.config read and no engine execution.",
       "keys": [],
       "edges": [
@@ -14098,7 +14098,7 @@
     },
     "scripts/lib/agent_hold.test.py": {
       "source": "scripts/lib/agent_hold.test.py",
-      "sha256": "a0a87cf6891a72cacb5ca3a7cec0958840db5ae9b1946e7248e697c356397914",
+      "sha256": "3df63b430665437c2aacadb42268dbeb214a7feb56ed12a165928d2ddfb9d893",
       "evidence": "Fixed Python fixture imports only the bound helper and standard library. Subprocess work/registry programs are literal strings in this source; no config-provided command or discovered test executes. Preserve the real helper closure conservatively. Renewed 2026-10-04: HeldAgentMakesNoModelCalls reads hooks/hooks.json for the PreToolUse[Bash] hooks that act on a held agent's call (the rewriter) and runs them, then the command they leave. Renewed 2026-10-04 (holdleak3): the fixture worker takes an optional go file as a literal argument, a path in the test's own temporary directory that the test creates after its hold; no new configuration key, environment variable or outside file is read.",
       "keys": [],
       "edges": [
@@ -15209,7 +15209,7 @@
     },
     "ecs/adapters/app.py#discovery-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "38ae20e48eca116ff134906605c452d233ce8a989f236b8ec1c252e2aaf2e1c8",
+      "sha256": "9d6cbbed4c446b93eae5989496ae24e7412c858016f4f7c86c1add20f0b79b46",
       "keys": [],
       "edges": [
         {
@@ -15287,7 +15287,7 @@
     },
     "ecs/tests/test_app.py": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "4c3c0563d91f1c6eb06758ef4a774250f0f300b259a8a1fc6dce5f0e92c4ac76",
+      "sha256": "6e78e8292cb27651627754e13e8e2203cd594f87afb16c8075b7a0cd3880c013",
       "keys": [],
       "edges": [
         {
@@ -15637,7 +15637,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "scripts/lib/pause_protocol.py",
-          "sha256": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+          "sha256": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -15685,7 +15685,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "scripts/lib/agent_hold.py",
-          "sha256": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+          "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -15785,7 +15785,7 @@
     },
     "scripts/lib/stall_watch.py#notice": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "af1278ebcc96ce0da7991eb8e1a169e8f3c235436748683a179ef6c4ebfc9bf8",
+      "sha256": "6ae250bfe2f321baef43df6e99a3f8eadf0174a551fe53a9533485e634af882d",
       "evidence": "--notice parses arguments and prints fixed text; its numbers are this file's constants or the STALL_WATCH_* and RICHOS_RESOURCE_WAIT_MINUTES environment overrides. It returns before the registry, the slot line or the CPU sampler is loaded. The module imports resource_waits.py, which reads no configuration at import. Renewed 2026-10-01: the module also imports escalations.py (the ESCALATION watch), which reads no configuration at import; --notice prints fixed text about it and reads neither the ledger nor any transcript.",
       "keys": [],
       "edges": [
@@ -15817,7 +15817,7 @@
     },
     "mega-lander/tests/app.test.py#pause-message-case": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "5fa411735499902f8ea50f7e4f8ad4711bdad090563e2deff8c74fc4f08d4ab0",
+      "sha256": "0827854c6b4fcb0353434d00588f27cbbe539d4d52e17a5583bf8027a2411e28",
       "evidence": "Added 2026-09-30 for workspaces.test.py's finding-20 case, which runs this suite with the one name test_pause_message_is_fixed. That selects only DesktopWork.test_pause_message_is_fixed_and_does_not_claim_delivery: setUp builds private Git repositories, a private orchestration.config, agent definitions copied from the engine as data, a private registry, scope, ECS store and land-locks directory, and loads app.py; the case renders pause messages and calls inspect over no receipts. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): the agent definitions setUp copies are now the always-active five plus a literal fictional teammate; the case still never reaches prepare. Renewed 2026-10-06 (proto-teammate shelf slice 3): a consult case was added beside it; this case is unchanged. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case elsewhere in the file changed; this case is unchanged. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): the case also calls resume_message and asserts both tools say NOT HELD / NOT RELEASED for the unregistered fixture name, against the same private registry; nothing else in setUp changed. Renewed 2026-10-15 (echo-opus-hire57): a Dean name-rule case was added elsewhere in the file; this case is unchanged.",
       "keys": [],
       "edges": [
@@ -15831,7 +15831,7 @@
     },
     "mega-lander/app.py#pause-message-case": {
       "source": "mega-lander/app.py",
-      "sha256": "80a2bfe1c8f443fca5e46bae4a4e40490468300cfbbf7d8cc82219ca181e56d5",
+      "sha256": "3143f0e816bccceba33fa0f9dbb6f497c0beddceebc0d625fbc86fa2850b3ab1",
       "evidence": "Reviewed 2026-09-30, the path app.test.py's pause-message case reaches: module load (ecs_core, the ECS adapter and workspaces.py loaded by fixed path); ECS bind, checkpoint, inspect and seats against the private store; workspaces.record_session_start (session registry and platform session JSON, git rev-parse, events); read_scope; pause_message, which renders pause_protocol; and inspect over no receipts, whose reconcile_seats retains this conversation's own seat. prepare, integrate, complete, spawn and land are not reached, so none of their model, scratch, app-instance or QA settings is read, and no orchestration.config is read. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): pause_message and the new resume_message call pause_protocol.issue, which renders the message and then imports mega-lander/workspaces.py by fixed path and calls current_session and pause(control=True) or resume; for an unregistered name (the app.test.py case) they stop at the registry lookup in the fixture's private RICHOS_WORKSPACES_DIR, and for a registered one (workspace-pause-hold.test.sh H11) they reach the workspaces.py#lifecycle-fixtures closure that suite already declares. No configuration read is added. Renewed 2026-10-15 (echo-opus-hire57): the team tool's description text only; nothing read changed.",
       "keys": [],
       "edges": [
@@ -16684,10 +16684,10 @@
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
         "scripts/lib/quota_watch.py": "bded843adc62b38bed41bae044e687db3c8064f3ea871ac82c54579210b30f34",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856"
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223"
       }
     },
     "scripts/hooks/root-contract.test.sh": {
@@ -16704,7 +16704,7 @@
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "scripts/lib/seat-jurisdiction.sh": "5a6c42a590bfb510dcab37039bb540c370d4aff731fd33211baf7bfe45c24fff",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -16758,10 +16758,10 @@
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
         "scripts/lib/quota_watch.py": "bded843adc62b38bed41bae044e687db3c8064f3ea871ac82c54579210b30f34",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856"
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223"
       }
     },
     "scripts/hooks/contract-integrity.test.sh": {
@@ -16812,7 +16812,7 @@
         "scripts/hooks/guard-unresolved-claims.test.sh": "58b9f2700b0be075e1ef95af1f4988e5a2989fdb3923144b105e6e23b3eceb81",
         "scripts/hooks/guard-workspace-gate.sh": "704f1516e9337a8dcdf4589fd5b74473bffffcb694c1460fa16bb43a4a2b802f",
         "scripts/hooks/guard-worktree-isolation.mutation.sh": "78c0a853cbbffd9329395faadcb69527aeaf6c12b17b45afefbbcecab995cff8",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/hooks/guard-worktree-isolation.test.sh": "8e9bdcf7b940c9070d803c74537d62b7ad202647d7cab33f32ddbf8fa6c247bc",
         "scripts/hooks/guard-worktree-removal.mutation.sh": "fd6a2fcd7355f73ecb051035a5dafcd54016daee52098f2314d4d5c79e62ed7d",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
@@ -16857,7 +16857,7 @@
         "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
         "scripts/lib/operator_fences.py": "619b54d7179599e21a54e492f30477bfb37a5ee24bee09777e6c0a6f7bbec01d",
         "scripts/lib/operator_fences_admin.py": "d4b9402bead1db4a74c5fc9f71978fcfc38ffb2b9a60e2664bce4180c5640b51",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/proc_tree.py": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
@@ -16900,7 +16900,7 @@
         "scripts/hooks/commit-ceo-inputs.py": "23341c30830399611efc4d9979df6bcdfc5b5d06f05c71d53da2755452aa6134",
         "scripts/hooks/guard-publication-writes.sh": "8d05dfb59a29be16bdcbd19aee71b0a402f58d928c82397f0a98da96f6f2531d",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
-        "scripts/hooks/detect-nonnative-worktree.sh": "11fe1d4301e448a709fa0117b1b7df797f3dc7750233d275f09b4d749a150dee",
+        "scripts/hooks/detect-nonnative-worktree.sh": "929a3def7667c4c0aaf23d1100d9cfeb90535730db1d6dca486cc437ff9e7387",
         "scripts/hooks/dispatch-pretooluse.sh": "9d416509d9ab8d2320e118e6920c5c6cb3f28c4889ae5969869474867508ce35",
         "scripts/hooks/failure-type-lookup.sh": "8e77ae84f95d79e11fd2f168a2fbb39c5f9548a8eec3ffcd0af5e4496e8cffd1",
         "scripts/lib/failure-type.py": "4979df06ab98e4bf1c1c0d86fb6a471db9fff8d6aa3efca88988118d24f81a9f",
@@ -17007,7 +17007,7 @@
         "scripts/hooks/worker-started-handoff.sh": "f18675f4938cae746d536661b44e49e7a3425c15acff5c7cd3ad2e1bf7ee9919",
         "scripts/hooks/worker-updated-handoff.sh": "6cbcdd13306d482c8bfd9da1f6ccc68141a3091f9f9405bb52232cb14430ebf8",
         "scripts/hooks/contract-integrity-case7.mutation.sh": "71a90a5ab0d82a3e109d7f06924e6766135b106bd3581b291067efb4fa663866",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3",
@@ -17238,7 +17238,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "mega-lander/workspaces.py": "322b96289885d846059115ed8f6438079cadc68aeaa66ca6bf23dd752b7b7637",
         "scripts/hooks/scan-secrets.sh": "fd488d5b07748fd41c773c80ec133eed526869534f4f1324c847a33701ae1ab1",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "scripts/hooks/guard-shared-scratchpad.sh": "4c3cf896da287334a38a6f3be20fc7a25bba901756ea1de665b5e4c77421f2c4",
@@ -17289,7 +17289,7 @@
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/hooks/release-land-leases.sh": "67507402a96c8fa243814ba2269cb3d3e00fede94ae50ca2c2bd9bb90b891e76",
         "scripts/hooks/turn-manifest.sh": "f5e92311f9896874e5294533673dd08160f3e4cfba4a262e161ae96e377331ae",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856"
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223"
       }
     },
     "scripts/hooks/waiver-repetition.test.sh": {
@@ -17606,7 +17606,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/guard-reference-ledger.sh": "d80ab9294a7ff64b244285f5467ecf728b692701b6a5d526152909335b750874",
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/testdevices.py": "912fc004b3cc04e6c6bf91524dcfab2fe0e9c94f087a7715eee47df1882839ab",
         "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
@@ -17623,7 +17623,7 @@
         "scripts/hooks/guard-unresolved-claims.py": "ba32db57dc08fd887b4210ce09e3e7cfc2a94ef16f89bd5c09d19378fada881d",
         "scripts/hooks/guard-workflow-ban.sh": "2b93395b9ef6e99b03221e0dcf7682b926f366dbb7884c3889c00384cf550ade",
         "scripts/hooks/guard-workspace-gate.sh": "704f1516e9337a8dcdf4589fd5b74473bffffcb694c1460fa16bb43a4a2b802f",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "b0324ae5589a7116ab2416643a899de05613fda7dafb204ce56c6d6e8e784585",
         "scripts/hooks/commit-ceo-inputs.py": "23341c30830399611efc4d9979df6bcdfc5b5d06f05c71d53da2755452aa6134",
@@ -17684,7 +17684,7 @@
         "scripts/hooks/guard-vendoring-commits.sh": "88f0eef0c45b61a143ce0ebd0cba1b8ceda9f908d0cfed09994a9acc30da1208",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3",
@@ -17713,7 +17713,7 @@
         "scripts/hooks/guard-model-ceiling.sh": "5837b9e9d2156487b00f280456da78f88e0bc66d6a4bbc32c6a1a9eeda8c60e3",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/testdevices.py": "912fc004b3cc04e6c6bf91524dcfab2fe0e9c94f087a7715eee47df1882839ab",
@@ -17730,7 +17730,7 @@
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
         "scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
@@ -17749,7 +17749,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa"
       },
       "evidence": "Suite and probe audit every event, ordering, registration count and expanded dispatcher manifest. Hook inventory edits select this whole unit."
@@ -17764,17 +17764,17 @@
       ],
       "sources": {
         "scripts/spawn.test.sh": "bdcbadba325947b1c85f81d4c76c88c4c3b2c768107fa2c9086aba9a690249b4",
-        "scripts/lib/spawn.py": "73ebada7af9d7fe2d6d294e26b8b51e275ef44872447a23d7a45aee36a410697",
+        "scripts/lib/spawn.py": "3f5b489bc1684909bd8b3d63a8c083921ef845cfb3ea43b9e6bc53cd7c353c56",
         "ass-kicker/brief-provenance.py": "78b82b175a6d2e59032bcffd9ca49928023f4742bd8866275c581e7afb6d4a10",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/workspaces.py": "322b96289885d846059115ed8f6438079cadc68aeaa66ca6bf23dd752b7b7637",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
@@ -17784,7 +17784,7 @@
         "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
         "scripts/lib/testdevices.py": "912fc004b3cc04e6c6bf91524dcfab2fe0e9c94f087a7715eee47df1882839ab",
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
-        "scripts/prepare-agent-spawn.py": "5c8ebac6082cdf7420658c3453b88eee017838c9f331e70f300ba5b91e177b9a",
+        "scripts/prepare-agent-spawn.py": "916ec2a2f12b877e5820edf1d90bd9cce06117117573e652d5c344393ce79e85",
         "scripts/spawn.sh": "c1965676afbb3cca7b2659304bc23574cc738dedd84c1410841b11498ba26bc9",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3"
       },
@@ -17803,11 +17803,11 @@
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-unresolved-claims.py": "ba32db57dc08fd887b4210ce09e3e7cfc2a94ef16f89bd5c09d19378fada881d",
         "scripts/hooks/guard-workspace-gate.sh": "704f1516e9337a8dcdf4589fd5b74473bffffcb694c1460fa16bb43a4a2b802f",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
@@ -17817,7 +17817,7 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/mutation-pool.sh": "c521ec5da8b8b6d1f44c41d97be2b48bb1b4dd7ff25bf985d42728b7268284b9",
         "scripts/lib/operator_fences.py": "619b54d7179599e21a54e492f30477bfb37a5ee24bee09777e6c0a6f7bbec01d",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/proc_tree.py": "ca4557acad8c3b91f0137d2cd68f5695893ba85e52f5042595e00883b9a9144c",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
@@ -17850,14 +17850,14 @@
         "mega-lander/workspaces.sh": "6d5ddbdf25829d1519727ed230665ce81c63141cf4320274d0a2522b80ceaee1",
         "scripts/hooks/guard-sealed-worktree.sh": "8b070f51e3b625aced36034d38d28c5231a8f0c780a51373d48d44e228d17bf1",
         "scripts/hooks/guard-workspace-gate.sh": "704f1516e9337a8dcdf4589fd5b74473bffffcb694c1460fa16bb43a4a2b802f",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -17956,10 +17956,10 @@
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
         "scripts/hooks/guard-resume-isolation.test.sh": "2fc190fc539a183b423ac8ba7a22a23c56d6f8cd289aa341a67a7d6fd8f39a1d",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -17996,7 +17996,7 @@
         "scripts/hooks/guard-model-ceiling.sh": "5837b9e9d2156487b00f280456da78f88e0bc66d6a4bbc32c6a1a9eeda8c60e3",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/testdevices.py": "912fc004b3cc04e6c6bf91524dcfab2fe0e9c94f087a7715eee47df1882839ab",
@@ -18013,7 +18013,7 @@
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
         "scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
@@ -18032,7 +18032,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa"
       },
       "evidence": "Suite and probe audit every event, ordering, registration count and expanded dispatcher manifest. Hook inventory edits select this whole unit."
@@ -18054,7 +18054,7 @@
         "scripts/hooks/guard-model-ceiling.sh": "5837b9e9d2156487b00f280456da78f88e0bc66d6a4bbc32c6a1a9eeda8c60e3",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/testdevices.py": "912fc004b3cc04e6c6bf91524dcfab2fe0e9c94f087a7715eee47df1882839ab",
@@ -18071,7 +18071,7 @@
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
         "scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
@@ -18090,7 +18090,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa"
       },
       "evidence": "Suite and probe audit every event, ordering, registration count and expanded dispatcher manifest. Hook inventory edits select this whole unit."
@@ -18112,7 +18112,7 @@
         "scripts/hooks/guard-model-ceiling.sh": "5837b9e9d2156487b00f280456da78f88e0bc66d6a4bbc32c6a1a9eeda8c60e3",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
-        "scripts/hooks/guard-worktree-isolation.sh": "c200f7a5b48835054ce460b95053abca44ac6dbaf677289940c23fc196917025",
+        "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/testdevices.py": "912fc004b3cc04e6c6bf91524dcfab2fe0e9c94f087a7715eee47df1882839ab",
@@ -18129,7 +18129,7 @@
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
         "scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
-        "scripts/lib/pause_protocol.py": "395ee7de08c85ce31efa46032e67fca2a11b317c45382fb9a8407ebf5c4b1cb4",
+        "scripts/lib/pause_protocol.py": "5f24b2d4b89b901cbf70d05e9259139767ecda611899e61f2bd93dee55ed6d3c",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
@@ -18148,7 +18148,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "db60b44996d00dbfb9e6221c479df8dd3c7a0d7a4a653ac23c22d5d700de8856",
+        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa"
       },
       "evidence": "Suite and probe audit every event, ordering, registration count and expanded dispatcher manifest. Hook inventory edits select this whole unit."

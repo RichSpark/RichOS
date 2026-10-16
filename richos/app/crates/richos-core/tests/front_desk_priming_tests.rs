@@ -275,7 +275,7 @@ fn rich_is_given_the_company_name_exactly_as_he_typed_it() {
     assert!(matches!(spine.prime_front_desk(&thread), FrontDeskReady::Ready { .. }));
     let priming = reprimes.lock().unwrap()[0].clone();
     assert!(priming.contains("\"Brightwave LABS\""), "the name as he typed it is in the priming: {priming}");
-    assert!(priming.contains("exactly"), "and Rich is told to write it exactly so: {priming}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&priming).unwrap()["company_material"]["company_name"],"Brightwave LABS");
     std::fs::remove_file(&path).expect("the test ledger is removable");
 }
 

@@ -249,7 +249,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = WorkHost::new(&state, Box::new(RealWorkLeases {
         engine: engine.clone(), data: data.clone(), runtime: runtime.clone(),
         doctrine: richos_core::doctrine::ensure_rendered(&data, &Default::default())?,
-        skills: richos_core::skills::ensure_rendered(&data)?,
+        skills: richos_core::skills::ensure_rendered(&data, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app"))?,
         permissions: permissions.clone(), spawns: spawns.clone(),
     }), Arc::new(Says { out: out.clone(), names: names.clone() }), permissions.clone());
     let walk = Walk {

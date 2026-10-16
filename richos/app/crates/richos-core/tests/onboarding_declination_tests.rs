@@ -37,6 +37,10 @@ use std::path::PathBuf;
 
 mod support;
 
+fn observed(text:&str)->serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(text).unwrap()["company_material"]["setup"]["onboarding"].clone()
+}
+
 /// `femcboost` rather than a new id: `support::registry()` is the shared fixture and a
 /// bare spine accepts no entity outside it. The company being described here is a fixture and
 /// exists on no machine.
@@ -100,7 +104,7 @@ fn the_declination_changes_what_rich_is_primed_with() {
 
     let before = primings(&mut spine);
     assert!(
-        before[0].contains("He has not been asked yet."),
+        (observed(&before[0])=="not_yet"),
         "before the press, Rich is told to offer: {}",
         before[0]
     );
@@ -117,12 +121,12 @@ fn the_declination_changes_what_rich_is_primed_with() {
 
     let after = primings(&mut spine2);
     assert!(
-        after[0].contains("said not now"),
+        observed(&after[0])["declined"].is_object(),
         "after the press, Rich is told he already asked: {}",
         after[0]
     );
     assert!(
-        !after[0].contains("He has not been asked yet."),
+        !(observed(&after[0])=="not_yet"),
         "and he is NOT told to offer again — that is the nag: {}",
         after[0]
     );
@@ -159,7 +163,7 @@ fn the_notice_state_and_the_priming_block_never_disagree() {
     spine.set_onboarding_record(record_path(&config));
     let b = spine.ensure_active_thread_in(&company()).unwrap();
     assert_eq!(spine.onboarding_state(&b), OnboardingState::NotYet);
-    assert!(primings(&mut spine)[0].contains("He has not been asked yet."));
+    assert_eq!(observed(&primings(&mut spine)[0]),"not_yet");
 
     // (c) he was asked and declined.
     spine.record_onboarding_declination(1_788_634_800_000).unwrap();
@@ -169,7 +173,7 @@ fn the_notice_state_and_the_priming_block_never_disagree() {
     spine.set_onboarding_record(record_path(&config));
     let b = spine.ensure_active_thread_in(&company()).unwrap();
     assert_eq!(spine.onboarding_state(&b), OnboardingState::Declined { at_millis: 1_788_634_800_000 });
-    assert!(primings(&mut spine)[0].contains("said not now"));
+    assert!(observed(&primings(&mut spine)[0])["declined"].is_object());
 
     // (d) described — and DESCRIBED WINS OVER A DECLINATION, which is the ordering the
     // notice depends on: a company he later wrote up must stop being a company he declined
@@ -189,7 +193,7 @@ fn the_notice_state_and_the_priming_block_never_disagree() {
     assert_eq!(spine.onboarding_state(&b), OnboardingState::Described);
     let primed = primings(&mut spine)[0].clone();
     assert!(primed.contains("coastal freight scheduling"), "the material, not the offer: {primed}");
-    assert!(!primed.contains("said not now"), "and not the declination either: {primed}");
+    assert!(!observed(&primed)["declined"].is_object(), "and not the declination either: {primed}");
 
     for p in [&path, &path_b, &path_c, &path_d] {
         let _ = std::fs::remove_file(p);
@@ -330,7 +334,7 @@ fn not_now_during_boot_priming_with_a_queued_message_costs_no_extra_priming() {
     let after_prime = primes.lock().unwrap().len();
     assert_eq!(after_prime, 2, "the boot prime, then the queued message's re-prime with the decline");
     assert!(
-        primes.lock().unwrap()[1].contains("said not now"),
+        observed(&primes.lock().unwrap()[1])["declined"].is_object(),
         "the queued message's re-prime already carries the decline"
     );
 
@@ -455,7 +459,7 @@ fn after_not_now_the_next_message_on_every_kind_of_desk_carries_the_decline() {
     for desk in ["desk-1", "desk-2", "desk-3"] {
         let p = primes_of(&primes, desk);
         assert_eq!(p.len(), 1, "{desk} was primed once before the answer");
-        assert!(p[0].contains("He has not been asked yet."), "{desk} was primed with the offer");
+        assert!(observed(&p[0])=="not_yet", "{desk} was primed with the offer");
     }
 
     spine.reader().snapshot().record_onboarding_declination(1_000).unwrap();
@@ -469,11 +473,11 @@ fn after_not_now_the_next_message_on_every_kind_of_desk_carries_the_decline() {
 
     for (kind, desk) in [("in use", "desk-2"), ("parked", "desk-1"), ("spare", "desk-3")] {
         let p = primes_of(&primes, desk);
-        let carries = p.last().is_some_and(|text| text.contains("said not now"));
+        let carries = p.last().is_some_and(|text| observed(text)["declined"].is_object());
         eprintln!("[not-now-every-desk] {kind} ({desk}): {} primes; the last carries the decline: {carries}", p.len());
         assert_eq!(p.len(), 2, "the {kind} desk is re-primed exactly once after the answer");
         assert!(carries, "the {kind} desk's next message carries the decline: {}", p[1]);
-        assert!(!p[1].contains("He has not been asked yet."), "and no longer the offer ({kind})");
+        assert!(!(observed(&p[1])=="not_yet"), "and no longer the offer ({kind})");
     }
     assert_eq!(
         spawns.load(std::sync::atomic::Ordering::SeqCst),
@@ -531,7 +535,7 @@ fn not_now_while_a_spare_is_starting_costs_its_first_message_no_extra_priming() 
     {
         let log = primes.lock().unwrap();
         assert_eq!(log.len(), 1, "the spare's own priming turn");
-        assert!(log[0].1.contains("said not now"), "the spare was primed after the answer, with the decline");
+        assert!(observed(&log[0].1)["declined"].is_object(), "the spare was primed after the answer, with the decline");
     }
 
     let mut held = spine.lock().unwrap();

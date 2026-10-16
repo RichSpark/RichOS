@@ -94,14 +94,6 @@ pub trait LeaseFactory: Send {
         None
     }
 
-    /// **The definitions on the team the next lease would register**
-    /// (`engine_profile::active_team`): the name each records is what tells the work host a
-    /// hiring is finished, every proposed teammate saved. `None` — the default, and any reading
-    /// that fails — means this factory cannot say, and no hiring is held open on the strength of it.
-    fn team_definitions(&self) -> Option<Vec<String>> {
-        None
-    }
-
     /// **The models the next leases would start on** (the CEO's §119): Rich's for a
     /// conversation lease and Stu's for a work lease, as the stored setting says now. Read at
     /// each boundary and compared with the lease in the chair's own
@@ -295,6 +287,10 @@ pub trait Cognition: Send {
     fn set_input_channel(&mut self, _channel: Option<&str>) -> Result<(), CognitionError> { Ok(()) }
     fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
         _source: crate::ledger::Source, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+
+    /// Prepare ordinary peer input without manufacturing an assignment.
+    fn prepare_agent_message(&mut self,_binding:&crate::entity::ThreadBinding,_turn:&str,
+        _message:&crate::session_tools::Message)->Result<(),CognitionError> {Ok(())}
 
     /// Give the session the context brief his next turn would otherwise supply first, while
     /// nobody is waiting: called right after the priming turn, under that turn's own ledger

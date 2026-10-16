@@ -68,29 +68,10 @@ pub enum SpineError {
     #[error("steering intake: {0}")]
     Steering(String),
     /// A job's result could not be taken off its assignment to be written into the
-    /// conversation ([`Spine::say_work_results`]); it stays pending there.
+    /// conversation (the ordinary intake queue); it stays pending there.
     #[error("assignments: {0}")]
     Assignments(String),
 }
-
-/// **The sentence the interview's team proposal ends on** (`skills/bootstrap-interview/SKILL.md`,
-/// which the front desk carries word for word), compared lowercase with a typographic
-/// apostrophe read as a plain one. His go to it starts the hiring ([`Spine::is_go_on_the_team_proposal`]).
-const TEAM_PROPOSAL_ASK: &str = "say go and i'll get them hired now";
-
-/// **What the register hands back for a task** (`assignment.rs`, `Receipt::sentence` and
-/// `sentence_after_questions`). The first is what the app says at once on his go; either, when
-/// the register's answer streams in afterwards, is the same words and is not said twice.
-const GO_RECEIPT: &str = "On it!";
-const GO_RECEIPT_AFTER_QUESTIONS: &str = "Got it. On it!";
-
-/// **His go, as a person says it**, compared lowercase with everything but letters, digits and
-/// spaces dropped ("Go.", "Yes, go!", "OK, go ahead", "Let's go"). Anything longer or different
-/// ("Go, but drop Beth") is the model's to answer, as before.
-const GO_WORDS: [&str; 14] = [
-    "go", "go ahead", "go for it", "yes", "yes go", "yes go ahead", "yes please", "ok go", "okay go",
-    "ok go ahead", "okay go ahead", "do it", "hire them", "lets go",
-];
 
 /// A prompt accepted while a turn was in flight, awaiting delivery at the next turn
 /// boundary (queue-not-interrupt: the CEO is never blocked, workers are never killed).
@@ -524,6 +505,52 @@ pub enum FrontDeskReady {
     NotReady(String),
 }
 
+struct Delivery {
+    turn_id:String,
+    binding:ThreadBinding,
+    text:String,
+    allow_recovery:bool,
+    internal_turn:bool,
+    live_turn:LiveTurn,
+    persist_err:Option<LedgerError>,
+    stopped_before_prompt:bool,
+    preparation_failed:bool,
+    preparation_stop:Option<String>,
+    preparation:Result<(),CognitionError>,
+    lease:Option<Box<dyn Cognition>>,
+    session_id:Option<String>,
+}
+
+fn run_delivery(delivery:&mut Delivery,on_item:&mut dyn FnMut(&mut Delivery,TurnItem))->Result<String,CognitionError> {
+    if delivery.stopped_before_prompt {
+        return Ok(delivery.preparation_stop.take().unwrap_or_else(||crate::native::STOP_REASON_CANCELLED.to_string()));
+    }
+    std::mem::replace(&mut delivery.preparation,Ok(()))?;
+    let mut lease=delivery.lease.take().ok_or_else(||CognitionError::Protocol("No prepared conversation connection".into()))?;
+    let result=lease.prompt(&delivery.text.clone(),&mut |item|on_item(delivery,item));
+    delivery.lease=Some(lease);
+    result
+}
+
+/// Run prepared conversation I/O with the shared state unlocked. Deltas and terminal
+/// state still enter through the same durable ledger and event handlers.
+pub fn drive_shared_turns(spine:&std::sync::Mutex<Spine>)->Result<(),SpineError> {
+    let mut failure=None;
+    loop {
+        let Some(mut delivery)=spine.lock().unwrap().pending_delivery.take() else {break};
+        let binding=delivery.binding.clone();
+        let result=run_delivery(&mut delivery,&mut |delivery,item| {
+            spine.lock().unwrap().capture_delivery_item(delivery,item);
+        });
+        let mut state=spine.lock().unwrap();
+        let delivered=state.finish_delivery(delivery,result);
+        let boundary=state.after_turn_boundary(&binding);
+        let queued=state.drain_queue();
+        if let Err(error)=delivered.and(boundary).and(queued) {if failure.is_none() {failure=Some(error)}}
+    }
+    match failure {Some(error)=>Err(error),None=>Ok(())}
+}
+
 pub struct Spine {
     ledger: Ledger,
     reader: Option<crate::read_view::SpineReader>,
@@ -572,6 +599,8 @@ pub struct Spine {
     /// a turn can END while engine subagents keep running, so delivery/rotation proceeds
     /// the moment the turn ends. Rotation NEVER happens inside a turn.
     turn_in_progress: bool,
+    detached_delivery: bool,
+    pending_delivery: Option<Delivery>,
     queue: VecDeque<Queued>,
     /// **The conversations whose turns have ENDED since the shell last asked** — one binding
     /// per thread, in the order their first turn ended. See [`Spine::take_ended_turns`].
@@ -821,6 +850,8 @@ impl Spine {
             active: None,
             registry: EntityRegistry::empty(),
             turn_in_progress: false,
+            detached_delivery: false,
+            pending_delivery: None,
             control: TurnControl::detached(),
             central_root: None,
             onboarding_record: None,
@@ -985,7 +1016,7 @@ impl Spine {
     fn ceo_message_event(&self, binding: &ThreadBinding, turn_id: &str) -> Vec<LiveEvent> {
         let Some(turn) = self.ledger.turn(turn_id) else { return Vec::new() };
         // A pressed button's words are not his, so they are never sent as his row (finding 14).
-        if turn.user_text.is_empty() || turn.source == Source::Proactive || turn.pressed {
+        if turn.user_text.is_empty() || matches!(turn.source, Source::Proactive | Source::Agent) || turn.pressed {
             return Vec::new();
         }
         vec![LiveEvent::CeoMessage {
@@ -1444,8 +1475,7 @@ impl Spine {
             payload.worker_state = workers.priming_lines();
         }
         self.fill_loro_tier(&mut payload, binding);
-        let mut priming = payload.to_priming_prompt();
-        if let Some(block) = &onboarding_block { priming.push_str(block); }
+        let priming = payload.to_priming_prompt_with_company(onboarding_block.as_deref());
         // Claim-then-execute, Internal visibility, exactly like the chair's `session_reprime`.
         // **"The spare WAS primed" is the fact the whole saving rests on**, so it is durable
         // even though the thread it names does not exist yet — and naming the reserved id is
@@ -1581,7 +1611,7 @@ impl Spine {
     }
 
     pub fn has_lease(&self) -> bool {
-        self.lease.is_some()
+        self.lease.is_some() || self.turn_in_progress
     }
 
     /// Called with the shell's idle lock held and worker observations checked.
@@ -1675,11 +1705,9 @@ impl Spine {
         let onboarding =
             crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding));
         match self.registry.get(binding.entity_id()) {
-            Some(entity) => Some(
-                crate::onboarding::company_name_block(binding.entity_id(), &entity.display_name)
-                    + &onboarding.unwrap_or_default(),
-            ),
-            None => onboarding,
+            Some(entity)=>Some(serde_json::json!({"entity_id":binding.entity_id(),"company_name":entity.display_name,
+                "setup":onboarding.and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok())}).to_string()),
+            None=>onboarding,
         }
     }
 
@@ -2027,12 +2055,17 @@ impl Spine {
     /// trigger, or a test) has already decided on, persist it durably and — for Tier 1/2
     /// only, never Tier 3/Silent — surface it to the UI at once, also while a turn is in
     /// flight (round 16 draws the switch line beside the working row). Returns the new
-    /// turn id.
     pub fn raise_proactive(
         &mut self,
         thread_id: Option<&str>,
         tier: AttentionTier,
         text: &str,
+    ) -> Result<String, SpineError> {
+        self.raise_proactive_identified(thread_id, tier, text, None)
+    }
+
+    fn raise_proactive_identified(
+        &mut self, thread_id: Option<&str>, tier: AttentionTier, text: &str, delivery_id: Option<String>,
     ) -> Result<String, SpineError> {
         // A proactive message is a scoped WRITE like any other: the binding comes from the
         // ledger (never from the caller), so Rich cannot speak unprompted into an unbound
@@ -2044,7 +2077,10 @@ impl Spine {
         let thread_id = binding.thread_id().to_string();
         // Durable regardless of tier or turn state — once Rich has "said" something
         // (even if Silent never renders it), it must survive a crash immediately after.
-        let turn_id = self.ledger.record_proactive_message(&binding, tier, text)?;
+        let turn_id = match delivery_id {
+            Some(id) => self.ledger.record_proactive_message_as(&binding, tier, text, id)?,
+            None => self.ledger.record_proactive_message(&binding, tier, text)?,
+        };
 
         // ACTION LEDGER (continuity §5.4 / §6.1): raising a proactive message is the one
         // genuinely CEO-FACING thing this app does on its own initiative today — Rich
@@ -2084,34 +2120,6 @@ impl Spine {
             self.emit_proactive_live(&binding, &turn_id, tier, text);
         }
         Ok(turn_id)
-    }
-
-    /// **A job's result, written into the conversation it was asked in, as Rich's message**
-    /// (nightly 57's hunt, finding 6). "Will and Beth have both joined your team" was a card the
-    /// window drew from the assignment's notice, marked told as it was handed over, and gone
-    /// after a relaunch: the conversation ended at "On it!" and he never saw his team hired.
-    ///
-    /// Takes this conversation's waiting results off their assignments
-    /// ([`crate::assignment::NoticeKind::is_result`]), oldest first, and raises each as a
-    /// proactive message ([`Self::raise_proactive`], `Digest`): durable, in the timeline after
-    /// a relaunch, in the tail the front desk is primed with, and drawn at once by the window's
-    /// `rich://proactive-message`. The notices that say where a job stands now stay on their
-    /// assignments for the window's cards. Answers the words written, oldest first, so the shell
-    /// can hand them to the speaker in voice mode (`rich://work-result`): drawing the message
-    /// says nothing out loud.
-    ///
-    /// Called with the spine held and no turn running, so a result never lands inside a turn.
-    pub fn say_work_results(&mut self, engine_state: &std::path::Path, thread_id: &str) -> Result<Vec<String>, SpineError> {
-        let binding = self.ledger.thread_binding(thread_id)?;
-        let entity = binding.entity_id().as_str().to_string();
-        let results = crate::assignment::take_pending_notices_of(engine_state, &entity, thread_id, |kind| kind.is_result())
-            .map_err(|e| SpineError::Assignments(e.to_string()))?;
-        let mut written = Vec::new();
-        for notice in results.into_iter().filter(|notice| !notice.text.trim().is_empty()) {
-            self.raise_proactive(Some(thread_id), AttentionTier::Digest, &notice.text)?;
-            written.push(notice.text);
-        }
-        Ok(written)
     }
 
     /// **A conversation the app opens on its own, with Rich's first message already in it**
@@ -2599,24 +2607,6 @@ impl Spine {
         })
     }
 
-    /// [`Self::record_prompt`] for a channel message that carries its sender's own id (a
-    /// phone's `client_id`) or is the transcript of a voice note the sender recorded
-    /// (`voice_note`). `Source::Text`, off the intake log, never desk-spoken here — the same
-    /// three facts the `Channel` drain arm has always written — with the channel kept only
-    /// where this install keeps it, exactly as `record_prompt` decides.
-    fn record_prompt_from_client(
-        &mut self,
-        binding: &ThreadBinding,
-        text: &str,
-        intake_id: u64,
-        channel: &str,
-        client_id: Option<&str>,
-        voice_note: bool,
-    ) -> Result<String, SpineError> {
-        let kept = self.keep_intake_channel.then_some(channel);
-        Ok(self.ledger.record_prompt_received_from_client(binding, text, Source::Text, intake_id, kept, client_id, voice_note)?)
-    }
-
     /// **ACCEPTING one CEO utterance: everything that happens between his sentence arriving
     /// and the decision to queue or deliver it.** Persist, announce, and look at it for the
     /// three correction families — in that order, and never in any other.
@@ -2900,62 +2890,6 @@ impl Spine {
         }
     }
 
-    /// **Is this his go on the team the interview just proposed?** His words are one of
-    /// [`GO_WORDS`], and the last thing said in this conversation before them, Rich's own
-    /// proactive lines aside, is Rich's proposal ending [`TEAM_PROPOSAL_ASK`]. Typed or
-    /// spoken; never a turn the app or a phone wrote for him.
-    fn is_go_on_the_team_proposal(&self, binding: &ThreadBinding, turn_id: &str, text: &str) -> bool {
-        let plain = |words: &str| words.to_lowercase().replace('\u{2019}', "'");
-        let said: String = plain(text).chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect();
-        let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !GO_WORDS.contains(&said.as_str()) {
-            return false;
-        }
-        if !self.ledger.turn(turn_id).is_some_and(|turn| matches!(turn.source, Source::Text | Source::Jam)) {
-            return false;
-        }
-        let Ok(messages) = self.ledger.messages(binding.thread_id()) else { return false };
-        messages
-            .iter()
-            .rev()
-            .filter(|message| message.turn_id != turn_id)
-            .find(|message| self.ledger.turn(&message.turn_id).is_none_or(|turn| turn.source != Source::Proactive))
-            .is_some_and(|message| message.role == "assistant" && plain(&message.text).contains(TEAM_PROPOSAL_ASK))
-    }
-
-    /// **Say "On it!" now, as this turn's first words, when he has just said go on the team
-    /// proposal** ([`Self::is_go_on_the_team_proposal`]): written to the ledger at position 0
-    /// and sent to the window and every live surface the way a streamed word is. `true` when it
-    /// was said. A write that fails says nothing and leaves the turn to the model, as before.
-    fn say_on_it_ahead(&mut self, binding: &ThreadBinding, turn_id: &str, text: &str, live_turn: &mut LiveTurn) -> bool {
-        if !self.is_go_on_the_team_proposal(binding, turn_id, text) {
-            return false;
-        }
-        let at = match self.ledger.append_assistant_delta(turn_id, GO_RECEIPT, 0) {
-            Ok(at) => at,
-            Err(e) => {
-                eprintln!("[richos] his go on the team proposal: \"{GO_RECEIPT}\" could not be written ahead of the turn ({e}); the model says it");
-                return false;
-            }
-        };
-        // The chunk carries a space after the words: voice mode speaks `rich://chunk` through
-        // a sentence chunker that holds a full stop until it sees past it, so a bare "On it!"
-        // was spoken only when the turn completed. The window draws from the live surfaces
-        // below and the ledger keeps the words as they are.
-        if let Some(observer) = self.observer.as_deref() {
-            observer.on_event(&StreamEvent::Chunk {
-                thread_id: binding.thread_id().to_string(),
-                turn_id: turn_id.to_string(),
-                seq: 0,
-                text_delta: format!("{GO_RECEIPT} "),
-                at,
-            });
-        }
-        let runs = self.ledger.turn(turn_id).map(|t| t.text_runs.as_slice()).unwrap_or(&[]);
-        Self::forward_live(self.live.as_deref(), live_turn.on_text(runs, 0, GO_RECEIPT, now_millis()));
-        true
-    }
-
     /// Deliver one already-journaled turn to the current lease. Each assistant delta is
     /// persisted to the ledger FIRST (crash-safe partial capture) and then emitted LIVE
     /// to the UI sink, so the CEO sees Rich's reply render token-by-token. Turn-state
@@ -2967,13 +2901,20 @@ impl Spine {
     /// recovery + replay (continuity §5.3) if a lease factory is attached. Pass `false`
     /// from the recovery path itself so a lease that dies immediately on every respawn
     /// surfaces honestly after one attempt rather than looping forever.
-    fn deliver(
-        &mut self,
-        turn_id: &str,
-        binding: &ThreadBinding,
-        text: &str,
-        allow_recovery: bool,
-    ) -> Result<(), SpineError> {
+    fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
+        let mut delivery=self.prepare_delivery(turn_id,binding,text,allow_recovery)?;
+        if self.detached_delivery && !delivery.internal_turn {
+            self.pending_delivery=Some(delivery);
+            return Ok(());
+        }
+        let result=run_delivery(&mut delivery,&mut |delivery,item|self.capture_delivery_item(delivery,item));
+        self.finish_delivery(delivery,result)
+    }
+
+    /// Shared desktop callers drive prepared visible replies after releasing their lock.
+    pub fn detach_conversation_io(&mut self) {self.detached_delivery=true;}
+
+    fn prepare_delivery(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<Delivery,SpineError> {
         // The scope is re-verified at delivery, not merely at acceptance: a queued turn
         // may have waited across an active-context switch, and this is the last point
         // before the text reaches a compute lease.
@@ -3017,15 +2958,8 @@ impl Spine {
         // The additive family's per-turn bookkeeping (§13). Holds no counter of its own:
         // message ids come from the ledger's `text_runs` fold, activity identity and
         // position from `machinery.rs`'s merge rules.
-        let mut live_turn = LiveTurn::new(EventFence::for_turn(binding, turn_id), internal_turn);
+        let live_turn = LiveTurn::new(EventFence::for_turn(binding, turn_id), internal_turn);
 
-        // **"ON IT!" THE INSTANT HE SAYS GO ON THE TEAM PROPOSAL** (nightly 57's product hunt,
-        // finding 3: it came 14 seconds after "Go.", written by a full model turn behind a
-        // re-prime, and it is always the same two words). Said here, before the request is
-        // prepared and before the model is asked anything, at position 0 of the turn; the
-        // lease's own items follow it one position on, and the register's copy of the same
-        // words is not said again (the stream below). The model still gets his go and hires.
-        let said_ahead = self.say_on_it_ahead(binding, turn_id, text, &mut live_turn);
 
         // Preparation belongs to the accepted request. Its text stays internal, but
         // its wait and cancellation must share the user's visible lifecycle.
@@ -3059,107 +2993,61 @@ impl Spine {
             other => CognitionError::Protocol(other.to_string()),
         });
 
-        // Disjoint field borrows: the closure appends each delta to the ledger AND emits
-        // it live, while `lease` streams — `ledger`, `lease`, `observer`, `machinery_*`
-        // are distinct fields of *self, so all can be borrowed at once.
-        let ledger = &mut self.ledger;
-        let observer = self.observer.as_deref();
-        let journal = self.machinery_journal.as_ref();
-        let machinery_observer = self.machinery_observer.as_deref();
-        let live_observer = self.live.as_deref();
-        // The output record, so witness (a) can record a file the moment the call that wrote
-        // it completes (Output side panel PRD §4.1 (a)).
-        let output_store = self.output.as_ref().map(|(store, _)| store);
-        // The engine's worker-lifecycle stream, borrowed as a distinct field so the closure
-        // below can re-read it DURING the turn — that is what makes a delegation reach the
-        // screen while it is happening rather than at the next `get_timeline`. It is read
-        // lazily (`LiveTurn::on_machinery` calls the thunk only once this turn has a
-        // delegation to resolve), so a turn that never delegates does no extra file I/O.
-        let worker_source = &self.worker_events;
-        // THE MEASURED WATERMARK'S INPUT (Frank F2). Two more disjoint field borrows, so
-        // the drain closure can consume `usage_update` AS IT GOES PAST — which is the
-        // only place it can be consumed: `usage_update` lands in the EVICTABLE Tier B
-        // (`journal.rs`), so reading it back from the journal is reading something that
-        // may legitimately be gone. 50 of these arrived across five probe runs and every
-        // one of them was retained and ignored; this is the line that stops ignoring them.
-        let usage_slot = &mut self.context_usage;
-        let pressure_slot = &mut self.context_pressure;
-        // Captured up front: the borrow checker will not let `self` be touched inside the
-        // stream closure below, and the session identity is what names the team directory.
-        let worker_session = self.lease.as_ref().map(|l| l.session_id().to_string());
-        let lease = self.lease.as_mut();
-        let mut persist_err: Option<LedgerError> = None;
-        // "On it!" took position 0 of this turn: the lease's items follow it one on, and the
-        // register's own copy of the words, the first time it streams, is not said again.
-        // A piece of the stream that could be the start of those words is held back
-        // (`held`) and said only if it turns out to be something else. A turn that ends with
-        // such a piece still held ended on a fragment of the words he already has.
-        let offset = u64::from(said_ahead);
-        let mut receipt_unsaid = said_ahead;
-        let mut held: Vec<(u64, String)> = Vec::new();
+        let session_id=self.lease_session_id().map(str::to_string);
+        Ok(Delivery {turn_id:turn_id.into(),binding:binding.clone(),text:text.into(),allow_recovery,
+            internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
+            preparation_stop,preparation,session_id,lease:self.lease.take()})
+    }
 
-        let stop = if stopped_before_prompt {
-            // An internal prime completing is not the user's request completing.
-            // Stop at this boundary prevents delivery of the user prompt.
-            Ok(preparation_stop.unwrap_or_else(|| crate::native::STOP_REASON_CANCELLED.to_string()))
-        } else if let Err(error) = preparation {
-            Err(error)
-        } else {
-            let mut on_item = |item: TurnItem| match item {
+    fn capture_delivery_item(&mut self,delivery:&mut Delivery,item:TurnItem) {
+        let turn_id=delivery.turn_id.as_str();
+        let binding=&delivery.binding;
+        let thread_id=binding.thread_id();
+        let internal_turn=delivery.internal_turn;
+        let live_turn=&mut delivery.live_turn;
+        let persist_err=&mut delivery.persist_err;
+        let ledger=&mut self.ledger;
+        let observer=self.observer.as_deref();
+        let journal=self.machinery_journal.as_ref();
+        let machinery_observer=self.machinery_observer.as_deref();
+        let live_observer=self.live.as_deref();
+        let output_store=self.output.as_ref().map(|(store,_)|store);
+        let worker_source=&self.worker_events;
+        let worker_session=&delivery.session_id;
+        let usage_slot=&mut self.context_usage;
+        let pressure_slot=&mut self.context_pressure;
+        match item {
                 // `seq` comes from the LEASE now (§1.4 G1): ONE counter per turn, shared
                 // by text and machinery. The spine no longer counts text items itself —
                 // that would be the second counter G1 exists to forbid.
                 TurnItem::Text { seq, text: c } => {
-                    // **The register's copy of the "On it!" already said** (finding 3) is held
-                    // back piece by piece while it can still be those words (the speller can
-                    // split it), and dropped once it is; anything else is said as it came.
-                    let mut pieces = vec![(seq + offset, c.to_string())];
-                    if receipt_unsaid {
-                        held.append(&mut pieces);
-                        let so_far: String = held.iter().map(|(_, piece)| piece.as_str()).collect();
-                        let so_far = so_far.trim_start();
-                        if so_far == GO_RECEIPT || so_far == GO_RECEIPT_AFTER_QUESTIONS {
-                            receipt_unsaid = false;
-                            held.clear();
-                            return;
-                        }
-                        if GO_RECEIPT.starts_with(so_far) || GO_RECEIPT_AFTER_QUESTIONS.starts_with(so_far) {
-                            return;
-                        }
-                        receipt_unsaid = false;
-                        pieces = std::mem::take(&mut held);
+                    // Ledger stays the source of truth: persist the delta BEFORE emitting
+                    // — and persist it AT its shared-sequence position, so the
+                    // interleaving of text and machinery survives the process (§1.4 G1).
+                    let at = match ledger.append_assistant_delta(turn_id, c, seq) {
+                        Ok(at) => at,
+                        Err(e) => { *persist_err = Some(e); return; }
+                    };
+                    // Then emit it live (clean output: assistant text only ever reaches here).
+                    if let Some(obs) = observer {
+                        obs.on_event(&StreamEvent::Chunk {
+                            thread_id: thread_id.to_string(),
+                            turn_id: turn_id.to_string(),
+                            seq,
+                            text_delta: c.to_string(),
+                            at,
+                        });
                     }
-                    for (seq, c) in &pieces {
-                        let (seq, c) = (*seq, c.as_str());
-                        // Ledger stays the source of truth: persist the delta BEFORE emitting
-                        // — and persist it AT its shared-sequence position, so the
-                        // interleaving of text and machinery survives the process (§1.4 G1).
-                        let at = match ledger.append_assistant_delta(turn_id, c, seq) {
-                            Ok(at) => at,
-                            Err(e) => { persist_err = Some(e); return; }
-                        };
-                        // Then emit it live (clean output: assistant text only ever reaches here).
-                        if let Some(obs) = observer {
-                            obs.on_event(&StreamEvent::Chunk {
-                                thread_id: thread_id.to_string(),
-                                turn_id: turn_id.to_string(),
-                                seq,
-                                text_delta: c.to_string(),
-                                at,
-                            });
-                        }
-                        // ADDITIVE (§13): message-started / message-delta, keyed to the run the
-                        // LEDGER just folded this delta into — so the boundary between "he said
-                        // X" and "then said Z" is the ledger's, not a second opinion.
-                        // Borrowed, never cloned: this runs once per delta, and copying the
-                        // whole reply-so-far each time would be quadratic in the reply length.
-                        let runs = ledger.turn(turn_id).map(|t| t.text_runs.as_slice()).unwrap_or(&[]);
-                        Self::forward_live(live_observer, live_turn.on_text(runs, seq, c, now_millis()));
-                    }
+                    // ADDITIVE (§13): message-started / message-delta, keyed to the run the
+                    // LEDGER just folded this delta into — so the boundary between "he said
+                    // X" and "then said Z" is the ledger's, not a second opinion.
+                    // Borrowed, never cloned: this runs once per delta, and copying the
+                    // whole reply-so-far each time would be quadratic in the reply length.
+                    let runs = ledger.turn(turn_id).map(|t| t.text_runs.as_slice()).unwrap_or(&[]);
+                    Self::forward_live(live_observer, live_turn.on_text(runs, seq, c, now_millis()));
                 }
                 TurnItem::Machinery(record) => {
-                    let mut record = record.stamp(thread_id, Some(turn_id), internal_turn);
-                    record.seq += offset;
+                    let record = record.stamp(thread_id, Some(turn_id), internal_turn);
                     // THE ONE machinery record that is read rather than merely retained.
                     // Everything else in this family is routed for later interpretation;
                     // this pair decides when Rich rotates, so it is consumed here, live.
@@ -3211,11 +3099,20 @@ impl Spine {
                         }]);
                     }
                 }
-            };
-            lease.expect("successful preparation has a lease").prompt(text, &mut on_item)
-        };
-        // `ledger` / `lease` / `observer` / `machinery_*` borrows end here.
+            }
+    }
 
+    fn finish_delivery(&mut self,mut delivery:Delivery,stop:Result<String,CognitionError>)->Result<(),SpineError> {
+        let turn_id=delivery.turn_id.as_str();
+        let binding=&delivery.binding;
+        let thread_id=binding.thread_id();
+        let text=delivery.text.as_str();
+        let allow_recovery=delivery.allow_recovery;
+        let stopped_before_prompt=delivery.stopped_before_prompt;
+        let preparation_failed=delivery.preparation_failed;
+        let persist_err=delivery.persist_err.take();
+        let live_turn=&mut delivery.live_turn;
+        self.lease=delivery.lease.take();
         self.turn_in_progress = false;
         // Witnesses (b) and (c) of the Output side panel PRD, for the lease that just ran this
         // turn: a front-desk worker's writes (nested inside the lead's turn) and the files the
@@ -3394,9 +3291,6 @@ impl Spine {
                 // of a failure, which is what silence looks like.
                 self.upstream_budget.succeeded();
                 self.ledger.complete_turn(turn_id, &stop_reason)?;
-                if stop_reason == "question_asked" {
-                    self.pending_rotation_reason=Some("question_asked".into());
-                }
                 self.emit(StreamEvent::TurnCompleted {
                     thread_id: thread_id.to_string(),
                     turn_id: turn_id.to_string(),
@@ -3481,7 +3375,7 @@ impl Spine {
                 Err(e.into())
             }
         }
-    }
+        }
 
     /// Retain ONE machinery record, then hand it to the live sink.
     ///
@@ -3774,60 +3668,16 @@ impl Spine {
                     self.queue.push_back(Queued { turn_id, binding, text, intake_id: Some(id) });
                     self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
                 }
-                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, .. } => {
-                    // IDENTICAL TO THE `Steer` ARM ABOVE, AND THAT IS THE POINT. From here
-                    // on the spine does not know or care which mouth the CEO used
-                    // (phone-client plan §4.2 iv) — the same de-duplication check, the same
-                    // fresh binding, the same `record_prompt_received_from_intake`, the
-                    // same `Source::Text`. What arrives on the phone is the CEO's own words
-                    // on a thread he already has, so anything else here would be a
-                    // distinction the back end has no business making.
-                    //
-                    // **AND THAT SENTENCE WAS NOT TRUE OF THE EVENTS UNTIL TODAY** — Ray's
-                    // candidate .13 walk, defect R3. `accept_prompt` emits three events for a
-                    // CEO utterance and this arm emitted two: the status and the sidebar row,
-                    // but never `rich://ceo-message`, which is the only one carrying his WORDS.
-                    // The Mac's window therefore had nothing to draw when he typed on his phone
-                    // — it had always drawn his own sentence itself — and his message appeared
-                    // there only when `turn-completed` reloaded the thread. Measured on his own
-                    // Android: **5.68 s and 5.77 s**, his words and the finished answer landing
-                    // in the same frame, against 0.096 s for the other direction. At 2.99 s the
-                    // only thing that had changed on the Mac was the sidebar's working dot —
-                    // which is this arm's OTHER event arriving on time, and is the proof that
-                    // the path was live and this one line was missing from it.
-                    //
-                    // **AND EMITTING IT WAS ONLY HALF.** Ray re-measured on candidate .16 with
-                    // the line above in the build: **7,288 ms**, worse than the 5.68 s it was
-                    // meant to fix, the bubble and the whole reply still in one paint, and the
-                    // sidebar's dot still moving at +471 ms. The event was on the wire and the
-                    // WINDOW DISCARDED IT — it was fenced from `Ledger::thread_binding` and the
-                    // open thread is fenced at the ACTIVATION revision, so `timeline.js`
-                    // `accepts()` read it as stale. `fence_binding` below is that fix, and the
-                    // dot is the tell in both halves: it is the one event in this arm that no
-                    // fence is applied to.
-                    if self.ledger.turn_for_intake(id).is_some() {
+                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, source, .. } => {
+                    if self.ledger.turn_for_intake(id).is_some() || client_id.as_ref().is_some_and(|key|
+                        self.ledger.thread_turns(&thread_id).is_ok_and(|turns| turns.iter().any(|turn| turn.client_id.as_ref() == Some(key)))) {
                         self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
                         continue;
                     }
                     let binding = self.fence_binding(&thread_id)?;
-                    // **The one line where the mouth survives** (operator back-end spec r3 (s)).
-                    // Kept only when this install keeps it; see `record_prompt`.
-                    //
-                    // **And the phone's own id for the words, when it sent one** (adoption
-                    // ledger §2.8 row C5). It goes onto the turn here, so the `ceo-message`
-                    // emitted three lines down and every later projection of this turn name
-                    // the message the phone is already showing: an echo that beats the phone's
-                    // receipt is then recognized on arrival instead of drawn as a second line.
-                    //
-                    // **And whether the words are the transcript of a voice note** (the
-                    // record's `voice_note`), for the same reason: that `ceo-message` is the row
-                    // that can beat the receipt, and it must be a voice row from the start, not
-                    // a text bubble the receipt later turns into the recording.
-                    let turn_id = if client_id.is_some() || voice_note {
-                        self.record_prompt_from_client(&binding, &text, id, &channel, client_id.as_deref(), voice_note)?
-                    } else {
-                        self.record_prompt(&binding, &text, Source::Text, None, Some(id), &channel)?
-                    };
+                    let source = source.unwrap_or(Source::Text);
+                    let kept = (self.keep_intake_channel || source == Source::Agent).then_some(channel.as_str());
+                    let turn_id = self.ledger.record_prompt_received_from_client(&binding, &text, source, id, kept, client_id.as_deref(), voice_note)?;
                     self.input_channels.insert(turn_id.clone(), channel);
                     self.emit_live(self.turn_status_event(&binding, &turn_id, TurnStatus::Queued, None));
                     self.emit_live(self.ceo_message_event(&binding, &turn_id));
@@ -3984,7 +3834,7 @@ impl Spine {
                 continue;
             }
             let binding = self.fence_binding(&turn.thread_id)?;
-            if turn.state == crate::ledger::TurnState::Received && (id.starts_with("question-answer:") || id.starts_with("question-followup:")) {
+            if turn.state == crate::ledger::TurnState::Received {
                 if !self.queue.iter().any(|q|q.turn_id==id) {
                     self.queue.push_back(Queued{turn_id:id.clone(),binding,text:turn.user_text.clone(),intake_id:None});
                 }
@@ -4018,6 +3868,7 @@ impl Spine {
     /// directly or from draining the queue — both call sites only reach here once
     /// `turn_in_progress` is false, so nothing below ever runs mid-turn.
     fn after_turn_boundary(&mut self, binding: &ThreadBinding) -> Result<(), SpineError> {
+        if self.turn_in_progress {return Ok(())}
         // FIRST, before anything below can fail: this turn has ended, whatever it ended in,
         // so the work it wrote down may now start (`take_ended_turns`, background-work §7.1).
         if !self.ended_turns.iter().any(|known| known.thread_id() == binding.thread_id()) {
@@ -4348,11 +4199,12 @@ impl Spine {
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
         // A pressed button's words stay pressed through the replay (finding 14).
+        let source = self.ledger.turn(failed_turn_id).map(|t| t.source).unwrap_or(Source::Text);
         let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
         let retry_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
-            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, Source::Text)?,
-            Some(channel) => self.record_prompt(binding, original_text, Source::Text, None, None, &channel)?,
-            None => self.ledger.record_prompt_received(binding, original_text, Source::Text)?,
+            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, source)?,
+            Some(channel) => self.record_prompt(binding, original_text, source, None, None, &channel)?,
+            None => self.ledger.record_prompt_received(binding, original_text, source)?,
         };
         if let Some(channel) = original_channel { self.input_channels.insert(retry_turn_id.clone(), channel); }
         self.ledger.mark_turn_superseded(failed_turn_id, &retry_turn_id)?;
@@ -4391,11 +4243,12 @@ impl Spine {
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
         // A pressed button's words stay pressed through the replay (finding 14).
+        let source = self.ledger.turn(failed_turn_id).map(|t| t.source).unwrap_or(Source::Text);
         let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
         let replay_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
-            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, Source::Text)?,
-            Some(channel) => self.record_prompt(binding, original_text, Source::Text, None, None, &channel)?,
-            None => self.ledger.record_prompt_received(binding, original_text, Source::Text)?,
+            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, source)?,
+            Some(channel) => self.record_prompt(binding, original_text, source, None, None, &channel)?,
+            None => self.ledger.record_prompt_received(binding, original_text, source)?,
         };
         if let Some(channel) = original_channel { self.input_channels.insert(replay_turn_id.clone(), channel); }
         self.ledger.mark_turn_superseded(failed_turn_id, &replay_turn_id)?;
@@ -4492,10 +4345,8 @@ impl Spine {
             payload.worker_state = workers.priming_lines();
         }
         self.fill_loro_tier(&mut payload, binding);
-        let mut priming = payload.to_priming_prompt();
-        // Preserve the company material and interview offer in the conversation.
-        let onboarding_block = self.company_block(binding);
-        if let Some(block) = &onboarding_block { priming.push_str(block); }
+        let onboarding_block=self.company_block(binding);
+        let priming=payload.to_priming_prompt_with_company(onboarding_block.as_deref());
         // Durable but NEVER rendered — same Internal-turn discipline as first-attach priming.
         let _ = self.ledger.record_prompt_received(binding, "[re-prime:rotation]", Source::Internal);
 
@@ -4580,22 +4431,26 @@ impl Spine {
     /// crash-safe) but as `Source::Internal`, so it has NO render path (`messages()`
     /// excludes it) exactly like re-prime injection.
     fn request_handoff_summary(&mut self, binding: &ThreadBinding) -> Result<String, SpineError> {
-        let thread_id = binding.thread_id();
-        const HANDOFF_PROMPT: &str = "[INTERNAL — do not mention this message] Before you're \
-            rotated to a successor, summarize this conversation so far in a few sentences: \
-            topics covered, decisions reached, commitments you made to the CEO. Reply with \
-            ONLY the summary, nothing else.";
-        let turn_id = self.ledger.record_prompt_received(binding, HANDOFF_PROMPT, Source::Internal)?;
+        const HANDOFF_PROMPT: &str = r#"{"event":"session_handoff_requested"}"#;
+        self.request_internal_reply(binding, HANDOFF_PROMPT)
+    }
 
+    /// Read-only model communication. Its input and intermediate output have no render path.
+    fn request_internal_reply(&mut self, binding: &ThreadBinding, prompt: &str) -> Result<String, SpineError> {
+        let thread_id = binding.thread_id();
+        let turn_id = self.ledger.record_prompt_received(binding, prompt, Source::Internal)?;
         // Disjoint field borrows — same pattern as `deliver()`.
         let ledger = &mut self.ledger;
         let journal = self.machinery_journal.as_ref();
         let machinery_observer = self.machinery_observer.as_deref();
         let lease = self.lease.as_mut().ok_or(SpineError::NoLease)?;
+        let mut persist_error = None;
         let result = {
             let mut on_item = |item: TurnItem| match item {
                 TurnItem::Text { seq, text: c } => {
-                    let _ = ledger.append_assistant_delta(&turn_id, c, seq);
+                    if let Err(error) = ledger.append_assistant_delta(&turn_id, c, seq) {
+                        persist_error = Some(error);
+                    }
                 }
                 // Rotation machinery: retained for debugging, `internal: true`, NEVER in a
                 // thread render (§1.5). The CEO must never see that a rotation happened.
@@ -4605,9 +4460,18 @@ impl Spine {
                 }
                 TurnItem::AnswerComplete => {}
             };
-            lease.prompt_context_only(HANDOFF_PROMPT, &mut on_item)
+            lease.prompt_context_only(prompt, &mut on_item)
         };
 
+        if let Some(failure) = self.detect_upstream_failure(&turn_id, &result) {
+            let reason = failure.summary();
+            self.ledger.interrupt_turn(&turn_id, &reason)?;
+            return Err(CognitionError::Protocol(reason).into());
+        }
+        if let Some(error) = persist_error {
+            self.ledger.interrupt_turn(&turn_id, &error.to_string())?;
+            return Err(error.into());
+        }
         match result {
             Ok(stop_reason) if stop_reason == "end_turn" => {
                 self.ledger.complete_turn(&turn_id, &stop_reason)?;
@@ -4625,7 +4489,9 @@ impl Spine {
         // itself is: the CEO must never see that a rotation happened, and that includes
         // whatever the outgoing lease says on its way out (§1.5).
         self.pump_between_turn_stamped(binding, true);
-        Ok(self.ledger.turn(&turn_id).map(|t| t.assistant_text.clone()).unwrap_or_default())
+        let reply = self.ledger.turn(&turn_id).map(|t| t.assistant_text.clone()).unwrap_or_default();
+        self.context_chars += prompt.len() + reply.len();
+        Ok(reply)
     }
 
     /// Get the chair ready to take a turn for `binding`.
@@ -4969,9 +4835,7 @@ impl Spine {
             payload.worker_state = workers.priming_lines();
         }
         self.fill_loro_tier(&mut payload, binding);
-        let mut priming = payload.to_priming_prompt();
-        // Preserve the company material and interview offer in the conversation.
-        if let Some(block) = &onboarding_block { priming.push_str(block); }
+        let priming=payload.to_priming_prompt_with_company(onboarding_block.as_deref());
         // Record the priming as an Internal turn so it is durable but NEVER rendered.
         let reprime_turn = self.ledger.record_prompt_received(binding, "[re-prime]", Source::Internal);
         // ... and as an Internal ACTION, claim-then-execute: this is the first-attach

@@ -13,11 +13,10 @@
 //! *"Is the CEO user supposed to keep babysitting Rich like this all the time OR WHAT???"* —
 //! over nightly 54, where a job of reading his own website stopped at "Approve this" for
 //! "running a command on your Mac". Work he hands over runs to a finished result with no
-//! approval from him. The provider runs in auto mode and approves routine work itself
-//! (reading websites, searching, reading and writing in its own workspace and the commands
-//! that work needs), so what still reaches this desk from a background lease is a step it
-//! would not approve on its own: that step is refused, and the model is told to find another
-//! way or to report plainly what it could not do. A real business decision of his travels as
+//! approval from him. Provider sessions now request bypassPermissions, matching the terminal.
+//! Existing hooks and the provider's remaining restrictions still apply. A native permission
+//! request that nevertheless reaches this desk from a background lease is refused rather
+//! than waiting for manual step approval. A real business decision of his travels as
 //! a question (`question_tools.rs`), never through this desk.
 //!
 //! This replaces the background-work spec's §5.2 (*"a request raised with no turn open is
@@ -55,7 +54,7 @@ pub const WORK_AUDIENCE: &str = "worker";
 /// Is this request background work's rather than the conversation's? The identity test
 /// §5.3 turns on, in one place so no caller re-spells it.
 pub fn is_background(binding: &Binding) -> bool {
-    binding.audience == WORK_AUDIENCE
+    matches!(binding.audience.as_str(),WORK_AUDIENCE|"rich")
 }
 
 /// The assignment a background binding belongs to: `(entity, thread, obligation)`.
@@ -107,9 +106,7 @@ pub enum Answered {
 /// nothing was put in front of him, and the two moves left are another way or an honest
 /// report.
 pub const BACKGROUND_STEP_REFUSED: &str =
-    "Not run, and not put to the CEO: background work never waits for him to approve a \
-     step. Do it another way with the tools and the workspace you have. If there is no other \
-     way, finish the rest of the job and tell him plainly what you could not do and why.";
+    "The action was not run. This background connection cannot obtain manual step approval.";
 
 /// **How long one permission call waits for him: 300 s.**
 ///
@@ -246,70 +243,13 @@ impl ScopedPermissions {
     fn wait(&self, request: &Value, limit: Duration) -> PermissionDecision {
         let deny=|message:&str|PermissionDecision::Deny{message:message.into()};
         let allow=||PermissionDecision::Allow{updated_input:request.get("input").cloned().unwrap_or(json!({}))};
-        let Some(binding)=grant(&self.scope) else {return deny("This app turn is stopped or is supplying context. New actions are unavailable.")};
         let tool=request["tool_name"].as_str().unwrap_or("");
-        // ===================================================================================
-        // THE FRONT DESK DOES NOT DO THE WORK — the CEO's Two Riches note 3, landed
-        // ===================================================================================
-        //
-        // *"The front desk gets no orchestration tools, so it cannot drift into doing the
-        // work."* These four lines are the refusal that implements it, and they were written
-        // in the approval slice and deliberately HELD, with both preconditions named. Both
-        // are now met, in the same commit as this:
-        //
-        //   1. **The doctrine moved.** The standing instruction used to route work through
-        //      these tools from the conversation; it now tells the front desk to hand work to
-        //      the back end with `richos_assignments.record` and to look with
-        //      `richos_status.background_work` (`doctrine.rs`).
-        //   2. **The read exists.** Sage's check of that page, finding 6: taking `richos_work`
-        //      off the front desk left it no read tool at all, because every status surface is
-        //      a Tauri command the model cannot call. `status_tools.rs` is that read.
-        //
-        // **This is the SECOND of two enforcements, and it is the one that catches a lease
-        // that should not have the server at all.** The first is the omission in
-        // `native.rs`'s `mcp_config` — a conversation lease is no longer given `richos_work`
-        // — which is the enforcement that matters, exactly as seam 1 argues for
-        // `richos_continuity`. This one refuses the call if a work tool ever reaches the desk
-        // on a binding that is not background work: a config edit, a lease that outlived a
-        // role change, or a future path nobody has thought of yet. A deny here is never a
-        // thing he sees, and it names the register so the model's next move is the right one.
-        if tool.starts_with("mcp__richos_work__") && !is_background(&binding) {
-            return deny("The conversation does not run work directly. Write the assignment down with \
-                         the assignment register and let the background connection run it.");
-        }
-        // ===================================================================================
-        // A BACKGROUND JOB LANDS ON ITS OWN — the CEO's ruling of 2026-09-18, §52
-        // ===================================================================================
-        //
-        // *"There's nothing that ever not lands on its own here in the terminal. Anything
-        // including things like design mockups always land before they are presented to me
-        // for review. So, yes, always land on its own."*
-        //
-        // This line is that ruling. `mcp__richos_work__integrate` used to be the one work
-        // tool deliberately OFF the list below — background-work spec §0 row 7, §5.4 and
-        // §7.8 all turned on its absence, and the whole `blocked`/"ready for you to approve"
-        // state existed to hold the assignment at it. §52 closes that open item the other
-        // way: a land is not a thing he is asked about, it is the thing the job is FOR, and
-        // what he hears is the outcome.
-        //
-        // **It is guarded on the audience rather than added to the list below, and that is
-        // not decoration.** The list below is reached by BOTH audiences; the front desk is
-        // kept off every work tool by the four lines above it, so putting `integrate` on the
-        // list would have made the ruling depend on that refusal continuing to exist. Here
-        // the grant names its own precondition, so a future edit that weakened the front
-        // desk's refusal could not silently hand the conversation a land.
-        //
-        // **And the engine still refuses a land that has not earned it.** Nothing here is a
-        // grant to merge: `integrate` requires an observed run end on both the worker and an
-        // independent reviewer, a `passed` verdict on the exact reviewed commit, clean
-        // checkouts, an unmoved recorded tip, and a fast-forward — and it never pushes
-        // (`richos/engine/mega-lander/app.py:755-836`). What was removed is the CEO's
-        // keystroke, not a check.
-        if tool == "mcp__richos_work__integrate" && is_background(&binding) {
-            return allow();
-        }
+        let Some(binding)=grant(&self.scope) else {return deny("This app turn is stopped or is supplying context. New actions are unavailable.")};
+        let work_read = matches!(tool, "mcp__richos_work__inspect" | "mcp__richos_work__repositories")
+            || (tool == "mcp__richos_work__team" && matches!(request["input"]["action"].as_str(), Some("list" | "show")));
+        if work_read { return allow(); }
         // These tools implement their own explicit host scope and write contracts.
-        if matches!(tool,"mcp__richos_work__repositories"|"mcp__richos_work__prepare"|"mcp__richos_work__inspect"|"mcp__richos_work__complete"|
+        if matches!(tool,"mcp__richos_work__integrate"|"mcp__richos_work__repositories"|"mcp__richos_work__prepare"|"mcp__richos_work__inspect"|"mcp__richos_work__complete"|
             // The team tool (proto-teammate shelf plan slice 4, richos-hq
             // docs/plans/2026-10-06-proto-teammate-shelf.md section 10 point 2: the back end
             // activates a shelf teammate when a job needs it, without asking). It lists and
@@ -326,17 +266,8 @@ impl ScopedPermissions {
             // an intent and changes nothing else — what it cannot do is the thing worth
             // saying out loud, which is finish the work.
             //
-            // `mcp__richos_work__integrate` is still NOT on this list, and the reason changed
-            // on 2026-09-18 rather than going away: it is granted above, on the background
-            // audience alone (CEO ruling §52). This list is reached by BOTH audiences, and a
-            // land is a thing only the back end does.
-            "mcp__richos_assignments__record"|
-            // The front desk's READ (`status_tools.rs`). On the list on the same grounds as
-            // the three app-owned tools above it — its own host scope, written by the app —
-            // and on one stronger ground of its own: it changes nothing at all. There is no
-            // input for him to approve, and a permission sheet asking him to allow Rich to
-            // LOOK at his own record would be a question with one answer.
-            "mcp__richos_status__background_work"|
+            "mcp__richos_assignments__record"|"mcp__richos_status__background_work"|"mcp__richos_status__sessions"|
+            "mcp__richos_status__transcript"|"mcp__richos_status__send"|
             // HIS TEAM'S TOOLS (`operator_desk_tools.rs`), present only on an operator install's
             // front desk. A named stop only removes (§67: *"unconditional for the agents his
             // words name"*), the interrupt ends a turn and keeps its agents, and the read
@@ -355,7 +286,7 @@ impl ScopedPermissions {
         // this" for "running a command on your Mac" (nightly 54). Work he hands over runs to a
         // finished result with no approval from him; only a real business decision of his
         // ever reaches him, and that travels as a question (`question_tools.rs`), never
-        // through this desk. The provider already approves routine work itself (auto mode);
+        // through this desk. The provider runs with bypass permissions;
         // what still arrives here from a background lease is a step it would not approve on
         // its own, so the step is refused at once, nothing is put in front of him, and the
         // model is told to find another way or report what it could not do.
@@ -388,7 +319,7 @@ impl ScopedPermissions {
             if let Some(allowed)=desk.queue[index].decision {
                 desk.queue.remove(index);
                 break if allowed {allow()}
-                    else {deny("The user declined this action. Do not retry it through another tool.")};
+                    else {deny("The user declined this action. It was not run.")};
             }
             if Instant::now()>=deadline {
                 desk.queue.remove(index);
@@ -486,10 +417,9 @@ impl ScopedPermissions {
             assert!(desk.background_queue().is_empty(),"{tool} from background work was put in front of him");
             assert!(desk.current().is_none(),"{tool} from background work opened the permission sheet");
         }
-        // What the model is told names both ways forward and never asks it to wait.
-        assert!(BACKGROUND_STEP_REFUSED.contains("another way"));
-        assert!(BACKGROUND_STEP_REFUSED.contains("could not do"));
-        assert!(!BACKGROUND_STEP_REFUSED.contains("End your turn"));
+        // The refusal reports what happened; the plain role file owns what to do next.
+        assert!(BACKGROUND_STEP_REFUSED.contains("not run"));
+        assert!(BACKGROUND_STEP_REFUSED.contains("cannot obtain manual step approval"));
         // POSITIVE CONTROL: the conversation's request still waits on his sheet.
         let (q,conversation)=joined(&desk,"ceo","turn-9");
         let call=ask(&conversation,"Bash",HANG_GUARD);
@@ -547,19 +477,8 @@ impl ScopedPermissions {
         std::fs::remove_file(p).unwrap();
     }
 
-    /// **WHAT EACH AUDIENCE CAN REACH NOW THAT NOTE 3 HAS LANDED**, and the two halves of
-    /// the CEO's sentence in one measurement.
-    ///
-    /// *"The front desk gets no orchestration tools, so it cannot drift into doing the
-    /// work."* The predecessor of this test pinned the state before the refusal — both
-    /// audiences reaching all four work tools — so that the day it landed it would land
-    /// against a measurement rather than a memory. This is that same test, after.
-    ///
-    /// **Every arm has its opposite in the same test**, because each one on its own can
-    /// pass for the wrong reason: a front desk that reached nothing at all would satisfy the
-    /// refusal and be useless, and a back end that reached nothing would make the app unable
-    /// to work while this test stayed green.
-    #[test] fn the_front_desk_reaches_no_work_tool_and_the_back_end_reaches_all_six(){
+    /// Both top-level agents have the same scoped work capabilities.
+    #[test] fn both_top_level_agents_reach_the_same_scoped_work_tools(){
         let desk=Arc::new(PermissionDesk::default());
         let (front,conversation)=joined(&desk,"ceo","turn-9");
         let (back,work_lease)=joined(&desk,WORK_AUDIENCE,"obligation-7");
@@ -570,12 +489,7 @@ impl ScopedPermissions {
         // The sixth came (`team`, proto-teammate shelf slice 4) and was added here.
         for tool in ["mcp__richos_work__repositories","mcp__richos_work__prepare","mcp__richos_work__inspect",
                      "mcp__richos_work__complete","mcp__richos_work__integrate","mcp__richos_work__team"] {
-            let refused=conversation.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20));
-            assert_eq!(refused.behavior(),"deny","the front desk still reaches {tool}");
-            // The refusal names the way OUT, not just the door: a model told "no" with no
-            // alternative retries; a model told where the work goes hands it over.
-            assert!(format!("{refused:?}").contains("assignment register"),"the refusal of {tool} names no alternative");
-            // Positive control, same tool, same desk, other audience.
+            assert_eq!(conversation.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20)).behavior(),"allow","Rich lost {tool}");
             assert_eq!(work_lease.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20)).behavior(),"allow","back end: {tool}");
         }
         assert!(desk.background_queue().is_empty(),"a work tool reached his queue; the job does its own work");

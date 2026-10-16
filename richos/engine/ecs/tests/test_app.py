@@ -49,6 +49,20 @@ class AppProtocolTests(unittest.TestCase):
     def checkpoint(self, statements, request_id="checkpoint-1", ok=True):
         return self.call("checkpoint", request_id=request_id, checkpoint={"statements": statements}, ok=ok)
 
+    def test_standing_stu_has_an_independent_cursor_and_the_same_record_visibility(self):
+        original = self.binding.copy()
+        stu = self.call("bind", seat="stu-thread:thread-a", request_id="stu-peer-1",
+                        source_ref="peer:1", expected_revision=None,
+                        scope={"entity_id":"depot", "thread_id":"thread-a",
+                               "session_id":"stu-session", "turn_id":"peer-1", "audience":"rich"})["binding"]
+        result = self.call("checkpoint", seat="stu-thread:thread-a", binding=stu,
+                           request_id="stu-checkpoint-1", checkpoint={"statements":[
+                               {"verb":"commitment", "fields":{"id":"shared-work", "title":"Inspect the shared fixture"}}]})
+        self.assertTrue(result["accepted"])
+        self.assertEqual(self.call("current")["binding"], original)
+        self.assertIn("Inspect the shared fixture", self.call("brief")["text"])
+        self.assertIn("Inspect the shared fixture", self.call("brief", seat="stu-thread:thread-a", binding=stu)["text"])
+
     def test_process_restart_and_duplicate_checkpoint_preserve_one_obligation(self):
         statement = {"verb": "commitment", "fields": {"id": "ship-manual", "title": "Ship the fictional depot manual"}}
         self.assertTrue(self.checkpoint([statement])["accepted"])

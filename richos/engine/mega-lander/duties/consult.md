@@ -27,9 +27,3 @@ you wrote it, so put the whole answer there: what you found, what you recommend,
 what you could not check and why. Anything meant to become a file (a document, a
 definition) goes in that message in full, for your lead to save. A sentence such
 as "see above" or "report delivered" is not a deliverable.
-
-For shell tools, use direct commands with literal absolute paths. Submit separate
-tool calls for separate checks. Avoid shell variables, loops and wrapper scripts:
-the provider cannot automatically authorize some of those forms even when their
-intended operation is routine. This is command construction guidance before
-execution, not permission to retry a denied action.

@@ -617,8 +617,7 @@ def build_payload(args, brief, workspaces, targets=None):
         missing = [w for w in workspaces if w not in have]
         if missing:
             prompt = "\n".join("cross-repo-worktree: %s" % w for w in missing) + "\n\n" + prompt
-    ti = {"name": args["name"], "subagent_type": args["type"], "prompt": prompt,
-          "isolation": "worktree"}
+    ti = {"name": args["name"], "subagent_type": args["type"], "prompt": prompt}
     if args.get("description"):
         ti["description"] = args["description"]
     if args.get("model"):
@@ -630,7 +629,7 @@ def build_payload(args, brief, workspaces, targets=None):
     # branch each repository's work lands on, so its last step merges that
     # branch (never main into a release branch).
     try:
-        return PREPARE.prepare(ti, targets)
+        return PREPARE.prepare(ti, targets, native_isolation=not (workspaces and args.get("audience") == APP))
     except ValueError as exc:
         raise Refusal(str(exc))
 

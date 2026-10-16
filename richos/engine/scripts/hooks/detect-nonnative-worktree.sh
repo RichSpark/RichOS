@@ -290,7 +290,12 @@ is_readonly=0
 for a in $READONLY_ALLOWLIST; do
   [ "$SUBAGENT_TYPE" = "$a" ] && is_readonly=1
 done
-if [ "$is_readonly" -eq 0 ] && [ "$ISOLATION" != "worktree" ] && [ "$ISOLATION" != "remote" ] && [ -z "$MAIN_CHECKOUT_MARKER" ]; then
+# App dispatch already verifies its registered linked target before this event.
+APP_TARGET=""
+if [ -n "${RICHOS_APP_SCOPE:-}" ] && printf '%s' "$PROMPT" | grep -E >/dev/null '^[[:space:]]*cross-repo-worktree:[[:space:]]*/'; then
+  APP_TARGET="yes"
+fi
+if [ "$is_readonly" -eq 0 ] && [ "$ISOLATION" != "worktree" ] && [ "$ISOLATION" != "remote" ] && [ -z "$MAIN_CHECKOUT_MARKER" ] && [ -z "$APP_TARGET" ]; then
   WARN+=("this spawn — agent '${SUBAGENT_TYPE:-<unset/general-purpose>}' is file-capable but was spawned WITHOUT native isolation (isolation='${ISOLATION:-unset}') and carries no 'main-checkout-run:' marker. The preventive guard (guard-worktree-isolation.sh) should have blocked this; if you are seeing this, it did not. Shut this teammate down and re-spawn with isolation:\"worktree\" — or, if it genuinely must run un-isolated in the main checkout, add a 'main-checkout-run: <reason>' prompt line.")
 fi
 

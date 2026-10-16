@@ -1,51 +1,4 @@
-//! The app-owned MCP endpoint the FRONT DESK LOOKS WITH — `richos_status.background_work`.
-//!
-//! **Why this exists, in one sentence: the CEO's Two Riches page takes the orchestration
-//! tools away from the front desk, and without this the front desk would have nothing left
-//! to answer "what is running" with.**
-//!
-//! The page's sense-check note 3 is *"The front desk gets no orchestration tools, so it
-//! cannot drift into doing the work. … Status questions are answered from the shared record
-//! at once."* Sage's check of that page (richos-hq
-//! `docs/plans/two-riches-spec-2026-09-17-sage-check.md`, finding 6) names the consequence
-//! nobody had built for: after the refusal, the conversation lease's remaining servers are
-//! `richos_onboarding` and `richos_assignments`, and `richos_assignments` exposes one tool,
-//! `record`, **which writes**. Every status surface this app has — `get_work_status`,
-//! `take_work_notices`, the live assignment — is a Tauri command reaching the WEBVIEW. The
-//! model never sees any of it. So "answered from the shared record at once" had no wire at
-//! all.
-//!
-//! This is that wire, and it is deliberately the smallest thing that can be one.
-//!
-//! ## Three properties, and each one is a refusal of something easier
-//!
-//! 1. **It reads and it cannot do anything else.** There is no argument that selects a
-//!    company, a conversation or a file: the scope the app wrote fixes all three, exactly
-//!    as `assignment_tools.rs` fixes them for the write. There is no stop, no approve and
-//!    no retry here — those are controls on his screen (the per-assignment stop, Approve
-//!    and Decline) or they are relayed to the back end. **A front desk tool that ACTS would
-//!    be the drift the page exists to prevent**, wearing the word "status".
-//! 2. **It never calls the back end.** It opens files under the state root and returns
-//!    what they say. A front desk that had to ask the back end a question would be blocked
-//!    behind whatever the back end is doing, which is the one thing the CEO's page
-//!    promises never happens: *"the CEO's conversation with Rich is never blocked by any
-//!    work that's going on in the background."*
-//! 3. **It answers about THIS conversation and no other.** His page assumes threads never
-//!    overlap in subject (*"the CEO is not expected to ever run 2 conversation threads that
-//!    are dealing with the exact same thing"*); a front desk that could read another
-//!    thread's register would make one thread's answer depend on another thread's work.
-//!
-//! ## What it deliberately cannot see, said here rather than discovered later
-//!
-//! **A permission request that is waiting in the running app's desk is NOT in this
-//! answer.** The desk is `permissions.rs`'s in-memory `PermissionDesk`, and this server
-//! runs in its own short-lived process (the same shape `assignment_tools.rs` runs in), so
-//! there is nothing in this process to ask. What IS here is the DURABLE half of the same
-//! fact: an assignment that stopped at a decision of his is written to disk as
-//! [`AssignmentState::Blocked`] with the step named in his words, and that is what
-//! `waiting_for_you` reports. The two agree because the host writes the record when it
-//! raises the question, and a reader that quoted a queue it could not see would be
-//! inventing precision.
+//! Scoped work records, native transcript reads and durable peer messages.
 use crate::assignment::{self, Assignment, AssignmentState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -112,9 +65,15 @@ fn read_scope(path: &Path) -> Result<StatusToolScope, String> {
 pub fn tools() -> Value {
     json!({"tools":[
         {"name":LOOK_TOOL_NAME,
-         "description":"Look at the background work in THIS conversation: what is starting, what is running, what is waiting for the CEO to decide, and what has finished, and, separately, which of those are QUESTIONS of his still being answered rather than work (every row carries a `kind` of `task`, `check` or `investigate`; a question is being checked or looked into, never `running`, and an answered one is never `finished`). Read this before answering any question of his about how work is going. It is the shared record, it is current as of the moment you call it, and it is the only thing you may base such an answer on. `starting` and `running` are different answers and must not be merged: work under `starting` is written down and has not been confirmed to be underway, so say it is starting. It reads and changes nothing: it cannot start, stop, approve or retry anything. Do NOT call it before writing an assignment down: a new request is not a question about how work is going, and the CEO waits while you look. To START work, write it down with the assignment register first; to stop or approve a step, tell him the control is on the assignment itself, or pass his instruction to the back end.",
+         "description":"Read the scoped background-work record for this conversation. Lists starting, running, waiting and finished assignments, including each work kind and observed state. Registration is distinct from execution; a running state does not prove progress. This tool changes nothing and cannot start, stop, approve or retry work.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
          "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}
+        ,{"name":"sessions","description":"List recorded native Rich and Stu sessions in this company and conversation.",
+          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
+        ,{"name":"transcript","description":"Read original native session JSONL directly, including live messages, tool calls and results. No peer request or turn lock. Defaults to the latest 64 KiB; use byte offsets to page earlier content. Optional worker selects a native subagent transcript within that session.",
+          "inputSchema":{"type":"object","required":["session_id"],"properties":{"session_id":{"type":"string"},"worker":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":131072}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
+        ,{"name":"send","description":"Save your own message to the other top-level agent in this conversation. Delivery does not require an assignment and does not wait for the recipient. The sender and recipient are fixed by the host.",
+          "inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}}
     ]})
 }
 
@@ -163,6 +122,11 @@ pub fn call(
     name: &str,
     arguments: Value,
 ) -> Result<Value, String> {
+    if name == "send" {return crate::session_tools::send(scope_path, &read_scope(scope_path)?, arguments)}
+    if name == "transcript" || name == "sessions" {
+        if name == "sessions" && arguments != json!({}) {return Err("sessions takes no arguments".into())}
+        return crate::session_tools::call(&read_scope(scope_path)?,name,arguments)
+    }
     if name != LOOK_TOOL_NAME {
         return Err("That status tool does not exist. Nothing was read.".into());
     }
@@ -174,7 +138,7 @@ pub fn call(
     }
     let scope = read_scope(scope_path)?;
     let items = assignment::read_all(&scope.state_root, &scope.entity_id, &scope.thread_id)
-        .map_err(|e| format!("The background work record could not be read ({e}). Do not guess what is running."))?;
+        .map_err(|e| format!("The background work record could not be read ({e})."))?;
     let mut starting: Vec<&Assignment> = Vec::new();
     let mut running: Vec<&Assignment> = Vec::new();
     let mut waiting: Vec<&Assignment> = Vec::new();
@@ -245,11 +209,7 @@ pub fn call(
             + screen_omitted
             + quota_omitted
             + finished_omitted,
-        // **The sentence the front desk says about the §56 section, given rather than left to
-        // be composed.** It is the CEO's own wording from the §56 brief, and it is handed over
-        // as a string so the front desk relays it instead of inventing a promise about how
-        // long a lock lasts.
-        "waiting_for_the_screen_says": crate::screen::says::waiting_for_the_screen(),
+        "screen_wait_resumes_automatically": true,
         // **THE SCREEN AS IT IS RIGHT NOW** — the CEO's ruling §56's read half.
         //
         // A LIVE reading, and the only thing in this answer that is not read off disk. It is
@@ -265,7 +225,7 @@ pub fn call(
         // comment the model never sees — and the `starting`/`running` line is in it for the
         // same reason: the distinction is only worth having if the thing reading it is told
         // what it means.
-        "this_answer_covers": "Background work in this conversation only, as recorded on disk. It does not cover other conversations, and it is not a claim that a running assignment is making progress this second. Work under `starting` has been written down and the back end has not been confirmed to have taken it up yet: say it is starting, never that it is running. Work under `waiting_for_the_screen` needs the Mac's screen and the screen is locked; it is NOT waiting on him and there is nothing for him to do about it: it carries on by itself when the screen is unlocked, so say that and never ask him to unlock anything. `screen` is the one live reading here and everything else is from disk; its `state` is `unknown` when this build could not establish the screen at all, which is not the same as unlocked and must never be reported as either. Every row carries a `kind`: `task` is work he asked for, and `check` or `investigate` is a QUESTION of his that is still being answered: say a question is being checked or looked into, never that it is running or working, and never call an answered question `finished`.",
+        "this_answer_covers": "Background work in this conversation only, as recorded on disk. Other conversations are outside this result. A running state is not evidence of current progress. Starting means recorded without observed execution. Screen state is observed separately; unknown is not the same as unlocked and establishes neither locked nor unlocked. waiting_for_the_screen resumes automatically after unlock; no user response is required. `task` is requested work; `check` or `investigate` is a QUESTION delegated to Stu. These kinds describe intent, not a result.",
     }))
 }
 
@@ -526,16 +486,11 @@ mod tests {
         assert!(answer["finished"].as_array().unwrap().is_empty());
         assert_eq!(answer["omitted"], 0);
 
-        // The sentence is handed over rather than left to be composed, and it is his own.
-        assert_eq!(
-            answer["waiting_for_the_screen_says"],
-            "Waiting for the screen to unlock. I'll carry on the moment it's back."
-        );
-        // And the boundary statement tells the model what the heading means, including the
-        // part it would otherwise get wrong: there is nothing to ask him to do.
+        assert_eq!(answer["screen_wait_resumes_automatically"], true);
+        assert!(answer.get("waiting_for_the_screen_says").is_none());
         let covers = answer["this_answer_covers"].as_str().unwrap();
         assert!(covers.contains("waiting_for_the_screen"), "{covers}");
-        assert!(covers.contains("never ask him to unlock anything"), "{covers}");
+        assert!(covers.contains("no user response is required"), "{covers}");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -619,7 +574,7 @@ mod tests {
         // follows.
         let covers = answer["this_answer_covers"].as_str().unwrap();
         assert!(covers.contains("`check` or `investigate` is a QUESTION"), "{covers}");
-        assert!(covers.contains("never that it is running"), "{covers}");
+        assert!(covers.contains("These kinds describe intent, not a result"), "{covers}");
         // Still no identifier on the way back out.
         assert!(!answer.to_string().contains(&quick), "an identifier reached the front desk");
         std::fs::remove_dir_all(root).unwrap();
@@ -665,7 +620,7 @@ mod tests {
         assert!(answer["finished"].as_array().unwrap().is_empty());
         // And the model is told what the distinction means where it will actually read it.
         let covers = answer["this_answer_covers"].as_str().unwrap();
-        assert!(covers.contains("never that it is running"), "{covers}");
+        assert!(covers.contains("These kinds describe intent, not a result"), "{covers}");
         // The assignment written down but untouched is the one Ray's walk mislabeled.
         let row = assignment::read(&state, "depot", "thread-one", &written).unwrap();
         assert_eq!(row.state, AssignmentState::Registered);
@@ -705,7 +660,7 @@ mod tests {
     /// **It cannot be pointed anywhere, and it cannot be made to act.** Every redirection
     /// field and every verb is refused outright rather than ignored.
     #[test]
-    fn it_takes_no_arguments_and_offers_no_verb_that_changes_anything() {
+    fn work_read_takes_no_arguments_and_peer_tools_keep_their_own_contracts() {
         let (root, scope) = fixture();
         for sneaky in [
             json!({"thread_id": "thread-two"}),
@@ -719,11 +674,13 @@ mod tests {
         }
         // Positive control: the plain call answers.
         assert!(call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).is_ok());
-        // And the inventory it advertises has exactly one tool, which is read-only.
+        // Direct session reads are read-only; peer send has a separate host-bound contract.
         let listed = tools();
         let listed = listed["tools"].as_array().unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0]["annotations"]["readOnlyHint"], true);
+        assert_eq!(listed.len(), 4);
+        assert!(listed[..3].iter().all(|t|t["annotations"]["readOnlyHint"]==true));
+        assert_eq!(listed[3]["name"],"send");
+        assert!(call(&scope,&UnknownScreen,"send",json!({"text":"hello","from":"stu"})).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 

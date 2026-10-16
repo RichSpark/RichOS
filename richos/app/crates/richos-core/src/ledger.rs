@@ -215,6 +215,8 @@ pub enum TurnState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
+    /// A message from another agent. Its text is context, never user authorization.
+    Agent,
     Text,
     Jam,
     /// A system-authored internal prompt (re-prime / handoff-summary request) — NEVER
@@ -2081,10 +2083,17 @@ impl Ledger {
         tier: AttentionTier,
         text: &str,
     ) -> Result<String, LedgerError> {
+        self.record_proactive_message_as(binding, tier, text, new_id("turn"))
+    }
+
+    /// A caller with a durable delivery identity can retry without creating another message.
+    pub(crate) fn record_proactive_message_as(
+        &mut self, binding: &ThreadBinding, tier: AttentionTier, text: &str, turn_id: String,
+    ) -> Result<String, LedgerError> {
         // Rich speaking unprompted is still a scoped write: an unbound or mis-scoped
         // thread must not receive one either.
         self.verify_binding(binding)?;
-        let turn_id = new_id("turn");
+        if self.turn(&turn_id).is_some() { return Ok(turn_id); }
         self.append(
             Event::ProactiveMessage {
                 turn_id: turn_id.clone(),
@@ -2209,7 +2218,7 @@ impl Ledger {
                 continue;
             }
             // Words the app sent for a button he pressed are not his line (finding 14).
-            if !t.pressed {
+            if !t.pressed && t.source != Source::Agent {
                 out.push(Message { role: "user".into(), text: t.user_text.clone(), turn_id: t.id.clone(), at: t.created_at });
             }
             if !t.assistant_text.is_empty() {

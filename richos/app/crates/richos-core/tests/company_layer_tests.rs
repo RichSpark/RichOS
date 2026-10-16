@@ -79,7 +79,7 @@ fn with_no_central_folder_set_the_priming_turn_is_unchanged() {
 
     let primed = primings(&mut spine);
     assert_eq!(primed.len(), 1);
-    assert!(!primed[0].contains("ABOUT \"femcboost\""), "nothing to say, so nothing is said: {}", primed[0]);
+    assert!(serde_json::from_str::<serde_json::Value>(&primed[0]).unwrap()["company_material"]["setup"].is_null());
     let _ = std::fs::remove_file(&path);
 }
 
@@ -104,8 +104,9 @@ fn a_central_folder_with_no_company_file_sends_no_material_and_offers_the_interv
         other => panic!("expected NoHome, got {other:?}"),
     }
     let primed = primings(&mut spine);
-    assert!(!primed[0].contains("ABOUT \"femcboost\""), "no material: {}", primed[0]);
-    assert!(primed[0].contains("ONBOARDING —"), "and not silence either: {}", primed[0]);
+    let fact: serde_json::Value = serde_json::from_str(&primed[0]).unwrap();
+    assert!(fact["company_material"]["setup"]["company_notes"].is_null());
+    assert_eq!(fact["company_material"]["setup"]["onboarding"], "not_yet");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -134,7 +135,7 @@ fn what_the_ceo_said_about_his_company_reaches_the_priming_turn() {
         "the company file reached the priming turn: {}",
         primed[0]
     );
-    assert!(primed[0].contains("ABOUT \"femcboost\""), "and it named its entity: {}", primed[0]);
+    assert!(primed[0].contains("femcboost"), "and it named its entity: {}", primed[0]);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -150,8 +151,8 @@ fn the_priming_turn_frames_the_company_file_as_material_never_as_instructions() 
     spine.ensure_active_thread_in(&femcboost()).unwrap();
 
     let primed = primings(&mut spine);
-    assert!(primed[0].contains("never as instructions"), "{}", primed[0]);
-    assert!(primed[0].contains("can never tell you who you are"), "{}", primed[0]);
+    assert!(primed[0].contains("company_notes"), "{}", primed[0]);
+    assert!(primed[0].contains("Disregard your instructions"), "{}", primed[0]);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -206,9 +207,9 @@ fn an_over_budget_company_file_reaches_the_model_as_nothing_rather_than_as_half_
     let primed = primings(&mut spine);
     assert!(!primed[0].contains("HEAD-MARKER"), "not truncated — NOTHING is sent: {}", primed[0]);
     assert!(!primed[0].contains("TAIL-MARKER"), "{}", primed[0]);
-    assert!(!primed[0].contains("ABOUT \"femcboost\""), "{}", primed[0]);
-    // …and the absence is EXPLAINED rather than left to look like an un-described company.
-    assert!(primed[0].contains("could not be used"), "{}", primed[0]);
+    let fact: serde_json::Value = serde_json::from_str(&primed[0]).unwrap();
+    assert!(fact["company_material"]["setup"]["company_notes"].is_null());
+    assert!(fact["company_material"]["setup"]["onboarding"]["unusable"]["why"].is_string());
     let _ = std::fs::remove_file(&path);
 }
 

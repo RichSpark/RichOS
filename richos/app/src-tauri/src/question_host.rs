@@ -183,7 +183,8 @@ pub fn start(app: AppHandle) {
                         eprintln!("[richos] question answer remains saved: {error}");
                     }
                 }
-                if let Err(error) = spine.poll_intake() {
+                drop(spine);
+                if let Err(error) = crate::drain_incoming_messages(&state.spine, &state.work) {
                     eprintln!("[richos] question continuation failed: {error}");
                 }
             }

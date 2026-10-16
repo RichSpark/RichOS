@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='questions-proof-', dir=os.environ['TMPD
     root = pathlib.Path(tmp)
     fixture = root / 'claude'
     fixture.write_text('#!' + sys.executable + '\n' + r'''
-import json, os, pathlib, subprocess, sys, time
+import json, os, pathlib, subprocess, sys
 def emit(value): print(json.dumps(value), flush=True)
 config = json.loads(sys.argv[sys.argv.index('--mcp-config') + 1]) if '--mcp-config' in sys.argv else {}
 for line in sys.stdin:
@@ -37,10 +37,18 @@ for line in sys.stdin:
         emit({'type':'control_response','response':{'subtype':'success','request_id':request['request_id'],'response':{}}})
         continue
     if request['type'] != 'user': continue
-    emit({'type':'system','subtype':'init','plugins':[{'name':'rich-skills'}], 'permissionMode':'auto',
+    emit({'type':'system','subtype':'init','plugins':[{'name':'rich-skills'}], 'permissionMode':'bypassPermissions',
           'tools':['mcp__richos_onboarding__save_company_notes','mcp__richos_onboarding__decline_onboarding',
                    'mcp__richos_assignments__record','mcp__richos_status__background_work']})
-    prompt = str(request.get('message', {}).get('content', ''))
+    content = request.get('message', {}).get('content', '')
+    prompt = content[-1]['text'] if isinstance(content, list) else content
+    try:
+        context = json.loads(prompt)
+    except (TypeError, ValueError):
+        context = None
+    if isinstance(context, dict) and context.get('event') == 'context_restored':
+        emit({'type':'result','stop_reason':'end_turn','subtype':'success'})
+        continue
     if 'Classify as answer only' in prompt:
         rows = [{'index':i,'kind':'answer' if i < 20 else 'unrelated','option_ids':[]} for i in range(40)]
         if os.environ.get('QUESTION_BAD_CLASSIFICATION'): rows[0]['kind'] = 'unrelated'
@@ -56,9 +64,7 @@ for line in sys.stdin:
         reply = subprocess.run([server['command'], *server['args']], input=''.join(json.dumps(f)+'\n' for f in frames),
                                capture_output=True, text=True, timeout=10, check=True)
         assert 'recorded' in reply.stdout, reply.stdout + reply.stderr
-        # Deliberately uncooperative. The host must terminate this asking turn.
-        time.sleep(20)
-        text = 'The host failed to end the asking turn.'
+        text = 'The question is recorded.'
     else:
         text = 'Got it. On it!'
     emit({'type':'assistant','message':{'content':[{'type':'text','text':text}]}})
@@ -72,7 +78,7 @@ for line in sys.stdin:
     result = run('questions_roundtrip', 'roundtrip')
     assert result.returncode == 0, result.stdout + result.stderr
     assert '"phone_answer_delivered_once":true' in result.stdout, result.stdout
-    print('PASS production MCP ask, noncooperative host stop, restart and one receiving turn')
+    print('PASS production MCP ask, provider-owned turn end, restart and one receiving turn')
     result = run('question_words_eval', 'words')
     assert result.returncode == 0, result.stdout + result.stderr
     assert '"answer_shaped_correct":20' in result.stdout and '"unrelated_correct":20' in result.stdout

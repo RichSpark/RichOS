@@ -733,6 +733,10 @@ case "$ISOLATION" in
       # registered cross-repository worktree.
       CWD_WHY="$(registered_teammate_worktree "$SPAWN_CWD")" || \
         PROBLEMS+=("cwd spawn refused — ${CWD_WHY}. A cross-repository teammate works only in a worktree RichOS registered, so its owner can be judged after this session is gone: ${HELPER_HINT}")
+    elif printf '%s' "$PROMPT" | grep -E >/dev/null '^[[:space:]]*cross-repo-worktree:[[:space:]]*[^[:space:]]'; then
+      # The linked target worktrees provide isolation already. Clauses 4c
+      # and 7 below still verify every path, owner and native call identity.
+      :
     elif [ -n "$MAIN_CHECKOUT_MARKER" ]; then
       # Auditable fallback opt-out taken. Best-effort log — never fail the
       # spawn because logging failed; the marker itself is the audit trail.

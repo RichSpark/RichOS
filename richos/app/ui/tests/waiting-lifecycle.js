@@ -50,7 +50,7 @@ async function main() {
           assert((await band(page)).detail.includes("previous conversation"));
           await page.locator(`.nav-thread[data-thread-id="${fence.threadId}"]`).click();
           assertEqual((await band(page)).detail, "This conversation is still working. Press Stop to stop that work.");
-          assert(await page.isDisabled("#send"), "returning does not bypass ordered activation");
+          assert(!(await page.isDisabled("#send")), "returning keeps Send available during ordered activation");
           await page.click("#stop");
           assertEqual((await band(page)).detail, "I couldn't stop this conversation. Press Stop again.");
           await page.evaluate(() => { window.__allowStop = true; });
@@ -67,11 +67,12 @@ async function main() {
         } finally { await page.close(); }
       }
     });
-    await run.check("opening another company hides old messages, fences Send and keeps Stop usable", async () => {
+    await run.check("opening another company hides old messages, sends directly and keeps Stop usable", async () => {
       for (const theme of ["dark", "light"]) {
         const page = await openApp(browser, theme);
         const fence = await startTurn(page, "opening_previous");
         await goWorking(page, fence, "opening_previous");
+        await controllableSend(page);
         await page.evaluate(() => {
           const original = window.RichBridge.invoke.bind(window.RichBridge);
           window.__openingCalls = [];
@@ -93,14 +94,15 @@ async function main() {
           "previous company's messages are hidden while the destination pane paints");
         assertEqual((await band(page)).head, "Opening conversation");
         assert((await band(page)).detail.includes("previous conversation"));
-        assert(await page.isDisabled("#send"));
+        assert(!(await page.isDisabled("#send")));
         assert(await page.isVisible("#stop"));
         await page.fill("#input", "New company's draft");
         await page.press("#input", "Enter");
-        // NOTHING IS ISSUED WHILE THE NAVIGATION IS IN FLIGHT. This is the assertion this line
-        // has always made and it is unchanged: `openThread` is mid-flight, the model is being
-        // replaced, and a send into a half-built surface would be the wrong fix.
-        assertEqual(await page.evaluate(() => window.__openingCalls.filter(c => c.cmd === "send_message" || c.cmd === "steer_turn").length), 0);
+        const submitted = await page.evaluate(() => window.__openingCalls.filter(c => c.cmd === "send_message" || c.cmd === "steer_turn"));
+        assertEqual(submitted.length, 1);
+        assertEqual(submitted[0].cmd, "send_message");
+        assertEqual(submitted[0].args.threadId, "acme", "Send targets the destination before its switch completes");
+        assertEqual(submitted[0].args.text, "New company's draft");
         await page.click("#stop");
         assertEqual((await band(page)).detail, "I couldn't stop the previous conversation. Press Stop again.");
         assertEqual(await page.evaluate(() => window.__openingCalls.find(c => c.cmd === "stop_turn").args.expectedTurnId), "opening_previous");
@@ -117,28 +119,15 @@ async function main() {
         assert(await page.isHidden("#stop"), "previous terminal event removes its Stop");
         await page.evaluate(() => window.__finishOpeningSwitch());
         await page.waitForFunction(() => !!window.__finishOpeningSnapshot);
-        assert(await page.isDisabled("#send"), "binding alone does not enable Send before saved messages arrive");
+        assert(!(await page.isDisabled("#send")), "Send remains available while saved messages load");
         await page.evaluate(() => window.__finishOpeningSnapshot());
         await page.waitForSelector('#conversation:not([hidden])');
-        // CHANGED 2026-09-18, AUDIT-7 ROW 10, AND IT IS AN OBSOLETE ASSERTION RATHER THAN A NEW
-        // DEFECT. This line read `assertEqual(await page.inputValue("#input"), "New company's
-        // draft")` — it required the sentence he pressed Return on to be sitting untouched in
-        // the composer once the new conversation arrived. That is the defect Ray filed twice
-        // (audit-4 #18 and audit-7 row 10): "the first Return does not send; the second does",
-        // and on his walk it cost 26 seconds and two Returns at check 0. `send()` now HOLDS a
-        // send made during the opening window and replays it on arrival, so the box is empty
-        // and his sentence is in the thread — which is what pressing Return means.
-        //
-        // The two facts this check actually exists for are untouched and asserted above:
-        // nothing is issued while the navigation is in flight, and Stop stays usable through a
-        // failed stop. The draft invariant it also happened to encode is not lost — the check
-        // below it in this same file, "a send refused after navigation restores its draft only
-        // to the original thread", is the one that owns it and it still passes.
+        // The send already reached the destination while navigation was gated.
         await page.waitForFunction(
           () => Array.from(document.querySelectorAll(".tl-user-text")).some(n => n.textContent.trim() === "New company's draft"), null,
           { timeout: 8000 }
         );
-        assertEqual(await page.inputValue("#input"), "", "the held send landed but its words are still in the composer");
+        assertEqual(await page.inputValue("#input"), "", "the submitted words are still in the composer");
         assert(!(await page.isDisabled("#send")));
         assertEqual(await page.evaluate(() => window.__RICHOS_TIMELINE__().threadId), "acme");
         // The band is no longer null here and that is the point rather than a tolerance: the

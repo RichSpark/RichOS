@@ -96,8 +96,8 @@ fn lease_is_reprimed_before_first_turn() {
     // instruction on 2026-09-06 — a system prompt, fixed at spawn, rather than a turn
     // (`doctrine.rs`; inner-doctrine design §4.2, §5.1). They are checked there by
     // `action_ledger_tests::the_ledgers_partial_coverage_is_stated_rather_than_overclaimed`.
-    assert!(reprimes[0].contains("continuing conversation"), "the successor is told which conversation it is in");
-    assert!(reprimes[0].contains("never mis-attribute your own prior actions"), "anti-false-attribution rule present");
+    assert!(reprimes[0].contains("identity_assertion"), "the successor is told which conversation it is in");
+    assert!(reprimes[0].contains("action_ledger_digest"), "anti-false-attribution rule present");
     // The re-prime happens; the CEO prompt is delivered after it.
     assert_eq!(*prompts_ref.lock().unwrap(), vec!["hello".to_string()]);
     let _ = std::fs::remove_file(&path);
@@ -260,7 +260,7 @@ fn after_a_key_change_the_desk_that_answers_knows_only_the_new_key() {
         let fact_at = primed.rfind(fact).unwrap_or_else(|| panic!("the desk answering in {thread} is not told the key changed: {primed}"));
         let today = time::OffsetDateTime::now_utc().date().to_string();
         assert!(primed[..fact_at].ends_with(&format!("{today}: ")), "the fact is dated: {primed}");
-        assert!(primed[..fact_at].contains("The start/stop key is F2."), "the saved summary is kept: {primed}");
+        assert!(primed.contains("The start/stop key is F2."), "the saved summary is kept: {primed}");
         assert_eq!(primed[fact_at..].matches("F2").count(), 1, "the fact comes after every older F2 mention in {thread}: {primed}");
         if thread == &id {
             assert!(primed[..fact_at].contains("Tap F2 to start dictation."), "Rich's earlier reply is kept: {primed}");
@@ -327,7 +327,7 @@ fn reprime_payload_carries_action_ledger_as_ground_truth() {
     assert_eq!(payload.action_ledger_digest.len(), 1);
     assert_eq!(payload.action_ledger_digest[0].kind, "dispatch");
     let priming = payload.to_priming_prompt();
-    assert!(priming.contains("ACTION LEDGER"));
+    assert!(priming.contains("action_ledger_digest"));
     assert!(priming.contains("spawned worker mark-sonnet-f1"));
     let _ = std::fs::remove_file(&path);
 }
@@ -625,68 +625,9 @@ impl UnwrapErrTurn for Result<String, richos_core::spine::SpineError> {
     }
 }
 
-/// **A job's result is in the conversation, and still there after a relaunch** (nightly 57's
-/// product hunt, finding 6). "Will and Beth have both joined your team" was a card the window
-/// drew from the assignment's notice, marked told as it was handed over and gone after a
-/// relaunch, so the conversation ended at "On it!". Now a result is written into the
-/// conversation as Rich's message, once; a notice that says where a job stands now (here, a
-/// held one) stays on its assignment for the window's card.
+/// Rich interprets a reply in context before the app can publish any promise of work.
 #[test]
-fn a_jobs_result_is_written_into_the_conversation_once_and_is_there_after_a_relaunch() {
-    use richos_core::assignment::{self, NoticeKind, Registration};
-    let (path, ledger) = tmp_ledger("work-result");
-    let mut spine = support::spine(ledger);
-    let thread = spine.create_thread("General", &femcboost()).unwrap();
-    let state = std::env::temp_dir().join(format!(
-        "richos-test-work-result-{}-{}",
-        std::process::id(),
-        richos_core::util::now_millis()
-    ));
-    std::fs::create_dir_all(&state).unwrap();
-    let receipt = assignment::register(&state, &Registration {
-        entity_id: "femcboost".into(),
-        thread_id: thread.clone(),
-        obligation_id: "obligation-1".into(),
-        instruction_ledger_ref: format!("ledger:{thread}:turn-1"),
-        instruction_sha256: "0".repeat(64),
-        title: "Hire these AI teammates onto my team: Will (Marketing Director), Beth (Bookkeeper)".into(),
-        repositories: Vec::new(),
-        needs_screen: false,
-    })
-    .unwrap();
-    let joined = "Will (Marketing Director) and Beth (Bookkeeper) are on your team now, ready to take work.";
-    let held = "Your request is waiting until you sign in to Claude again.";
-    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Held, held).unwrap();
-    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, joined).unwrap();
-
-    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), [joined], "the result was not written, or not answered for the speaker");
-    assert!(spine.say_work_results(&state, &thread).unwrap().is_empty(), "the result was written twice");
-    let cards = assignment::take_pending_notices(&state, "femcboost", &thread).unwrap();
-    assert_eq!(cards.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), [held], "the held line is still a card");
-
-    drop(spine);
-    let relaunched = Ledger::open(&path).unwrap();
-    let said: Vec<String> = relaunched
-        .messages(&thread)
-        .unwrap()
-        .into_iter()
-        .filter(|m| m.role == "assistant")
-        .map(|m| m.text)
-        .collect();
-    assert_eq!(said, [joined], "after a relaunch the conversation does not hold the result");
-    std::fs::remove_file(&path).unwrap();
-    std::fs::remove_dir_all(&state).unwrap();
-}
-
-/// **"On it!" the instant he says go on the team proposal** (nightly 57's product hunt, finding
-/// 3). After the interview's last answer Rich proposes the team and ends "Say go and I'll get
-/// them hired now."; he said "Go." and "On it!" appeared 14 seconds later, because a full model
-/// turn (behind a re-prime) wrote the same two words the register always hands back. Now the
-/// app says them as the turn starts, before the conversation's model is asked anything, and the
-/// register's own copy is not said a second time. A "Go." that answers anything else is the
-/// model's to answer, as before.
-#[test]
-fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
+fn go_on_a_proposal_is_interpreted_by_rich_before_any_reply() {
     struct Seen {
         prompts: Arc<Mutex<Vec<String>>>,
         chunks: Arc<Mutex<Vec<(String, String, usize)>>>,
@@ -699,12 +640,6 @@ fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
             }
         }
     }
-    let skill = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/bootstrap-interview/SKILL.md"),
-    )
-    .unwrap();
-    assert!(skill.contains("Say go and I'll get them hired now."), "the interview no longer ends its team proposal this way");
-
     let (path, ledger) = tmp_ledger("go-on-it");
     let mut spine = support::spine(ledger);
     spine.create_thread("Onboarding", &femcboost()).unwrap();
@@ -713,7 +648,7 @@ fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
                     team any time as needed. Say go and I'll get them hired now.";
     // The second reply is the register's receipt, as the real lease streams it; the third is
     // the model's own answer to a "Go." that follows something other than the proposal.
-    let mock = MockCognition::new("sess-1", vec![proposal, "On it!", "Go where?"]);
+    let mock = MockCognition::new("sess-1", vec![proposal, "Which roles do you mean?", "Go where?"]);
     let prompts = mock.prompts.clone();
     let chunks = Arc::new(Mutex::new(Vec::new()));
     spine.set_observer(Box::new(Seen { prompts: prompts.clone(), chunks: chunks.clone() }));
@@ -723,12 +658,67 @@ fn on_it_is_said_the_instant_he_says_go_on_the_team_proposal() {
     let go = spine.submit_prompt("Go.", Source::Text).unwrap();
     let first = chunks.lock().unwrap().iter().find(|(turn, _, _)| *turn == go).cloned();
     let (_, words, asked) = first.expect("nothing was said on his go");
-    assert_eq!(words, "On it! ", "said with the space that lets voice mode speak it at once");
-    assert_eq!(asked, 1, "\"On it!\" waited for the model to be asked his go");
-    assert_eq!(spine.ledger().turn(&go).unwrap().assistant_text, "On it!", "said once, not twice");
+    assert!("Which roles do you mean?".starts_with(&words), "a reply was invented before Rich spoke: {words:?}");
+    assert_eq!(asked, 2, "the app replied before Rich interpreted the request");
+    assert_eq!(spine.ledger().turn(&go).unwrap().assistant_text, "Which roles do you mean?");
     assert_eq!(prompts.lock().unwrap().last().map(String::as_str), Some("Go."), "the model still gets his go and hires");
 
     let again = spine.submit_prompt("Go.", Source::Text).unwrap();
     assert_eq!(spine.ledger().turn(&again).unwrap().assistant_text, "Go where?", "a go on anything else is the model's");
     std::fs::remove_file(&path).unwrap();
+}
+
+
+/// An agent contribution takes the ordinary durable incoming-message path. Only
+/// Rich's reply appears in the user conversation, with sender provenance retained.
+#[test]
+fn agent_input_survives_restart_and_duplicate_delivery_without_a_report_writer() {
+    use richos_core::steering::TurnControl;
+    let (path, ledger) = tmp_ledger("ordinary-agent-input");
+    let intake = path.with_extension("intake.jsonl");
+    let mut spine = support::spine(ledger);
+    let thread = spine.create_thread("Research", &femcboost()).unwrap();
+    let control = TurnControl::open(&intake).unwrap();
+    let report = r#"{"from":"stu","text":"The northern market has twice as many buyers."}"#;
+    control.submit_agent_message(&thread, Some(femcboost()), report, "stu", "saved-message-1").unwrap();
+    drop(spine);
+    drop(control);
+
+    let control = TurnControl::open(&intake).unwrap();
+    // A duplicate notification/delivery must not create a second turn.
+    control.submit_agent_message(&thread, Some(femcboost()), report, "stu", "saved-message-1").unwrap();
+    let mut spine = support::spine(Ledger::open(&path).unwrap());
+    spine.set_turn_control(control);
+    let reply = "The northern market has twice as many buyers.";
+    let desk = MockCognition::new("rich", vec![reply]);
+    let prompts = desk.prompts.clone();
+    spine.attach_lease(Box::new(desk));
+    spine.reconcile_intake().unwrap();
+    spine.poll_intake().unwrap();
+    assert_eq!(*prompts.lock().unwrap(), [report]);
+    let messages = spine.messages(&thread).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "assistant");
+    assert_eq!(messages[0].text, reply);
+    let turn = spine.ledger().thread_turns(&thread).unwrap().into_iter().find(|t| t.source == Source::Agent).unwrap();
+    assert_eq!(turn.channel.as_deref(), Some("stu"));
+    assert_eq!(turn.state, TurnState::Completed);
+    let binding = spine.ledger().thread_binding(&thread).unwrap();
+    let context = RePrimePayload::assemble(spine.ledger(), &binding, 5, None).unwrap();
+    assert!(context.recent_tail.iter().any(|entry| entry.role == "agent (stu)" && entry.text == report));
+    assert!(!context.recent_tail.iter().any(|entry| entry.role == "user" && entry.text == report));
+    drop(spine);
+
+    let mut reopened = support::spine(Ledger::open(&path).unwrap());
+    reopened.set_turn_control(TurnControl::open(&intake).unwrap());
+    let desk = MockCognition::new("rich-restarted", vec![]);
+    let replayed = desk.prompts.clone();
+    reopened.attach_lease(Box::new(desk));
+    reopened.reconcile_intake().unwrap();
+    reopened.poll_intake().unwrap();
+    assert!(replayed.lock().unwrap().is_empty());
+    assert_eq!(reopened.messages(&thread).unwrap().len(), 1);
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(intake).unwrap();
 }

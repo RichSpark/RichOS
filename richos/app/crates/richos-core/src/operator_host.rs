@@ -127,7 +127,7 @@ impl Origin {
     pub fn of_turn(source: crate::ledger::Source, channel: Option<&str>) -> Origin {
         use crate::ledger::Source;
         match (source, channel) {
-            (Source::Internal | Source::Proactive, _) | (_, None) => Origin::NoOrigin,
+            (Source::Internal | Source::Proactive | Source::Agent, _) | (_, None) => Origin::NoOrigin,
             (_, Some("phone" | "phone_typed" | "phone_voice")) => Origin::Phone,
             (Source::Text, Some(crate::spine::DESK_CHANNEL)) => Origin::DeskTyped,
             (Source::Jam, Some(crate::spine::DESK_CHANNEL)) => Origin::DeskVoice,
@@ -329,10 +329,9 @@ pub fn changed_since(watched: &[PathBuf], since: SystemTime) -> Vec<PathBuf> {
     out
 }
 
-/// r3 e4, verbatim shape: "Changed since your last message: <paths>. Read them before you act."
+/// Factual changes observed since the prior relay. Role instructions live in files.
 pub fn changed_line(changed: &[PathBuf]) -> Option<String> {
-    (!changed.is_empty()).then(|| format!("Changed since your last message: {}. Read them before you act.",
-        changed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")))
+    (!changed.is_empty()).then(||serde_json::json!({"changed_since_last_message":changed}).to_string())
 }
 
 /// Is this `land-lease.sh status` line a lease held by the conversation titled `title`? The
@@ -2384,8 +2383,7 @@ pub(crate) mod tests {
         let sent = lead_of(&r, "a").sent.lock().unwrap().clone();
         assert!(sent[0].contains("Assignment handle: h-1."), "{}", sent[0]);
         assert!(!sent[0].contains("Changed since"), "nothing changed before the first relay");
-        assert!(sent[1].starts_with("Changed since your last message: ") && sent[1].contains("MEMORY.md")
-                && sent[1].contains("Read them before you act."), "{}", sent[1]);
+        assert!(sent[1].contains("changed_since_last_message") && sent[1].contains("MEMORY.md"), "{}", sent[1]);
         r.host.relay(&key("a"), "A", None, "And again.", Origin::DeskTyped).unwrap();
         let sent = lead_of(&r, "a").sent.lock().unwrap().clone();
         assert!(!sent[2].contains("Changed since"), "said once, not at every relay: {}", sent[2]);

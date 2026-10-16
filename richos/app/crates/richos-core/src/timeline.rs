@@ -1403,7 +1403,7 @@ fn turn_items(turn: &Turn, entity: &EntityId, revision: u64) -> Vec<TimelineItem
     // so it contributes no user item rather than an empty bubble. Nor does a turn the app
     // started for a button he pressed: those words are not his (product hunt 2026-10-15,
     // finding 14, `Turn::pressed`).
-    if turn.source != Source::Proactive && !turn.pressed && !turn.user_text.is_empty() {
+    if !matches!(turn.source, Source::Proactive | Source::Agent) && !turn.pressed && !turn.user_text.is_empty() {
         out.push(TimelineItem::UserMessage {
             base: base(format!("{}:user", turn.id), None, TimelineSlot::Opening, turn.created_at, vis(Visibility::Ceo)),
             text: turn.user_text.clone(),

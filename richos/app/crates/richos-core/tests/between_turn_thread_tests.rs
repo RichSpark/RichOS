@@ -110,7 +110,7 @@ fn a_real_agents_session_start_frame_reaches_the_journal_and_the_technical_view(
     spine.set_machinery_journal(MachineryJournal::new(&journal_root));
     let doctrine_dir = std::env::temp_dir().join(format!("richos-doctrine-btt-{}", std::process::id()));
     let doctrine = richos_core::doctrine::ensure_rendered(&doctrine_dir, &richos_core::doctrine::DoctrineIdentity::default()).unwrap();
-    let skills = richos_core::skills::ensure_rendered(&doctrine_dir).unwrap();
+    let skills = richos_core::skills::ensure_rendered(&doctrine_dir, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
     spine.attach_lease(Box::new(NativeCognition::start(&script, Path::new("/tmp"), &doctrine, &skills).unwrap()));
     let thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
 

@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod question_host;
+mod peer_messages;
 mod activation;
 mod lifecycle;
 mod events;
@@ -170,6 +171,16 @@ impl TurnObserver for TauriEmitter {
             || self.app.emit(event.event_name(), event.payload()),
             |receipt| eprintln!("[richos] ui-emit {receipt}"),
         );
+        if let StreamEvent::TurnCompleted { thread_id, turn_id, .. } = event {
+            if let Some(runtime) = self.app.try_state::<Arc<phone::PhoneRuntime>>() {
+                let runtime=Arc::clone(&runtime);
+                let (thread_id,turn_id)=(thread_id.clone(),turn_id.clone());
+                tauri::async_runtime::spawn_blocking(move || {
+                    runtime.bridge_refresh();
+                    runtime.push_reply(&thread_id,&turn_id);
+                });
+            }
+        }
     }
 }
 
@@ -262,12 +273,6 @@ impl richos_core::output::OutputObserver for TauriOutputEmitter {
 /// that inventory — declared, emitted, and invisible to the check that exists to stop
 /// exactly that. Nothing else reads it; the visibility is the gate.
 pub const EVENT_WORK_NOTICE: &str = "rich://work-notice";
-
-/// **A job's result was just written into his conversation as Rich's message**, with its words,
-/// so voice mode can say it ([`say_work_results`]; nightly 57's hunt, findings 4 and 6). The
-/// window draws the message from `rich://proactive-message`, which carries no words and speaks
-/// nothing. Emitted once per message written. `pub` for the documentation gate.
-pub const EVENT_WORK_RESULT: &str = "rich://work-result";
 
 /// **His team said something** — an operator install's push lane (the operator-client record's
 /// §7 item 1). Best-effort like `rich://work-notice`: the notice is on disk before this is
@@ -428,6 +433,11 @@ struct WorkNotice {
 
 impl richos_core::work_host::WorkNotifier for WorkNotice {
     fn raised(&self, thread_id: &str, notice: &richos_core::assignment::PendingNotice) {
+        if notice.kind.is_result() {
+            if let Some(state) = self.app.try_state::<AppState>() {
+                queue_work_messages(&self.app, &state.data_dir.join("engine-state"), thread_id);
+            }
+        }
         let _ = self.app.emit(
             EVENT_WORK_NOTICE,
             serde_json::json!({"threadId": thread_id, "notice": notice}),
@@ -454,7 +464,8 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
         if !self.app.webview_windows().is_empty() {
             return;
         }
-        if self.app.try_state::<AppState>().is_some_and(|state| questions_pending(&state)) {
+        if self.app.try_state::<AppState>().is_some_and(|state| questions_pending(&state)
+            || state.control.active_turn().is_some() || state.work.peer_work_pending() || !state.control.pending_intake().is_empty()) {
             return;
         }
         // **A command Rich started outlives its assignment** (reap gap C5): quitting would end
@@ -599,13 +610,6 @@ impl LeaseFactory for EngineLeaseFactory {
         richos_core::engine_profile::team_digest(&engine, &self.data_dir).ok()
     }
 
-    /// The definitions that digest covers, read the same way: the names they record are what
-    /// the work host checks a hiring's proposed teammates against.
-    fn team_definitions(&self) -> Option<Vec<String>> {
-        let engine = self.engine_dir.lock().ok()?.clone();
-        richos_core::engine_profile::active_team(&engine, &self.data_dir).ok().map(|team| team.into_values().collect())
-    }
-
     /// **The models the next leases would start on** (§119): what `EngineProfile::prepare`
     /// reads at every spawn, read the same way — off `config.json` on disk, never the config
     /// lock, for the deadlock reason on `data_dir` above. The spine and the work host compare
@@ -658,13 +662,8 @@ impl LeaseFactory for EngineLeaseFactory {
             .lock()
             .map(|b| b.clone())
             .unwrap_or_else(|_| PathBuf::from("claude"));
-        let doctrine = richos_core::doctrine::ensure_rendered(
-            &self.data_dir,
-            &richos_core::doctrine::identity_from_config(&self.data_dir),
-        )
-        .map_err(|e| CognitionError::Io(e.to_string()))?;
-        let skills = richos_core::skills::ensure_rendered(&self.data_dir)
-            .map_err(|e| CognitionError::Io(e.to_string()))?;
+        let skills = dir.join("app");
+        let doctrine = skills.join("agents/stu.md");
         let executable = std::env::current_exe().map_err(|e| CognitionError::Io(e.to_string()))?;
         // **AND THE CONTENT, not just the release** (2026-09-18). `EngineDemand::pinned` carries
         // the digest of the asset this build was built against, so the directory a stale nightly
@@ -722,16 +721,8 @@ impl EngineLeaseFactory {
         // The standing instruction, rendered and verified before the successor exists. A
         // failure here is a failure to spawn: a lease with no doctrine is a generic Claude
         // wearing the product's window, and `doctrine.rs` has no fallback for that on purpose.
-        let doctrine = richos_core::doctrine::ensure_rendered(
-            &self.data_dir,
-            &richos_core::doctrine::identity_from_config(&self.data_dir),
-        )
-        .map_err(|e| CognitionError::Io(e.to_string()))?;
-        // The skills, rendered and verified beside it and for the same reason. A missing one
-        // is a refusal at `preflight`, because `--plugin-dir` accepts a path that is not there
-        // without saying so (`skills.rs`).
-        let skills = richos_core::skills::ensure_rendered(&self.data_dir)
-            .map_err(|e| CognitionError::Io(e.to_string()))?;
+        let skills = dir.join("app");
+        let doctrine = skills.join("agents/rich.md");
         let executable = std::env::current_exe().map_err(|e| CognitionError::Io(e.to_string()))?;
         // **THE RELEASE GATE — spec point 22, and the half of it that stops the wrong engine
         // WRITING.** A refused resolution does not end the launch: `resolve_engine` hands the
@@ -1227,6 +1218,9 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
         let verdict = spine.prime_front_desk(&thread_id);
         // Priming drains what he sent while it ran (`prime_front_desk`'s `poll_intake`), and
         // those are real turns: their boundary is here (`adopt_at_the_turn_boundary`).
+        drop(spine);
+        if let Err(error)=richos_core::spine::drive_shared_turns(&state.spine) {eprintln!("[richos] queued reply: {error}");}
+        let spine=take_the_spine(&state.spine);
         adopt_at_the_turn_boundary(spine, &state.work);
         match verdict {
             richos_core::spine::FrontDeskReady::Ready { millis, spawned } => eprintln!(
@@ -1580,8 +1574,9 @@ fn send_message(
     //
     // A write that FAILS is not a refusal of his message either: it falls through to the same
     // old road, and the only thing lost is the wait.
-    let his_words_are_on_the_log = if !pressed && desk_input_can_be_logged(&state.control, &thread_id) {
-        match state.control.submit_from_desk(&thread_id, state.entity.lock().unwrap().clone(), &text)
+    let destination = state.reader.snapshot().ledger().thread_binding(&thread_id).ok();
+    let his_words_are_on_the_log = if !pressed && destination.is_some() && desk_input_can_be_logged(&state.control, &thread_id) {
+        match state.control.submit_from_desk(&thread_id, destination.map(|binding| binding.entity_id().clone()), &text)
         {
             Ok(record) => {
                 // THE PHONE, BEFORE THE LOCK. Inert when nothing is paired, so this costs a
@@ -1707,39 +1702,10 @@ fn send_message(
             .submit_prompt_to(&thread_id, &text, Source::Text)
             .map_err(|e| refused_send("the spine refused the prompt", e.to_string()))?;
     }
-    // "no active thread" used to be the whole sentence here, and it went straight onto the
-    // CEO's screen through `send()`'s `String(e)`. Machinery, and it named neither an action
-    // nor an actor. The prompt IS already submitted by this line, so the sentence must not
-    // claim the message was lost, and must not promise it will reappear — nothing here knows
-    // that.
-    let thread = spine
-        .active_thread()
-        .ok_or(
-            "I've taken that down, but I haven't got a thread open to show it in. Quit RichOS \
-             and open it again; if it still isn't here, whoever set RichOS up needs to look.",
-        )?
-        .to_string();
-    let messages = spine.messages(&thread).map_err(|e| e.to_string())?;
-    // ===================================================================================
-    // THE TURN BOUNDARY, AND THE ONE LINE THAT MAKES §7.1's DECISION REAL
-    // ===================================================================================
-    //
-    // The turn is over: the prompt ran, the reply is reconciled, and the mutex goes back
-    // below. If Rich wrote an assignment down during it — `richos_assignments.record`,
-    // which returns a receipt and nothing else — the work starts HERE, after the turn, on
-    // the work lease. Background-work spec §7.1: *"registration is the receipt, and
-    // `prepare` runs on the work lease after the turn has ended."*
-    //
-    // **The spine lock is dropped first, on purpose.** The work host must never be reached
-    // while it is held; that is §0 row 3's whole point, and doing the adoption inside the
-    // guard would have put the one lock this feature exists to escape back on the path.
-    //
-    // **It is a directory read at a boundary, not a timer.** Adoption happens once per
-    // assignment, at the end of the turn that created it. Nothing here retries and nothing
-    // restarts work by itself (spec §6.3).
-    //
-    // **Every conversation whose turn ended in this call, not the one active afterwards** —
-    // the same door the spoken turn, the phone and the boot use (`adopt_at_the_turn_boundary`).
+    drop(spine);
+    richos_core::spine::drive_shared_turns(&state.spine).map_err(|e|e.to_string())?;
+    let spine=take_the_spine(&state.spine);
+    let messages=spine.messages(&thread_id).map_err(|e|e.to_string())?;
     adopt_at_the_turn_boundary(spine, &state.work);
     Ok(messages)
 }
@@ -1759,7 +1725,7 @@ fn send_message(
 // `turn_boundary_tests::every_entrance_that_runs_his_turns_adopts_at_its_boundary` names each):
 //   * typed      — `send_message`
 //   * spoken     — the voice submit callback, through `run_the_spoken_turn`
-//   * phone      — `phone::bridge`'s drain, through `drain_the_phone`
+//   * phone      — `phone::bridge`'s drain, through `drain_incoming_messages`
 //   * priming    — `ready_the_front_desk` (`prime_front_desk` drains what was sent during it)
 //   * boot       — `reconcile_intake`, which runs what outlived the last process
 
@@ -1781,36 +1747,33 @@ where
 
 /// **His spoken sentence, as a turn, and then its boundary** — the tail of the voice submit
 /// callback, a function so the adoption it ends with is tested rather than assumed.
-fn run_the_spoken_turn<G>(
-    mut spine: G,
+fn run_the_spoken_turn(
+    shared: &Mutex<Spine>,
     work: &Arc<richos_core::work_host::WorkHost>,
     text: &str,
     rich_audible: bool,
-) where
-    G: std::ops::DerefMut<Target = Spine>,
-{
-    // Source::Jam — voice and text are ONE thread and ONE ledger.
-    //
-    // `submit_prompt_spoken` rather than `submit_prompt`: the latter writes
-    // `rich_audible: None`, which means "not recorded", and would throw away the one fact
-    // about this audio that nothing downstream can reconstruct.
+) {
+    let mut spine=shared.lock().unwrap();
     if let Err(e) = spine.submit_prompt_spoken(text, Source::Jam, rich_audible) {
         eprintln!("[richos] voice turn failed: {e}");
     }
+    drop(spine);
+    if let Err(error)=richos_core::spine::drive_shared_turns(shared) {eprintln!("[richos] spoken reply: {error}");}
+    let spine=shared.lock().unwrap();
     // A failed turn still reaches here: what it wrote down before failing is a receipt.
     adopt_at_the_turn_boundary(spine, work);
 }
 
-/// **The phone's drain: take his words off the intake log, run them, then the boundary.**
-/// Called from `phone::bridge` on its own thread, because the drain runs the turn.
-fn drain_the_phone(
-    spine: &std::sync::Mutex<Spine>,
+/// Receive durable input and run its model I/O outside the shared conversation lock.
+fn drain_incoming_messages(
+    shared: &std::sync::Mutex<Spine>,
     work: &Arc<richos_core::work_host::WorkHost>,
 ) -> Result<(), richos_core::spine::SpineError> {
-    let mut spine = spine.lock().unwrap();
-    let outcome = spine.poll_intake();
+    let outcome=shared.lock().unwrap().poll_intake();
+    let driven=richos_core::spine::drive_shared_turns(shared);
+    let spine=shared.lock().unwrap();
     adopt_at_the_turn_boundary(spine, work);
-    outcome
+    outcome.and(driven)
 }
 
 /// A cold prime starts before its provider has a session id. Its intake marker
@@ -3652,6 +3615,7 @@ fn main() {
                 }
             };
 
+            spine.detach_conversation_io();
             app.manage(AppState {
                 quota: quota.clone(),
                 permissions,
@@ -3705,6 +3669,22 @@ fn main() {
                 boot_engine,
             });
 
+            // Replay durable reports independently of which conversation the UI opens.
+            {
+                let state = app.state::<AppState>();
+                let engine_state = state.data_dir.join("engine-state");
+                for thread in state.reader.snapshot().threads() {
+                    let Some(entity) = thread.entity_id.as_deref() else { continue };
+                    let pending = richos_core::assignment::pending_notices_of(
+                        &engine_state, entity, &thread.id, |kind| kind.is_result());
+                    match pending {
+                        Ok(notices) if !notices.is_empty() => queue_work_messages(app.handle(), &engine_state, &thread.id),
+                        Ok(_) => {},
+                        Err(error) => eprintln!("[richos] work: pending reports could not be read: {error}"),
+                    }
+                }
+            }
+
             // Resume only after AppState exists: PhoneBridge::new immediately reads
             // the spine to prime the paired phone's conversation. The window was
             // created above for first paint, but setup has not returned to the event
@@ -3713,6 +3693,7 @@ fn main() {
             phone_runtime.resume_if_paired(app.handle().clone());
             app.manage(phone_runtime);
             question_host::start(app.handle().clone());
+            peer_messages::start(app.handle().clone())?;
             // Readiness starts before the window's setup/navigation reads, with the
             // selected thread's immutable company scope. Reader snapshots stay available.
             ready_selected_front_desk(app.handle());
@@ -4075,7 +4056,6 @@ fn main() {
             // — appended ---
             home_team,
             // --- a job's result said on its own (2026-10-15) — appended ---
-            voice_speak_result
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -4416,53 +4396,37 @@ fn take_work_notices(
 ) -> Result<Vec<richos_core::assignment::PendingNotice>, String> {
     let entity = assignment_scope(&state, &thread_id)?;
     let engine_state = state.data_dir.join("engine-state");
-    say_work_results(&app, &state, &engine_state, &thread_id);
+    queue_work_messages(&app, &engine_state, &thread_id);
     richos_core::assignment::take_pending_notices_of(&engine_state, entity.as_str(), &thread_id, |kind| !kind.is_result())
         .map_err(|e| e.to_string())
 }
 
-/// Write this conversation's waiting job results into it ([`take_work_notices`]): now, when no
-/// turn holds the conversation, or else on one waiter per conversation that takes it when the
-/// turn lets go. Nothing is taken off the assignment until it is being written.
-fn say_work_results(app: &AppHandle, state: &AppState, engine_state: &Path, thread_id: &str) {
-    if let Ok(mut spine) = state.spine.try_lock() {
-        let written = spine.say_work_results(engine_state, thread_id);
-        drop(spine);
-        tell_work_results(app, thread_id, written);
-        return;
-    }
-    static WAITING: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
-    let waiting = WAITING.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
-    if !waiting.lock().unwrap().insert(thread_id.to_string()) {
-        return;
-    }
-    let app = app.clone();
-    let (engine_state, thread_id) = (engine_state.to_path_buf(), thread_id.to_string());
-    std::thread::spawn(move || {
-        if let Some(state) = app.try_state::<AppState>() {
-            let mut spine = take_the_spine(&state.spine);
-            let written = spine.say_work_results(&engine_state, &thread_id);
-            drop(spine);
-            tell_work_results(&app, &thread_id, written);
+/// Transfer durable agent messages to the ordinary conversation intake.
+fn queue_work_messages(app: &AppHandle, engine_state: &Path, thread_id: &str) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let result = (|| -> Result<(), String> {
+        let entity = state.reader.snapshot().ledger().thread_binding(thread_id).map_err(|e|e.to_string())?.entity_id().clone();
+        let notices = richos_core::assignment::pending_notices_of(engine_state, entity.as_str(), thread_id, |kind|kind.is_result()).map_err(|e|e.to_string())?;
+        for notice in notices {
+            let sender = if notice.kind == richos_core::assignment::NoticeKind::Answer { "stu" } else { "work_host" };
+            let message = serde_json::json!({"from":sender,"request":notice.title,"kind":notice.kind,"message":notice.text}).to_string();
+            state.control.submit_agent_message(thread_id, Some(entity.clone()), &message, sender, &notice.delivery_id(entity.as_str(),thread_id)).map_err(|e|e.to_string())?;
+            richos_core::assignment::acknowledge_notice(engine_state, entity.as_str(),thread_id,&notice).map_err(|e|e.to_string())?;
         }
-        waiting.lock().unwrap().remove(&thread_id);
-    });
+        Ok(())
+    })();
+    if let Err(error)=result { eprintln!("[richos] incoming work message: {error}"); }
+    if let Err(error)=dispatch_incoming_messages(app,thread_id) { eprintln!("[richos] incoming message dispatch: {error}"); }
 }
 
-/// Each result just written into the conversation, with its words, to the window
-/// ([`EVENT_WORK_RESULT`]), which says it in voice mode; or why none could be written.
-fn tell_work_results(app: &AppHandle, thread_id: &str, written: Result<Vec<String>, richos_core::spine::SpineError>) {
-    match written {
-        Ok(texts) => {
-            for text in texts {
-                // The message is already in the conversation; a lost emit costs only its speech.
-                if let Err(e) = app.emit(EVENT_WORK_RESULT, serde_json::json!({"threadId": thread_id, "text": text})) {
-                    eprintln!("[richos] work: a result was written but could not be handed to the speaker ({e})");
-                }
-            }
-        }
-        Err(e) => eprintln!("[richos] work: a result could not be written into the conversation ({e}); it waits on its assignment"),
-    }
+/// All asynchronous incoming messages use the same turn, stream and phone delivery.
+fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), String> {
+    let app=app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state=app.state::<AppState>();
+        if let Err(error)=drain_incoming_messages(&state.spine,&state.work) { eprintln!("[richos] incoming message: {error}"); }
+    });
+    Ok(())
 }
 
 /// **What his team said on this conversation that the window has not shown yet** — the seam
@@ -4969,7 +4933,8 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
             }
             // The turn, and then its boundary: work he gave aloud starts the way typed work
             // does (`adopt_at_the_turn_boundary`, CEO ruling §88).
-            run_the_spoken_turn(spine, &state.work, &text, rich_audible);
+            drop(spine);
+            run_the_spoken_turn(&state.spine, &state.work, &text, rich_audible);
         });
     // Behind this session's gate, which dictation closes when it takes the microphone.
     #[cfg(target_os = "macos")]
@@ -5063,18 +5028,7 @@ fn voice_speak_end(app: AppHandle) {
     }
 }
 
-/// A job's result (`rich://work-result`), said whole and on its own, not as part of any answer:
-/// a Stop he gave an earlier reply does not silence it (`VoiceController::speak_result`).
-#[richos_command::command]
-fn voice_speak_result(app: AppHandle, text: String) {
-    if let Some(handle) = app.try_state::<VoiceHandle>() {
-        if let Ok(slot) = handle.controller.lock() {
-            if let Some(ctl) = slot.as_ref() {
-                ctl.speak_result(&text);
-            }
-        }
-    }
-}
+
 
 /// `rich://turn-started`, relayed from the UI.
 #[richos_command::command]
@@ -6971,8 +6925,8 @@ mod operator_gate_tests {
         assert_eq!(why, expected);
         assert!(!why.contains("Your team"), "the operator gate spoke on an install with no declaration: {why}");
         // And the product path really started: it renders the standing instruction first.
-        assert!(richos_core::doctrine::doctrine_path(&factory.data_dir).is_file(),
-            "the product path writes its standing instruction before it checks the engine");
+        assert!(!richos_core::doctrine::doctrine_path(&factory.data_dir).exists(),
+            "the product must not generate or compile role instructions");
         assert!(!factory.data_dir.join(richos_core::operator_declaration::DECLARATION_FILE).exists());
         if let Err(error) = std::fs::remove_dir_all(&root) { eprintln!("fixture cleanup: {error}"); }
     }
@@ -9940,7 +9894,9 @@ fn questions_pending(state: &AppState) -> bool {
 fn registered_work(state: &AppState) -> lifecycle::Registered {
     let work = state.work.background_work();
     lifecycle::Registered {
-        running: work.running,
+        running: work.running + usize::from(state.control.active_turn().is_some())
+            + usize::from(state.work.peer_work_pending())
+            + usize::from(!state.control.pending_intake().is_empty()),
         awaiting_you: work.awaiting_you,
         readable: work.readable,
         // **His team, on an operator install** (r3 (m)), read from the leads' own streams:

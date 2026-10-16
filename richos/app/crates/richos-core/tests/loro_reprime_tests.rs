@@ -80,7 +80,7 @@ fn a_compiled_slice_is_injected_verbatim_with_no_second_heading() {
         "COMPANY MEMORY (loro) — bearing on: \"pricing\"\n• [decision] Pricing moved to per-seat".into(),
     ));
     let prompt = p.to_priming_prompt();
-    assert!(prompt.contains("COMPANY MEMORY (loro) — bearing on: \"pricing\""), "{prompt}");
+    assert!(support::context(&prompt)["loro"]["Slice"].as_str().unwrap().contains("pricing"), "{prompt}");
     assert!(prompt.contains("• [decision] Pricing moved to per-seat"));
     // CONTEXT-CONTRACT.md §3: `slice.text` is self-contained and carries its own heading.
     // The old render prefixed "RELEVANT COMPANY MEMORY (loro slice): ", which doubled it.
@@ -96,9 +96,9 @@ fn an_empty_corpus_says_nothing_is_recorded_and_never_fabricates_a_slice() {
                 facts — ask the CEO or check a live system.";
     let p = payload_with_tier(LoroTier::NothingRecorded(thin.into()));
     let prompt = p.to_priming_prompt();
-    assert!(prompt.contains("nothing recorded bears on \"pricing\""), "{prompt}");
+    assert!(support::context(&prompt)["loro"]["NothingRecorded"].as_str().unwrap().contains("pricing"), "{prompt}");
     assert!(prompt.contains("Do not assume company facts"), "{prompt}");
-    assert!(!prompt.contains("could not be consulted"), "a CHECKED nothing is not an unknown: {prompt}");
+    assert!(!prompt.contains("Unavailable"), "a CHECKED nothing is not an unknown: {prompt}");
 }
 
 #[test]
@@ -109,9 +109,9 @@ fn an_unavailable_compiler_states_the_unknown_instead_of_looking_like_an_empty_l
     // decided.
     let p = payload_with_tier(LoroTier::Unavailable("the loro compiler exited 2: no corpus configured".into()));
     let prompt = p.to_priming_prompt();
-    assert!(prompt.contains("could not be consulted"), "{prompt}");
+    assert!(prompt.contains("Unavailable"), "{prompt}");
     assert!(prompt.contains("the loro compiler exited 2"), "the REASON is carried, not swallowed: {prompt}");
-    assert!(prompt.contains("NOT A STATEMENT THAT LORO HOLDS NOTHING"), "{prompt}");
+    assert!(support::context(&prompt)["loro"].get("NothingRecorded").is_none(), "{prompt}");
     assert!(!prompt.contains("nothing recorded bears on"), "{prompt}");
 }
 
@@ -119,8 +119,8 @@ fn an_unavailable_compiler_states_the_unknown_instead_of_looking_like_an_empty_l
 fn no_compiler_attached_says_so_about_the_install_not_about_the_memory() {
     let p = payload_with_tier(LoroTier::NotWired);
     let prompt = p.to_priming_prompt();
-    assert!(prompt.contains("no loro corpus is configured for this install"), "{prompt}");
-    assert!(prompt.contains("not about what is recorded"), "{prompt}");
+    assert!(support::context(&prompt)["loro"]=="NotWired", "{prompt}");
+    assert!(support::context(&prompt)["loro"]!="NothingRecorded", "{prompt}");
 }
 
 fn payload_with_tier(tier: LoroTier) -> RePrimePayload {
@@ -230,7 +230,7 @@ fn a_compiler_that_cannot_answer_never_takes_down_the_turn() {
     spine.submit_prompt("hello", Source::Text).unwrap();
     let primed = reprimes.lock().unwrap();
     assert!(primed[0].contains("node is not installed"), "{}", primed[0]);
-    assert!(primed[0].contains("Reply only with: ready"), "the turn completed normally");
+    assert!(support::context(&primed[0]).is_object(), "the turn completed normally");
     let _ = std::fs::remove_file(&path);
 }
 

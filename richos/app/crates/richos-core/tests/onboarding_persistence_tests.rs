@@ -116,7 +116,7 @@ fn fresh_prime_supplies_the_exact_destination_even_when_no_folder_exists() {
             .to_string_lossy()
             .to_string()
     ));
-    assert!(primes.lock().unwrap()[0].contains("mcp__richos_onboarding__save_company_notes"));
+    assert!(primes.lock().unwrap()[0].contains("company_notes_path"));
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn partial_answers_resume_then_explicit_decline_preserves_them_and_only_that_com
     let record = OnboardingRecord::load(&f.record).for_entity(&f.a);
     let prime = onboarding::priming_block(&f.a, Some(&layer), &record).unwrap();
     assert!(prime.contains("harbor ropes"));
-    assert!(prime.contains("said not now"));
+    assert!(prime.contains("declined"));
     f.save(
         "Stage 1: harbor ropes. Stage 2: one website. Stages 3-6: not discussed yet.",
         "partial",
@@ -162,7 +162,7 @@ fn same_thread_button_decline_refreshes_the_next_model_turn() {
         .unwrap();
     let primes = primes.lock().unwrap();
     assert_eq!(primes.len(), 2);
-    assert!(primes[1].contains("said not now"));
+    assert!(primes[1].contains("declined"));
     assert!(!primes[1].contains("He has not been asked yet."));
 }
 
@@ -184,8 +184,8 @@ fn same_thread_external_tool_save_and_decline_are_detected_before_next_turn() {
     s.submit_prompt("Let's do some work", Source::Text).unwrap();
     let primes = primes.lock().unwrap();
     assert_eq!(primes.len(), 3);
-    assert!(primes[1].contains("partly complete"));
-    assert!(primes[2].contains("said not now"));
+    assert!(primes[1].contains("partial"));
+    assert!(primes[2].contains("declined"));
 }
 
 #[test]
@@ -521,6 +521,6 @@ fn accepted_request_is_delivered_once_and_never_injected_into_hidden_priming() {
     assert!(!primed[1].contains("CURRENT INTENT (what we are doing right now)"));
     assert_eq!(prompts.lock().unwrap().as_slice(), [first, second]);
     let native_prompt = richos_core::reprime::context_only_priming(&primed[1]);
-    assert!(native_prompt.ends_with("Reply with only CONTEXT_READY."));
-    assert!(native_prompt.contains("Do not call any tool"));
+    assert!(serde_json::from_str::<serde_json::Value>(&native_prompt).unwrap()["event"]=="context_restored");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&native_prompt).unwrap()["context"],primed[1]);
 }

@@ -1169,6 +1169,7 @@ async function openThread(threadId, opts) {
 
   openingThread = { threadId, previousModel, cached: !!cached, startedAt: Date.now(), quietAnnounced: false };
   inputEl.value = drafts.get(threadId) || "";
+  sendBlockedReason = null;
   inputEl.disabled = false;
   autoGrow();
   composerBlockedEl.hidden = true;
@@ -1245,11 +1246,6 @@ async function openThread(threadId, opts) {
   restoreThreadViewState(threadId);
   resetWaitBandForThread();
   scheduleRender();
-  // AND THE SEND HE ALREADY MADE, if he pressed Return while this was still opening — audit-7
-  // row 10. AFTER `restoreThreadViewState`, which is what puts his sentence back in the box,
-  // and before the awaited calls below: `replayHeldSend` compares the box against what he
-  // actually submitted, so it has to run while that is still the box's state.
-  replayHeldSend(threadId);
   // **AND THE CHIP CARRIES THIS THREAD'S WORK IN THE FIRST RENDERED SECOND, not the fourth.**
   //
   // The synchronous head above clears all four pieces of state `renderDrillChip` reads, so from
@@ -1274,7 +1270,7 @@ async function openThread(threadId, opts) {
   // `workStatusRead` ticket, so a second switch landing mid-flight still discards the older
   // answer.
   //
-  // Placed AFTER `replayHeldSend` (which must see the box exactly as `restoreThreadViewState`
+  // Placed after restoring the thread view (which puts the draft back in its composer)
   // left it) and BEFORE `renderFirstRunNotice`, so the chip arrives with the conversation
   // rather than behind the onboarding question that may follow it.
   await pollWorkerStatus();
@@ -1990,7 +1986,16 @@ async function loadTimeline() {
     return;
   }
   if (stale()) return;
+  // A snapshot can arrive after Send but before its acceptance event. Keep those
+  // existing optimistic items until the ordinary queued event adopts them.
+  const submitted = [...pendingSends.entries()].filter(([id, request]) =>
+    request.model === timelineModel && !request.turnId && timelineModel.items.get(id)?.pending
+  ).map(([id]) => [id, timelineModel.items.get(id)]);
   window.RichTimeline.applySnapshot(timelineModel, snapshot);
+  for (const [id, item] of submitted) {
+    timelineModel.items.set(id, item);
+    timelineModel.pendingUser.push(id);
+  }
   timelineModel.cacheEpoch = threadViewEpoch;
   rememberThreadView();
   reviveLiveTurns();
@@ -2020,10 +2025,6 @@ function restoreUnsentText(text, threadId) {
   parkViewStateNow();
 }
 
-/// A send the CEO issued while the thread he is arriving at was still opening. Held, never
-/// dropped. See the note in `send()` below — audit-7 row 10.
-let sendHeldWhileOpening = null;
-
 /// **The bubble `openThread` carried across the model it replaced** — Ray's candidate-.11
 /// defect 2.2, and the handover between the two halves of that fix.
 ///
@@ -2032,28 +2033,6 @@ let sendHeldWhileOpening = null;
 /// `send()` then adopts this id instead of adding a second bubble for the same sentence.
 /// Consumed exactly once, and cleared by whoever reads it.
 let carriedPendingUserId = null;
-
-/// Replay the send he already made, now that there is somewhere for it to go.
-///
-/// THE HOLD IS DROPPED RATHER THAN GUESSED AT in all three cases where it would be a guess: a
-/// different thread finished opening (his words are still in that thread's draft, and one more
-/// Return sends them); the composer no longer holds exactly the sentence he pressed Return on,
-/// so he has edited it since and a send would submit words he never submitted; or the surface
-/// did not end up on a conversation at all.
-///
-/// AT MOST ONE, which is the other half of the defect. Three Returns during the opening window
-/// are one held send, not three: `send()` overwrites the hold rather than queueing, and a
-/// person hammering Return because nothing happened must not find three copies of his sentence
-/// in the thread.
-function replayHeldSend(threadId) {
-  const held = sendHeldWhileOpening;
-  sendHeldWhileOpening = null;
-  if (!held) return;
-  if (held.threadId !== threadId) return;
-  if (mainView !== "conversation") return;
-  if (inputEl.value !== held.text) return;
-  send();
-}
 
 /// True while `commit_attachments` runs, so a second Send in that gap is not a second message.
 let foldingAttachments = false;
@@ -2103,38 +2082,8 @@ function attachingLine(files) {
 /// refused, so the button's owner can offer it again.
 async function send(explicitText, opts) {
   const pressed = opts && opts.pressed ? String(opts.pressed) : null;
-  // AUDIT-7 ROW 10, AND IT WAS A SILENT DROP, NOT A REFUSAL. `mainView === "opening"` is the
-  // window between a thread being asked for and its timeline being on screen — six bridge
-  // round trips on a cold boot. Through that whole window the composer looks completely idle:
-  // it is editable, and `syncComposerMode` gives it the IDLE placeholder `Talk to Rich…`. So
-  // the CEO types, presses Return, and this line threw his sentence away without a word.
-  //
-  // Reproduced under WebKit with the harness's own slow-bridge lever at 400ms, which is what
-  // a cold first run costs:
-  //
-  //     click a thread   -> composer mode "opening", placeholder "Talk to Rich…",
-  //                         send visible but disabled, input editable
-  //     type + Return    -> text still in the box, ZERO user bubbles
-  //     6 s later        -> mode "idle", text still in the box, nothing sent
-  //     Return again     -> sent
-  //
-  // Which is exactly what Ray filed twice: "the first Return after clicking into the composer
-  // does not send; the second does" (audit-7 row 10, carried from audit-4 #18). His check 0
-  // took 26 seconds and two Returns on the CEO's own screen.
-  //
-  // It is NOT fixed by sending into a half-built surface. The refusal is right — `openThread`
-  // is mid-flight, the model is being replaced, and `drafts.set(threadId, inputEl.value)` a
-  // few lines into its tail already declares that typing during this window belongs to the
-  // thread being opened. What was missing is that the same declaration was never made for the
-  // SEND. So the send is held and replayed the moment the thread is on screen, by
-  // `replayHeldSend` above.
-  if (mainView === "opening") {
-    const text = (typeof explicitText === "string" ? explicitText : inputEl.value).trim();
-    if (text && openingThread) {
-      sendHeldWhileOpening = { threadId: openingThread.threadId, text: inputEl.value };
-    }
-    return;
-  }
+  // The destination is bound before navigation awaits anything. Send directly to its
+  // durable inbox even while its saved timeline is loading.
   // One Send at a time while files are being filed into the conversation: a second Return in
   // that gap would otherwise send the same words twice, once with the files and once without.
   if (foldingAttachments) return;
@@ -2179,7 +2128,7 @@ async function send(explicitText, opts) {
     const foldThread = activeThreadId;
     const folded = await foldAttachments(text, foldThread, files);
     if (folded === null) return;
-    if (activeThreadId !== foldThread || mainView !== "conversation") {
+    if (activeThreadId !== foldThread || (mainView !== "conversation" && mainView !== "opening")) {
       // He moved in the milliseconds the files took. They are filed under the thread he sent
       // from, so the message stays with it, as its draft, ready to send.
       drafts.set(foldThread, folded);
@@ -2334,11 +2283,7 @@ async function send(explicitText, opts) {
   // the send created the thread (defect 2.2); a second `addPendingUserMessage` here would draw
   // the CEO's one sentence twice, which is the defect §25 names by name.
   // The carried bubble is adopted only when it is THIS sentence, still pending, in THIS model,
-  // and a send that does not match LEAVES IT for the one that does. `replayHeldSend` can
-  // re-enter `send()` from inside `openThread` with a different sentence — the one he typed
-  // while the thread was opening — and both adopting it (his first sentence drawn twice, his
-  // second lost) and consuming it (the outer send adding a second bubble for a sentence already
-  // on screen) are wrong. Not matching is not the same as not being wanted.
+  // and a send that does not match leaves it for the one that does.
   const carriedItem = carriedPendingUserId !== null ? sentModel.items.get(carriedPendingUserId) : null;
   const adopt = !pressed && carriedItem && carriedItem.pending && carriedItem.text === text;
   const pendingId = adopt
@@ -2606,7 +2551,7 @@ function syncComposerMode() {
     stopBtn.hidden = !working;
     stopBtn.disabled = stopping;
     sendBtn.hidden = false;
-    sendBtn.disabled = true;
+    sendBtn.disabled = false;
     el("composer-row").dataset.mode = "opening";
     return;
   }
@@ -3301,6 +3246,7 @@ function resetWaitBandForThread() {
     renderWaitBand();
     return;
   }
+  renderWaitBand();
   startOrStopWaitTimer();
 }
 
@@ -4370,11 +4316,7 @@ function sayWorkNotice(text, raisedAt, model = timelineModel, team = null, key =
 }
 
 function flushWorkNotices() {
-  if (heldWorkResults.length && !anyLiveTurn()) {
-    const results = heldWorkResults;
-    heldWorkResults = [];
-    for (const text of results) speakWorkResult(text);
-  }
+
   if (!heldWorkNotices.length || !calmEnoughForANotice()) return;
   const pending = heldWorkNotices;
   heldWorkNotices = [];
@@ -4391,34 +4333,6 @@ function receiveWorkNotice(text, raisedAt, model = timelineModel, team = null, k
     return;
   }
   sayWorkNotice(text, raisedAt, model, team, key);
-}
-
-/// **A job's result, said in voice mode** (nightly 57's hunt, findings 4 and 6; handover review
-/// rv-20261015T122526Z-558b93b7). The result is written into the conversation as Rich's message
-/// and drawn from `rich://proactive-message`, which speaks nothing, so "Will is on your team now"
-/// was silent to a CEO who was listening. `rich://work-result` carries its words to the speaker
-/// whole (`voice_speak_result`), as words of their own rather than part of an answer, so a Stop
-/// he gave an earlier reply does not silence them (review rv-20261015T125238Z-37f970a3).
-/// Held while a turn runs; the speaker itself queues it behind Rich's own sentences and holds it
-/// while he is talking.
-let heldWorkResults = [];
-let workResultsSaid = Promise.resolve();
-
-function receiveWorkResult(text) {
-  if (!voiceMode || !text) return;
-  if (anyLiveTurn()) {
-    heldWorkResults.push(text);
-    return;
-  }
-  speakWorkResult(text);
-}
-
-function speakWorkResult(text) {
-  if (!voiceMode) return;
-  // One after another, in the order they arrived.
-  workResultsSaid = workResultsSaid
-    .then(() => Bridge.invoke("voice_speak_result", { text }))
-    .catch(() => {});
 }
 
 /// Everything he has not been told yet on this conversation. Called when a thread opens and
@@ -4960,13 +4874,6 @@ Bridge.listen("rich://work-notice", ({ payload }) => {
   if (!payload || !payload.notice || !payload.notice.text) return;
   if (payload.threadId !== activeThreadId) return;
   drainWorkNotices();
-});
-
-/// **A job's result was written into this conversation** (`main.rs` `EVENT_WORK_RESULT`). The
-/// message is drawn by `rich://proactive-message`; this says it, in voice mode only.
-Bridge.listen("rich://work-result", ({ payload }) => {
-  if (!payload || !payload.text || payload.threadId !== activeThreadId) return;
-  receiveWorkResult(payload.text);
 });
 
 /// **His team said something, pushed** (an operator install only; `app/STREAMING.md` "His
