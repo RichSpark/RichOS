@@ -114,15 +114,21 @@ async function main() {
       assertEqual(binding.thread_id, "hiring", "serialized activation ends on the last choice");
     });
 
-    await run.check("a send waits for the confirmed destination", async () => {
-      await clickAndPaint(page, "acme");
-      await page.locator("#input").fill("Queued for Acme only");
-      await page.locator("#input").press("Enter");
-      assertEqual(await page.evaluate(() => window.sentBindings.length), 0, "activation is still held");
-      await release(page);
-      await page.waitForFunction(() => window.sentBindings.length === 1);
-      const args = await page.evaluate(() => window.sentBindings[0]);
-      assertEqual(args.threadId, "acme", "the held send carries the destination thread");
+    await run.check("a send reaches the selected destination before activation completes", async () => {
+      const view = await clickAndPaint(page, "acme");
+      try {
+        assert(view.opening, "the destination activation is held");
+        await page.locator("#input").fill("Queued for Acme only");
+        await page.locator("#input").press("Enter");
+        assertEqual(await page.evaluate(() => window.sentBindings.length), 1, "sending does not wait for activation");
+        const args = await page.evaluate(() => window.sentBindings[0]);
+        assertEqual(args.threadId, "acme", "the send carries the selected destination thread");
+        assertEqual(args.text, "Queued for Acme only", "the original message reaches that destination");
+      } finally {
+        await release(page);
+        await page.waitForFunction(() => document.querySelector("#composer-row").dataset.mode !== "opening");
+      }
+      assertEqual(await page.evaluate(() => window.sentBindings.length), 1, "activation does not send the message again");
     });
 
     await run.check("activation failure does not expose cached content as an active conversation", async () => {
