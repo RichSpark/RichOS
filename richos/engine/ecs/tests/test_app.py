@@ -845,7 +845,7 @@ class OperatorCompleteTests(unittest.TestCase):
         work = self.bind("depot", "thread-a", "session-w", "ship-it", None, seat=seat, audience="worker")
         message = self.call("operator-complete", ok=False, seat=seat, binding=work, obligation_id="ship-it",
                             source_ref="x", evidence=[f"git:{self.repo}:main:{self.landed}"])
-        self.assertIn("independent conversation agent", message)
+        self.assertIn("conversation's own seat", message)
         self.still_open("ship-it")
 
     def test_O6_a_closed_obligation_is_not_closed_again_with_other_evidence(self):
