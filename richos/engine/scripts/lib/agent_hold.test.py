@@ -11,10 +11,12 @@ is ever signaled.
 """
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -673,6 +675,23 @@ class Wait(Base):
                 else:
                     os.environ[k] = v
 
+    def test_installed_helper_in_quoted_path_stays_a_foreground_wait(self):
+        installed=Path(self.tmp)/"Application Support"/"CEO's engine"/"agent_hold.py"
+        installed.parent.mkdir(parents=True)
+        shutil.copy2(HERE/"agent_hold.py",installed)
+        spec=importlib.util.spec_from_file_location("installed_agent_hold",installed)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        command=module.WAIT_COMMAND+" --max-seconds 0.01"
+        self.assertTrue(module.is_wait_call(command),command)
+        payload=self.payload("toolu_installed_wait");payload["tool_input"]={"command":command}
+        rewritten=module.rewrite(payload)
+        self.assertFalse(rewritten["input"]["run_in_background"])
+        self.assertEqual(shlex.split(rewritten["command"].splitlines()[-1]),
+                         ["python3",str(installed),"wait","--max-seconds","0.01"])
+        # load-bound: Exact arguments and successful child exit prove the result; this timeout only catches a hung helper.
+        ran=subprocess.run([SHELL,"-c",rewritten["command"]],capture_output=True,text=True,timeout=10)
+        self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
+
     def test_the_wait_command_text_is_the_generated_waits(self):
         import pause_protocol
         self.assertEqual(agent_hold.WAIT_COMMAND, pause_protocol.WAIT_COMMAND)
@@ -680,7 +699,9 @@ class Wait(Base):
         for text in (agent_hold.WAIT_COMMAND, "python3 /x/y/agent_hold.py wait", "agent_hold.py wait 2>&1",
                      "python3 agent_hold.py wait --max-seconds 30"):
             self.assertTrue(agent_hold.is_wait_call(text), text)
-        for text in ("agent_hold.py wait; rm -rf x", "echo agent_hold.py wait", "agent_hold.py hold --session s"):
+        for text in ("agent_hold.py wait; rm -rf x", "echo agent_hold.py wait", "agent_hold.py hold --session s",
+                     "python3 '/x y/agent_hold.py' wait && echo extra", "python3 'unterminated",
+                     "agent_hold.py 'wait --max-seconds 30'"):
             self.assertFalse(agent_hold.is_wait_call(text), text)
 
 
