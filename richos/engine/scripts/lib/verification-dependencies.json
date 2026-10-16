@@ -8966,7 +8966,7 @@
     },
     "scripts/lib/publication-boundary.py": {
       "source": "scripts/lib/publication-boundary.py",
-      "sha256": "41bfce6cd434f436098821e164d8af586af0df411c15bda9d5760b58050f2aff",
+      "sha256": "300d69515801694a7bbaefbc0099dde7f835f84f0f970a1e819839f4fa7b6f40",
       "evidence": "AST inventory and every import, execution and I/O boundary reviewed. Only stdlib hashing, JSON, path and text operations; supplied corpus/item files and job limits are data. No configuration, engine imports or subprocess execution.",
       "keys": [],
       "edges": []
@@ -9043,7 +9043,7 @@
     },
     "scripts/hooks/publication-boundary.test.sh": {
       "source": "scripts/hooks/publication-boundary.test.sh",
-      "sha256": "da7cca15175420de4a40f40ed29d985ac505ec3e997af1a6156518ace27cbaa5",
+      "sha256": "46b76cd518b14769cc4f31fbda0e353c648cf753274c9ecedd9525e51b7d8dc0",
       "evidence": "Harness and executable call inventory reviewed. All publication declarations, corpus content and Git histories are generated fixtures. Real engine root remains the adoption seat. PUBLICATION_DECLARATION uses its unsourced environment/default value, not orchestration.config. Three literal source replacements mutate only the publication predicate and published-copy field; installer/probe reads are text assertions.",
       "keys": [],
       "edges": [
@@ -17366,7 +17366,7 @@
         "scripts/hooks/guard-publication-writes.sh"
       ],
       "sources": {
-        "scripts/hooks/publication-boundary.test.sh": "da7cca15175420de4a40f40ed29d985ac505ec3e997af1a6156518ace27cbaa5",
+        "scripts/hooks/publication-boundary.test.sh": "46b76cd518b14769cc4f31fbda0e353c648cf753274c9ecedd9525e51b7d8dc0",
         "scripts/lib/registered-hooks.sh": "73e390bacc85aef935d4da0f4b132ebb6790a83d55310a46c1c602614afe0a83",
         "scripts/hooks/guard-publication-writes.sh": "8d05dfb59a29be16bdcbd19aee71b0a402f58d928c82397f0a98da96f6f2531d",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
@@ -17375,7 +17375,7 @@
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
-        "scripts/lib/publication-boundary.py": "41bfce6cd434f436098821e164d8af586af0df411c15bda9d5760b58050f2aff",
+        "scripts/lib/publication-boundary.py": "300d69515801694a7bbaefbc0099dde7f835f84f0f970a1e819839f4fa7b6f40",
         "scripts/hooks/guard-publication-commits.sh": "acc0b52bb6bb2a54af722b8a0e5782078fc97adca2767a6198dca32e354b2adf",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/dispatch-pretooluse.manifest": "50818b9e68379300f0922b76a78f5c4d4b3d6e88f8aae6ed08271c95b498afbc"

@@ -1423,6 +1423,60 @@ if [ "$(di_tree "$DI_LIST")" = "CLEAN" ]; then ok "device id: --scan-tree passes
 if [ "$(di_tree "$SCRATCH/no-such-list" | cut -f1)" = "ABSENT" ]; then ok "device id: --scan-tree with no list says ABSENT, not CLEAN"; else bad "device id: --scan-tree ABSENT"; fi
 rm -rf "$DI_TREE"
 
+# A private record must reject oversized staged text before it breaks public scans.
+if python3 - "$SCRATCH/private-source-index" "$ENGINE_ROOT/scripts/lib/publication-boundary.py" <<'PY_PRIVATE_INDEX'
+import gzip,hashlib,json,os,subprocess,sys,shlex,importlib.util
+from pathlib import Path
+ROOT=Path(sys.argv[1]);ROOT.mkdir()
+CHECKER=Path(sys.argv[2])
+spec=importlib.util.spec_from_file_location("private_commit_checker",CHECKER)
+checker=importlib.util.module_from_spec(spec);spec.loader.exec_module(checker)
+LIMIT=checker.SOURCE_MAX_BYTES
+assert LIMIT==8000000
+env=dict(os.environ,GIT_CONFIG_GLOBAL='/dev/null',GIT_CONFIG_NOSYSTEM='1')
+results=[]
+def git(repo,*args):
+ return subprocess.run(['git','-C',str(repo),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgSign=false',*args],env=env,capture_output=True,text=True)
+def install(repo):
+ hook=repo/'.git/hooks/pre-commit'
+ hook.write_text('#!/bin/sh\nexec '+shlex.quote(sys.executable)+' '+shlex.quote(str(CHECKER))+' --check-staged-private-sizes\n');hook.chmod(0o755)
+def setup(name,hook):
+ p=ROOT/name;p.mkdir();assert git(p,'init','-q','-b','main').returncode==0
+ assert git(p,'commit','--allow-empty','-qm','Fixture').returncode==0
+ if hook:install(p)
+ return p
+def commit(repo,name,data,expected,stage_only=False):
+ p=repo/name;p.write_bytes(data);assert git(repo,'add','--',name).returncode==0
+ if stage_only:p.write_bytes(b'working tree is small; index remains oversized')
+ r=git(repo,'commit','-qm','Synthetic source size case');assert (r.returncode==0)==expected,(name,r.returncode,r.stderr)
+ results.append({'repository':repo.name,'file':name,'bytes':len(data),'accepted':r.returncode==0,'stage_only':stage_only,'stderr':r.stderr})
+ return r
+original=setup('original',False)
+commit(original,'oversized.json',b'x'*(LIMIT+1),True)
+# The exact committed baseline is recoverable without widening the corpus limit.
+install(original)
+assert git(original,'rm','--','oversized.json').returncode==0
+assert git(original,'commit','-qm','Remove old oversized source').returncode==0
+candidate=setup('candidate with trailing space ',True)
+commit(candidate,'large file\nwith spaces.json',b'x'*(LIMIT+1),False,True)
+assert git(candidate,'reset','--','large file\nwith spaces.json').returncode==0
+commit(candidate,'boundary.json',b'x'*LIMIT,True)
+commit(candidate,'oversized.TXT',b'x'*(LIMIT+1),False)
+assert git(candidate,'reset','--','oversized.TXT').returncode==0
+commit(candidate,'evidence.json.gz',gzip.compress(b'x'*(LIMIT+1),mtime=0),True)
+link=candidate/'converted.json';link.symlink_to('target');assert git(candidate,'add','converted.json').returncode==0;assert git(candidate,'commit','-qm','Synthetic symlink').returncode==0
+link.unlink();commit(candidate,'converted.json',b'x'*(LIMIT+1),False);assert git(candidate,'reset','--','converted.json').returncode==0
+hook=candidate/'.git/hooks/pre-commit';saved=hook.read_text();hook.write_text('#!/bin/sh\nexec '+shlex.quote(sys.executable)+' '+shlex.quote(str(ROOT/'missing-checker.py'))+' --check-staged-private-sizes\n')
+try:commit(candidate,'missing-checker.txt',b'ordinary',False)
+finally:hook.write_text(saved)
+(ROOT/'result.json').write_text(json.dumps({'results':results,'deleting_old_oversized_source_allowed':True,'candidate_sha256':hashlib.sha256(CHECKER.read_bytes()).hexdigest(),'verdict':'Unprotected Git admits oversized source; native candidate hook refuses staged oversized text, permits exact boundary, compression and cleanup. No corpus scan or new limit.'},indent=2)+'\n');print('PASS actual native Git hook, exact boundary, staged-vs-working distinction, unusual filenames and compression')
+PY_PRIVATE_INDEX
+then
+    ok "native private commit: staged blob boundary, partial staging, compression and cleanup"
+else
+    bad "native private commit: staged source size check"
+fi
+
 rm -rf "$SB"
 
 echo ""
