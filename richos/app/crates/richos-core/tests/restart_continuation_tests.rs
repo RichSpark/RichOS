@@ -254,3 +254,46 @@ fn repeated_restarts_preserve_every_uncertain_native_attempt() {
     drop(spine);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn recovery_delivers_older_ledger_requests_before_newer_intake_and_applies_stops_first() {
+    for inflight in [false, true] {
+        for stopped in [false, true] {
+            for phone in [false, true] {
+                let root = paths();
+                let path = root.join("ledger.jsonl");
+                let intake = root.join("intake.jsonl");
+                let mut ledger = Ledger::open(&path).unwrap();
+                let entity = EntityId::parse("femcboost").unwrap();
+                let thread = ledger.create_thread("fixture", &entity).unwrap();
+                let binding = ledger.thread_binding(&thread).unwrap();
+                let older = ledger.record_prompt_received(&binding, "Use Monday", Source::Text).unwrap();
+                if inflight { ledger.mark_turn_started(&older, "before-restart").unwrap(); }
+                let control = TurnControl::open(&intake).unwrap();
+                if stopped {
+                    control.begin_turn(ActiveTurn { turn_id: older.clone(), thread_id: thread.clone(), entity_id: Some(entity.clone()), started_at: None });
+                    control.request_stop().unwrap();
+                }
+                if phone {
+                    control.submit_from_channel(&thread, Some(entity), "Actually use Tuesday", "phone").unwrap();
+                } else {
+                    control.submit_from_desk(&thread, Some(entity), "Actually use Tuesday").unwrap();
+                }
+                drop(ledger);
+                drop(control);
+                let mut spine = support::spine(Ledger::open(&path).unwrap());
+                spine.set_turn_control(TurnControl::open(&intake).unwrap());
+                let mock = MockCognition::new("after-restart", vec!["Understood", "Updated"]);
+                let prompts = mock.prompts.clone();
+                spine.attach_lease(Box::new(mock));
+                spine.reconcile_intake().unwrap();
+                let expected = if stopped { vec!["Actually use Tuesday"] } else { vec!["Use Monday", "Actually use Tuesday"] };
+                assert_eq!(*prompts.lock().unwrap(), expected, "inflight={inflight}, stopped={stopped}, phone={phone}");
+                spine.reconcile_intake().unwrap();
+                assert_eq!(*prompts.lock().unwrap(), expected, "reconciliation must not deliver either request twice");
+                drop(spine);
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+}

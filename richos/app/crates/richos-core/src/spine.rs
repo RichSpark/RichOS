@@ -3851,7 +3851,6 @@ impl Spine {
                 self.ledger.stop_turn_after_restart(&turn_id, at)?;
             }
         }
-        self.drain_intake()?;
         for id in interrupted {
             let Some(turn) = self.ledger.turn(&id) else { continue };
             if !matches!(turn.state, crate::ledger::TurnState::Received | crate::ledger::TurnState::InFlight) {
@@ -3869,6 +3868,9 @@ impl Spine {
             self.queue.push_back(Queued { turn_id: replay, binding, text, intake_id: None });
 
         }
+        // Restore the already accepted ledger requests before appending newer intake.
+        // Durable Stops above still take precedence over both paths.
+        self.drain_intake()?;
         self.drain_queue()
     }
 
