@@ -1,5 +1,5 @@
 //! Durable, app-owned questions. No operation holds the conversation's turn lock.
-//! One atomic file and an OS lock serialize the app and its short-lived MCP servers.
+//! Readers use atomic snapshots; the OS lock serializes writers.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -209,7 +209,10 @@ impl Store {
             .write(true)
             .open(self.directory.join("lock"))
             .map_err(|e| e.to_string())?;
-        lock.lock().map_err(|e| e.to_string())?;
+        // Readers use the same atomic snapshot as pending_for_residency.
+        if write {
+            lock.lock().map_err(|e| e.to_string())?;
+        }
         let path = self.directory.join("store.json");
         let mut data = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice::<Data>(&bytes)

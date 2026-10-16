@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # run-tests: no-host-screen: builds and runs tiny Rust fixtures with no UI or network
-# run-tests: inputs richos/app/scripts/lib/machine_storage.py richos/engine/scripts/lib/machine_settings.py richos/app/scripts/cargo-identity.test.sh richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/testvm/reserve.py
+# run-tests: inputs richos/app/scripts/lib/machine_storage.py richos/engine/scripts/lib/machine_settings.py richos/app/scripts/cargo-identity.test.sh richos/app/scripts/proof-run.py richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/testvm/reserve.py
 # run-tests: covers richos/app/scripts/lib/machine_storage.py richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/app/scripts/testvm/reserve.py
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/cargo-cache-env.sh"
 python3 -B - "$HERE" <<'PY'
 import concurrent.futures
+import importlib.util
+import types
 import json
 import os
 from pathlib import Path
@@ -80,6 +82,28 @@ try:
         for path in root.rglob("*"):
             os.utime(path, (946684800, 946684800))
         roots.append(root)
+
+    # Direct proof-run commands must use the same dispatcher as the shell entrypoints.
+    # Alpha's artifact is newer than beta's source, so raw Cargo reuses the wrong library.
+    spec = importlib.util.spec_from_file_location("identity_proof_runner", here / "proof-run.py")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    raw_environment = dict(environment, CARGO_TARGET_DIR=str(scratch / "runner-cache"),
+                           RICHOS_CARGO_CACHE_ROOT=str(scratch / "runner-cache"))
+    raw_cargo = cargo_identity.cargo_executable(raw_environment)
+    raw_environment["PATH"] = os.pathsep.join(p for p in raw_environment["PATH"].split(os.pathsep)
+        if not (Path(p or ".").resolve().parent / "lib/cargo_identity.py").is_file())
+    control = subprocess.run([raw_cargo, "run", "--offline", "--quiet"], cwd=roots[0],
+                             env=raw_environment, capture_output=True, text=True, timeout=120)
+    assert control.returncode == 0 and control.stdout.strip() == "alpha", control.stderr
+    item = types.SimpleNamespace(label="cargo entrypoint fixture", argv=["cargo", "run"],
+                                 cwd=str(roots[1]), env=raw_environment)
+    through_runner = subprocess.run(["cargo", "run", "--offline", "--quiet"], cwd=roots[1],
+                                   env=runner.execution_environment(item),
+                                   capture_output=True, text=True, timeout=120)
+    assert through_runner.returncode == 0, through_runner.stderr
+    assert through_runner.stdout.strip() == "beta", through_runner.stdout
+    print("PASS proof runner executes the requested old-mtime checkout, not another checkout's library")
 
     def cargo(root, *args, env=None):
         result = subprocess.run([str(wrapper), *args], cwd=root, env=env or environment,
