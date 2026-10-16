@@ -13,11 +13,10 @@
 //! *"Is the CEO user supposed to keep babysitting Rich like this all the time OR WHAT???"* —
 //! over nightly 54, where a job of reading his own website stopped at "Approve this" for
 //! "running a command on your Mac". Work he hands over runs to a finished result with no
-//! approval from him. The provider runs in auto mode and approves routine work itself
-//! (reading websites, searching, reading and writing in its own workspace and the commands
-//! that work needs), so what still reaches this desk from a background lease is a step it
-//! would not approve on its own: that step is refused, and the model is told to find another
-//! way or to report plainly what it could not do. A real business decision of his travels as
+//! approval from him. Provider sessions now request bypassPermissions, matching the terminal.
+//! Existing hooks and the provider's remaining restrictions still apply. A native permission
+//! request that nevertheless reaches this desk from a background lease is refused rather
+//! than waiting for manual step approval. A real business decision of his travels as
 //! a question (`question_tools.rs`), never through this desk.
 //!
 //! This replaces the background-work spec's §5.2 (*"a request raised with no turn open is
@@ -287,7 +286,7 @@ impl ScopedPermissions {
         // this" for "running a command on your Mac" (nightly 54). Work he hands over runs to a
         // finished result with no approval from him; only a real business decision of his
         // ever reaches him, and that travels as a question (`question_tools.rs`), never
-        // through this desk. The provider already approves routine work itself (auto mode);
+        // through this desk. The provider runs with bypass permissions;
         // what still arrives here from a background lease is a step it would not approve on
         // its own, so the step is refused at once, nothing is put in front of him, and the
         // model is told to find another way or report what it could not do.

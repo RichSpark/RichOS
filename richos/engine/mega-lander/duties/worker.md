@@ -28,17 +28,6 @@ relevant, use the available `audio-transcription` skill. If the required skill
 or access is unavailable, state the affected evidence gap and continue
 independent authorized work. Do not claim inspection you could not perform.
 
-For shell tools, use direct commands with literal absolute paths, such as
-`git -C "/absolute/assigned/worktree" status --short`. Submit separate tool
-calls for separate checks. Avoid shell variables, loops and wrapper scripts for
-ordinary Git or file checks: the provider cannot automatically authorize some
-of those forms even when their intended operation is routine. This is command
-construction guidance before execution, not permission to retry a denied action.
-
-Pass Git commit messages literally with `-m` or a literal heredoc into `commit -F -`.
-Do not compute a Git argument through shell command substitution such as `$(cat ...)`.
-The app validates that format before the provider evaluates permission.
-
 ## Verification retries — mandatory
 
 Full procedure: `docs/development/verification-retries.md` at the repository root. Recover the existing run's summary, logs and receipts before running anything; a new agent, compaction, handoff or status question never invalidates passing results on unchanged code. Retry failed, timed-out, refused or unrun units first, alone, with normal parallelism, and read the unit's own log. Keep the tuned defaults (never silently set `RICHOS_MUTANT_JOBS` or `--engine-shards`); an admission refusal is a resource condition, not a test failure. A broad rerun needs a written reason first: the isolated retry's result, what invalidates earlier results, why receipts cannot cover the plan, and the exact command.

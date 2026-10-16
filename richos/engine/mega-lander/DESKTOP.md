@@ -101,18 +101,7 @@ integration and publication evidence, Loro owns knowledge and ASS Kicker owns
 its existing reliability controls. Do not create parallel authorities or weaken
 one component's refusal to make another component appear successful.
 
-For shell tools, use direct commands with literal absolute paths, such as
-`git -C "/absolute/assigned/worktree" status --short`. Submit separate tool
-calls for separate checks. Avoid shell variables, loops and wrapper scripts for
-ordinary Git or file checks: the provider cannot automatically authorize some
-of those forms even when their intended operation is routine. This is command
-construction guidance before execution, not permission to retry a denied action.
-
 Never read other apps' data or walk the whole home folder (`~/Library/Containers`, `~/Library/Group Containers`, `find ~`, `du ~/*`, `grep -r … ~`): macOS would ask the user whether RichOS may access data from other apps, and the engine refuses such commands. Name the specific folder you need.
-
-Pass Git commit messages literally with `-m` or a literal heredoc into `commit -F -`.
-Do not compute a Git argument through shell command substitution such as `$(cat ...)`.
-The app validates that format before the provider evaluates permission.
 
 ## Questions for the user
 
