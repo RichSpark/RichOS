@@ -412,7 +412,9 @@ def _proc_words(pid, table):
 def _slot_lines(src, now):
     """(status dict or None, problem)."""
     if src.proof_slots is None:
-        return None, "the proof-run slot library (app/scripts/lib/proof_slots.py) is not beside this engine"
+        if not os.path.isfile(src.proof_slots_path):
+            return None, ""  # Optional capability not shipped with a standalone engine.
+        return None, "the proof-run slot library could not be loaded"
     try:
         return src.proof_slots.status(), ""
     except Exception as exc:  # noqa: BLE001
@@ -843,7 +845,7 @@ def idle_end(src, now, session_id, prev):
             continue
         fin, paused, _why = src.ws.finished_state(rec, cache)
         last = _last_activity(src, rec)
-        if fin or paused or (last is not None and last > at + 60) or os.path.lexists(ah._held_path(sid, aid)):
+        if fin or paused or last is None or last > at + 60 or os.path.lexists(ah._held_path(sid, aid)):
             continue
         table = ah.snapshot()
         work = ah.work_tree(sid, aid, table)
@@ -1457,7 +1459,7 @@ def session_alive_check(pid):
     return alive
 
 
-def tick(src, sd, sid, now=None, out=None):
+def tick(src, sd, sid, now=None, out=None, json_lines=False):
     """One look against the session's state: prints what is due, returns the
     number of lines printed. A look that raises is announced once as a stall
     of the watcher and changes nothing else."""
@@ -1505,7 +1507,8 @@ def tick(src, sd, sid, now=None, out=None):
     lines = esc_lines + idle_lines + lines
     _write_json(path, state)
     if lines:
-        out.write("\n".join(lines) + "\n")
+        text = "\n".join(lines)
+        out.write((json.dumps({"text": text}) if json_lines else text) + "\n")
         out.flush()
     return len(lines), len(state.get("open") or {})
 
@@ -1537,7 +1540,7 @@ def run_loop(a, src, exit_on_notice=False):
             "mode": "watch" if exit_on_notice else "monitor", "last_look": None, "open": 0}
     try:
         while alive is None or alive():
-            printed, open_n = tick(src, sd, sid)
+            printed, open_n = tick(src, sd, sid, json_lines=a.jsonl)
             beat["last_look"] = time.time()
             beat["open"] = open_n
             _write_json(os.path.join(sd, "monitor.json"), beat)
@@ -1630,6 +1633,7 @@ def main(argv):
     g = ap.add_mutually_exclusive_group(required=True)
     for flag in ("--monitor", "--watch", "--alive", "--once", "--notice", "--tick"):
         g.add_argument(flag, action="store_true")
+    ap.add_argument("--jsonl", action="store_true", help="frame monitor/watch/tick output as one JSON line per complete block")
     ap.add_argument("--config", default="")
     ap.add_argument("--engine-root", default="")
     ap.add_argument("--command", default="stall-watch.sh")
@@ -1645,7 +1649,7 @@ def main(argv):
         return mode_once(a, src)
     if a.tick:
         sid, _spid = src.session()
-        tick(src, session_dir(sid), sid)
+        tick(src, session_dir(sid), sid, json_lines=a.jsonl)
         return 0
     return run_loop(a, src, exit_on_notice=a.watch)
 

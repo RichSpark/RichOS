@@ -264,7 +264,7 @@ tick() { # <now-offset-seconds>
 
 echo "=== stall-watch tests ==="
 
-# I01: controlled CPU samples cover a disappearing child without racing real time.
+# I01: controlled CPU/activity readings and installed capability checks.
 python3 - "$SCRIPT_DIR/lib" "$SB" <<'PY_IDLE'
 import os,sys,types,unittest
 from unittest.mock import patch
@@ -275,10 +275,13 @@ scratch=sys.argv.pop(1)
 class IdleSamples(unittest.TestCase):
     def setUp(self):
         self.state={};self.ended=[];self.cpu=0.0;self.missing=False
+        self.transcript=os.path.join(scratch,'idle-sample-activity.jsonl')
+        with open(self.transcript,'w') as f:f.write('{}\n')
+        os.utime(self.transcript,(1,1))
         record={'key':'fixture','session_id':'session','agent_id':'agent',
                 'history':[{'fact':'deferred','at':'1970-01-01T00:01:40Z'}]}
         ws=types.SimpleNamespace(END_DEFERRED_FACT='deferred',all_agents=lambda:[record],
-            finished_state=lambda *_:(False,False,''),platform_agent_transcript=lambda _:None)
+            finished_state=lambda *_:(False,False,''),platform_agent_transcript=lambda _:self.transcript)
         def end(*args,**kwargs):
             self.assertTrue(kwargs['spare_foreign'])
             self.ended.append(self.now)
@@ -330,10 +333,33 @@ class IdleSamples(unittest.TestCase):
         self.look(1660)
         self.assertEqual(self.ended,[1660])
 
+
+    def test_unknown_worker_activity_never_authorizes_ending_commands(self):
+        os.unlink(self.transcript)
+        for now in range(1000,1721,60):self.look(now)
+        self.assertEqual(self.ended,[])
+
+class InstalledSources(unittest.TestCase):
+    def test_not_installed_optional_helpers_are_not_source_errors(self):
+        engine=os.path.join(scratch,'absent-helper','engine')
+        os.makedirs(engine,exist_ok=True)
+        source=stall_watch.Sources(engine)
+        self.assertIsNone(source.proof_slots)
+        self.assertEqual(stall_watch._slot_lines(source,1000),(None,''))
+
+    def test_an_installed_but_broken_helper_stays_an_actual_error(self):
+        engine=os.path.join(scratch,'broken-helper','engine')
+        helper=os.path.join(scratch,'broken-helper','app','scripts','lib','proof_slots.py')
+        os.makedirs(engine,exist_ok=True);os.makedirs(os.path.dirname(helper),exist_ok=True)
+        with open(helper,'w') as f:f.write('raise RuntimeError("fixture broken helper")\n')
+        source=stall_watch.Sources(engine)
+        self.assertIsNone(source.proof_slots)
+        self.assertEqual(stall_watch._slot_lines(source,1000),(None,'the proof-run slot library could not be loaded'))
+
 unittest.main()
 PY_IDLE
 RC=$?
-check "I01  missing CPU samples preserve measured intervals, busy-work protection and the maximum look gap" "$RC" "controlled idle-sample regressions"
+check "I01  measured idle history, unknown activity safety and installed source capabilities" "$RC" "controlled idle/activity/source regressions"
 
 [ -f "$SW" ] || echo "  (scripts/stall-watch.sh is missing: every case below fails)"
 [ -d "$APP_LIB" ] || echo "  (the app tree is not beside this engine: the S and X cases fail)"
@@ -349,6 +375,21 @@ check "S01  a slot wait over 10 min is told once: waiter, slot, place, holder an
     "$( [ "$(count "$OUT" "[WAIT]")" -eq 1 ] && has "$OUT" "[WAIT] bravo-opus-w1: waits for a proof-run slot" \
         && has "$OUT" "#1 in line, this Mac runs 1 at once" && has "$OUT" "alpha-opus-h1 (pid $H" \
         && has "$OUT" "30% busy" && has "$OUT" "proof_slots.py set 2" && has "$OUT" "(since "; echo $?)" "out=$OUT"
+# The same real slot stall, at one controlled instant, remains one intact block.
+JNOW=$(( $(date +%s) + 660 ))
+STALL_WATCH_NOW="$JNOW" STALL_WATCH_STATE_DIR="$SB/state-json-control" bash "$SW" --tick > "$SB/block-control.txt"
+STALL_WATCH_NOW="$JNOW" STALL_WATCH_STATE_DIR="$SB/state-json-output" bash "$SW" --tick --jsonl > "$SB/block.jsonl"
+python3 - "$SB/block-control.txt" "$SB/block.jsonl" <<'PY_BLOCK'
+import json,sys
+from pathlib import Path
+plain=Path(sys.argv[1]).read_text().removesuffix('\n')
+records=Path(sys.argv[2]).read_text().splitlines()
+assert len(records)==1,records
+assert len(plain.splitlines())>1,plain
+assert json.loads(records[0])=={'text':plain}
+PY_BLOCK
+check "J01  one complete notification survives JSONL framing byte for byte" "$?" "whole monitor block"
+
 tick 720
 check "S02  the next look says nothing" "$( [ -z "$OUT" ]; echo $?)" "out=$OUT"
 tick 2530

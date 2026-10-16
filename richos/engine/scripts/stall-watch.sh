@@ -26,7 +26,8 @@
 # A stall: a resource wait over 10 minutes (proof-run slot, CPU admission, the
 # test VM, a device, any recorded wait); a live teammate with no commit and no
 # transcript write for 20 minutes; a teammate waiting on a slot its own other
-# process holds. It never kills, stops, pauses or signals anything. The logic
+# process holds. It reports these stalls. Its existing idle-end exception
+# ends only owned idle commands deferring an already ended turn. The logic
 # and every threshold's reason: scripts/lib/stall_watch.py.
 
 set -uo pipefail
