@@ -154,6 +154,19 @@ class DesktopHooks(unittest.TestCase):
                     self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]["updatedInput"], {**args, "run_in_background":True})
             if instruction == original:
                 self.assertEqual(self.hook("PreToolUse", tool_name="mcp__richos_status__send", tool_use_id="stop-report", tool_input={"text":"Stopped"}).returncode, 0)
+        # A standing Stu session can finish A after a newer, independent B was stopped.
+        for tool, args in [("mcp__richos_work__report", {"obligation_id":"work-other", "state":"running", "detail":"Worker finished"}),
+                           ("mcp__richos_work__complete", {"obligation_id":"work-other", "answer":"Verified answer"}),
+                           ("mcp__richos_work__inspect", {}), ("mcp__richos_work__repositories", {}),
+                           ("mcp__richos_status__sessions", {}), ("mcp__richos_status__transcript", {"session_id":"fictional-session"})]:
+            self.scope.write_text(json.dumps({**grant, "user_instruction":original}))
+            result = self.hook("PreToolUse", tool_name=tool, tool_use_id="other-job", tool_input=args)
+            self.assertEqual(result.returncode, 0, tool + result.stderr)
+            if "obligation_id" in args:
+                refused = self.hook("PreToolUse", tool_name=tool, tool_use_id="stopped-job",
+                                    tool_input={**args, "obligation_id":"work-job"})
+                self.assertEqual(refused.returncode, 2, refused.stderr)
+        self.scope.write_text(json.dumps({**grant, "user_instruction":{"ledger_ref":"ledger:thread:other", "sha256":"b" * 64}}))
         self.assertFalse((self.coordination / "result.txt").exists(), "the fixture never executes a requested tool")
         callbacks = [json.loads(line) for line in (self.root / "state/evidence/fictional-session/callbacks.jsonl").read_text().splitlines()]
         direct = [row for row in callbacks if row["callback"].get("tool_use_id") == "direct-Bash"]

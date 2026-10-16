@@ -1400,8 +1400,16 @@ def worker_context(scope, payload):
     if not aid:
         tool = str(payload.get("tool_name", ""))
         communication = tool in ("mcp__richos_status__send", "mcp__richos_status__background_work",
-                                 "mcp__richos_status__sessions", "mcp__richos_status__session_transcript")
+                                 "mcp__richos_status__sessions", "mcp__richos_status__transcript")
         if scope.get("background_work_allowed") is True and not communication:
+            if tool.startswith("mcp__richos_work__"):
+                # Work tools own their selected obligation; the session's latest input may be another job.
+                if tool in ("mcp__richos_work__prepare", "mcp__richos_work__report", "mcp__richos_work__complete"):
+                    require_not_stopped(scope, carried_obligation(scope) or text(payload.get("tool_input", {}), "obligation_id"))
+                return None
+            if tool == "Agent":
+                # dispatch_intent checks the matched prepared receipt's obligation below.
+                return None
             require_direct_not_stopped(scope)
             if tool == "Bash":
                 # Native per-task Stop cannot target a foreground Bash call.
