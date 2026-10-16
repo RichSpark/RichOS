@@ -94,6 +94,11 @@ The app's durable peer inbox is the only desktop handoff path. A peer message
 preserves the sender's complete text and the host-attested original user request.
 The receiving host acknowledges it only after durable acceptance. Uncertain
 provider delivery retains its previous native-session evidence for reconciliation.
+An unfinished native delivery remains recoverable even if a live correction has
+advanced the accepted inbox cursor. Recovery reads that exact original record
+within the existing frame bound and retains the previous native session for
+reconciliation. Accepted corrections are not replayed as new work.
+
 An operational assignment record is bookkeeping, never a second dispatch channel.
 Turn boundaries wake the inbox; they do not independently execute its records.
 The separate declared operator client retains its explicit assignment intake.

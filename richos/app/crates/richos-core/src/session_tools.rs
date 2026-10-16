@@ -162,6 +162,34 @@ fn append(scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> 
 
 /// The cursor is acknowledged only after the receiving path durably accepts the record.
 pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u64)>,String> {
+    let path=inbox(scope,role)?;
+    let cursor=cursor_state(&path)?;
+    let accepted=cursor["through"].as_u64().unwrap();
+    let mut unfinished=None;
+    for input in cursor["active"].as_object().unwrap().keys() {
+        let Some(offset)=input.strip_prefix("peer:") else {continue};
+        let offset=offset.parse::<u64>().map_err(|_|"Invalid unfinished input identity")?;
+        if offset<=accepted {unfinished=Some(unfinished.map_or(offset,|old:u64|old.min(offset)));}
+    }
+    if let Some(through)=unfinished {
+        // A live correction can advance acceptance past the native turn still
+        // executing. Recover that exact saved input and its previous session.
+        // The existing frame bound keeps this read independent of inbox history.
+        let mut file=std::fs::File::open(&path).map_err(|e|e.to_string())?;
+        let length=file.metadata().map_err(|e|e.to_string())?.len();
+        if through==0 || through>length || accepted>length {
+            return Err("Unfinished input no longer matches its durable inbox".into());
+        }
+        let start=through.saturating_sub(256*1024+1);
+        file.seek(SeekFrom::Start(start)).map_err(|e|e.to_string())?;
+        let mut bytes=Vec::new();file.take(through-start).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+        if bytes.last()!=Some(&b'\n') {return Err("Unfinished input is not a complete durable record".into())}
+        let end=bytes.len()-1;
+        let from=bytes[..end].iter().rposition(|byte|*byte==b'\n').map_or(0,|n|n+1);
+        if from==0 && start>0 {return Err("Unfinished input exceeds the existing frame limit".into())}
+        let message=serde_json::from_slice(&bytes[from..end]).map_err(|e|e.to_string())?;
+        return Ok(Some((message,through)));
+    }
     pending_after(scope, role, 0)
 }
 
@@ -230,6 +258,44 @@ pub fn begin_attempt(scope:&StatusToolScope,role:&str,input:&str,session:&str)->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_live_update_ack_does_not_hide_an_older_unfinished_native_turn_on_restart() {
+        let root=std::env::temp_dir().join(format!("richos-peer-frontier-{}",uuid::Uuid::new_v4()));
+        let scope=StatusToolScope {version:1,state_root:root.clone(),entity_id:"company".into(),thread_id:"thread".into()};
+        let path=root.join("scope.json");bind(&path,&scope,"native-rich","rich",None).unwrap();
+        for _ in 0..3 {
+            send(&path,&scope,json!({"text":"x".repeat(128*1024)})).unwrap();
+            let through=pending(&scope,"stu").unwrap().unwrap().1;
+            acknowledge(&scope,"stu",through).unwrap();
+        }
+        send(&path,&scope,json!({"text":"Original work still in progress"})).unwrap();
+        let original=pending(&scope,"stu").unwrap().unwrap().1;
+        let original_input=format!("peer:{original}");
+        begin_attempt(&scope,"stu",&original_input,"native-before-restart").unwrap();
+        send(&path,&scope,json!({"text":"Correction to that ongoing work"})).unwrap();
+        let update=pending_after(&scope,"stu",original).unwrap().unwrap().1;
+        begin_attempt(&scope,"stu",&format!("peer:{update}"),"native-before-restart").unwrap();
+        acknowledge(&scope,"stu",update).unwrap();
+        // Fresh reads after a process boundary must recover the unfinished input,
+        // despite a larger accepted cursor. Its native session may already have acted.
+        let saved=previous_attempt(&scope,"stu",&original_input).unwrap().unwrap();
+        assert_eq!(saved["session_id"],"native-before-restart");
+        let (message,through)=pending(&scope,"stu").unwrap().expect("unfinished native turn was hidden behind a later live update acknowledgement");
+        assert_eq!(through,original);assert_eq!(message.text,"Original work still in progress");
+        let cursor_file=inbox(&scope,"stu").unwrap().with_extension("cursor");
+        let saved_cursor=std::fs::read_to_string(&cursor_file).unwrap();
+        let mut damaged:Value=serde_json::from_str(&saved_cursor).unwrap();
+        damaged["through"]=json!(std::fs::metadata(inbox(&scope,"stu").unwrap()).unwrap().len()+1);
+        crate::doctrine::write_verified(&cursor_file,&damaged.to_string()).unwrap();
+        let refused=pending(&scope,"stu").is_err();
+        crate::doctrine::write_verified(&cursor_file,&saved_cursor).unwrap();
+        assert!(refused,"unfinished-input recovery must retain the shorter-than-cursor refusal");
+        acknowledge(&scope,"stu",original).unwrap();
+        assert!(pending(&scope,"stu").unwrap().is_none(),"recovery must not rewind an accepted correction");
+        assert!(previous_attempt(&scope,"stu",&original_input).unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn peer_input_is_durable_scoped_and_recovers_an_unfinished_append() {
         let root=std::env::temp_dir().join(format!("richos-peer-{}",uuid::Uuid::new_v4()));
