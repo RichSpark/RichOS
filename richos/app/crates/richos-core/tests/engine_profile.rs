@@ -103,6 +103,7 @@ fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child(
     let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
     assert_eq!(environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"].as_deref(), Some("1"));
     assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
+    assert_eq!(environment["STALL_WATCH_STATE_DIR"].as_deref(), profile.state.join("stall-watch").to_str());
     assert!(!environment["PATH"].as_ref().unwrap().contains("homebrew"));
     assert_eq!(environment["RICHOS_CLAUDE_BIN"].as_deref(), Some("/fictional/provider"));
     assert_eq!(environment["GIT_CONFIG_GLOBAL"].as_deref(), profile.plugin.join("gitconfig").to_str());

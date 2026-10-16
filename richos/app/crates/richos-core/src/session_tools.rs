@@ -121,7 +121,17 @@ pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Va
     let sender:Session=serde_json::from_slice(&std::fs::read(scope_path.with_extension("session.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     if sender.entity_id!=scope.entity_id || sender.thread_id!=scope.thread_id {return Err("Message scope changed".into())}
     let peer=match sender.role.as_str() {"rich"=>"stu","stu"=>"rich",_=>return Err("Invalid sender role".into())};
-    let path=inbox(scope,peer)?;
+    append(scope,peer,&Message {from:sender.role,text:args.text,instruction:sender.instruction})?;
+    Ok(json!({"saved":true,"to":peer}))
+}
+
+/// A host observation is information, never a user instruction or a peer's authorship.
+pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String> {
+    append(scope,"stu",&Message {from:"stall-watch".into(),text:text.into(),instruction:None})
+}
+
+fn append(scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
+    let path=inbox(scope,role)?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e|e.to_string())?;
     let mut file=std::fs::OpenOptions::new().create(true).append(true).read(true).open(&path).map_err(|e|e.to_string())?;
     #[cfg(unix)]
@@ -129,7 +139,7 @@ pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Va
         // Locks are released by closing this handle on success or any error.
         if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX)}!=0 {return Err(std::io::Error::last_os_error().to_string())}
     }
-    let mut record=serde_json::to_vec(&Message {from:sender.role,text:args.text,instruction:sender.instruction}).map_err(|e|e.to_string())?;record.push(b'\n');
+    let mut record=serde_json::to_vec(message).map_err(|e|e.to_string())?;record.push(b'\n');
     if record.len()>256*1024 {return Err("Encoded message exceeds the input frame limit".into())}
     let length=file.metadata().map_err(|e|e.to_string())?.len();
     if length>0 {
@@ -142,8 +152,7 @@ pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Va
             file.set_len(complete).map_err(|e|e.to_string())?;
         }
     }
-    file.write_all(&record).and_then(|_|file.sync_all()).map_err(|e|e.to_string())?;
-    Ok(json!({"saved":true,"to":peer}))
+    file.write_all(&record).and_then(|_|file.sync_all()).map_err(|e|e.to_string())
 }
 
 /// The cursor is acknowledged only after the receiving path durably accepts the record.

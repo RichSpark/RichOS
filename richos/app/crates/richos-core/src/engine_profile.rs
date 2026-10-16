@@ -584,6 +584,7 @@ impl EngineProfile {
             .env("RICHOS_APP_REGISTRY", self.coordination.parent().unwrap().join("entities.json"))
             .env("RICHOS_APP_SCOPE", scope).env("RICHOS_APP_STATE", &self.state)
             .env("RICHOS_AGENT_HOLD_DIR", self.state.join("agent-hold"))
+            .env("STALL_WATCH_STATE_DIR", self.state.join("stall-watch"))
             .env("RICHOS_ENGINE_ROOT", &self.engine).env("RICHOS_ENGINE_DIR", &self.engine)
             .env("RICHOS_ENTITY_ROOT", &self.coordination).env("CLAUDE_PROJECT_DIR", &self.coordination)
             .env("RICHOS_WORKSPACES_DIR", self.workspace_state())

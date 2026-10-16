@@ -349,6 +349,21 @@ check "S01  a slot wait over 10 min is told once: waiter, slot, place, holder an
     "$( [ "$(count "$OUT" "[WAIT]")" -eq 1 ] && has "$OUT" "[WAIT] bravo-opus-w1: waits for a proof-run slot" \
         && has "$OUT" "#1 in line, this Mac runs 1 at once" && has "$OUT" "alpha-opus-h1 (pid $H" \
         && has "$OUT" "30% busy" && has "$OUT" "proof_slots.py set 2" && has "$OUT" "(since "; echo $?)" "out=$OUT"
+# The same real slot stall, at one controlled instant, remains one intact block.
+JNOW=$(( $(date +%s) + 660 ))
+STALL_WATCH_NOW="$JNOW" STALL_WATCH_STATE_DIR="$SB/state-json-control" bash "$SW" --tick > "$SB/block-control.txt"
+STALL_WATCH_NOW="$JNOW" STALL_WATCH_STATE_DIR="$SB/state-json-output" bash "$SW" --tick --jsonl > "$SB/block.jsonl"
+python3 - "$SB/block-control.txt" "$SB/block.jsonl" <<'PY_BLOCK'
+import json,sys
+from pathlib import Path
+plain=Path(sys.argv[1]).read_text().removesuffix('\n')
+records=Path(sys.argv[2]).read_text().splitlines()
+assert len(records)==1,records
+assert len(plain.splitlines())>1,plain
+assert json.loads(records[0])=={'text':plain}
+PY_BLOCK
+check "J01  one complete notification survives JSONL framing byte for byte" "$?" "whole monitor block"
+
 tick 720
 check "S02  the next look says nothing" "$( [ -z "$OUT" ]; echo $?)" "out=$OUT"
 tick 2530
