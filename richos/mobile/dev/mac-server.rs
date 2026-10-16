@@ -154,7 +154,11 @@ impl IsolatedBridge {
                 if let (Some(client),Some(device))=(client,devices.paired()) {
                     if let Ok(payload)=crate::timeline_view::timeline_payload(&*spine.lock().unwrap(),&reply_thread) {
                         let mut desk=push.lock().unwrap();
-                        phone::notifications::queue_reply(&mut desk,&device,&reply_thread,&payload).unwrap();
+                        if let Some(turn)=payload["items"].as_array()
+                            .and_then(|items|items.iter().rev().find(|item|item["kind"]=="rich_message"))
+                            .and_then(|item|item["turnId"].as_str()) {
+                            phone::notifications::queue_reply(&mut desk,&device,&reply_thread,&payload,turn).unwrap();
+                        }
                         let result=desk.reconcile(client.as_ref(),Some(&device));
                         eprintln!("native notification reconciliation succeeded: {}",result.is_ok());
                     }

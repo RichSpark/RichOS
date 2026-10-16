@@ -515,6 +515,16 @@ impl Cognition for GatedReply {
     }
 }
 
+#[derive(Clone,Default)]
+struct CompletedReplies(Arc<Mutex<Vec<(String,String)>>>);
+impl richos_core::stream::TurnObserver for CompletedReplies {
+    fn on_event(&self,event:&richos_core::stream::StreamEvent) {
+        if let richos_core::stream::StreamEvent::TurnCompleted {thread_id,turn_id,..}=event {
+            self.0.lock().unwrap().push((thread_id.clone(),turn_id.clone()));
+        }
+    }
+}
+
 #[test]
 fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing_its_destination() {
     let (mut spine, control, _, _) = fixture();
@@ -524,6 +534,8 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
     let (release, gated)=mpsc::channel();
     spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true}));
     spine.detach_conversation_io();
+    let completed=CompletedReplies::default();
+    spine.set_observer(Box::new(completed.clone()));
     let first=spine.submit_prompt_to(&first_thread,"first request",Source::Agent).unwrap();
     let shared=Arc::new(Mutex::new(spine));
     let driving=shared.clone();
@@ -543,6 +555,8 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
     worker.join().unwrap().unwrap();
     let finished=shared.lock().unwrap();
     assert!(control.active_turn().is_none());
+    assert_eq!(*completed.0.lock().unwrap(),vec![(first_thread.clone(),first.clone()),(second_thread.clone(),second.clone())],
+        "the ordinary completion observer must see both the original reply and its queued reply");
     for (id,thread,text) in [(first,first_thread,"first request"),(second,second_thread,"second request")] {
         let turn=finished.ledger().turn(&id).unwrap();
         assert_eq!(turn.state,TurnState::Completed);

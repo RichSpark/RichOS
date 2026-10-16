@@ -994,7 +994,7 @@ impl PhoneRuntime {
     /// the ones a screen redraws itself out of. Without a ceiling, that is a subprocess per poll.
     ///
     /// **It is never held across the `running` lock.** `status()` takes this first and finishes
-    /// with it before it touches anything else, for the reason `push_last_reply` records at
+    /// with it before it touches anything else, for the reason `push_reply` records at
     /// length: a lock held across a subprocess is a settings screen that freezes.
     fn tailnet_now(&self) -> tailnet::TailnetState {
         let mut cached = self.tailnet.lock().unwrap();
@@ -1624,7 +1624,7 @@ impl PhoneRuntime {
         let client=connect::client::Client::new(connect::client::Identity::open(&secrets::Keychain::for_app_data(&self.data_dir)).map_err(|_|notifications::unavailable())?);
         desk.reconcile(&client,device.as_ref())
     }
-    fn push_native_reply(&self, thread_id:&str) {
+    fn push_native_reply(&self, thread_id:&str, turn_id:&str) {
         let _action=self.connect_actions.lock().unwrap();
         let gathered={
             let running=self.running.lock().unwrap();
@@ -1640,7 +1640,7 @@ impl PhoneRuntime {
         if !desk.enabled_for(&device) {return}
         let bridge:&dyn routes::Bridge=bridge.as_ref();
         let Ok(payload)=bridge.snapshot(Some(thread_id)) else {return};
-        if notifications::queue_reply(&mut desk,&device,thread_id,&payload).is_err() {return}
+        if notifications::queue_reply(&mut desk,&device,thread_id,&payload,turn_id).is_err() {return}
         let Ok(identity)=connect::client::Identity::open(&secrets::Keychain::for_app_data(&self.data_dir)) else {return};
         if let Err(error) = desk.reconcile(&connect::client::Client::new(identity), Some(&device)) {
             eprintln!("[richos] native reply notification could not be sent; queued work will be retried: {error}");
@@ -1680,15 +1680,14 @@ impl PhoneRuntime {
 
     /// **Push the reply that just finished**, if there is a phone to push to.
     ///
-    /// Called from the drain thread once the turn is over and the spine lock is free. Blocking, on
-    /// its own small runtime: one push per turn is not worth threading an async sender through the
-    /// live observer, and the alternative — the emitter sending into a channel — would put an
-    /// await in the one place §13 says must never block the spine.
+    /// Called after the actual completion event on the existing blocking pool. Network
+    /// delivery never holds the conversation lock. The turn id keeps a later queued
+    /// reply from replacing the one whose completion triggered this push.
     ///
     /// A visible browser acknowledges the completed reply. Background browsers receive push
     /// even when a proxy still holds their stream open. Older clients retain presence fallback.
-    pub fn push_last_reply(&self, thread_id: &str) {
-        self.push_native_reply(thread_id);
+    pub fn push_reply(&self, thread_id: &str, turn_id: &str) {
+        self.push_native_reply(thread_id,turn_id);
         // EVERYTHING THE PUSH NEEDS IS TAKEN OUT OF THE LOCK FIRST, and the lock is released by
         // THIS BLOCK ENDING rather than by a `drop` call. The first version wrote
         // `let Some(running) = running.as_ref() else …` and then `drop(running)`, which drops a
@@ -1712,13 +1711,12 @@ impl PhoneRuntime {
             }
         };
         let Gathered { devices, device_id, subscription, device, vapid, api_base, bridge } = gathered;
-        // Through the trait, deliberately: `push_last_reply` reads exactly what the phone reads,
+        // Through the trait, deliberately: `push_reply` reads exactly what the phone reads,
         // through the same gated door, so a push can never carry something the stream could not.
         let bridge: &dyn routes::Bridge = bridge.as_ref();
 
         let Ok(payload) = bridge.snapshot(Some(&thread_id)) else { return };
-        let rows = rows::rows_from_payload(&payload);
-        let Some(last) = rows.iter().rev().find(|r| r["role"] == "rich" && r["kind"] != "question") else { return };
+        let Some(last) = rows::reply_for_turn(&payload,turn_id) else { return };
         if device.has_read(thread_id, last["cursor"].as_u64()) || !push::should_notify(&devices, &device_id, thread_id, last["id"].as_str().unwrap_or("")) {
             // He has already seen it. A push here would be the second time he was told.
             return;
@@ -1797,7 +1795,7 @@ fn forget_a_lapsed_subscription(devices: &device::DeviceDesk, subscription: &pus
     }
 }
 
-/// What [`PhoneRuntime::push_last_reply`] takes out of the lock before it does any network work.
+/// What [`PhoneRuntime::push_reply`] takes out of the lock before it does any network work.
 ///
 /// A struct rather than a tuple of five, so the thing that makes the lock's scope a BLOCK is
 /// visible in the type rather than being a convention somebody has to keep.

@@ -187,9 +187,8 @@ fn device_body(revision:u64,generation:u64,target:Option<&Target>)->Value {
     }
 }
 
-pub fn queue_reply(desk:&mut Desk,device:&Device,thread:&str,payload:&Value)->Result<(),String> {
-    let rows=super::rows::rows_from_payload(payload);
-    let Some(row)=rows.iter().rev().find(|r|r["role"]=="rich" && r["kind"]!="question" && r["complete"]!=false) else {return Ok(())};
+pub fn queue_reply(desk:&mut Desk,device:&Device,thread:&str,payload:&Value,turn:&str)->Result<(),String> {
+    let Some(row)=super::rows::reply_for_turn(payload,turn) else {return Ok(())};
     if device.has_read(thread,row["cursor"].as_u64()) {return Ok(())}
     let Some(event)=row["id"].as_str() else {return Ok(())};
     desk.enqueue(device,thread,event)?;
@@ -304,19 +303,19 @@ mod tests {
             serde_json::from_value::<Device>(record).unwrap()
         };
         let reply=|id:&str,count:usize|{
-            let items:Vec<Value>=(1..=count).map(|n|json!({"kind":"rich_message","id":format!("{id}-{n}"),"threadId":id,"text":"Done.","createdAt":n})).collect();
+            let items:Vec<Value>=(1..=count).map(|n|json!({"kind":"rich_message","id":format!("{id}-{n}"),"threadId":id,"turnId":id,"text":"Done.","createdAt":n})).collect();
             json!({"items":items})
         };
         // He has read 100 rows of thread A. The old record says so device-wide; the new one says so for A.
         let read_a_long_thread=device_with(json!({"delivered_cursor":100,"delivered_cursors":{"thread-a":100}}));
         let mut desk=Desk::open(&dir.0).unwrap();desk.set(&read_a_long_thread,Some(registration)).unwrap();
-        queue_reply(&mut desk,&read_a_long_thread,"thread-b",&reply("thread-b",3)).unwrap();
+        queue_reply(&mut desk,&read_a_long_thread,"thread-b",&reply("thread-b",3),"thread-b").unwrap();
         assert_eq!(desk.state.jobs.len(),1,"row 3 of another conversation was suppressed by row 100 of thread A");
         // POSITIVE CONTROL: the guard still does its job for the conversation it was recorded for.
-        queue_reply(&mut desk,&read_a_long_thread,"thread-a",&reply("thread-a",100)).unwrap();
+        queue_reply(&mut desk,&read_a_long_thread,"thread-a",&reply("thread-a",100),"thread-a").unwrap();
         assert_eq!(desk.state.jobs.len(),1,"a reply he had already read in thread A was announced again");
         // And in its own conversation a NEWER row is still announced.
-        queue_reply(&mut desk,&read_a_long_thread,"thread-a",&reply("thread-a",101)).unwrap();
+        queue_reply(&mut desk,&read_a_long_thread,"thread-a",&reply("thread-a",101),"thread-a").unwrap();
         assert_eq!(desk.state.jobs.len(),2);
     }
     #[test] fn malformed_native_registrations_are_rejected() {

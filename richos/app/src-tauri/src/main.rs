@@ -171,6 +171,16 @@ impl TurnObserver for TauriEmitter {
             || self.app.emit(event.event_name(), event.payload()),
             |receipt| eprintln!("[richos] ui-emit {receipt}"),
         );
+        if let StreamEvent::TurnCompleted { thread_id, turn_id, .. } = event {
+            if let Some(runtime) = self.app.try_state::<Arc<phone::PhoneRuntime>>() {
+                let runtime=Arc::clone(&runtime);
+                let (thread_id,turn_id)=(thread_id.clone(),turn_id.clone());
+                tauri::async_runtime::spawn_blocking(move || {
+                    runtime.bridge_refresh();
+                    runtime.push_reply(&thread_id,&turn_id);
+                });
+            }
+        }
     }
 }
 
@@ -4410,16 +4420,11 @@ fn queue_work_messages(app: &AppHandle, engine_state: &Path, thread_id: &str) {
 }
 
 /// All asynchronous incoming messages use the same turn, stream and phone delivery.
-fn dispatch_incoming_messages(app: &AppHandle, thread_id: &str) -> Result<(), String> {
+fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), String> {
     let app=app.clone();
-    let thread_id=thread_id.to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let state=app.state::<AppState>();
         if let Err(error)=drain_incoming_messages(&state.spine,&state.work) { eprintln!("[richos] incoming message: {error}"); }
-        if let Some(runtime)=app.try_state::<std::sync::Arc<phone::PhoneRuntime>>() {
-            runtime.bridge_refresh();
-            runtime.push_last_reply(&thread_id);
-        }
     });
     Ok(())
 }
