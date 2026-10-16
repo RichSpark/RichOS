@@ -854,6 +854,11 @@ def idle_end(src, now, session_id, prev):
         key = str(rec.get("key"))
         old = prev.get(key) if isinstance(prev.get(key), dict) else None
         if any(v[1] is None for v in reading.values()):
+            # A child can exit between the snapshot and its CPU read. Keep the last
+            # valid sample: the next cumulative reading covers this interval. Its
+            # timestamp stays unchanged, so the existing maximum-gap reset still applies.
+            if old:
+                state[key] = old
             continue  # unmeasured is never idle
         before = old.get("at") if old else None
         if not isinstance(before, (int, float)) or not 0 <= now - before <= IDLE_LOOK_GAP:
