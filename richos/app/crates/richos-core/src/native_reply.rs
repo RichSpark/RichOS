@@ -50,7 +50,7 @@ pub fn completed(result:&Value)->bool {
 
 pub fn schema()->Value {
     serde_json::json!({"type":"object","properties":{"reply":{"type":"string",
-        "description":"The reply addressed directly to the user."}},"required":["reply"],"additionalProperties":false})
+        "description":"The reply addressed directly to the user, or an empty string when no reply is needed."}},"required":["reply"],"additionalProperties":false})
 }
 
 #[cfg(test)]
@@ -70,6 +70,7 @@ mod tests {
    }
   }
   for value in [json!(null),json!({"text":"not a reply"}),json!({"reply":"ok","other":"forbidden"})] {assert!(ReplyStream::default().finish(&json!({"structured_output":value})).is_err());}
+  assert!(completed(&json!({"is_error":false,"subtype":"success","structured_output":{"reply":""}})),"choosing silence is a completed reply, not a provider failure");
  }
  #[test]
  fn unicode_surrogates_nested_agents_and_rewrites_cannot_leak_into_reply() {
