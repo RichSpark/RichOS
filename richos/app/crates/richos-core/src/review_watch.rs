@@ -419,7 +419,9 @@ while time.monotonic() < end and len(acks) < 3:
         acks.append(json.loads(line))
     elif acks:
         break
-json.dump({{"acks": acks, "env": os.environ.get("{ACKS_ENV}")}}, open({got:?}, "w"))
+with open({got:?} + ".pending", "w") as target:
+    json.dump({{"acks": acks, "env": os.environ.get("{ACKS_ENV}")}}, target)
+os.replace({got:?} + ".pending", {got:?})
 time.sleep(60)
 "#)).unwrap();
         let sink: NoticeSink = Arc::new(|notice: Notice| notice.session == "told");

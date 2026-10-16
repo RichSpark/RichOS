@@ -639,8 +639,30 @@ while IFS= read -r p; do
   case "$p" in
     "$APP_REL"/crates/*/tests/*.rs)
       c="$(printf '%s' "$p" | sed "s:^$APP_REL/crates/::; s:/tests/.*::")"
-      printf '%s\t%s\t--test %s\n' "$c" "integration" "$(basename "$p" .rs)" >> "$WORK/rust"
-      MATCHED=1; note "is an integration target of $c" ;;
+      rel="${p#"$APP_REL/crates/$c/tests/"}"
+      if gone "$p"; then
+        printf '%s\n' "$p" >> "$REMOVED"
+        MATCHED=1; note "deleted integration source: no target remains at this path"
+      fi
+      case "$rel" in
+        */*)
+          # Shared modules are compiled by their integration consumers, never as
+          # a target named mod. Include Cargo's directory/main.rs layout too.
+          testdir="$APP/crates/$c/tests"
+          for t in "$testdir"/*.rs "$testdir"/*/main.rs; do
+            [ -f "$t" ] || continue
+            case "$t" in
+              "$testdir"/*/main.rs) target="$(basename "$(dirname "$t")")" ;;
+              *) target="$(basename "$t" .rs)" ;;
+            esac
+            printf '%s\t%s\t--test %s\n' "$c" "integration" "$target" >> "$WORK/rust"
+          done
+          MATCHED=1; note "integration helper: compile the surviving integration targets of $c" ;;
+        *) if ! gone "$p"; then
+             printf '%s\t%s\t--test %s\n' "$c" "integration" "$(basename "$p" .rs)" >> "$WORK/rust"
+             MATCHED=1; note "is an integration target of $c"
+           fi ;;
+      esac ;;
     "$APP_REL"/crates/*/src/*.rs)
       c="$(printf '%s' "$p" | sed "s:^$APP_REL/crates/::; s:/src/.*::")"
       m="$(printf '%s' "$p" | sed "s:^$APP_REL/crates/$c/src/::; s:\.rs$::" | awk '{gsub("/","::"); print}')"
