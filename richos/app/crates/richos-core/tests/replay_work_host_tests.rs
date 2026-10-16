@@ -141,7 +141,7 @@ fn replay(capture: &str, speed: f64, requests: &[&str]) -> Replay {
     }
     let doctrine = richos_core::doctrine::ensure_rendered(&root, &richos_core::doctrine::DoctrineIdentity::default())
         .expect("the doctrine fixture must render");
-    let skills = richos_core::skills::ensure_rendered(&root).expect("the skills fixture must render");
+    let skills = richos_core::skills::ensure_rendered(&root, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).expect("the skills fixture must render");
     // A conversation in the company, as the spine opens one; only the spine mints a binding.
     let mut spine = support::spine(Ledger::open(root.join("spine-ledger.jsonl")).unwrap());
     let binding = spine.ensure_active_thread_in(&EntityId::parse(COMPANY).unwrap()).unwrap();

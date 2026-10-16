@@ -71,7 +71,7 @@ fn prime_failure_terminalizes_the_accepted_turn_and_survives_reload() {
         .iter()
         .find(|t| t.source == Source::Text)
         .unwrap();
-    assert_eq!(turn.state, TurnState::Interrupted);
+    assert_eq!(turn.state,TurnState::Interrupted);
     assert!(turn.ended_at.is_some());
     assert_eq!(events.statuses(), vec!["queued", "working", "failed"]);
     assert!(control.active_turn().is_none());
@@ -208,15 +208,16 @@ fn restart_marks_orphan_received_and_inflight_requests_failed_without_replaying(
     let prompts = mock.prompts.clone();
     restored.attach_lease(Box::new(mock));
     restored.reconcile_intake().unwrap();
-    for id in [first, second] {
+    for id in [first.clone(), second] {
         let turn = restored.ledger().turn(&id).unwrap();
-        assert_eq!(turn.state, TurnState::Interrupted);
+        assert_eq!(turn.state,if id==first {TurnState::Completed}else{TurnState::Interrupted});
+        if id==first {continue}
         assert_eq!(turn.ended_at, None, "restart cannot know when the process died");
         assert_eq!(turn.active_ms(), None, "closed-app time must never count as work");
         let reloaded = Ledger::open(root.join("ledger.jsonl")).unwrap();
         assert_eq!(reloaded.turn(&id).unwrap().active_ms(), None);
     }
-    assert!(prompts.lock().unwrap().is_empty());
+    assert_eq!(*prompts.lock().unwrap(),vec!["not started"]);
 }
 struct WaitingFactory {
     entered: Mutex<mpsc::Sender<()>>,

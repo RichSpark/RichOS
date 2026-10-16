@@ -215,6 +215,8 @@ pub enum TurnState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
+    /// A message from another agent. Its text is context, never user authorization.
+    Agent,
     Text,
     Jam,
     /// A system-authored internal prompt (re-prime / handoff-summary request) — NEVER
@@ -2216,7 +2218,7 @@ impl Ledger {
                 continue;
             }
             // Words the app sent for a button he pressed are not his line (finding 14).
-            if !t.pressed {
+            if !t.pressed && t.source != Source::Agent {
                 out.push(Message { role: "user".into(), text: t.user_text.clone(), turn_id: t.id.clone(), at: t.created_at });
             }
             if !t.assistant_text.is_empty() {

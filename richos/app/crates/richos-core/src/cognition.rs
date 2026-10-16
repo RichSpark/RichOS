@@ -288,6 +288,10 @@ pub trait Cognition: Send {
     fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
         _source: crate::ledger::Source, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
 
+    /// Prepare ordinary peer input without manufacturing an assignment.
+    fn prepare_agent_message(&mut self,_binding:&crate::entity::ThreadBinding,_turn:&str,
+        _message:&crate::session_tools::Message)->Result<(),CognitionError> {Ok(())}
+
     /// Give the session the context brief his next turn would otherwise supply first, while
     /// nobody is waiting: called right after the priming turn, under that turn's own ledger
     /// id. His turn's [`Self::prepare_work_turn`] then finds the same brief already held and
@@ -339,11 +343,6 @@ pub trait Cognition: Send {
     fn prompt_context_only(
         &mut self, text: &str, on_item: &mut dyn FnMut(TurnItem),
     ) -> Result<String, CognitionError> { self.prompt(text, on_item) }
-
-    /// Communicate an internal report with read access and no new action authority.
-    fn prompt_read_only(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        self.prompt_context_only(text, on_item)
-    }
 
     /// A handle that interrupts the CURRENTLY RUNNING `prompt` from another thread
     /// (UX §9.3 step 2).

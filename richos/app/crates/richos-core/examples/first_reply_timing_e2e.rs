@@ -315,7 +315,7 @@ fn drive_prepare(
     let scope_path = scratch.join(format!("work-scope-{}.json", uuid::Uuid::new_v4()));
     richos_core::ecs::write_scope(
         &scope_path,
-        &richos_core::ecs::ToolScope { read_only_tools: Vec::new(),
+        &richos_core::ecs::ToolScope {
             version: 1,
             actions_allowed: true,
             bridge: bridge.clone(),
@@ -453,7 +453,7 @@ fn does_it_dispatch(
         let state = bridge.obligation_state(&binding, Some(seat), obligation)?;
         let (ok, detail) = drive_prepare(
             bridge, runtime, engine, state_root, coordination, scratch,
-            &entity, &thread_id, &session, obligation, seat, &ledger_ref, &digest,
+            &entity, &thread_id, session, obligation, seat, &ledger_ref, &digest,
             &repo_argument, &format!("probe-dispatch-{index}"), "Probe: does this obligation dispatch?",
             hook_sources,
         )?;
@@ -677,7 +677,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     registry.save(&data.join("entities.json"))?;
 
     let doctrine = richos_core::doctrine::ensure_rendered(&data, &Default::default())?;
-    let skills = richos_core::skills::ensure_rendered(&data)?;
+    let skills = richos_core::skills::ensure_rendered(&data, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app"))?;
     let bridge = EcsBridge::new(&runtime.python, &engine, &data.join("ecs"))?;
 
     let mut spine = Spine::new(Ledger::open(&data.join("ledger.jsonl"))?);

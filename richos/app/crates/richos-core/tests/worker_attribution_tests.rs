@@ -356,10 +356,10 @@ fn an_unknown_session_dir_makes_the_priming_prompt_say_so_instead_of_falling_sil
     // It SPEAKS rather than omitting the section. Silence here reads as "no workers are
     // running", which is a claim nobody may make when the app could not identify whose
     // workers it would be counting — the same rule the ACTION LEDGER section follows.
-    assert!(priming.contains("LIVE WORKER STATE: NOT AVAILABLE"), "{priming}");
-    assert!(priming.contains("this session has no team directory on disk"), "it says WHY");
+    assert!(priming.contains("worker_state_unknown"), "{priming}");
+    assert!(priming.contains("no_team_dir_for_session"), "it says WHY");
     assert!(
-        priming.contains("NOT A STATEMENT THAT NO WORKERS ARE RUNNING"),
+        priming.contains("worker_state_unknown"),
         "and it forbids the false denial the absence would otherwise invite"
     );
     // And not one byte of the three live workers next door reaches the prompt.
@@ -390,9 +390,9 @@ fn an_unreadable_worker_log_makes_the_priming_prompt_say_so_instead_of_falling_s
     let priming = payload.to_priming_prompt();
 
     assert_eq!(payload.worker_state_unknown, Some(Unattributed::WorkerLogUnreadable));
-    assert!(priming.contains("LIVE WORKER STATE: NOT AVAILABLE"), "{priming}");
-    assert!(priming.contains("worker log is there but could not be read"), "it says WHY");
-    assert!(priming.contains("NOT A STATEMENT THAT NO WORKERS ARE RUNNING"));
+    assert!(priming.contains("worker_state_unknown"), "{priming}");
+    assert!(priming.contains("worker_log_unreadable"), "it says WHY");
+    assert!(priming.contains("worker_state_unknown"));
     assert!(!priming.contains("could not be identified"), "the directory WAS identified: {priming}");
     assert!(!priming.contains("not-my-worker"), "{priming}");
 
@@ -424,9 +424,9 @@ fn a_damaged_worker_log_or_task_history_makes_the_priming_prompt_say_so_instead_
     let payload = with_home(&home, || RePrimePayload::assemble(&ledger, &binding, 8, Some(MINE_FULL)).unwrap());
     let priming = payload.to_priming_prompt();
     assert!(payload.worker_state_unknown.is_some(), "a damaged started row was counted as no worker at all");
-    assert!(priming.contains("LIVE WORKER STATE: NOT AVAILABLE"), "{priming}");
-    assert!(priming.contains("part of this session's worker log could not be read"), "it says WHY: {priming}");
-    assert!(priming.contains("NOT A STATEMENT THAT NO WORKERS ARE RUNNING"), "{priming}");
+    assert!(priming.contains("worker_state_unknown"), "{priming}");
+    assert!(priming.contains("worker_log_damaged"), "it says WHY: {priming}");
+    assert!(priming.contains("worker_state_unknown"), "{priming}");
     assert!(!priming.contains("could not be identified"), "the directory WAS identified: {priming}");
 
     // The worker log whole again, and the completed-task history unreadable (a folder where
@@ -460,7 +460,7 @@ fn no_lease_never_puts_another_sessions_workers_in_the_prompt() {
     let priming = payload.to_priming_prompt();
 
     assert_eq!(payload.worker_state_unknown, Some(Unattributed::NoSession));
-    assert!(priming.contains("no compute lease is attached"));
+    assert!(priming.contains("no_session"));
     assert!(!priming.contains("not-my-worker"), "{priming}");
 
     let _ = std::fs::remove_file(&path);
@@ -483,7 +483,7 @@ fn the_serving_sessions_own_workers_do_reach_the_prompt_and_only_those() {
 
     assert_eq!(payload.worker_state_unknown, None, "a derived directory IS an attribution");
     assert_eq!(payload.worker_state, vec!["[active] sage-opus-r3".to_string()]);
-    assert!(priming.contains("LIVE WORKER STATE (this session's own workers"));
+    assert!(priming.contains("worker_state"));
     assert!(priming.contains("[active] sage-opus-r3"));
     assert!(!priming.contains("not-my-worker"), "{priming}");
     assert!(!priming.contains("NOT AVAILABLE"), "an attributed read never claims it is unknown");

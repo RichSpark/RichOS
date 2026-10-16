@@ -127,7 +127,6 @@ def handle(payload):
     if event == "PreToolUse":
         active = scope()
         if active.get("actions_allowed") is not True \
-                and payload.get("tool_name") not in active.get("read_only_tools", []) \
                 and not a_worker_this_lease_already_dispatched(active, payload):
             raise ValueError("This app turn is stopped or is supplying context. New actions are unavailable.")
     evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")

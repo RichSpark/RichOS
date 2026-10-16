@@ -50,23 +50,6 @@ const REPLY_WAIT: Duration = Duration::from_secs(150);
 /// macOS's `sun_path` holds 104 bytes including the terminator.
 const SOCKET_PATH_LIMIT: usize = 103;
 
-/// **The front desk's operator addendum, served as this server's `instructions`** (Sage's text,
-/// richos-hq `tools-private/operator/front-desk-addendum.md` at `f59342ee`, revised to Frank's
-/// F6, F14, F15 and F16, copied byte for byte; [`ADDENDUM_SHA256`] pins it;
-/// its notes' §3 item 8: *"where it lives is echo's wiring"*). `claude` places a server's
-/// instructions in the system prompt under "MCP Server Instructions" (the sentence that heads
-/// that block is in the 2.1.282 and 2.1.283 binaries), and this server exists only on an operator
-/// install's front desk, which is exactly the "operator mode only" the addendum asks for. It
-/// names the three tools below; a test holds the names together.
-pub const INSTRUCTIONS: &str = include_str!("../doctrine/operator-front-desk.md");
-
-/// SHA-256 of richos-hq `tools-private/operator/front-desk-addendum.md` at `f59342ee` (last
-/// changed in `3dc2ca74`), which this build serves. Re-derive it from richos-hq with
-/// `git show <commit>:tools-private/operator/front-desk-addendum.md | shasum -a 256`; a test
-/// holds [`INSTRUCTIONS`] to it, so a copy that drifted from Sage's text by one byte fails. The
-/// record lives in a private repository, so the digest is what this public tree can carry.
-pub const ADDENDUM_SHA256: &str = "b3b3cbf326ff6b6b46dd3d534e8c2c1a6011bf5ac7f351040a348d5acad5eafe";
-
 /// The scope the app writes for the front desk's turn. Everything a request could use to
 /// redirect itself is here, and none of it is a tool argument.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -461,7 +444,7 @@ fn response(scope: &Path, request: Value, initialized: &mut bool) -> Option<Valu
                 _ => "2025-11-25",
             };
             json!({"protocolVersion": protocol, "capabilities": {"tools": {}},
-                   "serverInfo": {"name": SERVER_NAME, "version": "1.0.0"}, "instructions": INSTRUCTIONS})
+                   "serverInfo": {"name": SERVER_NAME, "version": "1.0.0"}})
         }
         "ping" => json!({}),
         _ if !*initialized => return Some(error(id, -32002, "Initialize before calling your team's tools")),
@@ -617,7 +600,7 @@ mod tests {
         let f = fixture();
         let replies = rpc(&f.scope, &[init(), tool(1, STOP_TOOL, json!({"names": ["mark-sonnet-a", "gone"],
                                                                          "words": "stop mark and gone"}))]);
-        assert_eq!(replies[0]["result"]["instructions"], INSTRUCTIONS, "the doctrine lines travel with the tools");
+        assert!(replies[0]["result"].get("instructions").is_none());
         let said = text(&replies[1]);
         assert_eq!(said["say"], "Stopped mark-sonnet-a. gone isn't one of your team's agents in this app.");
         assert_eq!(said["stopped"], json!(["mark-sonnet-a"]));
@@ -719,28 +702,6 @@ mod tests {
     fn the_scope_sits_beside_the_register_s_from_the_same_identity() {
         assert_eq!(scope_beside(Path::new("/s/scopes/abc-assignments.json")), PathBuf::from("/s/scopes/abc-operator.json"));
         assert_eq!(scope_beside(Path::new("/s/assignments.json")), PathBuf::from("/s/assignments-operator.json"));
-    }
-
-    /// **The addendum and the tools agree on the names** (Sage's notes §3 item 3: *"the three
-    /// names in the addendum must match it, or the addendum changes"*).
-    #[test]
-    fn the_addendum_served_as_instructions_names_exactly_the_tools_this_server_lists() {
-        for name in [STOP_TOOL, INTERRUPT_TOOL] {
-            assert!(INSTRUCTIONS.contains(&format!("`{SERVER_NAME}.{name}`")), "the addendum does not name {name}");
-        }
-        assert!(INSTRUCTIONS.contains("the read"), "the addendum's read is this server's `read`");
-        assert!(INSTRUCTIONS.starts_with("## Operator mode: the other one is his own team"));
-    }
-
-    /// **The app serves Sage's current addendum, byte for byte** (Frank's F19: the addendum
-    /// ships only with an app build; Rich's order of 2026-09-26 to copy f59342ee's text).
-    #[test]
-    fn the_served_addendum_is_the_record_s_text_byte_for_byte() {
-        use sha2::Digest;
-        assert_eq!(format!("{:x}", sha2::Sha256::digest(INSTRUCTIONS.as_bytes())), ADDENDUM_SHA256);
-        // The revision's own lines (F14, F15), so a stale copy with a re-pinned digest still fails.
-        assert!(INSTRUCTIONS.contains("the read, with\n  `every`, is the one call before the stop"), "{INSTRUCTIONS}");
-        assert!(INSTRUCTIONS.contains("Say the sentence `stop` or `interrupt` hands back"), "{INSTRUCTIONS}");
     }
 
     /// **F16 of Frank's review:** the read lists only questions with no answer relayed yet

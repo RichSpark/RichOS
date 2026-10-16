@@ -1,83 +1,6 @@
-//! ONBOARDING — the trigger for the bootstrap interview, and the refusal that keeps it honest.
-//!
-//! # The finding this closes, and the one it corrects
-//!
-//! `docs/plans/richos-onboarding-2026-09-06.md`: *"The trigger for the bootstrap interview
-//! exists, and it is written in a file that is never created."* `engine/CLAUDE.md.template:25`
-//! tells the orchestrator to run the interview before anything else; that template becomes a
-//! real `CLAUDE.md` only through `provision-claude-md.sh`, which nothing invokes. The first
-//! outside user was asked nothing because nobody was sitting next to him to type one command.
-//!
-//! Re-derived on this branch before anything was built on it, `claude` 2.1.263, 2026-09-06:
-//!
-//! ```text
-//! grep -rn "bootstrap-interview" app/ | wc -l      -> 0
-//! grep -rn "provision-claude-md\.sh" engine/ --include="*.sh" --include="*.py"
-//!                                                  -> its own file and its own test; no caller
-//! ```
-//!
-//! **And the correction.** The onboarding document's fix is M1/M2 — bridge the app's config
-//! into `engine/identity.config` and call the provisioner — so that G1 can fill a `CLAUDE.md`.
-//! Measured, that would repair a chain whose far end is a file the product never loads: under
-//! the production chat-lease vector the child reads no `CLAUDE.md` at all (`company.rs` module
-//! doc, cells B0a/B0b/B0c). So the provisioner is **not** wired here, deliberately, and this
-//! module uses the channel that was measured to be open instead — the priming turn.
-//!
-//! # THE TRIGGER IS THE PRIMING TURN, AND THAT IS NOT A CONVENIENCE
-//!
-//! A skill that nothing invokes is `provision-claude-md.sh` with a different file extension. So
-//! the trigger cannot be "the interview is available if Rich thinks to reach for it". It has to
-//! be issued.
-//!
-//! The priming turn is the one place it can be issued from honestly:
-//!
-//! - it re-fires on every thread change and thread → entity is one-to-one, so it is already
-//!   scoped to the company the question is about;
-//! - it is derived from a **fact on disk** — whether this company has a `company.md` with
-//!   substance in it — rather than from a flag saying a dialog was once shown;
-//! - and it **retires itself**. The moment the file has substance, [`priming_block`] stops
-//!   emitting the offer and starts emitting the material. Nothing has to remember to turn it off.
-//!
-//! The doctrine file cannot carry it: it is fixed at spawn, one lease serves many companies, and
-//! `doctrine.rs`'s §4.1 boundary rule refuses anything that is not true for every turn of every
-//! conversation. "This company has not been interviewed" is true of one entity at a time.
-//!
-//! # POSITIVE SIGNALS ONLY — no "seen it" flag, ever
-//!
-//! Onboarding document §3 states the rule and the reason: *"A launch counter, a 'seen it' flag,
-//! or a first-run boolean would all record that the app SHOWED something, not that the CEO
-//! ANSWERED anything — and the failure mode we are fixing is precisely a product that reported
-//! success over work that never happened."*
-//!
-//! So there are exactly two facts here and both are answers:
-//!
-//! | fact | where it lives | why it is an answer |
-//! |---|---|---|
-//! | this company has been described | `<central>/companies/<id>/company.md` has substance | he said those things |
-//! | he was asked and said not now | [`OnboardingRecord`] | "not now" is an answer, and the only one the file cannot hold |
-//!
-//! [`OnboardingRecord`] holds company-scoped explicit declines. There is no counter,
-//! timestamp of an offer or "shown" boolean. The version and company id describe whose
-//! answer was persisted, not whether a screen was shown.
-//!
-//! # THE DECLINATION EXISTS BECAUSE OF A FAILURE THIS PRODUCT ALREADY HAD
-//!
-//! Onboarding document M5: without a durable "not now", the offer either nags forever or
-//! vanishes forever, and both are wrong. The memory question learned it the hard way —
-//! `main.js:3538-3548` records a dialog that reopened at every launch and became *"a permanent
-//! interruption"* on a first run.
-//!
-//! A declined company still gets a block, and that is deliberate: it tells Rich he was already
-//! asked, so Rich neither re-offers nor wonders why he knows nothing. The way back is the CEO
-//! asking, which needs no mechanism.
-//!
-//! # The interview and team handoff
-//!
-//! Rich uses the interview as an adaptive conversation and preserves the actual answers.
-//! A team proposal uses current evidence. Approval is interpreted in context, then handed
-//! over under the ordinary latency rule with every requested name, role and constraint.
-//! The display title is never the execution contract. Only an observed saved definition
-//! establishes that a teammate was added. This module supplies state, not conversation scripts.
+//! Observed company setup state and durable, company-scoped user declines.
+//! Role and interview instructions live in the engine plugin's plain Markdown files.
+//! This module sends setup facts and available company notes, never conversation scripts.
 
 use crate::company::CompanyLayer;
 use crate::entity::EntityId;
@@ -188,7 +111,8 @@ impl OnboardingRecord {
 ///
 /// It is a function of two facts on disk, so it cannot drift from them — there is no third
 /// place holding a cached opinion about which of these is true.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all="snake_case")]
 pub enum OnboardingState {
     /// No central folder has been configured, so the question cannot even be asked yet. This is
     /// NOT "he has not been interviewed" — nothing has looked.
@@ -233,71 +157,18 @@ pub fn state(layer: Option<&CompanyLayer>, record: &OnboardingRecord) -> Onboard
     }
 }
 
-/// Current onboarding observations. Conversation behavior belongs in Rich's standing
-/// role and the interview skill; these facts prescribe no reply or next action.
-pub const OFFER_BLOCK: &str = "ONBOARDING — Company notes are not available in this install. \
-The interview is optional. Stopping partway is fine; 'not sure yet' is a valid answer. \
-Unknown answers remain open. Interview notes do not populate the home screen, which shows a \
-worked example.\n\n";
-
-/// The recorded decision survives company switches and restarts.
-pub const DECLINED_BLOCK: &str = "ONBOARDING — He said not now to the interview or its \
-resumption. That explicit decline is recorded. Declining does not change saved notes.\n\n";
-
-/// Saved answers exist, with interview progress still partial.
-pub const RESUME_BLOCK: &str = "ONBOARDING — This company's interview is partly complete. \
-The company notes contain the answers already saved.\n\n";
-
-/// A file exists but no usable contents are supplied to the agent.
-pub const UNUSABLE_BLOCK: &str = "ONBOARDING — Company notes exist but could not be read. \
-Their contents are unavailable in this context.\n\n";
-
-/// The onboarding contribution to a priming turn: the material, the offer, or the honest note.
-///
-/// `None` in exactly two cases — nothing has looked ([`OnboardingState::NoCentralFolder`]), and
-/// the company is described, in which case the block is the material itself. Every other state
-/// says something, because the whole subject of this module is a product that said nothing.
-pub fn priming_block(
-    entity: &EntityId,
-    layer: Option<&CompanyLayer>,
-    record: &OnboardingRecord,
-) -> Option<String> {
-    let state = state(layer, record);
-    if state == OnboardingState::NoCentralFolder { return None; }
-    let layer = layer?;
-    let path = match layer {
-        CompanyLayer::NoHome { dir } => dir.join(crate::company::COMPANY_FILENAME),
-        _ => layer.path().to_path_buf(),
-    };
-    let destination = serde_json::to_string(&path.to_string_lossy()).expect("path serializes");
-    let mut block = format!(
-        "COMPANY NOTES DESTINATION: entity={entity}; file={destination}. \
-         Bound save tool: mcp__richos_onboarding__save_company_notes. \
-         Bound decline tool: mcp__richos_onboarding__decline_onboarding. \
-         Saves are atomic and verified by reading the notes back.\n\n"
-    );
-    if let Some(material) = layer.render_for_priming(entity) { block.push_str(&material); }
-    block.push_str(match state {
-        OnboardingState::NotYet => OFFER_BLOCK,
-        OnboardingState::Declined { .. } => DECLINED_BLOCK,
-        OnboardingState::Partial => RESUME_BLOCK,
-        OnboardingState::Unusable { .. } => UNUSABLE_BLOCK,
-        OnboardingState::Described | OnboardingState::NoCentralFolder => "",
-    });
-    Some(block)
+/// Host observations about company setup. Instructions live in the plain role and skill files.
+pub fn priming_block(entity:&EntityId,layer:Option<&CompanyLayer>,record:&OnboardingRecord)->Option<String> {
+    let observed=state(layer,record);
+    if observed==OnboardingState::NoCentralFolder {return None}
+    let layer=layer?;
+    let path=match layer {CompanyLayer::NoHome {dir}=>dir.join(crate::company::COMPANY_FILENAME),_=>layer.path().to_path_buf()};
+    Some(serde_json::json!({"entity_id":entity,"company_notes_path":path,"onboarding":observed,
+        "company_notes":layer.render_for_priming(entity).and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok())}).to_string())
 }
 
-/// The company's name, exactly as he typed it, for the priming turn.
-///
-/// The CEO, 2026-10-13: a name with a word in capitals was written back re-capitalized,
-/// because nothing told Rich the name and the id is all lower case.
-pub fn company_name_block(entity: &EntityId, name: &str) -> String {
-    let quoted = serde_json::to_string(name).expect("a string serializes");
-    format!(
-        "\n\nCOMPANY NAME: this company is called {quoted}. Whenever you write or say its name, write \
-         it exactly so, letter for letter, with exactly this capitalization. Never re-capitalize \
-         it and never rebuild it from the id {entity}.\n\n"
-    )
+pub fn company_name_block(entity:&EntityId,name:&str)->String {
+    serde_json::json!({"entity_id":entity,"company_name":name}).to_string()
 }
 
 /// One line for the boot log, naming what this launch will actually do about onboarding.
@@ -370,7 +241,7 @@ mod tests {
         let central = tmp("notyet");
         assert_eq!(state(Some(&layer_for(&central)), &OnboardingRecord::default()), OnboardingState::NotYet);
         let block = priming_block(&entity(), Some(&layer_for(&central)), &OnboardingRecord::default()).unwrap();
-        assert!(block.contains("Company notes are not available in this install"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&block).unwrap()["onboarding"],"not_yet");
     }
 
     #[test]
@@ -396,10 +267,10 @@ mod tests {
     fn the_offer_retires_itself_the_moment_the_file_has_substance() {
         let central = tmp("retire");
         let record = OnboardingRecord::default();
-        assert!(priming_block(&entity(), Some(&layer_for(&central)), &record).unwrap().contains("ONBOARDING —"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&priming_block(&entity(), Some(&layer_for(&central)), &record).unwrap()).unwrap()["onboarding"],"not_yet");
         write_company(&central, "We sell rope to harbors.\n");
         let after = priming_block(&entity(), Some(&layer_for(&central)), &record).unwrap();
-        assert!(!after.contains("ONBOARDING —"), "{after}");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&after).unwrap()["onboarding"],"described");
     }
 
     // -----------------------------------------------------------------------
@@ -417,9 +288,7 @@ mod tests {
             OnboardingState::Declined { at_millis: 1_757_000_000_000 }
         );
         let block = priming_block(&entity(), Some(&layer_for(&central)), &record).unwrap();
-        assert!(block.contains("said not now"), "{block}");
-        assert!(block.contains("explicit decline is recorded"), "{block}");
-        assert!(!block.contains("offer, once"), "a declined company is not re-offered: {block}");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&block).unwrap()["onboarding"]["declined"]["at_millis"],1_757_000_000_000_u64);
     }
 
     #[test]
@@ -451,41 +320,17 @@ mod tests {
     // the CEO's constraint, pinned in the text that is actually sent
     // -----------------------------------------------------------------------
 
-    /// Runtime state is information, not a scripted conversation or work request.
     #[test]
-    fn the_offer_reports_missing_notes_without_dictating_a_reply() {
-        assert!(OFFER_BLOCK.contains("Company notes are not available in this install"));
-        for instruction in ["Say this sentence", "word for word", "Write it down", "hire them"] {
-            assert!(!OFFER_BLOCK.contains(instruction));
-        }
-    }
-
-    /// The offer must never instruct a spawn. Cells B2/B3 measured that an attempt fails loudly
-    /// today, but that is the model's behavior and this is the structure: a run that never asks
-    /// for Dean cannot get a wrong answer about Dean.
-    #[test]
-    fn the_offer_instructs_no_spawn_of_anyone() {
-        let lowered = OFFER_BLOCK.to_lowercase();
-        for word in ["dean", "subagent", "spawn", "task tool", "teammate"] {
-            assert!(!lowered.contains(word), "the offer must not reach for staffing: {word}");
-        }
-    }
-
-    /// Onboarding §4: deferral has to be made visibly safe, unprompted, because alone nobody
-    /// reminds him.
-    #[test]
-    fn the_offer_makes_stopping_and_not_knowing_visibly_safe() {
-        assert!(OFFER_BLOCK.contains("Stopping partway is fine"));
-        assert!(OFFER_BLOCK.contains("not sure yet"));
-        assert!(OFFER_BLOCK.contains("Unknown answers remain open"));
-    }
-
-    /// Onboarding §6: the demo stays, and the interview must not be sold on the promise that
-    /// answering questions makes his own data appear.
-    #[test]
-    fn the_offer_refuses_to_promise_his_data_on_the_home_screen() {
-        assert!(OFFER_BLOCK.contains("Interview notes do not populate the home screen"));
-        assert!(OFFER_BLOCK.contains("worked example"));
+    fn onboarding_context_contains_observations_and_the_plain_skill_carries_conversation_guidance() {
+        let entity=EntityId::parse("fixture").unwrap();
+        let data=priming_block(&entity,Some(&CompanyLayer::Absent {path:std::path::PathBuf::from("/fixture/company.md")}),&OnboardingRecord::default()).unwrap();
+        let data:serde_json::Value=serde_json::from_str(&data).unwrap();
+        assert_eq!(data["onboarding"],"not_yet");
+        assert_eq!(data["company_notes_path"],"/fixture/company.md");
+        assert!(data["company_notes"].is_null());
+        let skill=std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app/skills/bootstrap-interview/SKILL.md")).unwrap();
+        assert!(skill.contains("Stopping partway is fine"));
+        assert!(skill.contains("not sure yet"));
     }
 
     // -----------------------------------------------------------------------
@@ -500,7 +345,7 @@ mod tests {
         assert!(matches!(state(Some(&layer_for(&central)), &record), OnboardingState::Unusable { .. }));
         let block = priming_block(&entity(), Some(&layer_for(&central)), &record).unwrap();
         assert!(!block.contains("SECRET-MARKER"), "an unusable file's contents never go in: {block}");
-        assert!(block.contains("could not be read"), "{block}");
+        assert!(serde_json::from_str::<serde_json::Value>(&block).unwrap()["onboarding"]["unusable"]["why"].is_string());
     }
 
     /// An unusable file must NOT be treated as an un-interviewed company: offering the interview
@@ -529,10 +374,8 @@ mod tests {
     /// changed nothing. A test that breaks when the paragraph is reflowed teaches people to
     /// stop reflowing paragraphs, and then to stop trusting the test.
     fn interview_skill() -> String {
-        let body = crate::skills::SKILLS
-            .iter()
-            .find(|(n, _)| *n == "bootstrap-interview")
-            .map(|(_, body)| *body)
+        let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app");
+        let body = std::fs::read_to_string(crate::skills::skill_path(&plugin, "bootstrap-interview"))
             .expect("the interview the offer names must be a shipped skill");
         body.split_whitespace().collect::<Vec<_>>().join(" ")
     }

@@ -335,7 +335,8 @@ def execute(state_root, request):
     # and on a work seat these raise a revision conflict rather than refusing
     # cleanly. The refusal is here, in the engine, as well as in the app's per-lease
     # MCP config: an allow-list on tool NAMES cannot see whose seat is calling.
-    if command in CONVERSATION_ONLY and not is_ceo_row(context):
+    if command in CONVERSATION_ONLY and not (is_ceo_row(context) or (
+            context["audience"] == "rich" and context["person_id"] == "stu-thread:" + context["thread_id"])):
         raise ScopeError("checkpoint, receipt and brief belong to the conversation's own seat")
     if command in HOST_ONLY and not is_ceo_row(context):
         raise ScopeError("seat reconciliation belongs to the conversation's own seat")

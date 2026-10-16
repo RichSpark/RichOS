@@ -938,133 +938,25 @@ pub fn screen_words(content: &str) -> String {
     }
 }
 
-/// What Rich has to look at, and the order to check what the user said against it.
-fn evidence(screen: &Screen, picture: bool) -> String {
-    let words = screen_words(&screen.content);
-    let mut out = String::new();
-    if !words.is_empty() {
-        out.push_str(&format!(
-            "What was on that screen when they pressed the button, its visible words top to bottom. They are \
-private: check against them, and do not copy names from them into the report.\n<<<\n{words}\n>>>\n\n"
-        ));
-    }
-    if picture {
-        out.push_str(
-            "A picture of the RichOS window as it was when they pressed the button is attached. It is private \
-too: describe what it shows only in words a stranger may read.\n\n",
-        );
-    }
-    if !out.is_empty() {
-        out.push_str(
-            "CHECK what the user said against the screen before you write: say in the report what the screen \
-shows that bears it out (what is cut off, missing or wrong, and what a control or a count reads), and do not \
-claim anything the screen does not show.\n\n",
-        );
-    }
-    out
-}
 
 /// The one prompt Rich writes the report from. `picture` says a picture of the window goes with
 /// it ([`writer_input`]).
 pub fn writer_prompt(answer: &str, screen: &Screen, version: &str, terms: &[PrivateTerm], picture: bool) -> String {
-    format!(
-        "You are Rich, the user's assistant inside the RichOS desktop app. The user pressed \"Bust a bug\" \
-and told you what went wrong. Write it up as a bug report for the RichOS developers. After the user reads \
-and approves it, it is filed as a GitHub issue that anyone can read.\n\n\
-What the user said, in their own words:\n<<<\n{answer}\n>>>\n\n\
-Where they were when they pressed the button:\n{screen}\n\n\
-{evidence}\
-Private words this user has: {terms}. Write the report with every private detail of this user's case \
-already left out: {private_details}. Write each as the stand-in for its kind, exactly: {stand_ins}.\n\n\
-Write in plain American English that a non-technical reader follows. Say what the user saw and did, not \
-guesses about the code. Give steps to see it only as far as the user's words and the screen support them.\n\n\
-Answer with ONLY a JSON object, no other text, in exactly this shape:\n\
-{{\"title\": \"...\", \"what_happened\": \"...\", \"where\": \"...\", \"steps\": [\"...\"], \"expected\": \"...\", \
-\"checked\": \"...\", \"private\": [{{\"text\": \"...\", \"kind\": \"person\"}}]}}\n\
-- title: one line under 80 characters that says what is wrong.\n\
-- what_happened: one or two short paragraphs; a blank line between paragraphs.\n\
-- where: the place in RichOS, in words a reader of the public issue understands.\n\
-- steps: the shortest steps to see it, or [] when the user's words do not support any.\n\
-- expected: what the user expected instead, or \"\" when it is not clear.\n\
-- checked: under 60 characters, starting with a verb, what you saw on the screen that bears the user out \
-(\"Saw the names cut off at 135% text size\"), or \"\" when the screen does not show it or you were not given it.\n\
-- private: every name of a person, company, conversation, product, client or folder, and anything else \
-private, that is still in what you wrote, copied exactly, with kind one of person, company, conversation, \
-folder, file, email, other. [] when there is none.",
-        answer = answer.trim(),
-        screen = screen_lines(screen, version),
-        evidence = evidence(screen, picture),
-        terms = terms_line(terms),
-        private_details = PRIVATE_DETAILS,
-        stand_ins = stand_ins_line(),
-    )
+    writer_prompt_for(Post::Bug, answer, screen, version, terms, picture)
+
 }
 
 /// The one prompt Rich writes a bug report or a feature idea from. A bug report's is
 /// [`writer_prompt`]; an idea's asks for round 24's sections (*The idea*, *Why it would help*,
 /// *What the user pictured*, *Where*), with the same rules for what is private.
 pub fn writer_prompt_for(post: Post, answer: &str, screen: &Screen, version: &str, terms: &[PrivateTerm], picture: bool) -> String {
-    if post == Post::Bug {
-        return writer_prompt(answer, screen, version, terms, picture);
-    }
-    format!(
-        "You are Rich, the user's assistant inside the RichOS desktop app. The user pressed \"Request a feature\" \
-and told you something they would like RichOS to do. Write it up as a feature idea for the RichOS developers. \
-After the user reads and approves it, it is posted in RichOS's GitHub Discussions, under Ideas, where anyone can \
-read it. It is an idea, not a bug report: never call it an issue or a bug.\n\n\
-What the user said, in their own words:\n<<<\n{answer}\n>>>\n\n\
-Where they were when they pressed the button (it may or may not be about this screen):\n{screen}\n\n\
-{evidence}\
-Private words this user has: {terms}. Write the idea with every private detail of this user's case \
-already left out: {private_details}. Write each as the stand-in for its kind, exactly: {stand_ins}.\n\n\
-Write in plain American English that a non-technical reader follows, about \"the user\", in the third person. \
-Say what the user would like RichOS to do and why, in their terms; do not design the code.\n\n\
-Answer with ONLY a JSON object, no other text, in exactly this shape:\n\
-{{\"title\": \"...\", \"idea\": \"...\", \"why\": \"...\", \"pictured\": [\"...\"], \"where\": \"...\", \
-\"checked\": \"...\", \"private\": [{{\"text\": \"...\", \"kind\": \"person\"}}]}}\n\
-- title: one line under 80 characters that names the idea.\n\
-- idea: one or two short paragraphs saying what the user would like RichOS to do; a blank line between paragraphs.\n\
-- why: why it would help the user, or \"\" when they did not say.\n\
-- pictured: the points of how the user pictured it working, one short sentence each, or [] when they did not say.\n\
-- where: the place in RichOS it is about, in words a reader of the public post understands, or \"\" when it is \
-not about one place.\n\
-- checked: under 60 characters, starting with a verb, what you saw on the screen that bears on the idea \
-(\"Saw that Corrections has no undo\"), or \"\" when the screen does not show it or you were not given it.\n\
-- private: every name of a person, company, conversation, product, client or folder, and anything else \
-private, that is still in what you wrote, copied exactly, with kind one of person, company, conversation, \
-folder, file, email, other. [] when there is none.",
-        answer = answer.trim(),
-        screen = screen_lines(screen, version),
-        evidence = idea_evidence(screen, picture),
-        terms = terms_line(terms),
-        private_details = PRIVATE_DETAILS,
-        stand_ins = stand_ins_line(),
-    )
-}
+    let schema = match post {
+        Post::Bug => serde_json::json!({"title":"string","what_happened":"string","where":"string","steps":["string"],"expected":"string","checked":"string","private":[{"text":"string","kind":"person|company|conversation|folder|file|email|other"}]}),
+        Post::Idea => serde_json::json!({"title":"string","idea":"string","why":"string","pictured":["string"],"where":"string","checked":"string","private":[{"text":"string","kind":"person|company|conversation|folder|file|email|other"}]}),
+    };
+    serde_json::json!({"event":"user_requested_public_draft","kind":post.what(),"destination":post.goes(),"user_message":answer.trim(),"screen":screen_lines(screen,version),"screen_content":screen_words(&screen.content),"picture_attached":picture,"private_terms":terms_line(terms),"privacy_placeholders":stand_ins_line(),"output_schema":schema}).to_string()
 
-/// What Rich has to look at for an idea: the same screen and picture as for a bug report
-/// ([`evidence`]), to check the idea against rather than a fault.
-fn idea_evidence(screen: &Screen, picture: bool) -> String {
-    let words = screen_words(&screen.content);
-    let mut out = String::new();
-    if !words.is_empty() {
-        out.push_str(&format!(
-            "What was on that screen when they pressed the button, its visible words top to bottom. They are \
-private: use them to understand the idea, and do not copy names from them into the post.\n<<<\n{words}\n>>>\n\n"
-        ));
-    }
-    if picture {
-        out.push_str(
-            "A picture of the RichOS window as it was when they pressed the button is attached. It is private \
-too: describe what it shows only in words a stranger may read.\n\n",
-        );
-    }
-    out
 }
-
-/// What every one of Rich's prompts calls a private detail of this user's case.
-const PRIVATE_DETAILS: &str = "names of people, companies, clients, products, projects, conversations and folders, \
-file paths, email addresses, and anything else that is theirs and private";
 
 /// Each kind Rich names a private word with, and the stand-in written in its place
 /// ([`Kind::stand_in`]), as his prompts list them: "person [a person], company [a company], …".
@@ -1124,32 +1016,8 @@ pub fn change_prompt(sheet: &Sheet, said: &str) -> String {
 
 /// [`change_prompt`] for a bug report or a feature idea: the same answer, about the post it is.
 pub fn change_prompt_for(post: Post, sheet: &Sheet, said: &str) -> String {
-    let headings: Vec<&str> = sheet.sections.iter().map(|s| s.heading.as_str()).collect();
-    let (sent, thing) = match post {
-        Post::Bug => ("sent", "report"),
-        Post::Idea => ("posted", "post"),
-    };
-    format!(
-        "You are Rich, inside the RichOS desktop app. You wrote this {what} and the user has not {sent} it \
-yet. It is public once {sent}; words in square brackets stand in for private details and stay as they are.\n\n\
-The {thing}:\n<<<\n# {title}\n\n{body}>>>\n\n\
-The user just told you what to change:\n<<<\n{said}\n>>>\n\n\
-Answer with ONLY a JSON object, no other text: {{\"section\": \"...\", \"add\": \"...\", \"private\": []}}\n\
-- section: the heading the change belongs under, exactly one of: {headings}.\n\
-- add: the sentence or two to add there, in plain American English, written about \"the user\" the way \
-the {thing} is, with every private detail of this user's case ({private_details}) already left out, each \
-written as the stand-in for its kind, exactly: {stand_ins}.\n\
-- private: every name of a person, company, conversation, product, client or folder, and anything else \
-private, that is in what you add, copied exactly, each as {{\"text\": \"...\", \"kind\": \"person\"}} with kind \
-one of person, company, conversation, folder, file, email, other. [] when there is none.",
-        what = post.what(),
-        title = sheet.title,
-        body = issue_body(sheet),
-        said = said.trim(),
-        headings = headings.join(", "),
-        private_details = PRIVATE_DETAILS,
-        stand_ins = stand_ins_line(),
-    )
+    serde_json::json!({"event":"user_requested_draft_change","kind":post.what(),"destination":post.goes(),"draft":{"title":sheet.title,"body":issue_body(sheet)},"user_message":said.trim(),"section_headings":sheet.sections.iter().map(|section|section.heading.as_str()).collect::<Vec<_>>(),"output_schema":{"section":"string","add":"string","private":[{"text":"string","kind":"person|company|conversation|folder|file|email|other"}]}}).to_string()
+
 }
 
 /// The `result` text out of `claude --print`'s answer: the last `"type": "result"` line of its
@@ -1375,42 +1243,8 @@ pub fn finish_prompt(sheet: &Sheet, before: &Sheet, known: &[PrivateTerm]) -> St
 
 /// [`finish_prompt`] for a bug report or a feature idea: the same last pass, about the post it is.
 pub fn finish_prompt_for(post: Post, sheet: &Sheet, before: &Sheet, known: &[PrivateTerm]) -> String {
-    let (thing, filed) = match post {
-        Post::Bug => ("report", "filed"),
-        Post::Idea => ("post", "posted"),
-    };
-    format!(
-        "You are Rich, inside the RichOS desktop app. Below is a {what} the user will read and approve before \
-it is {goes}. The app's automatic check for private details has already \
-been over it and wrote what it recognized as stand-ins in square brackets, but it cannot be relied on: it does \
-not know this user, and it hides ordinary words too. You are the last check, and you have the final say. Nothing \
-changes your words after you: the user sees them, and they are {filed} word for word.\n\n\
-The {thing}, after the automatic check:\n<<<\n{report}\n>>>\n\n\
-The same {thing} as it was before the automatic check:\n<<<\n{before}\n>>>\n\n\
-Private words this user has: {terms}.\n\n\
-Start from the {thing} after the automatic check. Where it put a stand-in over words that are not private in this \
-user's case (an ordinary phrase, the name of a button, words with a slash in them), put those words back exactly \
-as they were before the check. Keep every stand-in that hides something private, and every stand-in that was \
-already in the {thing} before the check. Clean up every private detail of this user's case that is still in it: \
-{private_details}. Write each as the stand-in for its kind, exactly: {stand_ins}. Change nothing else: every \
-other character stays exactly as it is, and no section, paragraph or step is added or taken away.\n\n\
-Answer with ONLY a JSON object, no other text, in exactly this shape:\n\
-{{\"title\": \"...\", \"sections\": [{{\"heading\": \"...\", \"paragraphs\": [\"...\"], \"steps\": [\"...\"]}}], \
-\"private\": [{{\"text\": \"...\", \"kind\": \"person\"}}]}}\n\
-- title and sections: the {thing} after the automatic check, with what you put back and what you cleaned up, \
-its sections in the same order, each with its heading, its paragraphs and its steps.\n\
-- private: every private detail you replaced now, copied exactly as it was written, with kind one of person, \
-company, conversation, folder, file, email, other. [] when there was none.",
-        what = post.what(),
-        goes = post.goes(),
-        thing = thing,
-        filed = filed,
-        report = report_json(sheet),
-        before = report_json(before),
-        terms = terms_line(known),
-        private_details = PRIVATE_DETAILS,
-        stand_ins = stand_ins_line(),
-    )
+    serde_json::json!({"event":"public_draft_privacy_check","kind":post.what(),"destination":post.goes(),"draft":serde_json::from_str::<serde_json::Value>(&report_json(sheet)).expect("serialized draft"),"before_automatic_check":serde_json::from_str::<serde_json::Value>(&report_json(before)).expect("serialized draft"),"private_terms":terms_line(known),"privacy_placeholders":stand_ins_line(),"output_schema":{"title":"string","sections":[{"heading":"string","paragraphs":["string"],"steps":["string"]}],"private":[{"text":"string","kind":"person|company|conversation|folder|file|email|other"}]}}).to_string()
+
 }
 
 /// **THE WORDS OF ONE LIST OF A SECTION IN RICH'S ANSWER, OR NO ANSWER**: `key` (`paragraphs` or

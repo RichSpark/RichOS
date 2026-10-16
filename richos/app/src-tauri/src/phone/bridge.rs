@@ -174,30 +174,7 @@ impl PhoneBridge {
         let record = write_phone_words(&state.control, &thread, entity, text, channel, client_id, voice_note)?;
         let intake_id = record.id();
 
-        // THE DRAIN RUNS ON ITS OWN THREAD, because it runs the turn. A phone that waited for the
-        // reply before its POST returned would be a phone that times out on every question worth
-        // asking.
-        let app = self.app.clone();
-        let reply_thread=thread.clone();
-        std::thread::Builder::new()
-            .name("richos-phone-drain".to_string())
-            .spawn(move || {
-                let state = app.state::<AppState>();
-                // The turn, and then its boundary: work he gave from the phone starts the way
-                // typed work does (`crate::adopt_at_the_turn_boundary`, CEO ruling §88).
-                let outcome = crate::drain_the_phone(&state.spine, &state.work);
-                if let Err(e) = outcome {
-                    eprintln!("[richos] the phone's message could not be drained: {e}");
-                }
-                // The lock is free again here, so this is the cheapest correct moment both to
-                // make the cached view current and to push the reply that just finished. Neither
-                // can be done from inside the turn: one needs the lock, and the other needs to
-                // await, which §13 says the live observer must never do.
-                let runtime = app.state::<std::sync::Arc<super::PhoneRuntime>>();
-                runtime.bridge_refresh();
-                runtime.push_last_reply(&reply_thread);
-            })
-            .map_err(|e| format!("could not start the drain: {e}"))?;
+        crate::dispatch_incoming_messages(&self.app, &thread)?;
 
         Ok(Accepted {
             // The intake id, not a turn id: there is no turn yet, and inventing one here would be

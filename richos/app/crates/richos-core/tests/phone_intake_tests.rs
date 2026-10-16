@@ -138,6 +138,7 @@ fn a_channel_record_carries_no_steering_turn_id_because_there_is_no_turn_to_attr
         channel: "phone".into(),
         client_id: None,
         voice_note: false,
+        source: None,
     };
     let json = serde_json::to_value(&record).unwrap();
     assert_eq!(json.get("record").unwrap().as_str().unwrap(), "channel");

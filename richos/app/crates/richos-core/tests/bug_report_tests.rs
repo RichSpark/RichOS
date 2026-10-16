@@ -63,10 +63,8 @@ const VERSION: &str = "RichOS 1.2.0, nightly 45 · macOS 15.6 · Apple silicon";
 // ---- a fake Rich for his last pass (the CEO's order, §115: the scanner first, Rich last) ----
 
 /// The report Rich is given in his last pass ([`finish_prompt`]), as the scanner left it.
-fn report_in(prompt: &str) -> serde_json::Value {
-    let start = prompt.find("<<<\n").expect("the report") + 4;
-    let end = start + prompt[start..].find("\n>>>").expect("the report's end");
-    serde_json::from_str(&prompt[start..end]).expect("the report as JSON")
+fn report_in(prompt:&str)->serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(prompt).unwrap()["draft"].clone()
 }
 
 /// A Rich who, last, finds nothing more to clean up: his words are the scanner's.
@@ -550,15 +548,16 @@ fn rich_is_given_what_was_on_the_screen_and_a_picture_of_the_window_to_check_aga
     let mut on_screen = screen();
     on_screen.content = "Acme deal\n  what's   the status on Acme?\nNames cut off: Design RichOS memo…".into();
     let prompt = writer_prompt("the names get cut off", &on_screen, VERSION, &terms(), true);
-    assert!(prompt.contains("visible words top to bottom"), "{prompt}");
+    let data:serde_json::Value=serde_json::from_str(&prompt).unwrap();
+    assert!(data["screen_content"].is_string());
     assert!(prompt.contains("what's the status on Acme?"), "the screen's words are not in the prompt: {prompt}");
     assert!(prompt.contains("Names cut off: Design RichOS memo…"));
-    assert!(prompt.contains("A picture of the RichOS window"), "{prompt}");
-    assert!(prompt.contains("CHECK what the user said against the screen"), "{prompt}");
+    assert_eq!(data["picture_attached"],true);
+    assert_eq!(data["user_message"],"the names get cut off");
     assert!(prompt.contains("\"checked\""), "{prompt}");
     // Without either, nothing claims there is something to look at.
     let blind = writer_prompt("the names get cut off", &screen(), VERSION, &terms(), false);
-    assert!(!blind.contains("visible words") && !blind.contains("picture") && !blind.contains("CHECK"), "{blind}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&blind).unwrap()["picture_attached"],false);
 
     // The one line on standard input: the picture as an image block, then the prompt.
     let picture = Picture { media_type: "image/jpeg".into(), base64: "/9j/4AAQ".into() };
@@ -1338,23 +1337,17 @@ fn sent_body(sheet: &Sheet, check: &Check) -> String {
 
 #[test]
 fn every_prompt_asks_rich_for_the_report_with_this_users_private_details_already_left_out() {
-    // On a1d158b35 his write-up was asked to "leave names out where you can", with the scanner to
-    // replace "any that remain" after him, and there was no last pass of his at all.
-    let written = writer_prompt("names get cut off", &screen(), VERSION, &terms(), false);
-    assert!(written.contains("Write the report with every private detail of this user's case already left out"), "{written}");
-    assert!(written.contains("person [a person], company [a company], conversation [a conversation], folder [a folder], file [a file on this Mac], email [an email address], other [a private word]"), "{written}");
-    assert!(written.contains("Acme deal"), "the names RichOS holds are not given to him: {written}");
-    let card = sheet("Names are cut off");
-    let change = change_prompt(&card, "say Jane saw it too");
-    assert!(change.contains("already left out") && change.contains("person [a person]"), "{change}");
-    // His last pass: the scanner's output, and he is told he is the last check.
-    // Since review rv-20261009T204435Z-593f4791-c2ff finding 1 he is given the report as it was
-    // before the scanner too, and has the final say: he puts back what is not private.
-    let last = finish_prompt(&card, &card, &terms());
-    for said in ["You are the last check", "you have the final say", "Nothing changes your words after you", "it cannot be relied on", "as it was before the automatic check", "put those words back exactly as they were before the check", "Keep every stand-in that hides something private", "Change nothing else", "Acme deal", "\"private\""] {
-        assert!(last.contains(said), "{said:?} is not in the last pass's prompt: {last}");
-    }
-    assert_eq!(report_in(&last)["sections"][0]["paragraphs"][0], "It broke.");
+    let written:serde_json::Value=serde_json::from_str(&writer_prompt("names get cut off",&screen(),VERSION,&terms(),false)).unwrap();
+    assert_eq!(written["event"],"user_requested_public_draft");
+    assert!(written["private_terms"].as_str().unwrap().contains("Acme deal"));
+    assert!(written["privacy_placeholders"].as_str().unwrap().contains("person [a person]"));
+    let card=sheet("Names are cut off");
+    let last:serde_json::Value=serde_json::from_str(&finish_prompt(&card,&card,&terms())).unwrap();
+    assert_eq!(last["event"],"public_draft_privacy_check");
+    assert!(last["output_schema"]["private"].is_array());
+    assert_eq!(last["draft"],last["before_automatic_check"]);
+    assert_eq!(report_in(&last.to_string())["sections"][0]["paragraphs"][0],"It broke.");
+
 }
 
 #[test]
@@ -1771,8 +1764,9 @@ fn every_card_is_word_for_word_the_issue_that_is_posted() {
 // ---- the review of 593f4791b (rv-20261009T204435Z-593f4791-c2ff), fixture `core_probe.rs` ----
 
 /// Every `<<< … >>>` block of a prompt that reads as JSON, in the order they are written.
-fn json_blocks(prompt: &str) -> Vec<serde_json::Value> {
-    prompt.split("<<<\n").skip(1).filter_map(|block| block.split("\n>>>").next()).filter_map(|block| serde_json::from_str(block).ok()).collect()
+fn json_blocks(prompt:&str)->Vec<serde_json::Value> {
+    let data:serde_json::Value=serde_json::from_str(prompt).unwrap();
+    vec![data["draft"].clone(),data["before_automatic_check"].clone()]
 }
 
 /// A Rich who, last, finds that nothing the scanner hid is private in this user's case: he answers

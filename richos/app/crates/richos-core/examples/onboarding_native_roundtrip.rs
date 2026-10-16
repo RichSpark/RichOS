@@ -22,7 +22,7 @@ fn open(root: &Path, executable: &Path) -> Spine {
     spine.set_onboarding_record(root.join("config/onboarding.json"));
     spine.ensure_active_thread_in(&EntityId::parse("northstar-fixture").unwrap()).unwrap();
     let doctrine = doctrine::ensure_rendered(&config, &DoctrineIdentity::new(Some("Morgan"))).unwrap();
-    let skills = richos_core::skills::ensure_rendered(&config).unwrap();
+    let skills = richos_core::skills::ensure_rendered(&config, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
     let start = Instant::now();
     spine.attach_lease(Box::new(NativeCognition::start_with_onboarding(
         &resolve_claude_bin(), &engine, &doctrine, &skills, executable, None).unwrap()));
@@ -56,7 +56,7 @@ fn ask_with_assignment(spine: &mut Spine, text: &str, _expects_work: bool, expec
     let handled = richos_core::onboarding_tools::handled_in_turn(
         spine.machinery_journal().unwrap().read_thread(&result.thread_id), &turn);
     if expects_tool { assert!(handled, "the approved action must happen in this visible turn, not hidden priming"); }
-    let scope = spine.onboarding_tool_scope(&spine.active_binding().unwrap()).unwrap();
+    let scope = spine.onboarding_tool_scope(spine.active_binding().unwrap()).unwrap();
     let grants = std::fs::read_dir(scope.record_path.parent().unwrap().join("onboarding-scopes")).unwrap();
     let mut grants_checked = 0;
     for entry in grants {
@@ -67,7 +67,7 @@ fn ask_with_assignment(spine: &mut Spine, text: &str, _expects_work: bool, expec
     assert!(grants_checked > 0, "no native scope grant checked");
     reply
 }
-fn state(spine: &Spine) -> OnboardingState { spine.onboarding_state(&spine.active_binding().unwrap()) }
+fn state(spine: &Spine) -> OnboardingState { spine.onboarding_state(spine.active_binding().unwrap()) }
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     assert_eq!(args.len(), 2, "scratch directory and desktop executable required");

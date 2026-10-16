@@ -170,7 +170,6 @@ pub fn start(app: AppHandle) {
                 }
                 // Only this worker waits on a front-desk turn. Team answers, display
                 // updates and phone awareness continue on their own event channels.
-                let _user_priority = state.control.prioritize_user_input();
                 let Ok(mut spine) = state.spine.lock() else {
                     continue;
                 };

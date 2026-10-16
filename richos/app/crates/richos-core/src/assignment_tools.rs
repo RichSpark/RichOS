@@ -293,7 +293,7 @@ struct RecordArguments {
 pub fn tools() -> Value {
     json!({"tools":[
         {"name":RECORD_TOOL_NAME,
-         "description":"Record Rich's handoff to Stu durably, including its original user-request reference and an open obligation. Returns registration facts without waiting for execution. Registered means accepted for background work, not started or completed.",
+         "description":"Create an operational work record with its original user-request reference and an open obligation. Returns registration facts without waiting for execution. Registration is distinct from peer messaging, execution and completion.",
          "inputSchema":{"type":"object","properties":{
              "assignment":{"type":"string","minLength":1,"maxLength":4096,"description":"Your complete handoff to Stu: outcome or question, relevant context, constraints and decisions. Preserved in full; a shortened display title is stored separately."},
              "repositories":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":4096},"description":"Absolute paths of the repositories this assignment touches, if he named any. Omit when he did not. Only a repository connected to this company is kept; any other path is left out of the record."},

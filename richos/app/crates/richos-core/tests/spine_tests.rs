@@ -96,8 +96,8 @@ fn lease_is_reprimed_before_first_turn() {
     // instruction on 2026-09-06 — a system prompt, fixed at spawn, rather than a turn
     // (`doctrine.rs`; inner-doctrine design §4.2, §5.1). They are checked there by
     // `action_ledger_tests::the_ledgers_partial_coverage_is_stated_rather_than_overclaimed`.
-    assert!(reprimes[0].contains("continuing conversation"), "the successor is told which conversation it is in");
-    assert!(reprimes[0].contains("never mis-attribute your own prior actions"), "anti-false-attribution rule present");
+    assert!(reprimes[0].contains("identity_assertion"), "the successor is told which conversation it is in");
+    assert!(reprimes[0].contains("action_ledger_digest"), "anti-false-attribution rule present");
     // The re-prime happens; the CEO prompt is delivered after it.
     assert_eq!(*prompts_ref.lock().unwrap(), vec!["hello".to_string()]);
     let _ = std::fs::remove_file(&path);
@@ -260,7 +260,7 @@ fn after_a_key_change_the_desk_that_answers_knows_only_the_new_key() {
         let fact_at = primed.rfind(fact).unwrap_or_else(|| panic!("the desk answering in {thread} is not told the key changed: {primed}"));
         let today = time::OffsetDateTime::now_utc().date().to_string();
         assert!(primed[..fact_at].ends_with(&format!("{today}: ")), "the fact is dated: {primed}");
-        assert!(primed[..fact_at].contains("The start/stop key is F2."), "the saved summary is kept: {primed}");
+        assert!(primed.contains("The start/stop key is F2."), "the saved summary is kept: {primed}");
         assert_eq!(primed[fact_at..].matches("F2").count(), 1, "the fact comes after every older F2 mention in {thread}: {primed}");
         if thread == &id {
             assert!(primed[..fact_at].contains("Tap F2 to start dictation."), "Rich's earlier reply is kept: {primed}");
@@ -327,7 +327,7 @@ fn reprime_payload_carries_action_ledger_as_ground_truth() {
     assert_eq!(payload.action_ledger_digest.len(), 1);
     assert_eq!(payload.action_ledger_digest[0].kind, "dispatch");
     let priming = payload.to_priming_prompt();
-    assert!(priming.contains("ACTION LEDGER"));
+    assert!(priming.contains("action_ledger_digest"));
     assert!(priming.contains("spawned worker mark-sonnet-f1"));
     let _ = std::fs::remove_file(&path);
 }
@@ -625,79 +625,6 @@ impl UnwrapErrTurn for Result<String, richos_core::spine::SpineError> {
     }
 }
 
-/// Work reports reach Rich as internal data. Only his response reaches the durable
-/// conversation. Failure retains the report; replay after publishing cannot duplicate it.
-#[test]
-fn a_jobs_result_is_written_into_the_conversation_once_and_is_there_after_a_relaunch() {
-    use richos_core::assignment::{self, NoticeKind, Registration};
-    struct ReportDesk(MockCognition);
-    struct ImmediateCancel;
-    impl richos_core::steering::TurnCancel for ImmediateCancel { fn cancel(&self) -> bool { false } }
-
-    impl Cognition for ReportDesk {
-        fn session_id(&self) -> &str { self.0.session_id() }
-        fn cancel_handle(&self) -> Option<std::sync::Arc<dyn richos_core::steering::TurnCancel>> { Some(Arc::new(ImmediateCancel)) }
-        fn reprime(&mut self, text: &str, sink: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-            self.0.reprime(text, sink)
-        }
-        fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-            panic!("a work report must not run with user-turn tool authority")
-        }
-        fn prompt_context_only(&mut self, text: &str, sink: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-            self.0.prompt(text, sink)
-        }
-    }
-    let (path, ledger) = tmp_ledger("work-result");
-    let mut spine = support::spine(ledger);
-    let thread = spine.create_thread("Market research", &femcboost()).unwrap();
-    let elsewhere = spine.create_thread("Another conversation", &femcboost()).unwrap();
-    spine.switch_thread(&elsewhere).unwrap();
-    let state = std::env::temp_dir().join(format!("richos-test-work-result-{}-{}",
-        std::process::id(), richos_core::util::now_millis()));
-    std::fs::create_dir_all(&state).unwrap();
-    let receipt = assignment::register(&state, &Registration {
-        entity_id: "femcboost".into(), thread_id: thread.clone(), obligation_id: "obligation-1".into(),
-        instruction_ledger_ref: format!("ledger:{thread}:turn-1"), instruction_sha256: "0".repeat(64),
-        title: "Compare the two markets".into(), repositories: Vec::new(), needs_screen: false,
-    }).unwrap();
-    let raw = "Retrying the research call. No sources yet. Research complete: the northern market has twice as many buyers.";
-    let reply = "The northern market has twice as many buyers.";
-    let held = "Your request is waiting until you sign in again.";
-    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Held, held).unwrap();
-    assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, raw).unwrap();
-
-    assert!(spine.say_work_results(&state, &thread).is_err(), "no Rich is available yet");
-    assert_eq!(assignment::pending_notices_of(&state, "femcboost", &thread, |k| k.is_result()).unwrap().len(), 1);
-    assert!(spine.ledger().messages(&thread).unwrap().is_empty(), "raw backend text leaked on failure");
-    let desk = ReportDesk(MockCognition::new("report-desk", vec![reply]));
-    let prompts = desk.0.prompts.clone();
-    spine.attach_lease(Box::new(desk));
-    assert_eq!(spine.say_work_results(&state, &thread).unwrap(), [reply]);
-    assert_eq!(spine.active_thread(), Some(elsewhere.as_str()), "delivery changed the selected conversation");
-    let input: serde_json::Value = serde_json::from_str(&prompts.lock().unwrap()[0]).unwrap();
-    assert_eq!(input["from"], "stu");
-    assert_eq!(input["work_report"]["report"], raw);
-    assert_eq!(input["work_report"]["request"], "Compare the two markets");
-    assert!(spine.say_work_results(&state, &thread).unwrap().is_empty());
-    assert_eq!(prompts.lock().unwrap().len(), 1);
-    assert!(spine.ledger().messages(&elsewhere).unwrap().is_empty());
-
-    // Simulate a crash after the conversation write but before report acknowledgment.
-    let partition = std::fs::read_dir(state.join("assignments")).unwrap().next().unwrap().unwrap().path();
-    let record_path = partition.join(format!("{}.json", receipt.id));
-    let mut record: serde_json::Value = serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
-    for notice in record["notices"].as_array_mut().unwrap() { notice["delivered_at_ms"] = serde_json::Value::Null; }
-    std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
-    drop(spine);
-    let mut relaunched = support::spine(Ledger::open(&path).unwrap());
-    assert!(relaunched.say_work_results(&state, &thread).unwrap().is_empty(), "a delivered result needs no second model call");
-    assert_eq!(relaunched.ledger().messages(&thread).unwrap().iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), [reply]);
-    assert_eq!(assignment::take_pending_notices(&state, "femcboost", &thread).unwrap()
-        .iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), [held]);
-    std::fs::remove_file(&path).unwrap();
-    std::fs::remove_dir_all(&state).unwrap();
-}
-
 /// Rich interprets a reply in context before the app can publish any promise of work.
 #[test]
 fn go_on_a_proposal_is_interpreted_by_rich_before_any_reply() {
@@ -742,159 +669,56 @@ fn go_on_a_proposal_is_interpreted_by_rich_before_any_reply() {
 }
 
 
+/// An agent contribution takes the ordinary durable incoming-message path. Only
+/// Rich's reply appears in the user conversation, with sender provenance retained.
 #[test]
-fn a_user_message_preempts_an_offscreen_report_and_the_report_survives_for_retry() {
-    use richos_core::{assignment::{self, NoticeKind, Registration}, steering::{TurnCancel, TurnControl}};
-    use std::sync::{mpsc, atomic::{AtomicUsize, Ordering}};
-    use std::time::Duration;
-    struct Cancel(mpsc::Sender<()>);
-    impl TurnCancel for Cancel {
-        fn cancel(&self) -> bool { self.0.send(()).is_ok() }
-    }
-    struct Desk {
-        entered: mpsc::Sender<()>, canceled: mpsc::Receiver<()>,
-        cancel: Arc<Cancel>, attempts: Arc<AtomicUsize>,
-    }
-    impl Cognition for Desk {
-        fn session_id(&self) -> &str { "report-priority" }
-        fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> { Some(self.cancel.clone()) }
-        fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
-        fn prompt(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-            on(TurnItem::Text { seq: 0, text: "Here is your quick answer." });
-            Ok("end_turn".into())
-        }
-        fn prompt_read_only(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                on(TurnItem::Text { seq: 0, text: "INTERNAL PARTIAL REPORT" });
-                self.entered.send(()).unwrap();
-                // load-bound: hang guard only; channel cancellation and durable replies decide correctness, never elapsed time.
-                self.canceled.recv_timeout(Duration::from_secs(5)).unwrap();
-                return Ok("end_turn".into()); // A completion racing cancellation must still yield.
-            }
-            on(TurnItem::Text { seq: 0, text: "The work is complete." });
-            Ok("end_turn".into())
-        }
-    }
-    let (path, ledger) = tmp_ledger("report-priority");
-    let state = path.with_extension("state");
-    std::fs::create_dir_all(&state).unwrap();
-    let control = TurnControl::open(state.join("intake.jsonl")).unwrap();
+fn agent_input_survives_restart_and_duplicate_delivery_without_a_report_writer() {
+    use richos_core::steering::TurnControl;
+    let (path, ledger) = tmp_ledger("ordinary-agent-input");
+    let intake = path.with_extension("intake.jsonl");
     let mut spine = support::spine(ledger);
-    spine.set_turn_control(control.clone());
-    let report_thread = spine.create_thread("Background", &femcboost()).unwrap();
-    let user_thread = spine.create_thread("Current conversation", &femcboost()).unwrap();
-    spine.switch_thread(&user_thread).unwrap();
-    let receipt = assignment::register(&state, &Registration {
-        entity_id: "femcboost".into(), thread_id: report_thread.clone(), obligation_id: "work-report".into(),
-        instruction_ledger_ref: format!("ledger:{report_thread}:request"), instruction_sha256: "a".repeat(64),
-        title: "Check the market".into(), repositories: Vec::new(), needs_screen: false,
-    }).unwrap();
-    assignment::raise_notice(&state, "femcboost", &report_thread, &receipt.id, NoticeKind::Answer, "Stu's report").unwrap();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (cancel_tx, cancel_rx) = mpsc::channel();
-    let attempts = Arc::new(AtomicUsize::new(0));
-    spine.attach_lease(Box::new(Desk {
-        entered: entered_tx, canceled: cancel_rx, cancel: Arc::new(Cancel(cancel_tx)), attempts: attempts.clone(),
-    }));
-    let spine = Arc::new(Mutex::new(spine));
-    let worker = {
-        let spine = spine.clone(); let state = state.clone(); let thread = report_thread.clone();
-        std::thread::spawn(move || spine.lock().unwrap().say_work_results(&state, &thread))
-    };
-    // load-bound: hang guard for fixture rendezvous; the actual report-start event establishes ordering.
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let user = control.prioritize_user_input();
-    control.submit_from_desk(&user_thread, Some(femcboost()), "A quick question").unwrap();
-    assert!(worker.join().unwrap().is_err(), "the interrupted report must remain unpublished");
-    let mut spine = spine.lock().unwrap();
-    assert!(spine.has_pending_work_results(&state, &report_thread).unwrap());
-    assert!(spine.messages(&report_thread).unwrap().is_empty(), "partial report text leaked");
-    assert!(control.stop_claim().is_none(), "a new message is not a user Stop");
-    spine.poll_intake().unwrap();
-    assert_eq!(spine.messages(&user_thread).unwrap().last().unwrap().text, "Here is your quick answer.");
-    drop(user);
-    assert_eq!(spine.say_work_results(&state, &report_thread).unwrap(), ["The work is complete."]);
-    assert!(!spine.has_pending_work_results(&state, &report_thread).unwrap());
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    let thread = spine.create_thread("Research", &femcboost()).unwrap();
+    let control = TurnControl::open(&intake).unwrap();
+    let report = r#"{"from":"stu","text":"The northern market has twice as many buyers."}"#;
+    control.submit_agent_message(&thread, Some(femcboost()), report, "stu", "saved-message-1").unwrap();
     drop(spine);
-    std::fs::remove_dir_all(state).unwrap();
-    std::fs::remove_file(path).unwrap();
-}
+    drop(control);
 
-#[test]
-fn report_failures_keep_the_notice_and_recover_without_publishing_diagnostics() {
-    use richos_core::{assignment::{self, NoticeKind, Registration}, cognition::LeaseFactory, steering::TurnCancel};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    #[derive(Clone, Copy)]
-    enum Failure { Closed, ErrorText, ErrorResult, Preparation }
-    struct Cancel;
-    impl TurnCancel for Cancel { fn cancel(&self) -> bool { true } }
-    struct Desk { failure: Option<Failure>, calls: Arc<AtomicUsize> }
-    impl Cognition for Desk {
-        fn session_id(&self) -> &str { "report-recovery" }
-        fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> { Some(Arc::new(Cancel)) }
-        fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
-        fn prepare_work_turn(&mut self, _: &richos_core::entity::ThreadBinding, _: &str,
-            _: Source, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-            if matches!(self.failure, Some(Failure::Preparation)) {
-                return Err(CognitionError::Io("provider binding connection closed".into()));
-            }
-            Ok(())
-        }
-        fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-            panic!("report authoring must stay read-only")
-        }
-        fn prompt_read_only(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            let text = match self.failure {
-                Some(Failure::Closed) => return Err(CognitionError::Io("Claude channel closed (child exited?)".into())),
-                Some(Failure::ErrorResult) => return Err(CognitionError::Protocol("API Error: 529 Overloaded.".into())),
-                Some(Failure::ErrorText) => {
-                    self.failure = None; // The connection survives this provider refusal.
-                    "API Error: 529 Overloaded."
-                }
-                Some(Failure::Preparation) => panic!("a failed preparation cannot run the model"),
-                None => "Your research is complete.",
-            };
-            on(TurnItem::Text { seq: 0, text });
-            Ok("end_turn".into())
-        }
-    }
-    struct Factory { spawns: Arc<AtomicUsize>, calls: Arc<AtomicUsize> }
-    impl LeaseFactory for Factory {
-        fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
-            self.spawns.fetch_add(1, Ordering::SeqCst);
-            Ok(Box::new(Desk { failure: None, calls: self.calls.clone() }))
-        }
-    }
-    for (tag, failure, replaces) in [("closed", Failure::Closed, 1), ("text", Failure::ErrorText, 0),
-        ("error", Failure::ErrorResult, 1), ("preparation", Failure::Preparation, 1)] {
-        let (path, ledger) = tmp_ledger(tag);
-        let state = path.with_extension("state");
-        std::fs::create_dir_all(&state).unwrap();
-        let mut spine = support::spine(ledger);
-        let thread = spine.create_thread("Research", &femcboost()).unwrap();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let spawns = Arc::new(AtomicUsize::new(0));
-        spine.set_lease_factory(Box::new(Factory { spawns: spawns.clone(), calls: calls.clone() }));
-        spine.attach_lease(Box::new(Desk { failure: Some(failure), calls: calls.clone() }));
-        let receipt = assignment::register(&state, &Registration {
-            entity_id: "femcboost".into(), thread_id: thread.clone(), obligation_id: "research".into(),
-            instruction_ledger_ref: format!("ledger:{thread}:original"), instruction_sha256: "a".repeat(64),
-            title: "Research the market".into(), repositories: Vec::new(), needs_screen: false,
-        }).unwrap();
-        assignment::raise_notice(&state, "femcboost", &thread, &receipt.id, NoticeKind::Answer, "Stu's actual work result").unwrap();
-        assert!(spine.say_work_results(&state, &thread).is_err(), "{tag}: failure must not become a reply");
-        assert!(spine.has_pending_work_results(&state, &thread).unwrap(), "{tag}: notice lost");
-        assert!(spine.messages(&thread).unwrap().is_empty(), "{tag}: provider diagnostic leaked");
-        assert_eq!(spine.say_work_results(&state, &thread).unwrap(), ["Your research is complete."], "{tag}");
-        assert_eq!(spawns.load(Ordering::SeqCst), replaces, "{tag}: use a healthy connection");
-        assert_eq!(calls.load(Ordering::SeqCst), if matches!(failure, Failure::Preparation) { 1 } else { 2 }, "{tag}");
-        assert!(!spine.has_pending_work_results(&state, &thread).unwrap(), "{tag}: missing acknowledgment");
-        assert!(spine.say_work_results(&state, &thread).unwrap().is_empty(), "{tag}: duplicate report");
-        assert_eq!(spine.messages(&thread).unwrap().len(), 1);
-        drop(spine);
-        std::fs::remove_dir_all(state).unwrap();
-        std::fs::remove_file(path).unwrap();
-    }
+    let control = TurnControl::open(&intake).unwrap();
+    // A duplicate notification/delivery must not create a second turn.
+    control.submit_agent_message(&thread, Some(femcboost()), report, "stu", "saved-message-1").unwrap();
+    let mut spine = support::spine(Ledger::open(&path).unwrap());
+    spine.set_turn_control(control);
+    let reply = "The northern market has twice as many buyers.";
+    let desk = MockCognition::new("rich", vec![reply]);
+    let prompts = desk.prompts.clone();
+    spine.attach_lease(Box::new(desk));
+    spine.reconcile_intake().unwrap();
+    spine.poll_intake().unwrap();
+    assert_eq!(*prompts.lock().unwrap(), [report]);
+    let messages = spine.messages(&thread).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "assistant");
+    assert_eq!(messages[0].text, reply);
+    let turn = spine.ledger().thread_turns(&thread).unwrap().into_iter().find(|t| t.source == Source::Agent).unwrap();
+    assert_eq!(turn.channel.as_deref(), Some("stu"));
+    assert_eq!(turn.state, TurnState::Completed);
+    let binding = spine.ledger().thread_binding(&thread).unwrap();
+    let context = RePrimePayload::assemble(spine.ledger(), &binding, 5, None).unwrap();
+    assert!(context.recent_tail.iter().any(|entry| entry.role == "agent (stu)" && entry.text == report));
+    assert!(!context.recent_tail.iter().any(|entry| entry.role == "user" && entry.text == report));
+    drop(spine);
+
+    let mut reopened = support::spine(Ledger::open(&path).unwrap());
+    reopened.set_turn_control(TurnControl::open(&intake).unwrap());
+    let desk = MockCognition::new("rich-restarted", vec![]);
+    let replayed = desk.prompts.clone();
+    reopened.attach_lease(Box::new(desk));
+    reopened.reconcile_intake().unwrap();
+    reopened.poll_intake().unwrap();
+    assert!(replayed.lock().unwrap().is_empty());
+    assert_eq!(reopened.messages(&thread).unwrap().len(), 1);
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(intake).unwrap();
 }

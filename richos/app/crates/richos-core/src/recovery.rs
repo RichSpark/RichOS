@@ -1091,7 +1091,7 @@ mod tests {
         // A REAL grant, written the way `native.rs`'s `bind_work_assignment` writes one, so
         // this test exercises the document the app actually leaves behind rather than a
         // convenient stand-in.
-        let granted = crate::ecs::ToolScope { read_only_tools: Vec::new(),
+        let granted = crate::ecs::ToolScope {
             version: 1,
             actions_allowed: true,
             bridge: crate::ecs::EcsBridge {

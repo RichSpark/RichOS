@@ -1153,6 +1153,45 @@ impl WorkHost {
         }
     }
 
+    /// Notify the standing operator that its durable inbox changed.
+    pub fn wake_messages(self:&Arc<Self>,binding:&ThreadBinding) {
+        if let Some(backend)=self.backend_for(binding.thread_id()) {
+            backend.inner.lock().unwrap().binding=Some(binding.clone());
+            backend.wake.notify_all();
+        }
+    }
+
+    fn message_scope(&self,binding:&ThreadBinding)->crate::status_tools::StatusToolScope {
+        crate::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),
+            entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()}
+    }
+
+    fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
+        message:&crate::session_tools::Message,turn:&str)->Result<String,String> {
+        self.ensure_lease(backend,binding)?;
+        let mut guard=backend.lease.lock().unwrap();
+        let lease=guard.as_mut().ok_or("The operator connection closed")?;
+        lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
+        backend.inner.lock().unwrap().cancel=lease.cancel_handle();
+        let session=lease.session_id().to_string();
+        crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
+        let mut diagnostics=String::new();
+        let result=lease.prompt(&serde_json::to_string(message).map_err(|e|e.to_string())?,&mut |item| {
+            if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
+        });
+        let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
+        backend.inner.lock().unwrap().cancel=None;
+        if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
+        let reason=result.map_err(|e|e.to_string())?;
+        if !matches!(reason.as_str(),"end_turn"|"question_asked"|"question_asked_open") {
+            return Err(format!("Operator input did not complete: {reason}"));
+        }
+        if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
+        drop(guard);
+        self.adopt_registered(binding);
+        Ok(session)
+    }
+
     /// **The turn boundary, and the whole of it.** Spec §1.1: the assignment is recorded,
     /// the receipt is written, and the turn is over.
     ///
@@ -1210,6 +1249,7 @@ impl WorkHost {
     ///
     /// Returns how many were adopted. Zero is the ordinary answer.
     pub fn adopt_registered(self: &Arc<Self>, binding: &ThreadBinding) -> usize {
+        self.wake_messages(binding);
         let Ok(rows) = assignment::read_all(&self.state, &binding.entity_id().to_string(), binding.thread_id())
         else {
             return 0;
@@ -1310,6 +1350,8 @@ impl WorkHost {
     fn run(self: Arc<Self>, backend: Arc<Backend>) {
         enum Next {
             Work(Scheduled),
+            Message(ThreadBinding,crate::session_tools::Message,u64),
+            Answer(ThreadBinding,crate::questions::Delivery),
             Report(Watched, Vec<String>),
             Lost(Watched),
         }
@@ -1319,6 +1361,18 @@ impl WorkHost {
                 loop {
                     if inner.closing {
                         return;
+                    }
+                    if let Some(binding)=inner.binding.clone() {
+                        if let Ok(answers)=crate::question_work::pending(&self.state) {
+                            if let Some(answer)=answers.into_iter().find(|d|d.asker=="stu" && d.entity_id==binding.entity_id().as_str() && d.thread_id==binding.thread_id()) {
+                                inner.processing=true;break Next::Answer(binding,answer)
+                            }
+                        }
+                        match crate::session_tools::pending(&self.message_scope(&binding),"stu") {
+                            Ok(Some((message,through)))=>{inner.processing=true;break Next::Message(binding,message,through)},
+                            Ok(None)=>{},
+                            Err(error)=>eprintln!("[richos] operator inbox: {error}"),
+                        }
                     }
                     // **A WATCHED JOB WHOSE COMMAND HAS ENDED GOES FIRST** ([`Watched`]): it
                     // ended before the next job starts, and its report is one short turn. The
@@ -1388,6 +1442,39 @@ impl WorkHost {
                 }
             };
             let binding = match next {
+                Next::Message(binding,message,through)=>{
+                    if let Err(error)=self.run_message(&backend,&binding,&message,&format!("peer:{through}"))
+                        .and_then(|_|crate::session_tools::acknowledge(&self.message_scope(&binding),"stu",through)) {
+                        eprintln!("[richos] operator message remains pending: {error}");
+                        // The ordinary host owns retry and shutdown. No message is acknowledged on failure.
+                        let mut inner=backend.inner.lock().unwrap();
+                        inner.processing=false;
+                        if inner.closing {return}
+                        inner=backend.wake.wait_timeout(inner,*self.hold_check.lock().unwrap()).unwrap().0;
+                        drop(inner);
+                    }
+                    backend.inner.lock().unwrap().completed+=1;
+                    backend.wake.notify_all();
+                    binding
+                }
+                Next::Answer(binding,delivery)=>{
+                    let message=crate::session_tools::Message {from:"user".into(),text:delivery.text.clone(),instruction:None};
+                    match self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id)) {
+                        Ok(session)=>if let Err(error)=crate::question_work::taken(&self.state,std::slice::from_ref(&delivery.id),&session)
+                            .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id))) {
+                            eprintln!("[richos] operator answer acknowledgement: {error}");
+                        },
+                        Err(error)=>{
+                            eprintln!("[richos] operator answer remains saved: {error}");
+                            let inner=backend.inner.lock().unwrap();
+                            if inner.closing {return}
+                            drop(backend.wake.wait_timeout(inner,*self.hold_check.lock().unwrap()).unwrap());
+                        }
+                    }
+                    backend.inner.lock().unwrap().completed+=1;
+                    backend.wake.notify_all();
+                    binding
+                }
                 Next::Work(Scheduled { binding, record, resumed }) => {
                     // **A stop that landed between the dequeue and the start.** The ordinary
                     // queued-stop path never reaches here — `stop_assignment` takes that
@@ -1458,6 +1545,7 @@ impl WorkHost {
             // the question is whether anything at all is still registered anywhere — a
             // second conversation's running assignment must keep the app alive just as
             // this one's would.
+            backend.inner.lock().unwrap().processing = false;
             if self.open_assignments().map(|open| open.is_empty()).unwrap_or(false) {
                 self.notifier.nothing_left_to_do();
             }
@@ -3479,6 +3567,11 @@ impl WorkHost {
         {
             return Err("Question scope mismatch".into());
         }
+        if delivery.asker=="stu" {
+            crate::question_work::enqueue(&self.state,delivery)?;
+            self.wake_messages(binding);
+            return Ok(format!("work-input:{}",delivery.id));
+        }
         let record = assignment::read_all(&self.state, &delivery.entity_id, &delivery.thread_id)
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -4481,6 +4574,18 @@ impl WorkHost {
         }
     }
 
+    pub fn peer_work_pending(&self)->bool {
+        let backends:Vec<_>=self.backends.lock().unwrap().values().cloned().collect();
+        backends.into_iter().any(|backend| {
+            let inner=backend.inner.lock().unwrap();
+            if inner.processing && inner.live.is_none() {return true}
+            inner.binding.as_ref().is_some_and(|binding| {
+                let scope=self.message_scope(binding);
+                ["rich","stu"].iter().any(|role|crate::session_tools::pending(&scope,role).map(|m|m.is_some()).unwrap_or(true))
+            })
+        })
+    }
+
     /// The ids of the fresh jobs waiting in a queue held because the back end would not open
     /// ([`HoldCause::BackEnd`]); see [`Self::background_work`].
     fn back_end_held_ids(&self) -> std::collections::HashSet<String> {
@@ -4708,12 +4813,16 @@ pub enum Outcome {
 /// assignment, Rich owns internal obligation and receipt ids. The seat and the frozen
 /// instruction reference reach the child through its scope file, not through its prompt,
 /// so a model that decided to quote its own prompt back cannot leak either.
-fn instruction_for(state: &Path, record: &Assignment) -> Result<String, &'static str> {
+fn instruction_for(state:&Path,record:&Assignment)->Result<String,&'static str> {
+    verified_instruction(state,&record.entity_id,&record.thread_id,&record.instruction_ledger_ref,&record.instruction_sha256)
+}
+
+pub(crate) fn verified_instruction(state:&Path,entity:&str,thread:&str,ledger_ref:&str,sha256:&str)->Result<String,&'static str> {
     use sha2::{Digest, Sha256};
     use std::io::BufRead;
     const UNAVAILABLE: &str = "The original request could not be verified. Nothing was started.";
-    let prefix = format!("ledger:{}:", record.thread_id);
-    let turn = record.instruction_ledger_ref.strip_prefix(&prefix)
+    let prefix = format!("ledger:{thread}:");
+    let turn = ledger_ref.strip_prefix(&prefix)
         .filter(|turn| !turn.is_empty()).ok_or(UNAVAILABLE)?;
     let path = state.parent().ok_or(UNAVAILABLE)?.join("conversation-ledger.jsonl");
     let file = std::fs::File::open(path).map_err(|_| UNAVAILABLE)?;
@@ -4728,10 +4837,10 @@ fn instruction_for(state: &Path, record: &Assignment) -> Result<String, &'static
         let Ok(row) = serde_json::from_str::<serde_json::Value>(&line) else { continue; };
         if row["event"] != "PromptReceived" || row["turn_id"] != turn { continue; }
         let text = row["text"].as_str().ok_or(UNAVAILABLE)?;
-        if found.is_some() || row["thread_id"] != record.thread_id
-            || row["entity_id"] != record.entity_id
+        if found.is_some() || row["thread_id"] != thread
+            || row["entity_id"] != entity
             || !matches!(row["source"].as_str(), Some("text" | "jam"))
-            || format!("{:x}", Sha256::digest(text.as_bytes())) != record.instruction_sha256
+            || format!("{:x}", Sha256::digest(text.as_bytes())) != sha256
         { return Err(UNAVAILABLE); }
         found = Some(text.to_owned());
     }
@@ -5490,6 +5599,41 @@ mod tests {
         signed_out: Arc<AtomicBool>,
         fill: Arc<Mutex<FillFirst>>,
         team: Arc<Mutex<TeamScript>>,
+    }
+
+    #[test]
+    fn ordinary_peer_input_runs_without_an_assignment_and_is_not_replayed_after_ack() {
+        let h=harness(0);
+        let scope=h.host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Inspect the current evidence"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(10)),"hang guard: wait for the receiving turn to complete");
+        assert!(h.bound.lock().unwrap().is_empty(),"communication manufactured an assignment");
+        assert!(h.host.open_assignments().unwrap().is_empty());
+        assert_eq!(h.work_prompts.lock().unwrap().len(),1);
+        assert!(h.work_prompts.lock().unwrap()[0].contains("Inspect the current evidence"));
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        h.host.shutdown();
+    }
+
+    #[test]
+    fn a_standing_stu_question_answer_reaches_his_turn_without_an_assignment() {
+        let h=harness(0);
+        let answer=crate::questions::Delivery {id:"standing-answer".into(),entity_id:"depot".into(),
+            thread_id:"thread-one".into(),asker:"stu".into(),set_id:Some("standing-choice".into()),
+            text:"Use the existing launch date".into(),receipt:None};
+        h.host.queue_question_answer(&h.binding,&answer).unwrap();
+        assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(10)),"hang guard: wait for the answer turn");
+        assert!(h.host.open_assignments().unwrap().is_empty());
+        assert!(h.bound.lock().unwrap().is_empty());
+        assert_eq!(h.work_prompts.lock().unwrap().len(),1);
+        assert!(h.work_prompts.lock().unwrap()[0].contains(&answer.text));
+        assert!(crate::question_work::pending(&h.state).unwrap().is_empty());
+        let wrong=ThreadBinding::new(PersonId::default_ceo(),EntityId::parse("depot").unwrap(),"thread-two",1);
+        assert!(h.host.queue_question_answer(&wrong,&answer).is_err());
+        h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
     fn harness(step_ms: u64) -> Harness {

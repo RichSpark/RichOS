@@ -9,7 +9,6 @@ use std::{
 };
 
 pub const SERVER: &str = "richos_quota";
-pub const INSTRUCTION: &str = "\nWeekly Claude resets: richos_quota.status reports reset offers and prior user approval. Approval can only be granted or revoked by the user in Technical Settings. The desktop host arms the approved one-use action in advance and executes it at 99% weekly usage without another model turn. richos_quota.use_approved_reset can execute that same action if needed. Never use a reset because the five-hour window reached its 93% pause threshold. Never claim a reset succeeded unless its recorded outcome is used. An uncertain outcome must be checked in Claude; do not retry or seek another grant.\n";
 
 fn authorized(scope: &Path) -> bool {
     read_json::<Value>(scope).is_ok_and(|s| s["version"] == 1 && s["actions_allowed"] == true)

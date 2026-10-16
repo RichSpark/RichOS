@@ -92,7 +92,7 @@ fn connect(script: &PathBuf) -> NativeClient {
         &richos_core::doctrine::DoctrineIdentity::default(),
     )
     .expect("the doctrine fixture must render");
-    let skills = richos_core::skills::ensure_rendered(&dir).expect("the skills fixture must render");
+    let skills = richos_core::skills::ensure_rendered(&dir, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).expect("the skills fixture must render");
     match NativeClient::spawn(script, std::path::Path::new("/tmp"), &doctrine, &skills) {
         Ok(c) => c,
         Err(e) => panic!("the fake agent should have completed the handshake: {e}"),

@@ -307,6 +307,8 @@ fn ask_rich(bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str) -> Resul
     let mut command = std::process::Command::new(bin);
     command
         .args(bug::writer_args())
+        .arg("--plugin-dir").arg(richos_core::skills::ensure_for_install().map_err(|e|e.to_string())?)
+        .args(["--agent", "rich-skills:rich"])
         .env_remove("CLAUDECODE")
         .current_dir(cwd)
         .stdin(std::process::Stdio::piped())

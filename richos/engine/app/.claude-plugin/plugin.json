@@ -1,0 +1,8 @@
+{
+  "name": "rich-skills",
+  "version": "1.0.0",
+  "agents": [
+    "./agents/rich.md",
+    "./agents/stu.md"
+  ]
+}

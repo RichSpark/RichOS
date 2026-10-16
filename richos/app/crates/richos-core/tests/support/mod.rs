@@ -47,3 +47,8 @@ pub fn spine(ledger: Ledger) -> Spine {
     spine.set_entity_registry(registry());
     spine
 }
+
+/// The factual context on the native priming wire.
+pub fn context(text:&str)->serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(text).expect("factual priming JSON")["context"].clone()
+}

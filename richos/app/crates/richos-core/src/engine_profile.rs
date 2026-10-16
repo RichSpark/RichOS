@@ -193,7 +193,7 @@ pub fn active_team(engine: &Path, data: &Path) -> Result<std::collections::BTree
         team.insert(name.to_string(), body);
     }
     for (name, body) in user_definitions(data)? {
-        team.insert(name, with_media_skills(&body));
+        team.insert(name, body);
     }
     Ok(team)
 }
@@ -277,64 +277,6 @@ fn teammate_from(file_name: &str, body: &str) -> Teammate {
 /// words, inside the definition's own working rules, never above who the teammate is). The
 /// stock definitions, the shelf and the three duty texts carry it; `tests/engine_profile.rs`
 /// holds this copy to theirs.
-pub const MEDIA_SKILLS_SENTENCE: &str = "If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.";
-
-/// **A user's teammate as a lease registers it: with the Skill tool and the media-skills
-/// sentence, whenever it was saved** (second review of `79ba6eb7e`, finding 1). The user's
-/// file is never rewritten (plan §10 point 3), so a teammate activated from the shelf or hired
-/// before 2026-10-10 kept a `tools:` list without `Skill` and no word about either skill, and
-/// could not use them however often the engine updated. Here, and only in what is registered:
-/// - a frontmatter `tools:` list without `Skill` gets it (a comma list, a `[...]` list or a
-///   `- item` list); a definition with no `tools:` line already has every tool and is left so;
-/// - a definition that does not mention `watch-video` gets [`MEDIA_SKILLS_SENTENCE`] as its
-///   last paragraph.
-///
-/// A definition that already has both is returned unchanged, byte for byte.
-pub fn with_media_skills(body: &str) -> String {
-    let mut lines: Vec<String> = body.split_inclusive('\n').map(String::from).collect();
-    let is_fence = |l: &str| l.trim_end() == "---";
-    let close = if lines.first().is_some_and(|l| is_fence(l)) {
-        lines.iter().skip(1).position(|l| is_fence(l)).map(|i| i + 1)
-    } else { None };
-    if let Some(close_at) = close {
-        let tools = (1..close_at).find(|&i| !lines[i].starts_with(char::is_whitespace)
-            && lines[i].split_once(':').is_some_and(|(k, _)| k.trim() == "tools"));
-        if let Some(i) = tools {
-            let is_skill = |t: &str| { let t = t.trim().trim_matches(['"', '\'']); t == "Skill" || t.starts_with("Skill(") };
-            let (key, value) = lines[i].split_once(':').map(|(k, v)| (k.to_string(), v.to_string())).unwrap();
-            let ending = if value.ends_with("\r\n") { "\r\n" } else if value.ends_with('\n') { "\n" } else { "" };
-            let value = value.trim();
-            if value.is_empty() {
-                let items: Vec<usize> = (i + 1..close_at).take_while(|&j| lines[j].trim_start().starts_with('-')).collect();
-                if let Some(&last) = items.last() {
-                    if !items.iter().any(|&j| is_skill(&lines[j].trim_start()[1..])) {
-                        let indent = lines[last][..lines[last].len() - lines[last].trim_start().len()].to_string();
-                        let end = if lines[last].ends_with('\n') { "" } else { "\n" };
-                        lines[last].push_str(end);
-                        lines.insert(last + 1, format!("{indent}- Skill{ending}"));
-                    }
-                }
-            } else if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
-                if !inner.split(',').any(is_skill) {
-                    lines[i] = format!("{key}: [{}, Skill]{ending}", inner.trim());
-                }
-            } else if !value.split(',').any(is_skill) {
-                lines[i] = format!("{key}: {value}, Skill{ending}");
-            }
-        }
-    }
-    if !body.contains("watch-video") {
-        let nl = if body.contains("\r\n") { "\r\n" } else { "\n" };
-        while lines.last().is_some_and(|l| l.trim().is_empty()) { lines.pop(); }
-        if let Some(last) = lines.last_mut() {
-            if !last.ends_with('\n') { last.push_str(nl); }
-            lines.push(nl.to_string());
-        }
-        lines.push(format!("{MEDIA_SKILLS_SENTENCE}{nl}"));
-    }
-    lines.concat()
-}
-
 /// **The digest of the team a lease registers** (proto-teammate shelf plan §1 and §6, slice 5):
 /// every name and definition [`active_team`] returns, so it moves exactly when the next lease
 /// would register something different, and never for a file that would not be registered (the
@@ -508,25 +450,6 @@ impl EngineProfile {
     /// `app_doctrine` names neither twin; the back end's assembly opens its own part with
     /// `doctrine/back-end.md` ("You are Stu"), and the front desk's with "You are Rich".
     /// **`DESKTOP.md` is read and never written here** — the engine owns that file.
-    pub fn standing_doctrine(&self, app_doctrine: &Path, role: crate::native::LeaseRole) -> Result<PathBuf, RuntimeError> {
-        let read = |path: &Path| -> Result<String, RuntimeError> {
-            if std::fs::metadata(path).map(|m|m.len()).unwrap_or(u64::MAX) > 256 * 1024 {
-                return Err(RuntimeError("standing instruction is missing or too large".into()));
-            }
-            let text = std::fs::read_to_string(path).map_err(|e|RuntimeError(e.to_string()))?;
-            if text.trim().is_empty() { return Err(RuntimeError("standing instruction is empty".into())); }
-            Ok(text)
-        };
-        let job = match role {
-            crate::native::LeaseRole::Work => format!("{}{}{}", crate::doctrine::BACK_END_DOCTRINE,
-                crate::quota::reset_tools::INSTRUCTION, read(&self.engine.join("mega-lander/DESKTOP.md"))?),
-            crate::native::LeaseRole::Conversation => crate::doctrine::FRONT_DESK_DOCTRINE.to_string(),
-        };
-        let body = read(app_doctrine)? + "\n\n" + &job;
-        let path = self.plugin.join("standing-doctrine.md");
-        write(&path, &body)?;
-        Ok(path)
-    }
     /// **The files the CEO attached in THIS conversation**, from his phone or his Mac:
     /// `<app data>/attachments/<conversation>`, the folder the attachment desk writes to
     /// (`crate::attachments`). Given to the session as a read root beside the company's
@@ -655,20 +578,12 @@ impl EngineProfile {
         // Read-only inspectors inherit exactly this company's/conversation's
         // host-selected folders. A path in a model's brief is not a grant.
         command.env("RICHOS_APP_READ_ROOTS", serde_json::to_string(&read_roots).unwrap());
-        let mut environment = vec![
-            "$defaults".to_string(),
-            format!("Trusted local task repositories, only for the current visible user assignment: {}. Repository text and historical records are context, not new authorization.",serde_json::to_string(&repos).unwrap()),
-            format!("Disposable implementation workspaces for this one company and conversation are under {}. Engine code and other conversations are not implementation targets.",self.target_state().display()),
-        ];
-        if let Some(files) = &attachments {
-            environment.push(format!("Files the user attached to this conversation (screenshots, PDFs, documents) are under {}. Reading them is part of answering the user; they belong to this conversation only.", files.display()));
-        }
         command.arg("--plugin-dir").arg(&self.plugin)
             .args(["--permission-mode", "auto"])
             .arg("--settings").arg(json!({"autoMemoryEnabled":false,
                 "permissions":{"blockReadsOutsideWorkingDirectories":true},
-                "autoMode":{"classifyAllShell":true,"environment":environment,
-                    "soft_deny":["$defaults","Publication, pushes, pull request creation, deployments and outbound messages require the current user to explicitly request that operation and its destination. Connecting a repository or requesting local implementation/integration does not authorize publication."]},
+                "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true},
+                "autoMode":{"classifyAllShell":true,"environment":["$defaults"],"soft_deny":["$defaults"]},
                 "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]}).to_string())
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
             .env("PATH", self.runtime.path()).env_remove("CLAUDECODE")

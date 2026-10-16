@@ -68,7 +68,7 @@ pub enum SpineError {
     #[error("steering intake: {0}")]
     Steering(String),
     /// A job's result could not be taken off its assignment to be written into the
-    /// conversation ([`Spine::say_work_results`]); it stays pending there.
+    /// conversation (the ordinary intake queue); it stays pending there.
     #[error("assignments: {0}")]
     Assignments(String),
 }
@@ -966,7 +966,7 @@ impl Spine {
     fn ceo_message_event(&self, binding: &ThreadBinding, turn_id: &str) -> Vec<LiveEvent> {
         let Some(turn) = self.ledger.turn(turn_id) else { return Vec::new() };
         // A pressed button's words are not his, so they are never sent as his row (finding 14).
-        if turn.user_text.is_empty() || turn.source == Source::Proactive || turn.pressed {
+        if turn.user_text.is_empty() || matches!(turn.source, Source::Proactive | Source::Agent) || turn.pressed {
             return Vec::new();
         }
         vec![LiveEvent::CeoMessage {
@@ -1425,8 +1425,7 @@ impl Spine {
             payload.worker_state = workers.priming_lines();
         }
         self.fill_loro_tier(&mut payload, binding);
-        let mut priming = payload.to_priming_prompt();
-        if let Some(block) = &onboarding_block { priming.push_str(block); }
+        let priming = payload.to_priming_prompt_with_company(onboarding_block.as_deref());
         // Claim-then-execute, Internal visibility, exactly like the chair's `session_reprime`.
         // **"The spare WAS primed" is the fact the whole saving rests on**, so it is durable
         // even though the thread it names does not exist yet — and naming the reserved id is
@@ -1656,11 +1655,9 @@ impl Spine {
         let onboarding =
             crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding));
         match self.registry.get(binding.entity_id()) {
-            Some(entity) => Some(
-                crate::onboarding::company_name_block(binding.entity_id(), &entity.display_name)
-                    + &onboarding.unwrap_or_default(),
-            ),
-            None => onboarding,
+            Some(entity)=>Some(serde_json::json!({"entity_id":binding.entity_id(),"company_name":entity.display_name,
+                "setup":onboarding.and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok())}).to_string()),
+            None=>onboarding,
         }
     }
 
@@ -2008,7 +2005,6 @@ impl Spine {
     /// trigger, or a test) has already decided on, persist it durably and — for Tier 1/2
     /// only, never Tier 3/Silent — surface it to the UI at once, also while a turn is in
     /// flight (round 16 draws the switch line beside the working row). Returns the new
-    /// turn id.
     pub fn raise_proactive(
         &mut self,
         thread_id: Option<&str>,
@@ -2074,56 +2070,6 @@ impl Spine {
             self.emit_proactive_live(&binding, &turn_id, tier, text);
         }
         Ok(turn_id)
-    }
-
-    pub fn has_pending_work_results(&self, engine_state: &std::path::Path, thread_id: &str) -> Result<bool, SpineError> {
-        let binding = self.ledger.thread_binding(thread_id)?;
-        crate::assignment::pending_notices_of(engine_state, binding.entity_id().as_str(), thread_id, |kind| kind.is_result())
-            .map(|notices| notices.iter().any(|notice| !notice.text.trim().is_empty()))
-            .map_err(|error| SpineError::Assignments(error.to_string()))
-    }
-
-    /// Stu reports to Rich. Only Rich's reply is published and spoken. A report remains
-    /// pending on any failure; its stable delivery identity prevents replay after a crash
-    /// between publishing the reply and acknowledging the report.
-    pub fn say_work_results(&mut self, engine_state: &std::path::Path, thread_id: &str) -> Result<Vec<String>, SpineError> {
-        let binding = self.ledger.thread_binding(thread_id)?;
-        let entity = binding.entity_id().as_str().to_string();
-        let results = crate::assignment::pending_notices_of(engine_state, &entity, thread_id, |kind| kind.is_result())
-            .map_err(|e| SpineError::Assignments(e.to_string()))?;
-        let mut written = Vec::new();
-        for notice in results.into_iter().filter(|notice| !notice.text.trim().is_empty()) {
-            let delivery = notice.delivery_id(&entity, thread_id);
-            let delivered = (|| -> Result<Option<String>, SpineError> {
-                if self.ledger.turn(&delivery).is_some() { return Ok(None); }
-                let prompt = serde_json::json!({"from": if notice.kind == crate::assignment::NoticeKind::Answer {"stu"} else {"work_host"}, "work_report": {
-                    "request": notice.title, "kind": notice.kind, "report": notice.text,
-                    "assignment_state": crate::assignment::read(engine_state, &entity, thread_id, &notice.assignment_id)
-                        .map(|record| record.state.as_str().to_string()).ok(),
-                }}).to_string();
-                let reply = self.request_internal_reply(&binding, &prompt, true)?;
-                if reply.trim().is_empty() {
-                    return Err(SpineError::Assignments("Rich returned no reply; the work report remains pending".into()));
-                }
-                self.raise_proactive_identified(Some(thread_id), AttentionTier::Digest, &reply, Some(delivery))?;
-                Ok(Some(reply))
-            })();
-            match delivered {
-                Ok(Some(reply)) => written.push(reply),
-                Ok(None) => {},
-                Err(error) if written.is_empty() => return Err(error),
-                Err(error) => {
-                    eprintln!("[richos] a later work report remains pending: {error}");
-                    break;
-                }
-            }
-            if let Err(error) = crate::assignment::acknowledge_notice(engine_state, &entity, thread_id, &notice) {
-                if written.is_empty() { return Err(SpineError::Assignments(error.to_string())); }
-                eprintln!("[richos] a published reply awaits report acknowledgment: {error}");
-                break;
-            }
-        }
-        Ok(written)
     }
 
     /// **A conversation the app opens on its own, with Rich's first message already in it**
@@ -2609,24 +2555,6 @@ impl Spine {
                 turn
             }
         })
-    }
-
-    /// [`Self::record_prompt`] for a channel message that carries its sender's own id (a
-    /// phone's `client_id`) or is the transcript of a voice note the sender recorded
-    /// (`voice_note`). `Source::Text`, off the intake log, never desk-spoken here — the same
-    /// three facts the `Channel` drain arm has always written — with the channel kept only
-    /// where this install keeps it, exactly as `record_prompt` decides.
-    fn record_prompt_from_client(
-        &mut self,
-        binding: &ThreadBinding,
-        text: &str,
-        intake_id: u64,
-        channel: &str,
-        client_id: Option<&str>,
-        voice_note: bool,
-    ) -> Result<String, SpineError> {
-        let kept = self.keep_intake_channel.then_some(channel);
-        Ok(self.ledger.record_prompt_received_from_client(binding, text, Source::Text, intake_id, kept, client_id, voice_note)?)
     }
 
     /// **ACCEPTING one CEO utterance: everything that happens between his sentence arriving
@@ -3691,60 +3619,16 @@ impl Spine {
                     self.queue.push_back(Queued { turn_id, binding, text, intake_id: Some(id) });
                     self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
                 }
-                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, .. } => {
-                    // IDENTICAL TO THE `Steer` ARM ABOVE, AND THAT IS THE POINT. From here
-                    // on the spine does not know or care which mouth the CEO used
-                    // (phone-client plan §4.2 iv) — the same de-duplication check, the same
-                    // fresh binding, the same `record_prompt_received_from_intake`, the
-                    // same `Source::Text`. What arrives on the phone is the CEO's own words
-                    // on a thread he already has, so anything else here would be a
-                    // distinction the back end has no business making.
-                    //
-                    // **AND THAT SENTENCE WAS NOT TRUE OF THE EVENTS UNTIL TODAY** — Ray's
-                    // candidate .13 walk, defect R3. `accept_prompt` emits three events for a
-                    // CEO utterance and this arm emitted two: the status and the sidebar row,
-                    // but never `rich://ceo-message`, which is the only one carrying his WORDS.
-                    // The Mac's window therefore had nothing to draw when he typed on his phone
-                    // — it had always drawn his own sentence itself — and his message appeared
-                    // there only when `turn-completed` reloaded the thread. Measured on his own
-                    // Android: **5.68 s and 5.77 s**, his words and the finished answer landing
-                    // in the same frame, against 0.096 s for the other direction. At 2.99 s the
-                    // only thing that had changed on the Mac was the sidebar's working dot —
-                    // which is this arm's OTHER event arriving on time, and is the proof that
-                    // the path was live and this one line was missing from it.
-                    //
-                    // **AND EMITTING IT WAS ONLY HALF.** Ray re-measured on candidate .16 with
-                    // the line above in the build: **7,288 ms**, worse than the 5.68 s it was
-                    // meant to fix, the bubble and the whole reply still in one paint, and the
-                    // sidebar's dot still moving at +471 ms. The event was on the wire and the
-                    // WINDOW DISCARDED IT — it was fenced from `Ledger::thread_binding` and the
-                    // open thread is fenced at the ACTIVATION revision, so `timeline.js`
-                    // `accepts()` read it as stale. `fence_binding` below is that fix, and the
-                    // dot is the tell in both halves: it is the one event in this arm that no
-                    // fence is applied to.
-                    if self.ledger.turn_for_intake(id).is_some() {
+                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, source, .. } => {
+                    if self.ledger.turn_for_intake(id).is_some() || client_id.as_ref().is_some_and(|key|
+                        self.ledger.thread_turns(&thread_id).is_ok_and(|turns| turns.iter().any(|turn| turn.client_id.as_ref() == Some(key)))) {
                         self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
                         continue;
                     }
                     let binding = self.fence_binding(&thread_id)?;
-                    // **The one line where the mouth survives** (operator back-end spec r3 (s)).
-                    // Kept only when this install keeps it; see `record_prompt`.
-                    //
-                    // **And the phone's own id for the words, when it sent one** (adoption
-                    // ledger §2.8 row C5). It goes onto the turn here, so the `ceo-message`
-                    // emitted three lines down and every later projection of this turn name
-                    // the message the phone is already showing: an echo that beats the phone's
-                    // receipt is then recognized on arrival instead of drawn as a second line.
-                    //
-                    // **And whether the words are the transcript of a voice note** (the
-                    // record's `voice_note`), for the same reason: that `ceo-message` is the row
-                    // that can beat the receipt, and it must be a voice row from the start, not
-                    // a text bubble the receipt later turns into the recording.
-                    let turn_id = if client_id.is_some() || voice_note {
-                        self.record_prompt_from_client(&binding, &text, id, &channel, client_id.as_deref(), voice_note)?
-                    } else {
-                        self.record_prompt(&binding, &text, Source::Text, None, Some(id), &channel)?
-                    };
+                    let source = source.unwrap_or(Source::Text);
+                    let kept = (self.keep_intake_channel || source == Source::Agent).then_some(channel.as_str());
+                    let turn_id = self.ledger.record_prompt_received_from_client(&binding, &text, source, id, kept, client_id.as_deref(), voice_note)?;
                     self.input_channels.insert(turn_id.clone(), channel);
                     self.emit_live(self.turn_status_event(&binding, &turn_id, TurnStatus::Queued, None));
                     self.emit_live(self.ceo_message_event(&binding, &turn_id));
@@ -3901,7 +3785,7 @@ impl Spine {
                 continue;
             }
             let binding = self.fence_binding(&turn.thread_id)?;
-            if turn.state == crate::ledger::TurnState::Received && (id.starts_with("question-answer:") || id.starts_with("question-followup:")) {
+            if turn.state == crate::ledger::TurnState::Received {
                 if !self.queue.iter().any(|q|q.turn_id==id) {
                     self.queue.push_back(Queued{turn_id:id.clone(),binding,text:turn.user_text.clone(),intake_id:None});
                 }
@@ -4265,11 +4149,12 @@ impl Spine {
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
         // A pressed button's words stay pressed through the replay (finding 14).
+        let source = self.ledger.turn(failed_turn_id).map(|t| t.source).unwrap_or(Source::Text);
         let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
         let retry_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
-            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, Source::Text)?,
-            Some(channel) => self.record_prompt(binding, original_text, Source::Text, None, None, &channel)?,
-            None => self.ledger.record_prompt_received(binding, original_text, Source::Text)?,
+            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, source)?,
+            Some(channel) => self.record_prompt(binding, original_text, source, None, None, &channel)?,
+            None => self.ledger.record_prompt_received(binding, original_text, source)?,
         };
         if let Some(channel) = original_channel { self.input_channels.insert(retry_turn_id.clone(), channel); }
         self.ledger.mark_turn_superseded(failed_turn_id, &retry_turn_id)?;
@@ -4308,11 +4193,12 @@ impl Spine {
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
         // A pressed button's words stay pressed through the replay (finding 14).
+        let source = self.ledger.turn(failed_turn_id).map(|t| t.source).unwrap_or(Source::Text);
         let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
         let replay_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
-            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, Source::Text)?,
-            Some(channel) => self.record_prompt(binding, original_text, Source::Text, None, None, &channel)?,
-            None => self.ledger.record_prompt_received(binding, original_text, Source::Text)?,
+            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, source)?,
+            Some(channel) => self.record_prompt(binding, original_text, source, None, None, &channel)?,
+            None => self.ledger.record_prompt_received(binding, original_text, source)?,
         };
         if let Some(channel) = original_channel { self.input_channels.insert(replay_turn_id.clone(), channel); }
         self.ledger.mark_turn_superseded(failed_turn_id, &replay_turn_id)?;
@@ -4409,10 +4295,8 @@ impl Spine {
             payload.worker_state = workers.priming_lines();
         }
         self.fill_loro_tier(&mut payload, binding);
-        let mut priming = payload.to_priming_prompt();
-        // Preserve the company material and interview offer in the conversation.
-        let onboarding_block = self.company_block(binding);
-        if let Some(block) = &onboarding_block { priming.push_str(block); }
+        let onboarding_block=self.company_block(binding);
+        let priming=payload.to_priming_prompt_with_company(onboarding_block.as_deref());
         // Durable but NEVER rendered — same Internal-turn discipline as first-attach priming.
         let _ = self.ledger.record_prompt_received(binding, "[re-prime:rotation]", Source::Internal);
 
@@ -4498,43 +4382,13 @@ impl Spine {
     /// excludes it) exactly like re-prime injection.
     fn request_handoff_summary(&mut self, binding: &ThreadBinding) -> Result<String, SpineError> {
         const HANDOFF_PROMPT: &str = r#"{"event":"session_handoff_requested"}"#;
-        self.request_internal_reply(binding, HANDOFF_PROMPT, false)
+        self.request_internal_reply(binding, HANDOFF_PROMPT)
     }
 
     /// Read-only model communication. Its input and intermediate output have no render path.
-    fn request_internal_reply(&mut self, binding: &ThreadBinding, prompt: &str, read_only: bool) -> Result<String, SpineError> {
+    fn request_internal_reply(&mut self, binding: &ThreadBinding, prompt: &str) -> Result<String, SpineError> {
         let thread_id = binding.thread_id();
         let turn_id = self.ledger.record_prompt_received(binding, prompt, Source::Internal)?;
-        let control = self.control.clone();
-        let _report_read = if read_only {
-            let Some(guard) = control.begin_report_read(&turn_id) else {
-                self.ledger.interrupt_turn(&turn_id, "Report deferred to user input")?;
-                return Err(SpineError::Assignments("Report deferred to user input".into()));
-            };
-            Some(guard)
-        } else { None };
-        if read_only {
-            let prepared = (|| -> Result<(), SpineError> {
-                self.prepare_request(binding)?;
-                if control.report_interrupted(&turn_id) {
-                    return Err(SpineError::Assignments("Report yielded to user input".into()));
-                }
-                let lease = self.lease.as_mut().ok_or(SpineError::NoLease)?;
-                if lease.cancel_handle().is_none() {
-                    return Err(SpineError::Assignments("Report authoring needs an interruptible conversation lease".into()));
-                }
-                lease.prepare_work_turn(binding, &turn_id, Source::Internal, prompt, &mut |_| {})?;
-                Ok(())
-            })();
-            if let Err(error) = prepared {
-                if matches!(error, SpineError::Cognition(CognitionError::Io(_) | CognitionError::Protocol(_))) {
-                    self.clear_lease();
-                }
-                self.ledger.interrupt_turn(&turn_id, &error.to_string())?;
-                return Err(error);
-            }
-        }
-
         // Disjoint field borrows — same pattern as `deliver()`.
         let ledger = &mut self.ledger;
         let journal = self.machinery_journal.as_ref();
@@ -4556,15 +4410,9 @@ impl Spine {
                 }
                 TurnItem::AnswerComplete => {}
             };
-            if read_only { lease.prompt_read_only(prompt, &mut on_item) } else { lease.prompt_context_only(prompt, &mut on_item) }
+            lease.prompt_context_only(prompt, &mut on_item)
         };
 
-        // A failed provider connection cannot serve the next scheduled retry.
-        if read_only && result.is_err() { self.clear_lease(); }
-        if read_only && control.report_interrupted(&turn_id) {
-            self.ledger.interrupt_turn(&turn_id, "Report yielded to user input")?;
-            return Err(SpineError::Assignments("Report yielded to user input".into()));
-        }
         if let Some(failure) = self.detect_upstream_failure(&turn_id, &result) {
             let reason = failure.summary();
             self.ledger.interrupt_turn(&turn_id, &reason)?;
@@ -4937,9 +4785,7 @@ impl Spine {
             payload.worker_state = workers.priming_lines();
         }
         self.fill_loro_tier(&mut payload, binding);
-        let mut priming = payload.to_priming_prompt();
-        // Preserve the company material and interview offer in the conversation.
-        if let Some(block) = &onboarding_block { priming.push_str(block); }
+        let priming=payload.to_priming_prompt_with_company(onboarding_block.as_deref());
         // Record the priming as an Internal turn so it is durable but NEVER rendered.
         let reprime_turn = self.ledger.record_prompt_received(binding, "[re-prime]", Source::Internal);
         // ... and as an Internal ACTION, claim-then-execute: this is the first-attach

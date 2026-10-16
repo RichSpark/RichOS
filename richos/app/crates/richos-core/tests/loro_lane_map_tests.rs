@@ -284,10 +284,10 @@ fn a_thread_reading_another_companys_in_repo_record_is_told_whose_it_is() {
     // ANY OTHER entity is told, in one sentence, whose record this is.
     match c.interpret(&json, &req("femcboost", "pricing")) {
         LoroTier::Slice(t) => {
-            assert!(t.starts_with("COMPANY MEMORY PROVENANCE:"), "{t}");
-            assert!(t.contains("richos's own record"), "{t}");
-            assert!(t.contains("holds no femcboost partition"), "{t}");
-            assert!(t.contains("Do not state any of it as a fact about femcboost"), "{t}");
+            assert!(t.starts_with("{\"owner\":") || t.starts_with("{\"partitioned\":") || t.starts_with("{\"source\":"), "{t}");
+            assert!(t.contains("\"owner\":\"richos\""), "{t}");
+            assert!(t.contains("\"partitioned\":false"), "{t}");
+            assert!(t.contains("\"requested_entity\":\"femcboost\""), "{t}");
             // loro's own text is carried whole underneath it, never edited.
             assert!(t.contains("COMPANY MEMORY (loro) — bearing on: \"pricing\""), "{t}");
         }

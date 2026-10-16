@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() == 2 { std::fs::create_dir_all(root.0.join("coordination"))?; }
     std::fs::create_dir_all(root.0.join("corpus/ceo/records"))?;
     let doctrine = richos_core::doctrine::ensure_rendered(&root.0, &Default::default())?;
-    let skills = richos_core::skills::ensure_rendered(&root.0)?;
+    let skills = richos_core::skills::ensure_rendered(&root.0, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app"))?;
     let bridge = EcsBridge::new(&python, &engine, &root.0.join("ecs"))?;
     let mut spine = Spine::new(Ledger::open(&root.0.join("ledger.jsonl"))?);
     let entity = EntityId::parse("depot")?;

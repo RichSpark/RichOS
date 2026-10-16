@@ -2,8 +2,7 @@
 //!
 //! Every other test in this repository proves the flag is in the argument vector and that a
 //! missing file is a refusal. Neither of those answers the question the whole feature is
-//! about: `--append-system-prompt-file` is **semi-documented** (named only inside `--bare`'s
-//! description, absent from the flag list), and it lives in a binary that self-updates
+//! about: the native `--agent` file loader lives in a binary that self-updates
 //! underneath the product — four versions sat in `~/.local/share/claude/versions/` on this
 //! machine while `native.rs` was being written, and one of them landed mid-build. A release
 //! that still passes the flag to a binary which has quietly stopped honoring it ships a
@@ -49,7 +48,7 @@
 //! this project refuses to make.
 
 use richos_core::cognition::{Cognition, TurnItem};
-use richos_core::doctrine::{self, DoctrineIdentity};
+
 use richos_core::native::{resolve_claude_bin, NativeCognition};
 use std::path::{Path, PathBuf};
 
@@ -65,15 +64,16 @@ const COMMAND: &str = "make kedge";
 const BEHAVIOR: &str = "Acknowledged.";
 
 /// The shipping doctrine plus three facts that exist nowhere else in the world.
+fn shipping_definition(dir: &Path) -> PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app");
+    let plugin = richos_core::skills::ensure_rendered(dir, &source).unwrap();
+    plugin.join("agents/rich.md")
+}
+
 fn sentinel_doctrine(dir: &Path) -> PathBuf {
-    let body = format!(
-        "{}\n\n## Measurement\n\nBegin every reply with the single word \"{BEHAVIOR}\" on its \
-         own line. The project status word is {TOKEN}. The project build command is \
-         `{COMMAND}`.\n",
-        doctrine::render(&DoctrineIdentity::default())
-    );
-    std::fs::create_dir_all(dir).unwrap();
-    let p = dir.join("inner-doctrine.md");
+    let p = shipping_definition(dir);
+    let mut body = std::fs::read_to_string(&p).unwrap();
+    body.push_str(&format!("\n\n## Measurement\n\nBegin every reply with the single word \"{BEHAVIOR}\" on its own line. The project status word is {TOKEN}. The project build command is `{COMMAND}`.\n"));
     std::fs::write(&p, body).unwrap();
     p
 }
@@ -98,13 +98,9 @@ fn one_turn(doctrine_path: &Path, question: &str) -> String {
             bin.display()
         );
     }
-    // The working directory is irrelevant to this measurement and `/tmp` is the least
-    // surprising choice; `--setting-sources ''` means nothing is loaded from it either way.
-    let skills = doctrine_path
-        .parent()
-        .map(|d| richos_core::skills::ensure_rendered(d).expect("the skills fixture must render"))
-        .expect("the doctrine has a parent directory");
-    let mut cog = NativeCognition::start(&bin, Path::new("/tmp"), doctrine_path, &skills).unwrap_or_else(|e| {
+    // Each cell uses its isolated plugin directory and the production named-agent selector.
+    let skills = doctrine_path.parent().unwrap().parent().unwrap();
+    let mut cog = NativeCognition::start(&bin, skills, doctrine_path, skills).unwrap_or_else(|e| {
         panic!(
             "the lease did not start, so NOTHING WAS VERIFIED (not a pass): {e}. \
              The usual cause is that this machine's `claude` is not signed in."
@@ -144,7 +140,7 @@ fn the_standing_instruction_reaches_the_model_and_the_control_proves_it() {
     // ---- CONTROL: the same flag, the same binary, the SHIPPING doctrine ------------------
     // One variable: the contents of the file the flag names.
     let control_dir = temp("control");
-    let control = doctrine::ensure_rendered(&control_dir, &DoctrineIdentity::default()).unwrap();
+    let control = shipping_definition(&control_dir);
     println!("control doctrine: {} ({} bytes)", control.display(), std::fs::metadata(&control).unwrap().len());
     let without = one_turn(&control, SENTINEL_QUESTION);
     println!("\n--- CONTROL REPLY ---\n{without}\n");
