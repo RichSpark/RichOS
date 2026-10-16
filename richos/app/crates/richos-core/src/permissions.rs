@@ -267,7 +267,7 @@ impl ScopedPermissions {
             // saying out loud, which is finish the work.
             //
             "mcp__richos_assignments__record"|"mcp__richos_status__background_work"|"mcp__richos_status__sessions"|
-            "mcp__richos_status__transcript"|"mcp__richos_status__send"|
+            "mcp__richos_status__transcript"|"mcp__richos_status__send"|"mcp__richos_status__delegate"|
             // HIS TEAM'S TOOLS (`operator_desk_tools.rs`), present only on an operator install's
             // front desk. A named stop only removes (§67: *"unconditional for the agents his
             // words name"*), the interrupt ends a turn and keeps its agents, and the read
@@ -500,7 +500,7 @@ impl ScopedPermissions {
         // **And what note 3 LEAVES on the front desk**: hand the work over, and look at it.
         // Without these two arms the test above would be satisfied by a front desk that can
         // do nothing whatsoever, which is not what his page asks for.
-        for tool in ["mcp__richos_assignments__record","mcp__richos_status__background_work"] {
+        for tool in ["mcp__richos_assignments__record","mcp__richos_status__background_work","mcp__richos_status__delegate"] {
             assert_eq!(conversation.wait(&json!({"tool_name":tool,"input":{}}),Duration::from_millis(20)).behavior(),"allow","front desk lost {tool}");
         }
         std::fs::remove_file(front).unwrap();std::fs::remove_file(back).unwrap();

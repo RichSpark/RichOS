@@ -178,3 +178,11 @@ through scoped inspection.
 The native hook interface supports host context at tool boundaries. See the
 [provider hooks reference](https://code.claude.com/docs/en/hooks). Actual behavior
 is also exercised by the opt-in live desktop probe.
+
+Execution handoff uses `richos_status.delegate`, shared by automatic intake routing
+and Rich's manual decision. The original user ledger reference identifies the work
+in the existing peer inbox. Its existing append lock covers lookup, append and
+fsync, so simultaneous calls or retries return the same saved handoff. A new user
+turn with identical words remains distinct. Assignment records cannot dispatch it.
+New execution requests wait for Stu's next prepared turn; corrections and reports
+still use live input. Neither agent is the other's provider teammate.

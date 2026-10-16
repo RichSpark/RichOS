@@ -1174,6 +1174,9 @@ impl WorkHost {
         let scope=self.message_scope(binding);
         let result=(|| {
             let Some((message,through))=crate::session_tools::pending_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
+            // A new execution request gets its own prepared turn and original authority.
+            // Corrections and observations still reach the live session immediately.
+            if message.handoff {return Ok(())}
             use sha2::Digest;
             let digest=sha2::Sha256::digest(format!("{}\0{}\0{through}",scope.entity_id,scope.thread_id));
             let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
@@ -1504,7 +1507,7 @@ impl WorkHost {
                     binding
                 }
                 Next::Answer(binding,delivery)=>{
-                    let message=crate::session_tools::Message {from:"user".into(),text:delivery.text.clone(),instruction:None};
+                    let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:delivery.text.clone(),instruction:None};
                     match self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id)) {
                         Ok(session)=>if let Err(error)=crate::question_work::taken(&self.state,std::slice::from_ref(&delivery.id),&session)
                             .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id))) {
@@ -5722,6 +5725,14 @@ mod tests {
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"finishing the original turn must not rewind the consumed cursor");
         assert!(backend.inner.lock().unwrap().processing,"the running job was not ended to deliver input");
         assert!(h.host.open_assignments().unwrap().is_empty());
+        use sha2::Digest;
+        let instruction=crate::ecs::UserInstruction::with_text("ledger:thread-one:turn-7".into(),
+            format!("{:x}",sha2::Sha256::digest("landing the three branches")),Some("landing the three branches"));
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",Some(instruction)).unwrap();
+        crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"New execution request"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(matches!(rx.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"new work must wait for a prepared turn, not replace current authority through live input");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().0.handoff);
         drop(running);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 

@@ -103,7 +103,7 @@ pub fn call(scope: &StatusToolScope, name: &str, args: Value) -> Result<Value,St
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Message {pub from:String, pub text:String, #[serde(default)] pub instruction:Option<crate::ecs::UserInstruction>}
+pub struct Message {#[serde(default, skip_serializing_if="std::ops::Not::not")] pub handoff:bool, pub from:String, pub text:String, #[serde(default)] pub instruction:Option<crate::ecs::UserInstruction>}
 
 pub fn inbox(scope: &StatusToolScope, role: &str) -> Result<PathBuf,String> {
     if !component(&scope.entity_id) || !component(&scope.thread_id) || !matches!(role,"rich"|"stu") {
@@ -121,21 +121,65 @@ pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Va
     let sender:Session=serde_json::from_slice(&std::fs::read(scope_path.with_extension("session.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     if sender.entity_id!=scope.entity_id || sender.thread_id!=scope.thread_id {return Err("Message scope changed".into())}
     let peer=match sender.role.as_str() {"rich"=>"stu","stu"=>"rich",_=>return Err("Invalid sender role".into())};
-    append(scope,peer,&Message {from:sender.role,text:args.text,instruction:sender.instruction})?;
+    append(scope,peer,&Message {handoff:false,from:sender.role,text:args.text,instruction:sender.instruction})?;
     Ok(json!({"saved":true,"to":peer}))
 }
 
 /// A host observation is information, never a user instruction or a peer's authorship.
 pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String> {
-    append(scope,"stu",&Message {from:"stall-watch".into(),text:text.into(),instruction:None})
+    append(scope,"stu",&Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None})
 }
 
 pub(crate) fn observe_user_stop(scope:&StatusToolScope,assignment:&str,obligation:&str,at:u64)->Result<(),String> {
-    append(scope,"stu",&Message {from:"user-control".into(),text:json!({"event":"user_stop",
+    append(scope,"stu",&Message {handoff:false,from:"user-control".into(),text:json!({"event":"user_stop",
         "assignment_id":assignment,"obligation_id":obligation,"requested_at_ms":at}).to_string(),instruction:None})
 }
 
+/// Execution ownership is recorded in the existing inbox, using the original ledger reference.
+pub fn delegate(scope_path:&Path,scope:&StatusToolScope,args:Value)->Result<Value,String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Args {text:String}
+    let args:Args=serde_json::from_value(args).map_err(|e|e.to_string())?;
+    if args.text.trim().is_empty() || args.text.len()>128*1024 {return Err("Handoff must contain 1–131072 bytes".into())}
+    let sender:Session=serde_json::from_slice(&std::fs::read(scope_path.with_extension("session.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    if sender.role!="rich" || sender.entity_id!=scope.entity_id || sender.thread_id!=scope.thread_id {return Err("Only this conversation's Rich can hand work to Stu".into())}
+    let mut instruction=sender.instruction.ok_or("No original user request is bound to this turn")?;
+    let text=crate::work_host::verified_instruction(&scope.state_root,&scope.entity_id,&scope.thread_id,&instruction.ledger_ref,&instruction.sha256).map_err(str::to_string)?;
+    instruction=crate::ecs::UserInstruction::with_text(instruction.ledger_ref,instruction.sha256,Some(&text));
+    let message=Message {handoff:true,from:"rich".into(),text:args.text,instruction:Some(instruction)};
+    let (through,already_saved)=append_record(scope,"stu",&message,true)?;
+    Ok(json!({"saved":true,"to":"stu","through":through,"already_saved":already_saved,"instruction_ledger_ref":message.instruction.unwrap().ledger_ref}))
+}
+
+pub fn saved_handoff(scope:&StatusToolScope,instruction:&crate::ecs::UserInstruction)->Result<Option<(Message,u64)>,String> {
+    let path=inbox(scope,"stu")?;
+    let file=match std::fs::File::open(path) {Ok(file)=>file,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
+    find_handoff(&mut BufReader::new(file),instruction)
+}
+
+fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstruction)->Result<Option<(Message,u64)>,String> {
+    let mut through=0;
+    loop {
+        let mut line=String::new();
+        let count=reader.take(256*1024+1).read_line(&mut line).map_err(|e|e.to_string())?;
+        if count>256*1024 {return Err("Saved peer input exceeds its frame limit".into())}
+        if count==0 || !line.ends_with('\n') {return Ok(None)}
+        through+=count as u64;
+        let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
+        if message.handoff && message.instruction.as_ref().is_some_and(|i|i.ledger_ref==instruction.ledger_ref) {
+            if message.instruction.as_ref().unwrap().sha256!=instruction.sha256 {return Err("Saved handoff disagrees with the original request".into())}
+            return Ok(Some((message,through)))
+        }
+    }
+}
+
 fn append(scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
+    append_record(scope,role,message,false).map(|_|())
+}
+
+fn append_record(scope:&StatusToolScope,role:&str,message:&Message,unique:bool)->Result<(u64,bool),String> {
+
     let path=inbox(scope,role)?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e|e.to_string())?;
     let mut file=std::fs::OpenOptions::new().create(true).append(true).read(true).open(&path).map_err(|e|e.to_string())?;
@@ -157,7 +201,12 @@ fn append(scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> 
             file.set_len(complete).map_err(|e|e.to_string())?;
         }
     }
-    file.write_all(&record).and_then(|_|file.sync_all()).map_err(|e|e.to_string())
+    if unique {
+        file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
+        if let Some((_,through))=find_handoff(&mut BufReader::new(&mut file),message.instruction.as_ref().ok_or("Handoff has no request")?)? {file.sync_all().map_err(|e|e.to_string())?;return Ok((through,true))}
+    }
+    file.write_all(&record).and_then(|_|file.sync_all()).map_err(|e|e.to_string())?;
+    Ok((file.metadata().map_err(|e|e.to_string())?.len(),false))
 }
 
 /// The cursor is acknowledged only after the receiving path durably accepts the record.
@@ -258,6 +307,52 @@ pub fn begin_attempt(scope:&StatusToolScope,role:&str,input:&str,session:&str)->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn concurrent_hook_and_manual_handoffs_survive_restart_without_duplicating_execution() {
+        use crate::{ledger::{Ledger,Source},entity::EntityId};
+        use sha2::Digest;
+        let root=std::env::temp_dir().join(format!("richos-handoff-{}",uuid::Uuid::new_v4()));
+        let mut ledger=Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
+        let entity=EntityId::parse("company").unwrap();
+        let thread=ledger.create_thread("work",&entity).unwrap();
+        let binding=ledger.thread_binding(&thread).unwrap();
+        let original="Investigate the repository and implement the requested fix";
+        let turn=ledger.record_prompt_received(&binding,original,Source::Text).unwrap();
+        let instruction=crate::ecs::UserInstruction::with_text(format!("ledger:{thread}:{turn}"),format!("{:x}",sha2::Sha256::digest(original)),Some(original));
+        let scope=StatusToolScope {version:1,state_root:root.join("engine-state"),entity_id:entity.to_string(),thread_id:thread};
+        let path=root.join("status.json");bind(&path,&scope,"native-rich","rich",Some(instruction.clone())).unwrap();
+        let barrier=std::sync::Arc::new(std::sync::Barrier::new(3));
+        let results=std::thread::scope(|threads| {
+            let run=|text| {let b=barrier.clone();let path=&path;let scope=&scope;threads.spawn(move || {b.wait();delegate(path,scope,json!({"text":text})).unwrap()})};
+            let hook=run("Original request and recorded context");let manual=run("Rich's handoff with his findings");barrier.wait();
+            [hook.join().unwrap(),manual.join().unwrap()]
+        });
+        assert_eq!(results[0]["through"],results[1]["through"]);
+        assert_ne!(results[0]["already_saved"],results[1]["already_saved"]);
+        let (message,through)=pending(&scope,"stu").unwrap().unwrap();assert!(message.handoff);
+        assert_eq!(message.instruction.as_ref().unwrap().text.as_deref(),Some(original));
+        begin_attempt(&scope,"stu",&format!("peer:{through}"),"stu-before-crash").unwrap();
+        // A fresh Rich session after a crash retries the same canonical request.
+        bind(&path,&scope,"rich-after-crash","rich",Some(instruction.clone())).unwrap();
+        assert_eq!(delegate(&path,&scope,json!({"text":"Retry after uncertain HTTP result"})).unwrap()["through"],through);
+        assert_eq!(previous_attempt(&scope,"stu",&format!("peer:{through}")).unwrap().unwrap()["session_id"],"stu-before-crash");
+        acknowledge(&scope,"stu",through).unwrap();
+        assert!(delegate(&path,&scope,json!({"text":"Retry after Stu consumed it"})).unwrap()["already_saved"].as_bool().unwrap());
+        assert!(pending(&scope,"stu").unwrap().is_none());
+        send(&path,&scope,json!({"text":"A correction is still ordinary independent communication"})).unwrap();
+        let (correction,offset)=pending(&scope,"stu").unwrap().unwrap();assert!(!correction.handoff);acknowledge(&scope,"stu",offset).unwrap();
+        // Identical words in a NEW user turn remain a distinct request.
+        let next=ledger.record_prompt_received(&binding,original,Source::Text).unwrap();
+        let next_instruction=crate::ecs::UserInstruction::with_text(format!("ledger:{}:{next}",scope.thread_id),instruction.sha256.clone(),Some(original));
+        bind(&path,&scope,"rich-after-crash","rich",Some(next_instruction)).unwrap();
+        let next=delegate(&path,&scope,json!({"text":"The user asked again"})).unwrap();assert_ne!(next["through"],through);
+        bind(&path,&scope,"native-stu","stu",Some(instruction.clone())).unwrap();assert!(delegate(&path,&scope,json!({"text":"wrong role"})).is_err());
+        let mut forged=instruction;forged.sha256="0".repeat(64);bind(&path,&scope,"native-rich","rich",Some(forged)).unwrap();
+        assert!(delegate(&path,&scope,json!({"text":"forged request"})).is_err());
+        drop(ledger);std::fs::remove_dir_all(root).unwrap();
+    }
+
+
     #[test]
     fn a_live_update_ack_does_not_hide_an_older_unfinished_native_turn_on_restart() {
         let root=std::env::temp_dir().join(format!("richos-peer-frontier-{}",uuid::Uuid::new_v4()));
