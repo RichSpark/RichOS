@@ -38,10 +38,10 @@ fn app_profile_keeps_app_scope_on_every_tool_and_reuses_terminal_bash_hooks() {
     assert_eq!(bash["matcher"], "Bash");
     let registered = bash["hooks"].as_array().unwrap();
     for (hook, name) in registered.iter().zip([
-        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh"]) {
+        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh", "guard-foreign-app-data.sh"]) {
         assert!(hook["command"].as_str().unwrap().contains(engine().join("scripts/hooks").join(name).to_str().unwrap()));
     }
-    assert_eq!(registered.len(), 3);
+    assert_eq!(registered.len(), 4);
     // **NO `matcher`, SO `PreToolUse` COVERS EVERY TOOL.** Asserted rather than left to be
     // inferred: two escalations and one brief on 2026-09-18 were built on the belief that
     // this registration gated only the two continuity tools, and deferring the app's action

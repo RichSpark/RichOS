@@ -405,7 +405,8 @@ impl EngineProfile {
             "matcher":"Bash", "hooks": [
                 {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/guard-interactive-prompt.sh"))), "timeout":25},
                 {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/guard-no-shell-c.sh"))), "timeout":25},
-                {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/shell-evidence.sh"))), "timeout":86400}
+                {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/shell-evidence.sh"))), "timeout":86400},
+                {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/guard-foreign-app-data.sh"))), "timeout":25}
             ]}));
         write(&plugin.join("hooks/hooks.json"), &json!({"hooks":hooks}).to_string())?;
         // Spawn preflight runs the canonical guards directly. The real provider
