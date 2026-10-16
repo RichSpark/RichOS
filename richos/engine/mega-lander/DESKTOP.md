@@ -123,3 +123,5 @@ Continue any work that does not depend on the answer. End the turn when only dep
 remains. A complete set of answers returns to this same assignment at a turn boundary,
 including phone taps, typed answers and voice answers. No desktop approval is needed.
 Withdraw your own moot questions with `richos_questions.withdraw` and a short reason.
+
+Stu's own shell commands run as native background tasks so each command can be stopped independently. The shell command and its other arguments are preserved. Read the native task result before treating the command as finished. A user Stop revokes that request's tools; status inspection and communication with Rich remain available.

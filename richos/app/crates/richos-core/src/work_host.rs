@@ -4490,7 +4490,10 @@ impl WorkHost {
             let dispatch_lock = crate::work_status::lock_receipts(&self.state, entity, thread)?;
             let trail = crate::work_status::trail(&self.state, entity, thread, &record.obligation_id)?;
             drop(dispatch_lock);
-            let outcomes: Vec<CommandStop> = trail.stop_targets.iter().map(|(owner, tool)| {
+            let mut targets = trail.stop_targets;
+            targets.extend(crate::work_status::direct_stop_targets(&self.state, &session,
+                &record.instruction_ledger_ref, &record.instruction_sha256)?.into_iter().map(|tool| (session.clone(), tool)));
+            let outcomes: Vec<CommandStop> = targets.iter().map(|(owner, tool)| {
                 if owner == &session {
                     stopper.stop_worker(tool)
                 } else { CommandStop::NotDelivered }
@@ -4499,7 +4502,7 @@ impl WorkHost {
             crate::questions::Store::new(&self.state).close(entity,thread,Some(&record.obligation_id),"The assignment was stopped",false)?;
             drop(crate::question_work::discard(&self.state,entity,thread,&record.obligation_id));
             assignment::advance(&self.state, entity, thread, id, AssignmentState::Interrupted,
-                if outcomes.is_empty() { "Stop requested by the user. No unresolved worker launch is recorded." }
+                if outcomes.is_empty() { "Stop requested by the user. No native execution is recorded." }
                 else { watched_stop_detail(true, &outcomes) }).map_err(|e| e.to_string())?;
             let scope = crate::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:entity.into(),thread_id:thread.into()};
             crate::session_tools::observe_user_stop(&scope, id, &record.obligation_id, stopped.user_stop_requested_at_ms.unwrap())?;
@@ -10769,8 +10772,16 @@ mod tests {
                 "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"independent-stu"},
                 "request":{"obligation_id":obligation,"role":"worker"},"status":"running","tool_use_id":tool}).to_string()).unwrap();
         }
+        let evidence=h.state.join("evidence/independent-stu");
+        std::fs::create_dir_all(&evidence).unwrap();
+        let selected=assignment::read(&h.state,"depot","thread-one",&first.id).unwrap();
+        let callbacks=[serde_json::json!({"schema":1,"instruction":{"ledger_ref":selected.instruction_ledger_ref,"sha256":selected.instruction_sha256},
+            "callback":{"session_id":"independent-stu","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"direct-first"}}),
+            serde_json::json!({"schema":1,"instruction":{"ledger_ref":"ledger:thread-one:another-request","sha256":"other"},
+            "callback":{"session_id":"independent-stu","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"direct-second"}})];
+        std::fs::write(evidence.join("callbacks.jsonl"),callbacks.iter().map(|row|row.to_string()+"\n").collect::<String>()).unwrap();
         h.host.stop_assignment("depot","thread-one",&first.id).unwrap();
-        assert_eq!(*stopper.0.lock().unwrap(),vec!["call-first"]);
+        assert_eq!(*stopper.0.lock().unwrap(),vec!["call-first","direct-first"]);
         let stopped=assignment::read(&h.state,"depot","thread-one",&first.id).unwrap();
         assert!(stopped.user_stop_requested_at_ms.is_some());
         let control=crate::session_tools::pending(&h.host.message_scope(&h.binding),"stu").unwrap().unwrap().0;

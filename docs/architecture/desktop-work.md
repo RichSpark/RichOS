@@ -139,8 +139,14 @@ A user Stop is recorded durably before cancellation. For independent Stu, the ho
 persists revocation before waiting for the existing receipt lock, takes its launch
 snapshot under that lock, then sends the existing native per-task stop control only to that work's observed
 tool calls on their owning session. Missing delivery or ending evidence stays
-unknown. The Stop fact prevents subsequent preparation, dispatch and worker actions
-for that obligation. Stu receives typed user-control facts through the same inbox;
+unknown. Direct Stu shell calls retain their original instruction in the existing
+hook evidence. The canonical hook uses the native background-task option for
+Stu's own Bash calls, preserving the command and its other arguments. Foreground
+Bash has no independently stoppable native task; interrupting the session also
+stops unrelated workers. Using the existing background-task option gives those
+commands the same native per-task Stop without interrupting the session. The Stop fact revokes that request's subsequent direct tools as well
+as its preparation, dispatch and worker actions. Read-only status and peer
+communication remain available. Stu receives typed user-control facts through the same inbox;
 other assignments and Rich's conversation keep their own execution ownership.
 
 ## Lifecycle

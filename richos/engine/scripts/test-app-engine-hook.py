@@ -132,6 +132,33 @@ class DesktopHooks(unittest.TestCase):
             tool_input={"subagent_type":"worker", "prompt":"Edit an arbitrary file"})
         self.assertEqual(result.returncode, 2)
 
+    def test_stopping_an_assignment_revokes_its_direct_stu_tools_only(self):
+        import hashlib
+        partition = hashlib.sha256(b'["company","thread"]').hexdigest()
+        assignments = self.root / "state/assignments" / partition
+        assignments.mkdir(parents=True)
+        original = {"ledger_ref":"ledger:thread:original", "sha256":"a" * 64}
+        (assignments / "job.json").write_text(json.dumps({"schema":1, "id":"job",
+            "entity_id":"company", "thread_id":"thread", "obligation_id":"work-job",
+            "instruction_ledger_ref":original["ledger_ref"], "instruction_sha256":original["sha256"],
+            "state":"interrupted", "user_stop_requested_at_ms":1234}))
+        grant = {"version":1, "actions_allowed":True, "background_work_allowed":True,
+            "binding":{"entity_id":"company", "thread_id":"thread", "session_id":"fictional-session", "turn_id":"peer:1"}}
+        for instruction in [None, original, {"ledger_ref":"ledger:thread:other", "sha256":"b" * 64}]:
+            self.scope.write_text(json.dumps({**grant, "user_instruction":instruction}))
+            for tool, args in [("Bash", {"command":"true"}), ("Write", {"file_path":str(self.coordination / "result.txt"), "content":"after Stop"}),
+                               ("Read", {"file_path":str(self.scope)})]:
+                result = self.hook("PreToolUse", tool_name=tool, tool_use_id="direct-" + tool, tool_input=args)
+                self.assertEqual(result.returncode, 0 if instruction and instruction != original else 2, result.stderr)
+                if result.returncode == 0 and tool == "Bash":
+                    self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]["updatedInput"], {**args, "run_in_background":True})
+            if instruction == original:
+                self.assertEqual(self.hook("PreToolUse", tool_name="mcp__richos_status__send", tool_use_id="stop-report", tool_input={"text":"Stopped"}).returncode, 0)
+        self.assertFalse((self.coordination / "result.txt").exists(), "the fixture never executes a requested tool")
+        callbacks = [json.loads(line) for line in (self.root / "state/evidence/fictional-session/callbacks.jsonl").read_text().splitlines()]
+        direct = [row for row in callbacks if row["callback"].get("tool_use_id") == "direct-Bash"]
+        self.assertEqual(direct[-1]["instruction"]["ledger_ref"], "ledger:thread:other")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,42 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+/// Direct shell calls carry the same original instruction as the assignment.
+/// Reuse their existing hook evidence and the native tool-to-task cancellation map.
+pub fn direct_stop_targets(state: &Path, session: &str, reference: &str, digest: &str) -> Result<Vec<String>, String> {
+    use std::io::{BufRead, BufReader, Read};
+    if session.is_empty() || !session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err("Invalid native session identity".into());
+    }
+    let path = state.join("evidence").join(session).join("callbacks.jsonl");
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) => return Err(error.to_string()),
+    };
+    if file.metadata().map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
+        return Err("Native command evidence exceeds its read limit".into());
+    }
+    let mut reader = BufReader::new(file);
+    let mut targets = Vec::new();
+    loop {
+        let mut line = String::new();
+        let size = reader.by_ref().take(1024 * 1024 + 1).read_line(&mut line).map_err(|e| e.to_string())?;
+        if size > 1024 * 1024 { return Err("Native command evidence has an oversized frame".into()); }
+        if size == 0 || !line.ends_with('\n') { break; }
+        let row: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+        let call = &row["callback"];
+        if row["instruction"]["ledger_ref"] == reference && row["instruction"]["sha256"] == digest
+            && call["session_id"] == session && call["agent_id"].is_null()
+            && call["hook_event_name"] == "PreToolUse" && call["tool_name"] == "Bash" {
+            if let Some(tool) = call["tool_use_id"].as_str().filter(|id| !id.is_empty()) {
+                if !targets.iter().any(|id| id == tool) { targets.push(tool.to_string()); }
+            }
+        }
+    }
+    Ok(targets)
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct WorkSummary {
     pub items: Vec<WorkItem>,
