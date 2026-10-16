@@ -88,10 +88,10 @@ kc_bound() {
   remote="$(python3 - "$home" "$cmd" "$who" "$TESTVM_GUEST_USER" "$TESTVM_KEYCHAIN_PROBE_SECONDS" "$HERE/ax-deadline.py" <<'BOUND'
 import pathlib, shlex, sys
 home,command,who,user,seconds,source=sys.argv[1:]
-args=['env','HOME='+home,'python3','-c',pathlib.Path(source).read_text(),seconds,'sh','-c',command]
+args=['env','HOME='+home,'python3','-c',pathlib.Path(source).read_text(),seconds,'sh','-c','{ '+command+'\n} 2>&1']
 if who=='gui':
     args=['sudo','launchctl','asuser','__GUEST_UID__','sudo','-u',user]+args
-print(shlex.join(args).replace('__GUEST_UID__','$(id -u '+shlex.quote(user)+')')+' 2>&1')
+print(shlex.join(args).replace('__GUEST_UID__','$(id -u '+shlex.quote(user)+')'))
 BOUND
 )" || return 1
   kcg "$vm" "$remote"

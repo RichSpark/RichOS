@@ -505,6 +505,53 @@ t "keychain: check answers for the APP's session, not the ssh one"
   has "$(printf '%s\n' "$(grep "generic-password" "$TMP/log.kccheck" | head -1)")" "launchctl asuser"
 t_done
 
+t "keychain: the supervisor's own timing lines never reach the verdict"
+  # Nightly 59: every fresh guest printed gui-session=UNUSABLE
+  # ({"ax_phase":"guest"}probe{...}) for a keychain that answered "probe". The
+  # guest-side supervisor writes those lines on stderr, and the answer merged
+  # them in. The stub guest above never runs the supervisor, so this case runs
+  # the REAL ax-deadline.py on this machine, behind a fake `security` and `sudo`;
+  # every other guest command still goes to the stub.
+  kcl="$TMP/kc-local"; mkdir -p "$kcl/bin"
+  cat > "$kcl/bin/security" <<'SEC'
+#!/usr/bin/env bash
+case "$1" in
+  add-generic-password|delete-generic-password) exit 0 ;;
+  find-generic-password) echo probe; exit 0 ;;
+  show-keychain-info) echo "Keychain \"$2\" no-timeout" >&2; exit 0 ;;
+  default-keychain) printf '    "%s"\n' "$HOME/Library/Keychains/login.keychain-db"; exit 0 ;;
+esac
+exit 0
+SEC
+  cat > "$kcl/bin/sudo" <<'SUDO'
+#!/usr/bin/env bash
+while [ $# -gt 0 ]; do
+  case "$1" in
+    launchctl) shift 2; case "${1:-}" in sudo|env) ;; *) shift ;; esac ;;
+    sudo) shift ;;
+    -u) shift 2 ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+SUDO
+  cat > "$kcl/guest" <<GUEST
+#!/usr/bin/env bash
+vm="\$1"; shift
+case "\$*" in
+  *start_new_session*) PATH="$kcl/bin:\$PATH" exec bash -c "\$*" ;;
+  *) exec "$HERE/stub-guest.sh" "\$vm" "\$@" ;;
+esac
+GUEST
+  chmod +x "$kcl/bin/security" "$kcl/bin/sudo" "$kcl/guest"
+  out="$(env STUB_LOG="$TMP/log.kclocal" TESTVM_GUEST_EXEC="$kcl/guest" \
+           "$TESTVM_DIR/keychain.sh" check richos-test-a "$GUEST_HOME_UNDER_TEST" 2>/dev/null)"; ok $?
+  has   "$out" "gui-session=usable"
+  has   "$out" "default=$GUEST_HOME_UNDER_TEST/Library/Keychains/login.keychain-db"
+  hasnt "$out" "ax_phase"
+  hasnt "$out" "ax_guest_seconds"
+t_done
+
 t "keychain: run.sh prepares it after the fixture home lands and before the app launches"
   src="$(cat "$TESTVM_DIR/run.sh")"
   has "$src" "keychain.sh"
