@@ -516,8 +516,8 @@ impl EngineProfile {
     /// (nightly 54, 2026-10-13).
     pub fn configure(&self, command: &mut Command, provider: &Path, session: &str, scope: &Path) {
         crate::runtime::isolate_interpreter_environment(command);
-        // App bindings replace terminal component roots, test overrides and
-        // transcript discovery. The provider's account location is unchanged.
+        // App bindings replace terminal component roots and test overrides.
+        // Native transcript/session readers use the provider's selected Claude account.
         let inherited: Vec<_> = std::env::vars_os().map(|(key,_)|key)
             .chain(command.get_envs().map(|(key,_)|key.to_owned())).collect();
         for key in inherited {
@@ -588,8 +588,6 @@ impl EngineProfile {
             .env("RICHOS_ENGINE_ROOT", &self.engine).env("RICHOS_ENGINE_DIR", &self.engine)
             .env("RICHOS_ENTITY_ROOT", &self.coordination).env("CLAUDE_PROJECT_DIR", &self.coordination)
             .env("RICHOS_WORKSPACES_DIR", self.workspace_state())
-            .env("RICHOS_PROJECTS_DIR", self.state.join("platform-projects"))
-            .env("RICHOS_SESSIONS_DIR", self.state.join("platform-sessions"))
             .env("RICHOS_SA_ENTITY_ROOT", &self.coordination).env("RICHOS_SA_TEAMS_DIR", self.state.join("teams"))
             .env("RICHOS_SESSION_ID", session).env_remove("RICHOS_SESSION_PID")
             .env("RICHOS_SPAWN_HOOK_SOURCES", self.spawn_hook_sources());

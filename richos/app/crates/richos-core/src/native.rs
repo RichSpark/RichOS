@@ -5046,12 +5046,14 @@ done
         std::fs::create_dir_all(&profile.coordination).unwrap();
         std::fs::write(profile.engine.join("scripts/stall-watch.sh"),r#"
 [ "$1" = --monitor ] && [ "$2" = --jsonl ] || exit 2
+[ "${RICHOS_PROJECTS_DIR+set}" != set ] && [ "${RICHOS_SESSIONS_DIR+set}" != set ] || exit 2
 printf '{"text":"%s|%s|%s|%s|%s\\nSecond line"}\n' "$RICHOS_SESSION_ID" "$RICHOS_APP_ENTITY" "$RICHOS_APP_THREAD" "$RICHOS_SESSION_PID" "$STALL_WATCH_STATE_DIR"
 exec /bin/sleep 1000
 "#).unwrap();
         let mut environment=Command::new("/fictional/provider");
-        environment.env("RICHOS_APP_ENTITY","company-a").env("RICHOS_APP_THREAD","thread-a")
-            .env("STALL_WATCH_STATE_DIR",profile.state.join("stall-watch"));
+        environment.env("RICHOS_PROJECTS_DIR","/fictional/terminal-projects")
+            .env("RICHOS_SESSIONS_DIR","/fictional/terminal-sessions");
+        profile.configure(&mut environment,Path::new("/fictional/provider"),"stu-session",&root.join("scope.json"));
         let closed=Arc::new(AtomicBool::new(false));
         assert!(StallWatch::start(Some(&profile),LeaseRole::Conversation,&environment,"rich-session",std::process::id(),Arc::clone(&closed)).unwrap().is_none());
         let monitor=StallWatch::start(Some(&profile),LeaseRole::Work,&environment,"stu-session",std::process::id(),closed).unwrap().unwrap();

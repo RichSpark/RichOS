@@ -412,7 +412,9 @@ def _proc_words(pid, table):
 def _slot_lines(src, now):
     """(status dict or None, problem)."""
     if src.proof_slots is None:
-        return None, "the proof-run slot library (app/scripts/lib/proof_slots.py) is not beside this engine"
+        if not os.path.isfile(src.proof_slots_path):
+            return None, ""  # Optional capability not shipped with a standalone engine.
+        return None, "the proof-run slot library could not be loaded"
     try:
         return src.proof_slots.status(), ""
     except Exception as exc:  # noqa: BLE001
@@ -843,7 +845,7 @@ def idle_end(src, now, session_id, prev):
             continue
         fin, paused, _why = src.ws.finished_state(rec, cache)
         last = _last_activity(src, rec)
-        if fin or paused or (last is not None and last > at + 60) or os.path.lexists(ah._held_path(sid, aid)):
+        if fin or paused or last is None or last > at + 60 or os.path.lexists(ah._held_path(sid, aid)):
             continue
         table = ah.snapshot()
         work = ah.work_tree(sid, aid, table)

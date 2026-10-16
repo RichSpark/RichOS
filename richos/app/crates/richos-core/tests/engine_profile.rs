@@ -97,7 +97,7 @@ fn an_unrelated_or_redirected_directory_is_never_adopted() {
 fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child() {
     let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut command = std::process::Command::new("/fictional/provider");
-    command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
+    command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("RICHOS_SESSIONS_DIR", "/fictional/terminal-sessions").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
         .env("RICHOS_APP_READ_ROOTS", "[\"/fictional/other-company\"]");
     profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
     let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
@@ -110,7 +110,8 @@ fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child(
     assert_eq!(environment["GIT_AUTHOR_NAME"], None);
     assert_eq!(environment["LORO_CORPUS"], None);
     assert_eq!(environment["NODE_OPTIONS"], None);
-    assert_eq!(environment["RICHOS_PROJECTS_DIR"].as_deref(), profile.state.join("platform-projects").to_str());
+    assert_eq!(environment["RICHOS_PROJECTS_DIR"], None);
+    assert_eq!(environment["RICHOS_SESSIONS_DIR"], None);
     assert_eq!(environment["RICHOS_SESSION_ID"].as_deref(), Some("fictional-session"));
     assert_eq!(environment["RICHOS_APP_READ_ROOTS"].as_deref(), Some("[]"));
     let args: Vec<_> = command.get_args().map(|a|a.to_string_lossy().to_string()).collect();
