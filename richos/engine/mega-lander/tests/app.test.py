@@ -291,6 +291,32 @@ class DesktopWork(unittest.TestCase):
             self.assertNotIn("error",reply,repr(unit))
             self.assertIn("65,537 bytes as sent",reply["result"]["content"][0]["text"],repr(unit))
 
+    def test_inspection_reports_committed_work_separately_from_uncommitted_files_in_each_repository(self):
+        second = self.second_repository()
+        ready = self.call("prepare", {**self.args, "request_id": "commit-facts", "repos": [str(second)]})
+        paths = self.workspaces_of(ready)
+        commits = self.commit_in_each(paths, "finished.txt", "Implemented fixture")
+        row = self.app.call_read_only(self.scope_path, "inspect", {})["records"][0]
+        self.assertEqual(row["uncommitted_files"], "")
+        self.assertEqual(row["head_commit"]["sha"], commits[str(self.repo)])
+        self.assertFalse(row["assignment_completed"])
+        for repo, commit in commits.items():
+            observation = row["retained_targets"][repo]
+            self.assertEqual(observation["uncommitted_files"], "")
+            self.assertEqual(observation["head_commit"]["sha"], commit)
+            self.assertEqual(observation["head_commit"]["subject"], "Fictional finished.txt")
+            self.assertIn("finished.txt", observation["head_commit"]["changed_files"])
+            self.assertRegex(observation["head_commit"]["committed_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        (Path(paths[str(self.repo)]) / "finished.txt").write_text("Another edit, not committed")
+        changed = self.app.call_read_only(self.scope_path, "inspect", {})["records"][0]
+        self.assertIn("finished.txt", changed["uncommitted_files"])
+        self.assertEqual(changed["head_commit"]["sha"], commits[str(self.repo)])
+        for path in (self.root / "missing", self.root):
+            unknown = self.app.workspace_observation(path)
+            self.assertIsNone(unknown["uncommitted_files"])
+            self.assertIsNone(unknown["head_commit"])
+            self.assertTrue(unknown["workspace_problem"])
+
     def test_a_consult_needs_no_repository_is_read_only_and_hands_back_its_final_message(self):
         """Slice 3 of the proto-teammate shelf plan (richos-hq
         docs/plans/2026-10-06-proto-teammate-shelf.md §3): a third duty, `consult`, with no
