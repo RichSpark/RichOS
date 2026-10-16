@@ -687,7 +687,7 @@ class Wait(Base):
         rewritten=module.rewrite(payload)
         self.assertFalse(rewritten["input"]["run_in_background"])
         self.assertEqual(shlex.split(rewritten["command"].splitlines()[-1]),
-                         ["python3",str(installed),"wait","--max-seconds","0.01"])
+                         ["python3",str(installed.resolve()),"wait","--max-seconds","0.01"])
         # load-bound: Exact arguments and successful child exit prove the result; this timeout only catches a hung helper.
         ran=subprocess.run([SHELL,"-c",rewritten["command"]],capture_output=True,text=True,timeout=10)
         self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
