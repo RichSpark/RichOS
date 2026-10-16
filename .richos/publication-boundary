@@ -197,8 +197,8 @@ PRIVATE_RECORD="richos-hq — the private HQ repository, a sibling checkout of t
 
 # docs/reference/local/ is the in-repo home for recordings and anything derived
 # from them; it is gitignored, so nothing there is ever published.
-# ../richos-hq is the private record itself: measured at 0.10s to walk in full,
-# from which the shape filter keeps exactly the transcript files.
+# ../richos-hq is the private record itself; the corpus filter selects recordings
+# and their derived text. The current measurement is below.
 PRIVATE_SOURCES="docs/reference/local ../richos-hq"
 
 # Both defaults are measured, not chosen — see scripts/lib/publication-boundary.sh
@@ -207,18 +207,14 @@ PRIVATE_SOURCES="docs/reference/local ../richos-hq"
 MIN_SPEECH_LINES=8
 MIN_QUOTE_WORDS=10
 
-# The corpus bounds are raised, not the sources narrowed: narrowing would stop
-# scanning part of the private record, and nothing shows that part holds no
-# recordings. Measured on 2026-09-27 with the engine's own publication-boundary.py
-# over the private record: 4156 candidate text files, 47.3 MB, corpus built in
-# 1.9 s (three runs: 1.97, 1.92, 1.87 s). The engine defaults (4000 files, 64 MB)
-# had been passed or were close; the record grew by 1188 candidate files and
-# 7.0 MB on 2026-09-26 alone. Both caps are about four times the measured size,
-# roughly ten days of that growth. The build time scales with the corpus, so
-# expect about 7 s per commit near the caps. When one trips again, re-measure
-# and restate these numbers.
-CORPUS_MAX_FILES=16000
-CORPUS_MAX_BYTES=201326592
+# Keep the complete private record in scope. Measured on 2026-10-16 with
+# the engine's own publication-boundary.py: 14,199 candidate text files,
+# 251,099,725 bytes (239.5 MiB), full corpus built in 15.905 s (one run).
+# Both caps below are four times those measured counts. The sources, speech
+# thresholds and per-file read limit are unchanged. When a cap trips again,
+# re-measure with the engine and restate these numbers.
+CORPUS_MAX_FILES=56796
+CORPUS_MAX_BYTES=1004398900
 
 ALLOWLIST=""
 
