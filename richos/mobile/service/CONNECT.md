@@ -1,6 +1,6 @@
 # Connect control protocol v1
 
-The Worker allocates Cloudflare tunnels and DNS records. It never proxies conversations, message bodies or event streams. Cloudflare terminates public HTTPS. A supervised Mac connector forwards the tunnel to a dedicated phone-only listener on `127.0.0.1:18443`.
+The Worker allocates Cloudflare tunnels and DNS records. It does not proxy conversation delivery or event streams. Its routing endpoint processes a bounded request, recent conversation context and the current agent roles through Cloudflare Clef. Cloudflare terminates public HTTPS. A supervised Mac connector forwards the tunnel to a dedicated phone-only listener on `127.0.0.1:18443`.
 
 Every control request uses a P-256 Mac identity and signs the protocol marker, millisecond timestamp, random 128-bit nonce, HTTP method, path and SHA-256 of the exact body. See `connect/auth.mjs` for canonical encoding. Requests expire after 60 seconds. D1 rejects nonce replay. Host IDs derive from the public key; every operation additionally compares the full key.
 
@@ -8,6 +8,7 @@ Routes:
 
 | Method and path | Purpose |
 | --- | --- |
+| POST /v1/route | Classify a bounded foreground request for Rich or Stu, without dispatching work |
 | GET /healthz | Non-secret configuration readiness |
 | POST /v1/hosts | Enroll or retry enabling the signing Mac |
 | GET /v1/host | Read the signing Mac's state |
@@ -25,7 +26,7 @@ Phone authentication remains enforced on the Mac. The control service's device-k
 
 Apply `connect/schema.sql` to D1. Prepare an upload with `node richos/mobile/cli/mobile.mjs connect managed-artifact <private-profile.json>`. Keep account identifiers and operational evidence in the private repository. Upload the exact modules and metadata, preserve `secret_text` bindings and configure the returned schedule. Disable workers.dev, preview URLs, request logging and tracing. Verify source hashes, bindings and HTTPS health after deployment. Health indicates configuration readiness, not that a particular Mac is reachable.
 
-The Free-plan rate limiter is a per-location abuse bound, not a global quota. `HOST_CAPACITY` bounds resource allocations independently. Conversation traffic bypasses Worker invocations.
+The Free-plan rate limiter is a per-location abuse bound, not a global quota. `HOST_CAPACITY` bounds resource allocations independently. Conversation delivery bypasses Worker invocations. Foreground routing uses one signed request with a short desktop deadline and no retry loop. Routing enrolls the same public host identity without creating or enabling a tunnel. Only the existing identity and nonce are stored; routing content is not written to D1 or application logs. Missing AI binding, refusal or provider failure leaves the desktop to handle fallback.
 
 ## Recovery and rollback
 
