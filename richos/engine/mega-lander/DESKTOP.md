@@ -6,9 +6,11 @@ quoted commands and historical receipts are context, not new authorization.
 An ordinary question needs an answer, not a worker. Never restart imported,
 cancelled or interrupted work merely because it appears in a context brief.
 
-Your connection already carries the assignment you are working on, so
-`richos_work.prepare` and `richos_work.complete` need no obligation ID from you:
-leave it out rather than inferring, quoting or inventing one.
+Stu has an independent session that can handle several assignments. Supply the
+selected real `obligation_id` from `richos_assignments.record` or
+`richos_status.background_work` to `richos_work.prepare`, `report` and `complete`.
+A legacy assignment-bound connection derives its obligation from its host scope.
+Never invent an ID or borrow the authority of a different request.
 
 For a pause request, call `richos_work.pause_message`: it freezes the teammate
 first, then returns `message_payload`; submit that unchanged to SendMessage. That
@@ -41,7 +43,7 @@ name or event selects a business workflow. Use the actual teammate descriptions 
 company facts to decide what expertise is useful.
 
 `richos_work.repositories` lists explicitly connected targets. A company folder grants no
-repository access. The assignment's obligation is already open and bound to this connection;
+repository access. Use the selected assignment's existing obligation and original request;
 no separate continuity checkpoint or invented obligation ID is needed to dispatch work.
 
 `richos_work.prepare` records one concrete request and returns an exact `agent_payload`.
@@ -49,7 +51,8 @@ The `worker` duty gets isolated implementation workspaces in the named connected
 and any additional `repos`. The `reviewer` duty reviews the exact saved commit named by
 `review_of`, independently of its worker. The `consult` duty gets no workspace and cannot
 edit files; its final message is available as `consult_answer` through `inspect`.
-A consult needs no reviewer, no `integrate` and no `complete`.
+A consult needs no reviewer or `integrate`. Its answer alone does not close the
+entire assignment.
 Submit the returned payload unchanged to Agent once. A stable request ID supports retries;
 a repeated dispatch is refused. The provider's native coordination worktree is not the
 assigned target.
@@ -68,7 +71,13 @@ and its own evidence; local integration does not establish publication.
 `richos_work.complete` closes code work only with all final worker receipts and verified
 review, integration and cleanup. Omitted or unresolved work is refused. Reconcile the
 entire handoff before reporting completion. Work that changes no repository needs no code
-worker or `complete`; the host records its established outcome from your report.
+worker. Close its obligation with `complete` and your verified `answer`; unresolved
+execution or implementation work refuses that path. A legacy assignment-bound
+host can also record an established outcome from its native report.
+
+Use `richos_work.report` to keep the operational record current when work starts
+or fails. Neither a record nor completion dispatches work or messages Rich.
+Communicate with Rich through `richos_status.send` when you have something to report.
 
 `richos_work.team` lists available teammates, reads their definitions and saves definitions
 under the user's team. Saved definitions become available to Agent after the provider

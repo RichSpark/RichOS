@@ -8562,16 +8562,10 @@ mod tests {
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
-    /// **A job that changes no repository is reported in his terms, with none of the machinery**
-    /// (vm-run-2: *"there won't be anything to review or merge"*, *"My system's step for formally
-    /// closing an assignment only takes finished code changes ... It's still open there"*).
-    ///
-    /// The task brief told every job to report "the branch, the repository and the reviewer's
-    /// verdict" and never to call an open assignment finished, and `DESKTOP.md` step 7 and the
-    /// `complete` tool said only a code assignment closes; a back end that ran a command for
-    /// him obeyed all three by explaining the bookkeeping to him. All three now say the app
-    /// closes such a job from its report, and the land report stays for a job that changed a
-    /// repository.
+    /// Non-repository work can close without a code worker. Independent Stu must
+    /// select its existing obligation; a legacy assignment-bound host can still
+    /// close from the observed native report. The loaded instructions and schema
+    /// must describe both paths rather than contradicting each other.
     #[test]
     fn a_job_that_changes_no_repository_is_reported_without_the_machinery() {
         let h = harness(5);
@@ -8583,13 +8577,17 @@ mod tests {
         assert_eq!(input["assignment"]["question"], false);
         let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine/mega-lander");
         let desktop = std::fs::read_to_string(engine.join("DESKTOP.md")).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(desktop.contains("Work that changes no repository needs no code worker or `complete`"),
+        assert!(desktop.contains("Work that changes no repository needs no code worker."),
                 "the tool contract wrongly requires code work for a non-repository assignment");
-        assert!(desktop.contains("the host records its established outcome from your report"));
-        assert!(desktop.contains("A consult needs no reviewer, no `integrate` and no `complete`."));
+        assert!(desktop.contains("Close its obligation with `complete` and your verified `answer`"));
+        assert!(desktop.contains("A legacy assignment-bound host can also record an established outcome from its native report."));
+        assert!(desktop.contains("A consult needs no reviewer or `integrate`."));
+        assert!(desktop.contains("Supply the selected real `obligation_id`"));
+        assert!(!desktop.contains("leave it out"), "the shared contract must not tell independent Stu to omit his obligation");
         let tools = std::fs::read_to_string(engine.join("app.py")).unwrap();
-        assert!(tools.contains("An assignment you handled yourself, with no worker, is closed by the app from your report: do not call this for it."),
-                "the complete tool does not say who closes a job with no worker");
+        assert!(tools.contains("For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids."),
+                "the complete tool does not explain non-repository completion");
+        assert!(tools.contains("Completion updates the operational record but never sends Rich a message."));
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
