@@ -48,3 +48,5 @@ has changed what a customer's history says, and the test fails.
 
 Regenerate a golden ONLY when the change to the projection is the deliberate point of the
 work, and say so in the commit that does it.
+
+`v1-replay.jsonl` covers the atomic replay event introduced for restart continuation. It is separate from the unchanged historical fixtures and their shipped-reader goldens.

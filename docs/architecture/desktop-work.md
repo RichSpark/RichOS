@@ -30,6 +30,14 @@ interrupted, unknown and integrated. A run ending does not establish success.
 ECS observations use durable outboxes so a crash after the ECS commit but before
 the local receipt can reconcile without a duplicate event.
 
+Conversation recovery first applies durable user Stops. A saved in-flight request
+continues automatically through one fsynced ledger replay transition, preserving
+its original text, channel and pressed-control provenance. Repeating recovery does
+not manufacture another visible user message. The previous native sessions, partial
+replies and unknown delivery outcomes reach Rich as separate facts in the same visible
+request. He reconciles prior effects before continuing. This is a new delivery
+attempt of the saved request, not new user authorization or a blind worker retry.
+
 ## Continuation
 
 A new worker can name `continue_of` after the original execution settles. The

@@ -1,0 +1,8 @@
+{"event":"ThreadCreated","thread_id":"thr_replay_fixture","title":"Replay fixture","entity_id":"fixture","binding_revision":1,"at":1}
+{"event":"PromptReceived","thread_id":"thr_replay_fixture","turn_id":"turn_replay_before","entity_id":"fixture","binding_revision":1,"text":"Resume the saved question","source":"text","at":2}
+{"event":"TurnStarted","turn_id":"turn_replay_before","session_id":"native-before","at":3}
+{"event":"AssistantDelta","turn_id":"turn_replay_before","text":"Checking","seq":0,"at":4}
+{"event":"TurnReplayed","turn_id":"turn_replay_before","by_turn_id":"turn_replay_after","at":5}
+{"event":"TurnStarted","turn_id":"turn_replay_after","session_id":"native-after","at":6}
+{"event":"AssistantDelta","turn_id":"turn_replay_after","text":"Checked","seq":0,"at":7}
+{"event":"TurnCompleted","turn_id":"turn_replay_after","stop_reason":"end_turn","at":8}

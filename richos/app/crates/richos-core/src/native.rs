@@ -3725,6 +3725,12 @@ impl Cognition for NativeCognition {
         Ok(true)
     }
 
+    fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
+        let current = self.pending_context_brief.take().unwrap_or_default();
+        self.pending_context_brief = Some(format!("{current}\n\n{context}"));
+        Ok(())
+    }
+
     fn prepare_work_turn(&mut self, binding: &crate::entity::ThreadBinding, turn: &str,
         source: crate::ledger::Source, text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
         // A failed preparation must not leave another turn's pending context behind.
