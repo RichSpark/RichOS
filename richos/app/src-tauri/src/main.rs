@@ -6517,9 +6517,15 @@ fn register_entity(
         None => Vec::new(),
     };
 
+    // A selected company folder is also its connected project folder. Reuse the
+    // Settings connection path, including scope checks and Git initialization.
+    let engine = state.engine_dir.lock().unwrap().clone();
+    let runtime = if roots.is_empty() { None } else {
+        Some(richos_core::runtime::verify_engine(&engine).map_err(|e| e.to_string())?)
+    };
     // Lock order everywhere in this file: config, then registry, then entity, then spine.
     let mut current_registry = state.registry.lock().unwrap();
-    let (id, next) = {
+    let (id, mut next) = {
         let current = &*current_registry;
         let id = entity_id_from_name(&name, &current)?;
         let mut next = current.clone();
@@ -6546,6 +6552,10 @@ fn register_entity(
     };
 
     let mut registry_spine = state.spine.try_lock().map_err(|_| "Wait for the current turn to stop before adding a company.".to_string())?;
+    if let (Some(root), Some(runtime)) = (roots.first(), runtime.as_ref()) {
+        next = richos_core::repositories::connect_folder(&next, &id, root, runtime,
+            &[&engine, &state.data_dir])?.0;
+    }
     // PROPERTY 1: durable first. Nothing in memory has moved yet.
     next.save(&state.registry_path).map_err(|e| {
         format!(

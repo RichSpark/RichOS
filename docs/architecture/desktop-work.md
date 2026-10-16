@@ -3,7 +3,9 @@
 The app's selected engine supplies a generic worker and reviewer, the work MCP
 adapter and canonical Mega Lander controls. The provider starts in private app
 coordination. Target repositories must be explicitly connected to the active
-company. Company folder mappings alone confer no execution grant.
+company. Selecting a folder when adding a company connects it through the same
+validated path as Settings, including Git tracking. Inherited folder mappings
+alone confer no execution grant.
 
 Workspace registries and target-worktree directories are partitioned by company and thread before provider
 startup. Provider sessions share a partition only when they serve the same
