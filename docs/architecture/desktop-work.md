@@ -191,3 +191,28 @@ Recovered deliveries retain the initial user turn's ledger reference for request
 authority and execution handoff. The continuation's own turn ID still identifies
 its native delivery, questions and lifecycle. Recovery never creates new authority
 for an existing user request.
+
+Before a visible user request reaches Rich's inference, native request handling
+asks a dedicated Haiku 5.5 classifier for the next action. It uses the same Claude
+executable, selected account and delivered runtime as the conversation, with no
+work tools, hooks, memory files or extra service account. Its plain purpose is in
+`engine/app/routing.md`; the loaded Rich/Stu definitions supply their roles.
+
+The decision is whether this message requires a new Stu execution handoff or
+Rich can handle its next step quickly. A correction to ongoing work can be quick
+communication by Rich without creating another job. The full original request
+and bounded recent visible conversation are supplied as context, without thinking.
+The classifier cannot dispatch. Native handling saves a Stu decision through the
+same inbox operation as Rich and supplies factual ownership with the unchanged
+user message. No extra Rich context-only model request is sent.
+
+One classifier process is retained per native conversation lease and ends with
+that lease through the existing provider supervisor. It uses the user's existing
+Claude account limits. The first request starts it; subsequent requests reuse it.
+A five-second deadline, cancellation, unavailable model, invalid output or
+uncertainty leaves Rich's normal judgment available. A failed process is retired
+before reuse so a late result cannot classify the next message. A saved Stu
+handoff retains ownership across those failures and restart. Stop is checked again
+under the existing send lock before saving a new handoff. Peer reports and hidden
+preparation never trigger classification. No subsidized routing service, local
+model download or additional socket server is involved.

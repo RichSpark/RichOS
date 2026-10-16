@@ -3397,6 +3397,7 @@ pub struct NativeCognition {
     /// Preparation cannot authorize actions or pay an extra foreground model turn.
     pending_context_brief: Option<String>,
     company_context: Option<String>,
+    classifier: Option<crate::request_classifier::RequestClassifier>,
 }
 
 impl NativeCognition {
@@ -3415,7 +3416,7 @@ impl NativeCognition {
     pub fn start(claude_bin: &Path, engine_cwd: &Path, doctrine: &Path, skills: &Path) -> Result<Self, NativeError> {
         let client = NativeClient::spawn(claude_bin, engine_cwd, doctrine, skills)?;
         let session_id = client.session_id().to_string();
-        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
+        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
     }
     /// A chat lease with app-owned, company-scoped persistence tools. The scope is
     /// supplied by the spine before priming, never selected by the model. The host
@@ -3431,7 +3432,7 @@ impl NativeCognition {
         let status = scopes.join(format!("{identity}-status.json"));
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
@@ -3450,7 +3451,7 @@ impl NativeCognition {
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
     }
 
     /// Settings-isolated desktop lease from verified engine delivery.
@@ -3475,8 +3476,9 @@ impl NativeCognition {
         let client = NativeClient::spawn_with_tools(bin, &profile.coordination, Some((doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
+        let classifier=Some(crate::request_classifier::RequestClassifier::new(bin,&profile,skills));
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier })
     }
 
     /// **The WORK lease** — the background-work spec §2.1's second compute lease, in the
@@ -3518,7 +3520,7 @@ impl NativeCognition {
             // A work lease has no `richos_continuity` server, so there is no second scope for
             // one — the file it does read is `richos_work`'s, and its grant is §5.4's standing
             // one, opened per assignment rather than per reply.
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None })
     }
 
     /// **Give this session the turn's brief, unless it already holds exactly this text** — part 1
@@ -3628,6 +3630,26 @@ impl NativeCognition {
         if questions.is_empty(){return Ok(String::new());}
         Ok(json!({"event":"question_records","questions":questions}).to_string())
     }
+    fn route_visible_request(&mut self)->Result<Option<Value>,String> {
+        let Some(classifier)=self.classifier.as_mut() else {return Ok(None)};
+        let path=self.status_scope.as_ref().ok_or("Missing routing conversation")?;
+        let scope:crate::status_tools::StatusToolScope=serde_json::from_slice(&std::fs::read(path).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        let active=self.continuity.as_ref().ok_or("Missing routing scope")?.1.clone();
+        let active:crate::ecs::ToolScope=serde_json::from_slice(&std::fs::read(active).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        let operation=&self.client.operation_cancel;
+        let mut saving=None;
+        let result=crate::routing::route(path,&scope,&active,&self.session_id,|original,context| {
+            let choice=classifier.classify(original,context,|| {
+                let op=operation.lock().unwrap();op.active && op.requested
+            });
+            saving=Some(operation.lock().unwrap());
+            if saving.as_ref().is_some_and(|op|op.active && op.requested) {Err("Classification canceled".into())}
+            else {choice}
+        });
+        drop(saving);
+        result
+    }
+
     pub fn role(&self) -> LeaseRole { self.role }
 
     /// **The CEO's seat for the conversation this lease serves** — `ceo-thread:<thread_id>`,
@@ -4277,7 +4299,14 @@ impl Cognition for NativeCognition {
             }
         }
         let context = self.pending_context_brief.take();
-        let result = self.client.prompt_with_context(text, context.as_deref(), on_item).map_err(CognitionError::from);
+        let routing=self.route_visible_request();
+        let visible_context=match routing {
+            Ok(Some(receipt))=>Some(format!("{}\n{}",context.as_deref().unwrap_or(""),receipt)),
+            Ok(None)=>context.clone(),
+            Err(error)=>Some(format!("{}\n{}",context.as_deref().unwrap_or(""),
+                json!({"event":"execution_routing","owner":"unknown","error":error}))),
+        };
+        let result = self.client.prompt_with_context(text, visible_context.as_deref(), on_item).map_err(CognitionError::from);
         // Only a completed request qualifies the session cache. Cancellation, refusal
         // or a disconnected provider must cause the next preparation to send it again.
         if matches!(&result, Ok(reason) if reason == "end_turn") {
@@ -5376,7 +5405,7 @@ exec /bin/sleep 1000
             work_binding: None,
             engine_profile: None,
             role,
-            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None,
+            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None,
         };
         (lease, root)
     }
@@ -5650,7 +5679,7 @@ exec /bin/sleep 1000
             work_binding: None,
             engine_profile: Some(fixture_profile(&root)),
             role: LeaseRole::Work,
-            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None,
+            ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier: None,
         };
         (lease, root)
     }
