@@ -38,10 +38,10 @@ fn app_profile_keeps_app_scope_on_every_tool_and_reuses_terminal_bash_hooks() {
     assert_eq!(bash["matcher"], "Bash");
     let registered = bash["hooks"].as_array().unwrap();
     for (hook, name) in registered.iter().zip([
-        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh"]) {
+        "guard-interactive-prompt.sh", "guard-no-shell-c.sh", "shell-evidence.sh", "guard-foreign-app-data.sh"]) {
         assert!(hook["command"].as_str().unwrap().contains(engine().join("scripts/hooks").join(name).to_str().unwrap()));
     }
-    assert_eq!(registered.len(), 3);
+    assert_eq!(registered.len(), 4);
     // **NO `matcher`, SO `PreToolUse` COVERS EVERY TOOL.** Asserted rather than left to be
     // inferred: two escalations and one brief on 2026-09-18 were built on the belief that
     // this registration gated only the two continuity tools, and deferring the app's action
@@ -97,19 +97,21 @@ fn an_unrelated_or_redirected_directory_is_never_adopted() {
 fn child_configuration_is_explicit_and_disables_auto_memory_only_for_that_child() {
     let f = Scratch::new(); let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let mut command = std::process::Command::new("/fictional/provider");
-    command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
+    command.env("RICHOS_PROJECTS_DIR", "/fictional/terminal-context").env("RICHOS_SESSIONS_DIR", "/fictional/terminal-sessions").env("LORO_CORPUS", "/fictional/private-corpus").env("NODE_OPTIONS", "--require /fictional/private.js")
         .env("RICHOS_APP_READ_ROOTS", "[\"/fictional/other-company\"]");
     profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
     let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
     assert_eq!(environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"].as_deref(), Some("1"));
     assert_eq!(environment["RICHOS_ENTITY_ROOT"].as_deref(), profile.coordination.to_str());
+    assert_eq!(environment["STALL_WATCH_STATE_DIR"].as_deref(), profile.state.join("stall-watch").to_str());
     assert!(!environment["PATH"].as_ref().unwrap().contains("homebrew"));
     assert_eq!(environment["RICHOS_CLAUDE_BIN"].as_deref(), Some("/fictional/provider"));
     assert_eq!(environment["GIT_CONFIG_GLOBAL"].as_deref(), profile.plugin.join("gitconfig").to_str());
     assert_eq!(environment["GIT_AUTHOR_NAME"], None);
     assert_eq!(environment["LORO_CORPUS"], None);
     assert_eq!(environment["NODE_OPTIONS"], None);
-    assert_eq!(environment["RICHOS_PROJECTS_DIR"].as_deref(), profile.state.join("platform-projects").to_str());
+    assert_eq!(environment["RICHOS_PROJECTS_DIR"], None);
+    assert_eq!(environment["RICHOS_SESSIONS_DIR"], None);
     assert_eq!(environment["RICHOS_SESSION_ID"].as_deref(), Some("fictional-session"));
     assert_eq!(environment["RICHOS_APP_READ_ROOTS"].as_deref(), Some("[]"));
     let args: Vec<_> = command.get_args().map(|a|a.to_string_lossy().to_string()).collect();

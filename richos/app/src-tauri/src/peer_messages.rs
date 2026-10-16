@@ -29,13 +29,17 @@ fn drain(app:&AppHandle)->Result<(),String> {
     Ok(())
 }
 
-fn watch(root:&std::path::Path,tx:mpsc::SyncSender<()>)->notify::Result<notify::RecommendedWatcher> {
-    let mut watcher=notify::recommended_watcher(move |event:notify::Result<notify::Event>| {
+fn receive(event:notify::Result<notify::Event>, tx:&mpsc::SyncSender<()>) {
         match event {
-            Ok(event) if matches!(event.kind,notify::EventKind::Create(_)|notify::EventKind::Modify(_)|notify::EventKind::Remove(_)) && event.paths.iter().any(|p|p.extension().is_some_and(|e|e=="jsonl"))=>{if let Err(mpsc::TrySendError::Disconnected(()))=tx.try_send(()) {eprintln!("[richos] peer input receiver closed");}},
+            Ok(event) if event.need_rescan() || matches!(event.kind,notify::EventKind::Create(_)|notify::EventKind::Modify(_)|notify::EventKind::Remove(_)) && event.paths.iter().any(|p|p.extension().is_some_and(|e|e=="jsonl"))=>{if let Err(mpsc::TrySendError::Disconnected(()))=tx.try_send(()) {eprintln!("[richos] peer input receiver closed");}},
             Err(error)=>{eprintln!("[richos] peer message watch: {error}");if let Err(mpsc::TrySendError::Disconnected(()))=tx.try_send(()) {eprintln!("[richos] peer input receiver closed");}},
             _=>{},
         }
+}
+
+fn watch(root:&std::path::Path,tx:mpsc::SyncSender<()>)->notify::Result<notify::RecommendedWatcher> {
+    let mut watcher=notify::recommended_watcher(move |event:notify::Result<notify::Event>| {
+        receive(event, &tx);
     })?;
     watcher.watch(root,notify::RecursiveMode::Recursive)?;
     Ok(watcher)
@@ -66,6 +70,18 @@ pub fn start(app:AppHandle)->Result<(),Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dropped_notifications_request_a_drain_without_paths() {
+        let (tx,rx)=mpsc::sync_channel(1);
+        let event=notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        assert!(event.need_rescan());
+        assert!(event.paths.is_empty());
+        receive(Ok(event),&tx);
+        assert_eq!(rx.try_recv().expect("rescan must wake the existing drain"),());
+        receive(Ok(notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any)).add_path("noise.log".into())),&tx);
+        assert!(matches!(rx.try_recv(),Err(mpsc::TryRecvError::Empty)));
+    }
+
     #[test]
     fn a_durable_peer_append_wakes_the_kernel_watch_and_remains_until_accepted() {
         let root=std::env::temp_dir().join(format!("richos-peer-watch-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
