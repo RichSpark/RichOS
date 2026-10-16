@@ -19,6 +19,31 @@ pub struct WorkItem {
     pub detail: String,
 }
 
+/// The existing engine receipt lock, shared with dispatch. Stop records revocation
+/// and snapshots native call identities while holding it, then releases it before
+/// waiting for provider control replies.
+pub fn lock_receipts(state: &Path, entity: &str, thread: &str) -> Result<std::fs::File, String> {
+    let identity = serde_json::to_vec(&[entity, thread]).map_err(|e| e.to_string())?;
+    let parent = state.join("work-receipts");
+    let root = parent.join(format!("{:x}", Sha256::digest(identity)));
+    if parent.is_symlink() || root.is_symlink() { return Err("Work records have been redirected.".into()); }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)] {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let lock = options.open(root.join(".lock")).map_err(|e| e.to_string())?;
+    #[cfg(unix)] {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    Ok(lock)
+}
+
 pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, String> {
     let identity = serde_json::to_vec(&[entity, thread]).map_err(|e| e.to_string())?;
     let partition = format!("{:x}", Sha256::digest(identity));
@@ -240,6 +265,8 @@ pub struct WorkTrail {
     /// `(agent id, receipt id, role)`. The weekly-switch handoff names a handed-off helper's
     /// receipt from it (`work_host`'s handoff continuation).
     pub helpers: Vec<(String, String, String)>,
+    /// Unresolved native launches, paired with their owning session. No inferred agent names.
+    pub stop_targets: Vec<(String, String)>,
 }
 
 /// Read one assignment's trail. `obligation` is the assignment's obligation id, which the
@@ -325,6 +352,9 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         reviews_passed: verdicts.iter().filter(|(_, v)| v == "passed").count(),
         helpers: rows.iter().filter_map(|row| Some((row["agent_id"].as_str()?.to_string(),
             row["id"].as_str()?.to_string(), row["request"]["role"].as_str()?.to_string()))).collect(),
+        stop_targets: rows.iter().filter(|row| matches!(row["status"].as_str(), Some("dispatching" | "running" | "unknown")))
+            .filter_map(|row| Some((row["binding"]["session_id"].as_str()?.to_string(), row["tool_use_id"].as_str()?.to_string())))
+            .collect(),
         ..Default::default()
     };
     let mut last_end = f64::NEG_INFINITY;

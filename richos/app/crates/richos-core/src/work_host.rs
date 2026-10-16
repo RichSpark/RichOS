@@ -238,6 +238,7 @@ enum CommandWait {
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
     peer_active_through: Option<u64>,
+    peer_stopper: Option<(String, Arc<dyn TurnCancel>)>,
     // Includes pre-lease waits and final receipt writes, not just a live lease.
     processing: bool,
     /// Jobs whose background commands outlived their wait ([`Watched`]).
@@ -352,6 +353,7 @@ impl Backend {
                 cancel: None,
                 peer_input: None,
                 peer_active_through: None,
+                peer_stopper: None,
                 lease_session: None,
                 stopped: Vec::new(),
                 screen_wait: None,
@@ -1215,6 +1217,7 @@ impl WorkHost {
         {
             let mut inner=backend.inner.lock().unwrap();
             inner.cancel=lease.cancel_handle();
+            inner.peer_stopper=inner.cancel.clone().map(|handle|(lease.session_id().to_string(),handle));
             inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
         }
         let session=lease.session_id().to_string();
@@ -4467,16 +4470,45 @@ impl WorkHost {
     /// assignment is the one on it. A queued assignment is marked and never starts. Spec
     /// §5.4: *"Stopping one assignment revokes one grant and one seat and leaves every
     /// other assignment's pair alone."*
-    pub fn stop_assignment(&self, entity: &str, thread: &str, id: &str) -> Result<(), String> {
-        // His team's assignment is stopped by stopping its agents, on his team's desk.
-        let operator = self.operator.lock().unwrap().clone();
-        if let Some(operator) = operator {
-            return operator.stop(entity, thread, id);
-        }
+    pub fn stop_assignment(self: &Arc<Self>, entity: &str, thread: &str, id: &str) -> Result<(), String> {
         let record = assignment::read(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
         if !record.state.is_open() {
             return Err("That assignment has already stopped.".into());
         }
+        let operator = self.operator.lock().unwrap().clone();
+        if let Some(operator) = operator {
+            assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
+            return operator.stop(entity, thread, id);
+        }
+        let peer = self.backend(thread).and_then(|backend| {
+            let inner = backend.inner.lock().unwrap();
+            if inner.live.is_some() { return None; }
+            inner.peer_stopper.clone()
+        });
+        if let Some((session, stopper)) = peer {
+            let dispatch_lock = crate::work_status::lock_receipts(&self.state, entity, thread)?;
+            let stopped = assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
+            let trail = crate::work_status::trail(&self.state, entity, thread, &record.obligation_id)?;
+            drop(dispatch_lock);
+            let outcomes: Vec<CommandStop> = trail.stop_targets.iter().map(|(owner, tool)| {
+                if owner == &session {
+                    stopper.stop_worker(tool)
+                } else { CommandStop::NotDelivered }
+            }).collect();
+            self.forget_at_the_desk(&record);
+            crate::questions::Store::new(&self.state).close(entity,thread,Some(&record.obligation_id),"The assignment was stopped",false)?;
+            drop(crate::question_work::discard(&self.state,entity,thread,&record.obligation_id));
+            assignment::advance(&self.state, entity, thread, id, AssignmentState::Interrupted,
+                if outcomes.is_empty() { "Stop requested by the user. No unresolved worker launch is recorded." }
+                else { watched_stop_detail(true, &outcomes) }).map_err(|e| e.to_string())?;
+            let scope = crate::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:entity.into(),thread_id:thread.into()};
+            crate::session_tools::observe_user_stop(&scope, id, &record.obligation_id, stopped.user_stop_requested_at_ms.unwrap())?;
+            if let Some(binding) = self.backend(thread).and_then(|b| b.inner.lock().unwrap().binding.clone()) {
+                self.wake_messages(&binding);
+            }
+            return Ok(());
+        }
+        assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
         // **Stopping one assignment takes its question off his screen** (spec §5.4: one
         // grant, one seat, one queue entry, all released together and none of anybody
         // else's). A request left waiting for an assignment that has stopped is a question
@@ -7300,6 +7332,7 @@ mod tests {
             detail: String::new(),
             registered_at_ms: 0,
             updated_at_ms: 0,
+            user_stop_requested_at_ms: None,
             notices: Vec::new(),
             work_session: None,
             repository_pins: Vec::new(),
@@ -9720,6 +9753,7 @@ mod tests {
             detail: String::new(),
             registered_at_ms: 0,
             updated_at_ms: 0,
+            user_stop_requested_at_ms: None,
             notices: Vec::new(),
             work_session: None,
             repository_pins: Vec::new(),
@@ -10674,5 +10708,59 @@ mod tests {
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
         std::fs::remove_dir_all(&h.root).unwrap();
     }
+
+    #[test]
+    fn independent_stu_stop_reaches_only_the_selected_assignments_worker() {
+        struct Stops(Mutex<Vec<String>>);
+        impl TurnCancel for Stops {
+            fn cancel(&self)->bool { panic!("per-assignment Stop must not cancel Stu") }
+            fn stop_worker(&self, tool:&str)->CommandStop {
+                self.0.lock().unwrap().push(tool.into()); CommandStop::Ended
+            }
+        }
+        let h=harness(0);
+        let first=assignment::register(&h.state,&registration(&h)).unwrap();
+        let second=assignment::register(&h.state,&Registration {obligation_id:"another-obligation".into(),..registration(&h)}).unwrap();
+        let backend=Backend::new();let stopper=Arc::new(Stops(Mutex::new(vec![])));
+        {let mut inner=backend.inner.lock().unwrap();inner.lease_session=Some("independent-stu".into());inner.peer_stopper=Some(("independent-stu".into(),stopper.clone()));}
+        h.host.backends.lock().unwrap().insert("thread-one".into(),backend);
+        let root=h.state.join("work-receipts").join({use sha2::Digest;format!("{:x}",sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"))});
+        std::fs::create_dir_all(&root).unwrap();
+        for (id,obligation,tool) in [("first","obligation-7","call-first"),("second","another-obligation","call-second")] {
+            std::fs::write(root.join(format!("{id}.json")),serde_json::json!({"schema":1,"id":id,
+                "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"independent-stu"},
+                "request":{"obligation_id":obligation,"role":"worker"},"status":"running","tool_use_id":tool}).to_string()).unwrap();
+        }
+        h.host.stop_assignment("depot","thread-one",&first.id).unwrap();
+        assert_eq!(*stopper.0.lock().unwrap(),vec!["call-first"]);
+        let stopped=assignment::read(&h.state,"depot","thread-one",&first.id).unwrap();
+        assert!(stopped.user_stop_requested_at_ms.is_some());
+        let control=crate::session_tools::pending(&h.host.message_scope(&h.binding),"stu").unwrap().unwrap().0;
+        assert_eq!(control.from,"user-control");
+        let facts:serde_json::Value=serde_json::from_str(&control.text).unwrap();
+        assert_eq!(facts["event"],"user_stop");assert_eq!(facts["assignment_id"],first.id);
+        assert_eq!(facts["requested_at_ms"],stopped.user_stop_requested_at_ms.unwrap());
+        assert!(crate::session_tools::pending(&h.host.message_scope(&h.binding),"rich").unwrap().is_none());
+        assert_eq!(stopped.state,AssignmentState::Interrupted);
+        assert_eq!(assignment::read(&h.state,"depot","thread-one",&second.id).unwrap().state,AssignmentState::Registered);
+        h.host.shutdown();std::fs::remove_dir_all(&h.root).unwrap();
+    }
+   #[test]
+   fn user_stop_provenance_survives_state_changes_and_reload() {
+       let h = harness(0);
+       let receipt = assignment::register(&h.state, &registration(&h)).unwrap();
+       let before = serde_json::to_value(assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap()).unwrap();
+       assert!(before.get("user_stop_requested_at_ms").is_none_or(|value|value.is_null()));
+       h.host.stop_assignment("depot", "thread-one", &receipt.id).unwrap();
+       let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+       let stopped = serde_json::to_value(read()).unwrap();
+       let at = stopped["user_stop_requested_at_ms"].as_u64().expect("the user's Stop is a durable source fact");
+       assert!(at > 0);
+       assert_eq!(read().state, AssignmentState::Interrupted);
+       assignment::advance(&h.state, "depot", "thread-one", &receipt.id, AssignmentState::Interrupted, "Provider cancellation outcome recorded separately").unwrap();
+       assert_eq!(serde_json::to_value(read()).unwrap()["user_stop_requested_at_ms"], at);
+       h.host.shutdown();
+       std::fs::remove_dir_all(&h.root).unwrap();
+   }
 
 }

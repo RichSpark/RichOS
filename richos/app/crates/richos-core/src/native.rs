@@ -1279,6 +1279,7 @@ pub struct NativeClient {
 /// starting value is `NotYetReported` and a derived default would be whichever variant happens
 /// to be declared first.
 struct ReaderState {
+    agent_tasks: crate::operator_lead::TaskBook,
     input_taken: std::collections::HashMap<String, Box<dyn FnOnce() + Send>>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
@@ -1501,6 +1502,7 @@ impl ReaderState {
 impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
+            agent_tasks: crate::operator_lead::TaskBook::default(),
             input_taken: std::collections::HashMap::new(),
             question_scope: None,
             permissions: None,
@@ -2213,6 +2215,7 @@ impl NativeClient {
         state: &Arc<Mutex<ReaderState>>,
         text_deltas: &Arc<AtomicUsize>,
     ) {
+        drop(state.lock().unwrap().agent_tasks.observe(&msg));
         let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
         // Kept whichever turn (or none) the frame belongs to: it is a reading of the account.
@@ -3075,10 +3078,17 @@ impl TurnCancel for NativeCancelHandle {
     /// the reply is awaited the way `operator_lead::control` awaits it (an `error` reply is
     /// [`CommandStop::Refused`]), and only the task's own `task_notification` — the authority
     /// for an ending everywhere else in this file — makes it [`CommandStop::Ended`].
+    fn stop_worker(&self, tool_use_id: &str) -> crate::steering::CommandStop {
+        let task = self.reader_state.lock().unwrap().agent_tasks.task_for_tool(tool_use_id);
+        task.map_or(crate::steering::CommandStop::NotDelivered, |task| self.stop_background_command(&task))
+    }
+
     fn stop_background_command(&self, task_id: &str) -> crate::steering::CommandStop {
         use crate::steering::CommandStop;
         let ended = |state: &Arc<Mutex<ReaderState>>| {
-            state.lock().unwrap().background.iter().any(|c| c.task_id == task_id && c.ended.is_some())
+            let state = state.lock().unwrap();
+            state.agent_tasks.task_ended(task_id)
+                || state.background.iter().any(|c| c.task_id == task_id && c.ended.is_some())
         };
         // A command that already ended needs no stop, and saying so is the true sentence.
         if ended(&self.reader_state) {
@@ -8065,4 +8075,31 @@ cat '{frames}'
         assert_eq!(said_in(&items), crate::american_spelling::fix(&third.concat()), "the partial reply must be kept, fixed");
         assert_ne!(said_in(&items), third.concat());
     }
+    #[test]
+    fn independent_stu_stops_an_unnamed_native_agent_without_interrupting_the_lead() {
+        use crate::steering::CommandStop;
+        let script = write_script("independent-agent-stop", r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_agent","task_id":"native-first","tool_use_id":"prepared-first"}'
+printf '%s\n' '{"type":"system","subtype":"task_started","task_type":"local_agent","task_id":"native-second","tool_use_id":"prepared-second"}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn"}'
+read -r stop
+case "$stop" in *'"subtype":"stop_task","task_id":"native-first"'*) ;; *) exit 9;; esac
+id=$(printf '%s' "$stop" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$id\",\"response\":{}}}"
+printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"native-first","status":"stopped"}'
+read -r keep_alive
+"#);
+        let client = NativeClient::spawn(&script, fixture_root(), &doctrine_fixture(), &skills_fixture()).unwrap();
+        client.prompt("start fixture", &mut |_| {}).unwrap();
+        assert_eq!(client.cancel_handle().stop_worker("unobserved-call"), CommandStop::NotDelivered);
+        assert_eq!(client.cancel_handle().stop_worker("prepared-first"), CommandStop::Ended);
+        let state=client.reader_state.lock().unwrap();
+        assert!(state.agent_tasks.task_ended("native-first"));
+        assert!(!state.agent_tasks.task_ended("native-second"));
+        assert_eq!(state.agent_tasks.task_for_tool("prepared-second").as_deref(),Some("native-second"));
+    }
+
 }

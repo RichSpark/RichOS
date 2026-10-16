@@ -130,6 +130,11 @@ pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String>
     append(scope,"stu",&Message {from:"stall-watch".into(),text:text.into(),instruction:None})
 }
 
+pub(crate) fn observe_user_stop(scope:&StatusToolScope,assignment:&str,obligation:&str,at:u64)->Result<(),String> {
+    append(scope,"stu",&Message {from:"user-control".into(),text:json!({"event":"user_stop",
+        "assignment_id":assignment,"obligation_id":obligation,"requested_at_ms":at}).to_string(),instruction:None})
+}
+
 fn append(scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
     let path=inbox(scope,role)?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e|e.to_string())?;

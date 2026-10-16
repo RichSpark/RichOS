@@ -105,6 +105,7 @@ fn row(item: &Assignment) -> Value {
         "detail": item.detail,
         "asked_for_at_ms": item.registered_at_ms,
         "last_moved_at_ms": item.updated_at_ms,
+        "user_stop_requested_at_ms": item.user_stop_requested_at_ms,
         "notices": notices,
     })
 }

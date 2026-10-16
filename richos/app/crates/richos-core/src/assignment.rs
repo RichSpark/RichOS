@@ -330,6 +330,9 @@ pub struct Assignment {
     pub detail: String,
     pub registered_at_ms: u64,
     pub updated_at_ms: u64,
+    /// A user Stop request, independent of whether provider cancellation succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_stop_requested_at_ms: Option<u64>,
     #[serde(default)]
     pub notices: Vec<Notice>,
     /// **The back end's session id, written down when this assignment went on the lease.**
@@ -726,6 +729,7 @@ pub fn register_kind(
         },
         registered_at_ms: at,
         updated_at_ms: at,
+        user_stop_requested_at_ms: None,
         notices: Vec::new(),
         // Nothing has been on a lease and nothing has been looked at in Git. Both are
         // written later, on the work lease, after this turn has ended (§7.1).
@@ -913,6 +917,14 @@ fn update(
 /// know: the caller that witnessed the settlement. A table would let this file decide that
 /// `Running` "must" become `Settled`, which is spec §6.1's forbidden inference wearing a
 /// state machine.
+/// Record the user control before any cancellation side effect. Provider outcomes
+/// may change state and detail later, but cannot erase who requested the stop.
+pub fn record_user_stop(state: &Path, entity: &str, thread: &str, id: &str) -> Result<Assignment, AssignmentError> {
+    update(state, entity, thread, id, |record| {
+        record.user_stop_requested_at_ms.get_or_insert_with(crate::util::now_millis);
+    })
+}
+
 pub fn advance(
     state: &Path,
     entity: &str,

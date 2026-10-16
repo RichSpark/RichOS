@@ -138,6 +138,87 @@ def repositories(scope):
     return paths
 
 
+def assignment_record(scope, obligation):
+    """Find selected work in the existing scoped app record, never the latest message."""
+    identity = json.dumps([scope["binding"]["entity_id"], scope["binding"]["thread_id"]], separators=(",", ":"))
+    parent = state() / "assignments"
+    root = parent / hashlib.sha256(identity.encode()).hexdigest()
+    if parent.is_symlink() or root.is_symlink():
+        raise ValueError("assignment records are redirected")
+    matches = []
+    for path in root.glob("*.json"):
+        record = bounded(path)
+        if record.get("schema") != 1 or any(record.get(key) != scope["binding"][key] for key in ("entity_id", "thread_id")):
+            raise ValueError("assignment record is outside this conversation")
+        if record.get("obligation_id") == obligation:
+            matches.append(record)
+    if len(matches) > 1:
+        raise ValueError("the obligation has ambiguous assignment records")
+    return matches[0] if matches else None
+
+
+def require_not_stopped(scope, obligation):
+    record = assignment_record(scope, obligation)
+    if record is not None and record.get("user_stop_requested_at_ms") is not None:
+        raise ValueError("the user stopped this assignment")
+
+
+def assignment_instruction(scope, obligation):
+    record = assignment_record(scope, obligation)
+    if record is None:
+        return scope.get("user_instruction")
+    ref, digest = record.get("instruction_ledger_ref"), record.get("instruction_sha256")
+    prefix = "ledger:" + scope["binding"]["thread_id"] + ":"
+    if not isinstance(ref, str) or not ref.startswith(prefix):
+        raise ValueError("assignment has no original user request")
+    found = None
+    with (state().parent / "conversation-ledger.jsonl").open() as ledger:
+        for line in ledger:
+            if not line.endswith("\n"): break
+            try: row = json.loads(line)
+            except ValueError: continue
+            if row.get("event") != "PromptReceived" or row.get("turn_id") != ref[len(prefix):]: continue
+            text = row.get("text")
+            if (found is not None or not isinstance(text, str) or row.get("source") not in ("text", "jam")
+                    or any(row.get(key) != scope["binding"][key] for key in ("entity_id", "thread_id"))
+                    or hashlib.sha256(text.encode()).hexdigest() != digest):
+                raise ValueError("assignment original request does not match its host attestation")
+            found = text
+    if found is None: raise ValueError("assignment original request is unavailable")
+    instruction = {"ledger_ref":ref, "sha256":digest}
+    if len(json.dumps(found, ensure_ascii=False).encode()) <= 128 * 1024:
+        instruction["text"] = found
+    return instruction
+
+
+def report_assignment(scope, obligation, status, detail, observed_start=False):
+    """Update the existing app record; this is not a dispatch or a peer report."""
+    record = assignment_record(scope, obligation)
+    if record is None: return {"recorded":False}
+    identity = json.dumps([scope["binding"]["entity_id"], scope["binding"]["thread_id"]], separators=(",", ":"))
+    root = state() / "assignments" / hashlib.sha256(identity.encode()).hexdigest()
+    if not isinstance(record.get("id"), str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", record["id"]):
+        raise ValueError("assignment record has no canonical identity")
+    path = root / (record["id"] + ".json")
+    fd = os.open(root / ".updates.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        record = bounded(path)
+        if record.get("user_stop_requested_at_ms") is not None:
+            raise ValueError("the user stopped this assignment")
+        if record["state"] in ("settled", "interrupted"):
+            return {"recorded":True, "state":record["state"]}
+        if observed_start and record["state"] == "running":
+            return {"recorded":True, "state":record["state"]}
+        if (record["state"] == status and record.get("detail") == detail
+                and record.get("work_session") == scope["binding"]["session_id"]):
+            return {"recorded":True, "state":status}
+        record.update(state=status, detail=detail, updated_at_ms=int(time.time()*1000),
+                      work_session=scope["binding"]["session_id"])
+        save(path, record)
+    return {"recorded":True, "state":status}
+
+
 def carried_obligation(scope):
     """The obligation THIS LEASE IS CARRYING, read off its own scope.
 
@@ -527,6 +608,8 @@ def project(scope, path, record):
     # engine's `answer-complete` -- which refuses any assignment with a work unit on its seat,
     # because that is how it keeps a code change on `complete`. Projected, one consult would
     # make its assignment impossible to close at all. Its evidence is this receipt.
+    if record["status"] == "running":
+        report_assignment(scope, record["request"]["obligation_id"], "running", "Worker start observed.", observed_start=True)
     if record["request"]["role"] == "consult":
         return
     status = {"prepared":"created", "dispatching":"assigned", "running":"started", "blocked":"blocked", "integrated":"completed"}.get(record["status"], "unknown")
@@ -970,10 +1053,11 @@ def prepare(scope_path, scope, args):
     # names one is not refused for it) and it is not consulted. A conversation scope
     # carries none, and there the argument is still required.
     obligation = carried_obligation(scope) or text(args,"obligation_id")
+    require_not_stopped(scope, obligation)
     item = ecs(scope, {"protocol":1,"command":"inspect","binding":scope["binding"],"query":{"item_id":obligation}})["item"]
     if item["status"] not in ("accepted","active","pending","blocked"):
         raise ValueError("dispatch requires an accepted open obligation")
-    instruction = scope.get("user_instruction")
+    instruction = assignment_instruction(scope, obligation)
     if not isinstance(instruction, dict) or not instruction.get("ledger_ref"):
         raise ValueError("dispatch requires a host-attested visible user turn")
     words = user_words(instruction)
@@ -1004,6 +1088,7 @@ def prepare(scope_path, scope, args):
     lock_stack = contextlib.ExitStack()
     with lock_stack:
         root = lock_stack.enter_context(locked(scope))
+        require_not_stopped(scope, obligation)
         path = root / (identity + ".json")
         if path.exists():
             old = bounded(path)
@@ -1025,7 +1110,7 @@ def prepare(scope_path, scope, args):
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
                 ("item_id", "title", "details", "beneficiary")}, sort_keys=True).encode()).hexdigest(),
-            "instruction_ref":instruction["ledger_ref"],"request":normalized,"name":name,"status":"preparing"}
+            "instruction_ref":instruction["ledger_ref"],"original_user_instruction":instruction,"request":normalized,"name":name,"status":"preparing"}
         if args.get("continue_of") is not None:
             if role != "worker" or args.get("review_of") is not None:
                 raise ValueError("only an implementation worker can continue prior work")
@@ -1192,6 +1277,7 @@ def prepare(scope_path, scope, args):
                 # The receipt as it is NOW: other observers may have refreshed it
                 # while the lock was not held. Only this call's own fields change.
                 record = bounded(path)
+                require_not_stopped(scope, obligation)
                 record.pop("preparing_by", None)
                 record.update(status="prepared",payload={**ready["payload"],"run_in_background":True},
                     workspace_ref=W.named_key(scope["binding"]["session_id"],name))
@@ -1255,6 +1341,7 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
                        {k:v for k,v in r["payload"].items() if k != "name"} == ti)]
         if len(matches) != 1: raise ValueError("Agent input is absent from or differs from its prepared scoped receipt; prepare this assignment with the app work tool before calling Agent")
         path,record = matches[0]
+        require_not_stopped(scope, record["request"]["obligation_id"])
         if record["binding"] != scope["binding"] or record["status"] != "prepared":
             raise ValueError("this dispatch is stale or already attempted; reconcile before retrying")
         ti = {"name": record["name"], **ti}
@@ -1265,7 +1352,7 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
         read_scope(os.environ["RICHOS_APP_SCOPE"])
         if inspect_only:
             request = record["request"]
-            instruction = scope["user_instruction"]
+            instruction = record.get("original_user_instruction") or assignment_instruction(scope, record["request"]["obligation_id"])
             return {"kind": {"worker": "implementation", "reviewer": "review", "consult": "helper"}[request["role"]],
                     "outcome": "app:%s:%s" % (scope["binding"]["entity_id"], request["obligation_id"]),
                     "acceptance": record.get("recovery_acceptance") or instruction.get("sha256") or hashlib.sha256(
@@ -1304,6 +1391,7 @@ def worker_context(scope, payload):
         if len(matches) != 1:
             raise ValueError("worker identity has not joined its app receipt; no tool action is allowed yet")
         record=matches[0]
+        require_not_stopped(scope, record["request"]["obligation_id"])
         # A dispatched worker belongs to this standing session, not its latest input turn.
         if any(record["binding"][key] != scope["binding"][key]
                for key in ("entity_id", "thread_id", "session_id")):
@@ -1761,6 +1849,7 @@ def land_locks(scope, repos):
 
 
 def require_current_assignment(scope, record):
+    require_not_stopped(scope, record["request"]["obligation_id"])
     obligation = carried_obligation(scope)
     if obligation is not None and record.get("request", {}).get("obligation_id") != obligation:
         raise ValueError("receipt belongs to another assignment; prepare work for the assignment this connection carries")
@@ -1852,7 +1941,7 @@ def integrate(scope_path,scope,args):
                 if not existing:
                     worker["integration"]={"reviewer_id":reviewer["id"],"commit":plan[repository]["commit"],
                         "branch":plan[repository]["branch"],"before":plan[repository]["tip"],
-                        "instruction_ref":scope.get("user_instruction",{}).get("ledger_ref"),"verified":False}
+                        "instruction_ref":worker["instruction_ref"],"verified":False}
                     if len(repositories_to_land)>1:
                         worker["integration"]["repos"]={r:{"commit":plan[r]["commit"],"branch":plan[r]["branch"],
                             "before":plan[r]["tip"]} for r in repositories_to_land[1:]}
@@ -2153,14 +2242,34 @@ def complete(scope_path, scope, args):
     # the obligation still open and reports a failure over work that actually
     # landed. Fixing only `prepare` would have moved the defect one step later and
     # made it harder to see.
+    if "answer" in args:
+        if set(args) - {"obligation_id", "answer"}: raise ValueError("answer completion takes no worker set")
+        obligation = carried_obligation(scope) or text(args, "obligation_id")
+        answer = sent_text(args, "answer", 256 * 1024)
+        with locked(scope):
+            require_not_stopped(scope, obligation)
+            rows = [refresh(record) for _, record in receipts(folder(scope))
+                    if record["request"]["obligation_id"] == obligation]
+            if any(record["status"] in ("preparing", "prepared", "dispatching", "running", "unknown") for record in rows):
+                raise ValueError("this assignment still has unresolved execution")
+            if any(record["request"]["role"] != "consult" and not never_dispatched(record) for record in rows):
+                raise ValueError("implementation work requires verified worker completion")
+            instruction = assignment_instruction(scope, obligation)
+            if not isinstance(instruction, dict) or not instruction.get("ledger_ref"):
+                raise ValueError("answer completion requires the original user request")
+            result = ecs(scope, {"protocol":1, "command":"answer-complete", "binding":scope["binding"],
+                "obligation_id":obligation, "answer_text":answer, "source_ref":instruction["ledger_ref"]})
+            report_assignment(scope, obligation, "settled", "Answer recorded.")
+            return {**result, "published":False}
     if set(args) - {"obligation_id", "worker_ids"} or "worker_ids" not in args:
         raise ValueError("completion requires an obligation and its complete final worker set")
     obligation = carried_obligation(scope) or text(args, "obligation_id")
+    require_not_stopped(scope, obligation)
     ids = args["worker_ids"]
     if not isinstance(ids, list) or not 1 <= len(ids) <= 50 or any(not isinstance(i, str) or not re.fullmatch(r"[a-f0-9]{64}", i) for i in ids) or len(set(ids)) != len(ids):
         raise ValueError("worker_ids must contain one to fifty distinct work receipt identities")
     ids = sorted(ids)
-    instruction = scope.get("user_instruction", {}).get("ledger_ref")
+    instruction = (assignment_instruction(scope, obligation) or {}).get("ledger_ref")
     if not instruction: raise ValueError("completion requires the current visible user turn")
     identity = hashlib.sha256(json.dumps([obligation, ids], separators=(",", ":")).encode()).hexdigest()
     with locked(scope):
@@ -2181,6 +2290,7 @@ def complete(scope_path, scope, args):
             "binding":scope["binding"], "completion_id":identity})
         receipt["verified"] = True
         save(path, receipt)
+        report_assignment(scope, obligation, "settled", "Verified local integration and cleanup.")
         return {**result, "evidence":evidence, "published":False}
 
 
@@ -2202,6 +2312,17 @@ def call(scope_path, name, args):
     if name == "prepare": return prepare(scope_path,scope,args)
     if name == "integrate": return integrate(scope_path,scope,args)
     if name == "complete": return complete(scope_path,scope,args)
+    if name == "report":
+        if set(args) - {"obligation_id", "state", "detail"}: raise ValueError("unsupported work report fields")
+        obligation = carried_obligation(scope) or text(args,"obligation_id")
+        status = text(args,"state")
+        if status not in ("running", "failed"): raise ValueError("report records running work or failure; completion uses complete")
+        with locked(scope):
+            if status == "failed" and any(record["request"]["obligation_id"] == obligation
+                    and record["status"] in ("preparing", "prepared", "dispatching", "running", "unknown")
+                    for _, record in receipts(folder(scope))):
+                raise ValueError("this assignment still has unresolved execution; reconcile it before reporting failure")
+            return report_assignment(scope, obligation, status, sent_text(args,"detail",4096))
     if name == "team": return team(args)
     if name == "inspect": return inspect_receipts(scope, args)
     raise ValueError("unknown app work tool")
@@ -2243,7 +2364,8 @@ def call_read_only(scope_path, name, args):
 TOOLS = [
     {"name":"pause_message","description":"Pause a teammate: this tool first freezes it (its running commands suspended, its next ones wait), then returns the one standard pause message. pause_confirmed says whether the hold is in place and hold says what was done; a refused or lost message never undoes it. Submit message_payload unchanged to SendMessage: it tells the teammate to wait. Do not write, append or summarize pause instructions yourself. Nothing is ended and no message is sent by this tool.","inputSchema":{"type":"object","properties":{"to":{"type":"string"},"reason":{"type":"string","enum":["manual","quota"]},"reset":{"type":"string","pattern":"^(?:[01][0-9]|2[0-3]):[0-5][0-9]Z$"}},"required":["to"],"additionalProperties":False}},
     {"name":"resume_message","description":"Resume a paused teammate: this tool first releases its hold (its suspended commands run again, its next ones run), then returns the one standard resume message. resume_confirmed says whether the hold is gone and hold says what was done; a refused or lost message never undoes it. Submit message_payload unchanged to SendMessage: it tells the teammate to carry on. Do not write your own resume instructions.","inputSchema":{"type":"object","properties":{"to":{"type":"string"}},"required":["to"],"additionalProperties":False}},
-    {"name":"complete","description":"Close a code assignment in ECS only after every requirement is satisfied and every final worker has a passing independent review, verified local integration and completed cleanup. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Supply all final worker receipts, across every repository. Unresolved execution or omitted work is refused. Do not use this to claim unrelated or unverified business outcomes. An assignment you handled yourself, with no worker, is closed by the app from your report: do not call this for it. Local completion never means publication.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"worker_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":["worker_ids"],"additionalProperties":False}},
+    {"name":"complete","description":"Close a code assignment in ECS only after every requirement is satisfied and every final worker has a passing independent review, verified local integration and completed cleanup. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Supply all final worker receipts, across every repository. Unresolved execution or omitted work is refused. Do not use this to claim unrelated or unverified business outcomes. For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids. Unresolved execution and code work refuse this answer-only path. Completion updates the operational record but never sends Rich a message. Local completion never means publication.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"answer":{"type":"string","minLength":1,"maxLength":262144},"worker_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":[],"additionalProperties":False}},
+    {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
     {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs on its own model with its own definition, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A failed preparation that never dispatched is settled when a new request_id prepares a replacement: anything it created is withdrawn, and dirty files are refused rather than discarded. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, fast-forward the recorded clean integration branch to the exact reviewed commit and clean up through Mega Lander. If the branch moved since the work started, the reviewed commit is merged with a merge commit only when Git merges the two without a conflict. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},

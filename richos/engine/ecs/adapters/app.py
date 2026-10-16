@@ -151,8 +151,9 @@ WORK_SEAT_PREFIX = "work-seat:"  # the app's contract spelling (richos-core assi
 
 
 def answer_complete(store, request, context):
-    if not is_ceo_row(context):
-        raise ScopeError("closing an assignment on its answer belongs to the conversation's own seat")
+    if not (is_ceo_row(context) or (context["audience"] == "rich"
+            and context["person_id"] == "stu-thread:" + context["thread_id"])):
+        raise ScopeError("closing an assignment on its answer belongs to an independent conversation agent")
     obligation = required(request, "obligation_id")
     text = request.get("answer_text")
     if (not isinstance(text, str) or not text.strip()

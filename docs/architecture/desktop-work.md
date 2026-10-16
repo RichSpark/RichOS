@@ -108,6 +108,26 @@ not automatically start additional Rich turns. Rich decides what the user needs
 to hear and writes the reply. The application supplies observed facts rather than
 writing either agent's conversational response.
 
+The selected assignment's original ledger reference and attested text remain its
+user authority even after another peer input changes Stu's current scope. Worker
+preparation and dispatch review carry that original request. Current conversation
+constraints still apply. A mismatched original request refuses preparation.
+
+`richos_work.report` updates the existing operational record without dispatching
+work or messaging Rich. It cannot mark unresolved execution failed. Code completion
+still requires the complete independently reviewed, integrated and cleaned worker
+set. An answer-only completion refuses implementation work or unresolved execution.
+Actual worker starts update their assignment's observed state. Inspection never
+manufactures a new activity timestamp or replaces Stu's own progress report.
+
+A user Stop is recorded durably before cancellation. For independent Stu, the host
+serializes that fact and its launch snapshot through the existing receipt lock,
+then sends the existing native per-task stop control only to that work's observed
+tool calls on their owning session. Missing delivery or ending evidence stays
+unknown. The Stop fact prevents subsequent preparation, dispatch and worker actions
+for that obligation. Stu receives typed user-control facts through the same inbox;
+other assignments and Rich's conversation keep their own execution ownership.
+
 ## Lifecycle
 
 The first desktop policy settles owned workers on Stop, scope change and quit.

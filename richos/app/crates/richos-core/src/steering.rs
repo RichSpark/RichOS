@@ -780,6 +780,9 @@ pub trait TurnCancel: Send + Sync {
     /// default is [`CommandStop::NotDelivered`], because a lease that cannot stop a command
     /// must say so rather than let a stop be reported as having reached it.
     fn stop_background_command(&self, _task_id: &str) -> CommandStop { CommandStop::NotDelivered }
+
+    /// Stop the native agent launched by this exact prepared tool call.
+    fn stop_worker(&self, _tool_use_id: &str) -> CommandStop { CommandStop::NotDelivered }
 }
 
 /// What became of a request to stop one background command, from the provider's own frames.
