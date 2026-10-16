@@ -732,6 +732,9 @@ def execution_environment(item):
         if extra not in path:
             path.append(extra)
     env["PATH"] = os.pathsep.join(p for p in path if p)
+    if item.argv[:1] == ["cargo"]:
+        import cargo_identity
+        return cargo_identity.enable_environment(env)
     return env
 
 

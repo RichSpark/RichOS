@@ -785,3 +785,34 @@ fn matching_initial_revision_is_an_answer_not_conflicting_words() {
     assert_eq!(deliveries[0].set_id.as_deref(), Some(q.set_id.as_str()));
     assert!(!deliveries[0].text.contains("You also answered"));
 }
+
+#[test]
+fn read_only_question_snapshots_do_not_wait_for_the_writer() {
+    let f = Fixture::new();
+    let asked = f.ask(1);
+    let path = f.root.join("questions/store.json");
+    let before = std::fs::read(&path).unwrap();
+    let writer = std::fs::OpenOptions::new().read(true).write(true)
+        .open(f.root.join("questions/lock")).unwrap();
+    writer.lock().unwrap();
+    let probe = std::fs::OpenOptions::new().read(true).write(true)
+        .open(f.root.join("questions/lock")).unwrap();
+    assert!(matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+    let store = f.store.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        send.send((store.list("entity", "thread"), store.all(), store.pending_threads())).unwrap();
+    });
+    // A read result while the kernel writer lock remains held is the verdict.
+    // This finite guard only catches a deadlock; it is not a speed threshold.
+    let observed = receive.recv_timeout(std::time::Duration::from_secs(10));
+    let still_held = matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock));
+    drop(writer); // Always release before joining, including the old deadlocking implementation.
+    reader.join().unwrap();
+    assert!(still_held);
+    let (listed, all, pending) = observed.expect("read-only question inspection waited for its writer");
+    assert_eq!(listed.unwrap()[0].id, asked[0].id);
+    assert_eq!(all.unwrap()[0].id, asked[0].id);
+    assert!(pending.unwrap().is_empty());
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
