@@ -317,6 +317,24 @@ class DesktopWork(unittest.TestCase):
             self.assertIsNone(unknown["head_commit"])
             self.assertTrue(unknown["workspace_problem"])
 
+    def test_read_only_inspection_does_not_wait_for_the_receipt_writer(self):
+        ready = self.call("prepare", {"request_id": "read-lock", "obligation_id": "fixture-task",
+                                      "role": "consult", "teammate": "clark",
+                                      "title": "Inspect a fictional task", "brief": "Answer the fictional question."})
+        real_flock = fcntl.flock
+        def refuse_a_contended_lock(fd, operation):
+            # The kernel's EWOULDBLOCK is the verdict, with no elapsed-time threshold.
+            return real_flock(fd, operation | fcntl.LOCK_NB)
+        with self.app.locked(self.scope) as root:
+            before = {path: path.read_bytes() for path in root.glob("*.json")}
+            with patch.object(self.app.fcntl, "flock", side_effect=refuse_a_contended_lock):
+                observed = self.app.call_read_only(self.scope_path, "inspect", {})
+                self.assertEqual([row["id"] for row in observed["records"]], [ready["id"]])
+                # Stu's mutating inspection must still acquire the writer lock.
+                with self.assertRaises(BlockingIOError):
+                    self.app.inspect_receipts(self.scope, {})
+            self.assertEqual({path: path.read_bytes() for path in root.glob("*.json")}, before)
+
     def test_a_consult_needs_no_repository_is_read_only_and_hands_back_its_final_message(self):
         """Slice 3 of the proto-teammate shelf plan (richos-hq
         docs/plans/2026-10-06-proto-teammate-shelf.md §3): a third duty, `consult`, with no

@@ -2213,7 +2213,8 @@ def inspect_receipts(scope, args, read_only=False):
     offset, limit = args.get("offset", 0), args.get("limit", 20)
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError("invalid inspection page")
-    with locked(scope) as root:
+    # Receipt writers already publish complete files with atomic replace.
+    with (contextlib.nullcontext(folder(scope)) if read_only else locked(scope)) as root:
         obligation = carried_obligation(scope)
         rows = [(path, record) for path, record in receipts(root)
                 if obligation is None or record["request"]["obligation_id"] == obligation]
