@@ -845,7 +845,7 @@ class OperatorCompleteTests(unittest.TestCase):
         work = self.bind("depot", "thread-a", "session-w", "ship-it", None, seat=seat, audience="worker")
         message = self.call("operator-complete", ok=False, seat=seat, binding=work, obligation_id="ship-it",
                             source_ref="x", evidence=[f"git:{self.repo}:main:{self.landed}"])
-        self.assertIn("conversation's own seat", message)
+        self.assertIn("independent conversation agent", message)
         self.still_open("ship-it")
 
     def test_O6_a_closed_obligation_is_not_closed_again_with_other_evidence(self):
@@ -937,7 +937,7 @@ class AnswerCompleteTests(unittest.TestCase):
         work = self.bind("depot", "thread-a", "session-w", "work-ran-it", None, seat=seat, audience="worker")
         message = self.call("answer-complete", ok=False, seat=seat, binding=work, obligation_id="work-ran-it",
                             source_ref="x", answer_text=self.ANSWER)
-        self.assertIn("conversation's own seat", message)
+        self.assertIn("independent conversation agent", message)
         self.assertEqual(self.item("work-ran-it")["status"], "active")
 
     def test_A4_it_needs_the_answer_and_an_open_assignment(self):
@@ -946,6 +946,24 @@ class AnswerCompleteTests(unittest.TestCase):
         self.assertEqual(self.item("work-ran-it")["status"], "active")
         self.close()
         self.assertIn("open", self.close(ok=False, answer_text="a different answer"))
+
+    def test_A6_only_this_threads_independent_stu_can_close_without_a_worker(self):
+        wrong = "stu-thread:thread-b"
+        binding = self.bind("depot", "thread-a", "wrong-stu", "peer-1", None,
+                            seat=wrong, audience="rich")
+        refused = self.call("answer-complete", ok=False, seat=wrong, binding=binding,
+                            obligation_id="work-ran-it", source_ref="ledger:thread-a:turn-1",
+                            answer_text=self.ANSWER)
+        self.assertIn("independent conversation agent", refused)
+        self.assertEqual(self.item("work-ran-it")["status"], "active")
+        seat = "stu-thread:thread-a"
+        binding = self.bind("depot", "thread-a", "independent-stu", "peer-2", None,
+                            seat=seat, audience="rich")
+        result = self.call("answer-complete", seat=seat, binding=binding,
+                           obligation_id="work-ran-it", source_ref="ledger:thread-a:turn-1",
+                           answer_text=self.ANSWER)
+        self.assertTrue(result["obligation_closed"])
+        self.assertEqual(self.item("work-ran-it")["status"], "completed")
 
     def test_A5_the_host_verb_is_announced_and_never_a_model_tool(self):
         self.assertIn("answer-complete", self.call("hello")["commands"])

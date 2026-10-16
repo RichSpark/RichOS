@@ -12902,7 +12902,7 @@
     },
     "ecs/tests/test_app.py#answer-operator": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "6e78e8292cb27651627754e13e8e2203cd594f87afb16c8075b7a0cd3880c013",
+      "sha256": "4d1207cc71f49c2990a58da1d7d1164a25daabe850ac219c88079d1ca70260e4",
       "evidence": "Only AnswerCompleteTests/OperatorCompleteTests and inherited WorkSeatTests call/bind/rows/observe helpers run. Private SQLite and Git fixtures, fixed CLI requests, host-only MCP refusal controls. No complete-obligation/verified-work command or other test class runs. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -15287,7 +15287,7 @@
     },
     "ecs/tests/test_app.py": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "6e78e8292cb27651627754e13e8e2203cd594f87afb16c8075b7a0cd3880c013",
+      "sha256": "4d1207cc71f49c2990a58da1d7d1164a25daabe850ac219c88079d1ca70260e4",
       "keys": [],
       "edges": [
         {
