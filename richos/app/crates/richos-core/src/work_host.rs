@@ -31,6 +31,7 @@ const HANDOFF_ASK: &str = r#"{"event":"session_handoff_requested","max_chars":15
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
+    // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
     peer_stopper: Option<(String, Arc<dyn TurnCancel>)>,
     processing: bool,
@@ -360,10 +361,11 @@ impl WorkHost {
                 let mut inner = backend.inner.lock().unwrap();
                 inner.peer_input = None;
                 inner.cancel = None;
-                inner.peer_active_through.take().unwrap_or(0)
+                inner.peer_active_through.unwrap_or(0)
             };
             if matches!(&result, Err(CognitionError::Io(_))) {
                 drop(guard.take());
+                backend.inner.lock().unwrap().peer_active_through=None;
             }
             let reason = result.map_err(|e| e.to_string())?;
             if reason != "end_turn" {
@@ -372,7 +374,6 @@ impl WorkHost {
             if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {
                 return Err(diagnostics);
             }
-            backend.inner.lock().unwrap().peer_active_through=Some(received_through);
             crate::session_tools::complete_live_inputs(
                 &self.message_scope(binding),
                 "stu",
@@ -851,7 +852,6 @@ impl WorkHost {
             };
             let mut inner = backend.inner.lock().unwrap();
             inner.peer_input = None;
-            if result.is_err(){inner.peer_active_through=None;}
             inner.processing = false;
             inner.completed += 1;
             backend.wake.notify_all();
@@ -940,6 +940,7 @@ impl WorkHost {
         let retired = lease.replace(fresh);
         let mut inner = backend.inner.lock().unwrap();
         inner.lease_session = Some(session);
+        inner.peer_active_through = None;
         inner.rotations += 1;
         inner.last_rotation_reason = Some(reason.into());
         inner.lease_repositories = repositories;
@@ -1228,6 +1229,7 @@ mod tests {
     struct TeamScript {
         digest: Option<String>,
         in_turn: VecDeque<Option<String>>,
+        turn_results: VecDeque<&'static str>,
     }
     struct Lease {
         session: String,
@@ -1261,12 +1263,17 @@ mod tests {
             if let Some(digest) = team.in_turn.pop_front() {
                 team.digest = digest;
             }
+            let result=team.turn_results.pop_front().unwrap_or("end_turn");
             drop(team);
             on(TurnItem::Text {
                 seq: 0,
                 text: "Recorded reply",
             });
-            Ok("end_turn".into())
+            match result {
+                "provider_error"=>{on(TurnItem::Text{seq:1,text:"API Error: 529 Overloaded."});Ok("end_turn".into())},
+                "io_error"=>Err(CognitionError::Io("connection ended".into())),
+                reason=>Ok(reason.into()),
+            }
         }
     }
     struct Factory {
@@ -1387,6 +1394,7 @@ mod tests {
     #[test]
     fn a_finished_native_turn_keeps_its_unfinished_job_resumable_after_quit() {
         for terminal in [Some(AssignmentState::Settled),Some(AssignmentState::Failed),None] {
+        for result in ["end_turn","max_tokens","provider_error"] {
         let h=harness(1);let record=assignment::register(&h.state,&registration(&h)).unwrap();
         assignment::advance(&h.state,"depot","thread-one",&record.id,AssignmentState::Running,"Worker start observed").unwrap();
         let scope=h.host.message_scope(&h.binding);let path=h.root.join("peer-status.json");
@@ -1400,18 +1408,29 @@ mod tests {
         crate::session_tools::complete_attempt(&scope,"stu",&format!("peer:{through}")).unwrap();
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"generic attempt completion bypassed the job's primary report");
         // A later correction is independent input, not a request to execute the handoff again.
+        h.team.lock().unwrap().turn_results.push_back(result);
         crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Keep the original release date"})).unwrap();
         h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(2,std::time::Duration::from_secs(30)));
         let prompts=h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(),2,"unfinished work was repeatedly redispatched to the same Stu: {prompts:?}");
         assert!(prompts[1].contains("Keep the original release date"));
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Use the connected repository"})).unwrap();
+        h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(3,std::time::Duration::from_secs(30)));
+        let prompts=h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(),3,"a failed turn made accepted work new again: {prompts:?}");
+        assert!(prompts[2].contains("Use the connected repository"),"old work was repeated after {result}: {prompts:?}");
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"a turn result replaced live Stu");
         h.host.shutdown();
         let resumed=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();assert_eq!(resumed.1,through);
         let factory=Factory{spawns:h.spawns.clone(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),gate:h.start_gate.clone()};
         let restarted=WorkHost::new(&h.state,Box::new(factory),Arc::new(SilentNotifier),Arc::new(PermissionDesk::default()));
-        restarted.wake_messages(&h.binding);assert!(restarted.wait_for_completed(1,std::time::Duration::from_secs(30)));
+        let recovered=if result=="end_turn" {1}else{2};
+        restarted.wake_messages(&h.binding);assert!(restarted.wait_for_completed(recovered,std::time::Duration::from_secs(30)));
         let prompts=h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(),3,"restart did not reconcile the one unfinished handoff exactly once: {prompts:?}");
+        assert_eq!(prompts.len(),3+recovered as usize,"restart repeated input beyond its unfinished receipts: {prompts:?}");
+        assert!(prompts[3].contains("Land the three branches"));
+        if result!="end_turn" {assert!(prompts[4].contains("Keep the original release date"),"the uncertain correction was lost");}
+        assert!(!prompts[3..].iter().any(|p|p.contains("Use the connected repository")),"successfully completed input replayed");
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some());
         // Only Stu's actual terminal report retires the original input.
         if let Some(terminal)=terminal {assignment::advance(&h.state,"depot","thread-one",&record.id,terminal,"Stu's terminal report").unwrap();}
@@ -1420,6 +1439,25 @@ mod tests {
         assert!(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{through}")).unwrap().is_none());
         restarted.shutdown();
         }
+        }
+    }
+
+    #[test]
+    fn a_disconnected_stu_reconciles_unfinished_input_in_a_new_session_once() {
+        let h=harness(1);assignment::register(&h.state,&registration(&h)).unwrap();
+        let scope=h.host.message_scope(&h.binding);let path=h.root.join("peer-status.json");
+        crate::session_tools::bind(&path,&scope,"front-session","rich",Some(crate::ecs::UserInstruction{ledger_ref:registration(&h).instruction_ledger_ref,sha256:registration(&h).instruction_sha256,text:None})).unwrap();
+        crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"Land the three branches"})).unwrap();
+        h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(30)));
+        h.team.lock().unwrap().turn_results.push_back("io_error");
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(2,std::time::Duration::from_secs(30)));
+        h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(4,std::time::Duration::from_secs(30)));
+        h.host.shutdown();
+        assert_eq!(h.spawns.load(Ordering::SeqCst),2,"a disconnected connection was reused");
+        let prompts=h.work_prompts.lock().unwrap().clone();assert_eq!(prompts.len(),4,"recovery input repeated: {prompts:?}");
+        assert!(prompts[2].contains("Land the three branches"));assert!(prompts[3].contains("Keep the original release date"));
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"unfinished work was lost on disconnect");
     }
 
     #[test]
