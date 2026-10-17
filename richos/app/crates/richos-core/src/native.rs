@@ -3640,7 +3640,7 @@ impl NativeCognition {
             .unwrap_or_else(||path.parent().and_then(Path::parent).unwrap_or(Path::new(".")).join("engine-state"));
         let declared=self.engine_profile.as_ref().filter(|p|p.coordination.join("orchestration.config").is_file());
         crate::question_tools::write_scope(&path,&crate::question_tools::Scope {
-            context:crate::questions::AskScope {root,entity_id:entity.into(),thread_id:thread.into(),turn_id:turn.into(),asker:asker.into(),session_id:self.session_id.clone(),
+            context:crate::questions::AskScope { obligation_id:None,root,entity_id:entity.into(),thread_id:thread.into(),turn_id:turn.into(),asker:asker.into(),session_id:self.session_id.clone(),
                 engine:declared.map(|p|p.engine.clone()),entity_root:declared.map(|p|p.coordination.clone()),app_run:None},
             actions_allowed:false,answer_method:method.into(),surface:"mac".into()
         }).map_err(CognitionError::Io)
@@ -4699,7 +4699,7 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         let mut client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
         client.settle_workers_on_stop=true;
         let path=root.join("questions-scope.json");
-        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"front_desk".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
+        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{ obligation_id:None,root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"front_desk".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
         crate::question_tools::write_scope(&path,&scope).unwrap();
         client.reader_state.lock().unwrap().question_scope=Some(path);
         let mut said=String::new();
@@ -4724,7 +4724,10 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         let mut client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
         client.settle_workers_on_stop=true;
         let path=root.join("scope.json");
-        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"stu".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
+        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{ obligation_id:None,root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"stu".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
+        crate::session_tools::bind(&root.join("status-scope.json"), &crate::status_tools::StatusToolScope {
+            version:1,state_root:root.into(),entity_id:"company".into(),thread_id:"thread".into()
+        },client.session_id(),"stu",None).unwrap();
         crate::question_tools::write_scope(&path,&scope).unwrap();
         client.reader_state.lock().unwrap().question_scope=Some(path.clone());
         let mut asked=false;
@@ -4757,7 +4760,7 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         let mut client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
         client.settle_workers_on_stop=true;
         let path=root.join("scope.json");
-        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"front_desk".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
+        let scope=crate::question_tools::Scope{context:crate::questions::AskScope{ obligation_id:None,root:root.into(),entity_id:"company".into(),thread_id:"thread".into(),turn_id:"ask-turn".into(),asker:"front_desk".into(),session_id:client.session_id().into(),engine:None,entity_root:None,app_run:None},actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()};
         crate::question_tools::write_scope(&path,&scope).unwrap();
         client.reader_state.lock().unwrap().question_scope=Some(path.clone());
         let mut asked=false;

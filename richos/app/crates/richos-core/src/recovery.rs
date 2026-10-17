@@ -808,7 +808,7 @@ mod tests {
             let receipt = assignment::register(&state, &registration(obligation)).unwrap();
             assignment::advance(&state, "depot", "thread-one", &receipt.id, *at, detail).unwrap();
             if *answered {
-                crate::question_work::enqueue(&state, &crate::questions::Delivery {
+                crate::question_work::enqueue(&state, &crate::questions::Delivery { obligation_id:None,
                     id: format!("question-set:{obligation}"), entity_id: "depot".into(), thread_id: "thread-one".into(),
                     asker: obligation.to_string(), set_id: None, text: "You answered: tomorrow".into(), receipt: None,
                 }).unwrap();
@@ -923,7 +923,7 @@ mod tests {
     /// (`questions.rs`), so it outlives the process that asked it.
     fn open_question(state: &Path, obligation: &str) {
         use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
-        Store::new(state).ask(&AskScope {
+        Store::new(state).ask(&AskScope { obligation_id:None,
             root: state.to_path_buf(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             turn_id: "turn-7".into(), asker: obligation.into(), session_id: "work-session-a".into(),
             engine: None, entity_root: None, app_run: None,
@@ -988,7 +988,7 @@ mod tests {
         let answered = assignment::register(&state, &registration("obligation-2")).unwrap();
         assignment::advance(&state, "depot", "thread-one", &answered.id, AssignmentState::Blocked,
             crate::work_host::ANSWER_RETRY_DETAIL).unwrap();
-        crate::question_work::enqueue(&state, &crate::questions::Delivery {
+        crate::question_work::enqueue(&state, &crate::questions::Delivery { obligation_id:None,
             id: "question-set:obligation-2".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: "obligation-2".into(), set_id: None, text: "You answered: tomorrow".into(), receipt: None,
         }).unwrap();

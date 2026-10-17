@@ -784,7 +784,7 @@ mod tests {
         let mut f=fixture();
         let args=json!({"kind":"question","text":"Release timing", "questions":[{"text":"When should the release ship?","options":[{"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More testing"}]}]});
         assert!(report(&f,args.clone()).unwrap_err().contains("runtime"));
-        f.scope.question_context=Some(crate::questions::AskScope{root:f.scope.state_root.clone(),entity_id:f.scope.entity_id.clone(),thread_id:f.scope.thread_id.clone(),turn_id:"operator-turn".into(),asker:"unused".into(),session_id:"original-lead-session".into(),engine:None,entity_root:None,app_run:None});
+        f.scope.question_context=Some(crate::questions::AskScope{ obligation_id:None,root:f.scope.state_root.clone(),entity_id:f.scope.entity_id.clone(),thread_id:f.scope.thread_id.clone(),turn_id:"operator-turn".into(),asker:"unused".into(),session_id:"original-lead-session".into(),engine:None,entity_root:None,app_run:None});
         write_scope(&f.scope_path,&f.scope).unwrap();
         let receipt=report(&f,args.clone()).unwrap();
         assert_eq!(receipt["recorded"],true);
@@ -812,7 +812,7 @@ mod tests {
         std::fs::write(seat.join("wiki/ceo-decisions.md"), "# Decisions\n\n## 21. The start screen (CEO, 2026-09-01)\n\n\
 ### The splash screens — TWO, and the order is DETERMINISTIC (CEO, 2026-09-01)\n\n\
 **His words:** *\"I have never approved more than 2 splash screens.\"*\n").unwrap();
-        f.scope.question_context = Some(crate::questions::AskScope {
+        f.scope.question_context = Some(crate::questions::AskScope { obligation_id:None,
             root: f.scope.state_root.clone(), entity_id: f.scope.entity_id.clone(), thread_id: f.scope.thread_id.clone(),
             turn_id: "operator-turn".into(), asker: "operator:conversation".into(), session_id: "lead-session-1".into(),
             engine: Some(engine.clone()), entity_root: Some(seat.clone()), app_run: None,

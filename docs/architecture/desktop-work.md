@@ -199,7 +199,10 @@ job stays queued, and restarting cannot lose the job or replay the correction.
 
 Recovered deliveries retain the initial user turn's ledger reference for request
 authority and execution handoff. The continuation's own turn ID still identifies
-its native delivery, questions and lifecycle. Recovery never creates new authority
+its native delivery, questions and lifecycle. Questions and answer deliveries keep their
+selected obligation separately from the Stu recipient. Stop closes only that
+obligation's questions and discards its untaken answers. An answer restores the
+asking job's original authority, even when another request reached Stu later. Recovery never creates new authority
 for an existing user request.
 
 Before a visible user request reaches Rich's inference, native request handling

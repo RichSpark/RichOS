@@ -1058,7 +1058,7 @@ mod tests {
         d.desk.take(a.clone());
         assert!(d.desk.wait_quiet(Duration::from_secs(10)));
         let store = Store::new(&d.state);
-        let scope = AskScope { root: d.state.clone(), entity_id: a.entity_id.clone(), thread_id: a.thread_id.clone(),
+        let scope = AskScope { obligation_id:None, root: d.state.clone(), entity_id: a.entity_id.clone(), thread_id: a.thread_id.clone(),
             turn_id: "lead-turn".into(), asker: format!("operator:handle:{}", a.id), session_id: "original-lead".into(), engine: None, entity_root: None, app_run: None };
         let inputs = serde_json::from_value(serde_json::json!([{"text":"When should the release ship?", "options":[
             {"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More testing"}]}])).unwrap();
@@ -1134,7 +1134,7 @@ mod tests {
 
     /// An operator answer saved in the inbox the way the question store saves it.
     fn saved_answer(d: &Desk, a: &Assignment, set: &str, text: &str) -> crate::questions::Delivery {
-        let delivery = crate::questions::Delivery {
+        let delivery = crate::questions::Delivery { obligation_id:None,
             id: format!("question-set:{set}"), entity_id: a.entity_id.clone(), thread_id: a.thread_id.clone(),
             asker: format!("operator:handle:{}", a.id), set_id: Some(set.into()), text: text.into(), receipt: None };
         d.desk.queue_question_answer(&delivery).unwrap();

@@ -161,7 +161,7 @@ pub fn discard(root: &Path, entity: &str, thread: &str, asker: &str) -> Result<(
     let mut untaken = Vec::new();
     for mut input in all(root)? {
         let d = &input.delivery;
-        if d.entity_id != entity || d.thread_id != thread || d.asker != asker || input.discarded {
+        if d.entity_id != entity || d.thread_id != thread || (d.asker != asker && d.obligation_id.as_deref() != Some(asker)) || input.discarded {
             continue;
         }
         let path = path(root, &d.id);

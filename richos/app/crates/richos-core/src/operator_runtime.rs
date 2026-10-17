@@ -316,7 +316,7 @@ impl ProfileLauncher {
             version: 1, outbox: paths.outbox.clone(), attachments: paths.attachments.clone(),
             file_roots: self.declaration.file_roots.clone(), state_root: self.state_root.clone(),
             entity_id: key.entity_id.clone(), thread_id: key.thread_id.clone(), lead: claim_id.to_string(),
-            question_context: Some(crate::questions::AskScope {
+            question_context: Some(crate::questions::AskScope { obligation_id:None,
                 root: self.state_root.clone(), entity_id: key.entity_id.clone(), thread_id: key.thread_id.clone(),
                 turn_id: format!("operator:{session_id}"), asker: "operator:conversation".into(), session_id: session_id.to_string(),
                 engine: Some(self.declaration.engine_root.clone()), entity_root: Some(self.declaration.entity_root.clone()),
@@ -661,7 +661,7 @@ mod tests {
         write_scope(&scope,&ReportScope {
             version:1,outbox:f.root.join("outbox"),attachments:f.root.join("attachments"),
             file_roots:vec![f.root.clone()],state_root:state.clone(),entity_id:"entity".into(),thread_id:"thread".into(),lead:"lead".into(),
-            question_context:Some(crate::questions::AskScope {
+            question_context:Some(crate::questions::AskScope { obligation_id:None,
                 root:state.clone(),entity_id:"entity".into(),thread_id:"thread".into(),asker:"operator:conversation".into(),
                 turn_id:"turn".into(),session_id:"original-session".into(),engine:None,entity_root:None,app_run:None,
             }),

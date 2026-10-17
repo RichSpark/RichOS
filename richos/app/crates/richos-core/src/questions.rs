@@ -69,6 +69,9 @@ pub struct Question {
     pub thread_id: String,
     pub turn_id: String,
     pub asker: String,
+    /// Selected work owner; the recipient may be the standing Stu session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obligation_id: Option<String>,
     pub session_id: String,
     pub text: String,
     pub options: Vec<AnswerOption>,
@@ -140,6 +143,9 @@ pub struct Delivery {
     pub entity_id: String,
     pub thread_id: String,
     pub asker: String,
+    /// Selected work owner; the recipient may be the standing Stu session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obligation_id: Option<String>,
     pub set_id: Option<String>,
     pub text: String,
     /// Set when the recipient durably accepts this identity. Retries reuse it.
@@ -157,6 +163,9 @@ pub struct AskScope {
     pub thread_id: String,
     pub turn_id: String,
     pub asker: String,
+    /// Selected work owner; the recipient may be the standing Stu session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obligation_id: Option<String>,
     pub session_id: String,
     #[serde(default)]
     pub engine: Option<PathBuf>,
@@ -302,6 +311,12 @@ impl Store {
             if d.deleted.contains(&scope.thread_id) {
                 return Err("This conversation was deleted.".into());
             }
+            if let Some(owner)=scope.obligation_id.as_deref() {
+                let records=crate::assignment::read_all(&scope.root,&scope.entity_id,&scope.thread_id).map_err(|e|e.to_string())?;
+                if records.iter().any(|r|r.obligation_id==owner && r.user_stop_requested_at_ms.is_some()) {
+                    return Err("The user stopped this assignment.".into());
+                }
+            }
             let set_id = id();
             let questions: Vec<_> = inputs
                 .into_iter()
@@ -323,6 +338,7 @@ impl Store {
                         thread_id: scope.thread_id.clone(),
                         turn_id: scope.turn_id.clone(),
                         asker: scope.asker.clone(),
+                        obligation_id: scope.obligation_id.clone(),
                         session_id: scope.session_id.clone(),
                         text: input.text,
                         recommended: input.recommended.map(|i| options[i].id.clone()),
@@ -470,6 +486,7 @@ impl Store {
                     entity_id: entity.into(),
                     thread_id: thread.into(),
                     asker: "front_desk".into(),
+                    obligation_id: None,
                     set_id: None,
                     text,
                     receipt: None,
@@ -592,7 +609,7 @@ impl Store {
             for q in &mut d.questions {
                 if q.entity_id == entity
                     && q.thread_id == thread
-                    && asker.is_none_or(|a| q.asker == a)
+                    && asker.is_none_or(|a| q.asker == a || q.obligation_id.as_deref() == Some(a))
                     && !q.delivered
                 {
                     q.state = State::Withdrawn;
@@ -605,7 +622,7 @@ impl Store {
             for delivery in &mut d.deliveries {
                 if delivery.entity_id == entity
                     && delivery.thread_id == thread
-                    && asker.is_none_or(|a| delivery.asker == a)
+                    && asker.is_none_or(|a| delivery.asker == a || delivery.obligation_id.as_deref() == Some(a))
                     && delivery.receipt.is_none()
                 {
                     delivery.receipt = Some("target_closed".into());
@@ -682,6 +699,7 @@ impl Store {
                         entity_id: entity.into(),
                         thread_id: thread.into(),
                         asker: asker.into(),
+                        obligation_id: qs.first().and_then(|q| q.obligation_id.clone()),
                         set_id: Some(set),
                         text,
                         receipt: None,

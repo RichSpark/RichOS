@@ -1529,8 +1529,11 @@ impl WorkHost {
                     binding
                 }
                 Next::Answer(binding,delivery)=>{
-                    let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:delivery.text.clone(),instruction:None};
-                    match self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id)) {
+                    let result=self.question_answer_instruction(&delivery).and_then(|instruction| {
+                        let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:delivery.text.clone(),instruction};
+                        self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id))
+                    });
+                    match result {
                         Ok(session)=>if let Err(error)=crate::question_work::taken(&self.state,std::slice::from_ref(&delivery.id),&session)
                             .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id))) {
                             eprintln!("[richos] operator answer acknowledgement: {error}");
@@ -3635,6 +3638,18 @@ impl WorkHost {
         }
     }
 
+    fn question_answer_instruction(&self, delivery:&crate::questions::Delivery)->Result<Option<crate::ecs::UserInstruction>,String> {
+        let Some(owner)=delivery.obligation_id.as_deref() else {return Ok(None)};
+        let record=assignment::read_all(&self.state,&delivery.entity_id,&delivery.thread_id).map_err(|e|e.to_string())?
+            .into_iter().find(|record|record.obligation_id==owner).ok_or("The asking assignment is unavailable")?;
+        if record.user_stop_requested_at_ms.is_some() || (!record.state.is_open() && record.state != AssignmentState::Unknown) {
+            crate::question_work::discard(&self.state,&delivery.entity_id,&delivery.thread_id,owner)?;
+            return Err("The asking assignment has stopped".into());
+        }
+        let text=instruction_for(&self.state,&record).ok().filter(|text|text.len()<=crate::ecs::INSTRUCTION_TEXT_LIMIT);
+        Ok(Some(crate::ecs::UserInstruction {ledger_ref:record.instruction_ledger_ref,sha256:record.instruction_sha256,text}))
+    }
+
     /// Both surfaces enter the same durable receiving inbox, without a permission hold.
     pub fn queue_question_answer(
         self: &Arc<Self>,
@@ -3647,6 +3662,7 @@ impl WorkHost {
             return Err("Question scope mismatch".into());
         }
         if delivery.asker=="stu" {
+            self.question_answer_instruction(delivery)?;
             crate::question_work::enqueue(&self.state,delivery)?;
             self.wake_messages(binding);
             return Ok(format!("work-input:{}",delivery.id));
@@ -5788,7 +5804,7 @@ mod tests {
     #[test]
     fn a_standing_stu_question_answer_reaches_his_turn_without_an_assignment() {
         let h=harness(0);
-        let answer=crate::questions::Delivery {id:"standing-answer".into(),entity_id:"depot".into(),
+        let answer=crate::questions::Delivery { obligation_id:None,id:"standing-answer".into(),entity_id:"depot".into(),
             thread_id:"thread-one".into(),asker:"stu".into(),set_id:Some("standing-choice".into()),
             text:"Use the existing launch date".into(),receipt:None};
         h.host.queue_question_answer(&h.binding,&answer).unwrap();
@@ -5800,7 +5816,36 @@ mod tests {
         assert!(crate::question_work::pending(&h.state).unwrap().is_empty());
         let wrong=ThreadBinding::new(PersonId::default_ceo(),EntityId::parse("depot").unwrap(),"thread-two",1);
         assert!(h.host.queue_question_answer(&wrong,&answer).is_err());
-        h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+        h.host.shutdown();
+        // A's answer retains A's authority even when B is the latest session input.
+        let a=assignment::register(&h.state,&registration(&h)).unwrap();
+        let b=assignment::register(&h.state,&Registration {obligation_id:"work-B".into(),
+            instruction_ledger_ref:"ledger:thread-one:turn-B".into(),instruction_sha256:"b".repeat(64),..registration(&h)}).unwrap();
+        let record=assignment::read(&h.state,"depot","thread-one",&a.id).unwrap();
+        let selected=crate::questions::Delivery {obligation_id:Some(record.obligation_id.clone()),..answer.clone()};
+        assert_eq!(h.host.question_answer_instruction(&selected).unwrap().unwrap().ledger_ref,record.instruction_ledger_ref);
+        let b_record=assignment::read(&h.state,"depot","thread-one",&b.id).unwrap();
+        let status=h.state.join("stu-status.json");
+        crate::session_tools::bind(&status,&h.host.message_scope(&h.binding),"question-stu","stu",Some(crate::ecs::UserInstruction {
+            ledger_ref:b_record.instruction_ledger_ref,sha256:b_record.instruction_sha256,text:None})).unwrap();
+        let qscope=h.state.join("questions-scope.json");
+        crate::question_tools::write_scope(&qscope,&crate::question_tools::Scope {context:crate::questions::AskScope {
+            obligation_id:None,root:h.state.clone(),entity_id:"depot".into(),thread_id:"thread-one".into(),turn_id:"peer:latest-B".into(),
+            asker:"stu".into(),session_id:"question-stu".into(),engine:None,entity_root:None,app_run:None},
+            actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()}).unwrap();
+        let args=serde_json::json!({"questions":[{"text":"When should the release ship?", "options":[
+            {"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More checks"}]}]});
+        let current=crate::question_tools::call(&qscope,"ask",args.clone()).unwrap();
+        assert_eq!(current["questions"][0]["obligation_id"],"work-B");
+        let mut for_a=args.clone();for_a["obligation_id"]=record.obligation_id.clone().into();
+        let owned=crate::question_tools::call(&qscope,"ask",for_a.clone()).unwrap();
+        assert_eq!(owned["questions"][0]["obligation_id"],record.obligation_id);
+        assignment::record_user_stop(&h.state,"depot","thread-one",&b.id).unwrap();
+        assert!(crate::question_tools::call(&qscope,"ask",args).is_err());
+        assert!(crate::question_tools::call(&qscope,"ask",for_a).is_ok(),"B's Stop revoked questions about A");
+        assignment::record_user_stop(&h.state,"depot","thread-one",&a.id).unwrap();
+        assert!(h.host.question_answer_instruction(&selected).is_err(),"stale answer reauthorized a stopped job");
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     fn harness(step_ms: u64) -> Harness {
@@ -6049,7 +6094,7 @@ mod tests {
         let h=harness(1);
         let receipt=assignment::register(&h.state,&registration(&h)).unwrap();
         let record=assignment::read(&h.state,"depot","thread-one",&receipt.id).unwrap();
-        let d=crate::questions::Delivery{id:"saved-before-crash".into(),entity_id:"depot".into(),thread_id:"thread-one".into(),asker:record.obligation_id.clone(),set_id:Some("release-set".into()),text:"When should the release ship? You answered: Ship tomorrow (phone_tap on phone)".into(),receipt:None};
+        let d=crate::questions::Delivery{ obligation_id:None,id:"saved-before-crash".into(),entity_id:"depot".into(),thread_id:"thread-one".into(),asker:record.obligation_id.clone(),set_id:Some("release-set".into()),text:"When should the release ship? You answered: Ship tomorrow (phone_tap on phone)".into(),receipt:None};
         crate::question_work::enqueue(&h.state,&d).unwrap();
         // Both durable inputs exist, with no process-local schedule after the crash.
         h.host.queue_question_answer(&h.binding,&d).unwrap();
@@ -6071,7 +6116,7 @@ mod tests {
         *h.answer_reply.lock().unwrap() = "I checked the release notes.".into();
         let request = registration(&h);
         let store = Store::new(&h.state);
-        let question = store.ask(&AskScope {
+        let question = store.ask(&AskScope { obligation_id:None,
             root: h.state.clone(),
             entity_id: "depot".into(),
             thread_id: "thread-one".into(),
@@ -9129,7 +9174,7 @@ mod tests {
     /// One saved answer of his for `record`, in the inbox, and handed to the host the way the
     /// question worker hands it (reader 2).
     fn his_answer(h: &Harness, record: &Assignment, id: &str, text: &str) -> crate::questions::Delivery {
-        let answer = crate::questions::Delivery {
+        let answer = crate::questions::Delivery { obligation_id:None,
             id: id.into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None, text: text.into(), receipt: None,
         };
@@ -9149,7 +9194,7 @@ mod tests {
     /// A question of his the job asked and he has not answered, so its runs end blocked on it.
     fn open_question(h: &Harness, record: &Assignment) {
         use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
-        Store::new(&h.state).ask(&AskScope {
+        Store::new(&h.state).ask(&AskScope { obligation_id:None,
             root: h.state.clone(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             turn_id: "turn-7".into(), asker: record.obligation_id.clone(), session_id: "work-session-one".into(),
             engine: None, entity_root: None, app_run: None,
@@ -9310,7 +9355,7 @@ mod tests {
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
         // Its next run is going when he answers again and RichOS closes: the crash, on disk.
         assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "The back end has started on it.").unwrap();
-        let second = crate::questions::Delivery {
+        let second = crate::questions::Delivery { obligation_id:None,
             id: "answer-2".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None, text: "Who reviews? You answered: Dana".into(), receipt: None,
         };
@@ -9458,7 +9503,7 @@ mod tests {
         let q = store.list("depot", "thread-one").unwrap().remove(0);
         store.answer("depot", "thread-one", AnswerRequest { question_id: q.id.clone(), client_id: "tap".into(),
             option_ids: vec![q.options[0].id.clone()], text: String::new(), expected_revision: None }, "click", "mac").unwrap();
-        crate::question_work::enqueue(&h.state, &crate::questions::Delivery {
+        crate::question_work::enqueue(&h.state, &crate::questions::Delivery { obligation_id:None,
             id: "operator-answer".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: "operator:conversation".into(), set_id: None, text: "for his team".into(), receipt: None,
         }).unwrap();
@@ -9656,7 +9701,7 @@ mod tests {
         every_worker_observed_ending(&h);
         *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Open);
         let record = waiting_job(&h);
-        let legacy = crate::questions::Delivery {
+        let legacy = crate::questions::Delivery { obligation_id:None,
             id: "legacy-1".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None, text: "Which branch? You answered: integration".into(), receipt: None,
         };
@@ -9701,7 +9746,7 @@ mod tests {
         let record = assignment::read(&h.state, "depot", "thread-one", &job.id).unwrap();
         assert_eq!(record.detail, COMMAND_STILL_RUNNING_DETAIL);
 
-        let answer = crate::questions::Delivery {
+        let answer = crate::questions::Delivery { obligation_id:None,
             id: "answer-1".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None,
             text: "When should it ship? You answered: tomorrow".into(), receipt: None,
@@ -9829,7 +9874,7 @@ mod tests {
     /// which is the real order: the job asks, then its turn ends around the question.
     fn a_question_for_him(h: &Harness, obligation: &str) {
         use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
-        Store::new(&h.state).ask(&AskScope {
+        Store::new(&h.state).ask(&AskScope { obligation_id:None,
             root: h.state.clone(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             turn_id: "turn-7".into(), asker: obligation.into(), session_id: "work-session-one".into(),
             engine: None, entity_root: None, app_run: None,

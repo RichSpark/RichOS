@@ -1400,9 +1400,12 @@ def worker_context(scope, payload):
     if not aid:
         tool = str(payload.get("tool_name", ""))
         communication = tool in ("mcp__richos_status__send", "mcp__richos_status__background_work",
-                                 "mcp__richos_status__sessions", "mcp__richos_status__transcript")
+                                 "mcp__richos_status__sessions", "mcp__richos_status__transcript", "mcp__richos_questions__withdraw")
         inspection = tool in ("Read", "Grep", "Glob", "TaskOutput", "TaskList", "ToolSearch")
         if scope.get("background_work_allowed") is True and not communication and not inspection:
+            if tool == "mcp__richos_questions__ask" and payload.get("tool_input", {}).get("obligation_id"):
+                require_not_stopped(scope, payload["tool_input"]["obligation_id"])
+                return None
             if tool.startswith("mcp__richos_work__"):
                 # Work tools own their selected obligation; the session's latest input may be another job.
                 if tool in ("mcp__richos_work__prepare", "mcp__richos_work__report", "mcp__richos_work__complete"):

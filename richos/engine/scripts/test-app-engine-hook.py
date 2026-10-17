@@ -159,7 +159,9 @@ class DesktopHooks(unittest.TestCase):
         for tool, args in [("mcp__richos_work__report", {"obligation_id":"work-other", "state":"running", "detail":"Worker finished"}),
                            ("mcp__richos_work__complete", {"obligation_id":"work-other", "answer":"Verified answer"}),
                            ("mcp__richos_work__inspect", {}), ("mcp__richos_work__repositories", {}),
-                           ("mcp__richos_status__sessions", {}), ("mcp__richos_status__transcript", {"session_id":"fictional-session"})]:
+                           ("mcp__richos_status__sessions", {}), ("mcp__richos_status__transcript", {"session_id":"fictional-session"}),
+                           ("mcp__richos_questions__withdraw", {"question_id":"own-question", "reason":"Stopped"}),
+                           ("mcp__richos_questions__ask", {"obligation_id":"work-other", "questions":[]})]:
             self.scope.write_text(json.dumps({**grant, "user_instruction":original}))
             result = self.hook("PreToolUse", tool_name=tool, tool_use_id="other-job", tool_input=args)
             self.assertEqual(result.returncode, 0, tool + result.stderr)
