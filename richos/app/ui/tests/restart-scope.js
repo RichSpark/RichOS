@@ -433,8 +433,11 @@ async function main() {
     // ...and the writes really are continuous, IN THE HANDLER THAT HANDLES TYPING. Asserting
     // the call exists anywhere in the file is what let a mutation deleting it from the input
     // listener pass: the scroll listener's identical call satisfied the search.
-    const inputHandler = src.slice(src.indexOf('inputEl.addEventListener("input"'));
-    assert(inputHandler.length > 0, "the composer's input listener is not in main.js");
+    // The named question-pointer listener also observes input. Select the
+    // typing callback whose responsibility is saving the draft.
+    const inputAt = src.indexOf('inputEl.addEventListener("input", () => {');
+    assert(inputAt >= 0, "the composer's typing listener is not in main.js");
+    const inputHandler = src.slice(inputAt);
     assert(
       inputHandler.slice(0, inputHandler.indexOf("});")).includes("parkViewStateSoon();"),
       "the composer's own input handler no longer parks — a crash would cost the sentence he is typing"
