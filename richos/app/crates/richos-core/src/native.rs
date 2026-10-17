@@ -3514,10 +3514,11 @@ impl NativeCognition {
         std::fs::write(&continuity_tools, "{\"version\":1,\"actions_allowed\":false}\n")?;
         let assignments = scopes.join(format!("{identity}-assignments.json"));
         let status = scopes.join(format!("{identity}-status.json"));
+        // Prepare Haiku alongside Rich, before this conversation can be used.
+        let classifier=Some(crate::request_classifier::RequestClassifier::new(bin,&profile,skills));
         let client = NativeClient::spawn_with_tools(bin, &profile.coordination, Some((doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        let classifier=Some(crate::request_classifier::RequestClassifier::new(bin,&profile,skills));
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
             continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, prepare_turn_supported: false, pending_context_brief: None, company_context: None, classifier, routing_context: String::new() })
     }
