@@ -1218,6 +1218,15 @@ impl WorkHost {
 
     fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
         message:&crate::session_tools::Message,turn:&str)->Result<String,String> {
+        // This is queue cancellation, not per-tool authority on Stu's session.
+        let stopped=||->Result<bool,String> {
+            let Some(instruction)=message.instruction.as_ref().filter(|_|message.handoff) else {return Ok(false)};
+            Ok(assignment::read_all(&self.state,binding.entity_id().as_str(),binding.thread_id())
+                .map_err(|e|e.to_string())?.iter().any(|record|
+                    record.instruction_ledger_ref==instruction.ledger_ref
+                    && record.instruction_sha256==instruction.sha256
+                    && record.user_stop_requested_at_ms.is_some()))
+        };
         // A native connection owns its workers as well as its shell commands.
         let workers_finished=|| {
             let session=backend.inner.lock().unwrap().lease_session.clone();
@@ -1238,6 +1247,8 @@ impl WorkHost {
             self.ensure_lease(backend,binding)?;
             let mut guard=backend.lease.lock().unwrap();
             let lease=guard.as_mut().ok_or("The operator connection closed")?;
+            let session=lease.session_id().to_string();
+            if stopped()? {return Ok(session)}
             self.refresh_peer_team(backend,lease.as_mut())?;
             lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
             {
@@ -1246,8 +1257,10 @@ impl WorkHost {
                 inner.peer_stopper=inner.cancel.clone().map(|handle|(lease.session_id().to_string(),handle));
                 inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
             }
-            let session=lease.session_id().to_string();
             crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
+            // Stop may have arrived during connection/scope preparation, before a
+            // native stop handle existed. Never deliver that saved handoff afterward.
+            if stopped()? {return Ok(session)}
             let mut diagnostics=String::new();
             let mut published=false;
             let result=lease.prompt(&input,&mut |item| {
@@ -10838,6 +10851,42 @@ mod tests {
         drop(prompts);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    #[test]
+    fn stopped_peer_handoff_is_not_delivered_after_first_connection_opens() {
+        for during_open in [false,true] {
+            let h=harness(0);
+            let record=assignment::register(&h.state,&registration(&h)).unwrap();
+            let scope=h.host.message_scope(&h.binding);
+            let path=h.state.join("rich-status.json");
+            let instruction=crate::ecs::UserInstruction::with_text("ledger:thread-one:turn-7".into(),
+                registration(&h).instruction_sha256,Some("landing the three branches"));
+            crate::session_tools::bind(&path,&scope,"native-rich","rich",Some(instruction)).unwrap();
+            crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"Land the three branches"})).unwrap();
+            let (message,through)=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();
+            let backend=Backend::new();
+            backend.inner.lock().unwrap().binding=Some(h.binding.clone());
+            h.host.backends.lock().unwrap().insert("thread-one".into(),backend.clone());
+            if during_open {h.start_gate.shut()} else {h.host.stop_assignment("depot","thread-one",&record.id).unwrap()}
+            let host=h.host.clone();let binding=h.binding.clone();
+            let run=std::thread::spawn(move || {
+                host.run_message(&backend,&binding,&message,&format!("peer:{through}")).unwrap();
+                crate::session_tools::acknowledge(&host.message_scope(&binding),"stu",through).unwrap();
+            });
+            if during_open {
+                // load-bound: hang guard only; the locked factory proves spawn is
+                // inside its closed gate before Stop, not merely scheduled later.
+                until("the first peer connection never reached its opening gate",||h.host.factory.try_lock().is_err());
+                h.host.stop_assignment("depot","thread-one",&record.id).unwrap();
+                h.start_gate.release();
+            }
+            run.join().unwrap();
+            assert!(h.work_prompts.lock().unwrap().is_empty(),"the stopped handoff reached Stu");
+            assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"stopped delivery must not replay on restart");
+            assert_eq!(assignment::read(&h.state,"depot","thread-one",&record.id).unwrap().state,AssignmentState::Interrupted);
+            h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+        }
     }
 
     #[test]
