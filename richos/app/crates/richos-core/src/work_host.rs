@@ -29,6 +29,7 @@ const HANDOFF_ASK: &str = r#"{"event":"session_handoff_requested","max_chars":15
 #[derive(Default)]
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
+    overload: crate::upstream::RetryBudget,
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
@@ -72,6 +73,7 @@ pub struct WorkHost {
     operator: Mutex<Option<Arc<dyn OperatorIntake>>>,
     output: Mutex<Option<crate::output::OutputStore>>,
     hold_check: Mutex<std::time::Duration>,
+    retry_clock: Mutex<Arc<dyn crate::upstream::RetryClock>>,
 }
 impl WorkHost {
     pub fn new(
@@ -91,8 +93,91 @@ impl WorkHost {
             operator: Mutex::new(None),
             output: Mutex::new(None),
             hold_check: Mutex::new(std::time::Duration::from_secs(120)),
+            retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
         })
     }
+    pub fn set_retry_clock(&self, clock: Arc<dyn crate::upstream::RetryClock>) {
+        *self.retry_clock.lock().unwrap() = clock;
+    }
+
+    fn overload_wait(&self, backend: &Backend, result: &Result<String, String>) -> Option<std::time::Duration> {
+        let overloaded = result.as_ref().err()
+            .and_then(|error| crate::upstream::UpstreamFailure::classify_lines(error))
+            .is_some_and(|failure| failure.fault == crate::upstream::UpstreamFault::Overloaded);
+        let mut inner = backend.inner.lock().unwrap();
+        if !overloaded {
+            if result.is_ok() { inner.overload.succeeded(); }
+            return None;
+        }
+        if inner.overload.charge(crate::upstream::UpstreamFault::Overloaded) {
+            inner.overload.wait_before_retry()
+        } else { None }
+    }
+
+    fn retry_stopped(&self, backend: &Backend, binding: &ThreadBinding,
+        message: &crate::session_tools::Message, session: &str) -> bool {
+        let inner = backend.inner.lock().unwrap();
+        let ended = inner.closing || inner.lease_session.as_deref() != Some(session);
+        drop(inner);
+        ended || self.handoff_stopped(binding, message).unwrap_or(true)
+    }
+
+    fn live_completion(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
+        message: crate::session_tools::Message, delivered: (u64, Option<String>), text: String,
+    ) -> Box<dyn FnOnce(crate::steering::InputOutcome) + Send> {
+        let host = Arc::downgrade(self);
+        let receiving = Arc::downgrade(backend);
+        let binding = binding.clone();
+        Box::new(move |outcome| {
+            let Some(host) = host.upgrade() else { return };
+            let Some(backend) = receiving.upgrade() else { return };
+            let (through, session) = delivered;
+            let scope = host.message_scope(&binding);
+            let receipt = if outcome.result.as_ref().is_ok_and(|reason| reason == "end_turn") {
+                crate::session_tools::acknowledge(&scope, "stu", through)
+            } else {
+                crate::session_tools::accept_live_handoff(&scope, "stu", through)
+            };
+            if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
+            if outcome.report_failure {
+                if let Some(wait) = host.overload_wait(&backend, &outcome.result) {
+                    // The native reader must keep reading while the existing retry clock waits.
+                    let retry_host = Arc::downgrade(&host);
+                    let retry_backend = Arc::downgrade(&backend);
+                    let retry_binding = binding.clone();
+                    let retry_message = message.clone();
+                    let retry_session = session.clone();
+                    let original_error = outcome.result.clone();
+                    let retry = std::thread::Builder::new().name("richos-stu-overload".into()).spawn(move || {
+                        let (Some(host), Some(backend)) = (retry_host.upgrade(), retry_backend.upgrade()) else { return };
+                        let owner = retry_session.as_deref().unwrap_or("");
+                        let clock = host.retry_clock.lock().unwrap().clone();
+                        if !clock.wait(wait, &||host.retry_stopped(&backend, &retry_binding, &retry_message, owner)) { return; }
+                        let _delivery = backend.live_delivery.lock().unwrap();
+                        if host.retry_stopped(&backend, &retry_binding, &retry_message, owner) { return; }
+                        let input = backend.inner.lock().unwrap().peer_stopper.clone()
+                            .filter(|(session, _)| session == owner).map(|(_, input)| input);
+                        let completed = host.live_completion(&backend, &retry_binding, retry_message.clone(),
+                            (through, retry_session.clone()), text.clone());
+                        let sent = input.map(|input|input.send_input(&uuid::Uuid::new_v4().to_string(), &text, completed));
+                        if !matches!(sent, Some(Ok(true))) {
+                            if let Err(error) = host.observe_turn_result(&retry_binding, Some(&retry_message),
+                                Some(&format!("peer:{through}")), owner, &original_error) {
+                                eprintln!("[richos] native input status: {error}");
+                            }
+                        }
+                    });
+                    if retry.is_ok() { backend.wake.notify_all(); return; }
+                }
+                if let Err(error) = host.observe_turn_result(&binding, Some(&message),
+                    Some(&format!("peer:{through}")), session.as_deref().unwrap_or(""), &outcome.result) {
+                    eprintln!("[richos] native input status: {error}");
+                }
+            }
+            backend.wake.notify_all();
+        })
+    }
+
     fn project_output(&self, binding: &ThreadBinding, session: &str) {
         let Some(store) = self.output.lock().unwrap().clone() else {
             return;
@@ -199,31 +284,12 @@ impl WorkHost {
             )
             .map_err(|e| e.to_string())?;
             let text = payload.to_string();
-            let host = Arc::downgrade(self);
-            let receiving = Arc::downgrade(&backend);
-            let delivered_scope = scope.clone();
-            let delivered_session = session.clone();
-            let delivered_binding = binding.clone();
             if let Some(session) = &session {
                 crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),session)?;
             }
-            let delivered = input.send_input(&id,&text,Box::new(move |outcome| {
-                let receipt = if outcome.result.as_ref().is_ok_and(|reason| reason == "end_turn") {
-                    crate::session_tools::acknowledge(&delivered_scope,"stu",through)
-                } else {
-                    crate::session_tools::accept_live_handoff(&delivered_scope,"stu",through)
-                };
-                if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
-                if let Some(host) = host.upgrade() {
-                    if outcome.report_failure {
-                        if let Err(error) = host.observe_turn_result(&delivered_binding,Some(&message),
-                            Some(&format!("peer:{through}")),delivered_session.as_deref().unwrap_or(""),&outcome.result) {
-                            eprintln!("[richos] native input status: {error}");
-                        }
-                    }
-                }
-                if let Some(backend) = receiving.upgrade() { backend.wake.notify_all(); }
-            }))?;
+            let completed = self.live_completion(&backend, binding, message,
+                (through, session.clone()), text.clone());
+            let delivered = input.send_input(&id, &text, completed)?;
             if !delivered { return Ok(()); }
             if delivered {
                 let mut inner = backend.inner.lock().unwrap();
@@ -362,12 +428,26 @@ impl WorkHost {
                 return Ok(session);
             }
             let mut published = false;
-            let result = lease.prompt(&input, &mut |_item| {
-                if !published {
-                    published = true;
-                    self.publish_peer_input(backend, binding);
+            let result = loop {
+                let mut said = String::new();
+                let mut sent = lease.prompt(&input, &mut |item| {
+                    if !published {
+                        published = true;
+                        self.publish_peer_input(backend, binding);
+                    }
+                    if let TurnItem::Text { text, .. } = item {
+                        if said.len() < 64 * 1024 { said.push_str(text); }
+                    }
+                });
+                if let Some(failure) = crate::upstream::UpstreamFailure::classify_lines(&said)
+                    .filter(|failure|failure.fault == crate::upstream::UpstreamFault::Overloaded) {
+                    sent = Err(CognitionError::Protocol(failure.raw));
                 }
-            });
+                let observed = sent.as_ref().map(Clone::clone).map_err(ToString::to_string);
+                let Some(wait) = self.overload_wait(backend, &observed) else { break sent };
+                let clock = self.retry_clock.lock().unwrap().clone();
+                if !clock.wait(wait, &||self.retry_stopped(backend, binding, message, &session)) { break sent; }
+            };
             let result =
                 result.and_then(|reason| lease.work_readiness_after_turn().map(|_| reason));
             {
@@ -1326,6 +1406,14 @@ mod tests {
             }))
         }
     }
+    #[derive(Default)]
+    struct RecordedRetryClock(Mutex<Vec<std::time::Duration>>);
+    impl crate::upstream::RetryClock for RecordedRetryClock {
+        fn wait(&self, wait: std::time::Duration, stop: &dyn Fn() -> bool) -> bool {
+            self.0.lock().unwrap().push(wait);
+            !stop()
+        }
+    }
     struct Harness {
         root: PathBuf,
         state: PathBuf,
@@ -1368,6 +1456,7 @@ mod tests {
             Arc::new(SilentNotifier),
 
         );
+        host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
 
         Harness {
             root,
@@ -1434,25 +1523,26 @@ mod tests {
         crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Keep the original release date"})).unwrap();
         h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(2,std::time::Duration::from_secs(30)));
         let prompts=h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(),2,"unfinished work was repeatedly redispatched to the same Stu: {prompts:?}");
+        let retry = usize::from(result=="provider_error");
+        assert_eq!(prompts.len(),2+retry,"unfinished work was repeatedly redispatched to the same Stu: {prompts:?}");
         assert!(prompts[1].contains("Keep the original release date"));
         crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Use the connected repository"})).unwrap();
         h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(3,std::time::Duration::from_secs(30)));
         let prompts=h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(),3,"a failed turn made accepted work new again: {prompts:?}");
-        assert!(prompts[2].contains("Use the connected repository"),"old work was repeated after {result}: {prompts:?}");
+        assert_eq!(prompts.len(),3+retry,"a failed turn made accepted work new again: {prompts:?}");
+        assert!(prompts[2+retry].contains("Use the connected repository"),"old work was repeated after {result}: {prompts:?}");
         assert_eq!(h.spawns.load(Ordering::SeqCst),1,"a turn result replaced live Stu");
         h.host.shutdown();
         let resumed=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();assert_eq!(resumed.1,through);
         let factory=Factory{spawns:h.spawns.clone(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),gate:h.start_gate.clone()};
         let restarted=WorkHost::new(&h.state,Box::new(factory),Arc::new(SilentNotifier));
-        let recovered=if result=="end_turn" {1}else{2};
+        let recovered=if matches!(result,"end_turn"|"provider_error") {1}else{2};
         restarted.wake_messages(&h.binding);assert!(restarted.wait_for_completed(recovered,std::time::Duration::from_secs(30)));
         let prompts=h.work_prompts.lock().unwrap().clone();
-        assert_eq!(prompts.len(),3+recovered as usize,"restart repeated input beyond its unfinished receipts: {prompts:?}");
-        assert!(prompts[3].contains("Land the three branches"));
-        if result!="end_turn" {assert!(prompts[4].contains("Keep the original release date"),"the uncertain correction was lost");}
-        assert!(!prompts[3..].iter().any(|p|p.contains("Use the connected repository")),"successfully completed input replayed");
+        assert_eq!(prompts.len(),3+retry+recovered as usize,"restart repeated input beyond its unfinished receipts: {prompts:?}");
+        assert!(prompts[3+retry].contains("Land the three branches"));
+        if !matches!(result,"end_turn"|"provider_error") {assert!(prompts[4+retry].contains("Keep the original release date"),"the uncertain correction was lost");}
+        assert!(!prompts[3+retry..].iter().any(|p|p.contains("Use the connected repository")),"successfully completed input replayed");
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some());
         // Only Stu's actual terminal report retires the original input.
         if let Some(terminal)=terminal {assignment::advance(&h.state,"depot","thread-one",&record.id,terminal,"Stu's terminal report").unwrap();}
@@ -1465,7 +1555,7 @@ mod tests {
     }
 
     #[test]
-    fn every_scheduled_input_is_delivered_once_per_live_stu_despite_a_failed_turn() {
+    fn scheduled_input_retries_only_overload_and_recovers_unfinished_work_after_restart() {
         for kind in ["handoff", "peer", "standing-answer", "job-answer"] {
             for result in ["end_turn", "max_tokens", "provider_error", "io_error", "pre_model_503", "pre_model_529", "pre_model_429", "pre_model_protocol", "tool_error", "native_quota", "max_tokens_no_text"] {
                 let h = harness(0);
@@ -1502,7 +1592,8 @@ mod tests {
                 until("later input must pass an answer already received by live Stu", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("Independent later input")));
                 h.host.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
-                let expected = if result == "io_error" {2} else {1};
+                let recovered_overload = matches!(result,"provider_error"|"pre_model_529");
+                let expected = if result == "io_error" || recovered_overload {2} else {1};
                 assert_eq!(prompts.iter().filter(|p|p.contains("Input under test")).count(),expected,
                     "{kind}/{result}: input repeated in the same live session: {prompts:?}");
                 assert_eq!(h.spawns.load(Ordering::SeqCst), if result=="io_error" {2}else{1});
@@ -1512,7 +1603,7 @@ mod tests {
                     facts.push(serde_json::from_str::<serde_json::Value>(&message.text).unwrap());
                     crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
                 }
-                assert_eq!(facts.len(),usize::from(result!="end_turn"),"{kind}/{result}: wrong failure-report count");
+                assert_eq!(facts.len(),usize::from(result!="end_turn" && !recovered_overload),"{kind}/{result}: wrong failure-report count");
                 let before = prompts.len();
                 crate::session_tools::send(&path, &scope, serde_json::json!({"text":"After restart"})).unwrap();
                 let restarted = WorkHost::new(&h.state, Box::new(Factory {
@@ -1523,13 +1614,106 @@ mod tests {
                 until("restart must deliver its new input", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("After restart")));
                 restarted.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
-                let unfinished = kind == "handoff" || !matches!(result,"end_turn"|"io_error");
+                let unfinished = kind == "handoff" || (!matches!(result,"end_turn"|"io_error") && !recovered_overload);
                 assert_eq!(prompts[before..].iter().filter(|p| p.contains("Input under test")).count(), usize::from(unfinished),
                     "{kind}/{result}: new session lost or repeated recovery input: {prompts:?}");
                 assert!(!prompts[before..].iter().any(|p| p.contains("Independent later input")), "completed input replayed");
                 std::fs::remove_dir_all(h.root).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn stu_overload_uses_the_ceos_seven_waits_on_one_session_and_success_resets_them() {
+        let h = harness(0);
+        let clock = Arc::new(RecordedRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front", "rich", None).unwrap();
+        h.team.lock().unwrap().turn_results.extend(std::iter::repeat_n("pre_model_529", 7).chain(["end_turn"]));
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Original request"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        // Hang guard: the clock is controlled; actual input completion is the verdict.
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "retry fixture did not finish");
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 8);
+        assert!(prompts.iter().all(|prompt| prompt == &prompts[0]), "retry changed the original input");
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
+        assert_eq!(*clock.0.lock().unwrap(), crate::upstream::OVERLOAD_RETRY_WAITS);
+        assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "recovered failure was announced as terminal");
+        h.team.lock().unwrap().turn_results.extend(["pre_model_529", "end_turn"]);
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Independent later request"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(30)));
+        assert_eq!(clock.0.lock().unwrap().as_slice(), [crate::upstream::OVERLOAD_RETRY_WAITS.as_slice(), &[std::time::Duration::from_secs(60)]].concat());
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn a_live_overload_wait_releases_the_native_reader_and_does_not_block_other_input() {
+        use std::sync::mpsc;
+        struct HeldClock { entered: mpsc::Sender<()>, release: Mutex<mpsc::Receiver<()>> }
+        impl crate::upstream::RetryClock for HeldClock {
+            fn wait(&self, wait: std::time::Duration, stop: &dyn Fn() -> bool) -> bool {
+                assert_eq!(wait, std::time::Duration::from_secs(60));
+                self.entered.send(()).unwrap();
+                // Hang guard only: the test releases the actual retry, never elapsed time.
+                self.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+                !stop()
+            }
+        }
+        struct NativeInput { calls: Arc<Mutex<Vec<String>>>, finished: mpsc::Sender<()> }
+        impl TurnCancel for NativeInput {
+            fn cancel(&self) -> bool { true }
+            fn send_input(&self, _: &str, text: &str, completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool,String> {
+                self.calls.lock().unwrap().push(text.to_string());
+                completed(crate::steering::InputOutcome { result: Ok("end_turn".into()), report_failure:true });
+                if text == "Original live input" { self.finished.send(()).unwrap(); }
+                Ok(true)
+            }
+        }
+        let h = harness(0);
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front", "rich", None).unwrap();
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Original live input"})).unwrap();
+        let (message, through) = crate::session_tools::pending(&scope, "stu").unwrap().unwrap();
+        let backend = Backend::new();
+        let session = "existing-live-stu".to_string();
+        backend.inner.lock().unwrap().lease_session = Some(session.clone());
+        crate::session_tools::begin_attempt(&scope, "stu", &format!("peer:{through}"), &session).unwrap();
+        let (entered, waiting) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        h.host.set_retry_clock(Arc::new(HeldClock { entered, release:Mutex::new(released) }));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (finished, done) = mpsc::channel();
+        let native = Arc::new(NativeInput { calls:calls.clone(), finished });
+        backend.inner.lock().unwrap().peer_stopper = Some((session.clone(), native.clone()));
+        let completed = h.host.live_completion(&backend, &h.binding, message,
+            (through, Some(session)), "Original live input".into());
+        let (returned, reader_returned) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            completed(crate::steering::InputOutcome { result:Err("API Error: 529 Overloaded.".into()), report_failure:true });
+            returned.send(()).unwrap();
+        });
+        // Hang guards: callback return and retry admission are separate positive events.
+        waiting.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        reader_returned.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        reader.join().unwrap();
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(native.send_input("independent", "Independent later input", Box::new(|outcome|assert!(outcome.result.is_ok()))).unwrap());
+        release.send(()).unwrap();
+        // Hang guard: completion comes from the retry's actual native callback.
+        done.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["Independent later input", "Original live input"]);
+        assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none());
+        assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_none());
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]
