@@ -210,6 +210,9 @@ pub struct CommandEnded {
     pub during_a_turn_of_ours: bool,
 }
 
+/// A consumer of the existing between-turn lane before presentation normalization.
+pub type BetweenTurnSink = Arc<dyn Fn(Vec<serde_json::Value>) + Send + Sync>;
+
 /// A disposable compute lease. One implementation per backing session.
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
@@ -354,6 +357,11 @@ pub trait Cognition: Send {
     fn drain_between_turn(&mut self) -> Vec<MachineryRecord> {
         Vec::new()
     }
+
+    /// Deliver the existing between-turn lane without waiting for another prompt.
+    /// Native Stu uses this to report turns started by its own workers as well.
+    fn set_between_turn_sink(&mut self, _sink: BetweenTurnSink) {}
+
 
     /// Bind this lease's ECS seat for ONE background assignment and write its tool scope.
     ///

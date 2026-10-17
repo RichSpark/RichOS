@@ -639,7 +639,7 @@ pub fn stop_reason_of(result: &Value) -> String {
     result.get("subtype").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
 }
 
-fn native_result(result: &Value) -> Result<String, NativeError> {
+pub(crate) fn native_result(result: &Value) -> Result<String, NativeError> {
     let reason = stop_reason_of(result);
     if let Some(reset) = usage_limit_signal(result) {
         return Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &result.to_string())));
@@ -1049,6 +1049,7 @@ impl BetweenItem {
 /// The buffer plus §1.5's `last_session_meta` slot.
 #[derive(Default)]
 pub(crate) struct BetweenTurn {
+    sink: Option<crate::cognition::BetweenTurnSink>,
     queue: Vec<BetweenItem>,
     /// §1.5's slot, and §1.2's *"last value wins"* made real: the last payload seen for each
     /// SessionMeta family member. An identical repeat is SUPPRESSED rather than queued.
@@ -1977,6 +1978,7 @@ impl NativeClient {
                     &reader_state,
                     &reader_text_deltas,
                 );
+                Self::release_between_turn(&reader_between);
             }
             // stdout closed. §5.2's POSITIVE termination signal: the child's stdout reached
             // EOF, which is a fact about the child and not an inference from silence. Fail
@@ -2688,6 +2690,24 @@ impl NativeClient {
     /// ([`crate::cognition::BackgroundCommand`]). A reading, never held across a turn.
     pub fn background_commands(&self) -> Vec<crate::cognition::BackgroundCommand> {
         self.reader_state.lock().map(|s| s.background.clone()).unwrap_or_default()
+    }
+
+    pub fn set_between_turn_sink(&self, sink: crate::cognition::BetweenTurnSink) {
+        self.between.lock().unwrap().sink = Some(sink);
+        Self::release_between_turn(&self.between);
+    }
+
+    fn release_between_turn(between: &Arc<Mutex<BetweenTurn>>) {
+        let (sink, records) = {
+            let mut lane = between.lock().unwrap();
+            let Some(sink) = lane.sink.clone() else { return };
+            let frames: Vec<Value> = std::mem::take(&mut lane.queue).into_iter().map(|item| match item {
+                BetweenItem::Frame(frame) => frame,
+                BetweenItem::Permission {request, chosen} => json!({"type":"control_request","request":request,"chosen":chosen}),
+            }).collect();
+            (sink, frames)
+        };
+        if !records.is_empty() { sink(records); }
     }
 
     pub fn drain_between_turn(&self, session_id: &str) -> Vec<MachineryRecord> {
@@ -4466,6 +4486,10 @@ impl Cognition for NativeCognition {
     fn drain_between_turn(&mut self) -> Vec<MachineryRecord> {
         self.client.drain_between_turn(&self.session_id)
     }
+    fn set_between_turn_sink(&mut self, sink: crate::cognition::BetweenTurnSink) {
+        self.client.set_between_turn_sink(sink);
+    }
+
 }
 
 #[cfg(test)]
@@ -8287,8 +8311,9 @@ struct Factory {
     started: Sender<()>,
     completed: Sender<()>,
     scheduled: Arc<AtomicU64>,
+    observed: Option<Sender<()>>,
 }
-struct Lease { client: NativeClient, started: Sender<()>, completed: Sender<()>, scheduled: Arc<AtomicU64> }
+struct Lease { client: NativeClient, started: Sender<()>, completed: Sender<()>, scheduled: Arc<AtomicU64>, observed: Option<Sender<()>> }
 struct LiveInput { inner: Arc<dyn TurnCancel>, completed: Sender<()> }
 impl LeaseFactory for Factory {
     fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> { unreachable!() }
@@ -8296,7 +8321,7 @@ impl LeaseFactory for Factory {
         Ok(Box::new(Lease {
             client: NativeClient::spawn(&self.root.join("provider"), &self.root,
                 &self.skills.join("agents/rich.md"), &self.skills)?,
-            started: self.started.clone(), completed: self.completed.clone(), scheduled:self.scheduled.clone(),
+            started: self.started.clone(), completed: self.completed.clone(), scheduled:self.scheduled.clone(), observed:self.observed.clone(),
         }))
     }
 }
@@ -8313,6 +8338,15 @@ impl TurnCancel for LiveInput {
     }
 }
 impl Cognition for Lease {
+    fn set_between_turn_sink(&mut self, sink: crate::cognition::BetweenTurnSink) {
+        let observed = self.observed.clone();
+        self.client.set_between_turn_sink(Arc::new(move |records| {
+            let terminal = records.iter().any(|frame|
+                frame["type"] == "result" && frame.get("parent_tool_use_id").is_none_or(Value::is_null));
+            sink(records);
+            if terminal { if let Some(observed) = &observed { observed.send(()).expect("native result observer receiver dropped"); } }
+        }));
+    }
     fn session_id(&self) -> &str { self.client.session_id() }
     fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
     fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> {
@@ -8358,7 +8392,7 @@ fn live_native_results_retain_failed_input_report_once_and_recover_once() {
                 let (done, completed) = channel();
                 let scheduled = Arc::new(AtomicU64::new(0));
                 let host = WorkHost::new(&scope.state_root, Box::new(Factory {
-                    root:root.clone(), skills:skills.clone(), started:began.clone(), completed:done.clone(), scheduled:scheduled.clone(),
+                    root:root.clone(), skills:skills.clone(), started:began.clone(), completed:done.clone(), scheduled:scheduled.clone(), observed:None,
                 }), Arc::new(SilentNotifier));
                 crate::session_tools::send(&status, &scope, json!({"text":"Original input"})).unwrap();
                 host.wake_messages(&binding);
@@ -8387,7 +8421,7 @@ fn live_native_results_retain_failed_input_report_once_and_recover_once() {
                 assert_eq!(fact.is_none(), success || quit, "{inputs}/{output}/{result}: missing or unwanted failure fact");
                 if let Some((message, through)) = fact {
                     assert_eq!(message.from, "work-status");
-                    assert_eq!(serde_json::from_str::<Value>(&message.text).unwrap()["event"], "upstream_input");
+                    assert_eq!(serde_json::from_str::<Value>(&message.text).unwrap()["event"], "upstream_turn");
                     crate::session_tools::acknowledge(&scope, "rich", through).unwrap();
                     assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "folded turn reported twice");
                 }
@@ -8401,7 +8435,7 @@ fn live_native_results_retain_failed_input_report_once_and_recover_once() {
                     std::fs::write(root.join("config.json"), r#"{"recover":true}"#).unwrap();
                     let scheduled = Arc::new(AtomicU64::new(0));
                     let recovered = WorkHost::new(&scope.state_root, Box::new(Factory {
-                        root:root.clone(), skills, started:began, completed:done, scheduled:scheduled.clone(),
+                        root:root.clone(), skills, started:began, completed:done, scheduled:scheduled.clone(), observed:None,
                     }), Arc::new(SilentNotifier));
                     recovered.wake_messages(&binding);
                     for _ in 0..inputs {
@@ -8477,5 +8511,95 @@ while sys.stdin.readline():pass
     assert_eq!(ended.recv_timeout(Duration::from_secs(10)).expect("live result absent").unwrap(), "end_turn");
     drop(client);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn worker_triggered_turns_report_once_even_when_a_new_app_input_is_queued() {
+    for queued in [false, true] {
+        let root = std::env::temp_dir().join(format!("richos-worker-turn-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("provider");
+        std::fs::write(&script, r#"#!/usr/bin/python3
+import json,pathlib,sys
+queued=json.loads(pathlib.Path('config.json').read_text())['queued']
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started')
+send({'type':'assistant','message':{'content':[{'type':'text','text':'ORIGINAL-STARTED'}]}})
+if queued:
+ live=read();phase(live,'queued')
+send({'type':'result','stop_reason':'end_turn'})
+send({'type':'system','subtype':'task_notification','task_id':'worker-one','status':'completed'})
+send({'type':'result','parent_tool_use_id':'worker-one','is_error':True,'api_error_status':429})
+send({'type':'result','stop_reason':'end_turn'})
+send({'type':'stream_event','event':{'type':'content_block_delta','delta':{'type':'thinking_delta','thinking':'landing worker output'}}})
+send({'type':'system','subtype':'api_retry','attempt':1,'error_status':503})
+send({'type':'result','is_error':True,'errors':['API Error: 503']})
+send({'type':'result','stop_reason':'max_tokens'})
+send({'type':'result','stop_reason':'cancelled'}) # dialect-exempt: native stop_reason wire value
+if queued:
+ phase(live,'started');send({'type':'result','stop_reason':'end_turn'})
+while True:read()
+"#).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("config.json"), json!({"queued":queued}).to_string()).unwrap();
+        let skills = crate::skills::ensure_rendered(&root.join("skills"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let thread = ledger.create_thread("Worker continuation", &EntityId::parse("company").unwrap()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let scope = StatusToolScope {version:1,state_root:root.join("state"),entity_id:"company".into(),thread_id:thread};
+        let status = root.join("rich.json");
+        crate::session_tools::bind(&status,&scope,"rich-session","rich",None).unwrap();
+        let (began,started) = channel();
+        let (done,completed) = channel();
+        let (observed,observations) = channel();
+        let host = WorkHost::new(&scope.state_root,Box::new(Factory {
+            root:root.clone(),skills,started:began,completed:done,scheduled:Arc::new(AtomicU64::new(0)),observed:Some(observed),
+        }),Arc::new(SilentNotifier));
+        crate::session_tools::send(&status,&scope,json!({"text":"Original input"})).unwrap();
+        host.wake_messages(&binding);
+        // load-bound: hang guard only; native output proves the initial turn entered.
+        started.recv_timeout(Duration::from_secs(10)).expect("initial turn absent");
+        if queued {
+            crate::session_tools::send(&status,&scope,json!({"text":"Queued correction"})).unwrap();
+            host.wake_messages(&binding);
+        }
+        for _ in 0..4 {
+            // load-bound: hang guard only; drained native results prove status observations have completed.
+            observations.recv_timeout(Duration::from_secs(10)).expect("worker continuation result was not observed");
+        }
+        for _ in 0..(1+usize::from(queued)) {
+            // load-bound: hang guard only; native outcomes and durable receipts, not elapsed time, are the verdict.
+            completed.recv_timeout(Duration::from_secs(10)).expect("app input result absent");
+        }
+        assert!(host.wait_for_completed(1,Duration::from_secs(10)));
+        let mut facts = Vec::new();
+        while let Some((message,through)) = crate::session_tools::pending(&scope,"rich").unwrap() {
+            assert_eq!(message.from,"work-status");
+            let fact:Value = serde_json::from_str(&message.text).unwrap();
+            assert_eq!(fact["event"],"upstream_turn");assert!(fact["input_id"].is_null());
+            facts.push(fact);
+            crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
+        }
+        assert_eq!(facts.len(),2,"missing or duplicate terminal failure: {facts:?}");
+        assert!(facts[0]["error"].as_str().unwrap().contains("503"));
+        assert_eq!(facts[1]["stop_reason"],"max_tokens");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        host.shutdown();
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"Quit produced an unwanted reply");
+        let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+        assert_eq!(sent.lines().count(),1+usize::from(queued),"worker results caused a new app send");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 }

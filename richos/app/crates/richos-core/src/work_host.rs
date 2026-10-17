@@ -216,8 +216,8 @@ impl WorkHost {
                 if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
                 if let Some(host) = host.upgrade() {
                     if outcome.report_failure {
-                        if let Err(error) = host.observe_input_result(&delivered_binding,&message,
-                            &format!("peer:{through}"),delivered_session.as_deref().unwrap_or(""),&outcome.result) {
+                        if let Err(error) = host.observe_turn_result(&delivered_binding,Some(&message),
+                            Some(&format!("peer:{through}")),delivered_session.as_deref().unwrap_or(""),&outcome.result) {
                             eprintln!("[richos] native input status: {error}");
                         }
                     }
@@ -239,12 +239,12 @@ impl WorkHost {
         }
     }
 
-    fn observe_input_result(&self, binding: &ThreadBinding, message: &crate::session_tools::Message,
-        input: &str, session: &str, result: &Result<String,String>) -> Result<(),String> {
-        if result.as_ref().is_ok_and(|reason| reason == "end_turn")
-            || *self.closing.lock().unwrap() || self.handoff_stopped(binding,message)? { return Ok(()); }
+    fn observe_turn_result(&self, binding: &ThreadBinding, message: Option<&crate::session_tools::Message>,
+        input: Option<&str>, session: &str, result: &Result<String,String>) -> Result<(),String> {
+        if result.as_ref().is_ok_and(|reason| matches!(reason.as_str(), "end_turn" | crate::native::STOP_REASON_CANCELLED | crate::native::STOP_REASON_CANCEL_UNACKNOWLEDGED))
+            || *self.closing.lock().unwrap() || match message {Some(message)=>self.handoff_stopped(binding,message)?,None=>false} { return Ok(()); }
         crate::session_tools::observe_work_status(&self.message_scope(binding), serde_json::json!({
-            "event":"upstream_input","input_id":input,"session_id":session,"work":message.work,
+            "event":"upstream_turn","input_id":input,"session_id":session,"work":message.and_then(|message|message.work.as_ref()),
             "stop_reason":result.as_ref().ok(),"error":result.as_ref().err()
         }))
     }
@@ -379,7 +379,7 @@ impl WorkHost {
                 drop(guard.take());
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
-            self.observe_input_result(binding,message,turn,&session,&result.as_ref().map(Clone::clone).map_err(ToString::to_string))?;
+            self.observe_turn_result(binding,Some(message),Some(turn),&session,&result.as_ref().map(Clone::clone).map_err(ToString::to_string))?;
             let reason = result.map_err(|e| e.to_string())?;
             if reason != "end_turn" {
                 return Err(format!("Operator input did not complete: {reason}"));
@@ -539,6 +539,22 @@ impl WorkHost {
         Some(repositories)
     }
 
+    fn observe_lease(self: &Arc<Self>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
+        let host = Arc::downgrade(self);
+        let binding = binding.clone();
+        let session = lease.session_id().to_string();
+        lease.set_between_turn_sink(Arc::new(move |records| {
+            let Some(host) = host.upgrade() else { return };
+            for frame in records {
+                if frame["type"] != "result" || frame.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) { continue }
+                let result = crate::native::native_result(&frame).map_err(|error| error.to_string());
+                if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
+                    eprintln!("[richos] native turn status: {error}");
+                }
+            }
+        }));
+    }
+
     fn ensure_lease(
         self: &Arc<Self>,
         backend: &Arc<Backend>,
@@ -553,7 +569,8 @@ impl WorkHost {
             let factory = &self.factory;
             (factory.team_digest(), factory.spawn_work(binding))
         };
-        let opened = opened.map_err(|e| e.to_string())?;
+        let mut opened = opened.map_err(|e| e.to_string())?;
+        self.observe_lease(opened.as_mut(), binding);
         // A provider opened after shutdown started is never installed.
         let closing = {
             let mut inner = backend.inner.lock().unwrap();
@@ -920,6 +937,7 @@ impl WorkHost {
             (factory.team_digest(), factory.spawn_work(binding))
         };
         let mut fresh = fresh.map_err(|e| e.to_string())?;
+        self.observe_lease(fresh.as_mut(), binding);
         let reports = assignment::read_all(
             &self.state,
             binding.entity_id().as_str(),
