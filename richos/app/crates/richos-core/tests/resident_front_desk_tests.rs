@@ -9,12 +9,7 @@
 //! instead of being killed and reconstituted from the ledger tail. Before this, a thread
 //! switch called `clear_lease()` and the outgoing child died.
 //!
-//! **What they deliberately do NOT claim is simultaneity.** Two front desks do not hold a
-//! turn open at the same instant, because both bind the CEO's single ECS cursor
-//! (`native.rs`'s `CONVERSATION_SEAT`, whose doc carries the engine `file:line` for why).
-//! Turns take turns; the WORK behind them has run in parallel since the work host took one
-//! back end per thread. The test that pins that boundary lives beside the bind, in
-//! `native.rs`, and is named for the day it changes.
+//! Actual overlapping replies are covered by request_preparation_tests and native transport witnesses.
 use richos_core::{
     cognition::{Cognition, CognitionError, LeaseFactory, TurnItem},
     entity::{EntityId, ThreadBinding},
@@ -34,9 +29,8 @@ fn femcboost() -> EntityId {
 #[derive(Clone, Default)]
 struct Log {
     spawned: Arc<Mutex<Vec<String>>>,
-    /// `(session, priming text)` — one row per re-prime. A desk that comes back must not
-    /// add a row: that is the difference between residence and reconstitution.
-    primed: Arc<Mutex<Vec<String>>>,
+    /// One session entry per original input receiving its current company context.
+    contexts: Arc<Mutex<Vec<String>>>,
     /// `(session, what he said)`.
     prompts: Arc<Mutex<Vec<(String, String)>>>,
     /// Sessions whose child was actually killed. `Drop` is the only honest witness — a
@@ -45,8 +39,8 @@ struct Log {
 }
 
 impl Log {
-    fn primed_count(&self, session: &str) -> usize {
-        self.primed.lock().unwrap().iter().filter(|s| *s == session).count()
+    fn context_count(&self, session: &str) -> usize {
+        self.contexts.lock().unwrap().iter().filter(|s| *s == session).count()
     }
     fn prompts_to(&self, session: &str) -> Vec<String> {
         self.prompts.lock().unwrap().iter()
@@ -75,6 +69,10 @@ impl Cognition for Desk {
     }
     fn requires_thread_isolation(&self) -> bool {
         true
+    }
+    fn set_company_context(&mut self,_context:Option<&str>)->Result<bool,CognitionError> {
+        self.log.contexts.lock().unwrap().push(self.session.clone());
+        Ok(true)
     }
 
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
@@ -139,7 +137,7 @@ fn a_threads_front_desk_is_still_there_when_he_comes_back_to_it() {
     // Back to the first conversation.
     spine.submit_prompt_to(&one, "and what did it cost", Source::Text).unwrap();
     assert_eq!(log.spawned(), vec!["desk-1", "desk-2"], "coming back spawned a new front desk");
-    assert_eq!(log.primed_count("desk-1"), 1, "the first desk was re-primed on its way back in");
+    assert_eq!(log.context_count("desk-1"), 2, "each original input receives company context");
     assert_eq!(
         log.prompts_to("desk-1"),
         vec!["where is the pricing review".to_string(), "and what did it cost".to_string()],
@@ -150,7 +148,7 @@ fn a_threads_front_desk_is_still_there_when_he_comes_back_to_it() {
     // once — so the three assertions above are about residence, not about a dead factory.
     spine.submit_prompt_to(&three, "how did the nightly go", Source::Text).unwrap();
     assert_eq!(log.spawned(), vec!["desk-1", "desk-2", "desk-3"]);
-    assert_eq!(log.primed_count("desk-3"), 1);
+    assert_eq!(log.context_count("desk-3"), 1);
     assert_eq!(spine.resident_front_desks(), 3);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -179,40 +177,6 @@ fn a_message_to_another_conversation_is_answered_rather_than_refused() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// **HE TYPES INTO ANOTHER CONVERSATION WHILE ONE IS WORKING, AND IT IS ANSWERED THERE.**
-///
-/// This is the mid-turn case, and it is the one the refusal used to own. The message is
-/// durable the moment he sends it, queued with its OWN binding, and delivered on its own
-/// thread by its own front desk at the turn boundary — never re-scoped to wherever he
-/// happens to be looking when the boundary arrives.
-#[test]
-fn a_message_sent_while_another_conversation_is_working_is_answered_on_its_own_thread() {
-    let (mut spine, log, root) = fixture();
-    let one = spine.create_thread("Pricing", &femcboost()).unwrap();
-    let two = spine.create_thread("Hiring", &femcboost()).unwrap();
-    spine.submit_prompt_to(&one, "start the pricing review", Source::Text).unwrap();
-
-    // A turn is in flight on `one`.
-    spine.debug_set_turn_in_progress(true);
-    spine.submit_prompt_to(&two, "who did we shortlist", Source::Text).unwrap();
-    // Durable immediately, and NOT yet answered: it is waiting for the boundary, not lost.
-    assert_eq!(spine.messages(&two).unwrap()[0].text, "who did we shortlist");
-    assert!(log.prompts_to("desk-2").is_empty(), "the queued message jumped the running turn");
-
-    // The turn ends; the next boundary drains the queue.
-    spine.debug_set_turn_in_progress(false);
-    spine.submit_prompt_to(&one, "and the margin", Source::Text).unwrap();
-
-    assert_eq!(log.prompts_to("desk-2"), vec!["who did we shortlist".to_string()],
-        "his message to the other conversation was never delivered");
-    assert!(spine.messages(&two).unwrap().iter().any(|m| m.text.contains("desk-2")));
-    // It was answered on ITS thread, by ITS desk. Nothing about it reached the other one.
-    assert_eq!(log.prompts_to("desk-1"), vec!["start the pricing review".to_string(), "and the margin".to_string()]);
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-
-
 /// Past the cap, the LEAST RECENTLY SPOKEN desk is retired — and nothing else is.
 ///
 /// That thread is then exactly where every thread was before residency: its next turn
@@ -238,7 +202,7 @@ fn past_the_cap_the_least_recently_spoken_front_desk_is_the_one_retired() {
     // And the retired conversation still works: a fresh desk, primed once, his words intact.
     spine.submit_prompt_to(&threads[0], "are you still there", Source::Text).unwrap();
     let fresh = log.spawned().last().unwrap().clone();
-    assert_eq!(log.primed_count(&fresh), 1);
+    assert_eq!(log.context_count(&fresh), 1);
     assert_eq!(log.prompts_to(&fresh), vec!["are you still there".to_string()]);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -247,7 +211,7 @@ fn past_the_cap_the_least_recently_spoken_front_desk_is_the_one_retired() {
 /// because they are facts about the whole app, not about one lease — the central folder
 /// moving, the memory wiring being torn down. Before residency, un-priming the chair was
 /// enough, because every other thread built a fresh lease on its next turn anyway. A parked
-/// desk that kept `primed: true` across one of these would go on serving him from material
+/// desk that kept `contexts: true` across one of these would go on serving him from material
 /// the app had stopped believing in.
 #[test]
 fn moving_the_central_folder_un_primes_the_parked_front_desks_too() {
@@ -256,14 +220,14 @@ fn moving_the_central_folder_un_primes_the_parked_front_desks_too() {
     let two = spine.create_thread("Hiring", &femcboost()).unwrap();
     spine.submit_prompt_to(&one, "first", Source::Text).unwrap();
     spine.submit_prompt_to(&two, "second", Source::Text).unwrap();
-    assert_eq!(log.primed_count("desk-1"), 1);
+    assert_eq!(log.context_count("desk-1"), 1);
 
     spine.set_central_root(root.join("a-different-folder"));
 
     // The parked desk is primed AGAIN on its way back into the chair — same session, so it
     // is the same Rich; new priming, so it is not the old material.
     spine.submit_prompt_to(&one, "third", Source::Text).unwrap();
-    assert_eq!(log.primed_count("desk-1"), 2, "a parked front desk kept its stale priming");
+    assert_eq!(log.context_count("desk-1"), 2, "a parked front desk kept its stale priming");
     assert_eq!(log.spawned(), vec!["desk-1", "desk-2"], "un-priming killed the desk instead of re-priming it");
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -323,17 +287,16 @@ fn a_parked_desk_comes_back_with_the_company_material_it_was_primed_with() {
     spine.submit_prompt_to(&one, "where is the pricing review", Source::Text).unwrap();
     spine.submit_prompt_to(&two, "what goes in the board pack", Source::Text).unwrap();
     assert_eq!(log.spawned(), vec!["desk-1", "desk-2"], "one desk per conversation");
-    assert_eq!(log.primed_count("desk-1"), 1);
-    assert_eq!(log.primed_count("desk-2"), 1);
+    assert_eq!(log.context_count("desk-1"), 1);
+    assert_eq!(log.context_count("desk-2"), 1);
 
     // Back to the first company's conversation. Its desk is parked and primed with that
     // company's material; nothing should be spent putting it back in the chair.
     spine.submit_prompt_to(&one, "and what did it cost", Source::Text).unwrap();
     assert_eq!(log.spawned(), vec!["desk-1", "desk-2"], "coming back spawned a new front desk");
     assert_eq!(
-        log.primed_count("desk-1"), 1,
-        "coming back to a parked desk spent a priming turn — the company material it was primed \
-         with did not come back with it, so the chair compared it against the OTHER company's"
+        log.context_count("desk-1"), 2,
+        "returning to this conversation must supply its own current company facts"
     );
     assert_eq!(
         log.prompts_to("desk-1"),

@@ -227,7 +227,7 @@ richos/app/
                               rather than four directory names, including the multi-root
                               proof (`richos` + `richos-hq` -> one entity id) and the
                               string-prefix trap beside it
-    tests/spine_tests.rs     14 spine invariant tests (no live Claude needed). One is the
+    tests/spine_tests.rs     12 spine invariant tests (no live Claude needed). One is the
                               nightly D4 pair: a failed TEXT turn and a failed VOICE turn are
                               classified identically, which is what makes the operator line
                               impossible to write for only one surface
@@ -468,7 +468,7 @@ richos/app/
                               learning where the central folder is re-primes a lease that was
                               already running. The two negative controls come first because
                               they are what make the positives mean anything
-    tests/resident_front_desk_tests.rs 7 tests for the CEO's "any number of conversation
+    tests/resident_front_desk_tests.rs 6 tests for the CEO's "any number of conversation
                               threads, each holding one front desk": a thread's lease is
                               PARKED alive rather than killed when another thread speaks, so
                               coming back is the same provider session with no re-prime; a
@@ -543,7 +543,7 @@ richos/app/
                               boundaries and unlocked startup/priming with the same shared factory.
                               A stale completed prime is retained without claiming it is current.
     tests/front_desk_priming_tests.rs
-                             9 tests for preparing the selected conversation before the first
+                             3 tests for preparing the selected conversation before the first
                               message, readiness after repair and accurate startup reporting.
     tests/setup.rs           56 tests for FIRST-RUN SETUP (Option D, `src/setup.rs`): the
                               two executables a customer's Mac does not have, fetched and
@@ -1196,7 +1196,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1799 tests + 8 doc-tests (1795 direct, 4 ignored)
+cargo test -p richos-core                       # 1790 tests + 8 doc-tests (1786 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

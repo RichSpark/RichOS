@@ -401,6 +401,7 @@ pub struct MockCognition {
     pub recovery_contexts: Arc<Mutex<Vec<String>>>,
     pub request_origins: Arc<Mutex<Vec<(String,String)>>>,
     pub conversation_contexts: Arc<Mutex<Vec<String>>>,
+    pub company_contexts: Arc<Mutex<Vec<String>>>,
     /// RAW native frames a test parked as between-turn traffic (§1.5 gap #1).
     ///
     /// Raw wire JSON, NOT pre-built records, deliberately: a test that pushed a finished
@@ -422,6 +423,7 @@ impl MockCognition {
             recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
+            company_contexts: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -439,6 +441,7 @@ impl MockCognition {
             recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
+            company_contexts: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -451,6 +454,10 @@ impl MockCognition {
 }
 
 impl Cognition for MockCognition {
+    fn set_company_context(&mut self,context:Option<&str>)->Result<bool,CognitionError> {
+        self.company_contexts.lock().unwrap().push(context.unwrap_or("").to_string());
+        Ok(true)
+    }
     fn set_conversation_context(&mut self, context:&str) {self.conversation_contexts.lock().unwrap().push(context.into());}
 
     fn prepare_work_turn(&mut self, _: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,

@@ -178,6 +178,9 @@ fn main() {
 
     let ledger = Ledger::open(dir.join("ledger.jsonl")).expect("open ledger");
     let mut spine = Spine::new(ledger);
+    spine.set_entity_registry(richos_core::entity::EntityRegistry::new(vec![
+        richos_core::entity::Entity::new("richos","RichOS",&["/fixture/richos"]).unwrap(),
+    ]).unwrap());
     spine.set_machinery_journal(MachineryJournal::new(dir.join("machinery")));
     let entity = EntityId::parse("richos").expect("entity");
 

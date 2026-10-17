@@ -74,50 +74,9 @@ fn full_roundtrip_persists_and_renders_clean() {
     let _ = std::fs::remove_file(&path);
 }
 
-#[test]
-fn lease_is_reprimed_before_first_turn() {
-    // Continuity foundation: the re-prime (identity assertion) is injected once,
-    // before the first CEO-visible turn.
-    let (path, ledger) = tmp_ledger("reprime");
-    let mut spine = support::spine(ledger);
-    spine.create_thread("General", &femcboost()).unwrap();
 
-    let mock = MockCognition::new("sess-1", vec!["reply"]);
-    let reprimes_ref = mock.reprimes.clone();
-    let prompts_ref = mock.prompts.clone();
-    spine.attach_lease(Box::new(mock));
 
-    spine.submit_prompt("hello", Source::Text).unwrap();
 
-    let reprimes = reprimes_ref.lock().unwrap();
-    assert_eq!(reprimes.len(), 1, "exactly one re-prime injection");
-    // "You are Rich" and the no-denial-from-absent-memory rule moved to the standing
-    // instruction on 2026-09-06 — a system prompt, fixed at spawn, rather than a turn
-    // (`doctrine.rs`; inner-doctrine design §4.2, §5.1). They are checked there by
-    // `action_ledger_tests::the_ledgers_partial_coverage_is_stated_rather_than_overclaimed`.
-    assert!(reprimes[0].contains("identity_assertion"), "the successor is told which conversation it is in");
-    assert!(reprimes[0].contains("action_ledger_digest"), "anti-false-attribution rule present");
-    // The re-prime happens; the CEO prompt is delivered after it.
-    assert_eq!(*prompts_ref.lock().unwrap(), vec!["hello".to_string()]);
-    let _ = std::fs::remove_file(&path);
-}
-
-#[test]
-fn internal_reprime_turn_is_never_rendered() {
-    let (path, ledger) = tmp_ledger("internal");
-    let mut spine = support::spine(ledger);
-    let thread = spine.create_thread("General", &femcboost()).unwrap();
-    spine.attach_lease(Box::new(MockCognition::new("sess-1", vec!["ok"])));
-    spine.submit_prompt("hey", Source::Text).unwrap();
-
-    // A `received` Internal turn exists in the ledger...
-    assert!(spine.ledger().turns().iter().any(|t| t.source == Source::Internal));
-    // ...but it has NO render path: messages() only shows the real user + assistant.
-    let msgs = spine.messages(&thread).unwrap();
-    assert!(msgs.iter().all(|m| m.text != "[re-prime]"));
-    assert_eq!(msgs.len(), 2);
-    let _ = std::fs::remove_file(&path);
-}
 
 #[test]
 fn default_thread_title_is_onboarding() {
@@ -143,11 +102,11 @@ fn threads_are_views_over_one_shared_ledger() {
     let mut spine = support::spine(ledger);
     let germany = spine.create_thread("Germany", &femcboost()).unwrap();
     let hiring = spine.create_thread("Q4 hiring", &femcboost()).unwrap();
-    spine.attach_lease(Box::new(MockCognition::new("sess-1", vec!["a", "b"])));
-
     spine.switch_thread(&germany).unwrap();
+    spine.attach_lease(Box::new(MockCognition::new("germany-session", vec!["a"])));
     spine.submit_prompt("about germany", Source::Text).unwrap();
     spine.switch_thread(&hiring).unwrap();
+    spine.attach_lease(Box::new(MockCognition::new("hiring-session", vec!["b"])));
     spine.submit_prompt("about hiring", Source::Text).unwrap();
 
     // Two threads, each carrying only its own messages, but both projected from the
@@ -537,6 +496,7 @@ fn agent_input_survives_restart_and_duplicate_delivery_without_a_report_writer()
     control.submit_agent_message(&thread, Some(femcboost()), report, "stu", "saved-message-1").unwrap();
     let mut spine = support::spine(Ledger::open(&path).unwrap());
     spine.set_turn_control(control);
+    spine.switch_thread(&thread).unwrap();
     let reply = "The northern market has twice as many buyers.";
     let desk = MockCognition::new("rich", vec![reply]);
     let prompts = desk.prompts.clone();
@@ -556,6 +516,7 @@ fn agent_input_survives_restart_and_duplicate_delivery_without_a_report_writer()
 
     let mut reopened = support::spine(Ledger::open(&path).unwrap());
     reopened.set_turn_control(TurnControl::open(&intake).unwrap());
+    reopened.switch_thread(&thread).unwrap();
     let desk = MockCognition::new("rich-restarted", vec![]);
     let replayed = desk.prompts.clone();
     reopened.attach_lease(Box::new(desk));
