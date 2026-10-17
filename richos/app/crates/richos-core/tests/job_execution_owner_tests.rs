@@ -129,13 +129,10 @@ fn ordinary_quit_and_restart_preserve_stus_reports_and_input_receipts() {
             AssignmentState::Interrupted | AssignmentState::Unknown
         );
         if unverified {
-            assert!(
-                view["finished"].as_array().unwrap().is_empty(),
-                "an old process label became a current finished job"
-            );
-            assert_eq!(view["unreported"].as_array().unwrap().len(), 1);
-            assert_eq!(view["unreported"][0]["previous_record"]["state"],state.as_str());
-            assert!(states.is_empty(),"an old host label was presented as a current status");
+            assert_eq!(view["finished"].as_array().unwrap().len(),1,"old stopped records must remain finished history");
+            assert_eq!(view["finished"][0]["previous_record"]["state"],state.as_str());
+            assert_eq!(view["finished"][0]["state"],"interrupted");
+            assert_eq!(states,vec!["interrupted"],"historical stopped work is not live work");
             let job =
                 assignment::read(&scope.state_root, "company", "thread", &receipt.id).unwrap();
             assert!(job.reported_state().is_none());

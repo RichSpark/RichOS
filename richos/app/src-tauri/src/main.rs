@@ -4212,7 +4212,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 // It is not an identifier he is ever shown — it never reaches a sentence,
                 // the same way `id` above never does.
                 "turnRef": row.instruction_ledger_ref,
-                "state": row.reported_state().unwrap_or(richos_core::assignment::AssignmentState::Unknown).as_str(),
+                "state": row.reported_state().unwrap_or(richos_core::assignment::AssignmentState::Interrupted).as_str(),
                 "detail": row.reported_state().map(|_|row.detail.as_str()),
                 // **THE DETAIL TELLS HIM WHAT TO DO** (sign in, a helper he may stop, an answer
                 // he owes), so Under the hood shows it without Technical view (hunt 57, finding 11).
@@ -4225,7 +4225,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "answered": row.was_answered(),
                 "repositories": row.repositories,
                 "registeredAtMs": row.registered_at_ms,
-                "canStop": row.accepts_input(),
+                "canStop": row.reported_state().is_some() && row.accepts_input(),
                 "awaitingYou": waiting,
             })
         }).collect::<Vec<_>>()

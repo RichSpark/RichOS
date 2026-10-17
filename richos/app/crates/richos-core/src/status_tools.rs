@@ -103,7 +103,7 @@ fn row(item: &Assignment) -> Value {
         // screen and deliberately does not rewrite this — the record keeps the estimate,
         // which is the only thing that can be compared against what actually happened.
         "kind": item.kind.as_str(),
-        "state": item.reported_state().unwrap_or(item.state).as_str(),
+        "state": item.reported_state().unwrap_or(AssignmentState::Interrupted).as_str(),
         "detail": item.detail,
         "asked_for_at_ms": item.registered_at_ms,
         "last_moved_at_ms": item.updated_at_ms,
@@ -111,7 +111,6 @@ fn row(item: &Assignment) -> Value {
         "notices": notices,
     });
     if item.reported_state().is_none() {
-        facts.as_object_mut().unwrap().remove("state");
         facts.as_object_mut().unwrap().remove("detail");
         facts["previous_record"]=json!({"state":item.state,"detail":item.detail});
     }
@@ -155,7 +154,7 @@ pub fn call(
     let mut finished: Vec<&Assignment> = Vec::new();
     let mut unreported:Vec<&Assignment>=Vec::new();
     for item in &items {
-        let Some(reported)=item.reported_state() else {unreported.push(item);continue};
+        let Some(reported)=item.reported_state() else {finished.push(item);continue};
         match reported {
             AssignmentState::WaitingForScreen=>waiting_for_screen.push(item),
             AssignmentState::WaitingForQuota=>waiting_for_quota.push(item),
