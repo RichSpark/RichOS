@@ -457,18 +457,17 @@
     const agents = held.filter(r => r.kind === "agent").length;
     const assignments = held.filter(r => r.kind === "assignment").length;
     const many = multi(), cur = inUseAcct(), nx = nextAcct(), allGone = many && view?.heldUntil > now;
-    // Pause on and no current reading: "waiting" while a check is on its way (round 16's
-    // `hold-no-reading`), "noReading" once that check came back with no figures (quota.rs
-    // `Admission::NoReading`: nothing is held on a missing number; walk of nightly 36, D1).
+    // Unknown or missing telemetry never creates a hold.
     const quiet = !held.length && !allGone && enabled;
-    const waiting = quiet && state === "unknown", noReading = quiet && state === "noReading";
-    let head, body, holding = !!held.length || allGone || waiting, acting = false;
+    const noReading = quiet && (state === "unknown" || state === "noReading");
+    const admitted = !enabled || state !== "held";
+    let head, body, holding = !!held.length || allGone, acting = false;
     const five = (view?.windows || []).find(w => w.id === "five_hour");
     // Refresh is never locked: a failure's backoff holds only the automatic check (quota.rs
     // `due`), and round 16 says "Refresh asks sooner" beside it.
-    field("quota-hold-refresh").hidden = !(waiting || noReading);
+    field("quota-hold-refresh").hidden = !noReading;
     field("quota-hold-refresh").disabled = busy || saving;
-    field("quota-release").hidden = !enabled || !(held.length || waiting);
+    field("quota-release").hidden = !enabled || !held.length;
     field("quota-release").disabled = saving;
     field("quota-release").textContent = held.length ? "Let them continue now" : "Turn it off";
     if (allGone) {
@@ -491,12 +490,12 @@
         body = `${whose} window is at <b>${pct(five.usedPercent)} used</b>, past your ${fiveLine()}% line. ${many ? "" : agents === 1 ? "It has kept its place. " : "Each has kept its place. "}`
           + `${agents === 1 ? "It resumes" : "They resume"} at <b>${esc(clock(activity.resumesAt))}</b>, 20 minutes before the reset${many ? "." : ", or sooner if a fresh reading is back under the line."}`;
       } else {
-        head = !enabled || state === "ready" ? "Releasing the pause…" : agents ? `${agents} ${agents === 1 ? "agent is" : "agents are"} paused` : assignments ? `${assignments} ${assignments === 1 ? "assignment is" : "assignments are"} paused` : "Waiting to start an agent";
-        body = esc(!enabled || state === "ready" ? "The allowance permits work. Waiting for each pause to clear." : weeklyHeld ? "Weekly usage reached 99%. Waiting for a confirmed reset and available allowance." : activity.resumesAt ? `Can continue just after ${clock(activity.resumesAt)} when the reset is under 20 minutes away.` : "Waiting for a current five-hour reading. Their work is saved.");
+        head = admitted ? "Releasing the pause…" : agents ? `${agents} ${agents === 1 ? "agent is" : "agents are"} paused` : assignments ? `${assignments} ${assignments === 1 ? "assignment is" : "assignments are"} paused` : "Waiting to start an agent";
+        body = esc(admitted ? "The allowance permits work. Waiting for each pause to clear." : weeklyHeld ? "Weekly usage reached 99%. Waiting for a confirmed reset and available allowance." : activity.resumesAt ? `Can continue just after ${clock(activity.resumesAt)} when the reset is under 20 minutes away.` : "Waiting for a current five-hour reading. Their work is saved.");
         if (enabled) body += " Continuing now turns automatic pause off.";
       }
       if (many && enabled && view.atThreshold !== "switch" && nx) body += ` <b>${esc(nx.label)}</b> has room: choose <i>switch</i> above and they continue there now.`;
-    } else if (released.length && (!enabled || state === "ready")) {
+    } else if (released.length && admitted) {
       head = "Pause released"; body = "These waits have cleared. Work can continue from its saved place.";
     } else if (!enabled) {
       head = "Off. Nothing is paused.";
@@ -504,15 +503,11 @@
       // sentence, because a turned-away step runs again on the next account with room.
       body = many ? `Rich’s agents keep working through the line. If ${cur ? poss(cur.label) : "the"} five-hour window runs out, the step Claude Code turns away runs again on the next account with room. The switch at 99% of the week still happens; that is what a second account is for.`
         : "Rich’s agents keep working through the limit. When the five-hour window is spent, Claude Code turns them away until it resets, and Rich tells you.";
-    } else if (waiting) {
-      // Round 16's `hold-no-reading`. The wait lasts until the check on its way comes back.
-      head = "Holding until there is a current reading.";
-      body = `${view.checkedAt ? `The last reading is <b>${esc(duration(now - view.checkedAt))} old</b>, and a rule needs a fresh one` : "There is no reading yet, and a rule needs one"}: an old number could let work through past the line. Nothing starts a new step until Claude Code answers.`;
     } else if (noReading) {
       // Not drawn in round 16: the check came back with no figures, so nothing is held on it.
       head = "No current reading, so nothing is held.";
       const ask = view.retryAt > now ? view.retryAt : view.nextCheckAt;
-      body = `${view.message ? "The last check brought no usage figures" : "Claude Code’s last answer had no usage figures"}, and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows the five-hour window past <b>${fiveLine()}%</b>.`
+      body = `${state === "unknown" ? "There is no current usage reading" : view.message ? "The last check brought no usage figures" : "Claude Code’s last answer had no usage figures"}, and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows the five-hour window past <b>${fiveLine()}%</b>.`
         + (ask > now ? ` RichOS asks again in <span class="quota-keep">${esc(duration(ask - now))}.</span>` : "");
     } else if (state === "held") {
       head = "Ready to pause"; body = esc(weeklyHeld ? "Weekly usage reached 99%. Agents will pause at their next step until allowance is confirmed." : `The five-hour allowance has reached ${view.policy.pausePercent}%. Agents will pause when they finish their current step. No pauses observed yet.`);
@@ -554,7 +549,7 @@
     title.replaceChildren(dot, head);
     detail.innerHTML = paragraphs.join("");
     list.replaceChildren();
-    for (const row of (held.length ? held : !enabled || state === "ready" ? released : [])) {
+    for (const row of (held.length ? held : admitted ? released : [])) {
       const item = node("li", ""), description = node("span", "quota-held-description");
       // Round 16's one line: "Mark · Outbox retry — wiring the reconnect path".
       description.appendChild(node("strong", "", row.name));

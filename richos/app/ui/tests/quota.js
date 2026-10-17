@@ -339,7 +339,7 @@ async function main() {
       await page.waitForTimeout(150);
       // Round 16's `hold-no-reading` while a check is on its way; once one came back empty,
       // nothing is held on the missing number (quota.rs Admission::NoReading).
-      if (name === "unavailable") assertEqual(await page.locator("#quota-hold-status").innerText(), "Holding until there is a current reading.");
+      if (name === "unavailable") assertEqual(await page.locator("#quota-hold-status").innerText(), "No current reading, so nothing is held.");
       if (name === "no-reading-null" || name === "null-over-reading") {
         assertEqual(await page.locator("#quota-hold-status").innerText(), "No current reading, so nothing is held.");
         assert(await page.locator("#quota-account-start").isVisible(), name + ": + Add account is offered");
@@ -830,9 +830,9 @@ async function main() {
     // `hold-no-reading`: pause on, the reading 47 minutes old, its check on its way.
     page = await open("dark", { ...low, state: "stale", checkedAt: Date.now() - 47 * 60000 }, 100, null, true);
     await enableTechnical(page); await page.click("#set-quota-open");
-    await page.waitForFunction(() => document.getElementById("quota-hold-status").textContent.startsWith("Holding until"));
-    assertEqual(await text("#quota-hold-detail"), "The last reading is 47 min old, and a rule needs a fresh one: an old number could let work through past the line. Nothing starts a new step until Claude Code answers.");
-    assertEqual(await page.locator("#quota-sheet .quota-status-actions button:visible").allTextContents(), ["Refresh now", "Turn it off"]);
+    await page.waitForFunction(() => document.getElementById("quota-hold-status").textContent === "No current reading, so nothing is held.");
+    assert((await text("#quota-hold-detail")).includes("Rich’s agents keep working"), "stale telemetry must not claim work is held");
+    assertEqual(await page.locator("#quota-sheet .quota-status-actions button:visible").allTextContents(), ["Refresh now"]);
     await page.close();
     // `holding`: three agents past the line.
     const activity = { held: ["Mark", "Andy", "Tom"].map((name, i) => ({ kind: "agent", id: "w" + i, name, sinceAt: now - 41 * 60000, threadId: "test" })), released: [] };

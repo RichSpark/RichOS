@@ -101,6 +101,16 @@ for line in sys.stdin:
     def start_waiter():
         publish(scope, {"version": 1, "actions_allowed": True,
                         "binding": {"entity_id": "company", "thread_id": "thread", "session_id": "session"}})
+        now = time.time_ns() // 1_000_000
+        # Only a real above-threshold window holds work. Missing telemetry does not.
+        publish(state / "claude-quota.json", {
+            "state": "fresh", "windows": [{"id": "five_hour", "label": "Five-hour",
+                "usedPercent": 95, "resetsAt": now + 3_600_000, "durationMs": 18_000_000}],
+            "checkedAt": now, "retryAt": None, "nextCheckAt": None,
+            "refreshIntervalMs": 300000, "message": None,
+            "policy": {"enabled": True, "pausePercent": 93},
+            "admission": {"state": "held", "resetsAt": now + 3_600_000},
+        })
         child = subprocess.Popen(
             [executable, "--claude-quota-gate", sys.executable, str(canonical), str(observed)],
             env={**env, "RICHOS_APP_STATE": str(state), "RICHOS_APP_SCOPE": str(scope)},
