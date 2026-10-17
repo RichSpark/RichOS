@@ -749,16 +749,20 @@ impl IntakeLog {
 // THE CANCEL SEAM
 // ---------------------------------------------------------------------------------------
 
-/// A handle that can interrupt the CURRENTLY RUNNING turn from outside the spine lock.
-///
-/// `Send + Sync` and cheap to clone-by-`Arc` because that is the whole requirement: the
-/// stop control runs on a different thread from the turn, and by construction it can never
-/// take the lock the turn is holding.
+/// The outcome of the native turn that consumed submitted input.
+pub struct InputOutcome {
+    pub result: Result<String, String>,
+    /// A folded native turn reports once, even if it consumed several inputs.
+    pub report_failure: bool,
+}
+
+/// A handle that can interrupt the currently running turn from outside the spine lock.
+/// Stop runs on another thread and never takes the lock held by that turn.
 pub trait TurnCancel: Send + Sync {
     /// Queue ordinary input on this same session without interrupting it. The
-    /// callback runs only when the provider identifies the input as consumed.
+    /// callback runs when the native turn ends. Admission alone is not completion.
     /// False means this provider has no live input path; leave the inbox pending.
-    fn send_input(&self, _id: &str, _text: &str, _taken: Box<dyn FnOnce() + Send>) -> Result<bool, String> {
+    fn send_input(&self, _id: &str, _text: &str, _taken: Box<dyn FnOnce(InputOutcome) + Send>) -> Result<bool, String> {
         Ok(false)
     }
 

@@ -43,9 +43,9 @@ struct Inner {
     last_rotation_reason: Option<String>,
     lease_repositories: Option<Vec<PathBuf>>,
     lease_team: Option<String>,
-    upstream_budget: crate::upstream::RetryBudget,
 }
 struct Backend {
+    live_delivery: Mutex<()>,
     lease: Mutex<Option<Box<dyn Cognition>>>,
     inner: Mutex<Inner>,
     wake: Condvar,
@@ -53,6 +53,7 @@ struct Backend {
 impl Backend {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            live_delivery: Mutex::new(()),
             lease: Mutex::new(None),
             inner: Mutex::new(Inner::default()),
             wake: Condvar::new(),
@@ -60,7 +61,6 @@ impl Backend {
     }
 }
 pub struct WorkHost {
-    retry_clock: Arc<dyn crate::upstream::RetryClock>,
     state: PathBuf,
     factory: Arc<dyn LeaseFactory>,
     backends: Mutex<std::collections::HashMap<String, Arc<Backend>>>,
@@ -80,7 +80,6 @@ impl WorkHost {
         notifier: Arc<dyn WorkNotifier>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            retry_clock: Arc::new(crate::upstream::SystemRetryClock),
             state: state.into(),
             factory: Arc::from(factory),
             backends: Mutex::new(Default::default()),
@@ -154,6 +153,7 @@ impl WorkHost {
         let Some(backend) = self.backend_for(binding.thread_id()) else {
             return;
         };
+        let _delivery = backend.live_delivery.lock().unwrap();
         let (input, after, session) = {
             let mut inner = backend.inner.lock().unwrap();
             inner.binding = Some(binding.clone());
@@ -171,6 +171,7 @@ impl WorkHost {
         let scope = self.message_scope(binding);
         let result = (|| {
             let mut after = after;
+            loop {
             let (mut message, through) = loop {
                 let Some((message, through)) =
                     crate::session_tools::pending_after(&scope, "stu", after)?
@@ -200,35 +201,52 @@ impl WorkHost {
             let text = payload.to_string();
             let host = Arc::downgrade(self);
             let receiving = Arc::downgrade(&backend);
-            let binding = binding.clone();
+            let delivered_scope = scope.clone();
+            let delivered_session = session.clone();
+            let delivered_binding = binding.clone();
             if let Some(session) = &session {
-                crate::session_tools::begin_attempt(
-                    &scope,
-                    "stu",
-                    &format!("peer:{through}"),
-                    session,
-                )?;
+                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),session)?;
             }
-            input.send_input(&id,&text,Box::new(move || {
-                let accepted=if message.handoff {crate::session_tools::accept_live_handoff(&scope,"stu",through)}
-                    else {crate::session_tools::acknowledge(&scope,"stu",through)};
-                if let Err(error)=accepted {
-                    eprintln!("[richos] operator input was taken but its receipt remains pending: {error}");
-                    return;
-                }
-                if let Some(backend)=receiving.upgrade() {
-                    let mut inner=backend.inner.lock().unwrap();
-                    if inner.lease_session==session {
-                        inner.peer_active_through=Some(inner.peer_active_through.unwrap_or(0).max(through));
+            let delivered = input.send_input(&id,&text,Box::new(move |outcome| {
+                let receipt = if outcome.result.as_ref().is_ok_and(|reason| reason == "end_turn") {
+                    crate::session_tools::acknowledge(&delivered_scope,"stu",through)
+                } else {
+                    crate::session_tools::accept_live_handoff(&delivered_scope,"stu",through)
+                };
+                if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
+                if let Some(host) = host.upgrade() {
+                    if outcome.report_failure {
+                        if let Err(error) = host.observe_input_result(&delivered_binding,&message,
+                            &format!("peer:{through}"),delivered_session.as_deref().unwrap_or(""),&outcome.result) {
+                            eprintln!("[richos] native input status: {error}");
+                        }
                     }
                 }
-                if let Some(host)=host.upgrade() {host.wake_messages(&binding)}
+                if let Some(backend) = receiving.upgrade() { backend.wake.notify_all(); }
             }))?;
-            Ok(())
+            if !delivered { return Ok(()); }
+            if delivered {
+                let mut inner = backend.inner.lock().unwrap();
+                if inner.lease_session == session {
+                    inner.peer_active_through=Some(inner.peer_active_through.unwrap_or(0).max(through));
+                }
+            }
+            after = through;
+            }
         })();
         if let Err(error) = result {
             eprintln!("[richos] operator live input remains pending: {error}");
         }
+    }
+
+    fn observe_input_result(&self, binding: &ThreadBinding, message: &crate::session_tools::Message,
+        input: &str, session: &str, result: &Result<String,String>) -> Result<(),String> {
+        if result.as_ref().is_ok_and(|reason| reason == "end_turn")
+            || *self.closing.lock().unwrap() || self.handoff_stopped(binding,message)? { return Ok(()); }
+        crate::session_tools::observe_work_status(&self.message_scope(binding), serde_json::json!({
+            "event":"upstream_input","input_id":input,"session_id":session,"work":message.work,
+            "stop_reason":result.as_ref().ok(),"error":result.as_ref().err()
+        }))
     }
 
     fn publish_peer_input(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
@@ -309,7 +327,6 @@ impl WorkHost {
         }
         let original = serde_json::to_string(message).map_err(|e| e.to_string())?;
         let mut input = original.clone();
-        backend.inner.lock().unwrap().upstream_budget.new_message();
         loop {
             self.ensure_lease(backend, binding)?;
             let mut guard = backend.lease.lock().unwrap();
@@ -344,77 +361,29 @@ impl WorkHost {
             if stopped()? {
                 return Ok(session);
             }
-            let mut diagnostics = String::new();
             let mut published = false;
-            let mut model_activity = false;
-            let result = lease.prompt(&input, &mut |item| {
+            let result = lease.prompt(&input, &mut |_item| {
                 if !published {
                     published = true;
                     self.publish_peer_input(backend, binding);
                 }
-                match item {
-                    TurnItem::Text { text, .. } => diagnostics.push_str(text),
-                    TurnItem::AnswerComplete => model_activity = true,
-                    TurnItem::Machinery(record) => model_activity |= matches!(record.kind,
-                        crate::machinery::MachineryKind::ToolCall | crate::machinery::MachineryKind::Thought |
-                        crate::machinery::MachineryKind::PermissionRequested | crate::machinery::MachineryKind::ClientFsCall),
-                }
             });
             let result =
                 result.and_then(|reason| lease.work_readiness_after_turn().map(|_| reason));
-            let received_through = {
+            {
                 let mut inner = backend.inner.lock().unwrap();
                 inner.peer_input = None;
                 inner.cancel = None;
-                inner.peer_active_through.unwrap_or(0)
-            };
+            }
             if matches!(&result, Err(CognitionError::Io(_))) {
                 drop(guard.take());
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
-            let failure = crate::upstream::UpstreamFailure::classify_lines(&diagnostics)
-                .or_else(|| result.as_ref().err().and_then(|e| crate::upstream::UpstreamFailure::classify_lines(&e.to_string())))
-                .or_else(||result.as_ref().err().filter(|e|crate::claude_accounts::parse_usage_limit(&e.to_string()).is_some()).map(|e|crate::upstream::UpstreamFailure {
-                    fault:crate::upstream::UpstreamFault::RateLimited,status:Some(429),request_id:None,model:None,raw:e.to_string()
-                }));
-            let model_started = model_activity || !crate::upstream::split_at_vendor_diagnostic(&diagnostics).0.trim().is_empty()
-                || result.as_ref().is_ok_and(|reason| reason == "max_tokens");
-            let incomplete=failure.is_some() || !result.as_ref().is_ok_and(|reason|reason=="end_turn");
-            if incomplete {
-                let (wait, attempts) = if let Some(failure)=&failure {
-                    let mut inner = backend.inner.lock().unwrap();
-                    let allowed = inner.upstream_budget.charge(failure.fault);
-                    ((allowed && !model_started && guard.is_some()).then(||inner.upstream_budget.wait_before_retry().unwrap_or_default()), Some(inner.upstream_budget.attempts()))
-                } else {(None,None)};
-                if wait.is_none() && !backend.inner.lock().unwrap().closing && !stopped()? {
-                    crate::session_tools::observe_work_status(&self.message_scope(binding), serde_json::json!({
-                        "event":"upstream_input","input_id":turn,"session_id":session,"work":message.work,
-                        "model_started":model_started,"fault":failure.as_ref().map(|f|f.fault.tag()),
-                        "provider_detail":failure.as_ref().map(|f|f.raw.clone()).unwrap_or_else(||match &result {Ok(reason)=>reason.clone(),Err(error)=>error.to_string()}),
-                        "attempts":attempts,"retry_wait_ms":wait.map(|d| d.as_millis() as u64)
-                    }))?;
-                }
-                if let Some(wait) = wait {
-                    if self.retry_clock.wait(wait, &|| backend.inner.lock().unwrap().closing || stopped().unwrap_or(true)) {
-                        continue;
-                    }
-                    return Err("The unfinished input remains saved after its retry wait ended.".into());
-                }
-            }
+            self.observe_input_result(binding,message,turn,&session,&result.as_ref().map(Clone::clone).map_err(ToString::to_string))?;
             let reason = result.map_err(|e| e.to_string())?;
             if reason != "end_turn" {
                 return Err(format!("Operator input did not complete: {reason}"));
             }
-            if failure.is_some() {
-                return Err(diagnostics);
-            }
-            backend.inner.lock().unwrap().upstream_budget.succeeded();
-            crate::session_tools::complete_live_inputs(
-                &self.message_scope(binding),
-                "stu",
-                &session,
-                received_through,
-            )?;
             let lease = guard
                 .as_mut()
                 .ok_or("The operator connection closed during team reload")?;
@@ -1284,12 +1253,16 @@ mod tests {
             }
             let result=team.turn_results.pop_front().unwrap_or("end_turn");
             drop(team);
+            if result=="retry_progress" {
+                for record in crate::machinery::MachineryRecord::from_native_event(&serde_json::json!({"type":"system","subtype":"api_retry","attempt":1,"retry_delay_ms":1000,"error_status":529}),&self.session,0) {on(TurnItem::Machinery(record));}
+                return Ok("end_turn".into());
+            }
             if result=="native_quota" {return Err(CognitionError::Protocol(crate::claude_accounts::usage_limit_error(None,"native quota refusal")))}
             if result=="max_tokens_no_text" {return Ok("max_tokens".into())}
             if let Some(status)=result.strip_prefix("pre_model_") {
                 if status=="protocol" {return Err(CognitionError::Protocol("API Error: 503 Server error.".into()))}
                 let text=match status {"529"=>"API Error: 529 Overloaded.","429"=>"API Error: 429 Rate limited.",_=>"API Error: 503 Server error."};
-                on(TurnItem::Text {seq:0,text});return Ok("end_turn".into());
+                return Err(CognitionError::Protocol(text.into()));
             }
             if result=="tool_error" {
                 for record in crate::machinery::MachineryRecord::from_native_event(&serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-one","name":"Bash","input":{"command":"fictional"}}]}}),&self.session,0) {on(TurnItem::Machinery(record));}
@@ -1300,7 +1273,7 @@ mod tests {
                 text: "Recorded reply",
             });
             match result {
-                "provider_error"=>{on(TurnItem::Text{seq:1,text:"API Error: 529 Overloaded."});Ok("end_turn".into())},
+                "provider_error"=>Err(CognitionError::Protocol("API Error: 529 Overloaded.".into())),
                 "io_error"=>Err(CognitionError::Io("connection ended".into())),
                 reason=>Ok(reason.into()),
             }
@@ -1335,15 +1308,7 @@ mod tests {
             }))
         }
     }
-    #[derive(Default)]
-    struct RetryWaits(Mutex<Vec<std::time::Duration>>);
-    impl crate::upstream::RetryClock for RetryWaits {
-        fn wait(&self,wait:std::time::Duration,stopped:&dyn Fn()->bool)->bool {
-            self.0.lock().unwrap().push(wait);!stopped()
-        }
-    }
     struct Harness {
-        retry_waits:Arc<RetryWaits>,
         root: PathBuf,
         state: PathBuf,
         host: Arc<WorkHost>,
@@ -1379,16 +1344,14 @@ mod tests {
             team: team.clone(),
             gate: start_gate.clone(),
         };
-        let mut host = WorkHost::new(
+        let host = WorkHost::new(
             &state,
             Box::new(factory),
             Arc::new(SilentNotifier),
 
         );
-        let retry_waits=Arc::new(RetryWaits::default());
-        Arc::get_mut(&mut host).unwrap().retry_clock=retry_waits.clone();
+
         Harness {
-            retry_waits,
             root,
             state,
             host,
@@ -1486,7 +1449,7 @@ mod tests {
     #[test]
     fn every_scheduled_input_is_delivered_once_per_live_stu_despite_a_failed_turn() {
         for kind in ["handoff", "peer", "standing-answer", "job-answer"] {
-            for result in ["end_turn", "max_tokens", "provider_error", "io_error", "pre_model_503", "pre_model_529", "pre_model_429", "pre_model_protocol", "tool_error", "exhaust_503", "exhaust_529", "native_quota", "max_tokens_no_text"] {
+            for result in ["end_turn", "max_tokens", "provider_error", "io_error", "pre_model_503", "pre_model_529", "pre_model_429", "pre_model_protocol", "tool_error", "native_quota", "max_tokens_no_text"] {
                 let h = harness(0);
                 let scope = h.host.message_scope(&h.binding);
                 let path = h.root.join("peer-status.json");
@@ -1501,11 +1464,7 @@ mod tests {
                     None
                 };
                 crate::session_tools::bind(&path, &scope, "front-session", "rich", instruction).unwrap();
-                match result {
-                    "exhaust_503"=>h.team.lock().unwrap().turn_results.extend(["pre_model_503";2]),
-                    "exhaust_529"=>h.team.lock().unwrap().turn_results.extend(["pre_model_529";8]),
-                    _=>h.team.lock().unwrap().turn_results.push_back(result),
-                }
+                h.team.lock().unwrap().turn_results.push_back(result);
                 match kind {
                     "handoff" => { crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Input under test"})).unwrap(); }
                     "peer" => { crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Input under test"})).unwrap(); }
@@ -1525,32 +1484,17 @@ mod tests {
                 until("later input must pass an answer already received by live Stu", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("Independent later input")));
                 h.host.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
-                let expected = match result {"exhaust_529"=>8,"io_error"|"pre_model_503"|"pre_model_529"|"pre_model_protocol"|"exhaust_503"=>2,_=>1};
-                assert_eq!(prompts.iter().filter(|p| p.contains("Input under test")).count(), expected,
-                    "{kind}/{result}: accepted input repeated in the same live session: {prompts:?}");
-                assert_eq!(h.spawns.load(Ordering::SeqCst), if result=="io_error" {2}else{1}, "{kind}/{result}: unexpected connection replacement");
-                let waits=h.retry_waits.0.lock().unwrap().clone();
-                match result {
-                    "exhaust_529"=>assert_eq!(waits,crate::upstream::OVERLOAD_RETRY_WAITS),
-                    "pre_model_529"=>assert_eq!(waits,vec![crate::upstream::OVERLOAD_RETRY_WAITS[0]]),
-                    "pre_model_503"|"pre_model_protocol"|"exhaust_503"=>assert_eq!(waits,vec![std::time::Duration::ZERO]),
-                    _=>assert!(waits.is_empty(),"started input or a quota refusal was retried"),
+                let expected = if result == "io_error" {2} else {1};
+                assert_eq!(prompts.iter().filter(|p|p.contains("Input under test")).count(),expected,
+                    "{kind}/{result}: input repeated in the same live session: {prompts:?}");
+                assert_eq!(h.spawns.load(Ordering::SeqCst), if result=="io_error" {2}else{1});
+                let mut facts=Vec::new();
+                while let Some((message,through))=crate::session_tools::pending(&scope,"rich").unwrap() {
+                    assert_eq!(message.from,"work-status");assert!(message.instruction.is_none());
+                    facts.push(serde_json::from_str::<serde_json::Value>(&message.text).unwrap());
+                    crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
                 }
-                if matches!(result,"exhaust_529"|"exhaust_503"|"pre_model_429"|"native_quota") {
-                    let mut facts=Vec::new();
-                    while let Some((message,through))=crate::session_tools::pending(&scope,"rich").unwrap() {
-                        assert_eq!(message.from,"work-status");assert!(message.instruction.is_none());
-                        facts.push(serde_json::from_str::<serde_json::Value>(&message.text).unwrap());
-                        crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
-                    }
-                    assert_eq!(facts.len(),1,"{kind}/{result}: transient retries reached Rich");
-                    let last=facts.last().expect("exhausted input stalled without telling Rich");
-                    assert_eq!(last["model_started"],false);assert!(last["retry_wait_ms"].is_null());
-                    assert_eq!(last["attempts"],expected);
-                } else if matches!(result,"end_turn"|"pre_model_503"|"pre_model_529"|"pre_model_protocol") {
-                    assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),
-                        "{kind}/{result}: a successful input reported a transient retry to Rich");
-                }
+                assert_eq!(facts.len(),usize::from(result!="end_turn"),"{kind}/{result}: wrong failure-report count");
                 let before = prompts.len();
                 crate::session_tools::send(&path, &scope, serde_json::json!({"text":"After restart"})).unwrap();
                 let restarted = WorkHost::new(&h.state, Box::new(Factory {
@@ -1561,7 +1505,7 @@ mod tests {
                 until("restart must deliver its new input", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("After restart")));
                 restarted.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
-                let unfinished = kind == "handoff" || !matches!(result, "end_turn" | "io_error" | "pre_model_503" | "pre_model_529" | "pre_model_protocol");
+                let unfinished = kind == "handoff" || !matches!(result,"end_turn"|"io_error");
                 assert_eq!(prompts[before..].iter().filter(|p| p.contains("Input under test")).count(), usize::from(unfinished),
                     "{kind}/{result}: new session lost or repeated recovery input: {prompts:?}");
                 assert!(!prompts[before..].iter().any(|p| p.contains("Independent later input")), "completed input replayed");
@@ -1571,44 +1515,15 @@ mod tests {
     }
 
     #[test]
-    fn stop_and_quit_interrupt_an_unreceived_inputs_existing_retry_wait() {
-        struct Clock { entered:std::sync::mpsc::SyncSender<()>, release:Mutex<std::sync::mpsc::Receiver<()>> }
-        impl crate::upstream::RetryClock for Clock {
-            fn wait(&self,_:std::time::Duration,stopped:&dyn Fn()->bool)->bool {
-                self.entered.send(()).unwrap();
-                self.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(30)).unwrap();
-                !stopped()
-            }
-        }
-        for quit in [false,true] {
-            let mut h=harness(0);
-            let (entered,ready)=std::sync::mpsc::sync_channel(0);
-            let (release,held)=std::sync::mpsc::sync_channel(0);
-            Arc::get_mut(&mut h.host).unwrap().retry_clock=Arc::new(Clock{entered,release:Mutex::new(held)});
-            let record=assignment::register(&h.state,&registration(&h)).unwrap();
-            let scope=h.host.message_scope(&h.binding);let path=h.root.join("peer-status.json");
-            crate::session_tools::bind(&path,&scope,"front-session","rich",Some(crate::ecs::UserInstruction{ledger_ref:registration(&h).instruction_ledger_ref,sha256:registration(&h).instruction_sha256,text:None})).unwrap();
-            h.team.lock().unwrap().turn_results.push_back("pre_model_529");
-            crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"Input under test"})).unwrap();
-            h.host.wake_messages(&h.binding);
-            ready.recv_timeout(std::time::Duration::from_secs(30)).expect("retry wait never started");
-            assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),
-                "a pending retry reached Rich before Stop or Quit");
-            if quit {
-                let host=h.host.clone();let shutdown=std::thread::spawn(move||host.shutdown());
-                until("quit must mark this host closing",||*h.host.closing.lock().unwrap());
-                release.send(()).unwrap();shutdown.join().unwrap();
-                assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"Quit lost unfinished input");
-            } else {
-                assignment::record_user_stop(&h.state,"depot","thread-one",&record.id).unwrap();
-                release.send(()).unwrap();assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(30)));
-                h.host.shutdown();
-                assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"Stopped input remained dispatchable");
-            }
-            assert_eq!(h.work_prompts.lock().unwrap().len(),1,"retry ran after Stop or Quit");
-            assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"an unwanted work-status input followed Stop or Quit");
-            std::fs::remove_dir_all(h.root).unwrap();
-        }
+    fn native_retry_activity_does_not_create_an_app_retry_or_failure_report() {
+        let h=harness(0);let scope=h.host.message_scope(&h.binding);let path=h.root.join("peer-status.json");
+        crate::session_tools::bind(&path,&scope,"front","rich",None).unwrap();
+        h.team.lock().unwrap().turn_results.push_back("retry_progress");
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"One request"})).unwrap();
+        h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(30)));
+        h.host.shutdown();assert_eq!(h.work_prompts.lock().unwrap().len(),1);
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none());
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]
@@ -1698,7 +1613,7 @@ mod tests {
 
     #[test]
     fn a_correction_reaches_stus_live_input_while_his_job_owns_the_lease() {
-        type Delivery = (String, String, Box<dyn FnOnce() + Send>);
+        type Delivery = (String, String, Box<dyn FnOnce(crate::steering::InputOutcome) + Send>);
         struct Input(std::sync::mpsc::Sender<Delivery>);
         impl TurnCancel for Input {
             fn cancel(&self) -> bool {
@@ -1708,7 +1623,7 @@ mod tests {
                 &self,
                 id: &str,
                 text: &str,
-                taken: Box<dyn FnOnce() + Send>,
+                taken: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
             ) -> Result<bool, String> {
                 self.0.send((id.into(), text.into(), taken)).unwrap();
                 Ok(true)
@@ -1769,12 +1684,13 @@ mod tests {
             serde_json::json!({"text":"Then retain the current team"}),
         )
         .unwrap();
-        taken();
+        taken(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
+        h.host.wake_messages(&h.binding);
         let (_, text, taken) = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("hang guard: consumption forwards the next durable message");
         assert!(text.contains("retain the current team"));
-        taken();
+        taken(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
         crate::session_tools::acknowledge(&scope, "stu", original).unwrap();
         assert!(
             crate::session_tools::pending(&scope, "stu")
@@ -1812,7 +1728,7 @@ mod tests {
         assert!(handoff.handoff);
         assert_eq!(handoff.text, "New execution request");
         assert_eq!(handoff.work.as_ref().unwrap().assignment_id, receipt.id);
-        taken();
+        taken(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
         crate::session_tools::send(
             &path,
             &scope,
@@ -1824,14 +1740,7 @@ mod tests {
             "hang guard: a queued new job must not block a quick correction to current work",
         );
         assert!(text.contains("do not change the date"));
-        taken();
-        crate::session_tools::complete_live_inputs(
-            &scope,
-            "stu",
-            "same-stu",
-            backend.inner.lock().unwrap().peer_active_through.unwrap(),
-        )
-        .unwrap();
+        taken(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
         let pending=crate::session_tools::pending(&scope,"stu").unwrap().expect("native turn completion erased the job");
         assert_eq!(pending.0.work.as_ref().unwrap().assignment_id,receipt.id);
         drop(running);
@@ -1853,7 +1762,7 @@ mod tests {
     #[test]
     fn unfinished_live_handoffs_reach_recovered_stu_before_newer_input() {
         use std::io::Write as _;
-        type Delivery = (String, Box<dyn FnOnce() + Send>);
+        type Delivery = (String, Box<dyn FnOnce(crate::steering::InputOutcome) + Send>);
         struct Input {
             seen: Mutex<std::collections::HashSet<String>>,
             tx: std::sync::mpsc::Sender<Delivery>,
@@ -1866,7 +1775,7 @@ mod tests {
                 &self,
                 id: &str,
                 text: &str,
-                taken: Box<dyn FnOnce() + Send>,
+                taken: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
             ) -> Result<bool, String> {
                 if !self.seen.lock().unwrap().insert(id.into()) {
                     return Ok(false);
@@ -1967,7 +1876,6 @@ mod tests {
                     ["previous_delivery_attempt"]["session_id"],
                 "before-relaunch"
             );
-            crate::session_tools::complete_live_inputs(&scope, "stu", "after-relaunch", a).unwrap();
             assert!(
                 crate::session_tools::previous_attempt(&scope, "stu", &format!("peer:{b}"))
                     .unwrap()
@@ -1975,25 +1883,15 @@ mod tests {
                 "sending without a provider receipt was called complete"
             );
             h.host.wake_messages(&h.binding);
-            assert!(
-                rx.try_recv().is_err(),
-                "C was sent before B's actual receipt"
-            );
-            taken();
-            let (text, taken) = rx
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .expect("hang guard: B's receipt must release C through the same input");
-            assert_eq!(
-                serde_json::from_str::<crate::session_tools::Message>(&text)
-                    .unwrap()
-                    .text,
-                "C"
-            );
-            taken();
+            let (text, complete_c) = rx.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("native queue must receive C after B without waiting for B's result");
+            assert_eq!(serde_json::from_str::<crate::session_tools::Message>(&text).unwrap().text,"C");
+            assert!(rx.try_recv().is_err(),"an input was submitted twice to the same native session");
+            taken(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
+            complete_c(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
             assert_eq!(backend.inner.lock().unwrap().peer_active_through, Some(c));
             crate::session_tools::acknowledge(&scope, "stu", a).unwrap();
             // The existing completion API is bounded by actual receipts in the fix.
-            crate::session_tools::complete_live_inputs(&scope, "stu", "after-relaunch", c).unwrap();
             assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"end_turn erased unfinished jobs");
             for record in assignment::read_all(&h.state,"depot","thread-one").unwrap(){
                 assignment::advance(&h.state,"depot","thread-one",&record.id,AssignmentState::Settled,"Stu's terminal report").unwrap();
@@ -2007,7 +1905,7 @@ mod tests {
 
     #[test]
     fn stopped_new_handoff_is_skipped_on_live_input_without_blocking_a_correction() {
-        type Delivery = (String, Box<dyn FnOnce() + Send>);
+        type Delivery = (String, Box<dyn FnOnce(crate::steering::InputOutcome) + Send>);
         struct Input(std::sync::mpsc::Sender<Delivery>);
         impl TurnCancel for Input {
             fn cancel(&self) -> bool {
@@ -2017,7 +1915,7 @@ mod tests {
                 &self,
                 _: &str,
                 text: &str,
-                taken: Box<dyn FnOnce() + Send>,
+                taken: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
             ) -> Result<bool, String> {
                 self.0.send((text.into(), taken)).unwrap();
                 Ok(true)
@@ -2072,7 +1970,7 @@ mod tests {
         let message: crate::session_tools::Message = serde_json::from_str(&text).unwrap();
         assert!(!message.handoff);
         assert_eq!(message.text, "Correction to A");
-        taken();
+        taken(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
         assert!(rx.try_recv().is_err(), "a stopped handoff was sent");
         crate::session_tools::acknowledge(&scope, "stu", a).unwrap();
         assert!(crate::session_tools::pending(&scope, "stu")

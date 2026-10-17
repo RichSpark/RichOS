@@ -639,6 +639,20 @@ pub fn stop_reason_of(result: &Value) -> String {
     result.get("subtype").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
 }
 
+fn native_result(result: &Value) -> Result<String, NativeError> {
+    let reason = stop_reason_of(result);
+    if let Some(reset) = usage_limit_signal(result) {
+        return Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &result.to_string())));
+    }
+    if reason == "child_exited" { return Err(NativeError::Closed); }
+    if result.get("is_error").and_then(Value::as_bool) == Some(true) && reason != STOP_REASON_CANCELLED {
+        let detail = result.get("errors").or_else(|| result.get("result"))
+            .map(Value::to_string).unwrap_or(reason);
+        return Err(NativeError::Protocol(detail));
+    }
+    Ok(reason)
+}
+
 /// The child's argument vector.
 ///
 /// Every flag is here for a stated reason, and the vector is a pure function so a test can
@@ -731,6 +745,7 @@ pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<
 /// single-threaded) and not at `dispatch` (which runs on the reader thread). A
 /// `MachineryRecord` cannot exist without its `seq`, so `dispatch` hands over the wire JSON
 /// and `prompt` normalizes it.
+#[derive(Clone)]
 enum ChunkMsg {
     /// Assistant-message text — the clean-output path, unchanged.
     Text(String),
@@ -780,6 +795,27 @@ enum TurnPhase {
     /// `result`). From here the turn in flight is OURS.
     Running,
 }
+
+fn finish_native_turn(inputs: Vec<PendingTurn>, frame: Value) {
+    // Visible prompts report through their caller. Live-only or hidden+live turns
+    // use one live callback. Every input still receives its own receipt outcome.
+    let mut reported = inputs.iter().any(|input|
+        matches!(input.sink, TurnSink::Prompt(_)) && !input.context_only);
+    for input in inputs {
+        let report = !reported && matches!(input.sink, TurnSink::Input { .. });
+        reported |= report;
+        input.finish(frame.clone(), report);
+    }
+}
+
+enum TurnSink {
+    Prompt(Sender<ChunkMsg>),
+    Input {
+        completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
+        limit: Option<Option<u64>>,
+    },
+}
+
 
 /// The prompt this client has sent and is waiting for.
 ///
@@ -855,12 +891,14 @@ enum TurnPhase {
 /// and it is named here rather than hidden.
 struct PendingTurn {
     /// Where this turn's items go.
-    sink: Sender<ChunkMsg>,
+    sink: TurnSink,
     /// The `uuid` stamped on the user message this prompt wrote, which the child echoes as
     /// `command_uuid`. Minted per prompt, so a lifecycle frame can never be matched against a
     /// previous turn's message.
     command_uuid: String,
     phase: TurnPhase,
+    /// The mode of this submitted input, not a later input queued behind it.
+    context_only: bool,
     /// **Had this child already named a turn THIS client sent, when this one was parked?**
     /// (`ReaderState::turns_named_by_the_child`, copied at the send.) Hunt 2026-09-29 part 1
     /// v2, finding 47: on such a child `Unconfirmed` is not "the child says nothing about
@@ -872,6 +910,32 @@ struct PendingTurn {
 }
 
 impl PendingTurn {
+    fn send(&mut self, chunk: ChunkMsg, frame: &Value) -> bool {
+        match &mut self.sink {
+            TurnSink::Prompt(sink) => sink.send(chunk).is_ok(),
+            TurnSink::Input { limit, .. } => {
+                if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
+                    if let Some(reset) = usage_limit_signal(frame) { *limit = Some(reset); }
+                }
+                false
+            }
+        }
+    }
+
+    fn finish(self, frame: Value, report_failure: bool) {
+        match self.sink {
+            TurnSink::Prompt(sink) => { let _ = sink.send(ChunkMsg::Done(frame)); }
+            TurnSink::Input { completed, limit } => {
+                let result = if let Some(reset) = limit {
+                    Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &frame.to_string())))
+                } else { native_result(&frame) };
+                completed(crate::steering::InputOutcome {
+                    result: result.map_err(|error| error.to_string()), report_failure,
+                });
+            }
+        }
+    }
+
     /// **Is the turn in flight positively NOT ours yet?** True when the child said our
     /// message is still queued, or when a child that names its turns has not named this one
     /// yet (finding 47). Every place that decides whether a frame belongs to this prompt asks
@@ -1213,7 +1277,7 @@ pub struct NativeClient {
     /// **This used to say "there is at most one turn in flight, so the next `result` ends
     /// it", and that premise is FALSE on this wire** — see [`PendingTurn`] for the run that
     /// disproved it and the correlation the child actually offers.
-    current_prompt: Arc<Mutex<Option<PendingTurn>>>,
+    current_prompt: Arc<Mutex<Vec<PendingTurn>>>,
     operation_cancel: Arc<Mutex<OperationCancellation>>,
     action_grants: Vec<ActionGrant>,
     reader_closed: Arc<AtomicBool>,
@@ -1238,7 +1302,6 @@ pub struct NativeClient {
 /// to be declared first.
 struct ReaderState {
     agent_tasks: crate::operator_lead::TaskBook,
-    input_taken: std::collections::HashMap<String, Box<dyn FnOnce() + Send>>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1259,7 +1322,6 @@ struct ReaderState {
     /// ASSERTED rather than merely recorded (`requires_status_tool`): it is the front desk's
     /// only read once the work tools are refused.
     status_tool_loaded: bool,
-    /// Did the child come up in `permissionMode: bypassPermissions`? [`InitFact`], for the same reason.
     /// Host-owned phase, never set by a model frame.
     context_only: bool,
     /// The model this session is running, from `system/init.model`.
@@ -1459,7 +1521,6 @@ impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
             agent_tasks: crate::operator_lead::TaskBook::default(),
-            input_taken: std::collections::HashMap::new(),
             question_scope: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
@@ -1851,7 +1912,7 @@ impl NativeClient {
 
         let pending: Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>> =
             Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let current_prompt: Arc<Mutex<Option<PendingTurn>>> = Arc::new(Mutex::new(None));
+        let current_prompt: Arc<Mutex<Vec<PendingTurn>>> = Arc::new(Mutex::new(Vec::new()));
         let between: Arc<Mutex<BetweenTurn>> = Arc::new(Mutex::new(BetweenTurn::default()));
         let state: Arc<Mutex<ReaderState>> = Arc::new(Mutex::new(ReaderState::default()));
         state.lock().unwrap().question_scope = onboarding.map(|(_,_,path,_)|crate::question_tools::path(path));
@@ -1921,11 +1982,9 @@ impl NativeClient {
             // EOF, which is a fact about the child and not an inference from silence. Fail
             // every waiter so no caller hangs forever.
             reader_pending.lock().unwrap().clear();
-            let mut current = reader_current.lock().unwrap();
             reader_closed_flag.store(true, Ordering::SeqCst);
-            if let Some(pending) = current.take() {
-                let _ = pending.sink.send(ChunkMsg::Done(json!({ "stop_reason": "child_exited" })));
-            }
+            let waiting = std::mem::take(&mut *reader_current.lock().unwrap());
+            finish_native_turn(waiting, json!({"stop_reason":"child_exited"}));
         });
 
         // A supervised leader gets SIGTERM first and reaps its tree; only a bare child (no
@@ -2162,7 +2221,7 @@ impl NativeClient {
         msg: Value,
         stdin: &Arc<Mutex<ChildStdin>>,
         pending: &Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>>,
-        current: &Arc<Mutex<Option<PendingTurn>>>,
+        current: &Arc<Mutex<Vec<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         state: &Arc<Mutex<ReaderState>>,
         text_deltas: &Arc<AtomicUsize>,
@@ -2202,7 +2261,11 @@ impl NativeClient {
             return;
         }
         if ty == "control_request" {
-            let context_only = state.lock().unwrap().context_only;
+            let context_only = {
+                let turns = current.lock().unwrap();
+                let mut running = turns.iter().filter(|turn| !turn.not_yet_ours()).peekable();
+                running.peek().is_some() && running.all(|turn| turn.context_only)
+            };
             // **Read on the reader thread, which is also the thread the text deltas arrive
             // on** — so "has he heard anything yet" is answered in the order the wire put the
             // two events in, with no race to lose.
@@ -2220,18 +2283,10 @@ impl NativeClient {
         if ty == "command_lifecycle" {
             let command = msg.get("command_uuid").and_then(|v| v.as_str()).unwrap_or("");
             let lifecycle = msg.get("state").and_then(|v| v.as_str()).unwrap_or("");
-            let taken = if matches!(lifecycle, "started" | "completed") {
-                state.lock().unwrap().input_taken.remove(command)
-            } else { None };
-            if let Some(taken) = taken { taken(); }
-            if matches!(lifecycle, "cancelled" | "discarded" | "refused") { // dialect-exempt: vendor wire states
-                state.lock().unwrap().input_taken.remove(command);
-            }
             let mut terminal: Option<&'static str> = None;
             {
                 let mut guard = current.lock().unwrap();
-                if let Some(pending) = guard.as_mut() {
-                    if pending.command_uuid == command {
+                if let Some(pending) = guard.iter_mut().find(|pending| pending.command_uuid == command) {
                         // **THE LOUDNESS LAYER**: said once, at the transition, on stderr.
                         // See `ReaderState::turns_named_by_the_child` — a fallback quietly
                         // carrying the whole load looks exactly like the thing working.
@@ -2261,13 +2316,14 @@ impl NativeClient {
                             "refused" => terminal = Some("refused_before_it_ran"),
                             _ => {}
                         }
-                    }
                 }
-                if let Some(reason) = terminal {
-                    if let Some(pending) = guard.take() {
-                        let _ = pending.sink.send(ChunkMsg::Done(json!({ "stop_reason": reason })));
-                    }
-                }
+            }
+            if let Some(reason) = terminal {
+                let pending = {
+                    let mut guard = current.lock().unwrap();
+                    guard.iter().position(|pending| pending.command_uuid == command).map(|index| guard.remove(index))
+                };
+                if let Some(pending) = pending { pending.finish(json!({"stop_reason":reason}), true); }
             }
             Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
             return;
@@ -2301,23 +2357,17 @@ impl NativeClient {
             // with a user send still queued — ours, the only one there can be — ends a turn
             // that was already in flight when we sent, so it is RETAINED and the parked
             // prompt keeps waiting for its own.
-            {
-                let guard = current.lock().unwrap();
-                let another_turns = guard.as_ref().is_some_and(|pending| pending.result_is_another_turns(&msg));
-                drop(guard);
-                if another_turns {
-                    between.lock().unwrap().offer_frame(msg);
-                    return;
-                }
-            }
-            let sink = current.lock().unwrap().take();
-            match sink {
-                Some(pending) => {
-                    let _ = pending.sink.send(ChunkMsg::Done(msg));
-                }
-                // A `result` with no turn in flight is a statement about a turn that has
-                // already been answered. It is retained, not dropped.
-                None => between.lock().unwrap().offer_frame(msg),
+            let ready = {
+                let mut guard = current.lock().unwrap();
+                let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut *guard).into_iter()
+                    .partition(|pending| !pending.result_is_another_turns(&msg));
+                *guard = waiting;
+                ready
+            };
+            if ready.is_empty() {
+                between.lock().unwrap().offer_frame(msg);
+            } else {
+                finish_native_turn(ready, msg);
             }
             return;
         }
@@ -2334,8 +2384,8 @@ impl NativeClient {
                 let ours_running = current
                     .lock()
                     .unwrap()
-                    .as_ref()
-                    .is_some_and(|pending| !pending.not_yet_ours());
+                    .iter()
+                    .any(|pending| !pending.not_yet_ours());
                 state.lock().unwrap().note_background(&msg, ours_running);
             }
         }
@@ -2474,22 +2524,14 @@ impl NativeClient {
     /// arriving one instant later.
     fn route(
         chunk: ChunkMsg,
-        current: &Arc<Mutex<Option<PendingTurn>>>,
+        current: &Arc<Mutex<Vec<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         frame: &Value,
     ) {
-        let routed = match current.lock().unwrap().as_ref() {
-            // **A turn whose message the child says is STILL IN ITS QUEUE has not started,
-            // so none of this is its traffic.** It belongs to the turn that is running —
-            // one the platform injected — and streaming it here would attribute another
-            // turn's words to this one (§1.4 G4). Retained on the between-turn lane, where
-            // it attaches to the THREAD and to no turn at all, which is what it is.
-            // The same holds for a child that names its turns and has not named this one yet
-            // (finding 47): what it streams is still the earlier turn's.
-            Some(pending) if pending.not_yet_ours() => false,
-            Some(pending) => pending.sink.send(chunk).is_ok(),
-            None => false,
-        };
+        let mut routed = false;
+        for pending in current.lock().unwrap().iter_mut().filter(|pending| !pending.not_yet_ours()) {
+            routed |= pending.send(chunk.clone(), frame);
+        }
         if !routed {
             between.lock().unwrap().offer_frame(frame.clone());
         }
@@ -2503,7 +2545,7 @@ impl NativeClient {
     fn handle_agent_request(
         msg: &Value,
         stdin: &Arc<Mutex<ChildStdin>>,
-        current: &Arc<Mutex<Option<PendingTurn>>>,
+        current: &Arc<Mutex<Vec<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         context_only: bool,
         question_scope: Option<&Path>,
@@ -2556,13 +2598,10 @@ impl NativeClient {
         let _ = Self::write_line(stdin, &response);
 
         if let Some(m) = machinery {
-            let routed = match current.lock().unwrap().as_ref() {
-                // Same rule as `route`: a turn whose message is still in the child's queue
-                // has not started, so this record is the running turn's and not its.
-                Some(pending) if pending.not_yet_ours() => false,
-                Some(pending) => pending.sink.send(m.to_chunk()).is_ok(),
-                None => false,
-            };
+            let mut routed = false;
+            for pending in current.lock().unwrap().iter_mut().filter(|pending| !pending.not_yet_ours()) {
+                routed |= pending.send(m.to_chunk(), msg);
+            }
             if !routed {
                 between.lock().unwrap().push(m);
             }
@@ -2737,16 +2776,17 @@ impl NativeClient {
                 // the child has named our turns before is read here, with the park (finding
                 // 47; see `PendingTurn::child_names_turns`).
                 let child_names_turns = self.reader_state.lock().unwrap().turns_named_by_the_child;
-                *current = Some(PendingTurn {
-                    sink: tx,
+                current.push(PendingTurn {
+                    sink: TurnSink::Prompt(tx),
                     command_uuid: command_uuid.clone(),
                     phase: TurnPhase::Unconfirmed,
+                    context_only: self.reader_state.lock().unwrap().context_only,
                     child_names_turns,
                 });
 
             }
             if let Err(error) = Self::write_line(&self.stdin, &msg) {
-                *self.current_prompt.lock().unwrap() = None;
+                self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
                 return Err(error);
             }
         }
@@ -2823,8 +2863,8 @@ impl NativeClient {
                         && frame["event"]["delta"]["type"]=="input_json_delta";
                     if !reply_delta && !is_ping(&frame) {release(&mut seq,on_item,&mut spelling);}
                     if let Some(text)=typed {say(&text,&mut seq,on_item,&mut spelling,&mut first_text_logged);}
-                    if let Some(resets_at) = usage_limit_signal(&frame) {
-                        limit = Some(resets_at);
+                    if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
+                        if let Some(resets_at) = usage_limit_signal(&frame) { limit = Some(resets_at); }
                     }
                     // The formatted reply has its own typed carrier. Preserve ordinary
                     // assistant text as technical commentary through the existing normalizer.
@@ -2864,7 +2904,7 @@ impl NativeClient {
                 }
                 Ok(ChunkMsg::Done(result)) => {
                     release(&mut seq, on_item, &mut spelling);
-                    let mut reason = stop_reason_of(&result);
+                    let reason = stop_reason_of(&result);
                     // **Refused for a usage limit** (fill-first's backstop): said as that, so the
                     // spine and the work host continue on the next account instead of reading an
                     // ordinary failure. Whether the child stays alive afterwards is not known
@@ -2874,14 +2914,7 @@ impl NativeClient {
                             .map(Value::to_string).unwrap_or_else(|| reason.clone());
                         return Err(limit_error(resets_at, detail));
                     }
-                    if reason == "child_exited" { return Err(NativeError::Closed); }
-                    if result.get("is_error").and_then(Value::as_bool) == Some(true)
-                        && reason != STOP_REASON_CANCELLED
-                    {
-                        let detail = result.get("errors").or_else(|| result.get("result"))
-                            .map(Value::to_string).unwrap_or_else(|| reason.clone());
-                        return Err(NativeError::Protocol(detail));
-                    }
+                    let mut reason = native_result(&result)?;
                     if let Some(decoder)=formatted.as_mut() {
                         if reason!=STOP_REASON_CANCELLED {
                             if !crate::native_reply::completed(&result) {
@@ -2902,7 +2935,7 @@ impl NativeClient {
                     // anything the agent says afterwards cannot be routed into whatever turn
                     // runs next. What was already said is released first: it is this turn's.
                     release(&mut seq, on_item, &mut spelling);
-                    *self.current_prompt.lock().unwrap() = None;
+                    self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
                     return Ok(STOP_REASON_CANCEL_UNACKNOWLEDGED.to_string());
                 }
                 Err(RecvTimeoutError::Disconnected) => {
@@ -2957,7 +2990,7 @@ fn tokens_in_context(usage: &Value) -> Option<u64> {
 /// to leave the CEO looking at a turn he ended.
 pub struct NativeCancelHandle {
     stdin: Arc<Mutex<ChildStdin>>,
-    current_prompt: Arc<Mutex<Option<PendingTurn>>>,
+    current_prompt: Arc<Mutex<Vec<PendingTurn>>>,
     operation_cancel: Arc<Mutex<OperationCancellation>>,
     action_grants: Vec<ActionGrant>,
     process_fence: crate::owned_process::ProcessFence,
@@ -2981,19 +3014,25 @@ const STOP_TASK_REPLY_WAIT: Duration = Duration::from_secs(5);
 const STOP_TASK_ENDING_WAIT: Duration = Duration::from_secs(5);
 
 impl TurnCancel for NativeCancelHandle {
-    fn send_input(&self, id: &str, text: &str, taken: Box<dyn FnOnce() + Send>) -> Result<bool, String> {
-        if self.reader_closed.load(Ordering::SeqCst) || self.operation_cancel.lock().unwrap().requested {
-            return Ok(false);
-        }
+    fn send_input(&self, id: &str, text: &str, completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool, String> {
+        let operation = self.operation_cancel.lock().unwrap();
+        if self.reader_closed.load(Ordering::SeqCst) || operation.requested { return Ok(false); }
         {
-            let mut state = self.reader_state.lock().unwrap();
-            if state.input_taken.contains_key(id) { return Ok(true); }
-            state.input_taken.insert(id.to_string(), taken);
+            let mut current = self.current_prompt.lock().unwrap();
+            if current.iter().any(|pending| pending.command_uuid == id) { return Ok(true); }
+            current.push(PendingTurn {
+                sink: TurnSink::Input { completed, limit: None }, command_uuid: id.to_string(),
+                phase: TurnPhase::Unconfirmed,
+                context_only: false,
+                // Live input always requires its own native UUID acknowledgement. A queue
+                // count cannot identify one of several independently submitted commands.
+                child_names_turns: true,
+            });
         }
         let message = json!({"type":"user", "uuid":id,
             "message":{"role":"user", "content":[{"type":"text", "text":text}]}});
         if let Err(error) = NativeClient::write_line(&self.stdin, &message) {
-            self.reader_state.lock().unwrap().input_taken.remove(id);
+            self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != id);
             return Err(error.to_string());
         }
         Ok(true)
@@ -3026,15 +3065,13 @@ impl TurnCancel for NativeCancelHandle {
         // reverse order would let a very fast agent's `result` overtake the wake, and the
         // loop would return `end_turn` for a turn the CEO stopped. Measured: the agent acked
         // the interrupt in 0.9 ms, so this race is real rather than theoretical.
-        let sink = match self.current_prompt.lock().unwrap().as_ref() {
-            Some(pending) => pending.sink.clone(),
-            // Nothing in flight on this session. Reported as `false` and never as a success —
-            // see `StopOutcome::reached_lease`.
-            None => {
-                if self.settle_workers_on_stop { self.process_fence.kill(); }
-                return operation.active;
-            },
-        };
+        let sinks: Vec<_> = self.current_prompt.lock().unwrap().iter().filter_map(|pending| {
+            if let TurnSink::Prompt(sink) = &pending.sink { Some(sink.clone()) } else { None }
+        }).collect();
+        if sinks.is_empty() && self.current_prompt.lock().unwrap().is_empty() {
+            if self.settle_workers_on_stop { self.process_fence.kill(); }
+            return operation.active;
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = json!({
             "type": "control_request",
@@ -3042,7 +3079,8 @@ impl TurnCancel for NativeCancelHandle {
             "request": { "subtype": "interrupt" }
         });
         let wrote = NativeClient::write_line(&self.stdin, &request).is_ok();
-        let woke = sink.send(ChunkMsg::Cancel).is_ok();
+        let no_waiter = sinks.is_empty();
+        let woke = sinks.into_iter().fold(no_waiter, |woke, sink| sink.send(ChunkMsg::Cancel).is_ok() || woke);
         if self.settle_workers_on_stop { self.process_fence.kill(); }
         wrote && woke
     }
@@ -4473,7 +4511,7 @@ mod native_driver_tests {
 
     /// A fake `claude` that takes one turn and answers it with `frames`. Returns what the
     /// lease's `prompt` returned.
-    fn one_limited_turn(name: &str, frames: &str) -> Result<String, NativeError> {
+    pub(super) fn one_limited_turn(name: &str, frames: &str) -> Result<String, NativeError> {
         let script = write_script(name, &(r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
@@ -4651,17 +4689,19 @@ cat >/dev/null
         assert!(heard.recv_timeout(Duration::from_secs(5)).expect("hang guard: first prompt must enter").contains("FIRST-ACTIVE"));
         let (taken,receipt)=std::sync::mpsc::channel();
         let id=uuid::Uuid::new_v4().to_string();
-        assert!(input.send_input(&id,"Correction from Rich",Box::new(move || {taken.send(()).unwrap();})).unwrap());
+        assert!(input.send_input(&id,"Correction from Rich",Box::new(move |outcome| {taken.send(outcome.result).unwrap();})).unwrap());
         // load-bound: hang guard only; the queued marker establishes the protocol state before its receipt is released.
         assert!(heard.recv_timeout(Duration::from_secs(5)).expect("hang guard: provider must queue correction").contains("PEER-QUEUED"));
         assert!(matches!(receipt.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"queued is not consumed");
-        assert!(input.send_input(&id,"Correction from Rich",Box::new(||panic!("same input was sent twice"))).unwrap());
+        assert!(input.send_input(&id,"Correction from Rich",Box::new(|_|panic!("same input was sent twice"))).unwrap());
         NativeClient::write_line(&wire,&json!({"type":"user","message":{"role":"user","content":"advance"}})).unwrap();
         // load-bound: hang guard only; the named receipt proves consumption, with no latency assertion.
-        receipt.recv_timeout(Duration::from_secs(5)).expect("hang guard: receipt names the correction");
-        assert!(!turn.is_finished(),"correction receipt ended the original prompt");
+        assert!(matches!(receipt.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"admission completed the correction before its turn ended");
+        assert!(!turn.is_finished(),"correction admission ended the original prompt");
         NativeClient::write_line(&wire,&json!({"type":"user","message":{"role":"user","content":"finish"}})).unwrap();
         assert_eq!(turn.join().unwrap().unwrap(),"end_turn");
+        // load-bound: hang guard only; the exact native result proves completion, not elapsed time.
+        assert_eq!(receipt.recv_timeout(Duration::from_secs(5)).expect("native result did not complete live input").unwrap(),"end_turn");
     }
 
     #[test]
@@ -8192,4 +8232,250 @@ read -r keep_alive
         assert_eq!(state.agent_tasks.task_for_tool("prepared-second").as_deref(),Some("native-second"));
     }
 
+}
+
+#[cfg(test)]
+mod input_tests {
+//! Exercise the native transport and durable Host receipts together. No real provider.
+use super::*;
+use crate::{cognition::{Cognition, CognitionError, LeaseFactory}, entity::EntityId,
+    status_tools::StatusToolScope, work_host::{SilentNotifier, WorkHost}};
+use std::{path::PathBuf, sync::atomic::AtomicU64};
+
+const PROVIDER: &str = r#"#!/usr/bin/python3
+import json,pathlib,sys
+config=json.loads(pathlib.Path('config.json').read_text())
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def started(v):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':'started'})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+if config.get('recover'):
+ while True:
+  v=read()
+  if v.get('type')=='user':
+   started(v);send({'type':'result','stop_reason':'end_turn'})
+first=read();started(first)
+send({'type':'assistant','message':{'content':[{'type':'text','text':'ORIGINAL-STARTED'}]}})
+live=[read() for _ in range(config['inputs'])]
+for v in live:send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':'queued'})
+send({'type':'result','stop_reason':'end_turn','queued_turn_count':len(live)})
+for v in live:started(v)
+output=config['output']
+if output=='text':send({'type':'assistant','message':{'content':[{'type':'text','text':'Live output'}]}})
+if output=='thinking':send({'type':'stream_event','event':{'type':'content_block_delta','delta':{'type':'thinking_delta','thinking':'considering'}}})
+if output=='worker':
+ send({'type':'assistant','parent_tool_use_id':'background-worker','message':{'content':[{'type':'tool_use','id':'worker-tool','name':'Read','input':{}}]}})
+ send({'type':'result','parent_tool_use_id':'background-worker','is_error':True,'api_error_status':429})
+# Native retries are traffic within this one input, never a reason to submit it again.
+send({'type':'system','subtype':'api_retry','attempt':1,'max_retries':10,'error_status':503})
+if config['result'].get('fixture_quit'):
+ while True:read()
+for v in live:send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':'completed'})
+send(config['result'])
+while True:read()
+"#;
+
+struct Factory {
+    root: PathBuf,
+    skills: PathBuf,
+    started: Sender<()>,
+    completed: Sender<()>,
+    scheduled: Arc<AtomicU64>,
+}
+struct Lease { client: NativeClient, started: Sender<()>, completed: Sender<()>, scheduled: Arc<AtomicU64> }
+struct LiveInput { inner: Arc<dyn TurnCancel>, completed: Sender<()> }
+impl LeaseFactory for Factory {
+    fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> { unreachable!() }
+    fn spawn_work(&self, _: &crate::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+        Ok(Box::new(Lease {
+            client: NativeClient::spawn(&self.root.join("provider"), &self.root,
+                &self.skills.join("agents/rich.md"), &self.skills)?,
+            started: self.started.clone(), completed: self.completed.clone(), scheduled:self.scheduled.clone(),
+        }))
+    }
+}
+impl TurnCancel for LiveInput {
+    fn cancel(&self) -> bool { self.inner.cancel() }
+    fn shutdown(&self) { self.inner.shutdown(); }
+    fn send_input(&self, id: &str, text: &str,
+        completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool, String> {
+        let done = self.completed.clone();
+        self.inner.send_input(id, text, Box::new(move |outcome| {
+            completed(outcome);
+            let _ = done.send(());
+        }))
+    }
+}
+impl Cognition for Lease {
+    fn session_id(&self) -> &str { self.client.session_id() }
+    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+    fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> {
+        Some(Arc::new(LiveInput { inner: self.client.cancel_handle(), completed: self.completed.clone() }))
+    }
+    fn prompt(&mut self, input: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        self.scheduled.fetch_add(1, Ordering::SeqCst);
+        let result = self.client.prompt(input, &mut |item| {
+            let original = matches!(&item, TurnItem::Text { text, .. } if text.contains("ORIGINAL-STARTED"));
+            on(item);
+            if original { let _ = self.started.send(()); }
+        });
+        let _ = self.completed.send(());
+        Ok(result?)
+    }
+}
+
+#[test]
+fn live_native_results_retain_failed_input_report_once_and_recover_once() {
+    for inputs in [1, 2] {
+        for output in ["none", "text", "thinking", "worker"] {
+            for result in [json!({"type":"result","stop_reason":"end_turn"}),
+                json!({"type":"result","is_error":true,"errors":["API Error: 503"]}),
+                json!({"type":"result","stop_reason":"max_tokens"}), json!({"fixture_quit":true})] {
+                let success = result["stop_reason"] == "end_turn";
+                let quit = result["fixture_quit"] == true;
+                let root = std::env::temp_dir().join(format!("richos-native-input-{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir_all(&root).unwrap();
+                let script = root.join("provider");
+                std::fs::write(&script, PROVIDER).unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let skills = crate::skills::ensure_rendered(&root.join("skills"),
+                    &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+                std::fs::write(root.join("config.json"), json!({"inputs":inputs,"output":output,"result":result}).to_string()).unwrap();
+                let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+                let thread = ledger.create_thread("Native input test", &EntityId::parse("company").unwrap()).unwrap();
+                let binding = ledger.thread_binding(&thread).unwrap();
+                let scope = StatusToolScope { version:1, state_root:root.join("state"), entity_id:"company".into(), thread_id:thread };
+                let status = root.join("rich.json");
+                crate::session_tools::bind(&status, &scope, "rich-session", "rich", None).unwrap();
+                let (began, started) = channel();
+                let (done, completed) = channel();
+                let scheduled = Arc::new(AtomicU64::new(0));
+                let host = WorkHost::new(&scope.state_root, Box::new(Factory {
+                    root:root.clone(), skills:skills.clone(), started:began.clone(), completed:done.clone(), scheduled:scheduled.clone(),
+                }), Arc::new(SilentNotifier));
+                crate::session_tools::send(&status, &scope, json!({"text":"Original input"})).unwrap();
+                host.wake_messages(&binding);
+                // load-bound: hang guard only; the native text marker proves entry.
+                started.recv_timeout(Duration::from_secs(10)).expect("original did not enter");
+                for n in 0..inputs {
+                    crate::session_tools::send(&status, &scope, json!({"text":format!("Live correction {n}")})).unwrap();
+                }
+                host.wake_messages(&binding);
+                if quit {
+                    // load-bound: hang guard only; the original result proves the live input has been read.
+                    completed.recv_timeout(Duration::from_secs(10)).expect("original result absent before Quit");
+                    assert!(host.wait_for_completed(1, Duration::from_secs(10)));
+                    host.shutdown();
+                }
+                for _ in 0..(inputs + usize::from(!quit)) {
+                    // load-bound: hang guard only; callback completion proves the durable outcome was written.
+                    completed.recv_timeout(Duration::from_secs(10)).expect("live result did not complete");
+                }
+                assert!(host.wait_for_completed(scheduled.load(Ordering::SeqCst), Duration::from_secs(10)), "original result did not complete");
+                // Repeated desktop notifications cannot submit a received input again.
+                host.wake_messages(&binding);
+                let pending = crate::session_tools::pending(&scope, "stu").unwrap();
+                assert_eq!(pending.is_none(), success, "{inputs}/{output}/{result}: incorrect durable receipt");
+                let fact = crate::session_tools::pending(&scope, "rich").unwrap();
+                assert_eq!(fact.is_none(), success || quit, "{inputs}/{output}/{result}: missing or unwanted failure fact");
+                if let Some((message, through)) = fact {
+                    assert_eq!(message.from, "work-status");
+                    assert_eq!(serde_json::from_str::<Value>(&message.text).unwrap()["event"], "upstream_input");
+                    crate::session_tools::acknowledge(&scope, "rich", through).unwrap();
+                    assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "folded turn reported twice");
+                }
+                host.shutdown();
+                let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+                assert_eq!(sent.lines().count(), inputs + 1, "same-session duplicate: {sent}");
+                assert_eq!(sent.lines().filter(|line| line.contains("Original input")).count(), 1);
+                for n in 0..inputs { assert_eq!(sent.lines().filter(|line| line.contains(&format!("Live correction {n}"))).count(), 1); }
+                if !success {
+                    assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_some(), "Quit discarded unfinished input");
+                    std::fs::write(root.join("config.json"), r#"{"recover":true}"#).unwrap();
+                    let scheduled = Arc::new(AtomicU64::new(0));
+                    let recovered = WorkHost::new(&scope.state_root, Box::new(Factory {
+                        root:root.clone(), skills, started:began, completed:done, scheduled:scheduled.clone(),
+                    }), Arc::new(SilentNotifier));
+                    recovered.wake_messages(&binding);
+                    for _ in 0..inputs {
+                        // load-bound: hang guard only; all native outcomes must arrive before checking recovery receipts.
+                        completed.recv_timeout(Duration::from_secs(10)).expect("recovery result absent");
+                    }
+                    assert!(recovered.wait_for_completed(scheduled.load(Ordering::SeqCst), Duration::from_secs(10)), "restart did not finish inputs");
+                    recovered.shutdown();
+                    assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_none());
+                    assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "successful recovery reported failure");
+                    let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+                    assert_eq!(sent.lines().count(), inputs * 2 + 1);
+                    for n in 0..inputs { assert_eq!(sent.lines().filter(|line| line.contains(&format!("Live correction {n}"))).count(), 2); }
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_worker_limit_does_not_fail_the_successful_native_prompt() {
+    assert_eq!(super::native_driver_tests::one_limited_turn("worker-limit-is-not-lead-limit", r#"
+printf '%s\n' '{"type":"result","parent_tool_use_id":"worker","is_error":true,"api_error_status":429}'
+printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
+"#).unwrap(), "end_turn");
+}
+
+#[test]
+fn queued_context_restoration_does_not_close_the_active_live_inputs_questions() {
+    let root = std::env::temp_dir().join(format!("richos-context-input-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let script = root.join("provider");
+    std::fs::write(&script, r#"#!/usr/bin/python3
+import json,sys
+def read():return json.loads(sys.stdin.readline())
+def send(v):print(json.dumps(v),flush=True)
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+def question(key,want):
+ send({'type':'control_request','request_id':key,'request':{'subtype':'can_use_tool','tool_name':'mcp__richos_questions__ask','input':{}}})
+ actual=read()['response']['response']['behavior']
+ assert actual==want,(key,actual,want)
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started');send({'type':'assistant','message':{'content':[{'type':'text','text':'entered'}]}})
+live=read();phase(live,'queued');send({'type':'result','stop_reason':'end_turn','queued_turn_count':1});phase(live,'started')
+hidden=read();phase(hidden,'queued')
+question('active-live','allow');send({'type':'result','stop_reason':'end_turn','queued_turn_count':1})
+phase(hidden,'started');question('hidden-context','deny');send({'type':'result','stop_reason':'end_turn'})
+while sys.stdin.readline():pass
+"#).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let skills = crate::skills::ensure_rendered(&root.join("skills"),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+    let client = NativeClient::spawn(&script, &root, &skills.join("agents/rich.md"), &skills).unwrap();
+    let input = client.cancel_handle();
+    let (start, started) = channel();
+    let active = std::thread::spawn(move || {
+        assert_eq!(client.prompt("Original", &mut |item| {
+            if matches!(item, TurnItem::Text { .. }) { let _ = start.send(()); }
+        }).unwrap(), "end_turn");
+        client
+    });
+    // load-bound: hang guard only; the marker proves the original turn entered.
+    started.recv_timeout(Duration::from_secs(10)).expect("original did not enter");
+    let (end, ended) = channel();
+    input.send_input(&uuid::Uuid::new_v4().to_string(), "Live work", Box::new(move |outcome| {
+        end.send(outcome.result).unwrap();
+    })).unwrap();
+    let mut client = active.join().unwrap();
+    assert_eq!(client.prompt_context_only("Restore context", &mut |_| {}).unwrap(), "end_turn");
+    // load-bound: hang guard only; the result proves the live turn survived the queued prime.
+    assert_eq!(ended.recv_timeout(Duration::from_secs(10)).expect("live result absent").unwrap(), "end_turn");
+    drop(client);
+    std::fs::remove_dir_all(root).unwrap();
+}
 }

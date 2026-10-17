@@ -380,20 +380,6 @@ fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool)->Res
     })
 }
 
-/// Native turn completion finishes ordinary live input, never its unfinished jobs.
-pub(crate) fn complete_live_inputs(scope:&StatusToolScope,role:&str,session:&str,received_through:u64)->Result<(),String> {
-    let path=inbox(scope,role)?;
-    update_cursor(scope,role,|cursor| {
-        let through=cursor["through"].as_u64().unwrap();let mut done=Vec::new();
-        for (key,value) in cursor["active"].as_object().unwrap() {
-            let Some(offset)=key.strip_prefix("peer:").and_then(|n|n.parse::<u64>().ok()) else{continue};
-            if offset<=received_through && value["session_id"]==session && (offset<=through || cursor["accepted"].get(offset.to_string()).is_some())
-                && (role!="stu" || handoff_finished(scope,&input_at(&path,offset)?)?) {done.push(key.clone());}
-        }
-        for key in done{cursor["active"].as_object_mut().unwrap().remove(&key);}Ok(())
-    })
-}
-
 fn update_cursor(scope:&StatusToolScope,role:&str,edit:impl FnOnce(&mut Value)->Result<(),String>)->Result<(),String> {
     let path=inbox(scope,role)?;
     let _lock=locked_inbox(scope,role)?;
@@ -524,14 +510,14 @@ mod tests {
         acknowledge(&scope,"stu",correction).unwrap();
         assert_eq!(pending(&scope,"stu").unwrap().unwrap().1,a);
         acknowledge(&scope,"stu",a).unwrap();
-        complete_live_inputs(&scope,"stu","after-crash",correction).unwrap();
+        acknowledge(&scope,"stu",correction).unwrap();
         assert_eq!(pending(&scope,"stu").unwrap().unwrap().1,b,"a different session cannot erase unfinished B");
         assert_eq!(previous_attempt(&scope,"stu",&format!("peer:{b}")).unwrap().unwrap()["session_id"],"before-crash");
         acknowledge(&scope,"stu",b).unwrap();
         assert!(pending(&scope,"stu").unwrap().is_none());
         send(&path,&scope,json!({"text":"C"})).unwrap();let c=pending(&scope,"stu").unwrap().unwrap().1;
         begin_attempt(&scope,"stu",&format!("peer:{c}"),"completed-session").unwrap();accept_live_handoff(&scope,"stu",c).unwrap();
-        complete_live_inputs(&scope,"stu","completed-session",c).unwrap();
+        acknowledge(&scope,"stu",c).unwrap();
         assert!(pending(&scope,"stu").unwrap().is_none(),"completed live input replayed");
         std::fs::remove_dir_all(root).unwrap();
     }
