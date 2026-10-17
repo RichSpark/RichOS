@@ -386,7 +386,7 @@ impl WorkHost {
                     let allowed = inner.upstream_budget.charge(failure.fault);
                     ((allowed && !model_started && guard.is_some()).then(||inner.upstream_budget.wait_before_retry().unwrap_or_default()), Some(inner.upstream_budget.attempts()))
                 } else {(None,None)};
-                if !backend.inner.lock().unwrap().closing && !stopped()? {
+                if wait.is_none() && !backend.inner.lock().unwrap().closing && !stopped()? {
                     crate::session_tools::observe_work_status(&self.message_scope(binding), serde_json::json!({
                         "event":"upstream_input","input_id":turn,"session_id":session,"work":message.work,
                         "model_started":model_started,"fault":failure.as_ref().map(|f|f.fault.tag()),
@@ -1543,9 +1543,13 @@ mod tests {
                         facts.push(serde_json::from_str::<serde_json::Value>(&message.text).unwrap());
                         crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
                     }
+                    assert_eq!(facts.len(),1,"{kind}/{result}: transient retries reached Rich");
                     let last=facts.last().expect("exhausted input stalled without telling Rich");
                     assert_eq!(last["model_started"],false);assert!(last["retry_wait_ms"].is_null());
                     assert_eq!(last["attempts"],expected);
+                } else if matches!(result,"end_turn"|"pre_model_503"|"pre_model_529"|"pre_model_protocol") {
+                    assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),
+                        "{kind}/{result}: a successful input reported a transient retry to Rich");
                 }
                 let before = prompts.len();
                 crate::session_tools::send(&path, &scope, serde_json::json!({"text":"After restart"})).unwrap();
@@ -1588,8 +1592,8 @@ mod tests {
             crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"Input under test"})).unwrap();
             h.host.wake_messages(&h.binding);
             ready.recv_timeout(std::time::Duration::from_secs(30)).expect("retry wait never started");
-            let (_,through)=crate::session_tools::pending(&scope,"rich").unwrap().expect("retry facts did not reach Rich");
-            crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
+            assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),
+                "a pending retry reached Rich before Stop or Quit");
             if quit {
                 let host=h.host.clone();let shutdown=std::thread::spawn(move||host.shutdown());
                 until("quit must mark this host closing",||*h.host.closing.lock().unwrap());
