@@ -1,45 +1,10 @@
-//! **WHAT A RELAUNCH MAY SAY ABOUT WORK IT DID NOT SEE END** — row 9, and every rule in
-//! this file is a refusal.
+//! Restart cleanup for retired scopes and orphan seats.
 //!
-//! The CEO's nine, row 9: *"If the app crashes or restarts mid-run, nothing invents a
-//! completion."* The background-work spec (richos-hq
-//! `docs/plans/background-work-spec-2026-09-17.md` revision 5) §6 is the mechanism:
-//!
-//! - **§6.1** — *"receipts are reconciled against Git and the evidence file, never against
-//!   a timestamp. Interrupted execution is never converted into verified completion."*
-//! - **§6.2** — *"work that was running is reported as unknown until re-witnessed, and the
-//!   CEO is told that plainly."*
-//! - **§6.3** — *"Nothing restarts work by itself. Resuming is a decision, and the decision
-//!   is his or Rich's — never a retry loop. This is the specific mechanism September 9 kept
-//!   adding and is the reason it was removed."*
-//! - **§6.3a** — orphan seats and orphan grants are reconciled here, and **his own seat is
-//!   identified positively and never touched**, because *"everything that is not his"* is
-//!   exactly the reasoning that would delete his cursor after a crash.
-//!
-//! **THE ONE THING THIS FILE NEVER DOES IS START ANYTHING.** It reads, it compares, it
-//! writes an honest receipt, and it raises a sentence for him. `Unknown` is where every
-//! path it can take ends up, and the only exit from `Unknown` is him
-//! ([`crate::assignment::AssignmentState::awaits_his_word`]).
-//!
-//! **Why the two witnesses are the ones they are.**
-//!
-//! 1. **The evidence file**, keyed by the work lease's session (`app_workers.rs:38`), which
-//!    this build now writes onto the assignment before it runs
-//!    ([`crate::assignment::note_start`]). Its rules are unchanged and are the reason it is
-//!    trusted: unattributed or unreadable evidence counts as still running, never as zero
-//!    (`app_workers.rs:33-47`). **Workers all ending is still not a settlement** — the
-//!    engine says so in its own voice (`richos/engine/mega-lander/app.py:664-669`) — so a
-//!    quiet evidence file moves nothing toward finished here either.
-//! 2. **Git**, compared against the pins taken when the assignment started. This is the
-//!    assertion §7.8 asks to be made *"in Git, not on the screen"*. It is evidence in ONE
-//!    direction: an unmoved branch is positive proof that nothing was landed; a moved one
-//!    proves only that the repository changed, and never that this assignment is what
-//!    changed it.
-//!
-//! **What is deliberately not here.** Nothing reads a clock. A `registered_at_ms` that is
-//! three days old is not evidence of anything, and §6.1 rules out the comparison by name.
+//! Stu's durable inbox owns unfinished execution and its previous-attempt evidence.
+//! Assignment records are operational metadata. This module never changes their
+//! execution state or creates a competing recovery report for Rich.
 
-use crate::assignment::{self, Assignment, AssignmentState, NoticeKind, RepositoryPin};
+use crate::assignment::{self, Assignment, RepositoryPin};
 use std::path::{Path, PathBuf};
 
 /// Where his repositories stand right now.
@@ -148,286 +113,25 @@ impl Repositories for UnreadableRepositories {
     }
 }
 
-/// What one assignment was found to be, and what he is told about it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Reconciled {
-    pub entity_id: String,
-    pub thread_id: String,
-    pub id: String,
-    pub title: String,
-    /// Where the record ended up. Only ever [`AssignmentState::Unknown`] (it was running)
-    /// or [`AssignmentState::Blocked`] (it had already stopped at a step of his before the
-    /// process went away, which is a durable fact rather than an inference).
-    pub state: AssignmentState,
-    /// The sentence raised on the assignment, or `None` when nothing needed saying because
-    /// nothing changed.
-    pub said: Option<String>,
-}
-
-/// The whole sweep's report. Counts are for the boot line; the rows are for him.
+/// Cleanup observations from this launch, without inferring assignment outcomes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Reconciliation {
-    /// Assignments that were running and are now `unknown` — §6.2's whole population.
-    pub unknown: Vec<Reconciled>,
-    /// Assignments left exactly as they were, because their state was witnessed and
-    /// written before the process ended. `blocked` is the one that matters (§7.8).
-    pub untouched: Vec<Reconciled>,
-    /// Assignment records that could not be read at all. Reported, never skipped.
-    pub unreadable: Option<String>,
-    /// **Answer runs that had not started, back to waiting on his answer** (the work-path design
-    /// D6, richos-hq `docs/plans/2026-09-27-work-path-answer-delivery-design.md`). The job was
-    /// in a state where nothing had been asked of the back end, and an answer of his for it is
-    /// saved and was never taken. It is `Blocked`, not `Unknown`: nothing ran that anyone could
-    /// be unsure about, so there is nothing to tell him, and the launch hands the answer to it.
-    pub answers_waiting: Vec<Reconciled>,
-    /// Standing action grants closed because no lease can be holding them (§6.3a).
-    pub grants_closed: usize,
-    /// Grant files that could not be closed. A reconciliation that silently skips what it
-    /// could not do is a clean bill of health signed by nobody.
-    pub grants_unreconciled: Vec<String>,
+    pub grants_closed:usize,
+    pub grants_unreconciled:Vec<String>,
 }
 
 impl Reconciliation {
-    /// One line for the boot log. Says what it did, and says when it could not read
-    /// something rather than reporting a zero it did not establish.
-    pub fn log_message(&self) -> String {
-        let mut parts = Vec::new();
-        parts.push(format!(
-            "{} assignment(s) unknown until re-witnessed, {} left as recorded",
-            self.unknown.len(),
-            self.untouched.len()
-        ));
-        if !self.answers_waiting.is_empty() {
-            parts.push(format!("{} answer run(s) that had not started are waiting on his saved answer again", self.answers_waiting.len()));
-        }
-        if self.grants_closed > 0 {
-            parts.push(format!("{} orphan grant(s) closed", self.grants_closed));
-        }
-        if !self.grants_unreconciled.is_empty() {
-            parts.push(format!("{} grant(s) could NOT be closed", self.grants_unreconciled.len()));
-        }
-        if let Some(why) = &self.unreadable {
-            parts.push(format!("the register could not be read: {why}"));
-        }
-        format!("recovery: {}", parts.join("; "))
+    pub fn log_message(&self)->String {
+        format!("recovery: {} orphan grant(s) closed; {} grant(s) could NOT be closed",
+            self.grants_closed,self.grants_unreconciled.len())
     }
 }
 
-/// **The boot sweep.** Called once, before the work host takes any new assignment, and
-/// never again — this is a boundary, not a timer (§6.3).
-///
-/// It walks every partition (`assignment::open` already does, `assignment.rs`'s own
-/// `open`), because a thread he does not reopen still holds work, which is Sage's finding
-/// 10 in the Two Riches review: *"an assignment registered in a thread he does not reopen
-/// is never adopted at all"*.
-pub fn reconcile(state: &Path, repositories: &dyn Repositories) -> Reconciliation {
-    let mut report = Reconciliation::default();
-    // **One damaged record does not stop the others being reconciled** (hunt part 1 finding
-    // 08). It used to: the first file that failed to parse, often long-finished work, ended
-    // the sweep before any healthy open assignment was looked at. Unreadable is still
-    // reported, never counted as zero and never called finished (§6.1's standing rule); it
-    // is just no longer the whole answer.
-    let open = match assignment::scan_open(state) {
-        Ok(scan) => {
-            if let Some(first) = scan.unreadable.first() {
-                report.unreadable = Some(format!("{} assignment record(s) could not be read: {first}", scan.unreadable.len()));
-            }
-            scan.rows
-        }
-        Err(error) => {
-            report.unreadable = Some(error.to_string());
-            return report;
-        }
-    };
-    for record in open {
-        match record.state {
-            // **Stopped at a step of his, and what he must answer is still on disk.** That
-            // was written while a process was watching, so it is a witnessed fact and not an
-            // inference — leave it exactly as it is. §7.8 is the case: he comes back, finds
-            // an assignment waiting for him, and answers it. A question of his and a saved
-            // answer of his both outlive the process (`questions.rs`, `question_work.rs`).
-            AssignmentState::Blocked if waits_on_something_saved(state, &record) => report.untouched.push(Reconciled {
-                entity_id: record.entity_id.clone(),
-                thread_id: record.thread_id.clone(),
-                id: record.id.clone(),
-                title: record.title.clone(),
-                state: AssignmentState::Blocked,
-                said: None,
-            }),
-            // **Stopped at a step for him to APPROVE, and that request died with the process**
-            // (hunt part 1 finding 07, richos-hq `docs/audits/2026-09-29-hunt/part-1-codex.md`).
-            // An approval request lives only in the permission desk's memory (`permissions.rs`),
-            // so after a crash there is nothing he can approve, and a row that still says it
-            // waits on his decision is a door with no handle. It becomes `unknown`, which is
-            // what it now is: nothing is running and nothing finished. He is told the request
-            // closed with RichOS, and picking it back up (`assignment::pick_up`) runs it again,
-            // which asks him again if it reaches that step. Nothing re-runs it by itself (§6.3).
-            AssignmentState::Blocked => {
-                let said = recovery_facts(state,&record,repositories,true);
-                if assignment::advance(state, &record.entity_id, &record.thread_id, &record.id,
-                                       AssignmentState::Unknown, APPROVAL_LOST_AT_RELAUNCH).is_err() {
-                    report.unreadable = Some("an assignment could not be brought up to date".into());
-                    continue;
-                }
-                if let Err(error) = assignment::raise_notice(state, &record.entity_id, &record.thread_id, &record.id,
-                                                             NoticeKind::Unknown, &said) {
-                    eprintln!("[richos] recovery: the notice about a lost approval request could not be written: {error}");
-                }
-                report.unknown.push(Reconciled {
-                    entity_id: record.entity_id.clone(),
-                    thread_id: record.thread_id.clone(),
-                    id: record.id.clone(),
-                    title: record.title.clone(),
-                    state: AssignmentState::Unknown,
-                    said: Some(said),
-                });
-            }
-            // **AN ANSWER RUN THAT HAD NOT STARTED** (design D6). Nothing had been asked of the
-            // back end: the job was written down, waiting for the screen, waiting for its
-            // allowance before its first turn, or opening its connection (`work_host.rs` writes
-            // `Running` only at the back end's first item). And an answer of his for it is saved
-            // and was never taken. So it goes back to waiting on that answer, which the launch
-            // delivers. A job whose run HAD started stays `Unknown` below: §6.3, nothing started
-            // re-runs by itself (the CEO's call on the design's C6, option B).
-            _ if not_started(&record)
-                && crate::question_work::untaken(state, &record.entity_id, &record.thread_id, &record.obligation_id)
-                    .unwrap_or(false) =>
-            {
-                if assignment::advance(state, &record.entity_id, &record.thread_id, &record.id,
-                                       AssignmentState::Blocked, ANSWER_SAVED_AT_RELAUNCH).is_err() {
-                    report.unreadable = Some("an assignment could not be brought up to date".into());
-                    continue;
-                }
-                report.answers_waiting.push(Reconciled {
-                    entity_id: record.entity_id.clone(),
-                    thread_id: record.thread_id.clone(),
-                    id: record.id.clone(),
-                    title: record.title.clone(),
-                    state: AssignmentState::Blocked,
-                    said: None,
-                });
-            }
-            // Everything else that is open was in flight when the process went away.
-            _ => {
-                let said = recovery_facts(state,&record,repositories,false);
-                let detail = detail_for(&record);
-                let moved = assignment::advance(
-                    state,
-                    &record.entity_id,
-                    &record.thread_id,
-                    &record.id,
-                    AssignmentState::Unknown,
-                    &detail,
-                );
-                if moved.is_err() {
-                    report.unreadable = Some("an assignment could not be brought up to date".into());
-                    continue;
-                }
-                let _ = assignment::raise_notice(
-                    state,
-                    &record.entity_id,
-                    &record.thread_id,
-                    &record.id,
-                    NoticeKind::Unknown,
-                    &said,
-                );
-                report.unknown.push(Reconciled {
-                    entity_id: record.entity_id.clone(),
-                    thread_id: record.thread_id.clone(),
-                    id: record.id.clone(),
-                    title: record.title.clone(),
-                    state: AssignmentState::Unknown,
-                    said: Some(said),
-                });
-            }
-        }
-    }
-    report.grants_closed = close_orphan_grants(state, &mut report.grants_unreconciled);
+/// Retire grants from the old process. Canonical input recovery belongs to Stu.
+pub fn reconcile(state:&Path)->Reconciliation {
+    let mut report=Reconciliation::default();
+    report.grants_closed=close_orphan_grants(state,&mut report.grants_unreconciled);
     report
-}
-
-/// The row's detail for a job put back to waiting on his saved answer (design D6).
-pub const ANSWER_SAVED_AT_RELAUNCH: &str =
-    "Your answer is saved. RichOS closed before the back end took it, so it goes to the back end now.";
-
-/// The row's detail for a job whose approval request closed with RichOS (finding 07).
-pub const APPROVAL_LOST_AT_RELAUNCH: &str =
-    "It was waiting on a decision from you when RichOS closed, and that request closed with it. \
-     Nothing is running, and nothing was finished.";
-
-/// **Is what this blocked job waits for still on disk?** A question of his it asked and he
-/// has not answered, or an answer of his saved and not yet taken: both outlive the process.
-/// An approval request does not (`permissions.rs` keeps it in memory only). A store that
-/// cannot be read answers yes, which leaves the job exactly as it was recorded, the behavior
-/// before this reading existed: an unreadable store is no evidence that the wait is gone.
-fn waits_on_something_saved(state: &Path, record: &Assignment) -> bool {
-    let question = crate::questions::Store::new(state).list(&record.entity_id, &record.thread_id).map(|questions| {
-        questions.iter().any(|q| {
-            (q.asker == record.obligation_id || q.obligation_id.as_deref() == Some(record.obligation_id.as_str())) && !q.delivered && q.state != crate::questions::State::Withdrawn
-        })
-    });
-    let answer = crate::question_work::untaken(state, &record.entity_id, &record.thread_id, &record.obligation_id);
-    !matches!((question, answer), (Ok(false), Ok(false)))
-}
-
-/// **Had nothing been asked of the back end in the run this job was on?** The states before
-/// its first turn. `WaitingForQuota` counts only when its detail is not the one a started run
-/// writes ([`crate::work_host::QUOTA_WAIT_AFTER_START`]): the quota gate also holds between the
-/// turns of a run that has started.
-fn not_started(record: &Assignment) -> bool {
-    match record.state {
-        AssignmentState::Registered | AssignmentState::WaitingForScreen | AssignmentState::Preparing => true,
-        AssignmentState::WaitingForQuota => !crate::work_host::QUOTA_WAIT_AFTER_START.contains(&record.detail.as_str()),
-        _ => false,
-    }
-}
-
-/// The receipt's own detail line: what state it was in, and what was established about it.
-/// Never a stack trace, never an identifier (`sanitize_title` bounds it on the way in).
-fn detail_for(record: &Assignment) -> String {
-    let was = match record.state {
-        AssignmentState::Registered => "It had been written down and had not started",
-        // **The CEO's ruling §56 state, and it says the true thing about it: nothing had
-        // begun.** The screen gate is strictly before the lease (`work_host.rs`), so an
-        // assignment found here was parked on a locked screen with nothing asked of the back
-        // end. That is a better position than `Registered` and it still becomes `Unknown`
-        // below, for spec §6.3's reason — see `AssignmentState::WaitingForScreen`'s own doc
-        // for why the wait is not re-armed.
-        AssignmentState::WaitingForScreen => {
-            "It was waiting for the screen to unlock and had not started"
-        }
-        AssignmentState::Preparing => "It was opening its work connection",
-        AssignmentState::WaitingForQuota => "It was waiting for its allowance to refresh",
-        _ => "It was running",
-    };
-    format!("{was} when RichOS closed. Nothing has looked since, so nothing is being called finished.")
-}
-
-/// Observations for Rich, captured at reconciliation. They do not claim what is
-/// running later or prescribe what he should tell the user.
-fn recovery_facts(state:&Path,record:&Assignment,repositories:&dyn Repositories,approval_lost:bool)->String {
-    serde_json::json!({"event":"work_recovery","assignment_id":record.id,"obligation_id":record.obligation_id,
-        "title":record.title,"previous_state":record.state,"outcome":"unverified",
-        "approval_request_lost":approval_lost,"recorded_work_session":record.work_session,
-        "observations":what_was_checked(state,record,repositories)}).to_string()
-}
-
-fn what_was_checked(state:&Path,record:&Assignment,repositories:&dyn Repositories)->serde_json::Value {
-    let pins:Vec<_>=record.repository_pins.iter().map(|pin| {
-        let after=repositories.head(&pin.path);
-        let comparison=match (&pin.head,&after) {
-            (Some(before),Some(after)) if before==after=>"unchanged",
-            (Some(_),Some(_))=>"changed",
-            _=>"unreadable",
-        };
-        serde_json::json!({"path":pin.path,"before":pin.head,"after":after,"comparison":comparison})
-    }).collect();
-    let workers=record.work_session.as_ref().map(|session| {
-        let view=crate::app_workers::status(state,Some(session));
-        if view.is_attributed() {serde_json::json!({"attributed":true,"active":view.active,"liveness_unknown":view.liveness_unknown})}
-        else {serde_json::json!({"attributed":false})}
-    });
-    serde_json::json!({"repositories":pins,"workers":workers})
 }
 
 /// **Orphan standing grants (§6.3a).**
@@ -689,8 +393,7 @@ pub fn pins_for(record: &Assignment, repositories: &dyn Repositories) -> Vec<Rep
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assignment::Registration;
-    use std::collections::HashMap;
+    use crate::assignment::{Registration,AssignmentState};
 
     fn root() -> PathBuf {
         let path = std::env::temp_dir().join(format!("recovery-{}", uuid::Uuid::new_v4()));
@@ -716,365 +419,45 @@ mod tests {
         }
     }
 
-    /// **A relaunch over work that was waiting for the screen** — the CEO's ruling §56 meeting
-    /// spec §6.3, and the outcome is `unknown` rather than a re-armed wait.
-    ///
-    /// **The alternative was considered and rejected, and the reason is a comparison rather
-    /// than a preference.** Re-arming would mean an assignment that got as far as parking on a
-    /// locked screen is resumed automatically, while a `Registered` assignment that got
-    /// strictly LESS far is not — `Registered` already lands in the `_` arm and becomes
-    /// `unknown`. Treating the further-along one more permissively is not something §56 asks
-    /// for: §56 is about a wait inside a running app, and §6.3 — *"Nothing restarts work by
-    /// itself"* — is the standing rule it does not override.
-    ///
-    /// **Nothing is silently dropped, which is the property that matters.** The receipt names
-    /// what it was doing, in words that do not imply it got anywhere, and it is
-    /// `awaits_his_word` so it is on the list he can act on.
+
     #[test]
-    fn work_that_was_waiting_for_the_screen_comes_back_as_unknown_and_says_it_had_not_started() {
-        let state = root();
-        let receipt = assignment::register(&state, &registration("obligation-7")).unwrap();
-        assignment::advance(
-            &state,
-            "depot",
-            "thread-one",
-            &receipt.id,
-            AssignmentState::WaitingForScreen,
-            crate::screen::says::detail(),
-        )
-        .unwrap();
-
-        let report = reconcile(&state, &Fixed(HashMap::new()));
-        assert_eq!(report.unknown.len(), 1, "it was dropped or left as though it were running");
-        assert!(report.untouched.is_empty());
-
-        let row = assignment::read(&state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(row.state, AssignmentState::Unknown);
-        // Never softened into a completion or into a stop somebody made.
-        assert_ne!(row.state, AssignmentState::Settled);
-        assert_ne!(row.state, AssignmentState::Interrupted);
-        // It is on his list, because only he decides whether to pick it up (§6.3).
-        assert!(row.state.awaits_his_word());
-        // And the receipt says the true thing: it had not started. The screen gate is before
-        // the lease, so this is a fact rather than a hopeful reading.
-        assert!(
-            row.detail.contains("waiting for the screen to unlock and had not started"),
-            "the receipt does not say what it was doing: {}",
-            row.detail
-        );
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    /// **An answer run that had not started goes back to waiting on his saved answer** (the
-    /// work-path design D6), and only that one. Four jobs, each with a saved answer nobody took:
-    /// opening its connection, and held for its allowance before its first turn, come back
-    /// `Blocked` with no notice; running, and held for its allowance AFTER it had started, stay
-    /// `Unknown` with the ordinary notice (§6.3, nothing started re-runs by itself). A fifth,
-    /// opening its connection with NO saved answer, is the control: `Unknown` as before.
-    #[test]
-    fn only_an_answer_run_that_had_not_started_waits_on_his_answer_again() {
-        let state = root();
-        let cases = [
-            ("obligation-a", AssignmentState::Preparing, "Opening the work connection.", true, AssignmentState::Blocked),
-            ("obligation-b", AssignmentState::WaitingForQuota,
-             "Waiting for the allowance to refresh. Work is saved and will continue automatically.", true, AssignmentState::Blocked),
-            ("obligation-c", AssignmentState::Running, "The back end has started on it.", true, AssignmentState::Unknown),
-            ("obligation-d", AssignmentState::WaitingForQuota, crate::work_host::QUOTA_WAIT_AFTER_START[0], true, AssignmentState::Unknown),
-            ("obligation-e", AssignmentState::Preparing, "Opening the work connection.", false, AssignmentState::Unknown),
-        ];
-        let mut ids = Vec::new();
-        for (obligation, at, detail, answered, _) in &cases {
-            let receipt = assignment::register(&state, &registration(obligation)).unwrap();
-            assignment::advance(&state, "depot", "thread-one", &receipt.id, *at, detail).unwrap();
-            if *answered {
-                crate::question_work::enqueue(&state, &crate::questions::Delivery { obligation_id:Some(obligation.to_string()),
-                    id: format!("question-set:{obligation}"), entity_id: "depot".into(), thread_id: "thread-one".into(),
-                    asker: "stu".to_string(), set_id: None, text: "You answered: tomorrow".into(), receipt: None,
-                }).unwrap();
+    fn restart_keeps_canonical_handoff_ownership_and_never_announces_a_second_recovery() {
+        for phase in ["saved", "accepted", "completed", "stopped"] {
+            let state=root();
+            let receipt=assignment::register(&state,&registration("canonical-owner")).unwrap();
+            assignment::note_start(&state,"depot","thread-one",&receipt.id,"stu-before-restart",vec![]).unwrap();
+            assignment::advance(&state,"depot","thread-one",&receipt.id,AssignmentState::Running,"Stu owns this work").unwrap();
+            let scope=crate::status_tools::StatusToolScope{version:1,state_root:state.clone(),entity_id:"depot".into(),thread_id:"thread-one".into()};
+            let message=crate::session_tools::Message{handoff:true,from:"rich".into(),text:"Original handoff".into(),
+                instruction:Some(crate::ecs::UserInstruction{ledger_ref:"ledger:thread-one:turn-7".into(),sha256:digest(),text:None}),
+                work:Some(crate::session_tools::WorkReference{assignment_id:receipt.id.clone(),obligation_id:"canonical-owner".into()})};
+            let inbox=crate::session_tools::inbox(&scope,"stu").unwrap();
+            std::fs::create_dir_all(inbox.parent().unwrap()).unwrap();
+            let bytes=format!("{}\n",serde_json::to_string(&message).unwrap());
+            std::fs::write(&inbox,&bytes).unwrap();
+            let through=bytes.len() as u64;
+            if phase!="saved" {
+                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),"stu-before-restart").unwrap();
+                crate::session_tools::accept_live_handoff(&scope,"stu",through).unwrap();
             }
-            ids.push(receipt.id);
-        }
-        let report = reconcile(&state, &Fixed(HashMap::new()));
-        assert_eq!(report.answers_waiting.len(), 2, "{report:?}");
-        assert_eq!(report.unknown.len(), 3, "{report:?}");
-        for ((obligation, _, _, _, expected), id) in cases.iter().zip(&ids) {
-            let row = assignment::read(&state, "depot", "thread-one", id).unwrap();
-            assert_eq!(row.state, *expected, "{obligation}: {}", row.detail);
-            if *expected == AssignmentState::Blocked {
-                assert!(row.notices.is_empty(), "{obligation}: told it was running: {:?}", row.notices);
-                assert_eq!(row.detail, ANSWER_SAVED_AT_RELAUNCH);
-            } else {
-                assert_eq!(row.notices.last().unwrap().kind, NoticeKind::Unknown, "{obligation}");
+            if phase=="completed" {crate::session_tools::acknowledge(&scope,"stu",through).unwrap();}
+            if phase=="stopped" {
+                assignment::record_user_stop(&state,"depot","thread-one",&receipt.id).unwrap();
+                assignment::advance(&state,"depot","thread-one",&receipt.id,AssignmentState::Interrupted,"User stopped the request").unwrap();
             }
+            let before=serde_json::to_value(assignment::read(&state,"depot","thread-one",&receipt.id).unwrap()).unwrap();
+            let pending=crate::session_tools::pending(&scope,"stu").unwrap().map(|(_,offset)|offset);
+            let previous=crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{through}")).unwrap();
+            reconcile(&state);
+            let after=serde_json::to_value(assignment::read(&state,"depot","thread-one",&receipt.id).unwrap()).unwrap();
+            assert_eq!(after,before,"{phase}: assignment recovery invented a competing state or reply");
+            assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().map(|(_,offset)|offset),pending,"{phase}: changed canonical execution ownership");
+            assert_eq!(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{through}")).unwrap(),previous,"{phase}: erased uncertain execution evidence");
+            assert_eq!(std::fs::read_to_string(&inbox).unwrap(),bytes);
+            std::fs::remove_dir_all(state).unwrap();
         }
-        // Nothing was let go by looking.
-        assert_eq!(crate::question_work::pending(&state).unwrap().len(), 4);
-        std::fs::remove_dir_all(state).unwrap();
     }
 
-    /// Repositories that answer whatever a test says they answer.
-    struct Fixed(HashMap<String, String>);
-    impl Repositories for Fixed {
-        fn head(&self, path: &str) -> Option<String> {
-            self.0.get(path).cloned()
-        }
-    }
-    fn at(head: &str) -> Fixed {
-        Fixed(HashMap::from([("/fictional/project".to_string(), head.to_string())]))
-    }
-
-    /// **Row 9, in one test.** An assignment that was running when the process died comes
-    /// back `unknown` — not settled, not interrupted — and the sentence he gets says so.
-    #[test]
-    fn interrupted_work_produces_recovery_facts_instead_of_a_first_person_reply() {
-        let state=root();let receipt=assignment::register(&state,&registration("obligation-recovery")).unwrap();
-        assignment::advance(&state,"depot","thread-one",&receipt.id,AssignmentState::Running,"Running.").unwrap();
-        let report=reconcile(&state,&Fixed(HashMap::new()));
-        let saved=report.unknown[0].said.as_ref().unwrap();
-        let facts:serde_json::Value=serde_json::from_str(saved).expect("recovery must report facts for Rich, not impersonate him");
-        assert_eq!(facts["event"],"work_recovery");assert_eq!(facts["assignment_id"],receipt.id);
-        assert_eq!(facts["previous_state"],"running");assert_eq!(facts["outcome"],"unverified");
-        assert!(!saved.contains("Nothing is running now"));assert!(!saved.contains("Say the word"));
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    #[test]
-    fn a_crash_leaves_work_unknown_and_never_finished() {
-        let state = root();
-        let receipt = assignment::register(&state, &registration("obligation-1")).unwrap();
-        assignment::note_start(&state, "depot", "thread-one", &receipt.id, "work-session-a", vec![
-            RepositoryPin { path: "/fictional/project".into(), head: Some("a".repeat(40)) },
-        ])
-        .unwrap();
-        assignment::advance(&state, "depot", "thread-one", &receipt.id, AssignmentState::Running, "Running.")
-            .unwrap();
-
-        // The repository is exactly where it was: positive proof nothing was landed.
-        let report = reconcile(&state, &at(&"a".repeat(40)));
-
-        assert_eq!(report.unknown.len(), 1);
-        assert!(report.untouched.is_empty());
-        let record = assignment::read(&state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(record.state, AssignmentState::Unknown);
-        assert_ne!(record.state, AssignmentState::Settled);
-        assert_ne!(record.state, AssignmentState::Interrupted);
-        let said = report.unknown[0].said.clone().unwrap();
-        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
-        assert_eq!(facts["observations"]["repositories"][0]["comparison"],"unchanged");
-        assert_eq!(facts["outcome"],"unverified");
-        // He is told plainly (§6.2), durably, and exactly once — the notice is on the
-        // record, undelivered, so it survives him not being here.
-        assert_eq!(record.notices.last().unwrap().kind, NoticeKind::Unknown);
-        assert!(record.notices.last().unwrap().delivered_at_ms.is_none());
-        // And nothing restarted: an unknown assignment is not open, so nothing sweeps it
-        // back onto a lease (§6.3).
-        assert!(!record.state.is_open());
-        assert!(record.state.awaits_his_word());
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    /// **The moved-repository branch, and its positive control.** A branch that moved is
-    /// never read as "this assignment landed it" — the sentence refuses the attribution in
-    /// so many words, and the state is still `unknown`.
-    #[test]
-    fn a_moved_repository_is_never_read_as_this_assignment_having_landed_it() {
-        let state = root();
-        let receipt = assignment::register(&state, &registration("obligation-1")).unwrap();
-        assignment::note_start(&state, "depot", "thread-one", &receipt.id, "work-session-a", vec![
-            RepositoryPin { path: "/fictional/project".into(), head: Some("a".repeat(40)) },
-        ])
-        .unwrap();
-        assignment::advance(&state, "depot", "thread-one", &receipt.id, AssignmentState::Running, "Running.")
-            .unwrap();
-
-        let report = reconcile(&state, &at(&"b".repeat(40)));
-        let said = report.unknown[0].said.clone().unwrap();
-        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
-        assert_eq!(facts["observations"]["repositories"][0]["comparison"],"changed");
-        assert_eq!(facts["outcome"],"unverified");
-        assert_eq!(
-            assignment::read(&state, "depot", "thread-one", &receipt.id).unwrap().state,
-            AssignmentState::Unknown
-        );
-
-        // POSITIVE CONTROL for the third branch: a repository that cannot be read says
-        // "I couldn't read" and never "nothing moved".
-        let second = assignment::register(&state, &registration("obligation-2")).unwrap();
-        assignment::note_start(&state, "depot", "thread-one", &second.id, "work-session-b", vec![
-            RepositoryPin { path: "/fictional/project".into(), head: Some("a".repeat(40)) },
-        ])
-        .unwrap();
-        assignment::advance(&state, "depot", "thread-one", &second.id, AssignmentState::Running, "Running.")
-            .unwrap();
-        let report = reconcile(&state, &UnreadableRepositories);
-        let said = report.unknown[0].said.clone().unwrap();
-        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
-        assert_eq!(facts["observations"]["repositories"][0]["comparison"],"unreadable");
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    /// A question of his that the job asked and he has not answered: it is on disk
-    /// (`questions.rs`), so it outlives the process that asked it.
-    fn open_question(state: &Path, obligation: &str) {
-        use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
-        Store::new(state).ask(&AskScope { obligation_id:Some(obligation.into()),
-            root: state.to_path_buf(), entity_id: "depot".into(), thread_id: "thread-one".into(),
-            turn_id: "turn-7".into(), asker: "stu".into(), session_id: "work-session-a".into(),
-            engine: None, entity_root: None, app_run: None,
-        }, vec![QuestionInput {
-            text: "Who should review it?".into(),
-            options: vec![
-                OptionInput { label: "Dana reviews".into(), description: "Faster, knows the code.".into() },
-                OptionInput { label: "Sam reviews".into(), description: "Slower, fresh eyes.".into() },
-            ],
-            multiple: false, free_answer: true, recommended: None,
-        }]).unwrap();
-    }
-
-    /// **§7.8 survives a relaunch, where the thing he must answer survives it.** An
-    /// assignment waiting on a question of his is left exactly as it was: that state was
-    /// witnessed and written down while a process was watching, the question is on disk, and
-    /// turning it into `unknown` would throw away the one thing he came back for.
-    #[test]
-    fn an_assignment_that_was_waiting_for_him_is_still_waiting_for_him() {
-        let state = root();
-        let receipt = assignment::register(&state, &registration("obligation-1")).unwrap();
-        open_question(&state, "obligation-1");
-        assignment::advance(
-            &state,
-            "depot",
-            "thread-one",
-            &receipt.id,
-            AssignmentState::Blocked,
-            "Waiting for your answer. Independent work can continue.",
-        )
-        .unwrap();
-
-        let report = reconcile(&state, &at(&"a".repeat(40)));
-
-        assert!(report.unknown.is_empty());
-        assert_eq!(report.untouched.len(), 1);
-        let record = assignment::read(&state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(record.state, AssignmentState::Blocked);
-        assert!(record.state.is_open());
-        // Nothing was said about it: he was already told, and telling him twice about the
-        // same waiting decision is noise pretending to be diligence.
-        assert!(record.notices.is_empty());
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    /// **Hunt part 1 finding 07** (richos-hq `docs/audits/2026-09-29-hunt/part-1-codex.md`):
-    /// a job stopped at a step for him to approve, and RichOS then crashed. The approval
-    /// request lived only in the permission desk's memory (`permissions.rs`), so after the
-    /// relaunch there is nothing he can approve, and a row still saying it waits for his
-    /// approval is a door with no handle. It comes back `unknown` instead, says the request
-    /// closed with RichOS, and picking it back up works: the run that follows asks him again
-    /// if it reaches the same step. The control: a job waiting on a saved answer of his,
-    /// which is on disk, is still left exactly as it was.
-    #[test]
-    fn a_job_whose_approval_request_died_with_the_app_comes_back_as_something_he_can_pick_up() {
-        let state = root();
-        let approval = assignment::register(&state, &registration("obligation-1")).unwrap();
-        assignment::advance(&state, "depot", "thread-one", &approval.id, AssignmentState::Blocked,
-            "The work has run and stopped at a step that is yours to decide: run a command.").unwrap();
-        assignment::raise_notice(&state, "depot", "thread-one", &approval.id, NoticeKind::ReadyToApprove,
-            &assignment::says::ready_to_approve("landing obligation-1")).unwrap();
-        let answered = assignment::register(&state, &registration("obligation-2")).unwrap();
-        assignment::advance(&state, "depot", "thread-one", &answered.id, AssignmentState::Blocked,
-            crate::work_host::ANSWER_RETRY_DETAIL).unwrap();
-        crate::question_work::enqueue(&state, &crate::questions::Delivery { obligation_id:None,
-            id: "question-set:obligation-2".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
-            asker: "obligation-2".into(), set_id: None, text: "You answered: tomorrow".into(), receipt: None,
-        }).unwrap();
-
-        let report = reconcile(&state, &at(&"a".repeat(40)));
-
-        let row = assignment::read(&state, "depot", "thread-one", &approval.id).unwrap();
-        assert_eq!(row.state, AssignmentState::Unknown, "it still waits on an approval nobody can give: {}", row.detail);
-        assert!(row.state.awaits_his_word());
-        assert!(!row.state.is_open(), "nothing re-runs it by itself (§6.3)");
-        assert_eq!(report.unknown.len(), 1, "{report:?}");
-        let notice = row.notices.last().unwrap();
-        assert_eq!(notice.kind, NoticeKind::Unknown);
-        let facts:serde_json::Value=serde_json::from_str(&notice.text).unwrap();
-        assert_eq!(facts["approval_request_lost"],true);
-        assert_eq!(facts["outcome"],"unverified");
-        // The way out is the ordinary one for work RichOS closed on.
-        assignment::pick_up(&state, "depot", "thread-one", "landing obligation-1").unwrap();
-        assert_eq!(assignment::read(&state, "depot", "thread-one", &approval.id).unwrap().state,
-                   AssignmentState::Registered);
-        // The control: what he answered is saved, so that job is left as it was.
-        let row = assignment::read(&state, "depot", "thread-one", &answered.id).unwrap();
-        assert_eq!((row.state, row.detail.as_str()), (AssignmentState::Blocked, crate::work_host::ANSWER_RETRY_DETAIL));
-        assert!(row.notices.is_empty());
-        assert_eq!(report.untouched.len(), 1, "{report:?}");
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    /// Where the register keeps this assignment's record.
-    fn record_path(state: &Path, id: &str) -> PathBuf {
-        for partition in std::fs::read_dir(state.join("assignments")).unwrap().flatten() {
-            let path = partition.path().join(format!("{id}.json"));
-            if path.exists() {
-                return path;
-            }
-        }
-        panic!("no record for {id}");
-    }
-
-    /// **Hunt part 1 finding 08** (richos-hq `docs/audits/2026-09-29-hunt/part-1-codex.md`):
-    /// one damaged record of long-finished work, on the same conversation as a job that was
-    /// running when RichOS closed. The damaged one is REPORTED (never counted as zero and
-    /// never called finished), and the healthy one is still reconciled: it comes back
-    /// `unknown` with its notice, he is handed that notice, and he can pick it back up.
-    #[test]
-    fn one_damaged_record_is_reported_and_every_healthy_open_one_is_still_reconciled() {
-        let state = root();
-        let old = assignment::register(&state, &registration("obligation-old")).unwrap();
-        assignment::advance(&state, "depot", "thread-one", &old.id, AssignmentState::Settled, "Finished.").unwrap();
-        let running = assignment::register(&state, &registration("obligation-1")).unwrap();
-        assignment::advance(&state, "depot", "thread-one", &running.id, AssignmentState::Running, "Running.").unwrap();
-        std::fs::write(record_path(&state, &old.id), b"{\"schema\":1,\"half").unwrap();
-
-        let report = reconcile(&state, &at(&"a".repeat(40)));
-
-        assert!(report.unreadable.is_some(), "the damaged record was not reported: {report:?}");
-        assert_eq!(report.unknown.len(), 1, "the healthy open job was abandoned: {report:?}");
-        let row = assignment::read(&state, "depot", "thread-one", &running.id).unwrap();
-        assert_eq!(row.state, AssignmentState::Unknown);
-        assert!(report.log_message().contains("could not be read"), "{}", report.log_message());
-        // What recovery raised reaches him, and the way out works, with the damaged file still there.
-        let told = assignment::take_pending_notices(&state, "depot", "thread-one").unwrap();
-        assert_eq!(told.len(), 1, "{told:?}");
-        assert_eq!(told[0].kind, NoticeKind::Unknown);
-        assignment::pick_up(&state, "depot", "thread-one", "landing obligation-1").unwrap();
-        assert_eq!(assignment::read(&state, "depot", "thread-one", &running.id).unwrap().state,
-                   AssignmentState::Registered);
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    /// **An assignment that never reached a lease says that, rather than inventing a
-    /// reading of an evidence file that was never written.**
-    #[test]
-    fn an_assignment_that_never_started_is_told_apart_from_one_that_did() {
-        let state = root();
-        let receipt = assignment::register(&state, &registration("obligation-1")).unwrap();
-        // Left in `registered`: written down, nothing prepared.
-        let report = reconcile(&state, &at(&"a".repeat(40)));
-        let said = report.unknown[0].said.clone().unwrap();
-        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
-        assert!(facts["recorded_work_session"].is_null());
-        let record = assignment::read(&state, "depot", "thread-one", &receipt.id).unwrap();
-        assert_eq!(record.state, AssignmentState::Unknown);
-        assert!(record.detail.contains("had not started"), "{}", record.detail);
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    /// **§6.3a's orphan grants.** A work scope left open by a crash is closed at boot; a
-    /// scope that was already closed is not counted (a count that includes the ordinary
-    /// case cannot be used to notice the extraordinary one); and the conversation's own
-    /// continuity scope is never touched, which is the positive-identification rule §6.3a
-    /// states for seats applied to the file that names them.
     #[test]
     fn an_orphan_grant_is_closed_and_the_conversations_own_scope_is_not_touched() {
         let state = root();
@@ -1118,7 +501,7 @@ mod tests {
         // A grant that cannot be understood is REPORTED rather than silently skipped.
         std::fs::write(&damaged, "{\"version\":1,\"actions_allowed\":true,\"half\":").unwrap();
 
-        let report = reconcile(&state, &at(&"a".repeat(40)));
+        let report = reconcile(&state);
 
         assert_eq!(report.grants_closed, 1);
         assert_eq!(report.grants_unreconciled, vec!["44444444-work.json".to_string()]);

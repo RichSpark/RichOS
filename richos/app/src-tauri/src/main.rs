@@ -3312,26 +3312,10 @@ fn main() {
                 // installation loses the feature and never loses the work.
                 work.set_screen(std::sync::Arc::new(screen::MacScreen));
                 let report =
-                    richos_core::recovery::reconcile(&data_dir.join("engine-state"), reader().as_ref());
+                    richos_core::recovery::reconcile(&data_dir.join("engine-state"));
                 eprintln!("[richos] {}", report.log_message());
 
-                // **His approval has to work after a relaunch.** An assignment that stopped
-                // at a step of his is still waiting for him (§7.8), and putting it back on a
-                // lease needs the ledger's thread binding — which only the ledger can mint
-                // (`entity.rs`). This hands it over and starts NOTHING (§6.3).
-                let mut remembered = 0;
-                for record in report.untouched.iter().chain(report.unknown.iter()) {
-                    if let Ok(binding) = spine.ledger().thread_binding(&record.thread_id) {
-                        work.remember_binding(&binding);
-                        remembered += 1;
-                    }
-                }
-                if remembered > 0 {
-                    eprintln!(
-                        "[richos] recovery: {remembered} conversation(s) with unresolved work can be \
-                         picked back up when he says so. Nothing was restarted."
-                    );
-                }
+
             }
 
             // ==============================================================================

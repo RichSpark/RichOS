@@ -237,12 +237,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let names: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(
         std::fs::read(data.join("walk-threads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()));
 
-    // **Recovery first, before the host takes anything** (`recovery.rs`'s boot sweep, as the
-    // shell runs it), and what it decided is written out for the cell to grade.
-    let reconciled = richos_core::recovery::reconcile(&state, &richos_core::recovery::UnreadableRepositories);
-    out.line(&json!({"event": "recovery", "log": reconciled.log_message(),
-        "unknown": reconciled.unknown.iter().map(|r| &r.id).collect::<Vec<_>>(),
-        "answers_waiting": reconciled.answers_waiting.iter().map(|r| &r.id).collect::<Vec<_>>()}));
+    // Old scopes are closed; execution recovery remains with the receiving owner.
+    let reconciled=richos_core::recovery::reconcile(&state);
+    out.line(&json!({"event":"recovery","log":reconciled.log_message(),
+        "grants_closed":reconciled.grants_closed,"grants_unreconciled":reconciled.grants_unreconciled}));
 
     let permissions = Arc::new(richos_core::permissions::PermissionDesk::default());
     let spawns = Arc::new(AtomicUsize::new(0));
