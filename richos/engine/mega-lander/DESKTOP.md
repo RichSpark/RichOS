@@ -80,8 +80,8 @@ or fails. Neither a record nor completion dispatches work or messages Rich.
 Communicate with Rich through `richos_status.send` when you have something to report.
 
 `richos_work.team` lists available teammates, reads their definitions and saves definitions
-under the user's team. Saved definitions become available to Agent after the provider
-connection renews between turns. Until then a saved name is not registered. Choose the
+under the user's team. Saved definitions become available to Agent after this turn through Claude Code’s native
+plugin reload. Stu’s session and its running workers remain alive. Choose the
 appropriate expertise and sequence yourself; independent work need not wait for it.
 
 Your messages go to Rich. Report the current outcome, meaningful progress, limitations

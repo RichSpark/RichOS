@@ -1208,6 +1208,14 @@ impl WorkHost {
             entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()}
     }
 
+    fn refresh_peer_team(&self,backend:&Arc<Backend>,lease:&mut dyn Cognition)->Result<bool,String> {
+        let team=self.factory.lock().unwrap().team_digest();
+        if team.is_none() || team==backend.inner.lock().unwrap().lease_team {return Ok(false)}
+        lease.refresh_team().map_err(|e|e.to_string())?;
+        backend.inner.lock().unwrap().lease_team=team;
+        Ok(true)
+    }
+
     fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
         message:&crate::session_tools::Message,turn:&str)->Result<String,String> {
         // A native connection owns its workers as well as its shell commands.
@@ -1223,7 +1231,6 @@ impl WorkHost {
             self.renew_if_repositories_changed(backend,binding);
             self.renew_if_account_changed(backend,binding);
             self.renew_if_model_changed(backend,binding);
-            self.renew_if_team_changed(backend,binding);
         }
         let original=serde_json::to_string(message).map_err(|e|e.to_string())?;
         let mut input=original.clone();
@@ -1231,6 +1238,7 @@ impl WorkHost {
             self.ensure_lease(backend,binding)?;
             let mut guard=backend.lease.lock().unwrap();
             let lease=guard.as_mut().ok_or("The operator connection closed")?;
+            self.refresh_peer_team(backend,lease.as_mut())?;
             lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
             {
                 let mut inner=backend.inner.lock().unwrap();
@@ -1257,14 +1265,9 @@ impl WorkHost {
                 return Err(format!("Operator input did not complete: {reason}"));
             }
             if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
-            drop(guard);
-            // A saved teammate is registered only by a new provider connection.
-            // Continue this same accepted handoff after renewal, never dispatch it again.
-            if workers_finished() { self.renew_if_team_changed(backend,binding); }
-            if backend.inner.lock().unwrap().lease_session.as_deref() == Some(&session) {
-                return Ok(session);
-            }
-            input=format!("{TEAM_CHANGED_CONTINUATION}\n{original}");
+            let lease=guard.as_mut().ok_or("The operator connection closed during team reload")?;
+            if !self.refresh_peer_team(backend,lease.as_mut())? {return Ok(session)}
+            input=TEAM_CHANGED_CONTINUATION.to_string();
         }
     }
 
@@ -10810,25 +10813,27 @@ mod tests {
         let start=serde_json::json!({"schema":1,"callback":{"session_id":"work-session-one","hook_event_name":"SubagentStart","agent_id":"live-worker"}}).to_string()+"\n";
         std::fs::write(&evidence,&start).unwrap();
         run(3);
+        assert_eq!(backend.inner.lock().unwrap().lease_team.as_deref(),Some("stock and mark"));
         assert_eq!(h.spawns.load(Ordering::SeqCst),1,"renewal killed a live native worker");
         let end=serde_json::json!({"schema":1,"callback":{"session_id":"work-session-one","hook_event_name":"SubagentStop","agent_id":"live-worker"}}).to_string()+"\n";
         std::fs::write(&evidence,start+&end).unwrap();
         run(4);
-        assert_eq!(h.spawns.load(Ordering::SeqCst),2,"next peer handoff kept an obsolete roster");
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
         *h.commands.lock().unwrap()=Some(crate::lease_commands::CommandReading::Running(1));
         h.team.lock().unwrap().digest=Some("stock, mark and norm".into());
         run(5);
-        assert_eq!(h.spawns.load(Ordering::SeqCst),2,"renewal ended an unrelated running command");
+        assert_eq!(backend.inner.lock().unwrap().lease_team.as_deref(),Some("stock, mark and norm"));
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
         *h.commands.lock().unwrap()=Some(crate::lease_commands::CommandReading::Clear);
         run(6);
-        assert_eq!(h.spawns.load(Ordering::SeqCst),3,"deferred roster was never registered");
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
         h.team.lock().unwrap().in_turn.push_back(Some("stock, mark, norm and echo".into()));
         run(7);
-        assert_eq!(h.spawns.load(Ordering::SeqCst),4,"a teammate saved during the handoff was not registered");
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
         let prompts=h.work_prompts.lock().unwrap();
         assert_eq!(prompts.len(),8,"same handoff did not continue after registering the new teammate");
         assert!(prompts.last().unwrap().starts_with(TEAM_CHANGED_CONTINUATION));
-        assert!(prompts.last().unwrap().contains(&message.text),"the successor lost the original handoff");
+        assert_eq!(prompts.last().unwrap(),TEAM_CHANGED_CONTINUATION,"roster reload must not replay the accepted handoff");
         drop(prompts);
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();

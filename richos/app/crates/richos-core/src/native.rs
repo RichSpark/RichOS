@@ -2635,6 +2635,23 @@ impl NativeClient {
         Ok(())
     }
 
+    fn reload_plugins(&self)->Result<Value,NativeError> {
+        let id=format!("richos_reload_plugins_{}",self.next_id.fetch_add(1,Ordering::SeqCst));
+        let (tx,rx)=channel();
+        self.pending.lock().unwrap().insert(id.clone(),tx);
+        let request=json!({"type":"control_request","request_id":id,"request":{"subtype":"reload_plugins"}});
+        let result=(|| {
+            Self::write_line(&self.stdin,&request)?;
+            let reply=rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|e|NativeError::Protocol(format!("Plugin reload was not confirmed: {e}")))?;
+            if reply["response"]["subtype"]!="success" {
+                return Err(NativeError::Protocol(format!("Plugin reload refused: {}",reply["response"]["error"])));
+            }
+            Ok(reply["response"]["response"].clone())
+        })();
+        self.pending.lock().unwrap().remove(&id);
+        result
+    }
+
     /// The session id — OURS, minted at spawn and passed to the child as `--session-id`.
     pub fn session_id(&self) -> &str {
         &self.session_id
@@ -4105,6 +4122,17 @@ impl Cognition for NativeCognition {
         Ok(())
     }
 
+    fn refresh_team(&mut self)->Result<(),CognitionError> {
+        let profile=self.engine_profile.as_ref().ok_or_else(||CognitionError::Protocol("Missing engine profile for team reload".into()))?;
+        let expected=profile.refresh_team().map_err(|e|CognitionError::Io(e.to_string()))?;
+        let result=self.client.reload_plugins()?;
+        if expected.iter().any(|name|!result["agents"].as_array().is_some_and(|agents|
+            agents.iter().any(|agent|agent["name"].as_str()==Some(name)))) {
+            return Err(CognitionError::Protocol("The native team reload did not register every saved teammate".into()));
+        }
+        Ok(())
+    }
+
     /// The work lease's preparation — **the sibling path of `prepare_work_turn`, and its
     /// whole point is what it does not do.**
     ///
@@ -4704,6 +4732,29 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         let qs=crate::questions::Store::new(root).list("company","thread").unwrap();
         assert_eq!(qs.len(),1);assert_eq!(qs[0].state,crate::questions::State::Open);
         assert!(qs[0].shown.is_none(),"persisting a question must not claim it was shown");
+    }
+
+    #[test]
+    fn native_plugin_reload_is_a_control_request_and_keeps_the_session() {
+        for (name,answer) in [("reload-success","success"),("reload-refused","error")] {
+            let script=write_script(name,&format!(r#"
+read -r init
+printf '%s\n' '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_init","response":{{}}}}}}'
+read -r request
+printf '%s\n' "$request" > "$(dirname "$0")/reload-request.json"
+printf '%s\n' "$request" | python3 -c 'import json,sys;r=json.load(sys.stdin);print(json.dumps({{"type":"control_response","response":{{"subtype":"{answer}","request_id":r["request_id"],"response":{{"agents":[{{"name":"richos-app-engine:fresh"}}]}},"error":"fixture refusal"}}}}))'
+while read -r line; do :; done
+"#));
+            let root=script.parent().unwrap();
+            let client=NativeClient::spawn(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+            let before=client.session_id().to_string();
+            let result=client.reload_plugins();
+            assert_eq!(result.is_ok(),answer=="success");
+            let request:Value=serde_json::from_slice(&std::fs::read(root.join("reload-request.json")).unwrap()).unwrap();
+            assert_eq!(request["request"]["subtype"],"reload_plugins");
+            assert_eq!(client.session_id(),before);
+            assert!(client.pending.lock().unwrap().is_empty(),"reload left a stale control waiter");
+        }
     }
 
     #[test]

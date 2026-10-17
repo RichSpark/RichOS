@@ -300,6 +300,9 @@ pub trait Cognition: Send {
     fn prepare_agent_message(&mut self,_binding:&crate::entity::ThreadBinding,_turn:&str,
         _message:&crate::session_tools::Message)->Result<(),CognitionError> {Ok(())}
 
+    /// Reload the existing native roster without replacing this session or its workers.
+    fn refresh_team(&mut self)->Result<(),CognitionError> {Ok(())}
+
     /// Give the session the context brief his next turn would otherwise supply first, while
     /// nobody is waiting: called right after the priming turn, under that turn's own ledger
     /// id. His turn's [`Self::prepare_work_turn`] then finds the same brief already held and

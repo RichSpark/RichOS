@@ -281,7 +281,7 @@ fn teammate_from(file_name: &str, body: &str) -> Teammate {
 /// every name and definition [`active_team`] returns, so it moves exactly when the next lease
 /// would register something different, and never for a file that would not be registered (the
 /// shelf, a duty name, a temporary file, a link). The design is `operator_snapshot.rs`'s, digest
-/// the definitions a session read at start and renew it when the digest moves; its file set is
+/// the definitions a session loaded and refresh them when the digest moves; its file set is
 /// the operator's, so the code is not shared. Each part is length-prefixed, so no two teams
 /// share a digest by where one body ends and the next name starts.
 pub fn team_digest(engine: &Path, data: &Path) -> Result<String, RuntimeError> {
@@ -296,7 +296,29 @@ pub fn team_digest(engine: &Path, data: &Path) -> Result<String, RuntimeError> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path)->Result<Vec<String>,RuntimeError> {
+    let team=active_team(engine,data)?;
+    for root in [plugin.join("agents"),coordination.join(".claude/agents")] {
+        for (name,body) in &team {write(&root.join(format!("{name}.md")),body)?;}
+        for entry in std::fs::read_dir(&root).map_err(|e|RuntimeError(e.to_string()))? {
+            let path=entry.map_err(|e|RuntimeError(e.to_string()))?.path();
+            if path.extension().is_some_and(|ext|ext=="md")
+                && path.file_stem().and_then(|n|n.to_str()).is_none_or(|n|!team.contains_key(n)) {
+                std::fs::remove_file(path).map_err(|e|RuntimeError(e.to_string()))?;
+            }
+        }
+    }
+    let agents:Vec<_>=team.keys().map(|name|format!("./agents/{name}.md")).collect();
+    write(&plugin.join(".claude-plugin/plugin.json"),&json!({"name":PLUGIN_NAME,"version":"1.2.0","agents":agents}).to_string())?;
+    Ok(team.keys().map(|name|format!("{PLUGIN_NAME}:{name}")).collect())
+}
+
 impl EngineProfile {
+    pub fn refresh_team(&self)->Result<Vec<String>,RuntimeError> {
+        let data=self.state.parent().ok_or_else(||RuntimeError("Missing app data directory".into()))?;
+        render_team(&self.engine,data,&self.coordination,&self.plugin)
+    }
+
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
         Self::prepare_with_settings(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?)
     }
@@ -353,27 +375,10 @@ impl EngineProfile {
             std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).map_err(|e| RuntimeError(e.to_string()))?;
         }
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
-        let team = active_team(&engine, &data)?;
-        for (name, body) in &team {
-            write(&plugin.join(format!("agents/{name}.md")), body)?;
-            // The canonical guard resolves this explicit private roster. No
-            // namespace search through host settings or whitespace-split roots.
-            write(&coordination.join(format!(".claude/agents/{name}.md")), body)?;
-        }
-        // A teammate no longer active leaves the roster, so the guard stops resolving it.
-        let roster = coordination.join(".claude/agents");
-        for entry in std::fs::read_dir(&roster).map_err(|e| RuntimeError(e.to_string()))? {
-            let path = entry.map_err(|e| RuntimeError(e.to_string()))?.path();
-            let stale = path.extension().is_some_and(|ext| ext == "md")
-                && path.file_stem().and_then(|s| s.to_str()).is_none_or(|name| !team.contains_key(name));
-            if stale { std::fs::remove_file(&path).map_err(|e| RuntimeError(e.to_string()))?; }
-        }
-        let agents: Vec<String> = team.keys().map(|name| format!("./agents/{name}.md")).collect();
+        render_team(&engine, &data, &coordination, &plugin)?;
         write(&coordination.join("orchestration.config"), &format!(
             "# Generated desktop coordination, not target-repository configuration.\nALLOWED_MODELS=\"opus sonnet haiku\"\nMODEL_TIERS=\"opus > sonnet > haiku\"\nSESSION_TEAMS_DIR={}\n", quote(&state.join("teams"))))?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
-        write(&plugin.join(".claude-plugin/plugin.json"), &json!({"name":PLUGIN_NAME, "version":"1.2.0",
-            "agents":agents}).to_string())?;
         write(&plugin.join("gitconfig"), "[user]\n\tname = RichOS\n\temail = richos@localhost\n")?;
         let command = format!("{} {}", quote(&runtime.python), quote(&engine.join("scripts/app-engine-hook.py")));
         let mut hooks = serde_json::Map::new();
