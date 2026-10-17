@@ -18,15 +18,14 @@ pub fn direct_stop_targets(state: &Path, session: &str, reference: &str, digest:
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(error) => return Err(error.to_string()),
     };
-    if file.metadata().map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
-        return Err("Native command evidence exceeds its read limit".into());
-    }
-    let mut reader = BufReader::new(file);
+    // Read a fixed extent: later appends cannot extend this Stop's scan.
+    // Session age or an unrelated large result must not disable cancellation.
+    let extent = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut reader = BufReader::new(file.take(extent));
     let mut targets = Vec::new();
     loop {
         let mut line = String::new();
-        let size = reader.by_ref().take(1024 * 1024 + 1).read_line(&mut line).map_err(|e| e.to_string())?;
-        if size > 1024 * 1024 { return Err("Native command evidence has an oversized frame".into()); }
+        let size = reader.read_line(&mut line).map_err(|e| e.to_string())?;
         if size == 0 || !line.ends_with('\n') { break; }
         let row: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
         let call = &row["callback"];

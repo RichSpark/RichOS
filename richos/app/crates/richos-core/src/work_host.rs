@@ -10843,7 +10843,10 @@ mod tests {
             "callback":{"session_id":"independent-stu","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"direct-first"}}),
             serde_json::json!({"schema":1,"instruction":{"ledger_ref":"ledger:thread-one:another-request","sha256":"other"},
             "callback":{"session_id":"independent-stu","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"direct-second"}})];
-        std::fs::write(evidence.join("callbacks.jsonl"),callbacks.iter().map(|row|row.to_string()+"\n").collect::<String>()).unwrap();
+        // A standing session can have a long history and large unrelated tool output.
+        let history=serde_json::json!({"schema":1,"callback":{"session_id":"independent-stu", "hook_event_name":"PostToolUse",
+            "tool_name":"Read","tool_response":"x".repeat(1024 * 1024 + 1)}}).to_string()+"\n";
+        std::fs::write(evidence.join("callbacks.jsonl"),history.repeat(17)+&callbacks.iter().map(|row|row.to_string()+"\n").collect::<String>()).unwrap();
         h.host.stop_assignment("depot","thread-one",&first.id).unwrap();
         assert_eq!(*stopper.0.lock().unwrap(),vec!["call-first","direct-first"]);
         let stopped=assignment::read(&h.state,"depot","thread-one",&first.id).unwrap();
