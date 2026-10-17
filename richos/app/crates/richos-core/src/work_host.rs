@@ -59,7 +59,7 @@ impl Backend {
 }
 pub struct WorkHost {
     state: PathBuf,
-    factory: Mutex<Box<dyn LeaseFactory>>,
+    factory: Arc<dyn LeaseFactory>,
     backends: Mutex<std::collections::HashMap<String, Arc<Backend>>>,
     closing: Mutex<bool>,
     notifier: Arc<dyn WorkNotifier>,
@@ -80,7 +80,7 @@ impl WorkHost {
     ) -> Arc<Self> {
         Arc::new(Self {
             state: state.into(),
-            factory: Mutex::new(factory),
+            factory: Arc::from(factory),
             backends: Mutex::new(Default::default()),
             closing: Mutex::new(false),
             notifier,
@@ -252,7 +252,7 @@ impl WorkHost {
         backend: &Arc<Backend>,
         lease: &mut dyn Cognition,
     ) -> Result<bool, String> {
-        let team = self.factory.lock().unwrap().team_digest();
+        let team = self.factory.team_digest();
         if team.is_none() || team == backend.inner.lock().unwrap().lease_team {
             return Ok(false);
         }
@@ -555,7 +555,7 @@ impl WorkHost {
         }
         // The team it registers, read just before it is spawned (see `Inner::lease_team`).
         let (team, opened) = {
-            let factory = self.factory.lock().unwrap();
+            let factory = &self.factory;
             (factory.team_digest(), factory.spawn_work(binding))
         };
         let opened = opened.map_err(|e| e.to_string())?;
@@ -629,7 +629,7 @@ impl WorkHost {
     }
 
     fn renew_if_model_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
-        let Some(wanted) = self.factory.lock().unwrap().lease_models() else {
+        let Some(wanted) = self.factory.lease_models() else {
             return;
         };
         let running_on = backend
@@ -915,7 +915,7 @@ impl WorkHost {
             }
         }
         let (team, fresh) = {
-            let factory = self.factory.lock().unwrap();
+            let factory = &self.factory;
             (factory.team_digest(), factory.spawn_work(binding))
         };
         let mut fresh = fresh.map_err(|e| e.to_string())?;
@@ -1195,12 +1195,17 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct StartGate(Mutex<bool>, Condvar);
+    struct StartGate(Mutex<bool>, Condvar, std::sync::atomic::AtomicBool);
     impl StartGate {
         fn open_now() -> Arc<Self> {
-            Arc::new(Self(Mutex::new(true), Condvar::new()))
+            Arc::new(Self(
+                Mutex::new(true),
+                Condvar::new(),
+                std::sync::atomic::AtomicBool::new(false),
+            ))
         }
         fn shut(&self) {
+            self.2.store(false, Ordering::SeqCst);
             *self.0.lock().unwrap() = false;
         }
         fn release(&self) {
@@ -1210,6 +1215,7 @@ mod tests {
         fn wait_until_open(&self) {
             let mut open = self.0.lock().unwrap();
             while !*open {
+                self.2.store(true, Ordering::SeqCst);
                 open = self.1.wait(open).unwrap();
             }
         }
@@ -1372,6 +1378,73 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "{what}");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn one_stu_connection_can_open_while_another_is_still_starting() {
+        struct IndependentFactory(Arc<StartGate>);
+        impl LeaseFactory for IndependentFactory {
+            fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
+                panic!("scoped Stu only")
+            }
+            fn spawn_work(
+                &self,
+                binding: &ThreadBinding,
+            ) -> Result<Box<dyn Cognition>, CognitionError> {
+                if binding.thread_id() == "thread-one" {
+                    self.0.wait_until_open();
+                }
+                Ok(Box::new(crate::cognition::MockCognition::new(
+                    binding.thread_id(),
+                    Vec::new(),
+                )))
+            }
+        }
+        let h = harness(1);
+        let gate = StartGate::open_now();
+        gate.shut();
+        let host = WorkHost::new(
+            &h.state,
+            Box::new(IndependentFactory(gate.clone())),
+            Arc::new(SilentNotifier),
+            Arc::new(PermissionDesk::default()),
+        );
+        let a = Backend::new();
+        let b = Backend::new();
+        let opening = host.clone();
+        let binding = h.binding.clone();
+        let worker = std::thread::spawn(move || opening.ensure_lease(&a, &binding));
+        // load-bound: hang guard only; the gate's recorded entry proves A is still opening.
+        until("A never reached its startup gate", || {
+            gate.2.load(Ordering::SeqCst)
+        });
+        let binding = ThreadBinding::new(
+            PersonId::default_ceo(),
+            EntityId::parse("depot").unwrap(),
+            "thread-two",
+            1,
+        );
+        let opening = host.clone();
+        let second = b.clone();
+        let (sent, received) = std::sync::mpsc::channel();
+        let other = std::thread::spawn(move || {
+            let result = opening.ensure_lease(&second, &binding);
+            sent.send(result).unwrap();
+        });
+        // load-bound: hang guard only; receiving B's result before releasing A proves independence.
+        let result = received.recv_timeout(std::time::Duration::from_secs(60));
+        let a_held = !worker.is_finished();
+        gate.release();
+        worker.join().unwrap().unwrap();
+        other.join().unwrap();
+        result
+            .expect("B waited for A's connection startup")
+            .unwrap();
+        assert!(a_held);
+        assert_eq!(
+            b.lease.lock().unwrap().as_ref().unwrap().session_id(),
+            "thread-two"
+        );
     }
 
     #[test]
@@ -2095,11 +2168,11 @@ mod tests {
                     .unwrap();
             });
             if during_open {
-                // load-bound: hang guard only; the locked factory proves spawn is
-                // inside its closed gate before Stop, not merely scheduled later.
+                // load-bound: hang guard only; the gate records actual entry into
+                // the blocked factory call before Stop.
                 until(
                     "the first peer connection never reached its opening gate",
-                    || h.host.factory.try_lock().is_err(),
+                    || h.start_gate.2.load(Ordering::SeqCst),
                 );
                 h.host
                     .stop_assignment("depot", "thread-one", &record.id)

@@ -863,26 +863,10 @@ struct ConversationState {
 struct Inner {
     intake: Mutex<Option<IntakeLog>>,
     conversations: Mutex<std::collections::HashMap<String, ConversationState>>,
-    /// **The thread whose front desk is being primed RIGHT NOW, or `None`** — the one fact
-    /// `send_message` needs in order to not block, and the one place it can be read from.
-    ///
-    /// It cannot live on the `Spine` for the same reason `active` and `cancel` do not: the
-    /// priming holds the spine's mutex for the whole of a model turn, so anything stored
-    /// behind that mutex is unreadable during exactly the window it describes.
-    ///
-    /// **It is also the mutex that makes the handover race-free**, which is why it is a
-    /// `Mutex<Option<String>>` and not an `AtomicBool`.
-    /// [`TurnControl::defer_send`] holds this guard across BOTH the check and the intake
-    /// write, and [`TurnControl::end_front_desk_prime`] takes it to clear the marker while
-    /// the priming thread still holds the spine — so a send can be accepted for deferral
-    /// only while a drain is guaranteed to follow it, and once the marker is clear the next
-    /// send takes the ordinary path. There is no window in which a record is written that
-    /// nobody drains.
-    ///
-    /// Lock order, stated because there are now three: the priming thread takes SPINE then
-    /// this; `defer_send` takes this then INTAKE; nothing ever takes the spine while holding
-    /// this, and nothing holds INTAKE while waiting for this. No cycle exists.
-    priming: Mutex<Option<String>>,
+    /// Preparation claims by conversation. The guard covers only claim changes and
+    /// durable intake writes. Lock order is SPINE then claims, or claims then INTAKE;
+    /// no path takes SPINE while holding claims or holds INTAKE while taking claims.
+    priming: Mutex<std::collections::HashSet<String>>,
 }
 
 /// The shared, lock-free-with-respect-to-the-spine control surface for §9.2 and §9.3.
@@ -914,7 +898,7 @@ impl TurnControl {
             inner: Arc::new(Inner {
                 intake: Mutex::new(Some(log)),
                 conversations: Mutex::new(std::collections::HashMap::new()),
-                priming: Mutex::new(None),
+                priming: Mutex::new(Default::default()),
             }),
         })
     }
@@ -928,7 +912,7 @@ impl TurnControl {
             inner: Arc::new(Inner {
                 intake: Mutex::new(None),
                 conversations: Mutex::new(std::collections::HashMap::new()),
-                priming: Mutex::new(None),
+                priming: Mutex::new(Default::default()),
             }),
         }
     }
@@ -1106,35 +1090,8 @@ impl TurnControl {
         log.desk_message(thread_id, entity_id, text)
     }
 
-    // --- the pre-prime window (CEO §55) -------------------------------------------------
-
-    /// **A priming turn has started for `thread_id`, and the spine's mutex is about to be
-    /// unavailable for the length of it.** Called by [`crate::spine::Spine::prime_front_desk`]
-    /// from underneath that mutex, so by the time anyone can observe this marker the spine is
-    /// genuinely shut.
-    pub fn begin_front_desk_prime(&self, thread_id: &str) {
-        *self.inner.priming.lock().unwrap() = Some(thread_id.to_string());
-    }
-
-    /// **The priming turn is over.** Called from underneath the spine's mutex, BEFORE the
-    /// deferred sends are drained and long before the mutex is released — so the last send
-    /// this marker accepted is always drained by the same call that clears it, and the first
-    /// send it refuses takes the ordinary blocking path into a spine that is about to be free.
-    ///
-    /// Returns the marker it cleared, so a caller can say what it was priming without
-    /// consulting a second source.
-    pub fn end_front_desk_prime(&self) -> Option<String> {
-        self.inner.priming.lock().unwrap().take()
-    }
-
-    /// The thread being primed right now, if any. For reporting and for tests — never as the
-    /// check `defer_send` makes, which has to be atomic with its own write.
-    pub fn front_desk_priming(&self) -> Option<String> {
-        self.inner.priming.lock().unwrap().clone()
-    }
-
-    /// **Accept the CEO's typed message WITHOUT the spine, if and only if the spine is shut
-    /// for this thread's priming turn** — the CEO's §55.
+    /// **Accept the CEO's typed message WITHOUT the spine, if and only if this conversation has
+    /// an active priming claim** — the CEO's §55.
     ///
     /// Returns `Ok(Some(record))` when the message was taken and made durable here, and
     /// `Ok(None)` when it was not, which means exactly one thing: the caller must take the
@@ -1142,14 +1099,14 @@ impl TurnControl {
     ///
     /// # Why the check and the write are one operation
     ///
-    /// Both happen under the `priming` guard, and [`Self::end_front_desk_prime`] needs that
+    /// Both happen under the `priming` guard, and [`ConversationControl::end_front_desk_prime`] needs that
     /// same guard to clear the marker. So the two orderings are the only two there are, and
     /// both are safe:
     ///
     /// - this call wins the guard — the record is written while the priming thread waits to
     ///   clear the marker, and that thread's drain, which comes after the clear, finds it;
     /// - the priming thread wins — the marker is already `None`, this returns `Ok(None)`, and
-    ///   the caller blocks on a spine that is microseconds from being free.
+    ///   the caller takes the ordinary short state lock.
     ///
     /// A plain "is it priming?" read followed by a separate write would have a third
     /// ordering — write after the drain — and that message would sit in the log until some
@@ -1176,7 +1133,7 @@ impl TurnControl {
         text: &str,
     ) -> Result<Option<IntakeRecord>, SteeringError> {
         let priming = self.inner.priming.lock().unwrap();
-        if priming.as_deref() != Some(thread_id) {
+        if !priming.contains(thread_id) {
             return Ok(None);
         }
         let mut guard = self.inner.intake.lock().unwrap();
@@ -1250,6 +1207,15 @@ impl From<ConversationControl> for TurnControl {
     fn from(control:ConversationControl)->Self {control.shared}
 }
 impl ConversationControl {
+    /// Claim only this conversation's preparation. Other conversations stay available.
+    /// ```compile_fail,E0599
+    /// let controls=richos_core::steering::TurnControl::detached();
+    /// controls.end_front_desk_prime();
+    /// ```
+    pub fn begin_front_desk_prime(&self){self.shared.inner.priming.lock().unwrap().insert(self.thread.clone());}
+    pub fn end_front_desk_prime(&self)->Option<String>{self.shared.inner.priming.lock().unwrap().take(&self.thread)}
+    pub fn front_desk_priming(&self)->Option<String>{self.shared.inner.priming.lock().unwrap().get(&self.thread).cloned()}
+
     fn key(&self)->&str {&self.thread}
 
     pub fn begin_turn(&self, turn: ActiveTurn) {

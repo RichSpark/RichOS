@@ -491,7 +491,7 @@ richos/app/
                               prefix, and an unreachable engine answers no rather than
                               assuming support
     tests/onboarding_persistence_tests.rs regressions for verified tool persistence, per-company answers, resumption and MCP transport.
-    tests/request_preparation_tests.rs regressions for cancellable connection, priming, rotation, bounded recovery and restart outcomes.
+    tests/request_preparation_tests.rs regressions for cancellable preparation, independent replies and startup, rotation, provider retries and restart outcomes.
     tests/restart_continuation_tests.rs 8 restart tests for atomic continuation, uncertain native attempts, preserved control provenance and durable Stop across replay.
     tests/routing_context_tests.rs verifies that classification receives the existing scoped visible conversation, including formatted replies, without hidden inputs.
     tests/onboarding_declination_tests.rs 7 tests over the two spine methods the first-run
@@ -538,28 +538,15 @@ richos/app/
                               the SAME corpus — a build where they disagreed would show him
                               a proposal about one record and write to another
     tests/deferred_send_tests.rs
-                             10 tests for THE SEND THAT DOES NOT WAIT FOR THE PRIME (CEO §55,
-                              2026-09-18): a Send issued while the front desk is being primed is
-                              accepted at once, his words are durable before the call returns,
-                              and the message reaches the lease exactly once, in order, after
-                              the prime — never a second prime, never a lost message.
+                             11 tests for durable input during preparation, exact ordering,
+                              one delivery and independent conversation priming claims.
     tests/spare_front_desk_tests.rs
-                             17 tests for THE SPARE FRONT DESK (CEO §55, 2026-09-18): a desk is
-                              primed before the thread it will serve exists; his first brand-new
-                              thread adopts it, so the prime he waits for is zero; a spare is
-                              never adopted across an entity boundary, and the company material
-                              travels with the desk. Three more since 2026-09-19: the SPAWN and
-                              the PRIMING TURN no longer hold the spine's mutex, with the locked
-                              road as the positive probe (it must still block `try_lock`, or the
-                              claim proves nothing), and a spare primed against a world that
-                              moved while the mutex was down is kept but never called primed.
+                             18 tests for a spare primed before its thread exists, safe company
+                              boundaries and unlocked startup/priming with the same shared factory.
+                              A stale completed prime is retained without claiming it is current.
     tests/front_desk_priming_tests.rs
-                             7 tests for PRIMING THE FRONT DESK before he types (`Spine::prime_front_desk`,
-                              CEO §55): the priming turn is spent when a thread opens, once per lease,
-                              and never on his first message — including after a repair, where a prime
-                              that failed for want of a lease is free to his next message once something
-                              asks again (Ray's candidate-.11 §2.1). The count read 5 while the file held
-                              6: this row's two-line shape is one the docs-claims join cannot see.
+                             9 tests for preparing the selected conversation before the first
+                              message, readiness after repair and accurate startup reporting.
     tests/setup.rs           56 tests for FIRST-RUN SETUP (Option D, `src/setup.rs`): the
                               two executables a customer's Mac does not have, fetched and
                               verified, and since 2026-10-07 the video tools (yt-dlp and a
@@ -1218,7 +1205,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1925 tests + 7 doc-tests (1921 direct, 4 ignored)
+cargo test -p richos-core                       # 1930 tests + 8 doc-tests (1926 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

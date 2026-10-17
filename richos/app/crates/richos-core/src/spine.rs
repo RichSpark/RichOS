@@ -7,15 +7,10 @@
 //! recovery/replay**, and **the proactive-attention seam**. The lease is disposable;
 //! THIS is Rich.
 //!
-//! ## Concurrency note (why rotation can never race a CEO message)
-//! Every method here takes `&mut self`. The Tauri shell holds the one `Spine` behind a
-//! `Mutex`, so exactly one command (`send_message`, rotation, recovery — all of it) runs
-//! at a time; a message that "arrives during rotation" simply blocks on that mutex until
-//! rotation's synchronous call stack returns, then proceeds normally against the fresh
-//! lease. This is the mechanism that satisfies continuity §3.3's "a message that arrives
-//! during rotation is queued" — no separate queuing code needed for that case (the
-//! `queue: VecDeque<Queued>` field below handles the DIFFERENT case: a message arriving
-//! while a TURN, not a rotation, is in flight).
+//! Shared state serializes durable ledger and snapshot updates. Each conversation owns
+//! its provider connection during preparation and replies, outside that lock. Its own
+//! active-turn or priming claim queues later input for that conversation only. Native
+//! factories are shared safely across independent connections.
 
 use crate::cognition::{Cognition, CognitionError, LeaseFactory, TurnItem};
 use crate::entity::{EntityId, EntityRegistry, ThreadBinding};
@@ -304,10 +299,8 @@ struct SparePlan {
     entity: EntityId,
     binding: ThreadBinding,
     reserved: String,
-    /// A second handle to the same factory, or `None` when this factory cannot hand one out —
-    /// see [`crate::cognition::LeaseFactory::duplicate`]. `None` puts the spawn back under the
-    /// lock and changes nothing else.
-    factory: Option<Box<dyn crate::cognition::LeaseFactory>>,
+    /// The same shared factory, safe for independent conversation startup.
+    factory: std::sync::Arc<dyn crate::cognition::LeaseFactory>,
     control: crate::steering::ConversationControl,
     /// What `front_desk_generation` read when this was decided. Step 5 compares.
     generation: u64,
@@ -364,11 +357,6 @@ fn run_a_spare_priming_turn(
 /// differs; what differs is that a window command arriving in the middle is served in
 /// microseconds instead of waiting out a model turn.
 ///
-/// **Step 2 falls back under the lock when the factory cannot be duplicated**
-/// ([`crate::cognition::LeaseFactory::duplicate`] answering `None`) — today that is every test
-/// double and nothing that ships. The fallback is the old behavior exactly, which is correct
-/// and merely slower.
-///
 /// **A poisoned mutex is not a verdict about the spare.** It is reported as `NotReady` and
 /// nothing is left in flight: the flag lives inside the spine, so a poisoned spine has already
 /// lost the flag with everything else.
@@ -389,10 +377,7 @@ pub fn ready_a_spare_front_desk_without_the_spine(
         Err(verdict) => return verdict,
     };
     // ---- step 2, with the mutex down whenever the factory allows it ----------------------
-    let spawned = match &plan.factory {
-        Some(factory) => factory.spawn_scoped(&plan.binding, &plan.control),
-        None => hold!().spawn_a_spare_here(&plan),
-    };
+    let spawned=plan.factory.spawn_scoped(&plan.binding,&plan.control);
     let mut lease = match spawned {
         Ok(lease) => lease,
         Err(e) => return hold!().abandon_a_spare(plan, None, e.to_string()),
@@ -507,6 +492,8 @@ pub enum FrontDeskReady {
 }
 
 struct Delivery {
+    connection:Option<ConnectionPlan>,
+    retry_wait:Option<(std::time::Duration,std::sync::Arc<dyn crate::upstream::RetryClock>)>,
     turn_id:String,
     binding:ThreadBinding,
     text:String,
@@ -541,6 +528,7 @@ pub fn drive_shared_turns(spine:&std::sync::Mutex<Spine>)->Result<(),SpineError>
     loop {
         let Some(mut delivery)=spine.lock().unwrap().pending_delivery.pop_front() else {break};
         let binding=delivery.binding.clone();
+        prepare_delivery_io(&mut &*spine,&mut delivery);
         let result=run_delivery(&mut delivery,&mut |delivery,item| {
             spine.lock().unwrap().capture_delivery_item(delivery,item);
         });
@@ -551,6 +539,411 @@ pub fn drive_shared_turns(spine:&std::sync::Mutex<Spine>)->Result<(),SpineError>
         if let Err(error)=delivered.and(boundary).and(queued) {if failure.is_none() {failure=Some(error)}}
     }
     match failure {Some(error)=>Err(error),None=>Ok(())}
+}
+
+// Shared state is needed for durable commits, never for provider I/O.
+trait PreparationState {
+    fn state<R>(&mut self, run: impl FnOnce(&mut Spine) -> R) -> R;
+}
+impl PreparationState for &mut Spine {
+    fn state<R>(&mut self, run: impl FnOnce(&mut Spine) -> R) -> R {
+        run(self)
+    }
+}
+impl PreparationState for &std::sync::Mutex<Spine> {
+    fn state<R>(&mut self, run: impl FnOnce(&mut Spine) -> R) -> R {
+        run(&mut self.lock().unwrap())
+    }
+}
+struct ConnectionPlan {
+    binding: ThreadBinding,
+    control: crate::steering::ConversationControl,
+    factory: Option<std::sync::Arc<dyn LeaseFactory>>,
+    rotation: Option<String>,
+    outgoing: Option<ThreadBinding>,
+}
+fn retain_preparation_item(
+    state: &mut impl PreparationState,
+    binding: &ThreadBinding,
+    turn: Option<&str>,
+    item: TurnItem,
+) {
+    if let TurnItem::Machinery(record) = item {
+        state.state(|s| {
+            Spine::retain_and_emit_machinery(
+                s.machinery_journal.as_ref(),
+                s.machinery_observer.as_deref(),
+                record.stamp(binding.thread_id(), turn, true),
+            )
+        });
+    }
+}
+fn connection_handoff(
+    state: &mut impl PreparationState,
+    plan: &ConnectionPlan,
+    desk: &mut Resident,
+) -> Result<(), SpineError> {
+    let Some(binding) = plan.outgoing.as_ref() else {
+        return Ok(());
+    };
+    let Some(lease) = desk.lease.as_mut() else {
+        return Ok(());
+    };
+    let prompt = r#"{"event":"session_handoff_requested"}"#;
+    let turn = state.state(|s| {
+        s.ledger
+            .record_prompt_received(binding, prompt, Source::Internal)
+    })?;
+    let mut persist_error = None;
+    let result = lease.prompt_context_only(prompt, &mut |item| match item {
+        TurnItem::Text { seq, text } => {
+            if let Err(e) = state.state(|s| s.ledger.append_assistant_delta(&turn, text, seq)) {
+                persist_error = Some(e)
+            }
+        }
+        item => retain_preparation_item(state, binding, Some(&turn), item),
+    });
+    let outcome = state.state(|s| {
+        if let Some(failure) = s.detect_upstream_failure(&turn, &result) {
+            let reason = failure.summary();
+            s.ledger.interrupt_turn(&turn, &reason)?;
+            return Err(CognitionError::Protocol(reason).into());
+        }
+        if let Some(error) = persist_error {
+            s.ledger.interrupt_turn(&turn, &error.to_string())?;
+            return Err(error.into());
+        }
+        match result {
+            Ok(reason) if reason == "end_turn" => s.ledger.complete_turn(&turn, &reason)?,
+            Ok(reason) => {
+                s.ledger.interrupt_turn(&turn, &reason)?;
+                return Err(CognitionError::PrimingStopped(reason).into());
+            }
+            Err(error) => {
+                s.ledger.interrupt_turn(&turn, &error.to_string())?;
+                return Err(error.into());
+            }
+        }
+        let summary = s
+            .ledger
+            .turn(&turn)
+            .map(|t| t.assistant_text.clone())
+            .unwrap_or_default();
+        desk.context_chars += prompt.len() + summary.len();
+        if !summary.trim().is_empty() {
+            s.ledger
+                .record_handoff_summary(binding.thread_id(), &summary)?;
+        }
+        Ok(())
+    });
+    for item in lease.drain_between_turn() {
+        retain_preparation_item(state, binding, None, TurnItem::Machinery(item))
+    }
+    outcome
+}
+fn prime_connection(
+    state: &mut impl PreparationState,
+    plan: &ConnectionPlan,
+    desk: &mut Resident,
+    lease: &mut dyn Cognition,
+    rotation: bool,
+) -> Result<(), SpineError> {
+    let binding = &plan.binding;
+    let block = state.state(|s| s.company_block(binding));
+    let inline = lease.set_company_context(block.as_deref())?;
+    if block != desk.onboarding_block {
+        if inline {
+            desk.onboarding_block = block.clone()
+        } else {
+            desk.primed = false
+        }
+    }
+    if desk.primed && !rotation {
+        return Ok(());
+    }
+    let workers = if rotation {
+        desk.lease.as_ref().and_then(|l| l.worker_status())
+    } else {
+        lease.worker_status()
+    };
+    let (priming, turn, action, scope) = state.state(|s| {
+        let previous = desk
+            .lease
+            .as_ref()
+            .map(|l| l.session_id())
+            .or_else(|| Some(lease.session_id()));
+        let mut payload =
+            RePrimePayload::assemble_for_priming(&s.ledger, binding, DEFAULT_TAIL_TURNS, previous)?;
+        if let Some(workers) = workers {
+            payload.worker_state_unknown = workers.unattributed;
+            payload.worker_state = workers.priming_lines();
+        }
+        s.fill_loro_tier(&mut payload, binding);
+        let priming = payload.to_priming_prompt_with_company(block.as_deref());
+        let turn = s.ledger.record_prompt_received(
+            binding,
+            if rotation {
+                "[re-prime:rotation]"
+            } else {
+                "[re-prime]"
+            },
+            Source::Internal,
+        )?;
+        let action = s.ledger.record_action_with(
+            None,
+            "session_reprime",
+            &format!(
+                "thread={}; session={}; priming_chars={}; ceo_facing_actions={}",
+                binding.thread_id(),
+                lease.session_id(),
+                priming.len(),
+                payload.action_ledger_digest.len()
+            ),
+            ActionVisibility::Internal,
+            ActionStatus::Claimed,
+        )?;
+        Ok::<_, SpineError>((priming, turn, action, s.onboarding_tool_scope(binding)))
+    })?;
+    let result = (|| {
+        if let Some(scope) = scope {
+            lease.set_onboarding_scope(
+                binding.entity_id(),
+                &scope.central_root,
+                &scope.record_path,
+            )?;
+        }
+        if plan.control.stop_claim().is_some() {
+            return Err(CognitionError::PrimingStopped(
+                crate::native::STOP_REASON_CANCELLED.into(),
+            ));
+        }
+        let mut on = |item: TurnItem| retain_preparation_item(state, binding, None, item);
+        if rotation {
+            lease.reprime(&priming, &mut on)
+        } else {
+            lease.prime_with_continuity(binding, &turn, &priming, &mut on)
+        }
+    })();
+    state.state(|s| {
+        s.ledger.update_action(
+            &action,
+            if result.is_ok() {
+                ActionStatus::Completed
+            } else {
+                ActionStatus::Failed
+            },
+        )
+    })?;
+    result?;
+    for item in lease.drain_between_turn() {
+        retain_preparation_item(state, binding, None, TurnItem::Machinery(item))
+    }
+    desk.primed = true;
+    desk.onboarding_block = block;
+    desk.context_chars = priming.len();
+    Ok(())
+}
+fn prepare_connection(
+    state: &mut impl PreparationState,
+    plan: &ConnectionPlan,
+    desk: &mut Resident,
+) -> Result<bool, SpineError> {
+    if plan.control.stop_claim().is_some() {
+        return Ok(false);
+    }
+    let mut spawned = false;
+    if let Some(reason) = plan.rotation.as_deref() {
+        let factory = plan.factory.as_ref().ok_or(SpineError::NoLeaseFactory)?;
+        let action = state.state(|s| {
+            s.ledger.record_action_with(
+                None,
+                "session_rotation",
+                &format!("reason={reason}; thread={}", plan.binding.thread_id()),
+                ActionVisibility::Internal,
+                ActionStatus::Claimed,
+            )
+        })?;
+        let rotated = (|| {
+            let handoff = connection_handoff(state, plan, desk);
+            if plan.control.stop_claim().is_some() {
+                return Err(handoff.err().unwrap_or_else(|| {
+                    CognitionError::PrimingStopped(crate::native::STOP_REASON_CANCELLED.into())
+                        .into()
+                }));
+            }
+            let mut fresh = factory.spawn_scoped(&plan.binding, &plan.control)?;
+            plan.control.set_cancel(fresh.cancel_handle());
+            if let Err(error) = prime_connection(state, plan, desk, fresh.as_mut(), true) {
+                plan.control
+                    .set_cancel(desk.lease.as_ref().and_then(|l| l.cancel_handle()));
+                return Err(error);
+            }
+            let from = desk
+                .lease
+                .as_ref()
+                .map(|l| l.session_id().to_string())
+                .unwrap_or_default();
+            let to = fresh.session_id().to_string();
+            desk.lease = Some(fresh);
+            desk.context_usage = None;
+            desk.context_pressure = None;
+            state.state(|s| {
+                s.ledger.record_rotation(&from, &to, reason)?;
+                s.rotation_count += 1;
+                s.last_rotation_reason = Some(reason.into());
+                Ok::<_, SpineError>(())
+            })?;
+            Ok::<_, SpineError>(())
+        })();
+        state.state(|s| {
+            s.ledger.update_action(
+                &action,
+                if rotated.is_ok() {
+                    ActionStatus::Completed
+                } else {
+                    ActionStatus::Failed
+                },
+            )
+        })?;
+        rotated?;
+        spawned = true;
+    }
+    if desk.lease.is_none() {
+        let fresh = plan
+            .factory
+            .as_ref()
+            .ok_or(SpineError::NoLease)?
+            .spawn_scoped(&plan.binding, &plan.control)?;
+        plan.control.set_cancel(fresh.cancel_handle());
+        desk.lease = Some(fresh);
+        desk.primed = false;
+        desk.context_usage = None;
+        desk.context_pressure = None;
+        spawned = true;
+    }
+    if let Some(lease) = desk.lease.as_ref() {
+        plan.control.set_cancel(lease.cancel_handle());
+        plan.control
+            .set_lease_session(Some(lease.session_id().to_string()));
+        state.state(|s| {
+            if let Some(active) = plan.control.active_turn() {
+                s.ledger
+                    .mark_turn_started(&active.turn_id, lease.session_id())?;
+            }
+            if let (Some(quota), Some(account)) = (s.quota_service(), lease.account()) {
+                quota.accounts.ran_on(account);
+            }
+            s.raise_quota_notices(Some(plan.binding.thread_id()));
+            Ok::<_, SpineError>(())
+        })?;
+    }
+    if plan.control.stop_claim().is_some() {
+        return Ok(spawned);
+    }
+    let mut lease = desk.lease.take().ok_or(SpineError::NoLease)?;
+    let primed = prime_connection(state, plan, desk, lease.as_mut(), false);
+    desk.lease = Some(lease);
+    primed?;
+    Ok(spawned)
+}
+fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Delivery) {
+    let Some(plan) = delivery.connection.take() else {
+        return;
+    };
+    if let Some((wait, clock)) = delivery.retry_wait.take() {
+        clock.wait(wait, &|| {
+            plan.control.stop_claim_for(&delivery.turn_id).is_some()
+        });
+    }
+    let prepared=prepare_connection(state,&plan,&mut delivery.desk).and_then(|_| {
+        if plan.control.stop_claim_for(&delivery.turn_id).is_some(){return Ok(())}
+        let (original,source,attempts,conversation,channel)=state.state(|s| {
+            let mut attempts=Vec::new();let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
+            while let Some(previous)=s.ledger.turns().iter().find(|t|t.superseded_by.as_deref()==Some(successor)&&t.thread_id==plan.binding.thread_id()&&seen.insert(t.id.clone())) {
+                attempts.push(serde_json::json!({"turn_id":previous.id,"session_id":previous.session_id,"started_sessions":previous.started_sessions,"assistant_text":previous.assistant_text,"delivery_outcome":"unknown"}));successor=&previous.id;
+            }
+            let original=successor.to_string();let turn=s.ledger.turn(&delivery.turn_id).ok_or(SpineError::NoLease)?;
+            let channel=s.input_channels.get(&delivery.turn_id).cloned().or_else(||turn.channel.clone());
+            let mut conversation=String::new();
+            for message in s.ledger.messages_scoped(&plan.binding)?.into_iter().filter(|m|m.turn_id!=delivery.turn_id){conversation.push_str(&format!("{}: {}\n",message.role,message.text));}
+            let mut from=conversation.len().saturating_sub(8192);while !conversation.is_char_boundary(from){from+=1;}
+            Ok::<_,SpineError>((original,turn.source,attempts,conversation[from..].to_string(),channel))
+        })?;
+        let lease=delivery.desk.lease.as_mut().ok_or(SpineError::NoLease)?;
+        lease.prepare_work_turn(&plan.binding,&delivery.turn_id,&original,source,&delivery.text,&mut |item|retain_preparation_item(state,&plan.binding,Some(&delivery.turn_id),item))?;
+        lease.set_conversation_context(&conversation);
+        if let Some(previous)=attempts.first().filter(|a|a["session_id"].as_str()!=Some(lease.session_id())) {
+            lease.set_previous_delivery_attempt(&serde_json::json!({"previous_delivery_attempt":previous,"earlier_delivery_attempts":&attempts[1..]}).to_string())?;
+        }
+        lease.set_input_channel(channel.as_deref())?;Ok(())
+    });
+    delivery.stopped_before_prompt = plan.control.stop_claim_for(&delivery.turn_id).is_some();
+    delivery.preparation_stop = match &prepared {
+        Err(SpineError::Cognition(CognitionError::PrimingStopped(reason))) => Some(reason.clone()),
+        _ => None,
+    };
+    delivery.preparation_failed = prepared.is_err();
+    delivery.preparation = prepared.map_err(|e| match e {
+        SpineError::Cognition(e) => e,
+        other => CognitionError::Protocol(other.to_string()),
+    });
+    delivery.session_id = delivery
+        .desk
+        .lease
+        .as_ref()
+        .map(|l| l.session_id().to_string());
+}
+fn prime_front_desk_with(state: &mut impl PreparationState, thread: &str) -> FrontDeskReady {
+    let begun = state.state(|s| {
+        if s.thread_is_running(thread) {
+            return Err(FrontDeskReady::TurnInProgress);
+        }
+        let binding = s
+            .ledger
+            .thread_binding(thread)
+            .map_err(|e| FrontDeskReady::NotReady(e.to_string()))?;
+        if s.lease.is_some()
+            && s.lease_primed
+            && s.lease_primed_thread.as_deref() == Some(thread)
+            && s.pending_rotation_reason.is_none()
+        {
+            return Err(FrontDeskReady::AlreadyReady);
+        }
+        let plan = s
+            .select_connection(&binding)
+            .map_err(|e| FrontDeskReady::NotReady(e.to_string()))?;
+        plan.control.begin_front_desk_prime();
+        Ok((plan, s.take_current_front_desk(), s.front_desk_generation))
+    });
+    let (plan, mut desk, generation) = match begun {
+        Ok(p) => p,
+        Err(verdict) => return verdict,
+    };
+    let started = std::time::Instant::now();
+    let result = prepare_connection(state, &plan, &mut desk);
+    let millis = started.elapsed().as_millis() as u64;
+    state.state(|s| {
+        s.park_current_front_desk();
+        if generation != s.front_desk_generation {
+            desk.primed = false
+        }
+        s.restore_front_desk(thread, desk);
+        plan.control.end_front_desk_prime();
+        if let Err(error) = s.poll_intake() {
+            eprintln!("[richos] queued input after preparation: {error}");
+        }
+    });
+    match result {
+        Ok(spawned) => FrontDeskReady::Ready { millis, spawned },
+        Err(e) => FrontDeskReady::NotReady(e.to_string()),
+    }
+}
+/// Prepare this conversation without holding shared state across provider operations.
+pub fn prime_front_desk_without_the_spine(
+    spine: &std::sync::Mutex<Spine>,
+    thread: &str,
+) -> FrontDeskReady {
+    prime_front_desk_with(&mut &*spine, thread)
 }
 
 pub struct Spine {
@@ -617,7 +1010,7 @@ pub struct Spine {
     /// Spawns a fresh, un-primed lease at rotation/recovery time. `None` means the spine
     /// can prime/run ONE lease (whatever was `attach_lease`d) but can never rotate or
     /// recover from a crash — an honest degrade for tests/contexts with no respawn story.
-    lease_factory: Option<Box<dyn LeaseFactory>>,
+    lease_factory: Option<std::sync::Arc<dyn LeaseFactory>>,
     /// The optional Tier-C seam (continuity §2.3/§4) — a different engineer's parallel
     /// work on `loro/`. Absent by default; the re-prime payload degrades gracefully.
     loro_compiler: Option<Box<dyn LoroContextCompiler>>,
@@ -729,7 +1122,7 @@ pub struct Spine {
     /// `OnboardingRecord::load` on why the failure leans that way and only that way.
     onboarding_record: Option<std::path::PathBuf>,
     /// **The company material THE CHAIR'S DESK was last primed with.** External MCP
-    /// saves/declines invalidate it, and `prime_lease_if_needed` re-primes when what the
+    /// saves/declines invalidate it, and `prime_connection` re-primes when what the
     /// thread about to speak needs is not what the desk in the chair is holding.
     ///
     /// **It travels with the desk** — parked into [`Resident`], carried on
@@ -1238,7 +1631,7 @@ impl Spine {
     /// Put a parked front desk back in the chair, if this thread has one.
     ///
     /// Returns whether it found one. `false` means the thread has never spoken, or its desk
-    /// was retired at the cap, and `prepare_request` then takes the path every thread took
+    /// was retired at the cap, and `select_connection` then takes the path every thread took
     /// before residency: spawn a lease and prime it from the ledger.
     fn resume_front_desk(&mut self, thread_id: &str) -> bool {
         let Some(resident) = self.resident.remove(thread_id) else { return false };
@@ -1316,7 +1709,7 @@ impl Spine {
     ///
     /// Never the one in the chair — it is not in this map — and never one mid-turn, which
     /// cannot happen: a turn runs on the chair's lease, and parking only ever happens at a
-    /// turn boundary (`prepare_request`, reached with `turn_in_progress == false`).
+    /// turn boundary (`select_connection`, reached with `turn_in_progress == false`).
     fn evict_beyond_the_cap(&mut self) {
         while self.resident.len() >= MAX_RESIDENT_FRONT_DESKS {
             let Some(oldest) = self.resident.iter()
@@ -1439,16 +1832,13 @@ impl Spine {
             binding,
             control: self.control.for_thread(&reserved),
             reserved,
-            // `None` is not a failure: it means this factory cannot hand out a second handle,
-            // so step 2 runs under the caller's lock the way it always did.
-            factory: self.lease_factory.as_ref().and_then(|f| f.duplicate()),
+            factory: self.lease_factory.as_ref().unwrap().clone(),
             generation: self.front_desk_generation,
             started: std::time::Instant::now(),
         })
     }
 
-    /// **Step 2, the locked spelling.** Used by [`Spine::ready_a_spare_front_desk`], and by the
-    /// unlocked road when the factory cannot be duplicated.
+    /// Synchronous headless spelling of the same factory operation.
     fn spawn_a_spare_here(&self, plan: &SparePlan) -> Result<Box<dyn Cognition>, crate::cognition::CognitionError> {
         let factory = self.lease_factory.as_ref().ok_or(crate::cognition::CognitionError::Protocol(
             SpineError::NoLeaseFactory.to_string(),
@@ -1797,7 +2187,7 @@ impl Spine {
     /// (watermark: never fires since rotation can't proceed; crash: surfaces the error
     /// honestly instead of silently retrying against nothing).
     pub fn set_lease_factory(&mut self, factory: Box<dyn LeaseFactory>) {
-        self.lease_factory = Some(factory);
+        self.lease_factory = Some(std::sync::Arc::from(factory));
     }
 
     pub fn has_lease_factory(&self) -> bool {
@@ -2115,7 +2505,7 @@ impl Spine {
         // exists only while a turn runs). This used to be deferred to the turn's end so it
         // would not "collide with the working row"; round 16 draws the two together, and the
         // switch notice is raised INSIDE the turn that runs on the new account
-        // (`prepare_request`, after `ran_on`), so deferring it hid the line for exactly the
+        // (`select_connection`, after `ran_on`), so deferring it hid the line for exactly the
         // turn it describes. The message is its own turn, already durable above and already in
         // the published read view, so the window's reload draws it beside the running turn
         // without touching that turn's live state.
@@ -2243,7 +2633,7 @@ impl Spine {
     /// **AND THIS IS WHERE A SPARE FRONT DESK IS ADOPTED** (see [`SpareFrontDesk`]). If a
     /// primed spare is standing ready for this entity, the thread takes ITS reserved id and the
     /// spare is filed as this thread's resident desk, already primed. The CEO's first message
-    /// then finds `prepare_request` resuming a primed desk instead of spawning and priming one,
+    /// then finds `select_connection` resuming a primed desk instead of spawning and priming one,
     /// which is the whole of the saving.
     ///
     /// **The record is identical either way.** Same event, same immutable entity home, same
@@ -2916,11 +3306,16 @@ impl Spine {
     /// from the recovery path itself so a lease that dies immediately on every respawn
     /// surfaces honestly after one attempt rather than looping forever.
     fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
-        let mut delivery=self.prepare_delivery(turn_id,binding,text,allow_recovery)?;
-        if self.detached_delivery && !delivery.internal_turn {
+        let delivery=self.prepare_delivery(turn_id,binding,text,allow_recovery)?;
+        self.dispatch_delivery(delivery)
+    }
+
+    fn dispatch_delivery(&mut self,mut delivery:Delivery)->Result<(),SpineError> {
+        if self.detached_delivery {
             self.pending_delivery.push_back(delivery);
             return Ok(());
         }
+        prepare_delivery_io(&mut &mut *self,&mut delivery);
         let result=run_delivery(&mut delivery,&mut |delivery,item|self.capture_delivery_item(delivery,item));
         self.finish_delivery(delivery,result)
     }
@@ -2934,7 +3329,7 @@ impl Spine {
         // before the text reaches a compute lease.
         self.ledger.verify_binding(binding)?;
         let thread_id = binding.thread_id();
-        self.control=self.control.for_thread(thread_id);
+        let connection=self.select_connection(binding)?;
         self.control.set_cancel(self.lease.as_ref().and_then(|lease|lease.cancel_handle()));
         self.control.set_lease_session(self.lease.as_ref().map(|lease|lease.session_id().to_string()));
         // §1.5 gap #1: everything the lease said while no turn was in flight — its
@@ -2980,72 +3375,8 @@ impl Spine {
         let live_turn = LiveTurn::new(EventFence::for_turn(binding, turn_id), internal_turn);
 
 
-        // Preparation belongs to the accepted request. Its text stays internal, but
-        // its wait and cancellation must share the user's visible lifecycle.
-        let preparation = if self.control.stop_claim_for(turn_id).is_some() {
-            Ok(())
-        } else {
-            self.prepare_request(binding).and_then(|_| {
-                if self.control.stop_claim_for(turn_id).is_some() { return Ok(()); }
-                let journal = self.machinery_journal.as_ref();
-                let observer = self.machinery_observer.as_deref();
-                let mut on_item = |item: TurnItem| {
-                    if let TurnItem::Machinery(record) = item {
-                        Self::retain_and_emit_machinery(journal, observer, record.stamp(thread_id, Some(turn_id), true));
-                    }
-                };
-                let mut attempts = Vec::new();
-                let mut successor = turn_id;
-                let mut seen = std::collections::HashSet::new();
-                while let Some(previous) = self.ledger.turns().iter().find(|turn|
-                    turn.superseded_by.as_deref() == Some(successor)
-                    && turn.thread_id == thread_id && seen.insert(turn.id.clone())) {
-                    attempts.push(serde_json::json!({
-                        "turn_id": previous.id, "session_id": previous.session_id,
-                        "started_sessions": previous.started_sessions,
-                        "assistant_text": previous.assistant_text,
-                        "delivery_outcome": "unknown"
-                    }));
-                    successor = &previous.id;
-                }
-                // Delivery gets a new lifecycle ID after restart; execution retains the
-                // original user request identity for attestation and handoff deduplication.
-                self.lease.as_mut().ok_or(SpineError::NoLease)?
-                    .prepare_work_turn(binding, turn_id, successor, self.ledger.turn(turn_id).ok_or(SpineError::NoLease)?.source, text, &mut on_item).map_err(SpineError::from)?;
-                // Reuse the user-visible ledger view. Native transcripts also contain
-                // preparation and commentary, and formatted replies live in tool input.
-                let mut conversation=String::new();
-                for message in self.ledger.messages_scoped(binding)?.into_iter().filter(|m|m.turn_id!=turn_id) {
-                    conversation.push_str(&format!("{}: {}\n",message.role,message.text));
-                }
-                let mut from=conversation.len().saturating_sub(8192);
-                while !conversation.is_char_boundary(from) {from+=1;}
-                self.lease.as_mut().ok_or(SpineError::NoLease)?.set_conversation_context(&conversation[from..]);
-                // A same-session overload retry already has its own context. Only
-                // a replacement session needs prior native attempts for reconciliation.
-                if let Some(previous) = attempts.first().filter(|previous|
-                    previous["session_id"].as_str() != self.lease_session_id()) {
-                    let context = serde_json::json!({"previous_delivery_attempt": previous,
-                        "earlier_delivery_attempts": &attempts[1..]}).to_string();
-                    self.lease.as_mut().ok_or(SpineError::NoLease)?
-                        .set_previous_delivery_attempt(&context).map_err(SpineError::from)?;
-                }
-                let channel = self.input_channels.get(turn_id).cloned()
-                    .or_else(|| self.ledger.turn(turn_id).and_then(|turn| turn.channel.clone()));
-                self.lease.as_mut().ok_or(SpineError::NoLease)?.set_input_channel(channel.as_deref()).map_err(SpineError::from)
-            })
-        };
-        let stopped_before_prompt = self.control.stop_claim_for(turn_id).is_some();
-        let preparation_stop = match &preparation {
-            Err(SpineError::Cognition(CognitionError::PrimingStopped(reason))) => Some(reason.clone()),
-            _ => None,
-        };
-        let preparation_failed = preparation.is_err();
-        let preparation = preparation.map_err(|error| match error {
-            SpineError::Cognition(error) => error,
-            other => CognitionError::Protocol(other.to_string()),
-        });
-
+        let stopped_before_prompt=self.control.stop_claim_for(turn_id).is_some();
+        let preparation_stop=None;let preparation_failed=false;let preparation=Ok(());
         let session_id=self.lease_session_id().map(str::to_string);
         if let Some(session)=session_id.as_deref() {
             if self.ledger.turn(turn_id).is_some_and(|turn|turn.session_id.as_deref()!=Some(session)) {
@@ -3058,7 +3389,7 @@ impl Spine {
         let desk=self.take_current_front_desk();
         self.turn_in_progress=false;
         Ok(Delivery {turn_id:turn_id.into(),binding:binding.clone(),text:text.into(),allow_recovery,
-            internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
+            connection:Some(connection),retry_wait:None,internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
             preparation_stop,preparation,session_id,desk,generation:self.front_desk_generation})
     }
 
@@ -3318,7 +3649,7 @@ impl Spine {
         // FILL-FIRST'S BACKSTOP: THE TURN WAS REFUSED FOR A USAGE LIMIT ANYWAY
         // ==============================================================================
         //
-        // The switch normally happens BEFORE a turn (`prepare_request`), from the freshest
+        // The switch normally happens BEFORE a turn (`select_connection`), from the freshest
         // reading and the measured speed, so the account is left before it is full. This is
         // only for one turn that by itself used up what remained. The account is marked gone,
         // the next account with room is put in use, and his prompt is re-served on a fresh
@@ -4052,7 +4383,7 @@ impl Spine {
     }
 
     /// Mid-turn-crash recovery + replay (continuity §5.3). The dead lease is dropped;
-    /// a fresh one is spawned and re-primed (`prime_lease_if_needed`, called from the
+    /// a fresh one is spawned and re-primed (`prime_connection`, called from the
     /// nested `deliver`, naturally carries the just-interrupted turn forward — it is
     /// still `Interrupted` in the ledger at this point, so `reprime.rs`'s
     /// `pending_decisions` picks it up as "Unfinished: <text>" — plus the full action
@@ -4269,10 +4600,9 @@ impl Spine {
             started_at: None,
         });
         eprintln!("[richos] upstream overloaded: retrying in {} s on the same session", wait.as_secs());
-        let control = self.control.clone();
-        let stop_for = retry_turn_id.clone();
-        self.retry_clock.wait(wait, &|| control.stop_claim_for(&stop_for).is_some());
-        self.deliver(&retry_turn_id, binding, original_text, true)
+        let mut delivery=self.prepare_delivery(&retry_turn_id,binding,original_text,true)?;
+        delivery.retry_wait=Some((wait,self.retry_clock.clone()));
+        self.dispatch_delivery(delivery)
     }
 
     fn recover_and_replay(
@@ -4315,238 +4645,7 @@ impl Spine {
         outcome
     }
 
-    /// Rotate during the next request's preparation, before its user prompt is sent.
-    /// The request owns cancellation while all handoff/priming text stays internal.
-    fn rotate_lease(&mut self, binding: &ThreadBinding, reason: &str) -> Result<(), SpineError> {
-        if self.lease_factory.is_none() {
-            return Err(SpineError::NoLeaseFactory);
-        }
-        let thread_id = binding.thread_id();
-
-        // CLAIM-THEN-EXECUTE (§6.4), Internal visibility. Claimed at the very TOP so the
-        // claim covers the whole operation (handoff-summary ask -> spawn -> re-prime ->
-        // swap); a crash anywhere inside leaves a durable claim. These internal
-        // actions retain no CEO-turn association even though the accepted request
-        // owns their progress and cancellation during preparation.
-        let rotation_action = self.ledger.record_action_with(
-            None,
-            "session_rotation",
-            &format!("reason={reason}; thread={thread_id}"),
-            ActionVisibility::Internal,
-            ActionStatus::Claimed,
-        )?;
-
-        // Step 1: ask the OUTGOING session for a self-authored handoff summary — one
-        // cheap internal turn, never rendered (§2.4). Best-effort: a failure here is NOT
-        // fatal to rotation (the deterministic structured digest in reprime.rs is the
-        // crash-safe floor either way), so errors are swallowed, not propagated.
-        // A pending rotation can be consumed after switching companies. Summarize
-        // only the outgoing lease's last primed thread, never the new target's thread.
-        let outgoing = self.lease_primed_thread.as_ref()
-            .and_then(|id| self.ledger.thread_binding(id).ok());
-        if let Some(outgoing) = outgoing {
-            match self.request_handoff_summary(&outgoing) {
-                Ok(summary) if !summary.trim().is_empty() => {
-                    self.ledger.record_handoff_summary(outgoing.thread_id(), &summary)?;
-                }
-                Err(error) if self.control.stop_claim().is_some() => {
-                    self.ledger.update_action(&rotation_action, ActionStatus::Failed)?;
-                    return Err(error);
-                }
-                _ => {}
-            }
-        }
-        if self.control.stop_claim().is_some() {
-            self.ledger.update_action(&rotation_action, ActionStatus::Failed)?;
-            return Err(CognitionError::PrimingStopped(crate::native::STOP_REASON_CANCELLED.into()).into());
-        }
-
-        // Step 4: spawn the fresh child BEFORE tearing down the old one, so a spawn
-        // failure leaves the CEO on the still-working outgoing lease instead of
-        // stranding the conversation lease-less.
-        let spawned = self.lease_factory.as_ref().unwrap().spawn_scoped(binding, &self.control);
-        let mut fresh = match spawned {
-            Ok(f) => f,
-            Err(e) => {
-                // The CEO stays on the still-working outgoing lease (see the comment
-                // above); the failed rotation is now durable rather than invisible.
-                self.ledger.update_action(&rotation_action, ActionStatus::Failed)?;
-                return Err(e.into());
-            }
-        };
-        let from_session = self.lease.as_ref().map(|l| l.session_id().to_string()).unwrap_or_default();
-        let to_session = fresh.session_id().to_string();
-
-        // Step 3: assemble the re-prime payload (Tiers A/B from the ledger; Tier C from
-        // the optional loro seam, degrading gracefully when absent).
-        // The worker section is scoped to the session THIS payload is being built for —
-        // the OUTGOING lease on a rotation, which is the session whose workers the
-        // conversation so far actually belongs to. Never a directory picked by mtime.
-        let mut payload =
-            RePrimePayload::assemble_for_priming(&self.ledger, binding, DEFAULT_TAIL_TURNS, self.lease_session_id())?;
-        if let Some(workers) = self.lease.as_ref().and_then(|lease| lease.worker_status()) {
-            payload.worker_state_unknown = workers.unattributed;
-            payload.worker_state = workers.priming_lines();
-        }
-        self.fill_loro_tier(&mut payload, binding);
-        let onboarding_block=self.company_block(binding);
-        let priming=payload.to_priming_prompt_with_company(onboarding_block.as_deref());
-        // Durable but NEVER rendered — same Internal-turn discipline as first-attach priming.
-        let _ = self.ledger.record_prompt_received(binding, "[re-prime:rotation]", Source::Internal);
-
-        // Step 5: inject the re-prime payload as an internal priming turn — itself a
-        // recorded (Internal) action, because "the successor WAS primed" is the single
-        // fact the whole anti-false-attribution guarantee rests on. `priming_chars` is
-        // measured (`priming.len()`), never asserted.
-        let reprime_action = self.ledger.record_action_with(
-            None,
-            "session_reprime",
-            &format!(
-                "thread={thread_id}; session={to_session}; priming_chars={}; ceo_facing_actions={}",
-                priming.len(),
-                payload.action_ledger_digest.len()
-            ),
-            ActionVisibility::Internal,
-            ActionStatus::Claimed,
-        )?;
-        // The successor's priming machinery, like the first-attach path's: `internal:
-        // true`, `turn_id: None`, retained for debugging and NEVER rendered (§1.5). A
-        // rotation must stay invisible to the CEO, and that includes its machinery.
-        let journal = self.machinery_journal.as_ref();
-        let machinery_observer = self.machinery_observer.as_deref();
-        let mut on_item = |item: TurnItem| {
-            if let TurnItem::Machinery(record) = item {
-                let record = record.stamp(thread_id, None, true);
-                Self::retain_and_emit_machinery(journal, machinery_observer, record);
-            }
-        };
-        let scoped = match self.onboarding_tool_scope(binding) {
-            Some(scope) => fresh.set_onboarding_scope(binding.entity_id(), &scope.central_root, &scope.record_path),
-            None => Ok(()),
-        };
-        // Publish the successor's Stop handle before any priming request.
-        self.control.set_cancel(fresh.cancel_handle());
-        let primed = if self.control.stop_claim().is_some() {
-            Err(CognitionError::PrimingStopped(crate::native::STOP_REASON_CANCELLED.into()))
-        } else {
-            scoped.and_then(|_| fresh.reprime(&priming, &mut on_item))
-        };
-        if let Err(e) = primed {
-            self.control.set_cancel(self.lease.as_ref().and_then(|lease| lease.cancel_handle()));
-            self.ledger.update_action(&reprime_action, ActionStatus::Failed)?;
-            self.ledger.update_action(&rotation_action, ActionStatus::Failed)?;
-            return Err(e.into());
-        }
-        self.ledger.update_action(&reprime_action, ActionStatus::Completed)?;
-
-        // Steps 6/7: swap. The OLD lease (replaced here) is dropped — its `Drop` impl
-        // (see `native::NativeClient`) kills + waits on the child process, so exactly one live
-        // session exists at any instant ("serialize" — §3.3 step 6). The CEO's next
-        // prompt (queued or freshly typed) lands on the already-primed successor.
-        // `install_lease` republishes the cancel seam AND the session id in one place:
-        // between the swap and those two calls the control would still describe the dead
-        // lease, and a stop in that window would be written to a child that no longer
-        // exists while the worker path read the retired session's team directory.
-        self.install_lease(fresh);
-        if let Some(active) = self.control.active_turn() {
-            self.ledger.mark_turn_started(&active.turn_id, &to_session)?;
-        }
-        // The SUCCESSOR's own session-start and post-priming traffic, drained off the newly
-        // installed lease and stamped `internal: true`. A fresh `NativeClient` starts with an
-        // empty `last_session_meta` slot, so it re-announces its commands — and that
-        // re-announcement, appearing mid-conversation, is exactly the shape of a rotation
-        // tell. It never renders.
-        self.pump_between_turn_stamped(binding, true);
-        self.lease_primed_thread = Some(binding.thread_id().to_string());
-        self.onboarding_primed_block = onboarding_block;
-        self.lease_primed = true; // already primed above — deliver() won't re-prime redundantly
-        self.context_chars = priming.len(); // reset the watermark baseline to the new payload
-
-        self.ledger.record_rotation(&from_session, &to_session, reason)?;
-        self.ledger.update_action(&rotation_action, ActionStatus::Completed)?;
-        self.rotation_count += 1;
-        self.last_rotation_reason = Some(reason.to_string());
-        Ok(())
-    }
-
-    /// Ask the CURRENT (outgoing) lease to summarize the conversation for its successor
-    /// (continuity §2.4) — ONE cheap internal turn, journaled + streamed through the
-    /// SAME durable machinery as a normal turn (so a crash mid-summary is still
-    /// crash-safe) but as `Source::Internal`, so it has NO render path (`messages()`
-    /// excludes it) exactly like re-prime injection.
-    fn request_handoff_summary(&mut self, binding: &ThreadBinding) -> Result<String, SpineError> {
-        const HANDOFF_PROMPT: &str = r#"{"event":"session_handoff_requested"}"#;
-        self.request_internal_reply(binding, HANDOFF_PROMPT)
-    }
-
-    /// Read-only model communication. Its input and intermediate output have no render path.
-    fn request_internal_reply(&mut self, binding: &ThreadBinding, prompt: &str) -> Result<String, SpineError> {
-        let thread_id = binding.thread_id();
-        let turn_id = self.ledger.record_prompt_received(binding, prompt, Source::Internal)?;
-        // Disjoint field borrows — same pattern as `deliver()`.
-        let ledger = &mut self.ledger;
-        let journal = self.machinery_journal.as_ref();
-        let machinery_observer = self.machinery_observer.as_deref();
-        let lease = self.lease.as_mut().ok_or(SpineError::NoLease)?;
-        let mut persist_error = None;
-        let result = {
-            let mut on_item = |item: TurnItem| match item {
-                TurnItem::Text { seq, text: c } => {
-                    if let Err(error) = ledger.append_assistant_delta(&turn_id, c, seq) {
-                        persist_error = Some(error);
-                    }
-                }
-                // Rotation machinery: retained for debugging, `internal: true`, NEVER in a
-                // thread render (§1.5). The CEO must never see that a rotation happened.
-                TurnItem::Machinery(record) => {
-                    let record = record.stamp(thread_id, Some(&turn_id), true);
-                    Self::retain_and_emit_machinery(journal, machinery_observer, record);
-                }
-                TurnItem::AnswerComplete => {}
-            };
-            lease.prompt_context_only(prompt, &mut on_item)
-        };
-
-        if let Some(failure) = self.detect_upstream_failure(&turn_id, &result) {
-            let reason = failure.summary();
-            self.ledger.interrupt_turn(&turn_id, &reason)?;
-            return Err(CognitionError::Protocol(reason).into());
-        }
-        if let Some(error) = persist_error {
-            self.ledger.interrupt_turn(&turn_id, &error.to_string())?;
-            return Err(error.into());
-        }
-        match result {
-            Ok(stop_reason) if stop_reason == "end_turn" => {
-                self.ledger.complete_turn(&turn_id, &stop_reason)?;
-            }
-            Ok(stop_reason) => {
-                self.ledger.interrupt_turn(&turn_id, &stop_reason)?;
-                return Err(CognitionError::PrimingStopped(stop_reason).into());
-            }
-            Err(e) => {
-                self.ledger.interrupt_turn(&turn_id, &e.to_string())?;
-                return Err(e.into());
-            }
-        }
-        // The handoff turn's residue, stamped `internal: true` for the same reason the turn
-        // itself is: the CEO must never see that a rotation happened, and that includes
-        // whatever the outgoing lease says on its way out (§1.5).
-        self.pump_between_turn_stamped(binding, true);
-        let reply = self.ledger.turn(&turn_id).map(|t| t.assistant_text.clone()).unwrap_or_default();
-        self.context_chars += prompt.len() + reply.len();
-        Ok(reply)
-    }
-
-    /// Get the chair ready to take a turn for `binding`.
-    ///
-    /// **Returns whether a CHILD WAS STARTED**, which is not the same question as "was the chair
-    /// empty" and stopped being answerable from outside on the day a spare could fill an empty
-    /// chair without starting anything. Only this function knows: it is the one place a
-    /// conversation lease is spawned outside rotation, and rotation reports through it too.
-    /// [`Spine::prime_front_desk`] prints the answer into `app.log` through the shell, so the
-    /// value has to come from the code that did the thing rather than from a proxy for it.
-    /// The quota service, when the lease factory knows the accounts (fill-first).
+    /// The shared account service exposed by this factory.
     fn quota_service(&self) -> Option<std::sync::Arc<crate::quota::Service>> {
         self.lease_factory.as_ref().and_then(|factory| factory.quota())
     }
@@ -4631,9 +4730,8 @@ impl Spine {
         }
     }
 
-    fn prepare_request(&mut self, binding: &ThreadBinding) -> Result<bool, SpineError> {
+    fn select_connection(&mut self,binding:&ThreadBinding)->Result<ConnectionPlan,SpineError> {
         self.control=self.control.for_thread(binding.thread_id());
-        let mut spawned = false;
         // **THE DESK THAT IS ALREADY THIS THREAD'S TAKES THE CHAIR FIRST.**
         //
         // The isolation branch below has resumed parked desks since residency landed, but it
@@ -4679,264 +4777,23 @@ impl Spine {
         if self.pending_rotation_reason.is_none() && self.model_switch_due() {
             self.pending_rotation_reason = Some(MODEL_CHANGED.to_string());
         }
-        if let Some(reason) = self.pending_rotation_reason.take() {
-            // **A WATERMARK RENEWAL WAITS FOR A COMMAND THE LEASE STARTED** (reap gap C6).
-            // Retiring the lease ends its tool commands, and a renewal is invisible, so one due
-            // only to the watermark is held while the lease's supervisor shows a command
-            // running (or cannot say), up to `work_host::ROTATION_WAITS_FOR_COMMANDS`. An
-            // explicit or context-critical rotation is not held.
+        if self.lease_primed_thread.as_deref()!=Some(binding.thread_id()){self.lease_primed=false;}
+        let mut rotation=None;
+        if let Some(reason)=self.pending_rotation_reason.take() {
             use crate::lease_commands::CommandReading;
-            let commands = self.lease.as_ref().and_then(|lease| lease.running_commands());
-            let holding = reason == "context-watermark"
-                && matches!(commands, Some(CommandReading::Running(_) | CommandReading::Unreadable));
-            let waited = holding.then(|| self.rotation_deferred_since.get_or_insert_with(std::time::Instant::now).elapsed());
-            if waited.is_some_and(|waited| waited < crate::work_host::ROTATION_WAITS_FOR_COMMANDS) {
-                eprintln!("[richos] front desk: renewal deferred while a command it started is running ({commands:?})");
-                self.pending_rotation_reason = Some(reason);
-            } else if self.lease.is_some() {
-                self.rotation_deferred_since = None;
-                self.rotate_lease(binding, &reason)?;
-                spawned = true;
-            }
+            let holding=reason=="context-watermark" && matches!(self.lease.as_ref().and_then(|l|l.running_commands()),Some(CommandReading::Running(_) | CommandReading::Unreadable));
+            let waited=holding.then(||self.rotation_deferred_since.get_or_insert_with(std::time::Instant::now).elapsed());
+            if waited.is_some_and(|w|w<crate::work_host::ROTATION_WAITS_FOR_COMMANDS){self.pending_rotation_reason=Some(reason)}
+            else if self.lease.is_some(){self.rotation_deferred_since=None;rotation=Some(reason)}
         }
-        if self.lease.is_none() {
-            let factory = self.lease_factory.as_ref().ok_or(SpineError::NoLease)?;
-            let fresh = factory.spawn_scoped(binding, &self.control)?;
-            self.install_lease(fresh);
-            spawned = true;
-            if let Some(active) = self.control.active_turn() {
-                let session = self.lease_session_id().unwrap().to_string();
-                self.ledger.mark_turn_started(&active.turn_id, &session)?;
-            }
-        }
-        // **THE SWITCH NOTICE ONLY ONCE THE SWITCH HAS HAPPENED.** The lease that takes this
-        // turn is in the chair now; if it is on the account a switch went to, that switch is
-        // real and its notice is said. A switch still waiting on a command this lease started
-        // (`account_switch_due`) leaves the turn on the old account and says nothing.
-        if let (Some(quota), Some(account)) = (self.quota_service(), self.lease.as_ref().and_then(|l| l.account())) {
-            quota.accounts.ran_on(account);
-        }
-        self.raise_quota_notices(Some(binding.thread_id()));
-        if self.control.stop_claim().is_some() { return Ok(spawned); }
-        self.prime_lease_if_needed(binding).map(|()| spawned)
+        Ok(ConnectionPlan{binding:binding.clone(),control:self.control.clone(),factory:self.lease_factory.clone(),rotation,
+            outgoing:self.lease_primed_thread.as_ref().and_then(|t|self.ledger.thread_binding(t).ok())})
     }
 
-    /// **PRIME THE FRONT DESK BEFORE HE TYPES — the CEO's §55, the half that is not about the
-    /// reply at all.**
-    ///
-    /// # The measurement this exists for, and the premise it corrects
-    ///
-    /// `docs/verification/first-reply-2026-09-18.md` measured the lease's first visible turn at
-    /// **13.464 s / 13.628 s / 15.513 s** against **7.128 s / 8.505 s / 8.920 s** warm, and
-    /// recorded the ~8 s difference as *"the lease waking up while he waits"*. It is more specific
-    /// than that, and the difference decides what can be done about it: **those seconds are a
-    /// whole model turn.** [`Spine::prime_lease_if_needed`] runs `Cognition::reprime`, which is a
-    /// real turn with the re-prime payload in it, and it is called from
-    /// [`Spine::prepare_request`] — which runs INSIDE `submit_prompt`. So his first message pays
-    /// for the continuity priming of the lease that is about to answer it, while he watches.
-    ///
-    /// **So priming cannot be made "a process start only", and that is a finding rather than a
-    /// preference.** The child process is already started before his first message reaches the
-    /// provider, in the app (`prepare_request` spawns from the lease factory) and in the probe
-    /// (`attach_lease`) alike. The seconds are the priming TURN. This method moves that turn off
-    /// his wait; it does not invent it.
-    ///
-    /// # What it spends
-    ///
-    /// **At most one model turn per lease, and it is the same turn his first message spends
-    /// today.** Called at launch, or when a thread is opened, that turn is paid before he is
-    /// waiting on it; his first message then finds the desk primed and goes straight to the
-    /// provider. The ONE case where this spends something that would not have been spent is a
-    /// launch where he never says anything at all — one priming turn on a desk that answered
-    /// nothing. Named here rather than discovered on a bill.
-    ///
-    /// # What it will not do
-    ///
-    /// - **Never underneath a turn.** [`FrontDeskReady::TurnInProgress`], not a wait: the lease is
-    ///   the thing running that turn.
-    /// - **Never for a thread that does not exist, and never by creating one.** A caller that
-    ///   wants a thread makes one; this makes a thread's desk ready.
-    /// - **Nothing about rotation.** It goes through `prepare_request`, so a rotation that was
-    ///   already pending is honored exactly as his next message would have honored it, and none is
-    ///   ever started on the strength of a launch.
-    ///
-    /// The caller holds the spine's lock for the whole of it (~8 s, measured). That is deliberate,
-    /// and it is never worse than today: a message he sends during priming waits for the priming
-    /// his message used to perform itself, and then runs on a primed desk.
-    pub fn prime_front_desk(&mut self, thread_id: &str) -> FrontDeskReady {
-        if self.thread_is_running(thread_id) {
-            return FrontDeskReady::TurnInProgress;
-        }
-        let binding = match self.ledger.thread_binding(thread_id) {
-            Ok(binding) => binding,
-            Err(e) => return FrontDeskReady::NotReady(e.to_string()),
-        };
-        if self.lease.is_some()
-            && self.lease_primed
-            && self.lease_primed_thread.as_deref() == Some(thread_id)
-        {
-            return FrontDeskReady::AlreadyReady;
-        }
-        // **WHETHER A CHILD WAS STARTED IS `prepare_request`'s ANSWER, NOT A GUESS TAKEN HERE.**
-        //
-        // This used to read `let spawned = self.lease.is_none();` on this line — which answers
-        // "was the chair empty", and that was the same question only while an empty chair could
-        // be filled in exactly one way. It no longer can: `prepare_request` now puts an ADOPTED
-        // desk in an empty chair (a spare that `create_thread` filed, or a parked resident), and
-        // the old reading called that a spawn. The shell prints this flag verbatim into
-        // `app.log` as *", including the lease's own start"* — so a wrong value here is a wrong
-        // number in a log and then in a record two days later, which is §3 of
-        // `first-words-2026-09-18-sendlock.md` happening to the other field of this same struct.
-        let started = std::time::Instant::now();
-        // ===================================================================================
-        // FROM HERE THE SPINE IS SHUT FOR A MODEL TURN, AND HIS SEND MUST NOT WAIT ON IT
-        // ===================================================================================
-        //
-        // The caller holds the spine's mutex for the whole of `prepare_request` below, which
-        // is a real model turn (~2.9 s in the probe, 4412 ms in candidate .10's own `app.log`).
-        // Until this marker existed, a Send issued inside that window blocked at
-        // `state.spine.lock()` in `send_message` for the remainder of it, with the CEO looking
-        // at "Sending your message / Waiting for Rich to accept it" the entire time and his
-        // sentence living nowhere but the webview — a quit in that window lost it.
-        //
-        // The marker opens the intake log's road for THIS thread only, and the four lines
-        // after the prime close it again and deliver whatever came down it, in order, before
-        // this function returns and the mutex is released.
-        //
-        // **WHAT THIS DOES NOT DO, stated here because the shape invites the opposite
-        // reading.** It does not make his first words arrive sooner. The lease is serial —
-        // one turn at a time, continuity §3.1 — so his prompt queues behind the priming turn
-        // whether it waits on a mutex or on this log; the contended cost is
-        // `prime_remainder + turn` either way, and re-priming is not paid twice
-        // (`prime_lease_if_needed` returns early on an already-primed thread). What it does
-        // is make his sentence DURABLE at the instant he sends it and the Send itself
-        // instant. The seconds themselves are the pre-prime's own turn, and the only thing
-        // that removes them is a desk that was already primed when the thread opened.
-        self.control.begin_front_desk_prime(thread_id);
-        let prepared = self.prepare_request(&binding);
-        // **THE CLOCK STOPS HERE, BEFORE THE DRAIN, AND THAT IS NOT A DETAIL.** `Ready.millis`
-        // is documented as *"what he would otherwise have waited through on his first
-        // message"*, and the shell prints it as *"the front desk is ready before he types:
-        // {millis} ms"*. Taking it after the lines below would fold HIS OWN TURN into it — run
-        // F of `examples/first_reply_timing_e2e.rs` printed `Ready { millis: 11355 }` for a
-        // ~4 s prime that had a ~7 s turn drained behind it, and the probe's decomposition came
-        // out NEGATIVE, which is how this was found. A number that ends up in `app.log` and
-        // then in a record is exactly the kind that has to be right at the source.
-        let primed_in = started.elapsed();
-        // Shut the road BEFORE draining it, from under the same spine mutex. Every ordering
-        // is covered by `TurnControl::defer_send`'s own guard: a send accepted before this
-        // line is drained by the next one, and a send that arrives after it blocks on a spine
-        // that is about to be free.
-        self.control.end_front_desk_prime();
-        if let Err(e) = self.poll_intake() {
-            // His message is already durable and still pending; it is delivered at the next
-            // boundary. Machinery channel only — the CEO is told by the turn itself.
-            eprintln!("[richos] a message sent during the front desk's priming could not be delivered yet ({e})");
-        }
-        match prepared {
-            Ok(spawned) => FrontDeskReady::Ready { millis: primed_in.as_millis() as u64, spawned },
-            // **A FAILURE HERE IS NOT HIS PROBLEM AND MUST NOT BECOME ONE.** Priming only decides
-            // WHEN the waiting happens; if it cannot be done now, his first message takes the path
-            // it has always taken and primes on its own. So the reason is said once, on the
-            // machinery channel, and nothing is surfaced to him and nothing is retried.
-            Err(e) => {
-                eprintln!(
-                    "[richos] the front desk could not be made ready before he types ({e}); his \
-                     first message will prime it the way it did before, which is the only cost"
-                );
-                FrontDeskReady::NotReady(e.to_string())
-            }
-        }
-    }
-
-    /// Assemble + inject the re-prime payload once per lease (before its first turn).
-    fn prime_lease_if_needed(&mut self, binding: &ThreadBinding) -> Result<(), SpineError> {
-        let onboarding_block = self.company_block(binding);
-        // Updated interview answers are host context for the visible request. Native
-        // leases carry it with the continuity brief, without a separate model turn.
-        let inline_company = match self.lease.as_mut() {
-            Some(lease) => lease.set_company_context(onboarding_block.as_deref())?,
-            None => false,
-        };
-        if onboarding_block != self.onboarding_primed_block {
-            if inline_company { self.onboarding_primed_block = onboarding_block.clone(); }
-            else { self.lease_primed = false; }
-        }
-        if (self.lease_primed && self.lease_primed_thread.as_deref() == Some(binding.thread_id())) || self.lease.is_none() {
-            return Ok(());
-        }
-        let thread_id = binding.thread_id();
-        // The worker section is scoped to the session THIS payload is being built for —
-        // the OUTGOING lease on a rotation, which is the session whose workers the
-        // conversation so far actually belongs to. Never a directory picked by mtime.
-        let mut payload =
-            RePrimePayload::assemble_for_priming(&self.ledger, binding, DEFAULT_TAIL_TURNS, self.lease_session_id())?;
-        if let Some(workers) = self.lease.as_ref().and_then(|lease| lease.worker_status()) {
-            payload.worker_state_unknown = workers.unattributed;
-            payload.worker_state = workers.priming_lines();
-        }
-        self.fill_loro_tier(&mut payload, binding);
-        let priming=payload.to_priming_prompt_with_company(onboarding_block.as_deref());
-        // Record the priming as an Internal turn so it is durable but NEVER rendered.
-        let reprime_turn = self.ledger.record_prompt_received(binding, "[re-prime]", Source::Internal);
-        // ... and as an Internal ACTION, claim-then-execute: this is the first-attach
-        // priming path (boot, or a lease attached with no factory), the counterpart of
-        // the rotation path's own `session_reprime` record.
-        let session = self.lease.as_ref().map(|l| l.session_id().to_string()).unwrap_or_default();
-        let reprime_action = self.ledger.record_action_with(
-            None,
-            "session_reprime",
-            &format!(
-                "thread={thread_id}; session={session}; priming_chars={}; ceo_facing_actions={}",
-                priming.len(),
-                payload.action_ledger_digest.len()
-            ),
-            ActionVisibility::Internal,
-            ActionStatus::Claimed,
-        )?;
-        // §1.5: re-prime runs a real turn, so its machinery now flows. `internal: true`,
-        // `turn_id: None` — attached to the THREAD, not to a turn, because there is no
-        // CEO turn here to attach it to (§1.4 G4: `turn_id: None` is a first-class state,
-        // not a bug). Retained for debugging; never rendered.
-        let scoped = match self.onboarding_tool_scope(binding) {
-            Some(scope) => match self.lease.as_mut() {
-                Some(lease) => lease.set_onboarding_scope(binding.entity_id(), &scope.central_root, &scope.record_path),
-                None => Ok(()),
-            },
-            None => Ok(()),
-        };
-        let journal = self.machinery_journal.as_ref();
-        let machinery_observer = self.machinery_observer.as_deref();
-        let primed = match self.lease.as_mut() {
-            Some(lease) => {
-                let mut on_item = |item: TurnItem| {
-                    if let TurnItem::Machinery(record) = item {
-                        let record = record.stamp(thread_id, None, true);
-                        Self::retain_and_emit_machinery(journal, machinery_observer, record);
-                    }
-                    // Priming TEXT is discarded exactly as before — never rendered.
-                };
-                scoped.and_then(|_| lease.prime_with_continuity(binding,
-                    reprime_turn.as_deref().unwrap_or(&reprime_action), &priming, &mut on_item))
-            }
-            None => Ok(()),
-        };
-        if let Err(e) = primed {
-            self.ledger.update_action(&reprime_action, ActionStatus::Failed)?;
-            return Err(e.into());
-        }
-        self.ledger.update_action(&reprime_action, ActionStatus::Completed)?;
-        // The priming turn's RESIDUE. Whatever the lease says once the priming response has
-        // returned lands in the between-turn lane with no turn to own it, so it is drained
-        // HERE and stamped `internal: true` — the aftermath of a turn the CEO never saw is
-        // as unrenderable as the turn itself (§1.5, and the standing order that Rich never
-        // reveals or references session rotation).
-        self.pump_between_turn_stamped(binding, true);
-        self.onboarding_primed_block = onboarding_block;
-        self.lease_primed_thread = Some(binding.thread_id().to_string());
-        self.lease_primed = true;
-        self.context_chars = priming.len(); // baseline the watermark measurement
-        Ok(())
+    /// Synchronous headless entry. The desktop uses prime_front_desk_without_the_spine
+    /// so native startup, handoff and priming never hold shared conversation state.
+    pub fn prime_front_desk(&mut self,thread_id:&str)->FrontDeskReady {
+        prime_front_desk_with(&mut &mut *self,thread_id)
     }
 
     pub fn queue_depth(&self) -> usize {
@@ -4944,17 +4801,15 @@ impl Spine {
     }
 
     fn thread_is_running(&self,thread:&str)->bool {
-        self.turn_in_progress || self.control.for_thread(thread).active_turn().is_some()
+        self.turn_in_progress || self.control.for_thread(thread).active_turn().is_some() || self.control.for_thread(thread).front_desk_priming().is_some()
     }
 
     pub fn is_turn_in_progress(&self) -> bool {
         self.turn_in_progress || self.control.has_active_turns()
     }
 
-    /// TEST-ONLY seam. This spine is fully synchronous and single-threaded (the Tauri
-    /// shell serializes every call behind one `Mutex<Spine>` — see the module doc), so
-    /// genuine "a message arrives WHILE a turn is in flight" concurrency never occurs
-    /// in-process during a test. This lets an integration test force that state
+    /// TEST-ONLY seam for headless fixtures. Desktop deliveries and preparation run
+    /// independently outside shared state. This lets a synchronous fixture force a turn
     /// deterministically to exercise the proactive seam's deferred-emit branch (§ raise_proactive)
     /// without spinning up real threads. NOT part of the spine's real API contract.
     #[doc(hidden)]

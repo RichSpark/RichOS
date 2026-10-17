@@ -214,7 +214,7 @@ const RUNS_HIS_TURNS: [&str; 6] = [
     ".submit_prompt_spoken(",
     ".poll_intake(",
     ".reconcile_intake(",
-    ".prime_front_desk(",
+    "::prime_front_desk_without_the_spine(",
 ];
 
 /// The doors: the one function that adopts, and the two entrance functions that end in it.

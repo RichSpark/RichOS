@@ -569,27 +569,7 @@ impl LeaseFactory for EngineLeaseFactory {
         self.spawn_chat(Some(control), None)
     }
 
-    /// **A second handle onto the same configuration**, so the spare front desk can be spawned
-    /// and primed WITHOUT the spine's mutex (`spine.rs`'s
-    /// `ready_a_spare_front_desk_without_the_spine`, and the CEO's §55).
-    ///
-    /// **Every field is shared, not copied, and that is what makes it the same factory.** The
-    /// three that can change at runtime — `claude_bin` and `engine_dir`, which `run_setup`
-    /// rewrites, and the permission desk — are `Arc`s, so a duplicate handed out before an
-    /// install spawns with what the install wrote, exactly as the original would. `data_dir`
-    /// and `explicit_engine` are fixed for the life of the process (see their own notes), so
-    /// copying them cannot diverge from anything.
-    fn duplicate(&self) -> Option<Box<dyn LeaseFactory>> {
-        Some(Box::new(EngineLeaseFactory {
-            quota: self.quota.clone(),
-            permissions: self.permissions.clone(),
-            claude_bin: self.claude_bin.clone(),
-            engine_dir: self.engine_dir.clone(),
-            data_dir: self.data_dir.clone(),
-            explicit_engine: self.explicit_engine,
-            operator_desk: self.operator_desk.clone(),
-        }))
-    }
+
 
     /// Fill-first: the spine reads the accounts and the freshest readings through this.
     fn quota(&self) -> Option<Arc<richos_core::quota::Service>> {
@@ -803,7 +783,7 @@ struct AppState {
     /// a thread per call to ask a question whose answer is already `AlreadyReady`. It holds the
     /// thread id rather than a bool because he has more than one conversation and each has its
     /// own desk (`spine.rs`'s residency).
-    front_desk_primed_for: Mutex<Option<String>>,
+    front_desk_primed_for: Mutex<std::collections::HashSet<String>>,
     spine: Mutex<Spine>,
     reader: SpineReader,
     /// Durable CEO-facing preferences (company name, the assertiveness dial) — stored
@@ -1133,10 +1113,10 @@ fn switch_thread(state: State<AppState>, thread_id: String) -> Result<(), String
 
 fn switch_thread_in(spine: &Mutex<Spine>, reader: &SpineReader, control: &TurnControl,
     thread_id: &str) -> Result<(), String> {
-    // Startup is already preparing this exact active conversation under the spine lock.
+    // Startup is already preparing this exact active conversation independently.
     // Reopening it is a read, not another switch. Let the window paint while preparation
-    // runs. A different thread still takes the ordinary serialized switching path.
-    if control.front_desk_priming().as_deref() == Some(thread_id)
+    // runs. A different thread takes only the short state-switching lock.
+    if control.for_thread(thread_id).front_desk_priming().is_some()
         && reader.snapshot().active_thread() == Some(thread_id) {
         return Ok(());
     }
@@ -1178,8 +1158,8 @@ fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Re
 
 /// Prepare a conversation on a background thread, once per opened thread. Startup
 /// and company confirmation ask before the window opens the conversation. The exact
-/// active conversation can be read through its snapshot while preparation holds the
-/// spine; switching to a different conversation remains serialized.
+/// active conversation can be read through its snapshot while preparation runs.
+/// Switching conversations takes only the short state lock.
 ///
 /// The priming intake marker makes messages durable while the provider is preparing.
 /// Context and company permissions retain the thread's immutable binding. Failure is
@@ -1200,20 +1180,14 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
     {
         let Some(state) = app.try_state::<AppState>() else { return };
         let mut asked = state.front_desk_primed_for.lock().unwrap();
-        if asked.as_deref() == Some(thread_id) {
-            return;
-        }
-        *asked = Some(thread_id.to_string());
+        if !asked.insert(thread_id.to_string()) {return;}
     }
     let app = app.clone();
     let thread_id = thread_id.to_string();
     std::thread::spawn(move || {
         let Some(state) = app.try_state::<AppState>() else { return };
-        let mut spine = take_the_spine(&state.spine);
-        let verdict = spine.prime_front_desk(&thread_id);
-        // Priming drains what he sent while it ran (`prime_front_desk`'s `poll_intake`), and
-        // those are real turns: their boundary is here (`adopt_at_the_turn_boundary`).
-        drop(spine);
+        let verdict = richos_core::spine::prime_front_desk_without_the_spine(&state.spine,&thread_id);
+        // Priming drains durable input; its detached replies run outside shared state.
         if let Err(error)=richos_core::spine::drive_shared_turns(&state.spine) {eprintln!("[richos] queued reply: {error}");}
         let spine=take_the_spine(&state.spine);
         adopt_at_the_turn_boundary(spine, &state.work);
@@ -1235,9 +1209,8 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
         // active context, because the active context is whatever was switched to last and a
         // spare primed for the wrong company can never be adopted.
         //
-        // It runs after the prime above rather than beside it, on this same thread, because
-        // both take the spine's mutex for a model turn and two of those racing would hold the
-        // lock for the sum of them with his own Send arriving in the middle.
+        // Prepare the selected conversation first, then its optional next-thread spare.
+        // Neither provider operation holds shared conversation state.
         let entity = take_the_spine(&state.spine).ledger().thread_binding(&thread_id).map(|b| b.entity_id().clone());
         if let Ok(entity) = entity {
             ready_a_spare_front_desk(&app, entity);
@@ -1776,7 +1749,7 @@ fn drain_incoming_messages(
 /// The send handler always drains intake under the spine after writing it, including
 /// when priming finishes between this observation and the write.
 fn desk_input_can_be_logged(control: &TurnControl, thread_id: &str) -> bool {
-    control.for_thread(thread_id).lease_session().is_some() || control.front_desk_priming().as_deref() == Some(thread_id)
+    control.for_thread(thread_id).lease_session().is_some() || control.for_thread(thread_id).front_desk_priming().is_some()
 }
 
 /// **A TYPED MESSAGE THAT NEVER BECAME A TURN, ON THE OPERATOR'S LOG** — the nightly's D4.
@@ -3541,7 +3514,7 @@ fn main() {
                 can_come_back: activation.presentation == activation::Presentation::Regular,
                 provider_auth: Mutex::new(Default::default()),
                 account_auth: Mutex::new(None),
-                front_desk_primed_for: Mutex::new(None),
+                front_desk_primed_for: Mutex::new(Default::default()),
                 reader: spine.reader(),
                 spine: Mutex::new(spine),
                 config: Mutex::new(config),
@@ -6093,7 +6066,7 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
 /// call below do anything at all.
 fn ready_the_front_desk_after_a_repair(app: &AppHandle, thread_id: &str) {
     if let Some(state) = app.try_state::<AppState>() {
-        *state.front_desk_primed_for.lock().unwrap() = None;
+        state.front_desk_primed_for.lock().unwrap().clear();
     }
     ready_the_front_desk(app, thread_id);
 }
@@ -6795,12 +6768,12 @@ mod send_wait_tests {
         let control = super::TurnControl::open(&path).unwrap();
         assert!(control.lease_sessions().is_empty());
         assert!(!super::desk_input_can_be_logged(&control, "thread-a"));
-        control.begin_front_desk_prime("thread-a");
+        control.for_thread("thread-a").begin_front_desk_prime();
         assert!(super::desk_input_can_be_logged(&control, "thread-a"));
         assert!(!super::desk_input_can_be_logged(&control, "thread-b"));
         control.submit_from_desk("thread-a", Some(super::EntityId::parse("alpha").unwrap()),
             "Keep this first message").unwrap();
-        control.end_front_desk_prime();
+        control.for_thread("thread-a").end_front_desk_prime();
         assert!(!super::desk_input_can_be_logged(&control, "thread-a"));
         let reopened = super::TurnControl::open(&path).unwrap();
         assert_eq!(reopened.pending_intake().len(), 1, "a cold-start message did not survive reopening its intake log");
@@ -7104,7 +7077,7 @@ mod repair_priming_tests {
         let cleared = body.find(memo).expect("the memo must be cleared by name");
         let asked = body.find(concat!("ready_the_front_", "desk(app")).expect("and then the desk asked for");
         assert!(cleared < asked, "the memo must be cleared BEFORE the ask, or the ask does nothing");
-        assert!(body.contains("= None"), "the memo is cleared, not rewritten: {body}");
+        assert!(body.contains(".clear()"), "the conversation memo is cleared, not rewritten: {body}");
     }
 }
 

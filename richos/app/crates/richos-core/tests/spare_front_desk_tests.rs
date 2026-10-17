@@ -581,9 +581,7 @@ impl richos_core::cognition::LeaseFactory for SlowFactory {
             release: self.release.clone(),
         }))
     }
-    fn duplicate(&self) -> Option<Box<dyn richos_core::cognition::LeaseFactory>> {
-        Some(Box::new(self.clone()))
-    }
+
 }
 
 fn a_slow_spine(tag: &str) -> (std::path::PathBuf, std::sync::Arc<std::sync::Mutex<richos_core::spine::Spine>>, SlowFactory) {
@@ -756,9 +754,7 @@ impl richos_core::cognition::LeaseFactory for BriefFactory {
     fn spawn(&self) -> Result<Box<dyn richos_core::Cognition>, richos_core::cognition::CognitionError> {
         Ok(Box::new(BriefDesk { session: "brief-desk".into(), calls: self.calls.clone() }))
     }
-    fn duplicate(&self) -> Option<Box<dyn richos_core::cognition::LeaseFactory>> {
-        Some(Box::new(self.clone()))
-    }
+
 }
 
 /// **THE ADOPTED SPARE HOLDS HIS CONTEXT BRIEF BEFORE HE SPEAKS** (CEO 2026-10-14: "From barge
