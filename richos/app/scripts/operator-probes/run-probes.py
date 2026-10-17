@@ -15,10 +15,9 @@ pulls the results back, and deletes the clone however the run ends (§54).
                 [--walk-binary PATH] [--w3-cells W3,...] [--work-walk-binary BIN --runtime DIR]
                 [--w4-cells baseline,P5,...]
 
-W4 (the work path's crash matrix, richos-hq docs/plans/2026-09-27-work-path-answer-delivery-design.md
-§4.2) runs a real work lease, which needs the delivered runtime the app ships: --runtime names one
-(default the nightly's runtime for this recipe,
-~/.richos-nightly/runtime-<recipe sha256[:12]>, read only), and it is copied into the guest with the binary.
+W4's per-assignment runner has been removed. The probe is retired through the existing
+registry, with its old code and pure grading retained for historical captures. Its
+legacy work-walk/runtime/cell arguments do not provide current Stu recovery coverage.
 
 Exit: the guest driver's exit code (0 when every probe that ran PASSED; 1 when any FAILED
 or its premise was false; 2 for a harness failure), or 75 when admission was refused.

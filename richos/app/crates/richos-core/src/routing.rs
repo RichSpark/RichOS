@@ -90,7 +90,13 @@ mod tests {
         ledger.mark_turn_started(&active.binding.turn_id,"native-before-crash").unwrap();
         active.binding.turn_id=ledger.replay_turn(&binding,&active.binding.turn_id).unwrap();
         let receipt=route(&path,&scope,&active,payload,CONTEXT,|_,_|panic!("saved ownership must skip classification")).unwrap().unwrap();
-        assert_eq!(receipt["owner"],"stu");assert!(session_tools::pending(&scope,"stu").unwrap().is_none());
+        assert_eq!(receipt["owner"],"stu");
+        assert_eq!(session_tools::pending(&scope,"stu").unwrap().unwrap().1,through,"accepted unfinished work must survive restart");
+        let record=crate::assignment::read_all(&scope.state_root,&scope.entity_id,&scope.thread_id).unwrap().remove(0);
+        crate::assignment::advance(&scope.state_root,&scope.entity_id,&scope.thread_id,&record.id,crate::assignment::AssignmentState::Settled,"Stu verified completion").unwrap();
+        assert!(session_tools::pending(&scope,"stu").unwrap().is_none());
+        assert_eq!(route(&path,&scope,&active,payload,CONTEXT,|_,_|panic!("a completed saved request was classified twice")).unwrap().unwrap()["owner"],"stu");
+        assert!(session_tools::pending(&scope,"stu").unwrap().is_none(),"completed work was dispatched again");
         drop(ledger);std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
     #[test]

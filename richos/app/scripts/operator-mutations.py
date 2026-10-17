@@ -30,6 +30,10 @@ import time
 APP = Path(__file__).resolve().parents[1]
 SRC = APP / 'crates' / 'richos-core' / 'src'
 
+# The removed assignment dispatcher and host-inferred job state have no mutations here:
+# desk-withdraws, desk-stop-all-gone, work-host-intake and work-host-register-silent
+# depended on that deleted runner and its fixture. Current Stu inbox lifecycle and
+# durable user Stop are verified by work_host/session_tools tests, not that fixture.
 # (id, file, the exact snippet, its replacement, the tests that must go red, the rule)
 MUTANTS = [
     ('lead-affordance', 'operator_lead.rs',
@@ -350,7 +354,7 @@ MUTANTS = [
      '            (_, Some("phone" | "phone_typed" | "phone_voice")) => Origin::Phone,',
      '            (_, Some("phone" | "phone_typed" | "phone_voice")) => Origin::DeskTyped,',
      ['operator_host::tests::a_turn_s_origin_is_its_recorded_mouth_and_an_unrecorded_one_is_no_origin',
-      'operator_desk::tests::a_phone_assignment_is_closed_with_the_sentence_and_its_obligation_withdrawn'],
+      'operator_desk::tests::rejected_delivery_preserves_the_job_record_and_does_not_complete_its_obligation'],
      '(s) rule 1: phone words are the phone, and never become work'),
     ('lead-taking', 'operator_lead.rs',
      '(self.sent.contains(uuid) && !self.taken.iter().any(|u| u == uuid)).then(|| uuid.to_string())',
@@ -403,16 +407,6 @@ MUTANTS = [
      '        if let Some(sentence) = None::<String> {',
      ['operator_desk::tests::a_gate_that_changed_broke_or_went_away_since_launch_refuses_and_never_falls_back'],
      '(f), B8: the gate is read per assignment and never falls back'),
-    ('desk-withdraws', 'operator_desk.rs',
-     '        if let Err(why) = self.settle.complete(&key_of(record), &record.obligation_id, &format!("operator-refused:{}", record.id),\n                                               ECS_WITHDRAWN, &evidence, sentence) {',
-     '        if let Err(why) = Err::<(), String>(format!("{:?}", (&evidence, ECS_WITHDRAWN))) {',
-     ['operator_desk::tests::a_phone_assignment_is_closed_with_the_sentence_and_its_obligation_withdrawn'],
-     'item 1: an assignment not handed over has its obligation withdrawn'),
-    ('desk-stop-all-gone', 'operator_desk.rs',
-     'if results.iter().all(|r| matches!(r, StopResult::Stopped { .. })) {\n            if let Err(e) = assignment::advance',
-     'if true {\n            if let Err(e) = assignment::advance',
-     ['operator_desk::tests::a_stop_that_reached_only_some_of_its_agents_leaves_the_assignment_open'],
-     '(d) item 5: marked stopped only when every agent is NOT-ALIVE'),
     ('desk-timer-silent', 'operator_desk.rs',
      '        if self.host.running_leads() == 0 {\n            return Vec::new();\n        }\n',
      '',
@@ -434,21 +428,11 @@ MUTANTS = [
      ['native::native_driver_tests::rich_has_the_register_and_full_evidence_while_stu_has_execution',
       'native::native_driver_tests::an_operator_install_gives_the_front_desk_his_team_s_tools_and_the_back_end_none'],
      'N1: no operator tools on a front desk without the desk\'s access'),
-    ('work-host-intake', 'work_host.rs',
-     '            operator.take(record);\n            return true;',
-     '            let _ = operator;',
-     ['work_host::tests::an_operator_install_hands_every_assignment_to_his_team_and_opens_no_work_lease'],
-     'item 1: an operator assignment never reaches a work lease'),
     ('register-answers-unlisted', 'assignment_tools.rs',
      '        if !origin.declared().is_some_and(|mouth| listed.iter().any(|l| l == mouth)) {',
      '        if false && !origin.declared().is_some_and(|mouth| listed.iter().any(|l| l == mouth)) {',
      ['assignment_tools::tests::on_an_operator_install_the_register_answers_phone_or_unrecorded_work_and_writes_nothing'],
      '(s) rule 1: the front desk answers phone work in his turn, nothing written'),
-    ('work-host-register-silent', 'work_host.rs',
-     '        if self.operator.lock().unwrap().is_some() {',
-     '        if false && self.operator.lock().unwrap().is_some() {',
-     ['work_host::tests::an_operator_install_hands_every_assignment_to_his_team_and_opens_no_work_lease'],
-     '(m): on an operator install the register does not speak for his team'),
 ]
 
 

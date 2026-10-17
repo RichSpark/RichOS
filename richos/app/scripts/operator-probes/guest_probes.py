@@ -3520,7 +3520,11 @@ def w3_verdict(cells, wanted):
 
 
 # =============================================================================================
-# W4: the WORK PATH's crash matrix for his answers (richos-hq
+# W4: HISTORICAL ONLY. The per-assignment runner was removed; the existing RETIRED
+# probe registry prevents this matrix from running against current builds. Its code
+# and pure grading remain to interpret captured historical results. Current Stu
+# recovery is covered by canonical inbox/WorkHost tests and rebuilt-app acceptance.
+# Original work-path answer matrix (richos-hq
 # docs/plans/2026-09-27-work-path-answer-delivery-design.md §4.2). One question set per cell,
 # through the real `work_walk host` (built with the `crash-points` feature): a real work lease
 # on the delivered runtime, the durable question store and inbox, boot recovery, and the
@@ -3804,7 +3808,7 @@ def grade_w4_cell(rec):
     return False, 'unknown cell'
 
 
-@probe('W4', explicit=True)
+@probe('W4', explicit=True, retired='The per-assignment work runner was removed. W4 is historical capture grading only; current independent Stu recovery is verified by the core handoff lifecycle tests and rebuilt-app acceptance.')
 def w4(ctx, r):
     if not getattr(ctx, 'work_walk_binary', None) or not os.path.exists(ctx.work_walk_binary):
         return 'NOT-RUN', 'no work_walk binary built with --features crash-points was handed to the guest'
