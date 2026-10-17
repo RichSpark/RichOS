@@ -1210,37 +1210,62 @@ impl WorkHost {
 
     fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
         message:&crate::session_tools::Message,turn:&str)->Result<String,String> {
-        self.ensure_lease(backend,binding)?;
-        let mut guard=backend.lease.lock().unwrap();
-        let lease=guard.as_mut().ok_or("The operator connection closed")?;
-        lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
-        {
-            let mut inner=backend.inner.lock().unwrap();
-            inner.cancel=lease.cancel_handle();
-            inner.peer_stopper=inner.cancel.clone().map(|handle|(lease.session_id().to_string(),handle));
-            inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
+        // A native connection owns its workers as well as its shell commands.
+        let workers_finished=|| {
+            let session=backend.inner.lock().unwrap().lease_session.clone();
+            session.is_none_or(|session| {
+                let view=crate::app_workers::status(&self.state,Some(&session));
+                view.is_attributed() && view.active + view.liveness_unknown == 0
+            })
+        };
+        // Peer delivery uses the same connection lifecycle as assignment delivery.
+        if workers_finished() {
+            self.renew_if_repositories_changed(backend,binding);
+            self.renew_if_account_changed(backend,binding);
+            self.renew_if_model_changed(backend,binding);
+            self.renew_if_team_changed(backend,binding);
         }
-        let session=lease.session_id().to_string();
-        crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
-        let mut diagnostics=String::new();
-        let mut published=false;
-        let result=lease.prompt(&serde_json::to_string(message).map_err(|e|e.to_string())?,&mut |item| {
-            if !published {published=true;self.publish_peer_input(backend,binding);}
-            if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
-        });
-        let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
-        {
-            let mut inner=backend.inner.lock().unwrap();
-            inner.peer_input=None;inner.peer_active_through=None;inner.cancel=None;
+        let original=serde_json::to_string(message).map_err(|e|e.to_string())?;
+        let mut input=original.clone();
+        loop {
+            self.ensure_lease(backend,binding)?;
+            let mut guard=backend.lease.lock().unwrap();
+            let lease=guard.as_mut().ok_or("The operator connection closed")?;
+            lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.cancel=lease.cancel_handle();
+                inner.peer_stopper=inner.cancel.clone().map(|handle|(lease.session_id().to_string(),handle));
+                inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
+            }
+            let session=lease.session_id().to_string();
+            crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
+            let mut diagnostics=String::new();
+            let mut published=false;
+            let result=lease.prompt(&input,&mut |item| {
+                if !published {published=true;self.publish_peer_input(backend,binding);}
+                if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
+            });
+            let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.peer_input=None;inner.peer_active_through=None;inner.cancel=None;
+            }
+            if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
+            let reason=result.map_err(|e|e.to_string())?;
+            if reason != "end_turn" {
+                return Err(format!("Operator input did not complete: {reason}"));
+            }
+            if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
+            drop(guard);
+            // A saved teammate is registered only by a new provider connection.
+            // Continue this same accepted handoff after renewal, never dispatch it again.
+            if workers_finished() { self.renew_if_team_changed(backend,binding); }
+            if backend.inner.lock().unwrap().lease_session.as_deref() == Some(&session) {
+                return Ok(session);
+            }
+            input=format!("{TEAM_CHANGED_CONTINUATION}\n{original}");
         }
-        if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
-        let reason=result.map_err(|e|e.to_string())?;
-        if reason != "end_turn" {
-            return Err(format!("Operator input did not complete: {reason}"));
-        }
-        if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
-        drop(guard);
-        Ok(session)
     }
 
     /// **The turn boundary, and the whole of it.** Spec §1.1: the assignment is recorded,
@@ -10706,6 +10731,14 @@ mod tests {
     }    #[test]
     fn peer_handoff_with_operational_record_executes_once() {
         let h=harness(0);
+        h.team.lock().unwrap().digest=Some("stock".into());
+        every_worker_observed_ending(&h);
+        for n in 1..=4 {
+            let folder=h.state.join("evidence").join(format!("work-session-rotated-{n}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("callbacks.jsonl"),"").unwrap();
+            std::fs::write(folder.join(".lock"),"").unwrap();
+        }
         let scope=h.host.message_scope(&h.binding);
         let path=h.state.join("rich-status.json");
         crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
@@ -10717,10 +10750,41 @@ mod tests {
         assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(10)),"hang guard: wait for peer consumption");
         assert_eq!(h.host.adopt_registered(&h.binding),0);
         assert_eq!(assignment::read(&h.state,"depot","thread-one",&receipt.id).unwrap().state,AssignmentState::Registered);
-        h.host.shutdown();
         assert_eq!(h.work_prompts.lock().unwrap().len(),1);
         assert!(h.bound.lock().unwrap().is_empty(),"Stu was rebound to a formal assignment");
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        let backend=h.host.backend_for("thread-one").unwrap();
+        let message=crate::session_tools::Message { handoff:true, from:"rich".into(),
+            text:"Use the saved teammate for this authorized work".into(), instruction:None };
+        let run=|n| h.host.run_message(&backend,&h.binding,&message,&format!("peer:{n}")).unwrap();
+        run(2);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"unchanged team renewed unnecessarily");
+        h.team.lock().unwrap().digest=Some("stock and mark".into());
+        let evidence=h.state.join("evidence/work-session-one/callbacks.jsonl");
+        let start=serde_json::json!({"schema":1,"callback":{"session_id":"work-session-one","hook_event_name":"SubagentStart","agent_id":"live-worker"}}).to_string()+"\n";
+        std::fs::write(&evidence,&start).unwrap();
+        run(3);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"renewal killed a live native worker");
+        let end=serde_json::json!({"schema":1,"callback":{"session_id":"work-session-one","hook_event_name":"SubagentStop","agent_id":"live-worker"}}).to_string()+"\n";
+        std::fs::write(&evidence,start+&end).unwrap();
+        run(4);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),2,"next peer handoff kept an obsolete roster");
+        *h.commands.lock().unwrap()=Some(crate::lease_commands::CommandReading::Running(1));
+        h.team.lock().unwrap().digest=Some("stock, mark and norm".into());
+        run(5);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),2,"renewal ended an unrelated running command");
+        *h.commands.lock().unwrap()=Some(crate::lease_commands::CommandReading::Clear);
+        run(6);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),3,"deferred roster was never registered");
+        h.team.lock().unwrap().in_turn.push_back(Some("stock, mark, norm and echo".into()));
+        run(7);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),4,"a teammate saved during the handoff was not registered");
+        let prompts=h.work_prompts.lock().unwrap();
+        assert_eq!(prompts.len(),8,"same handoff did not continue after registering the new teammate");
+        assert!(prompts.last().unwrap().starts_with(TEAM_CHANGED_CONTINUATION));
+        assert!(prompts.last().unwrap().contains(&message.text),"the successor lost the original handoff");
+        drop(prompts);
+        h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
