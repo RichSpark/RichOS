@@ -133,5 +133,24 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
         got = mod.problems([{'op': 'pointer', 'points': bad}])
         check('a pointer step with points %r is refused with a sentence' % (bad,), bool(got), got)
 
+    # openlink: the pairing address the Mac draws is opened on the guest's phone page, and an
+    # address that never appears fails the step rather than opening nothing and passing.
+    seen.clear()
+    tree = "AXStaticText 'Open https://walk-guest.example.ts.net:8443/#pair=K7QF2M9X on your phone'"
+    mod.run = lambda args, timeout=120: (seen.append(args) or (0, tree if args[2] == 'tree' else ''))
+    code, text = mod.step_run('no-such-vm', {'op': 'openlink', 'pattern': '#pair='}, Path(tmp))
+    check('openlink opens the drawn pairing address in Safari on the walk\'s own VM',
+          code == 0 and seen[-1][1:] == ['no-such-vm', 'open', '-a', 'Safari',
+                                         'https://walk-guest.example.ts.net:8443/#pair=K7QF2M9X'], (code, text, seen))
+    seen.clear()
+    mod.run = lambda args, timeout=120: (seen.append(args) or (0, "AXStaticText 'https://example.invalid/help'"))
+    code, text = mod.step_run('no-such-vm', {'op': 'openlink', 'pattern': '#pair=', 'seconds': 0}, Path(tmp))
+    check('openlink with no matching address fails with a sentence and opens nothing',
+          code == 1 and 'no https:// address' in text and not any('open' in a for a in seen), (code, text, seen))
+    check('openlink needs a pattern', mod.problems([{'op': 'openlink'}]) != [], mod.problems([{'op': 'openlink'}]))
+    check('openlink with pattern, app and seconds is valid',
+          mod.problems([{'op': 'openlink', 'pattern': '#pair=', 'app': 'Safari', 'seconds': 20}]) == [],
+          mod.problems([{'op': 'openlink', 'pattern': '#pair=', 'app': 'Safari', 'seconds': 20}]))
+
 print('steps-walk.test.py: %d failed' % len(failures))
 sys.exit(1 if failures else 0)
