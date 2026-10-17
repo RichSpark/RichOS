@@ -1776,7 +1776,7 @@ fn drain_incoming_messages(
 /// The send handler always drains intake under the spine after writing it, including
 /// when priming finishes between this observation and the write.
 fn desk_input_can_be_logged(control: &TurnControl, thread_id: &str) -> bool {
-    control.lease_session().is_some() || control.front_desk_priming().as_deref() == Some(thread_id)
+    control.for_thread(thread_id).lease_session().is_some() || control.front_desk_priming().as_deref() == Some(thread_id)
 }
 
 /// **A TYPED MESSAGE THAT NEVER BECAME A TURN, ON THE OPERATOR'S LOG** — the nightly's D4.
@@ -6081,8 +6081,9 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
     let selected = state.engine_dir.lock().unwrap().clone();
     let registry = state.registry.lock().unwrap().clone();
     let mut spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
-    let workers = richos_core::app_workers::status(&state.data_dir.join("engine-state"), state.control.lease_session().as_deref());
-    let (worker_state, gap) = richos_core::work_gate::workers(&workers);
+    let workers:Vec<_>=state.control.lease_sessions().iter().map(|session|
+        richos_core::app_workers::status(&state.data_dir.join("engine-state"),Some(session))).collect();
+    let (worker_state, gap) = richos_core::work_gate::all_workers(&workers);
     if !worker_state.permits_action() { return Err(gap.unwrap_or_else(|| "Worker state is not settled.".into())); }
     let desk = state.correction.lock().unwrap().clone();
     let mut held_desk = match &desk {
@@ -6895,6 +6896,12 @@ mod send_wait_tests {
         assert_eq!(reopened.pending_intake().len(), 1, "a cold-start message did not survive reopening its intake log");
         assert!(std::fs::read_to_string(&path).unwrap().contains("Keep this first message"));
         drop(reopened);
+        for thread in ["thread-a","thread-b"] {
+            control.for_thread(thread).set_lease_session(Some(format!("session-{thread}")));
+            assert!(super::desk_input_can_be_logged(&control,thread));
+        }
+        assert!(control.lease_session().is_none(),"two live identities are ambiguous without a thread");
+        assert!(!super::desk_input_can_be_logged(&control,"thread-c"));
         drop(control);
         std::fs::remove_dir_all(root).unwrap();
     }
