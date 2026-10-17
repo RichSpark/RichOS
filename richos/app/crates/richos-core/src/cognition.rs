@@ -301,7 +301,7 @@ pub trait Cognition: Send {
         _message:&crate::session_tools::Message)->Result<(),CognitionError> {Ok(())}
 
     /// Reload the existing native roster without replacing this session or its workers.
-    fn refresh_team(&mut self)->Result<(),CognitionError> {Ok(())}
+    fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(false)}
 
     /// Give the session the context brief his next turn would otherwise supply first, while
     /// nobody is waiting: called right after the priming turn, under that turn's own ledger

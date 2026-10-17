@@ -4122,7 +4122,7 @@ impl Cognition for NativeCognition {
         Ok(())
     }
 
-    fn refresh_team(&mut self)->Result<(),CognitionError> {
+    fn refresh_team(&mut self)->Result<bool,CognitionError> {
         let profile=self.engine_profile.as_ref().ok_or_else(||CognitionError::Protocol("Missing engine profile for team reload".into()))?;
         let expected=profile.refresh_team().map_err(|e|CognitionError::Io(e.to_string()))?;
         let result=self.client.reload_plugins()?;
@@ -4130,7 +4130,7 @@ impl Cognition for NativeCognition {
             agents.iter().any(|agent|agent["name"].as_str()==Some(name)))) {
             return Err(CognitionError::Protocol("The native team reload did not register every saved teammate".into()));
         }
-        Ok(())
+        Ok(true)
     }
 
     /// The work lease's preparation — **the sibling path of `prepare_work_turn`, and its

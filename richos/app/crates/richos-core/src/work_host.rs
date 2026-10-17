@@ -1211,9 +1211,9 @@ impl WorkHost {
     fn refresh_peer_team(&self,backend:&Arc<Backend>,lease:&mut dyn Cognition)->Result<bool,String> {
         let team=self.factory.lock().unwrap().team_digest();
         if team.is_none() || team==backend.inner.lock().unwrap().lease_team {return Ok(false)}
-        lease.refresh_team().map_err(|e|e.to_string())?;
+        let changed=lease.refresh_team().map_err(|e|e.to_string())?;
         backend.inner.lock().unwrap().lease_team=team;
-        Ok(true)
+        Ok(changed)
     }
 
     fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
@@ -5374,6 +5374,7 @@ mod tests {
     }
 
     impl Cognition for WorkLease {
+        fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(true)}
         fn session_id(&self) -> &str {
             &self.session
         }

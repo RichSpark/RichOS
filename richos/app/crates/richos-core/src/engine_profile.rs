@@ -296,10 +296,13 @@ pub fn team_digest(engine: &Path, data: &Path) -> Result<String, RuntimeError> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path)->Result<Vec<String>,RuntimeError> {
+fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path, preserve_loaded:bool)->Result<Vec<String>,RuntimeError> {
     let team=active_team(engine,data)?;
     for root in [plugin.join("agents"),coordination.join(".claude/agents")] {
-        for (name,body) in &team {write(&root.join(format!("{name}.md")),body)?;}
+        for (name,body) in &team {
+            let path=root.join(format!("{name}.md"));
+            if !preserve_loaded || !path.exists() {write(&path,body)?;}
+        }
         for entry in std::fs::read_dir(&root).map_err(|e|RuntimeError(e.to_string()))? {
             let path=entry.map_err(|e|RuntimeError(e.to_string()))?.path();
             if path.extension().is_some_and(|ext|ext=="md")
@@ -316,7 +319,7 @@ fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path)->Resu
 impl EngineProfile {
     pub fn refresh_team(&self)->Result<Vec<String>,RuntimeError> {
         let data=self.state.parent().ok_or_else(||RuntimeError("Missing app data directory".into()))?;
-        render_team(&self.engine,data,&self.coordination,&self.plugin)
+        render_team(&self.engine,data,&self.coordination,&self.plugin,true)
     }
 
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
@@ -375,7 +378,7 @@ impl EngineProfile {
             std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).map_err(|e| RuntimeError(e.to_string()))?;
         }
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
-        render_team(&engine, &data, &coordination, &plugin)?;
+        render_team(&engine, &data, &coordination, &plugin,false)?;
         write(&coordination.join("orchestration.config"), &format!(
             "# Generated desktop coordination, not target-repository configuration.\nALLOWED_MODELS=\"opus sonnet haiku\"\nMODEL_TIERS=\"opus > sonnet > haiku\"\nSESSION_TEAMS_DIR={}\n", quote(&state.join("teams"))))?;
         write(&coordination.join(".gitignore"), ".claude/\norchestration.config\napp-owned-coordination.json\n")?;
