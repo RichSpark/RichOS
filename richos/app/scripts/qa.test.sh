@@ -54,6 +54,9 @@
 #   SM1-SM2 step-mark: one timestamped line appended to a step log; no words refused
 #   LT1-LT3 ledger-timeline: a reply's pieces joined once at its first piece, a sent
 #           message's wait in --turns; a missing or malformed ledger refused, exit 2
+#   NT1-NT3 native-transcript: a worker's tool call and its result on the session's clock,
+#           a streamed call printed once, a --tool filter that keeps nothing exits 1; a
+#           missing root or a folder of non-JSON rows refused, exit 2
 #   HS1-HS3 hidden-send-try: tap Send, Home, Wi-Fi off, release, Wi-Fi on in order
 #           against a scripted adb; Wi-Fi put back on when the switch failed half
 #           way; a malformed Send position refused; HS6-HS7 a debuggable build or a
@@ -91,7 +94,7 @@
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -140,7 +143,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 echo ""
 echo "=== H. every tool answers for itself ==="
 for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
-         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh fixtures/make-fixtures.py; do
+         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
     continue
@@ -991,6 +994,43 @@ expect "LT3 a missing ledger is refused, exit 2, never printed as an empty one" 
 printf 'not json\n' > "$TMP/bad-ledger.jsonl"
 run python3 "$QA/ledger-timeline.py" "$TMP/bad-ledger.jsonl"
 expect "LT3 a malformed ledger is refused, exit 2" 2 "is not JSON"
+
+echo ""
+echo "=== NT. native-transcript: Claude Code's own session transcripts as one timeline ==="
+mkdir -p "$TMP/np/proj/sess1111-aaaa/subagents"
+cat > "$TMP/np/proj/sess1111-aaaa.jsonl" <<'NTX'
+{"type":"user","timestamp":"2026-10-17T10:00:00.000Z","message":{"role":"user","content":"Fix the three functions."}}
+{"type":"assistant","timestamp":"2026-10-17T10:00:05.000Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Agent","input":{"description":"Fix amounts","subagent_type":"x:mark","run_in_background":true,"prompt":"Implement parse_minor"}}]}}
+{"type":"assistant","timestamp":"2026-10-17T10:00:05.100Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Agent","input":{"description":"Fix amounts","subagent_type":"x:mark","run_in_background":true,"prompt":"Implement parse_minor"}}]}}
+{"type":"user","timestamp":"2026-10-17T10:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Async agent launched"}]}}
+{"type":"assistant","timestamp":"2026-10-17T10:00
+NTX
+cat > "$TMP/np/proj/sess1111-aaaa/subagents/agent-abc123.jsonl" <<'NTX'
+{"type":"assistant","timestamp":"2026-10-17T10:00:30.000Z","message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"tu2","name":"Bash","input":{"command":"git commit -m fix","description":"Commit"}}]}}
+NTX
+printf '{"agentType":"x:mark","description":"Fix amounts"}\n' > "$TMP/np/proj/sess1111-aaaa/subagents/agent-abc123.meta.json"
+run python3 "$QA/native-transcript.py" "$TMP/np" --results
+if [ "$CODE" = 0 ] && [ "$(printf '%s\n' "$OUT" | grep -c 'USE  Agent')" = 1 ] \
+   && printf '%s' "$OUT" | grep -q '^10:00:06.000  sess1111  RESULT  Agent  ok Async agent launched' \
+   && printf '%s' "$OUT" | grep -q '^10:00:30.000  sess1111/abc123  USE  Bash  description=Commit command=git commit -m fix' \
+   && printf '%s' "$OUT" | grep -q 'skipped 1 line'; then
+  ok "NT1 the session's call is printed once with its result, the worker's commit on the same clock, an unfinished line skipped and counted"
+else
+  bad "NT1 one timeline of the session and its worker" "exit $CODE: $(printf '%s' "$OUT" | tr '\n' '|' | cut -c1-400)"
+fi
+run python3 "$QA/native-transcript.py" "$TMP/np" --sessions
+if [ "$CODE" = 0 ] && printf '%s' "$OUT" | grep -q 'sess1111/abc123 .*agentType=x:mark description=Fix amounts calls: Bash=1'; then
+  ok "NT2 --sessions names each worker by its own meta and counts its calls"
+else
+  bad "NT2 --sessions names each worker by its meta" "exit $CODE: $(printf '%s' "$OUT" | tr '\n' '|' | cut -c1-300)"
+fi
+run python3 "$QA/native-transcript.py" "$TMP/np" --tool TeamCreate
+expect "NT2 a --tool filter that keeps nothing exits 1, never an empty success" 1 ""
+run python3 "$QA/native-transcript.py" "$TMP/no-such-projects"
+expect "NT3 a missing root is refused, exit 2" 2 "does not exist"
+mkdir -p "$TMP/np-bad"; printf 'not json\n' > "$TMP/np-bad/x.jsonl"
+run python3 "$QA/native-transcript.py" "$TMP/np-bad"
+expect "NT3 a folder whose rows are not JSON is refused, exit 2" 2 "is JSON"
 
 echo ""
 echo "=== S. step-mark and hidden-send-try: a physical Android phone's send kept in flight across Home ==="
