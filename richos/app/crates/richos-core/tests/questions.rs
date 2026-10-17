@@ -837,3 +837,24 @@ fn read_only_question_snapshots_do_not_wait_for_the_writer() {
     assert!(pending.unwrap().is_empty());
     assert_eq!(std::fs::read(path).unwrap(), before);
 }
+
+#[test]
+fn app_questions_identify_the_nonblocking_tool_to_the_engine_guard() {
+    let mut f = Fixture::new();
+    let hooks = f.root.join("engine/scripts/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("guard-ceo-ruled-ask.sh"), r#"
+python3 -c 'import json,sys
+payload=json.load(sys.stdin)
+assert payload["tool_name"] == "mcp__richos_questions__ask", payload
+assert payload["tool_input"]["questions"][0]["question"] == "When should the release ship?"
+'
+"#).unwrap();
+    f.scope.engine = Some(f.root.join("engine"));
+    f.scope.entity_root = Some(f.root.clone());
+    f.scope.asker = "stu".into();
+    let asked = f.ask(1);
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].state, State::Open);
+    assert_eq!(asked[0].asker, "stu");
+}

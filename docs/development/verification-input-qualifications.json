@@ -1579,7 +1579,7 @@
         "richos/engine/scripts/lib/premise-ask.sh": "54ed7bab6c1f1632458c6dbabc05f13dcec91f6ab262bfe3c5c2ae20b4b91080",
         "richos/engine/scripts/lib/ceo-asks.sh": "90532e654d581669aafdc81d5b54f330d1488ee8161d2cef72af7421c9a2698d",
         "richos/engine/scripts/hooks/ceo-ruled.mutation.sh": "44319bb20fa4eb8189e26561707f16af5889e306533ff0cb59815dd40975e596",
-        "richos/engine/scripts/hooks/guard-ceo-ruled-ask.sh": "f09a98805684daaa62bca976e467abc3484e1b776f5bed99752fad890a7319a2",
+        "richos/engine/scripts/hooks/guard-ceo-ruled-ask.sh": "be83072dbcedb12c393d97662c5f584cc97ff75d5d9c1c15368f2f1b7a59d5f3",
         "richos/engine/scripts/hooks/notice-ceo-ruled-prose.sh": "b6aa4600524c27077232a5a83feab3cfe603436ae8dcaaaa0bcc9ed725c0c1b5",
         "richos/engine/scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "richos/engine/scripts/lib/stop-hook-notice.sh": "f1431988b7e290d871da89518cd3c6c2bfc455558517862097659472ddcf409d",

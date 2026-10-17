@@ -134,11 +134,11 @@ PY
 ask() { # <session> <transcript> [agent-id]: run the gate; stderr in ERR, exit in RC
     local payload
     payload="$(python3 -c 'import json,sys
-d={"session_id":sys.argv[1],"transcript_path":sys.argv[2],"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion",
+d={"session_id":sys.argv[1],"transcript_path":sys.argv[2],"hook_event_name":"PreToolUse","tool_name":sys.argv[5],
    "cwd":sys.argv[4],"tool_input":{"questions":[{"question":"Which phone run goes first?","header":"Order",
    "multiSelect":False,"options":[{"label":"D3","description":"the D3 reproduction"},{"label":"R1","description":"the R1 walk"}]}]}}
 if sys.argv[3]: d["agent_id"]=sys.argv[3]
-print(json.dumps(d))' "$1" "$2" "${3:-}" "$RICHOS_ENTITY_ROOT")"
+print(json.dumps(d))' "$1" "$2" "${3:-}" "$RICHOS_ENTITY_ROOT" "${4:-AskUserQuestion}")"
     ERR="$(printf '%s' "$payload" | bash "$GATE" 2>&1 >/dev/null)"; RC=$?
 }
 notice() { # <transcript>: run the Stop notice; stdout in OUT
@@ -153,6 +153,11 @@ if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -qF "QUESTION FOR YOU:" && print
    && printf '%s' "$ERR" | grep -qF "blocking-ask-exempt.sh $SID"; then
     ok "B01  a live teammate: refused, naming it, the QUESTION FOR YOU: lead-in and the declaration"
 else bad "B01  refused while a teammate is live" "rc=$RC err=$(printf '%s' "$ERR" | head -c 400)"; fi
+
+ask "$SID" "$T1" "" "mcp__richos_questions__ask"
+if [ "$B01_RC" -eq 2 ] && [ "$RC" -eq 0 ] && [ -z "$ERR" ]; then
+    ok "B07  the nonblocking app question passes while the same terminal question is refused"
+else bad "B07  app question is not a blocking terminal box" "rc=$RC err=$ERR"; fi
 
 ask "$SID2" "$T1"
 if [ "$B01_RC" -eq 2 ] && [ "$RC" -eq 0 ]; then ok "B02  the same call in a session with no live teammate: allowed"

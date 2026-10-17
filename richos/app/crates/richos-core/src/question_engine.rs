@@ -211,7 +211,9 @@ pub fn check(
     let output = invoke(
         scope,
         "guard-ceo-ruled-ask.sh",
-        json!({"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":scope.session_id,"cwd":scope.entity_root,"tool_input":{"questions":questions}}),
+        // The app card is nonblocking. Preserve its identity so only the terminal
+        // box is judged by the blocking-ask check; the other question checks still run.
+        json!({"hook_event_name":"PreToolUse","tool_name":"mcp__richos_questions__ask","session_id":scope.session_id,"cwd":scope.entity_root,"tool_input":{"questions":questions}}),
         budget,
     )?;
     // A broken declared guard may report a systemMessage with exit 0. Do not mistake
