@@ -68,7 +68,7 @@ fn sessions(scope: &StatusToolScope) -> Result<Vec<Session>, String> {
     Ok(found)
 }
 
-fn native_path(scope: &StatusToolScope, session: &str) -> Result<PathBuf,String> {
+pub(crate) fn native_path(scope: &StatusToolScope, session: &str) -> Result<PathBuf,String> {
     if !component(session) {return Err("Invalid native session identity".into())}
     let record:Session=serde_json::from_slice(&std::fs::read(scope.state_root.join("evidence").join(session).join("binding.json"))
         .map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;

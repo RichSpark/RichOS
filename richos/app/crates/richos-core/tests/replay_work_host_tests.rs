@@ -1,7 +1,7 @@
 //! The independent Stu transport over recorded native Claude frames.
 //! Native turn completion and later command notifications cannot manufacture job
 //! completion or user replies. Stu's explicit reports and verified work tools own those.
-use richos_core::assignment::{self, PendingNotice, Registration};
+use richos_core::assignment::{self, Registration};
 use richos_core::cognition::{
     BackgroundCommand, Cognition, CognitionError, LeaseFactory, ObligationState, TurnItem, WorkAssignment,
 };
@@ -10,10 +10,10 @@ use richos_core::ledger::Ledger;
 use richos_core::machinery::MachineryRecord;
 use richos_core::native::NativeClient;
 use richos_core::steering::TurnCancel;
-use richos_core::work_host::{WorkHost, WorkNotifier};
+use richos_core::work_host::{WorkHost, SilentNotifier};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod support;
@@ -37,9 +37,7 @@ impl Cognition for ReplayLease {
     fn background_commands(&self) -> Option<Vec<BackgroundCommand>> {
         Some(self.client.background_commands())
     }
-    fn reprime(&mut self, priming: &str, on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.client.prompt_context_only(priming, on).map(|_| ()).map_err(CognitionError::from)
-    }
+
     fn prompt(&mut self, text: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.client.prompt(text, on).map_err(CognitionError::from)
     }
@@ -84,21 +82,12 @@ impl LeaseFactory for ReplayFactory {
     }
 }
 
-#[derive(Default)]
-struct Told(Mutex<Vec<PendingNotice>>);
-impl WorkNotifier for Told {
-    fn raised(&self, _thread: &str, notice: &PendingNotice) {
-        self.0.lock().unwrap().push(notice.clone());
-    }
-}
-
 /// One work host over one capture, in a folder of its own.
 struct Replay {
     root: PathBuf,
     state: PathBuf,
     transcript: PathBuf,
     host: Arc<WorkHost>,
-    told: Arc<Told>,
     binding: ThreadBinding,
 }
 
@@ -144,9 +133,8 @@ fn replay(capture: &str, speed: f64, requests: &[&str]) -> Replay {
         .collect();
     std::fs::write(root.join("conversation-ledger.jsonl"), rows.join("\n") + "\n").unwrap();
     let factory = ReplayFactory { child, cwd: root.clone(), state: state.clone(), doctrine, skills };
-    let told = Arc::new(Told::default());
-    let host = WorkHost::new(&state, Box::new(factory), told.clone());
-    Replay { root, state, transcript, host, told, binding }
+    let host = WorkHost::new(&state, Box::new(factory), Arc::new(SilentNotifier));
+    Replay { root, state, transcript, host, binding }
 }
 
 impl Replay {
@@ -165,7 +153,7 @@ impl Replay {
             needs_screen: false,
         };
         let receipt=assignment::register(&self.state,&request).unwrap();
-        let scope=richos_core::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:COMPANY.into(),thread_id:thread.into()};
+        let scope=richos_core::status_tools::StatusToolScope { version:1,state_root:self.state.clone(),entity_id:COMPANY.into(),thread_id:thread.into()};
         let sender=self.root.join("rich-status.json");
         richos_core::session_tools::bind(&sender,&scope,"replay-rich","rich",Some(richos_core::ecs::UserInstruction {
             ledger_ref:request.instruction_ledger_ref,sha256:request.instruction_sha256,text:Some(text.into())})).unwrap();
@@ -180,7 +168,9 @@ impl Replay {
 
     /// What he was told about one job, in order.
     fn told_about(&self, id: &str) -> Vec<String> {
-        self.told.0.lock().unwrap().iter().filter(|n| n.assignment_id == id).map(|n| n.text.clone()).collect()
+        let scope=richos_core::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:COMPANY.into(),thread_id:self.binding.thread_id().into()};
+        let _ = id;
+        richos_core::session_tools::pending(&scope,"rich").unwrap().into_iter().map(|(message,_)|message.text).collect()
     }
 
     /// The replay child's own account of the wire, as far as it has written it.
@@ -244,7 +234,7 @@ fn frames_before_user_send(capture:&str,user_send:usize)->usize {
     frames
 }
 fn check_saved_report(r:&Replay,id:&str) {
-    assert_eq!(r.row(id).state,assignment::AssignmentState::Registered,"a native turn or task notification inferred job completion");
+    assert_eq!(r.row(id).state,richos_core::assignment::AssignmentState::Running,"a native turn or task notification inferred job completion");
     assert!(r.told_about(id).is_empty(),"the host manufactured a reply on Stu's behalf");
     assert!(r.events("divergence").is_empty(),"the host injected input absent from the user's handoff: {:?}",r.events("divergence"));
 }

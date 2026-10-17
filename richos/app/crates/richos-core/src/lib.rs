@@ -110,7 +110,6 @@ pub mod questions;
 pub mod question_work;
 pub mod question_engine;
 pub mod question_tools;
-pub mod reachability;
 pub mod recovery;
 pub mod reprime;
 pub mod runtime;
@@ -171,14 +170,13 @@ pub use loro::{
     CliContextCompiler, CorpusLanes, InjectedSlice, LaneMap, LoroError, LoroRoot, LoroTools,
     SharedSliceProvenance, Slice, SliceProvenance, SliceRecord,
 };
-pub use reprime::{LoroContextCompiler, LoroTier, RePrimePayload, SliceRequest};
+pub use reprime::{LoroContextCompiler, LoroTier, SliceRequest};
 pub use spine::{Spine, SpineError, WorkerEventsSource};
 pub use steering::{
     ActiveTurn, IntakeHealth, IntakeLog, IntakeRecord, SteeringError, StopClaim, StopOutcome, TurnCancel,
     TurnControl, ConversationControl, KNOWN_INTAKE_TAGS,
 };
 pub use stream::{StreamEvent, TurnObserver};
-pub use reachability::{ReachabilityProbe, ReachabilityVerdict, WorkSize};
 pub use screen::{
     FakeScreen, Screen, ScreenReading, ScreenSource, ScreenWatch, UnknownScreen, WaitOutcome,
     SCREEN_POLL,
@@ -200,7 +198,6 @@ pub mod provider_auth;
 pub mod engine_profile;
 
 pub mod repositories;
-pub mod app_workers;
 pub mod work_status;
 
 /// The BACKGROUND-WORK leg (the background-work spec, richos-hq
@@ -219,6 +216,7 @@ pub mod work_status;
 ///                    running" with unless it has a read of its own (Sage's check of that
 ///                    page, finding 6). Read-only, this conversation only, no call into the
 ///                    back end.
+pub mod app_workers;
 pub mod assignment;
 pub mod assignment_tools;
 pub mod status_tools;
@@ -232,14 +230,6 @@ pub mod review_watch;
 /// §114): the user's choice, saved where the app's review-watch reads it, and what the Mac reports
 /// about Codex (installed, signed in), from Codex's own `login status`.
 pub mod codex_reviews;
-
-/// **THE OPENING OF HIS TURN** (the CEO's ruling §55, 2026-09-18):
-///   - `first_reply` — what the model did before he heard a word, and whether it was allowed
-///                    to. The doctrine's *"the register is your FIRST tool call"* was measured
-///                    not being obeyed, so the ordering is a rule something can run rather
-///                    than a sentence: no tool discovery, no bookkeeping, and the hand-over
-///                    first, inside a budget taken off two real turns.
-pub mod first_reply;
 
 pub mod read_view;
 
@@ -266,11 +256,11 @@ pub mod operator_lead;
 pub mod operator_claim;
 ///   - `operator_snapshot` — the digest of what a lead read at start, so a stale lead is retired
 ///                    at its next idle moment ((q) item 4).
-pub mod operator_snapshot;
 ///   - `operator_host` — one lead per conversation: relay, never hold; only a report settles;
 ///                    named stops, the Esc, the read, team liveness, idle retirement ((g), (c),
 ///                    (d), (o), (m), (q), (r), (s), e4; the §88 answer seam).
 pub mod operator_host;
+pub mod operator_snapshot;
 ///   - `operator_runtime` — the host's seams for real: his engine's scripts from the declared
 ///                    root, the launcher with the claim, `operator-complete`, durable notices.
 pub mod operator_runtime;

@@ -99,24 +99,24 @@ fn successful_tool_save_is_verified_and_returns_after_a_new_spine_starts() {
     s.attach_lease(Box::new(mock));
     s.submit_prompt("What do you know about my business?", Source::Text)
         .unwrap();
-    assert!(primes.lock().unwrap()[0].contains("We sell ropes to harbors."));
-    assert!(!primes.lock().unwrap()[0].contains("He has not been asked yet."));
+    assert!(primes.lock().unwrap().is_empty(), "reading saved notes must not spend a hidden model turn");
+    assert_eq!(s.onboarding_state(s.active_binding().unwrap()), OnboardingState::Described);
+    assert!(fs::read_to_string(company::company_file(&f.central,&f.a)).unwrap().contains("We sell ropes to harbors."));
 }
 
 #[test]
-fn fresh_prime_supplies_the_exact_destination_even_when_no_folder_exists() {
+fn the_tool_scope_supplies_the_exact_destination_even_when_no_folder_exists() {
     let f = Fixture::new();
     let mut s = f.spine();
     let mock = MockCognition::new("fresh", vec!["ok"]);
     let primes = mock.reprimes.clone();
     s.attach_lease(Box::new(mock));
     s.submit_prompt("Let's begin", Source::Text).unwrap();
-    assert!(primes.lock().unwrap()[0].contains(
-        &company::company_file(&f.central, &f.a)
-            .to_string_lossy()
-            .to_string()
-    ));
-    assert!(primes.lock().unwrap()[0].contains("company_notes_path"));
+    assert!(primes.lock().unwrap().is_empty());
+    let scope=s.onboarding_tool_scope(s.active_binding().unwrap()).unwrap();
+    assert_eq!(scope.central_root,f.central);
+    assert_eq!(scope.record_path,f.record);
+
 }
 
 #[test]
@@ -161,9 +161,8 @@ fn same_thread_button_decline_refreshes_the_next_model_turn() {
     s.submit_prompt("What else can we do?", Source::Text)
         .unwrap();
     let primes = primes.lock().unwrap();
-    assert_eq!(primes.len(), 2);
-    assert!(primes[1].contains("declined"));
-    assert!(!primes[1].contains("He has not been asked yet."));
+    assert!(primes.is_empty());
+    assert!(matches!(s.onboarding_state(s.active_binding().unwrap()), OnboardingState::Declined { .. }));
 }
 
 #[test]
@@ -183,9 +182,8 @@ fn same_thread_external_tool_save_and_decline_are_detected_before_next_turn() {
     onboarding_tools::call(&f.scope, DECLINE_TOOL_NAME, json!({})).unwrap();
     s.submit_prompt("Let's do some work", Source::Text).unwrap();
     let primes = primes.lock().unwrap();
-    assert_eq!(primes.len(), 3);
-    assert!(primes[1].contains("partial"));
-    assert!(primes[2].contains("declined"));
+    assert!(primes.is_empty());
+    assert!(matches!(s.onboarding_state(s.active_binding().unwrap()), OnboardingState::Declined { .. }));
 }
 
 #[test]
@@ -504,23 +502,14 @@ fn accepted_request_is_delivered_once_and_never_injected_into_hidden_priming() {
     spine.attach_lease(Box::new(mock));
     let first = "First unique CEO request: save the blue notebook answer.";
     spine.submit_prompt(first, Source::Text).unwrap();
-    assert!(!primes.lock().unwrap()[0].contains(first));
+    assert!(primes.lock().unwrap().is_empty());
     assert_eq!(prompts.lock().unwrap().as_slice(), [first]);
     // A disk change forces same-lease refresh while the next request is durably accepted.
     f.save("Previously approved company facts.", "partial")
         .unwrap();
     let second = "Second unique CEO request: finish and save exactly once.";
     spine.submit_prompt(second, Source::Text).unwrap();
-    let primed = primes.lock().unwrap();
-    assert_eq!(primed.len(), 2);
-    assert!(primed[1].contains(first), "completed history survives");
-    assert!(
-        !primed[1].contains(second),
-        "accepted new request is absent"
-    );
-    assert!(!primed[1].contains("CURRENT INTENT (what we are doing right now)"));
+    assert!(primes.lock().unwrap().is_empty(), "no hidden request is permitted");
     assert_eq!(prompts.lock().unwrap().as_slice(), [first, second]);
-    let native_prompt = richos_core::reprime::context_only_priming(&primed[1]);
-    assert!(serde_json::from_str::<serde_json::Value>(&native_prompt).unwrap()["event"]=="context_restored");
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&native_prompt).unwrap()["context"],primed[1]);
+
 }

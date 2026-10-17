@@ -123,17 +123,13 @@ fn onboarding_grant_exists_only_during_visible_wire_delivery() {
     let mut f = Fixture::new();
     f.bind();
     assert!(!f.allowed());
-    f.lease.reprime("context to remember", &mut |_| {}).unwrap();
-    assert!(!f.allowed());
-    assert_eq!(f.observations(), ["denied"]);
+    assert!(f.observations().is_empty(), "preparation must not send a hidden model turn");
     assert_eq!(
         f.lease.prompt("visible question", &mut |_| {}).unwrap(),
         "end_turn"
     );
     assert!(!f.allowed());
-    f.lease.reprime("later context", &mut |_| {}).unwrap();
-    assert!(!f.allowed());
-    assert_eq!(f.observations(), ["denied", "granted", "denied"]);
+    assert_eq!(f.observations(), ["granted"]);
 }
 
 #[test]

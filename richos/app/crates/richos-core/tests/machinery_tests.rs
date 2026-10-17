@@ -138,17 +138,7 @@ impl Cognition for ReplayCognition {
     fn session_id(&self) -> &str {
         &self.session_id
     }
-    fn reprime(&mut self, _priming: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        if self.reprime_machinery {
-            // §1.5: the priming turn is a REAL turn and produces real machinery.
-            let script = vec![Item::Frame(json!({"type":"stream_event",
-                "event":{"type":"content_block_start","index":0,
-                         "content_block":{"type":"tool_use","id":"toolu_PRIME",
-                                          "name":"Read reprime payload","input":{}}}}))];
-            self.replay(&script, on_item);
-        }
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         let script = std::mem::take(&mut self.script);
         self.replay(&script, on_item);
@@ -532,9 +522,7 @@ impl Cognition for HookedCognition {
     fn session_id(&self) -> &str {
         self.inner.session_id()
     }
-    fn reprime(&mut self, priming: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.inner.reprime(priming, on_item)
-    }
+
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         (self.during)();
         self.inner.prompt(text, on_item)

@@ -329,13 +329,6 @@ module.exports = [
     why: "Only reachable with a live turn, which is exactly when syncComposerMode shows Stop.",
   },
   {
-    s: "I couldn't take that down while I was working. It's back in the box below, nothing lost.",
-    c: "ACTIONABLE",
-    control: "#send",
-    fixture: "working-turn",
-    why: "§9.2 steering refused. The words are restored; Send is what sends them again.",
-  },
-  {
     s: "I couldn't start that thread just now. Your words are still in the box below. Press Send to try again.",
     c: "ACTIONABLE",
     control: "#send",
@@ -2550,39 +2543,6 @@ module.exports = [
   // The fourth arm, `Failed`, mints no literal of its own — it returns
   // `UpstreamFault::ceo_message()`, which is already classified above.
   // -------------------------------------------------------------------------------------
-  {
-    s:
-      "Claude answered a request of {probe_chars} characters just now, which is the size " +
-      "RichOS actually sends. It is working.",
-    c: "UNREACHABLE",
-    why:
-      "`ReachabilityVerdict::Reachable`. It names the SIZE rather than saying 'online', " +
-      "because on 2026-09-03 a three-character probe succeeded while every large brief died " +
-      "on a 529 — so 'it is up' is not a fact and 'it is up for a request this big' is. No " +
-      "shipped UI path reaches it: the only caller is the `reachability_probe` example.",
-  },
-  {
-    s:
-      "That check sent {probe_chars} characters where RichOS's own work runs to " +
-      "{floor_chars}, so it proves nothing about whether real work would get through. A " +
-      "small request can succeed while every large one fails.",
-    c: "UNREACHABLE",
-    why:
-      "`ReachabilityVerdict::Unproven`, and the sentence the whole module exists for. It " +
-      "says neither 'healthy' nor 'down' — it says the check did not run at the size that " +
-      "matters, which is the true answer a cheap ping would have replaced with a green " +
-      "tick. Same reachability status as the row above: example-only today.",
-  },
-  {
-    s:
-      "RichOS has not sent Claude enough work yet to know what size to test at, so there " +
-      "is nothing honest to report about whether it is reachable.",
-    c: "UNREACHABLE",
-    why:
-      "`ReachabilityVerdict::Unmeasured` — a fresh install with no measured request sizes. " +
-      "It refuses to probe at all rather than pick a number, because a probe with no scale " +
-      "would spend the customer's own Claude quota to learn nothing. Example-only today.",
-  },
 
   // =======================================================================================
   // THE SIX FILES THE INVENTORY COULD NOT SEE UNTIL 2026-09-05

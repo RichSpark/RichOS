@@ -44,15 +44,7 @@ test = true
 name = "native_failure_modes"
 path = "examples/native_failure_modes.rs"
 
-[[example]]
-name = "rotation_roundtrip"
-path = "examples/rotation_roundtrip.rs"
-test = true
 
-[[example]]
-name = "watermark_roundtrip"
-path = "examples/watermark_roundtrip.rs"
-test = true
 
 [[example]]
 name = "machinery_roundtrip"
@@ -68,10 +60,6 @@ test = true
 name = "worker_status_demo"
 path = "examples/worker_status_demo.rs"
 
-[[example]]
-name = "loro_reprime_demo"
-path = "examples/loro_reprime_demo.rs"
-test = true
 
 [[example]]
 name = "loro_correction_demo"

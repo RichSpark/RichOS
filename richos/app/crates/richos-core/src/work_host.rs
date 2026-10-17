@@ -22,9 +22,6 @@ pub trait AnsweredClose: Send + Sync {
 }
 pub type LeadSink<'a> = &'a dyn Fn(&crate::questions::Delivery) -> Result<String, String>;
 pub const ROTATION_WAITS_FOR_COMMANDS: std::time::Duration = std::time::Duration::from_secs(600);
-pub const REPOSITORIES_CHANGED: &str = "repositories-connected";
-const TEAM_CHANGED_CONTINUATION: &str = r#"{"event":"team_changed","registered":true}"#;
-const HANDOFF_ASK: &str = r#"{"event":"session_handoff_requested","max_chars":1500}"#;
 
 #[derive(Default)]
 struct Inner {
@@ -42,7 +39,6 @@ struct Inner {
     completed: u64,
     rotations: u64,
     last_rotation_reason: Option<String>,
-    lease_repositories: Option<Vec<PathBuf>>,
     lease_team: Option<String>,
 }
 struct Backend {
@@ -72,7 +68,6 @@ pub struct WorkHost {
     quota: Mutex<Option<Arc<crate::quota::Service>>>,
     operator: Mutex<Option<Arc<dyn OperatorIntake>>>,
     output: Mutex<Option<crate::output::OutputStore>>,
-    hold_check: Mutex<std::time::Duration>,
     retry_clock: Mutex<Arc<dyn crate::upstream::RetryClock>>,
 }
 impl WorkHost {
@@ -92,7 +87,6 @@ impl WorkHost {
             quota: Mutex::new(None),
             operator: Mutex::new(None),
             output: Mutex::new(None),
-            hold_check: Mutex::new(std::time::Duration::from_secs(120)),
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
         })
     }
@@ -287,9 +281,16 @@ impl WorkHost {
             if let Some(session) = &session {
                 crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),session)?;
             }
-            let completed = self.live_completion(&backend, binding, message,
+            let completed = self.live_completion(&backend, binding, message.clone(),
                 (through, session.clone()), text.clone());
-            let delivered = input.send_input(&id, &text, completed)?;
+            let delivered = match input.send_input(&id, &text, completed) {
+                Ok(delivered)=>delivered,
+                Err(error)=>{
+                    self.observe_turn_result(binding,Some(&message),Some(&format!("peer:{through}")),
+                        session.as_deref().unwrap_or(""),&Err(error.clone()))?;
+                    return Err(error);
+                }
+            };
             if !delivered { return Ok(()); }
             if delivered {
                 let mut inner = backend.inner.lock().unwrap();
@@ -375,25 +376,12 @@ impl WorkHost {
         message: &crate::session_tools::Message,
         turn: &str,
     ) -> Result<String, String> {
+        let result=(|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
-        // A native connection owns its workers as well as its shell commands.
-        let workers_finished = || {
-            let session = backend.inner.lock().unwrap().lease_session.clone();
-            session.is_none_or(|session| {
-                let view = crate::app_workers::status(&self.state, Some(&session));
-                view.is_attributed() && view.active + view.liveness_unknown == 0
-            })
-        };
-        // Peer delivery uses the same connection lifecycle as assignment delivery.
-        if workers_finished() {
-            self.renew_if_repositories_changed(backend, binding);
-            self.renew_if_account_changed(backend, binding);
-            self.renew_if_model_changed(backend, binding);
-        }
-        let original = serde_json::to_string(message).map_err(|e| e.to_string())?;
-        let mut input = original.clone();
-        loop {
+        self.renew_if_account_changed(backend, binding);
+        let input = serde_json::to_string(message).map_err(|e| e.to_string())?;
+        {
             self.ensure_lease(backend, binding)?;
             let mut guard = backend.lease.lock().unwrap();
             let lease = guard.as_mut().ok_or("The operator connection closed")?;
@@ -448,8 +436,6 @@ impl WorkHost {
                 let clock = self.retry_clock.lock().unwrap().clone();
                 if !clock.wait(wait, &||self.retry_stopped(backend, binding, message, &session)) { break sent; }
             };
-            let result =
-                result.and_then(|reason| lease.work_readiness_after_turn().map(|_| reason));
             {
                 let mut inner = backend.inner.lock().unwrap();
                 inner.peer_input = None;
@@ -459,7 +445,6 @@ impl WorkHost {
                 drop(guard.take());
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
-            self.observe_turn_result(binding,Some(message),Some(turn),&session,&result.as_ref().map(Clone::clone).map_err(ToString::to_string))?;
             let reason = result.map_err(|e| e.to_string())?;
             if reason != "end_turn" {
                 return Err(format!("Operator input did not complete: {reason}"));
@@ -468,11 +453,16 @@ impl WorkHost {
                 .as_mut()
                 .ok_or("The operator connection closed during team reload")?;
             self.project_output(binding, &session);
-            if !self.refresh_peer_team(backend, lease.as_mut())? {
-                return Ok(session);
-            }
-            input = TEAM_CHANGED_CONTINUATION.to_string();
+            self.refresh_peer_team(backend, lease.as_mut())?;
+            Ok(session)
         }
+        })();
+        if result.is_err() {
+            let session=backend.inner.lock().unwrap().lease_session.clone().unwrap_or_default();
+            self.observe_turn_result(binding,Some(message),Some(turn),&session,&result)?;
+        }
+        result
+
     }
 
     pub fn adopt_registered(self: &Arc<Self>, binding: &ThreadBinding) -> usize {
@@ -603,22 +593,6 @@ impl WorkHost {
         }))
     }
 
-    fn connected_repositories(&self, binding: &ThreadBinding) -> Option<Vec<PathBuf>> {
-        let data_dir = self.state.parent()?;
-        let load =
-            crate::entity::EntityRegistry::load(&crate::entity::entity_registry_path(data_dir));
-        if load.source == crate::entity::RegistrySource::Unreadable {
-            return None;
-        }
-        let mut repositories = load
-            .registry
-            .get(binding.entity_id())
-            .map(|entity| entity.connected_repositories.clone())
-            .unwrap_or_default();
-        repositories.sort();
-        Some(repositories)
-    }
-
     fn observe_lease(self: &Arc<Self>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
         let host = Arc::downgrade(self);
         let binding = binding.clone();
@@ -656,7 +630,7 @@ impl WorkHost {
             let mut inner = backend.inner.lock().unwrap();
             if !inner.closing {
                 inner.lease_session = Some(opened.session_id().to_string());
-                inner.lease_repositories = self.connected_repositories(binding);
+                inner.peer_stopper=opened.cancel_handle().map(|handle|(opened.session_id().to_string(),handle));
                 inner.lease_team = team;
             }
             inner.closing
@@ -670,128 +644,47 @@ impl WorkHost {
         Ok(())
     }
 
-    fn renew_if_repositories_changed(
-        self: &Arc<Self>,
-        backend: &Arc<Backend>,
-        binding: &ThreadBinding,
-    ) {
-        if backend.lease.lock().unwrap().is_none() {
-            return;
-        }
-        let Some(now) = self.connected_repositories(binding) else {
-            return;
-        };
-        let Some(opened_with) = backend.inner.lock().unwrap().lease_repositories.clone() else {
-            return;
-        };
-        if opened_with == now {
-            return;
-        }
-        let commands = backend
-            .lease
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|lease| lease.running_commands());
-        if matches!(
-            commands,
-            Some(
-                crate::lease_commands::CommandReading::Running(_)
-                    | crate::lease_commands::CommandReading::Unreadable
-            )
-        ) {
-            eprintln!(
-                "[richos] back end: a repository was connected since it opened; renewal deferred \
-                 while a command it started may still be running"
-            );
-            return;
-        }
-        if let Err(why) = self.rotate(backend, binding, REPOSITORIES_CHANGED) {
-            eprintln!("[richos] back end: not renewed for the newly connected repository ({why})");
-        }
-    }
-
     fn renew_if_account_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
         if !self.account_switch_due(backend) {
             return;
         }
-        if let Err(why) = self.rotate(backend, binding, crate::spine::ACCOUNT_SWITCH) {
+        // Finish the previous process before the normal opener resumes its transcript.
+        // Both processes have the same native session ID and must never overlap.
+        {
+            let mut lease = backend.lease.lock().unwrap();
+            if lease.as_ref().is_some_and(|lease| lease.has_pending_input()) {
+                return;
+            }
+            let mut inner = backend.inner.lock().unwrap();
+            inner.cancel = None;
+            inner.peer_input = None;
+            inner.peer_stopper = None;
+            inner.peer_active_through = None;
+            drop(inner);
+            drop(lease.take());
+        }
+        if let Err(why) = self.ensure_lease(backend, binding) {
             eprintln!("[richos] back end: not moved to the next Claude account ({why})");
         }
     }
 
-    fn renew_if_model_changed(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
-        let Some(wanted) = self.factory.lease_models() else {
-            return;
-        };
-        let running_on = backend
-            .lease
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|lease| lease.lease_model());
-        if running_on.is_none_or(|model| model == wanted.stu)
-            || self.renewal_waits_for_a_command(backend, "its model changed in Preferences")
-        {
-            return;
-        }
-        if let Err(why) = self.rotate(backend, binding, crate::spine::MODEL_CHANGED) {
-            eprintln!("[richos] back end: not moved to the model chosen in Preferences ({why})");
-        }
+    pub fn set_model(&self,model:crate::config::ModelChoice)->Result<(),String> {
+        let backends:Vec<_>=self.backends.lock().unwrap().values().cloned().collect();
+        for backend in backends {Self::set_backend_model(&backend,model)?;}
+        Ok(())
     }
-
+    fn set_backend_model(backend:&Backend,model:crate::config::ModelChoice)->Result<(),String> {
+        let handle={let inner=backend.inner.lock().unwrap();inner.cancel.clone().or_else(||inner.peer_stopper.as_ref()
+            .filter(|(session,_)|inner.lease_session.as_ref()==Some(session)).map(|(_,handle)|handle.clone()))};
+        if let Some(handle)=handle {handle.set_model(model)?;}
+        Ok(())
+    }
     fn account_switch_due(&self, backend: &Arc<Backend>) -> bool {
-        let Some(quota) = self.quota.lock().unwrap().clone() else {
-            return false;
-        };
-        let (account, streamed, commands) = {
-            let lease = backend.lease.lock().unwrap();
-            let Some(lease) = lease.as_ref() else {
-                return false;
-            };
-            let Some(account) = lease.account() else {
-                return false;
-            };
-            (
-                account.to_string(),
-                lease.streamed_usage(),
-                lease.running_commands(),
-            )
-        };
-        if quota.before_turn(&account, streamed) == account {
-            return false;
-        }
-        if matches!(
-            commands,
-            Some(
-                crate::lease_commands::CommandReading::Running(_)
-                    | crate::lease_commands::CommandReading::Unreadable
-            )
-        ) {
-            eprintln!("[richos] back end: its Claude account is to be left; renewal deferred while a command it started may still be running");
-            return false;
-        }
-        true
-    }
-
-    fn renewal_waits_for_a_command(&self, backend: &Arc<Backend>, why: &str) -> bool {
-        let commands = backend
-            .lease
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|lease| lease.running_commands());
-        let waits = matches!(
-            commands,
-            Some(
-                crate::lease_commands::CommandReading::Running(_)
-                    | crate::lease_commands::CommandReading::Unreadable
-            )
-        );
-        if waits {
-            eprintln!("[richos] back end: {why}; renewal deferred while a command it started may still be running");
-        }
-        waits
+        let Some(quota)=self.quota.lock().unwrap().clone() else {return false};
+        let lease=backend.lease.lock().unwrap();
+        let Some(lease)=lease.as_ref() else {return false};
+        let Some(account)=lease.account() else {return false};
+        quota.before_turn(account,lease.streamed_usage())!=account
     }
 
     pub fn rotations(&self, thread: &str) -> (u64, Option<String>) {
@@ -954,12 +847,7 @@ impl WorkHost {
                 if inner.closing {
                     return;
                 }
-                drop(
-                    backend
-                        .wake
-                        .wait_timeout(inner, *self.hold_check.lock().unwrap())
-                        .unwrap(),
-                );
+                drop(backend.wake.wait(inner).unwrap());
             } else {
                 drop(inner);
                 if self.open_assignments().is_ok_and(|open| open.is_empty()) {
@@ -988,62 +876,6 @@ impl WorkHost {
         backend.inner.lock().unwrap().binding = Some(binding.clone());
         backend.wake.notify_all();
         Ok(format!("work-input:{}", delivery.id))
-    }
-
-    fn rotate(
-        self: &Arc<Self>,
-        backend: &Arc<Backend>,
-        binding: &ThreadBinding,
-        reason: &str,
-    ) -> Result<(), String> {
-        let mut handoff = String::new();
-        {
-            let mut lease = backend.lease.lock().unwrap();
-            if let Some(lease) = lease.as_mut() {
-                let said = lease.prompt_context_only(HANDOFF_ASK, &mut |item| {
-                    if let TurnItem::Text { text, .. } = item {
-                        if handoff.len() < 6000 {
-                            handoff.push_str(text);
-                        }
-                    }
-                });
-                if said.is_err() {
-                    handoff.clear();
-                }
-            }
-        }
-        let (team, fresh) = {
-            let factory = &self.factory;
-            (factory.team_digest(), factory.spawn_work(binding))
-        };
-        let mut fresh = fresh.map_err(|e| e.to_string())?;
-        self.observe_lease(fresh.as_mut(), binding);
-        let reports = assignment::read_all(
-            &self.state,
-            binding.entity_id().as_str(),
-            binding.thread_id(),
-        )
-        .map_err(|e| e.to_string())?;
-        let context=serde_json::json!({"event":"session_replaced","reason":reason,"previous_session_summary":handoff,
-            "work_records":reports}).to_string();
-        fresh
-            .reprime(&context, &mut |_| {})
-            .map_err(|e| e.to_string())?;
-        let session = fresh.session_id().to_string();
-        let repositories = self.connected_repositories(binding);
-        let mut lease = backend.lease.lock().unwrap();
-        let retired = lease.replace(fresh);
-        let mut inner = backend.inner.lock().unwrap();
-        inner.lease_session = Some(session);
-        inner.peer_active_through = None;
-        inner.rotations += 1;
-        inner.last_rotation_reason = Some(reason.into());
-        inner.lease_repositories = repositories;
-        inner.lease_team = team;
-        drop(inner);
-        drop(lease);
-        drop(retired);
-        Ok(())
     }
 
     /// Job execution status is read from Stu's existing reports, never maintained here.
@@ -1326,9 +1158,6 @@ mod tests {
     impl Cognition for Lease {
         fn session_id(&self) -> &str {
             &self.session
-        }
-        fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-            Ok(())
         }
         fn refresh_team(&mut self) -> Result<bool, CognitionError> {
             Ok(true)
@@ -2344,6 +2173,39 @@ mod tests {
     }
 
     #[test]
+    fn a_handoff_refused_before_stu_starts_is_saved_and_reports_one_failure() {
+        struct Refused;
+        impl LeaseFactory for Refused {
+            fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+            fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+                Err(CognitionError::Io("provider failed before opening".into()))
+            }
+        }
+        let h=harness(0);
+        let host=WorkHost::new(&h.state,Box::new(Refused),Arc::new(SilentNotifier));
+        let scope=host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Prepare the report"})).unwrap();
+        let (message,through)=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();
+        let error=host.run_message(&Backend::new(),&h.binding,&message,&format!("peer:{through}")).unwrap_err();
+        assert!(error.contains("provider failed before opening"));
+        let (saved,saved_through)=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();
+        assert_eq!(saved_through,through);
+        assert_eq!(saved.text,"Prepare the report");
+        let (notice,end)=crate::session_tools::pending(&scope,"rich").unwrap().unwrap();
+        assert_eq!(notice.from,"work-status");
+        let facts:serde_json::Value=serde_json::from_str(&notice.text).unwrap();
+        assert_eq!(facts["input_id"],format!("peer:{through}"));
+        assert!(facts["error"].as_str().unwrap().contains("provider failed before opening"));
+        crate::session_tools::acknowledge(&scope,"rich",end).unwrap();
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"one failure produced duplicate notices");
+        host.shutdown();
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
     fn peer_handoff_with_operational_record_executes_once() {
         let h = harness(0);
         h.team.lock().unwrap().digest = Some("stock".into());
@@ -2468,17 +2330,8 @@ mod tests {
         let prompts = h.work_prompts.lock().unwrap();
         assert_eq!(
             prompts.len(),
-            8,
-            "same handoff did not continue after registering the new teammate"
-        );
-        assert!(prompts
-            .last()
-            .unwrap()
-            .starts_with(TEAM_CHANGED_CONTINUATION));
-        assert_eq!(
-            prompts.last().unwrap(),
-            TEAM_CHANGED_CONTINUATION,
-            "roster reload must not replay the accepted handoff"
+            7,
+            "roster reload must not add a synthetic input or replay the accepted handoff"
         );
         drop(prompts);
         h.host.shutdown();

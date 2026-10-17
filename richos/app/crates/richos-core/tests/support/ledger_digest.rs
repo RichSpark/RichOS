@@ -108,15 +108,12 @@ pub fn digest_ledger(src: &Path, copy_to: &Path) -> Result<Vec<String>, String> 
         // emitted verbatim: they are a tag and a vendor id, neither of them his words.
         if let Some(u) = &t.upstream_failure {
             out.push(format!(
-                "  upstream {} | fault={} | status={} | request_id={} | model={} | ceo={} | loss={} | retry={}",
+                "  upstream {} | fault={} | status={} | request_id={} | model={}",
                 t.id,
                 u.fault,
                 opt(u.status),
                 u.request_id.clone().unwrap_or_else(|| "-".into()),
                 u.model.clone().unwrap_or_else(|| "-".into()),
-                digest(&u.ceo_message),
-                digest(&u.loss_message),
-                u.retry_message.as_deref().map(digest).unwrap_or_else(|| "-".into()),
             ));
         }
         // WHY THE TURN WAS INTERRUPTED, on its own line and only when present — same shape
@@ -130,11 +127,9 @@ pub fn digest_ledger(src: &Path, copy_to: &Path) -> Result<Vec<String>, String> 
         // behind a hash.
         if let Some(c) = &t.interruption {
             out.push(format!(
-                "  interruption {} | cause={} | ceo={} | loss={} | offers_retry={}",
+                "  interruption {} | cause={} | offers_retry={}",
                 t.id,
                 c.cause,
-                digest(&c.ceo_message),
-                c.loss_message.as_deref().map(digest).unwrap_or_else(|| "-".into()),
                 c.offers_retry,
             ));
         }
@@ -189,11 +184,6 @@ pub fn digest_ledger(src: &Path, copy_to: &Path) -> Result<Vec<String>, String> 
             // Hashed anyway, on the rule that this tool emits no string it did not choose.
             Err(e) => out.push(format!("messages {id} | refused={}", digest(&e.to_string()))),
         }
-        out.push(format!(
-            "handoff_summary {} = {}",
-            id,
-            ledger.handoff_summary(id).map(digest).unwrap_or_else(|| "-".into())
-        ));
     }
 
     out.push(format!("scope_violations.count = {}", ledger.scope_violations().len()));

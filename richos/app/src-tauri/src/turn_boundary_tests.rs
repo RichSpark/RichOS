@@ -20,9 +20,7 @@ impl Cognition for WritesItDown {
     fn session_id(&self) -> &str {
         "writes-it-down"
     }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     /// The host's scope for the visible turn: the binding, the turn and his exact words —
     /// the same three facts the real tool's scope file carries.
     fn prepare_work_turn(

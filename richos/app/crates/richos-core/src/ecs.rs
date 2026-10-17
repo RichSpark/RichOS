@@ -25,6 +25,9 @@ pub struct EcsError(pub String);
 /// rather than trusting the flag alone.
 pub const CEO_SEAT_PREFIX: &str = "ceo-thread:";
 
+/// The engine's existing open obligation statuses.
+pub const OPEN_OBLIGATION_STATUSES: [&str; 5] = ["candidate", "accepted", "active", "pending", "blocked"];
+
 /// **The CEO's own seat for ONE conversation thread** — his cursor, one per thread.
 ///
 /// Until 2026-09-17 every front desk bound the single `ceo-default` row, and that is the
@@ -343,6 +346,21 @@ impl EcsBridge {
         serde_json::from_value(result["binding"].clone()).map_err(|e| EcsError(e.to_string()))
     }
 
+    /// Read the engine's existing obligation without rebinding or changing its state.
+    pub fn read_obligation(&self, entity: &str, thread: &str, obligation: &str) -> Result<Value, EcsError> {
+        let seat=ceo_seat(thread);
+        let current=self.request("current",Self::seated(seat.as_deref(),json!({})))?;
+        let binding:Binding=serde_json::from_value(current["binding"].clone())
+            .map_err(|error|EcsError(error.to_string()))?;
+        if binding.entity_id!=entity || binding.thread_id!=thread {
+            return Err(EcsError("The binding belongs to another conversation".into()));
+        }
+        let result=self.request("inspect",Self::seated(seat.as_deref(),json!({
+            "binding":binding,"query":{"item_id":obligation}
+        })))?;
+        Ok(result["item"].clone())
+    }
+
     /// The obligation behind a background assignment: `open`, `settled` or `absent`.
     ///
     /// **Read from the obligation and never from its workers**, and the open set is
@@ -357,8 +375,6 @@ impl EcsBridge {
     pub fn obligation_state(&self, binding: &Binding, seat: Option<&str>, obligation: &str)
         -> Result<crate::cognition::ObligationState, EcsError> {
         use crate::cognition::ObligationState;
-        /// `OPEN_ASSIGNMENT_STATUSES`, mirrored from `mega-lander/app.py:660`.
-        const OPEN: [&str; 5] = ["candidate", "accepted", "active", "pending", "blocked"];
         if obligation.is_empty() || obligation.len() > 1024 {
             return Ok(ObligationState::Absent);
         }
@@ -367,7 +383,7 @@ impl EcsBridge {
         }))) {
             Ok(value) => match value.pointer("/item/status").and_then(Value::as_str) {
                 None => Ok(ObligationState::Absent),
-                Some(status) if OPEN.contains(&status) => Ok(ObligationState::Open),
+                Some(status) if OPEN_OBLIGATION_STATUSES.contains(&status) => Ok(ObligationState::Open),
                 Some(_) => Ok(ObligationState::Settled),
             },
             Err(error) if error.0.contains("item is absent") => Ok(ObligationState::Absent),

@@ -19,7 +19,6 @@
 use richos_core::cognition::MockCognition;
 use richos_core::entity::{EntityId, ThreadEntity};
 use richos_core::ledger::{Ledger, LedgerError, Source};
-use richos_core::reprime::RePrimePayload;
 use richos_core::spine::SpineError;
 
 mod support;
@@ -115,14 +114,6 @@ fn no_event_from_one_entity_renders_in_another_entitys_thread() {
     assert_eq!(violations[0].thread_entity.as_deref(), Some("femcboost"));
     assert_eq!(violations[0].turn_entity.as_deref(), Some("deeply"));
 
-    // (4) ...and it cannot reach a model either. A re-prime payload is the highest-
-    //     leverage leak in the app: whatever lands in it is asserted to a fresh session
-    //     as authoritative ground truth.
-    let binding = ledger.thread_binding("thr_fem").unwrap();
-    let priming = RePrimePayload::assemble(&ledger, &binding, 8, None).unwrap().to_priming_prompt();
-    assert!(!priming.contains(secret), "CROSS-ENTITY LEAK into the priming prompt:\n{priming}");
-    assert!(priming.contains("femcboost"), "the successor is told its scope");
-
     // (5) ...and crash recovery will not resume it into anything.
     assert!(
         !ledger.pending_turns().iter().any(|t| t.id == "turn_leak"),
@@ -137,7 +128,7 @@ fn no_event_from_one_entity_renders_in_another_entitys_thread() {
 }
 
 #[test]
-fn a_reprime_digest_for_one_entity_never_carries_another_entitys_actions() {
+fn the_action_read_for_one_company_never_carries_another_companys_actions() {
     // The leak that predated entity binding: the action digest was assembled from the
     // WHOLE ledger, so every rotation told every entity's session what Rich had done in
     // every OTHER entity, under a header calling it authoritative.
@@ -152,12 +143,12 @@ fn a_reprime_digest_for_one_entity_never_carries_another_entitys_actions() {
     ledger.record_action(&fem_turn, "dispatch", "spawned mark-sonnet-f1 on Avelor").unwrap();
     ledger.record_action(&dee_turn, "dispatch", "emailed the deeply partner list").unwrap();
 
-    let fem_digest = RePrimePayload::assemble(&ledger, &fem_binding, 8, None).unwrap();
-    let details: Vec<&str> = fem_digest.action_ledger_digest.iter().map(|a| a.detail.as_str()).collect();
+    let fem_digest = ledger.ceo_facing_actions_for_entity(&femcboost());
+    let details: Vec<&str> = fem_digest.iter().map(|a| a.detail.as_str()).collect();
     assert_eq!(details, vec!["spawned mark-sonnet-f1 on Avelor"], "femcboost sees only femcboost");
 
-    let dee_digest = RePrimePayload::assemble(&ledger, &dee_binding, 8, None).unwrap();
-    let details: Vec<&str> = dee_digest.action_ledger_digest.iter().map(|a| a.detail.as_str()).collect();
+    let dee_digest = ledger.ceo_facing_actions_for_entity(&deeply());
+    let details: Vec<&str> = dee_digest.iter().map(|a| a.detail.as_str()).collect();
     assert_eq!(details, vec!["emailed the deeply partner list"], "deeply sees only deeply");
 
     // The unscoped audit view still holds both — nothing was deleted, only unasserted.

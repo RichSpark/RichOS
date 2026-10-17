@@ -74,9 +74,7 @@ impl Cognition for ScriptedLease {
         &self.session_id
     }
 
-    fn reprime(&mut self, _priming: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
 
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         let mut seq = 0u64;

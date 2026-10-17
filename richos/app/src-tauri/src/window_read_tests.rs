@@ -10,7 +10,7 @@ struct HeldTurn {
 
 impl Cognition for HeldTurn {
     fn session_id(&self) -> &str { "read-test" }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+
     fn prompt(&mut self, _: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         on_item(TurnItem::Text { seq: 1, text: "First words" });
         self.entered.send(()).unwrap();
@@ -90,62 +90,4 @@ fn corrections_follow_the_company_of_the_open_conversation_not_the_launch_select
     assert_eq!(correction_entity(&*empty.reader().snapshot(), Some(alpha.clone())).unwrap(), alpha);
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&empty_path).ok();
-}
-
-struct HeldPrime {
-    entered: mpsc::Sender<()>,
-    release: mpsc::Receiver<()>,
-}
-impl Cognition for HeldPrime {
-    fn session_id(&self) -> &str { "opening-test" }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.entered.send(()).unwrap();
-        // Hang guard only: the test controls completion through the release channel.
-        self.release.recv_timeout(Duration::from_secs(10)).unwrap();
-        Ok(())
-    }
-    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        unreachable!("opening a conversation does not send a user request")
-    }
-}
-
-#[test]
-fn opening_the_active_conversation_finishes_while_its_prime_is_still_held() {
-    let root = std::env::temp_dir().join(format!("opening-prime-{}-{}", std::process::id(), richos_core::util::now_millis()));
-    std::fs::create_dir_all(&root).unwrap();
-    let mut spine = Spine::new(Ledger::open(root.join("ledger.jsonl")).unwrap());
-    spine.set_entity_registry(EntityRegistry::new(vec![
-        Entity::new("alpha", "Alpha", &["/fixture/alpha"]).unwrap(),
-        Entity::new("beta", "Beta", &["/fixture/beta"]).unwrap(),
-    ]).unwrap());
-    let first = spine.create_thread("First", &EntityId::parse("alpha").unwrap()).unwrap();
-    let other = spine.create_thread("Other", &EntityId::parse("beta").unwrap()).unwrap();
-    spine.switch_thread(&first).unwrap();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    spine.attach_lease(Box::new(HeldPrime { entered: entered_tx, release: release_rx }));
-    let control = spine.turn_control();
-    let reader = spine.reader();
-    let spine = Arc::new(Mutex::new(spine));
-    let writer = spine.clone();
-    let thread = first.clone();
-    let prime = std::thread::spawn(move || writer.lock().unwrap().prime_front_desk(&thread));
-    // Hang guards only. Completion before releasing the channel proves the open did not
-    // wait for priming; elapsed wall time is not the correctness assertion.
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let opener = spine.clone();
-    let view = reader.clone();
-    let ctl = control.clone();
-    let (opened_tx, opened_rx) = mpsc::channel();
-    let open = std::thread::spawn(move || opened_tx.send(switch_thread_in(&opener, &view, &ctl, &first)).unwrap());
-    let result = opened_rx.recv_timeout(Duration::from_secs(5));
-    release_tx.send(()).unwrap();
-    prime.join().unwrap();
-    open.join().unwrap();
-    result.expect("opening the active conversation waited for the provider").unwrap();
-    switch_thread_in(&spine, &reader, &control, &other).unwrap();
-    assert_eq!(reader.snapshot().active_thread(), Some(other.as_str()));
-    assert_eq!(reader.snapshot().active_binding().unwrap().entity_id().as_str(), "beta");
-    drop(spine);
-    std::fs::remove_dir_all(root).unwrap();
 }

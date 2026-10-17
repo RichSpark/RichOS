@@ -111,8 +111,9 @@ fn a_real_agents_session_start_frame_reaches_the_journal_and_the_technical_view(
     let doctrine_dir = std::env::temp_dir().join(format!("richos-doctrine-btt-{}", std::process::id()));
     let doctrine = richos_core::doctrine::ensure_rendered(&doctrine_dir, &richos_core::doctrine::DoctrineIdentity::default()).unwrap();
     let skills = richos_core::skills::ensure_rendered(&doctrine_dir, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
-    spine.attach_lease(Box::new(NativeCognition::start(&script, Path::new("/tmp"), &doctrine, &skills).unwrap()));
     let thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(NativeCognition::start(&script, std::env::temp_dir().as_path(), &doctrine, &skills).unwrap()));
+
 
     // The child writes its session-start frame immediately after answering the handshake,
     // so the reader thread may not have consumed it yet. Poll rather than sleep, so a real
@@ -161,28 +162,18 @@ fn a_real_agents_session_start_frame_reaches_the_journal_and_the_technical_view(
 
 /// A lease whose between-turn lane a test fills directly, and whose `reprime` emits real
 /// machinery — so the standing order can be tested rather than argued about.
-struct RepriminingLease {
+struct BetweenTurnLease {
     session_id: String,
     between: Vec<serde_json::Value>,
     /// What `reprime` emits. A real priming turn runs real tools; this is one of them.
-    reprime_machinery: Vec<serde_json::Value>,
     next_seq: u64,
 }
 
-impl Cognition for RepriminingLease {
+impl Cognition for BetweenTurnLease {
     fn session_id(&self) -> &str {
         &self.session_id
     }
-    fn reprime(&mut self, _priming: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        let mut seq = 0u64;
-        for f in self.reprime_machinery.clone().iter() {
-            for r in MachineryRecord::from_native_event(f, &self.session_id, seq) {
-                seq += 1;
-                on_item(TurnItem::Machinery(r));
-            }
-        }
-        Ok(())
-    }
+
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         on_item(TurnItem::Text { seq: 0, text: &format!("ack: {text}") });
         Ok("end_turn".to_string())
@@ -205,78 +196,13 @@ fn spine_with_lease(
 ) -> (Spine, String) {
     let mut spine = support::spine(Ledger::open(ledger_path).unwrap());
     spine.set_machinery_journal(MachineryJournal::new(journal_root));
-    spine.attach_lease(lease);
     let thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
+    spine.attach_lease(lease);
+
     (spine, thread)
 }
 
-#[test]
-fn reprime_machinery_is_recorded_and_can_never_reach_a_rendered_thread() {
-    // THE STANDING ORDER, as a test. Re-prime runs a REAL turn and its machinery now flows
-    // (§1.5) — so the question is not whether it is recorded but whether anything can ever
-    // render it. Three answers, and all three must hold:
-    //
-    //   1. it IS on disk, `internal: true`, `turn_id: None`;
-    //   2. the timeline REFUSES it at the guard — it never becomes an item or a lane row;
-    //   3. neither view can produce it, in either mode.
-    let ledger_path = tmp("reprime", ".jsonl");
-    let journal_root = tmp("reprime-journal", "");
-    let lease = RepriminingLease {
-        session_id: "sess-1".into(),
-        between: vec![session_init()],
-        reprime_machinery: vec![json!({"type":"stream_event","event":{"type":"content_block_start",
-            "index":0,"content_block":{"type":"tool_use","id":"toolu_RP","name":"read the action ledger",
-                                       "input":{}}}})],
-        next_seq: 0,
-    };
-    let (mut spine, thread) = spine_with_lease(&ledger_path, &journal_root, Box::new(lease));
 
-    // A CEO turn: this is what triggers `prime_lease_if_needed`, which runs the priming
-    // turn and drains its residue.
-    spine.submit_prompt("how is the release", Source::Text).unwrap();
-
-    // (1) RECORDED.
-    let on_disk = MachineryJournal::new(&journal_root).read_thread(&thread);
-    let priming: Vec<&MachineryRecord> =
-        on_disk.iter().filter(|r| r.title == "read the action ledger").collect();
-    assert_eq!(priming.len(), 1, "re-prime machinery is retained for debugging: {on_disk:#?}");
-    assert!(priming[0].internal, "and it is stamped internal");
-    assert_eq!(priming[0].turn_id, None);
-
-    // (2) REFUSED AT THE GUARD.
-    let timeline = spine.timeline(&thread).unwrap();
-    assert!(timeline.scope_violations().is_empty(), "an internal record is not a leak");
-    assert!(
-        timeline.rejections().iter().any(|r| r.record_id == priming[0].machinery_id),
-        "the guard must REPORT the refusal, not drop it silently"
-    );
-    // Not in the ungated lane either — it never became a row at all.
-    assert!(timeline
-        .between_turns_ungated()
-        .iter()
-        .all(|b| b.vendor_kind != "read the action ledger"));
-
-    // (3) NO MODE CAN PRODUCE IT.
-    for mode in [ViewMode::Ceo, ViewMode::Technical] {
-        let view = timeline.view(mode);
-        let rendered = format!("{:?}", (view.items(), view.between_turns()));
-        assert!(
-            !rendered.contains("read the action ledger"),
-            "re-prime machinery reached a rendered thread in {mode:?}"
-        );
-    }
-
-    // And the honest between-turn traffic that arrived BEFORE priming did render — so this
-    // test is not passing because nothing renders at all.
-    let technical = timeline.view(ViewMode::Technical);
-    assert_eq!(
-        technical.between_turns().iter().map(|b| b.vendor_kind.as_str()).collect::<Vec<_>>(),
-        vec!["system:init"]
-    );
-
-    let _ = std::fs::remove_file(&ledger_path);
-    let _ = std::fs::remove_dir_all(&journal_root);
-}
 
 #[test]
 fn a_lane_row_carries_no_session_id_because_that_is_where_a_rotation_would_show() {
@@ -285,11 +211,10 @@ fn a_lane_row_carries_no_session_id_because_that_is_where_a_rotation_would_show(
     // lane is the place where it would matter most: its rows arrive at session boundaries.
     let ledger_path = tmp("nosess", ".jsonl");
     let journal_root = tmp("nosess-journal", "");
-    let lease = RepriminingLease {
+    let lease = BetweenTurnLease {
         session_id: "sess-SECRET-ROTATION-ID".into(),
         between: vec![json!({"type":"system","subtype":"status","status":"requesting",
                              "session_id":"s","uuid":"u-st"})],
-        reprime_machinery: vec![],
         next_seq: 0,
     };
     let (mut spine, thread) = spine_with_lease(&ledger_path, &journal_root, Box::new(lease));
@@ -334,10 +259,9 @@ fn between_turn_records_obey_the_retention_setting_like_every_other_record() {
     // the normalized row with `payload: None`, which is the honest degrade, never a blank.
     let ledger_path = tmp("retain", ".jsonl");
     let journal_root = tmp("retain-journal", "");
-    let lease = RepriminingLease {
+    let lease = BetweenTurnLease {
         session_id: "sess-1".into(),
         between: vec![session_init()],
-        reprime_machinery: vec![],
         next_seq: 0,
     };
     let (mut spine, thread) = spine_with_lease(&ledger_path, &journal_root, Box::new(lease));
@@ -368,10 +292,9 @@ fn the_lane_is_gated_by_the_same_visibility_the_items_are() {
     // them with the SAME `renders_in` it filters items with.
     let ledger_path = tmp("gate", ".jsonl");
     let journal_root = tmp("gate-journal", "");
-    let lease = RepriminingLease {
+    let lease = BetweenTurnLease {
         session_id: "sess-1".into(),
         between: vec![session_init()],
-        reprime_machinery: vec![],
         next_seq: 0,
     };
     let (mut spine, thread) = spine_with_lease(&ledger_path, &journal_root, Box::new(lease));

@@ -328,19 +328,6 @@ fn child_exit_and_error_results_are_errors_not_successful_answers() {
     }
 }
 
-#[test]
-fn chat_priming_rejects_an_incomplete_terminal() {
-    use richos_core::cognition::{Cognition, CognitionError};
-    let (script, _) = terminal_agent(r#"{"type":"result","stop_reason":"max_tokens"}"#);
-    let dir = script.parent().unwrap();
-    let doctrine = richos_core::doctrine::ensure_rendered(dir, &Default::default()).unwrap();
-    let skills = richos_core::skills::ensure_rendered(dir, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
-    let mut lease =
-        richos_core::native::NativeCognition::start(&script, dir, &doctrine, &skills).unwrap();
-    assert!(
-        matches!(lease.reprime("internal", &mut |_| {}), Err(CognitionError::PrimingStopped(reason)) if reason == "max_tokens")
-    );
-}
 
 #[test]
 fn a_closed_output_stream_cannot_accept_a_later_prompt_that_would_wait_forever() {

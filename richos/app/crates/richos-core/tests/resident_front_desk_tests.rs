@@ -76,10 +76,7 @@ impl Cognition for Desk {
     fn requires_thread_isolation(&self) -> bool {
         true
     }
-    fn reprime(&mut self, _priming: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.log.primed.lock().unwrap().push(self.session.clone());
-        Ok(())
-    }
+
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.log.prompts.lock().unwrap().push((self.session.clone(), text.to_string()));
         let reply = format!("{}: {text}", self.session);
@@ -214,57 +211,7 @@ fn a_message_sent_while_another_conversation_is_working_is_answered_on_its_own_t
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// A returning desk brings its own context measurements back with it. A desk that inherited
-/// the chair's numbers would rotate itself on another conversation's consumption; one that
-/// came back at zero would claim it had used nothing after an hour of talking.
-#[test]
-fn a_returning_front_desk_brings_its_own_context_measurement_and_not_the_other_threads() {
-    let (mut spine, _log, root) = fixture();
-    let one = spine.create_thread("Pricing", &femcboost()).unwrap();
-    let two = spine.create_thread("Hiring", &femcboost()).unwrap();
 
-    spine.submit_prompt_to(&one, &"p".repeat(4000), Source::Text).unwrap();
-    let busy = spine.context_estimate_tokens();
-    assert!(busy > 0, "the first conversation measured nothing at all");
-
-    spine.submit_prompt_to(&two, "hi", Source::Text).unwrap();
-    let quiet = spine.context_estimate_tokens();
-    assert!(quiet < busy, "the fresh desk inherited the first conversation's consumption");
-
-    spine.submit_prompt_to(&one, "hi", Source::Text).unwrap();
-    assert!(spine.context_estimate_tokens() >= busy,
-        "the returning desk came back with an empty watermark");
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-/// **A RENEWAL BELONGS TO THE DESK THAT REACHED ITS LIMIT, NOT TO WHICHEVER DESK IS NEXT** —
-/// part 1 hunt finding 42. The pending renewal reason used to be one spine-wide field, so a
-/// switch to another resident conversation consumed it there: the desk just resumed was
-/// renewed (a handoff and a priming turn spent on a session that was fine), and the desk that
-/// actually needed it stayed parked with nothing scheduled.
-#[test]
-fn a_renewal_owed_to_one_desk_is_not_spent_on_the_desk_he_switches_to() {
-    let (mut spine, log, root) = fixture();
-    let one = spine.create_thread("Pricing", &femcboost()).unwrap();
-    let two = spine.create_thread("Hiring", &femcboost()).unwrap();
-    spine.submit_prompt_to(&one, "first", Source::Text).unwrap();
-    spine.submit_prompt_to(&two, "second", Source::Text).unwrap();
-    assert_eq!(log.spawned(), vec!["desk-1", "desk-2"]);
-
-    // The desk in the chair (desk-2) is the one that is due for renewal.
-    spine.request_rotation("test renewal").unwrap();
-
-    // He switches to the other resident conversation. Its desk is fine and must not be renewed.
-    spine.submit_prompt_to(&one, "back to pricing", Source::Text).unwrap();
-    assert_eq!(spine.rotation_count(), 0, "the renewal was spent on the desk he switched to");
-    assert_eq!(log.spawned(), vec!["desk-1", "desk-2"], "a session that was fine was replaced");
-
-    // And when he comes back to the desk that owed it, the renewal is still there for it.
-    spine.submit_prompt_to(&two, "back to hiring", Source::Text).unwrap();
-    assert_eq!(spine.rotation_count(), 1, "the parked desk lost the renewal it was owed");
-    assert_eq!(log.spawned(), vec!["desk-1", "desk-2", "desk-3"]);
-    std::fs::remove_dir_all(root).unwrap();
-}
 
 /// Past the cap, the LEAST RECENTLY SPOKEN desk is retired — and nothing else is.
 ///

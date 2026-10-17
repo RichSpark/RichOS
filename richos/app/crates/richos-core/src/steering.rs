@@ -759,6 +759,12 @@ pub struct InputOutcome {
 /// A handle that can interrupt the currently running turn from outside the spine lock.
 /// Stop runs on another thread and never takes the lock held by that turn.
 pub trait TurnCancel: Send + Sync {
+    /// Apply a native model setting without canceling or replacing this session.
+    fn set_model(&self, _model:crate::config::ModelChoice)->Result<bool,String> {Ok(false)}
+
+    /// Worker facts from this live session's own task frames.
+    fn worker_status(&self) -> Option<crate::worker_status::WorkerStatusView> { None }
+
     /// Queue ordinary input on this same session without interrupting it. The
     /// callback runs when the native turn ends. Admission alone is not completion.
     /// False means this provider has no live input path; leave the inbox pending.
@@ -982,8 +988,25 @@ impl TurnControl {
         for cancel in cancels {cancel.shutdown();}
     }
 
+    /// Update live Rich sessions. Copy control handles before provider I/O.
+    pub fn set_model(&self,model:crate::config::ModelChoice)->Result<(),String> {
+        let handles:Vec<_>=self.inner.conversations.lock().unwrap().values().filter_map(|state|state.cancel.clone()).collect();
+        for handle in handles {handle.set_model(model)?;}
+        Ok(())
+    }
+
     pub fn lease_sessions(&self)->Vec<String> {
         self.inner.conversations.lock().unwrap().iter().filter(|(thread,_)|!thread.is_empty()).filter_map(|(_,state)|state.lease_session.clone()).collect()
+    }
+
+    /// Read every conversation's native worker facts without taking the spine lock.
+    pub fn worker_statuses(&self)->Vec<crate::worker_status::WorkerStatusView> {
+        let controls:Vec<_>=self.inner.conversations.lock().unwrap().values()
+            .filter(|state|state.lease_session.is_some())
+            .map(|state|state.cancel.clone()).collect();
+        controls.into_iter().map(|handle|handle.and_then(|h|h.worker_status())
+            .unwrap_or_else(||crate::worker_status::WorkerStatusView::unattributed(
+                crate::worker_status::Unattributed::AppEvidenceUnavailable))).collect()
     }
 
     /// **The phone's road in** (plan §4.2 i). Durable on return, and it does NOT require a
@@ -1230,6 +1253,11 @@ impl ConversationControl {
         state.active=Some(turn);
     }
 
+    pub fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
+        let handle=self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.cancel.clone());
+        match handle {Some(handle)=>handle.set_model(model),None=>Ok(false)}
+    }
+
     pub fn shutdown_lease(&self) {
         let cancel=self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.cancel.clone());
         if let Some(cancel)=cancel {cancel.shutdown();}
@@ -1257,6 +1285,15 @@ impl ConversationControl {
 
     pub fn lease_session(&self)->Option<String> {
         self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.lease_session.clone())
+    }
+
+    pub fn worker_status(&self)->crate::worker_status::WorkerStatusView {
+        let (session, handle)=self.shared.inner.conversations.lock().unwrap().get(self.key())
+            .map(|state|(state.lease_session.clone(),state.cancel.clone())).unwrap_or_default();
+        handle.and_then(|h|h.worker_status()).unwrap_or_else(||
+            crate::worker_status::WorkerStatusView::unattributed(if session.is_some() {
+                crate::worker_status::Unattributed::AppEvidenceUnavailable
+            } else {crate::worker_status::Unattributed::NoSession}))
     }
 
     pub fn request_stop(&self) -> Result<StopOutcome, SteeringError> {

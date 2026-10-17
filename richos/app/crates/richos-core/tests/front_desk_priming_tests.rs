@@ -291,15 +291,8 @@ struct InlineCompany {
 
 impl richos_core::cognition::Cognition for InlineCompany {
     fn session_id(&self) -> &str { self.mock.session_id() }
-    fn set_company_context(&mut self, context: Option<&str>)
-        -> Result<bool, richos_core::cognition::CognitionError> {
-        self.current = context.map(str::to_string);
-        Ok(true)
-    }
-    fn reprime(&mut self, text: &str, sink: &mut dyn FnMut(richos_core::cognition::TurnItem))
-        -> Result<(), richos_core::cognition::CognitionError> {
-        self.mock.reprime(text, sink)
-    }
+
+
     fn prompt(&mut self, text: &str, sink: &mut dyn FnMut(richos_core::cognition::TurnItem))
         -> Result<String, richos_core::cognition::CognitionError> {
         self.sent.lock().unwrap().push((text.to_string(), self.current.clone()));

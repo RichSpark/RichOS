@@ -127,9 +127,7 @@ impl Cognition for ApiErrorAsTextCognition {
     fn session_id(&self) -> &str {
         &self.session_id
     }
-    fn reprime(&mut self, _p: &str, _on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(
         &mut self,
         _text: &str,
@@ -157,9 +155,7 @@ impl Cognition for ApiErrorAsErrCognition {
     fn session_id(&self) -> &str {
         &self.session_id
     }
-    fn reprime(&mut self, _p: &str, _on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(
         &mut self,
         _text: &str,
@@ -313,17 +309,15 @@ fn the_statement_survives_a_cold_reopen_and_renders_in_the_ceo_view() {
         .items
         .iter()
         .find_map(|i| match i {
-            TimelineItem::UpstreamOutage { ceo_message, loss_message, fault, request_id, .. } => {
-                Some((ceo_message.clone(), loss_message.clone(), fault.clone(), request_id.clone()))
+            TimelineItem::UpstreamOutage { fault, request_id, .. } => {
+                Some((fault.clone(), request_id.clone()))
             }
             _ => None,
         })
         .expect("the outage row is in the CEO view after a cold reopen");
-    assert_eq!(outage.2, "overloaded");
-    assert!(outage.0.contains("at capacity"));
-    assert!(outage.1.contains("Not on disk:"));
+    assert_eq!(outage.0, "overloaded");
     assert_eq!(
-        outage.3, None,
+        outage.1, None,
         "the vendor's request id is technical and is redacted out of a CEO view"
     );
     let _ = std::fs::remove_file(&path);
@@ -396,9 +390,7 @@ impl Cognition for ScriptedCognition {
     fn session_id(&self) -> &str {
         &self.session_id
     }
-    fn reprime(&mut self, _p: &str, _on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.prompts.lock().unwrap().push((self.session_id.clone(), text.to_string()));
         if self.script.lock().unwrap().pop_front().unwrap_or(false) {
@@ -458,7 +450,7 @@ fn an_overload_waits_out_his_schedule_on_the_same_session_and_a_success_resets_i
         "every retry is his same turn on the same session: {sent:?}"
     );
     assert_eq!(*spawns.lock().unwrap(), 0, "no fresh session was opened");
-    assert_eq!(spine.lease_session_id(), Some("sess-0"));
+    assert_eq!(spine.lease_session_id().as_deref(), Some("sess-0"));
     let turns = spine.ledger().thread_turns(&thread).unwrap();
     let answered = turns.iter().rev().find(|t| t.user_text == "how is the release going?").unwrap();
     assert_eq!(answered.state, TurnState::Completed);

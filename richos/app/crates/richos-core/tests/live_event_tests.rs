@@ -18,7 +18,7 @@
 
 use richos_core::cognition::{Cognition, CognitionError, MockCognition, TurnItem};
 use richos_core::entity::EntityId;
-use richos_core::ledger::{AttentionTier, Ledger, Source};
+use richos_core::ledger::{Ledger, Source};
 use richos_core::live::{LiveEvent, LiveObserver};
 use richos_core::machinery::{MachineryObserver, MachineryRecord};
 use richos_core::spine::WorkerEventsSource;
@@ -153,9 +153,7 @@ impl Cognition for ScriptedLease {
         &self.session_id
     }
 
-    fn reprime(&mut self, _priming: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
 
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         let mut seq = 0u64;
@@ -514,53 +512,7 @@ fn every_streamed_message_is_phase_unknown_and_never_final() {
     let _ = std::fs::remove_file(&path);
 }
 
-#[test]
-fn a_proactive_message_carries_the_one_phase_that_is_real() {
-    let (path, ledger) = tmp_ledger("proactive");
-    let mut spine = support::spine(ledger);
-    spine.create_thread("General", &femcboost()).unwrap();
-    let live = RecordingLive::default();
-    spine.set_live_observer(Box::new(live.clone()));
 
-    let turn_id = spine.raise_proactive(None, AttentionTier::Digest, "The staging deploy has been red for 40 minutes.").unwrap();
-
-    let started = live.of("rich://message-started");
-    assert_eq!(started.len(), 1);
-    assert_eq!(started[0]["phase"], json!("proactive"), "the ledger records Source::Proactive — this one IS sourced");
-    assert_eq!(started[0]["messageId"], json!(format!("{turn_id}:text:0")));
-    assert_eq!(started[0]["seq"], json!(null), "written atomically, outside the stream counter");
-
-    let completed = live.of("rich://message-completed");
-    assert_eq!(completed[0]["text"], json!("The staging deploy has been red for 40 minutes."));
-
-    // A proactive turn had no delivery span, so it claims none.
-    let status = live.of("rich://turn-status");
-    assert_eq!(status.len(), 1);
-    assert_eq!(status[0]["status"], json!("completed"));
-    assert_eq!(status[0]["startedAt"], json!(null), "there was no hand-off to a lease to time");
-    assert_eq!(status[0]["activeDurationMs"], json!(null));
-
-    let _ = std::fs::remove_file(&path);
-}
-
-#[test]
-fn a_silent_proactive_message_reaches_the_wire_on_no_family_at_all() {
-    let (path, ledger) = tmp_ledger("silent");
-    let mut spine = support::spine(ledger);
-    spine.create_thread("General", &femcboost()).unwrap();
-    let live = RecordingLive::default();
-    let stream = RecordingStream::default();
-    spine.set_live_observer(Box::new(live.clone()));
-    spine.set_observer(Box::new(stream.clone()));
-
-    let turn_id = spine.raise_proactive(None, AttentionTier::Silent, "noted for later").unwrap();
-
-    assert!(live.payloads().is_empty(), "§5.1: Tier 3 never appears in the conversation");
-    assert!(stream.payloads().is_empty(), "and the old family already agreed");
-    // ...but it IS durable. Silence on the wire is not silence in the ledger.
-    assert!(spine.ledger().turn(&turn_id).is_some(), "the message is recorded, only never shown");
-    let _ = std::fs::remove_file(&path);
-}
 
 // ===========================================================================
 // 4. TURN STATUS
@@ -851,59 +803,6 @@ fn no_event_ever_carries_one_entitys_content_under_another_entitys_fence() {
     let _ = std::fs::remove_file(&path);
 }
 
-#[test]
-fn a_proactive_emit_during_a_turn_keeps_the_entity_it_was_written_under() {
-    // THE NEGATIVE CONTROL WITH TEETH. A proactive message raised on entity B's thread
-    // while entity A's thread is the active context and a turn is in flight is sent at once
-    // (round 16 draws Rich's line beside the working row), stamped with the binding it was
-    // WRITTEN under.
-    //
-    // Point `emit_proactive_live` at the ACTIVE binding instead of the written one — a
-    // one-line change, and exactly the kind a future refactor makes to "simplify" it — and
-    // this test fails: deeply's sentence is emitted stamped femcboost.
-    let (path, ledger) = tmp_ledger("mid-turn-proactive");
-    let mut spine = support::spine(ledger);
-    let femc_thread = spine.create_thread("Memory strategy", &femcboost()).unwrap();
-    let deeply_thread = spine.create_thread("Pricing", &deeply()).unwrap();
-    spine.attach_lease(Box::new(MockCognition::new("sess-1", vec!["ack"])));
-    let live = RecordingLive::default();
-    spine.set_live_observer(Box::new(live.clone()));
-
-    spine.switch_thread(&femc_thread).unwrap();
-    // Pretend a turn is in flight.
-    spine.debug_set_turn_in_progress(true);
-    spine
-        .raise_proactive(Some(&deeply_thread), AttentionTier::Digest, "DEEPLY-ONLY: the pricing page is down.")
-        .unwrap();
-    spine.debug_set_turn_in_progress(false);
-
-    // A real turn on femcboost's thread afterwards sends nothing more of it.
-    spine.submit_prompt("status", Source::Text).unwrap();
-
-    let proactive: Vec<Value> = live
-        .of("rich://message-completed")
-        .into_iter()
-        .filter(|p| p["phase"] == json!("proactive"))
-        .collect();
-    assert_eq!(proactive.len(), 1, "the message was sent exactly once");
-    assert_eq!(
-        proactive[0]["entityId"],
-        json!("deeply"),
-        "flushed under the binding it was WRITTEN under, not the one that is active now"
-    );
-    assert_eq!(proactive[0]["threadId"], json!(deeply_thread));
-    assert_eq!(proactive[0]["text"], json!("DEEPLY-ONLY: the pricing page is down."));
-
-    // And nothing stamped femcboost carries deeply's sentence.
-    for (name, p) in live.payloads() {
-        if p["entityId"] == json!("femcboost") {
-            let flat = serde_json::to_string(&p).unwrap();
-            assert!(!flat.contains("DEEPLY-ONLY"), "{name}: {flat}");
-        }
-    }
-
-    let _ = std::fs::remove_file(&path);
-}
 
 #[test]
 fn an_unbound_legacy_thread_emits_nothing_at_all() {

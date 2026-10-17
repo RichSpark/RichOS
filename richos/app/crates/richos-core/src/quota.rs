@@ -1173,7 +1173,7 @@ impl Service {
     }
 
     /// **How many of Rich's agents are working**, as the desktop shell last counted them (the
-    /// provider's own launch rows with no end observed, `app_workers::status`). Said in the
+    /// provider's own native task frames). Said in the
     /// settings view and the every-account-used-up line; 0 leaves the count out.
     pub fn set_agents_working(&self, count: usize) {
         self.agents_working.store(count, std::sync::atomic::Ordering::SeqCst);

@@ -265,9 +265,7 @@ impl Cognition for HeldUntilReleased {
     fn session_id(&self) -> &str {
         "sess-held"
     }
-    fn reprime(&mut self, _p: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.turns += 1;
         on_item(TurnItem::Text { seq: 0, text: "working on it " });
@@ -429,9 +427,7 @@ impl Cognition for DiesOnCancel {
     fn session_id(&self) -> &str {
         "sess-dies"
     }
-    fn reprime(&mut self, _t: &str, _on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         on_item(TurnItem::Text { seq: 0, text: "starting" });
         while !self.flag.load(Ordering::SeqCst) {
@@ -631,9 +627,7 @@ impl Cognition for FinishesDespiteTheStop {
     fn session_id(&self) -> &str {
         "sess-finishes-anyway"
     }
-    fn reprime(&mut self, _p: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         on_item(TurnItem::Text { seq: 0, text: "Here is the complete answer you asked for." });
         self.running.store(true, Ordering::SeqCst);

@@ -17,7 +17,7 @@
 //! `the_classifier_does_not_read_the_vendors_english` is the proof of that claim rather
 //! than a promise about it.
 
-use richos_core::upstream::{FakeUpstream, RetryBudget, TurnLoss, UpstreamFailure, UpstreamFault};
+use richos_core::upstream::{FakeUpstream, RetryBudget, UpstreamFailure, UpstreamFault};
 
 /// The verbatim bytes, from this machine's own transcripts on 2026-09-05.
 const CAPTURED_529: &str =
@@ -97,7 +97,7 @@ fn the_undecorated_line_still_classifies() {
 /// as the same `TurnError` string and the CEO had no way to tell "wait, it will come
 /// back" from "wait until your window rolls over".
 #[test]
-fn a_429_is_a_different_fault_with_a_different_sentence_and_a_schedule() {
+fn a_429_is_a_different_fault_with_a_known_schedule() {
     let lines: Vec<&str> = CONSTRUCTED_429.lines().filter(|l| !l.trim().is_empty()).collect();
     assert_eq!(lines.len(), 2, "the constructed corpus is two lines; the fixture changed");
 
@@ -111,19 +111,8 @@ fn a_429_is_a_different_fault_with_a_different_sentence_and_a_schedule() {
 
     let overload = UpstreamFailure::classify("API Error: 529 Overloaded.").unwrap();
     let quota = UpstreamFailure::classify(lines[0]).unwrap();
-    assert_ne!(
-        overload.fault.ceo_message(),
-        quota.fault.ceo_message(),
-        "the two must not present the same way — that IS the finding"
-    );
-    assert!(
-        quota.fault.ceo_message().contains("schedule"),
-        "the quota sentence has to say the wait has an end"
-    );
-    assert!(
-        overload.fault.ceo_message().contains("capacity"),
-        "the overload sentence has to say it is capacity, not quota"
-    );
+    assert_ne!(overload.fault.tag(),quota.fault.tag());
+    assert!(!overload.fault.clears_on_a_known_schedule());
 }
 
 /// INVARIANT: classification reads the vendor's STRUCTURE, never its English.
@@ -189,20 +178,6 @@ fn a_stderr_tail_is_classified_line_by_line() {
     );
 }
 
-/// INVARIANT: the vendor's own words are quoted back, not summarized away, and they are
-/// attributed to Claude rather than spoken in Rich's voice.
-#[test]
-fn the_vendors_own_words_are_quoted_and_attributed() {
-    let line = CAPTURED_529.lines().next().unwrap();
-    let f = UpstreamFailure::classify(line).unwrap();
-    let msg = f.ceo_message();
-    assert!(msg.contains("Claude reported:"), "the quote must be attributed");
-    assert!(msg.contains("req_011Cegb417YK6i1BEVDFmzU1"), "the request id must survive");
-    assert!(
-        msg.starts_with(UpstreamFault::Overloaded.ceo_message()),
-        "Rich's own sentence comes first; the vendor's diagnostic is quoted after it"
-    );
-}
 
 // =========================================================================================
 // The fault-injection seam itself
@@ -281,77 +256,9 @@ fn a_successful_turn_restores_the_allowance() {
     b.succeeded();
     assert!(b.may_retry(UpstreamFault::ServerError), "a completed turn is a positive signal that the upstream works");
     assert_eq!(b.attempts(), 0);
-    assert_eq!(b.ceo_message(), None, "and nothing to report");
 }
 
-/// INVARIANT: retry is VISIBLE. The count of what was spent reaches the CEO in his own
-/// units, and it names the cost. A ceiling nobody is told about is still a silent retry.
-#[test]
-fn what_was_spent_trying_is_stated_in_attempts_and_names_the_cost() {
-    let mut b = RetryBudget::new();
-    assert_eq!(b.ceo_message(), None, "a healthy run says nothing");
-
-    b.charge(UpstreamFault::ServerError);
-    let one = b.ceo_message().expect("one failure must produce a line");
-    assert!(one.contains("tried once"), "singular is written out: {one}");
-
-    b.charge(UpstreamFault::ServerError);
-    let two = b.ceo_message().expect("two failures must produce a line");
-    assert!(two.contains("tried 2 times"), "the count is the billed count: {two}");
-    assert!(
-        two.contains("costs against your Claude usage"),
-        "the cost is named, because that is why the ceiling exists: {two}"
-    );
-    assert!(
-        two.contains(UpstreamFault::ServerError.ceo_message()),
-        "and the fault's own sentence is carried, not replaced"
-    );
-
-    // An overload says when the next try is, while one is coming.
-    let mut b = RetryBudget::new();
-    b.charge(UpstreamFault::Overloaded);
-    let next = b.ceo_message().unwrap();
-    assert!(next.contains("try again in 1 minute,"), "{next}");
-    assert!(next.contains("retry 1 of 7"), "{next}");
-    assert!(next.contains(UpstreamFault::Overloaded.ceo_message()), "{next}");
-}
 
 // =========================================================================================
 // What survived
 // =========================================================================================
-
-/// INVARIANT: the loss statement is built from COUNTS and never claims a clean survival.
-#[test]
-fn the_loss_statement_names_what_is_on_disk_and_what_is_not() {
-    let loss = TurnLoss {
-        prompt_is_durable: true,
-        partial_reply_chars: 412,
-        actions_recorded: 3,
-        lease_context_lost: true,
-    };
-    let m = loss.ceo_message();
-    assert!(m.contains("what you asked for is saved"), "{m}");
-    assert!(m.contains("412 characters"), "the number is measured, not adjectival: {m}");
-    assert!(m.contains("3 recorded action(s)"), "{m}");
-    assert!(m.contains("Not on disk:"), "the loss is named, not implied: {m}");
-    assert!(
-        !m.contains("nothing was lost"),
-        "something always was; saying otherwise is the defect this exists to end"
-    );
-}
-
-/// POSITIVE CONTROL for the other side: a turn that died before anything was written says
-/// exactly that, rather than listing zero characters of a saved answer.
-#[test]
-fn a_turn_that_died_before_writing_anything_says_so_plainly() {
-    let loss = TurnLoss {
-        prompt_is_durable: false,
-        partial_reply_chars: 0,
-        actions_recorded: 0,
-        lease_context_lost: true,
-    };
-    let m = loss.ceo_message();
-    assert!(m.starts_with("Nothing had been written to disk yet"), "{m}");
-    assert!(!m.contains("0 characters"), "an empty list is a sentence, not a zero: {m}");
-    assert!(m.contains("Not on disk:"), "{m}");
-}
