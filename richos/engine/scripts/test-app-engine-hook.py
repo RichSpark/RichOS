@@ -147,9 +147,10 @@ class DesktopHooks(unittest.TestCase):
         for instruction in [None, original, {"ledger_ref":"ledger:thread:other", "sha256":"b" * 64}]:
             self.scope.write_text(json.dumps({**grant, "user_instruction":instruction}))
             for tool, args in [("Bash", {"command":"true"}), ("Write", {"file_path":str(self.coordination / "result.txt"), "content":"after Stop"}),
-                               ("Read", {"file_path":str(self.scope)})]:
+                               ("Read", {"file_path":str(self.scope)}),
+                               ("TaskOutput", {"task_id":"command-for-other-job", "block":False, "timeout":1000})]:
                 result = self.hook("PreToolUse", tool_name=tool, tool_use_id="direct-" + tool, tool_input=args)
-                self.assertEqual(result.returncode, 0 if instruction and instruction != original else 2, result.stderr)
+                self.assertEqual(result.returncode, 0 if tool in ("Read", "TaskOutput") or instruction and instruction != original else 2, result.stderr)
                 if result.returncode == 0 and tool == "Bash":
                     self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]["updatedInput"], {**args, "run_in_background":True})
             if instruction == original:
