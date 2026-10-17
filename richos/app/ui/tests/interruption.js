@@ -54,7 +54,7 @@ function rustSentence(needle) {
   return unique[0];
 }
 
-const NOT_SIGNED_IN = rustSentence("isn't connected to your Claude account");
+const NOT_SIGNED_IN = rustSentence("no Claude account is signed in");
 const TRANSIENT = rustSentence("RichOS lost its connection to Claude Code");
 
 // The exact sentence `InterruptionRecord::new` writes when Rich had written nothing. It is
@@ -301,7 +301,7 @@ async function main() {
     assertEqual(calls, [TURN], "one press, one put-back call on this turn");
     // The card's own prose still refuses to promise the failure has cleared.
     const whole = c.body.concat(c.notes).join(" ");
-    assert(/send this again/.test(whole), "the sentence that makes this control necessary is gone: " + whole);
+    assert(/send your message again/.test(whole), "the sentence that makes this control necessary is gone: " + whole);
     return `1 control, ${JSON.stringify(RETRY_LABEL)}, one press -> one put-back call, no retry promised anywhere on the card`;
   });
 

@@ -194,10 +194,7 @@ module.exports = [
   // one's control (or its deliberate absence) on the rendered card.
   // -----------------------------------------------------------------------------------
   {
-    s:
-      "RichOS couldn't start that, because it isn't connected to your Claude account right " +
-      "now. Either nobody has signed in on this Mac yet, or the sign-in ran out. You can " +
-      "connect it in Settings, under Claude accounts, and then send this again.",
+    s: "RichOS couldn't send this to Rich because no Claude account is signed in on this Mac, or the sign-in has expired. Open Settings, choose Claude accounts and sign in, then send your message again.",
     c: "ACTIONABLE",
     control: "#set-btn",
     fixture: null,
@@ -210,13 +207,9 @@ module.exports = [
       "this card can appear in, and the sentence itself names the route in words. It was TWO sentences briefly, the second returned by a `route()` method — deleted because under app/crates this registry can only see literals inside a function called `ceo_message`, so a route authored anywhere else would reach his screen while being invisible to the one inventory that asks whether he can act on what he is told.",
   },
   {
-    s:
-      "RichOS couldn't start that. There is an account credential set up on this Mac and " +
-      "Anthropic turned it down, so the request never left the machine. This one needs " +
-      "whoever set RichOS up. It isn't something you can fix from here, and asking " +
-      "again won't change it.",
+    s: "RichOS couldn't send this to Rich because the Claude key or sign-in token set up on this Mac was refused. Sending again won't help until that key or token is replaced.",
     c: "NEEDS-SOMEONE-ELSE",
-    party: true,
+    explainedBy: "The notice names the key or program that must be replaced; this card cannot perform that installation.",
     fixture: null,
     why:
       "`InterruptionCause::CredentialRejected`, and a DIFFERENT class from the sign-in row " +
@@ -228,13 +221,9 @@ module.exports = [
       "honest shape for a state he does not own.",
   },
   {
-    s:
-      "RichOS couldn't start that. The copy of Claude Code RichOS tried to run isn't on this Mac " +
-      "where RichOS expected it, so there was nothing here to think with. This one needs whoever " +
-      "set RichOS up. It isn't something you can fix from here, and asking again won't " +
-      "change it.",
+    s: "RichOS couldn't send this to Rich because Claude Code, which Rich runs on, could not be found on this Mac. Sending again won't help until Claude Code is installed again.",
     c: "NEEDS-SOMEONE-ELSE",
-    party: true,
+    explainedBy: "The notice names the key or program that must be replaced; this card cannot perform that installation.",
     fixture: null,
     why:
       "`InterruptionCause::ProviderMissing` — the 2026-09-17 candidate-walk defect. " +
@@ -247,7 +236,7 @@ module.exports = [
       "or pointing at Claude Code) is whoever set RichOS up's to make, not his.",
   },
   {
-    s: "Stopped, as you asked. Nothing is running, and nothing of yours was lost.",
+    s: "Stopped, as you asked.",
     c: "INFORMATIONAL",
     fixture: null,
     why:
@@ -256,9 +245,7 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
-    s:
-      "RichOS lost its connection to Claude Code, partway through. That kind of " +
-      "thing usually clears on its own, so asking again is worth a try.",
+    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Put it back in the box to restore your message, then send your message again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -269,10 +256,7 @@ module.exports = [
       "no button' could just mean the card stopped drawing one.",
   },
   {
-    s:
-      "That stopped before Rich finished, and RichOS can't tell you why: it doesn't recognize what " +
-      "came back. Asking again is reasonable; if it stops the same way, it needs whoever " +
-      "set RichOS up.",
+    s: "Rich's answer stopped early and RichOS can't tell you why. Press Put it back in the box to restore your message, then send your message again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -461,9 +445,8 @@ module.exports = [
   // NEEDS SOMEONE ELSE
   // -------------------------------------------------------------------------------------
   {
-    s: "RichOS isn't connected to Claude Code right now, so it can't take that on. Quit RichOS and open it again. That clears it most of the time. If it keeps happening, whoever set RichOS up has to sign Claude Code back in; that part isn't yours to fix.",
-    c: "NEEDS-SOMEONE-ELSE",
-    party: true,
+    s: "RichOS couldn't send your message to Rich because Claude Code isn't ready. Quit RichOS and open it again, then send your message again.",
+    c: "ACTIONABLE",
     control: "#send",
     fixture: "not-connected",
     why:

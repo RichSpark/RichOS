@@ -73,7 +73,7 @@ fn an_io_failure_is_transient_and_says_asking_again_is_worth_a_try() {
     let cause = classify("cognition io: broken pipe");
     assert_eq!(cause, InterruptionCause::Transient);
     assert!(cause.offers_retry(), "the one arm where a retry control belongs");
-    assert!(cause.ceo_message().contains("asking again"), "{}", cause.ceo_message());
+    assert!(cause.ceo_message().contains("send your message again"), "{}", cause.ceo_message());
 }
 
 /// **THE 2026-09-17 CANDIDATE-WALK DEFECT, AS A VALUE.** `provider-supervisor.py`'s own

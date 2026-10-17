@@ -2101,7 +2101,7 @@ async function main() {
       const fs = require("fs");
       const rust = fs.readFileSync(path.join(UI_DIR, "..", "src-tauri", "src", "main.rs"), "utf8");
       const mock = fs.readFileSync(path.join(UI_DIR, "mock.js"), "utf8");
-      const entry = REGISTRY.find((r) => r.s.indexOf("RichOS isn't connected to Claude Code") === 0);
+      const entry = REGISTRY.find((r) => r.s.indexOf("RichOS couldn't send your message to Rich") === 0);
       assert(entry, "the lease-down state is missing from the registry");
       assert(rust.indexOf("LEASE_UNAVAILABLE_MESSAGE") > 0, "the Rust const is gone");
       assert(

@@ -67,7 +67,7 @@ pub const CHANGED_SINCE_LAUNCH: &str = "Your team's settings changed after RichO
 pub const OFF_SINCE_LAUNCH: &str = "Your team was switched off after RichOS started, so RichOS didn't hand this to your \
                                      team. Quit RichOS and open it again, then ask Rich again.";
 /// Quit has begun.
-pub const CLOSING: &str = "RichOS is closing, so RichOS didn't hand this to your team.";
+pub const CLOSING: &str = "RichOS is closing, so RichOS didn't hand this to your team. Open RichOS again, then ask Rich again.";
 /// The per-assignment Stop found no agent on that assignment.
 pub const NOTHING_ON_IT: &str = "None of your team's agents is working on this one. To stop what your team is \
                                   doing in this conversation, press Stop there.";
