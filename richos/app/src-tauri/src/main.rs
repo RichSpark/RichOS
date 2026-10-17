@@ -4355,17 +4355,15 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
     }))
 }
 
-/// Consume operational notice cards. Stu's authored reports reach Rich through the
-/// peer intake; operational state must not create a second conversation input.
+/// Compatibility endpoint. Work observations reach Rich through durable intake;
+/// application-written notice prose is never rendered as his conversation.
 #[richos_command::command]
 fn take_work_notices(
     state: State<AppState>,
     thread_id: String,
 ) -> Result<Vec<richos_core::assignment::PendingNotice>, String> {
-    let entity = assignment_scope(&state, &thread_id)?;
-    let engine_state = state.data_dir.join("engine-state");
-    richos_core::assignment::take_pending_notices_of(&engine_state, entity.as_str(), &thread_id, |kind| !kind.is_result())
-        .map_err(|e| e.to_string())
+    assignment_scope(&state, &thread_id)?;
+    Ok(Vec::new())
 }
 
 /// All asynchronous incoming messages use the same turn, stream and phone delivery.

@@ -1325,49 +1325,6 @@ pub mod says {
         )
     }
 
-    /// **Spec §6.2, and every word of it is chosen against a claim it must not make.**
-    ///
-    /// It does not say finished, it does not say stopped, and it does not say it is still
-    /// going. It says what is actually known — RichOS closed while this was running, and
-    /// nothing has looked since — and it ends by naming the one thing that moves it
-    /// forward, which is him (§6.3: nothing restarts by itself).
-    ///
-    /// `checked` is what the reconciliation could establish, already a sentence, or empty
-    /// when it could establish nothing. Spoken-safe: no identifiers, no counts he cannot
-    /// act on, and it means the same read or said aloud.
-    pub fn unknown(title: &str, checked: &str) -> String {
-        let checked = checked.trim();
-        if checked.is_empty() {
-            return continues(
-                title,
-                "was running when RichOS closed, and I can't tell you how it ended. \
-                 Nothing is running now and nothing was finished. Say the word and I'll pick \
-                 it back up.",
-            );
-        }
-        continues(
-            title,
-            &format!(
-                "was running when RichOS closed, and I can't tell you how it ended. \
-                 {checked} Nothing is running now and nothing was finished. Say the word and \
-                 I'll pick it back up."
-            ),
-        )
-    }
-
-    /// **A job that was waiting on his approval when RichOS closed** (hunt part 1 finding 07,
-    /// `recovery.rs`). The approval request lived in memory and closed with RichOS, so there
-    /// is nothing to approve now; the sentence says that, says nothing ran and nothing
-    /// finished, and names the one thing that moves it forward, as [`unknown`] does.
-    pub fn approval_lost(title: &str) -> String {
-        continues(
-            title,
-            "was waiting on a decision from you when RichOS closed, and that request closed \
-             with it. Nothing is running now and nothing was finished. Say the word and I'll \
-             pick it back up; if it reaches that step again, it will ask you then.",
-        )
-    }
-
     /// **A QUESTION THAT DID NOT GET ANSWERED, SAID AS THAT.**
     ///
     /// [`failed`] and [`did_not_start`] both put the title where a job's name goes —
@@ -1577,8 +1534,6 @@ mod tests {
                 says::did_not_start(title, "The work connection could not be opened."),
                 says::interrupted(title),
                 says::declined(title),
-                says::unknown(title, ""),
-                says::unknown(title, "Your branch has not moved."),
             ]
         };
 
@@ -1925,7 +1880,6 @@ mod tests {
                 says::failed(embedded, "The work connection could not be opened."),
                 says::interrupted(embedded),
                 says::declined(embedded),
-                says::unknown(embedded, ""),
                 says::did_not_start(embedded, "The work connection could not be opened."),
                 // §58's empty-answer fallback is the one arm of `answered` that embeds a
                 // title, so it belongs in this loop. The ordinary arm returns the back end's
@@ -2278,19 +2232,6 @@ mod tests {
         assert!(AssignmentState::Running.is_open());
         assert_eq!(AssignmentState::Unknown.as_str(), "unknown");
 
-        let said = says::unknown("landing the three branches", "Your repository is where it was.");
-        assert!(said.contains("landing the three branches"));
-        assert!(said.contains("Your repository is where it was."));
-        assert!(said.contains("nothing was finished"));
-        // The three words it must never say, and the interrupted sentence it must not
-        // borrow — a crash is not a stop somebody made.
-        for forbidden in ["finished,", "done", "was stopped", "landed"] {
-            assert!(!said.contains(forbidden), "the unknown sentence said {forbidden:?}: {said}");
-        }
-        // With nothing established, it says less rather than guessing more.
-        let bare = says::unknown("landing the three branches", "   ");
-        assert!(bare.contains("I can't tell you how it ended"));
-        assert!(bare.ends_with("Say the word and I'll pick it back up."));
-        std::fs::remove_dir_all(root()).unwrap();
+
     }
 }
