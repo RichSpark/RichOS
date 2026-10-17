@@ -1260,7 +1260,6 @@ impl StallWatch {
 
 /// A live session to a native `claude` child.
 pub struct NativeClient {
-    formatted_reply: bool,
     stall_watch: Option<StallWatch>,
     child: crate::owned_process::OwnedChild,
     /// The supervisor's per-lease state file, when this lease is supervised (the product reap,
@@ -1844,8 +1843,6 @@ impl NativeClient {
             Some((doctrine, skills)) => chat_child_args(&session_id, doctrine, skills),
             None => child_args(&session_id),
         };
-        let formatted_reply=profile.is_some() && role==LeaseRole::Conversation;
-        if formatted_reply {args.extend(["--json-schema".into(),crate::native_reply::schema().to_string()]);}
         // The selected model, with low effort for replies and high effort for work.
         args.extend(lease_model_args(role, profile));
         if let Some((executable, scope, assignments, status)) = onboarding {
@@ -2004,7 +2001,6 @@ impl NativeClient {
             },
             reap_state,
             settle_workers_on_stop: profile.is_some(),
-            formatted_reply,
             stdin,
             session_id,
             next_id: AtomicI64::new(1),
@@ -2840,7 +2836,6 @@ impl NativeClient {
         // `Done`, the cancel timeout (before the sink is detached), the child vanishing, and a
         // provider result, so partial output is never lost at the boundary.
         let mut spelling = crate::american_spelling::Speller::new();
-        let mut formatted=self.formatted_reply.then(crate::native_reply::ReplyStream::default);
         fn say(text:&str,seq:&mut u64,on_item:&mut dyn FnMut(TurnItem),spelling:&mut crate::american_spelling::Speller,first_logged:&mut bool) {
             if text.is_empty() {return}
             if !*first_logged {
@@ -2873,24 +2868,14 @@ impl NativeClient {
             };
             match received {
                 Ok(ChunkMsg::Text(t)) => {
-                    if !self.formatted_reply {say(&t,&mut seq,on_item,&mut spelling,&mut first_text_logged);}
+                    say(&t,&mut seq,on_item,&mut spelling,&mut first_text_logged);
                 }
                 Ok(ChunkMsg::Frame(frame)) => {
-                    let typed=if let Some(decoder)=formatted.as_mut() {
-                        decoder.observe(&frame).map_err(NativeError::Protocol)?
-                    } else {None};
-                    let reply_delta=typed.is_some() && frame["type"]=="stream_event"
-                        && frame["event"]["delta"]["type"]=="input_json_delta";
-                    if !reply_delta && !is_ping(&frame) {release(&mut seq,on_item,&mut spelling);}
-                    if let Some(text)=typed {say(&text,&mut seq,on_item,&mut spelling,&mut first_text_logged);}
+                    if !is_ping(&frame) {release(&mut seq,on_item,&mut spelling);}
                     if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
                         if let Some(resets_at) = usage_limit_signal(&frame) { limit = Some(resets_at); }
                     }
-                    // The formatted reply has its own typed carrier. Preserve ordinary
-                    // assistant text as technical commentary through the existing normalizer.
-                    let records=if self.formatted_reply {MachineryRecord::from_native_between_turn(&frame,&self.session_id,seq)}
-                        else {MachineryRecord::from_native_event(&frame,&self.session_id,seq)};
-                    for record in records {
+                    for record in MachineryRecord::from_native_event(&frame,&self.session_id,seq) {
                         seq += 1;
                         on_item(TurnItem::Machinery(record));
                     }
@@ -2934,19 +2919,7 @@ impl NativeClient {
                             .map(Value::to_string).unwrap_or_else(|| reason.clone());
                         return Err(limit_error(resets_at, detail));
                     }
-                    let mut reason = native_result(&result)?;
-                    if let Some(decoder)=formatted.as_mut() {
-                        if reason!=STOP_REASON_CANCELLED {
-                            if !crate::native_reply::completed(&result) {
-                                return Err(NativeError::Protocol("The provider omitted the formatted reply.".into()));
-                            }
-                            let text=decoder.finish(&result).map_err(NativeError::Protocol)?;
-                            say(&text,&mut seq,on_item,&mut spelling,&mut first_text_logged);
-                            release(&mut seq,on_item,&mut spelling);
-                            reason="end_turn".into();
-                        }
-                    }
-                    return Ok(reason);
+                    return native_result(&result);
                 }
                 Err(RecvTimeoutError::Timeout) if cancel_deadline.is_none() => continue,
                 Err(RecvTimeoutError::Timeout) => {
@@ -6948,46 +6921,22 @@ done
     }
 
     #[test]
-    fn formatted_replies_stream_without_promoting_commentary_and_complete_only_after_validation() {
-        let reply="Color 😀 with a \"quote\".\nReady.";
-        let note="Handoff saved. Just acknowledge.";
-        let line=|frame:Value|format!("printf '%s\\n' '{}'\n",frame.to_string().replace('\'',"'\\''"));
-        let mut script=String::from("read -r init\n");
-        script.push_str(&line(json!({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})));
-        for _ in 0..2 {
-            script.push_str("read -r prompt\n");
-            script.push_str(&line(json!({"type":"stream_event","event":{"type":"message_start"}})));
-            script.push_str(&line(json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":note}}})));
-            script.push_str(&line(json!({"type":"assistant","message":{"content":[{"type":"text","text":note}]}})));
-            script.push_str(&line(json!({"type":"stream_event","event":{"type":"message_start"}})));
-            script.push_str(&line(json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"format","name":"StructuredOutput"}}})));
-            for character in json!({"reply":reply}).to_string().chars() {
-                script.push_str(&line(json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":character.to_string()}}})));
-            }
-            script.push_str(&line(json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"format","name":"StructuredOutput","input":{"reply":reply}}]}})));
-            script.push_str(&line(json!({"type":"result","stop_reason":"tool_use","subtype":"success","is_error":false,"structured_output":{"reply":reply}})));
-        }
-        script.push_str("read -r prompt\n");
-        script.push_str(&line(json!({"type":"assistant","message":{"content":[{"type":"text","text":"Plain fallback must stay commentary"}]}})));
-        script.push_str(&line(json!({"type":"result","stop_reason":"end_turn","subtype":"success","is_error":false})));
-        script.push_str("read -r prompt\n");
-        script.push_str(&line(json!({"type":"result","stop_reason":STOP_REASON_CANCELLED})));
-        let script=write_script("formatted-replies",&script);
-        let mut client=NativeClient::spawn(&script,&std::env::temp_dir(),&doctrine_fixture(),&skills_fixture()).unwrap();
-        client.formatted_reply=true;
-        assert_eq!(client.prompt_context_only("Prior context",&mut |_|{}).unwrap(),"end_turn");
-        let mut text=String::new();let mut commentary=Vec::new();
-        assert_eq!(client.prompt("Actual user question",&mut |item|match item {
-            TurnItem::Text {text:delta,..}=>text.push_str(delta),
-            TurnItem::Machinery(record) if record.title=="assistant:text"=>commentary.push(record),
-            _=>{},
+    fn ordinary_native_reply_needs_no_structured_output_tool() {
+        let script=write_script("ordinary-reply", r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Color and light."}}}'
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Color and light."}]}}'
+printf '%s\n' '{"type":"result","stop_reason":"end_turn","subtype":"success","is_error":false}'
+read -r keep_alive
+"#);
+        let client=NativeClient::spawn(&script,fixture_root(),&doctrine_fixture(),&skills_fixture()).unwrap();
+        let mut text=String::new();
+        assert_eq!(client.prompt("Actual user question",&mut |item| {
+            if let TurnItem::Text {text:delta,..}=item {text.push_str(delta)}
         }).unwrap(),"end_turn");
-        assert_eq!(text,reply);assert_eq!(commentary.len(),1);
-        assert_eq!(commentary[0].summary.as_deref(),Some(note));
-        text.clear();
-        assert!(matches!(client.prompt("Next question",&mut |item|if let TurnItem::Text {text:delta,..}=item {text.push_str(delta)}),Err(NativeError::Protocol(_))));
-        assert!(text.is_empty(),"untyped fallback became a user reply");
-        assert_eq!(client.prompt("An interrupted question",&mut |_|{}).unwrap(),STOP_REASON_CANCELLED);
+        assert_eq!(text,"Color and light.");
     }
 
     #[test]
