@@ -6,7 +6,7 @@ use std::{io::{BufRead, BufReader, Read, Write}, path::{Path, PathBuf}, process:
 
 // A prepared classifier gets a short inference budget. Cold startup and process
 // cleanup never run on the visible request path. Failure leaves judgment to Rich.
-const WAIT: Duration = Duration::from_millis(1500);
+const WAIT: Duration = Duration::from_secs(5);
 const WARMUP: Duration = Duration::from_secs(30);
 const MAX_BYTES: usize = 64 * 1024;
 
@@ -304,6 +304,42 @@ for line in sys.stdin:
         assert!(rows.iter().all(|row|row["pid"]==rows[0]["pid"]));
         assert_eq!(rows[1]["data"]["recent_conversation"],"recent conversation");
         assert_eq!(rows[2]["data"]["user_request"],"Substantial work");
+        drop(classifier);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+
+    #[test]
+    fn ready_classifier_waits_for_the_model_instead_of_expiring_the_request() {
+        let (root,bin,profile,skills)=fixture(r#"
+print(json.dumps({'type':'system','subtype':'init','tools':[]}),flush=True)
+for line in sys.stdin:
+    data=json.loads(json.loads(line)['message']['content'])
+    if data.get('user_request'):
+        while not os.path.exists('release-answer'):
+            time.sleep(0.005) # Controlled reply barrier; the owner stops the fixture on failure.
+    result='new_stu_handoff'
+    print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':result}]}}),flush=True)
+    print(json.dumps({'type':'result','is_error':False,'result':result}),flush=True)
+"#);
+        let mut classifier=RequestClassifier::new(&bin,&profile,&skills);
+        let release=profile.state.join("classification/release-answer");
+        // Release only after forty cancellation polls while the model is still
+        // answering. The verdict is receipt of its answer, not an elapsed-time
+        // assertion. `until` supplies the existing fixture hang guard.
+        let answer=until(|| {
+            let polls=std::cell::Cell::new(0);
+            match classifier.classify("Substantial work","context",|| {
+                let count=polls.get()+1;polls.set(count);
+                if count==40 {std::fs::write(&release,"ready").unwrap();}
+                false
+            }) {
+                Ok(answer)=>Some(answer),
+                Err(error) if error=="Classifier not ready"=>None,
+                Err(error)=>panic!("{error}"),
+            }
+        });
+        assert_eq!(answer,"stu");
         drop(classifier);
         std::fs::remove_dir_all(root).unwrap();
     }
