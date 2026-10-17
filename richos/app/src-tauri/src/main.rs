@@ -460,7 +460,7 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
             return;
         }
         if self.app.try_state::<AppState>().is_some_and(|state| questions_pending(&state)
-            || state.control.active_turn().is_some() || state.work.peer_work_pending() || !state.control.pending_intake().is_empty()) {
+            || state.control.has_active_turns() || state.work.peer_work_pending() || !state.control.pending_intake().is_empty()) {
             return;
         }
         // **A command Rich started outlives its assignment** (reap gap C5): quitting would end
@@ -3149,7 +3149,7 @@ fn main() {
                     // that says a line never takes the work host's locks to count.
                     if counted.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(5)) {
                         if let Some(state) = quota_app.try_state::<AppState>() {
-                            let mut sessions: Vec<String> = state.control.lease_session().into_iter().chain(state.work.lease_sessions()).collect();
+                            let mut sessions: Vec<String> = state.control.lease_sessions().into_iter().chain(state.work.lease_sessions()).collect();
                             sessions.sort(); sessions.dedup();
                             let engine_state = state.data_dir.join("engine-state");
                             quota.set_agents_working(sessions.iter()
@@ -4240,20 +4240,16 @@ fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result
 /// until Rich finished — the same reason the stop control lives on this handle (§9.3).
 #[richos_command::command]
 fn get_worker_status(state: State<AppState>, thread_id: Option<String>) -> WorkerStatusView {
-    if let Some(thread) = thread_id {
-        if !state.control.active_turn().is_some_and(|turn| turn.thread_id == thread) {
-            return WorkerStatusView::default();
-        }
-    }
-    richos_core::app_workers::status(&state.data_dir.join("engine-state"), state.control.lease_session().as_deref())
+    let thread=thread_id.or_else(||state.reader.snapshot().active_thread().map(str::to_string));
+    let session=thread.and_then(|thread|state.control.for_thread(&thread).lease_session());
+    richos_core::app_workers::status(&state.data_dir.join("engine-state"),session.as_deref())
 }
 
 /// Saved work belongs to the requested ledger thread. Do not wait on a running
 /// reasoning turn or fall back to another company's most recent receipts.
 #[richos_command::command]
 fn get_work_status(state: State<AppState>, thread_id: String) -> Result<richos_core::work_status::WorkSummary, String> {
-    let entity = if let Some(active) = state.control.active_turn() {
-        if active.thread_id != thread_id { return Err("Another conversation is working. Saved work will refresh when it settles.".into()); }
+    let entity = if let Some(active) = state.control.for_thread(&thread_id).active_turn() {
         active.entity_id.ok_or("This conversation has no company binding.")?
     } else {
         let spine = state.spine.try_lock().map_err(|_| "Work status is changing. Please try again.")?;
@@ -4398,38 +4394,12 @@ fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: Str
     state.work.stop_assignment(entity.as_str(), &thread_id, &assignment_id)
 }
 
-/// Which company this thread belongs to, answered WITHOUT waiting on a running turn.
-///
-/// The same two conditions `get_work_status` carries, named rather than discovered: a live
-/// turn on a DIFFERENT thread is refused honestly, and with no turn at all this depends on
-/// `try_lock`, which fails during exactly the window a turn holds the spine. Neither blocks
-/// delivery on the assignment's own thread (spec §3.2).
-/// A turn is live on ANOTHER conversation, so this thread's company binding cannot be read
-/// without waiting on it. It resolves itself, and the sentence says so.
-const ASSIGNMENTS_ELSEWHERE: &str =
-    "Another conversation is working. Your assignments will refresh when it settles.";
-
-/// The spine's lock is held for the length of a turn, so this read is deferred.
-///
-/// **NOT "please try again".** The surface re-reads this every three seconds while the
-/// conversation is on screen, so telling him to do the thing that is already happening
-/// would be an instruction over a state that resolves itself — which is exactly what
-/// `ui/tests/affordances.js` exists to catch.
-///
-/// **Both sentences are named constants rather than literals inside the expression, and
-/// that is not style.** `ui/tests/lib/state-strings.js` decides a Rust literal is
-/// CEO-facing from its own line and the TWO ABOVE IT. Written inline, this sentence was
-/// visible to the affordance gate only because an unrelated `ok_or_else` happened to sit
-/// two lines up; adding a comment moved it out of the window and the gate stopped seeing
-/// it. A `const … : &str =` is one of the forms that scanner recognizes directly, so the
-/// sentence is now gated by what it IS rather than by what it sits next to.
+/// Read the requested conversation's company. A different running conversation
+/// neither supplies its binding nor prevents this lookup.
 const ASSIGNMENTS_CHANGING: &str = "Your assignments are changing. They will refresh in a moment.";
 
 fn assignment_scope(state: &State<AppState>, thread_id: &str) -> Result<EntityId, String> {
-    if let Some(active) = state.control.active_turn() {
-        if active.thread_id != thread_id {
-            return Err(ASSIGNMENTS_ELSEWHERE.into());
-        }
+    if let Some(active) = state.control.for_thread(thread_id).active_turn() {
         return active.entity_id.ok_or_else(|| "This conversation has no company binding.".into());
     }
     let spine = state.spine.try_lock().map_err(|_| ASSIGNMENTS_CHANGING)?;
@@ -4907,7 +4877,10 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
             let stop_app = app.clone();
             ctl.on_withdraw(Arc::new(move || {
                 let state = stop_app.state::<AppState>();
-                match state.control.request_stop() {
+                let view=state.reader.snapshot();
+                let outcome=view.active_thread().map(|thread|state.control.for_thread(thread).request_stop())
+                    .unwrap_or(Ok(StopOutcome::NothingRunning));
+                match outcome {
                     Ok(StopOutcome::Requested { turn_id, .. }) => eprintln!(
                         "[richos] voice: he went on before Rich answered; stopped {turn_id} so his whole thought is one request"
                     ),
@@ -8245,20 +8218,20 @@ struct StopReport {
 /// in `steering.rs` rather than here.
 #[richos_command::command]
 fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>) -> Result<StopReport, String> {
-    // Which conversation his Esc was pressed in: the control's own record of the running turn,
-    // or else the thread the window shows. Both read without the spine's lock, and read BEFORE
-    // the front desk's stop below clears the running turn.
-    let team_key = state.operator.as_ref().and_then(|_| {
-        let thread = state.control.active_turn().map(|t| t.thread_id.clone())
-            .or_else(|| state.reader.snapshot().active_thread().map(str::to_string))?;
-        let entity = state.reader.snapshot().ledger().thread_binding(&thread).ok()?.entity_id().to_string();
-        Some(richos_core::operator_host::ConversationKey { entity_id: entity, thread_id: thread })
+    let view=state.reader.snapshot();
+    let thread=view.active_thread();
+    let control=thread.map(|thread|state.control.for_thread(thread));
+    let team_key=state.operator.as_ref().and_then(|_| {
+        let binding=view.active_binding()?;
+        Some(richos_core::operator_host::ConversationKey {
+            entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string(),
+        })
     });
-    let outcome = if let Some(expected) = expected_turn_id.as_deref() {
-        state.control.request_stop_for(expected).map_err(|e| e.to_string())?
-    } else {
-        state.control.request_stop().map_err(|e| e.to_string())?
-    };
+    let outcome=match (control,expected_turn_id.as_deref()) {
+        (Some(control),Some(expected))=>control.request_stop_for(expected),
+        (Some(control),None)=>control.request_stop(),
+        (None,_)=>Ok(StopOutcome::NothingRunning),
+    }.map_err(|e|e.to_string())?;
     // **HIS ESC, on an operator install, is his team's too** (r3 (d) item 6): the lead's turn in
     // that conversation ends and its agents keep running (r4 §1.2). AFTER the front desk's stop
     // and on its own thread, so a lead slow to answer the interrupt never delays the stop he
@@ -8311,7 +8284,9 @@ fn steer_message(state: State<AppState>, text: String) -> Result<SteerReport, St
     if trimmed.is_empty() {
         return Err("nothing to add".into());
     }
-    match state.control.steer(trimmed).map_err(|e| e.to_string())? {
+    let view=state.reader.snapshot();
+    let thread=view.active_thread().ok_or_else(||richos_core::steering::SteeringError::NoActiveTurn.to_string())?;
+    match state.control.for_thread(thread).steer(trimmed).map_err(|e| e.to_string())? {
         IntakeRecord::Steer { id, thread_id, steering_turn_id, at, .. } => {
             Ok(SteerReport { intake_id: id, thread_id, steering_turn_id, at })
         }
@@ -8336,7 +8311,8 @@ struct RunningTurn {
 
 #[richos_command::command]
 fn running_turn(state: State<AppState>) -> Option<RunningTurn> {
-    state.control.active_turn().map(|a| RunningTurn {
+    let view=state.reader.snapshot();
+    state.control.for_thread(view.active_thread()?).active_turn().map(|a| RunningTurn {
         turn_id: a.turn_id,
         thread_id: a.thread_id,
         entity_id: a.entity_id.map(|e| e.as_str().to_string()),
@@ -9851,7 +9827,7 @@ fn questions_pending(state: &AppState) -> bool {
 fn registered_work(state: &AppState) -> lifecycle::Registered {
     let work = state.work.background_work();
     lifecycle::Registered {
-        running: work.running + usize::from(state.control.active_turn().is_some())
+        running: work.running + usize::from(state.control.has_active_turns())
             + usize::from(state.work.peer_work_pending())
             + usize::from(!state.control.pending_intake().is_empty()),
         awaiting_you: work.awaiting_you,

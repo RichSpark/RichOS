@@ -444,7 +444,8 @@ pub enum SpareReady {
 /// MOVED out of the chair and moved back into it, so there is never a second opinion about
 /// how much context a session has used.
 struct Resident {
-    lease: Box<dyn Cognition>,
+    lease: Option<Box<dyn Cognition>>,
+    upstream_budget:crate::upstream::RetryBudget,
     primed: bool,
     /// The company material THIS desk was primed with — see [`Spine::onboarding_primed_block`].
     /// Parked and restored with the lease, because it is a fact about the lease.
@@ -517,7 +518,8 @@ struct Delivery {
     preparation_failed:bool,
     preparation_stop:Option<String>,
     preparation:Result<(),CognitionError>,
-    lease:Option<Box<dyn Cognition>>,
+    desk:Resident,
+    generation:u64,
     session_id:Option<String>,
 }
 
@@ -526,9 +528,9 @@ fn run_delivery(delivery:&mut Delivery,on_item:&mut dyn FnMut(&mut Delivery,Turn
         return Ok(delivery.preparation_stop.take().unwrap_or_else(||crate::native::STOP_REASON_CANCELLED.to_string()));
     }
     std::mem::replace(&mut delivery.preparation,Ok(()))?;
-    let mut lease=delivery.lease.take().ok_or_else(||CognitionError::Protocol("No prepared conversation connection".into()))?;
+    let mut lease=delivery.desk.lease.take().ok_or_else(||CognitionError::Protocol("No prepared conversation connection".into()))?;
     let result=lease.prompt(&delivery.text.clone(),&mut |item|on_item(delivery,item));
-    delivery.lease=Some(lease);
+    delivery.desk.lease=Some(lease);
     result
 }
 
@@ -537,7 +539,7 @@ fn run_delivery(delivery:&mut Delivery,on_item:&mut dyn FnMut(&mut Delivery,Turn
 pub fn drive_shared_turns(spine:&std::sync::Mutex<Spine>)->Result<(),SpineError> {
     let mut failure=None;
     loop {
-        let Some(mut delivery)=spine.lock().unwrap().pending_delivery.take() else {break};
+        let Some(mut delivery)=spine.lock().unwrap().pending_delivery.pop_front() else {break};
         let binding=delivery.binding.clone();
         let result=run_delivery(&mut delivery,&mut |delivery,item| {
             spine.lock().unwrap().capture_delivery_item(delivery,item);
@@ -600,7 +602,7 @@ pub struct Spine {
     /// the moment the turn ends. Rotation NEVER happens inside a turn.
     turn_in_progress: bool,
     detached_delivery: bool,
-    pending_delivery: Option<Delivery>,
+    pending_delivery: VecDeque<Delivery>,
     queue: VecDeque<Queued>,
     /// **The conversations whose turns have ENDED since the shell last asked** — one binding
     /// per thread, in the order their first turn ended. See [`Spine::take_ended_turns`].
@@ -851,7 +853,7 @@ impl Spine {
             registry: EntityRegistry::empty(),
             turn_in_progress: false,
             detached_delivery: false,
-            pending_delivery: None,
+            pending_delivery: VecDeque::new(),
             control: TurnControl::detached(),
             central_root: None,
             onboarding_record: None,
@@ -1215,29 +1217,18 @@ impl Spine {
     /// exactly as before.
     fn park_current_front_desk(&mut self) {
         let Some(thread) = self.lease_primed_thread.clone() else {
-            self.clear_lease();
+            if self.lease.is_some() {self.clear_lease();}
             return;
         };
         let Some(lease) = self.lease.take() else {
             self.clear_lease();
             return;
         };
-        self.resident.insert(thread, Resident {
-            lease,
-            primed: self.lease_primed,
-            onboarding_block: self.onboarding_primed_block.take(),
-            context_chars: self.context_chars,
-            context_usage: self.context_usage.take(),
-            context_pressure: self.context_pressure.take(),
-            parked_at_ms: now_millis(),
-            pending_rotation_reason: self.pending_rotation_reason.take(),
-            rotation_deferred_since: self.rotation_deferred_since.take(),
-        });
-        // The chair is now empty, and the control must say so before anything else runs:
-        // a stop pressed in this instant has to reach nothing rather than reach the desk
-        // that just stood up. `install_lease` or `resume_front_desk` publishes the next one.
-        self.control.set_cancel(None);
-        self.control.set_lease_session(None);
+        self.lease=Some(lease);
+        let desk=self.take_current_front_desk();
+        self.resident.insert(thread,desk);
+        // Its session and cancel handle still belong to that parked conversation.
+        // The next desk publishes its own scoped control when it resumes.
         self.lease_primed = false;
         self.lease_primed_thread = None;
         self.context_chars = 0;
@@ -1251,30 +1242,42 @@ impl Spine {
     /// before residency: spawn a lease and prime it from the ledger.
     fn resume_front_desk(&mut self, thread_id: &str) -> bool {
         let Some(resident) = self.resident.remove(thread_id) else { return false };
-        // Published BEFORE the lease can be handed a turn, for the reason `install_lease`
-        // states: two things outside the spine lock must never describe a lease that is gone.
-        self.control.set_cancel(resident.lease.cancel_handle());
-        self.control.set_lease_session(Some(resident.lease.session_id().to_string()));
-        self.lease = Some(resident.lease);
-        // **Restored, not reset.** This is the one place a lease is installed WITHOUT
-        // clearing its measurements, and that is the point: they are its own, and a desk
-        // that came back with an empty watermark would be a session claiming it had used
-        // nothing when it has been talking to him for an hour.
-        self.lease_primed = resident.primed;
-        // **RESTORED WITH THE DESK, for the reason the field's own doc gives.** A desk that came
-        // back to a chair still describing the previous desk's company material is un-primed by
-        // `prime_lease_if_needed`'s comparison and re-primed on his clock, for nothing.
-        self.onboarding_primed_block = resident.onboarding_block;
-        self.lease_primed_thread = Some(thread_id.to_string());
-        self.context_chars = resident.context_chars;
-        self.context_usage = resident.context_usage;
-        self.context_pressure = resident.context_pressure;
-        // Its own renewal, if it was owed one when it was parked (finding 42). The chair was
-        // just emptied by `park_current_front_desk`, so nothing here overwrites a reason that
-        // belongs to another desk.
-        self.pending_rotation_reason = resident.pending_rotation_reason;
-        self.rotation_deferred_since = resident.rotation_deferred_since;
+        self.restore_front_desk(thread_id,resident);
         true
+    }
+
+    /// Move the entire desk with its delivery. No context or rotation state remains
+    /// in the shared chair while another conversation is using it.
+    fn take_current_front_desk(&mut self) -> Resident {
+        self.lease_primed_thread=None;
+        Resident {
+            lease:self.lease.take(),
+            upstream_budget:std::mem::take(&mut self.upstream_budget),
+            primed:std::mem::take(&mut self.lease_primed),
+            onboarding_block:self.onboarding_primed_block.take(),
+            context_chars:std::mem::take(&mut self.context_chars),
+            context_usage:self.context_usage.take(),
+            context_pressure:self.context_pressure.take(),
+            parked_at_ms:now_millis(),
+            pending_rotation_reason:self.pending_rotation_reason.take(),
+            rotation_deferred_since:self.rotation_deferred_since.take(),
+        }
+    }
+
+    fn restore_front_desk(&mut self,thread_id:&str,resident:Resident) {
+        self.control=self.control.for_thread(thread_id);
+        self.control.set_cancel(resident.lease.as_ref().and_then(|lease|lease.cancel_handle()));
+        self.control.set_lease_session(resident.lease.as_ref().map(|lease|lease.session_id().to_string()));
+        self.lease=resident.lease;
+        self.upstream_budget=resident.upstream_budget;
+        self.lease_primed=resident.primed;
+        self.onboarding_primed_block=resident.onboarding_block;
+        self.lease_primed_thread=Some(thread_id.to_string());
+        self.context_chars=resident.context_chars;
+        self.context_usage=resident.context_usage;
+        self.context_pressure=resident.context_pressure;
+        self.pending_rotation_reason=resident.pending_rotation_reason;
+        self.rotation_deferred_since=resident.rotation_deferred_since;
     }
 
     /// **Un-prime EVERY front desk, the parked ones included.**
@@ -1322,6 +1325,9 @@ impl Spine {
             // Dropping the `Resident` drops its `Box<dyn Cognition>`, whose `Drop` kills the
             // child. That is deliberate and it is the old behavior for this one thread.
             self.resident.remove(&oldest);
+            let control=self.control.for_thread(&oldest);
+            control.set_cancel(None);
+            control.set_lease_session(None);
         }
     }
 
@@ -1389,7 +1395,7 @@ impl Spine {
     /// **Step 1 (locked): decide, and reserve the slot.** Everything that reads or writes the
     /// spine happens here, so that steps 2 and 4 can run against nothing but the plan.
     fn begin_a_spare(&mut self, entity: &EntityId) -> Result<SparePlan, SpareReady> {
-        if self.turn_in_progress {
+        if self.is_turn_in_progress() {
             return Err(SpareReady::TurnInProgress);
         }
         if !self.registry.contains(entity) {
@@ -1578,7 +1584,7 @@ impl Spine {
     /// turn** — nothing in the product reads it.
     #[doc(hidden)]
     pub fn resident_front_desks(&self) -> usize {
-        self.resident.len() + usize::from(self.lease.is_some())
+        self.resident.len() + usize::from(self.lease.is_some()) + self.control.active_turn_count()
     }
 
     /// Is this thread's front desk alive — in the chair or parked? **Test scaffolding**,
@@ -1586,7 +1592,7 @@ impl Spine {
     /// about who is speaking.
     #[doc(hidden)]
     pub fn front_desk_is_resident(&self, thread_id: &str) -> bool {
-        self.resident.contains_key(thread_id)
+        self.control.for_thread(thread_id).active_turn().is_some() || self.resident.contains_key(thread_id)
             || (self.lease.is_some() && self.lease_primed_thread.as_deref() == Some(thread_id))
     }
 
@@ -1594,6 +1600,8 @@ impl Spine {
     /// the same handle beside the `Mutex<Spine>`; this is the only channel by which
     /// anything reaches a turn that is already running.
     pub fn set_turn_control(&mut self, control: TurnControl) {
+        let control=self.lease_primed_thread.as_deref().or(self.active_thread())
+            .map(|thread|control.for_thread(thread)).unwrap_or(control);
         control.set_cancel(self.lease.as_ref().and_then(|l| l.cancel_handle()));
         control.set_lease_session(self.lease.as_ref().map(|l| l.session_id().to_string()));
         self.control = control;
@@ -1611,12 +1619,12 @@ impl Spine {
     }
 
     pub fn has_lease(&self) -> bool {
-        self.lease.is_some() || self.turn_in_progress
+        self.lease.is_some() || self.is_turn_in_progress()
     }
 
     /// Called with the shell's idle lock held and worker observations checked.
     pub fn retire_idle_lease(&mut self) -> Result<(), String> {
-        if self.control.active_turn().is_some() { return Err("A turn is still running.".into()); }
+        if self.control.has_active_turns() { return Err("A turn is still running.".into()); }
         self.clear_lease(); Ok(())
     }
 
@@ -2199,7 +2207,13 @@ impl Spine {
         let ledger = &self.ledger;
         let of_company = |thread: &str| ledger.thread_binding(thread).is_ok_and(|b| b.entity_id() == &entity);
         let chair = !self.turn_in_progress && self.lease_primed_thread.as_deref().is_some_and(of_company);
-        self.resident.retain(|thread, _| !of_company(thread));
+        self.resident.retain(|thread, _| {
+            if !of_company(thread) {return true;}
+            let control=self.control.for_thread(thread);
+            control.set_cancel(None);
+            control.set_lease_session(None);
+            false
+        });
         if chair {
             self.clear_lease();
         }
@@ -2257,7 +2271,8 @@ impl Spine {
                 let id = self.ledger.create_thread_with_reserved_id(&reserved, title, entity_id)?;
                 let spare = self.spare.take().expect("checked directly above");
                 self.resident.insert(id.clone(), Resident {
-                    lease: spare.lease,
+                    lease: Some(spare.lease),
+                    upstream_budget:crate::upstream::RetryBudget::new(),
                     primed: spare.primed,
                     onboarding_block: spare.onboarding_block,
                     context_chars: spare.context_chars,
@@ -2432,7 +2447,7 @@ impl Spine {
         // The worker stream is read HERE rather than by the caller, for the same reason the
         // binding and the journal are: every consumer that assembled these itself would be
         // one more place the scope guard could be forgotten.
-        let workers = self.worker_events.read(self.lease_session_id());
+        let workers = self.worker_events.read(self.control.for_thread(thread_id).lease_session().as_deref());
         Ok(Timeline::project_with_workers(&self.ledger, &binding, &machinery, &workers)?)
     }
 
@@ -2477,9 +2492,8 @@ impl Spine {
     /// active one, and the deferred proactive emits carry their own. What is new is only
     /// that the front desk he switches away from stays alive (`park_current_front_desk`).
     ///
-    /// **What this is not.** It is not two front desks speaking at once; they take turns,
-    /// because both bind the CEO's single ECS cursor (`native.rs`'s `CONVERSATION_SEAT`).
-    /// Their WORK runs in parallel and has since slice 1 — one back end per thread.
+    /// Each thread has its own provider and scoped controls. A running reply only
+    /// queues later requests addressed to that same thread.
     pub fn submit_prompt_to(&mut self, thread_id: &str, text: &str, source: Source) -> Result<String, SpineError> {
         if self.active_thread() != Some(thread_id) {
             self.activate(thread_id)?;
@@ -2547,7 +2561,7 @@ impl Spine {
 
         // (2) if a turn is already running, queue it (never interrupt / never kill workers).
         //     The BINDING rides along, so a context switch while it waits cannot re-scope it.
-        if self.turn_in_progress {
+        if self.thread_is_running(binding.thread_id()) {
             self.queue.push_back(Queued {
                 turn_id: turn_id.clone(),
                 binding,
@@ -2557,7 +2571,6 @@ impl Spine {
             return Ok(turn_id);
         }
         // (3) otherwise deliver now.
-        self.upstream_budget.new_message();
         let delivered = self.deliver(&turn_id, &binding, text, true);
         let boundary = self.after_turn_boundary(&binding);
         let queued = self.drain_queue();
@@ -2904,7 +2917,7 @@ impl Spine {
     fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
         let mut delivery=self.prepare_delivery(turn_id,binding,text,allow_recovery)?;
         if self.detached_delivery && !delivery.internal_turn {
-            self.pending_delivery=Some(delivery);
+            self.pending_delivery.push_back(delivery);
             return Ok(());
         }
         let result=run_delivery(&mut delivery,&mut |delivery,item|self.capture_delivery_item(delivery,item));
@@ -2920,13 +2933,18 @@ impl Spine {
         // before the text reaches a compute lease.
         self.ledger.verify_binding(binding)?;
         let thread_id = binding.thread_id();
+        self.control=self.control.for_thread(thread_id);
+        self.control.set_cancel(self.lease.as_ref().and_then(|lease|lease.cancel_handle()));
+        self.control.set_lease_session(self.lease.as_ref().map(|lease|lease.session_id().to_string()));
         // §1.5 gap #1: everything the lease said while no turn was in flight — its
         // session-start traffic on the very first turn, and whatever arrived after the
         // previous turn's response — lands NOW, as honest thread-scoped machinery, BEFORE
         // the priming turn below can put its own residue in the lane. The ordering is the
         // rule: honest first, then internal. See `pump_between_turn_stamped`.
         self.pump_between_turn_stamped(binding, false);
-        let session_id = self.lease_session_id().unwrap_or_default().to_string();
+        let session_id = if self.lease_primed_thread.as_deref().is_none_or(|thread|thread==thread_id) {
+            self.lease_session_id().unwrap_or_default().to_string()
+        } else {String::new()};
         self.ledger.mark_turn_started(turn_id, &session_id)?;
         self.turn_in_progress = true;
         // Publish the running turn to the shared control. A MIRROR of `turn_in_progress`,
@@ -3028,9 +3046,19 @@ impl Spine {
         });
 
         let session_id=self.lease_session_id().map(str::to_string);
+        if let Some(session)=session_id.as_deref() {
+            if self.ledger.turn(turn_id).is_some_and(|turn|turn.session_id.as_deref()!=Some(session)) {
+                self.ledger.mark_turn_started(turn_id,session)?;
+            }
+        }
+        if !internal_turn && !self.ledger.turns().iter().any(|turn|turn.superseded_by.as_deref()==Some(turn_id)) {
+            self.upstream_budget.new_message();
+        }
+        let desk=self.take_current_front_desk();
+        self.turn_in_progress=false;
         Ok(Delivery {turn_id:turn_id.into(),binding:binding.clone(),text:text.into(),allow_recovery,
             internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
-            preparation_stop,preparation,session_id,lease:self.lease.take()})
+            preparation_stop,preparation,session_id,desk,generation:self.front_desk_generation})
     }
 
     fn capture_delivery_item(&mut self,delivery:&mut Delivery,item:TurnItem) {
@@ -3048,8 +3076,8 @@ impl Spine {
         let output_store=self.output.as_ref().map(|(store,_)|store);
         let worker_source=&self.worker_events;
         let worker_session=&delivery.session_id;
-        let usage_slot=&mut self.context_usage;
-        let pressure_slot=&mut self.context_pressure;
+        let usage_slot=&mut delivery.desk.context_usage;
+        let pressure_slot=&mut delivery.desk.context_pressure;
         match item {
                 // `seq` comes from the LEASE now (§1.4 G1): ONE counter per turn, shared
                 // by text and machinery. The spine no longer counts text items itself —
@@ -3146,7 +3174,9 @@ impl Spine {
         let preparation_failed=delivery.preparation_failed;
         let persist_err=delivery.persist_err.take();
         let live_turn=&mut delivery.live_turn;
-        self.lease=delivery.lease.take();
+        self.park_current_front_desk();
+        if delivery.generation!=self.front_desk_generation {delivery.desk.primed=false;}
+        self.restore_front_desk(thread_id,delivery.desk);
         self.turn_in_progress = false;
         // Witnesses (b) and (c) of the Output side panel PRD, for the lease that just ran this
         // turn: a front-desk worker's writes (nested inside the lead's turn) and the files the
@@ -3609,7 +3639,7 @@ impl Spine {
         let mut survivors: VecDeque<Queued> = VecDeque::new();
         while let Some(queued) = self.queue.pop_front() {
             let written_before_the_stop = queued.intake_id.map(|id| id < claim.intake_id).unwrap_or(true);
-            if written_before_the_stop {
+            if queued.binding.thread_id()==binding.thread_id() && written_before_the_stop {
                 self.ledger.stop_turn(&queued.turn_id, claim.requested_at)?;
                 self.emit_live(self.turn_status_event(&queued.binding, &queued.turn_id, TurnStatus::Stopped, None));
             } else {
@@ -3678,6 +3708,7 @@ impl Spine {
     /// matters more than the liveness of the records queued after them, and a binding
     /// failure here is systemic rather than per-message.
     fn drain_intake(&mut self) -> Result<(), SpineError> {
+        let mut deferred_stop=false;
         for record in self.control.pending_intake() {
             match record {
                 IntakeRecord::Steer { id, thread_id, text, .. } => {
@@ -3688,7 +3719,7 @@ impl Spine {
                     // the same sentence as a second turn — the CEO's one message, asked
                     // twice.
                     if self.ledger.turn_for_intake(id).is_some() {
-                        self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
+                        if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                         continue;
                     }
                     let binding = self.fence_binding(&thread_id)?;
@@ -3700,12 +3731,12 @@ impl Spine {
                     self.emit_live(self.ceo_message_event(&binding, &turn_id));
                     self.emit_live(self.thread_summary_event(&binding, &turn_id, ThreadStatus::Queued));
                     self.queue.push_back(Queued { turn_id, binding, text, intake_id: Some(id) });
-                    self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
+                    if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }
                 IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, source, .. } => {
                     if self.ledger.turn_for_intake(id).is_some() || client_id.as_ref().is_some_and(|key|
                         self.ledger.thread_turns(&thread_id).is_ok_and(|turns| turns.iter().any(|turn| turn.client_id.as_ref() == Some(key)))) {
-                        self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
+                        if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                         continue;
                     }
                     let binding = self.fence_binding(&thread_id)?;
@@ -3717,7 +3748,7 @@ impl Spine {
                     self.emit_live(self.ceo_message_event(&binding, &turn_id));
                     self.emit_live(self.thread_summary_event(&binding, &turn_id, ThreadStatus::Queued));
                     self.queue.push_back(Queued { turn_id, binding, text, intake_id: Some(id) });
-                    self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
+                    if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }
                 IntakeRecord::Desk { id, thread_id, text, .. } => {
                     // **HIS OWN COMPOSER, DEFERRED — so it lands exactly as if it had never
@@ -3727,15 +3758,19 @@ impl Spine {
                     // the front desk was priming is therefore staged, and the only difference
                     // between this road and the direct one is WHEN the spine could be reached.
                     if self.ledger.turn_for_intake(id).is_some() {
-                        self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
+                        if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                         continue;
                     }
                     let binding = self.fence_binding(&thread_id)?;
                     let turn_id = self.accept_prompt(&binding, &text, Source::Text, None, Some(id), DESK_CHANNEL)?;
                     self.queue.push_back(Queued { turn_id, binding, text, intake_id: Some(id) });
-                    self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
+                    if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }
                 IntakeRecord::Stop { id, turn_id, at } => {
+                    if self.control.has_active_turn_id(&turn_id) {
+                        deferred_stop=true;
+                        continue;
+                    }
                     let open = self.ledger.delivery_chain(&turn_id).iter().any(|id| {
                         self.ledger.turn(id).is_some_and(|turn| matches!(turn.state,
                             crate::ledger::TurnState::Received | crate::ledger::TurnState::InFlight))
@@ -3743,7 +3778,7 @@ impl Spine {
                     if open {
                         self.ledger.stop_turn(&turn_id, at)?;
                     }
-                    self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
+                    if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }
                 IntakeRecord::Drained { .. } => {}
             }
@@ -3774,13 +3809,9 @@ impl Spine {
     /// is why it is three lines rather than thirty: **no new machinery, one new caller for
     /// machinery that already exists.**
     ///
-    /// **It never runs mid-turn**, and that is structural twice over. A caller cannot even
-    /// reach it while a turn is running, because the shell holds the one `Spine` behind a
-    /// mutex that `submit_prompt` keeps for the whole turn. The `turn_in_progress` check
-    /// below is the second lock on the same door: if a future caller ever does hold the
-    /// spine mid-turn, this returns without touching the queue rather than delivering a
-    /// prompt into a running turn. Continuity §3.1 is queue-not-interrupt by construction
-    /// and this does not become the exception.
+    /// Intake can arrive while other conversations are replying. It is accepted into
+    /// the same ledger immediately; only a turn on its own conversation delays delivery.
+    /// Synchronous preparation still excludes intake until it releases the shared state.
     ///
     /// **It is called after a write, never on a timer.** Plan §6 forbids *"a polling loop
     /// that wakes the Mac"*, and a drain that runs on a schedule is exactly that. The
@@ -3801,9 +3832,9 @@ impl Spine {
     }
 
     pub fn poll_intake(&mut self) -> Result<(), SpineError> {
-        if self.turn_in_progress {
-            return Ok(());
-        }
+        // Preparation still owns the shared state. Detached visible replies instead
+        // own their per-conversation control and do not hold this flag.
+        if self.turn_in_progress {return Ok(());}
         self.drain_intake()?;
         self.drain_queue()
     }
@@ -3877,10 +3908,9 @@ impl Spine {
     /// Deliver queued prompts (FIFO) now that the turn boundary is clear.
     fn drain_queue(&mut self) -> Result<(), SpineError> {
         let mut failure = None;
-        while !self.turn_in_progress {
-            let Some(next) = self.queue.pop_front() else { break };
-            self.upstream_budget.new_message();
-            let delivered = self.deliver(&next.turn_id, &next.binding, &next.text, true);
+        while let Some(index)=self.queue.iter().position(|queued|!self.thread_is_running(queued.binding.thread_id())) {
+            let next=self.queue.remove(index).unwrap();
+                let delivered = self.deliver(&next.turn_id, &next.binding, &next.text, true);
             let boundary = self.after_turn_boundary(&next.binding);
             if let Err(error) = delivered.and(boundary) {
                 if failure.is_none() { failure = Some(error); }
@@ -3895,7 +3925,7 @@ impl Spine {
     /// directly or from draining the queue — both call sites only reach here once
     /// `turn_in_progress` is false, so nothing below ever runs mid-turn.
     fn after_turn_boundary(&mut self, binding: &ThreadBinding) -> Result<(), SpineError> {
-        if self.turn_in_progress {return Ok(())}
+        if self.thread_is_running(binding.thread_id()) {return Ok(())}
         // FIRST, before anything below can fail: this turn has ended, whatever it ended in,
         // so the work it wrote down may now start (`take_ended_turns`, background-work §7.1).
         if !self.ended_turns.iter().any(|known| known.thread_id() == binding.thread_id()) {
@@ -4015,8 +4045,7 @@ impl Spine {
         self.emit_live(self.turn_status_event(binding, turn_id, TurnStatus::Completed, None));
         // Said during a turn of this same thread, the thread is still working: the message
         // is complete, the turn beside it is not.
-        let working = self.turn_in_progress
-            && self.control.active_turn().is_some_and(|active| active.thread_id == binding.thread_id());
+        let working = self.thread_is_running(binding.thread_id());
         let status = if working { ThreadStatus::Working } else { ThreadStatus::Idle };
         self.emit_live(self.thread_summary_event(binding, turn_id, status));
     }
@@ -4602,6 +4631,7 @@ impl Spine {
     }
 
     fn prepare_request(&mut self, binding: &ThreadBinding) -> Result<bool, SpineError> {
+        self.control=self.control.for_thread(binding.thread_id());
         let mut spawned = false;
         // **THE DESK THAT IS ALREADY THIS THREAD'S TAKES THE CHAIR FIRST.**
         //
@@ -4631,12 +4661,8 @@ impl Spine {
             // reconstitution. So the outgoing desk is parked alive under its own thread and
             // this thread's own desk, if it has one, takes the chair.
             //
-            // Nothing crosses: each desk keeps its own provider session, its own ECS
-            // session id and its own priming, and the incoming one is the destination's or
-            // it is fresh. What is NOT yet true is simultaneity — two desks cannot hold a
-            // turn open at once, because both bind the CEO's single ECS cursor
-            // (`native.rs`'s `CONVERSATION_SEAT`, with the measurement beside it). Turns
-            // take turns; the work behind them has run in parallel since slice 1.
+            // Each desk keeps its own provider session, scope and priming. An in-flight
+            // delivery owns its whole desk until completion, so another thread can run.
             self.park_current_front_desk();
             self.resume_front_desk(binding.thread_id());
         }
@@ -4737,7 +4763,7 @@ impl Spine {
     /// and it is never worse than today: a message he sends during priming waits for the priming
     /// his message used to perform itself, and then runs on a primed desk.
     pub fn prime_front_desk(&mut self, thread_id: &str) -> FrontDeskReady {
-        if self.turn_in_progress {
+        if self.thread_is_running(thread_id) {
             return FrontDeskReady::TurnInProgress;
         }
         let binding = match self.ledger.thread_binding(thread_id) {
@@ -4916,8 +4942,12 @@ impl Spine {
         self.queue.len()
     }
 
+    fn thread_is_running(&self,thread:&str)->bool {
+        self.turn_in_progress || self.control.for_thread(thread).active_turn().is_some()
+    }
+
     pub fn is_turn_in_progress(&self) -> bool {
-        self.turn_in_progress
+        self.turn_in_progress || self.control.has_active_turns()
     }
 
     /// TEST-ONLY seam. This spine is fully synchronous and single-threaded (the Tauri

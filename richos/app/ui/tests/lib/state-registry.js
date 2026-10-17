@@ -3667,11 +3667,6 @@ module.exports = [
     "control": "#repository-close"
   },
   {
-    "s": "Another conversation is working. Saved work will refresh when it settles.",
-    "c": "INFORMATIONAL",
-    "why": "The refresh waits for the other conversation to release its lock."
-  },
-  {
     "s": "Checking this folder…",
     "c": "INFORMATIONAL",
     "why": "The native folder check, and Git set-up where the folder has none, is in progress."
@@ -4281,13 +4276,6 @@ module.exports = [
     "why":
       "Prefix joined to the backend's own reason, exactly as 'Saved work is unavailable:' " +
       "above it. The sentence he reads is the join.",
-  },
-  {
-    "s": "Another conversation is working. Your assignments will refresh when it settles.",
-    "c": "INFORMATIONAL",
-    "why":
-      "A turn is live on a different thread, so this thread's company binding cannot be read " +
-      "without waiting on it. It resolves itself and says so; nothing is asked of him.",
   },
   {
     "s": "Your assignments are changing. They will refresh in a moment.",

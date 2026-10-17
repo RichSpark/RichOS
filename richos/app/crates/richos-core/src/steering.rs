@@ -853,22 +853,17 @@ pub enum StopOutcome {
     },
 }
 
+#[derive(Default)]
+struct ConversationControl {
+    active: Option<ActiveTurn>,
+    stop: Option<StopClaim>,
+    cancel: Option<Arc<dyn TurnCancel>>,
+    lease_session: Option<String>,
+}
+
 struct Inner {
     intake: Mutex<Option<IntakeLog>>,
-    active: Mutex<Option<ActiveTurn>>,
-    stop: Mutex<Option<StopClaim>>,
-    cancel: Mutex<Option<Arc<dyn TurnCancel>>>,
-    /// The CURRENT compute lease's session id, published by the spine at the same three
-    /// points as `cancel` (attach, rotation, crash recovery).
-    ///
-    /// Here rather than behind the spine's mutex for the same reason `active` and `cancel`
-    /// are: `send_message` holds that mutex for the whole turn, and `get_worker_status` is
-    /// polled by the UI ON TURN START. Reading the session id through the spine would make
-    /// the worker chip block until Rich finished — so the one datum the worker path needs
-    /// travels the channel that was built to bypass the lock.
-    ///
-    /// A MIRROR, not a second opinion: it is only ever written next to `self.lease`.
-    lease_session: Mutex<Option<String>>,
+    conversations: Mutex<std::collections::HashMap<String, ConversationControl>>,
     /// **The thread whose front desk is being primed RIGHT NOW, or `None`** — the one fact
     /// `send_message` needs in order to not block, and the one place it can be read from.
     ///
@@ -898,6 +893,7 @@ struct Inner {
 #[derive(Clone)]
 pub struct TurnControl {
     inner: Arc<Inner>,
+    thread: Option<String>,
 }
 
 impl std::fmt::Debug for TurnControl {
@@ -913,12 +909,10 @@ impl TurnControl {
         Ok(TurnControl {
             inner: Arc::new(Inner {
                 intake: Mutex::new(Some(log)),
-                active: Mutex::new(None),
-                stop: Mutex::new(None),
-                cancel: Mutex::new(None),
-                lease_session: Mutex::new(None),
+                conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(None),
             }),
+            thread: None,
         })
     }
 
@@ -930,12 +924,10 @@ impl TurnControl {
         TurnControl {
             inner: Arc::new(Inner {
                 intake: Mutex::new(None),
-                active: Mutex::new(None),
-                stop: Mutex::new(None),
-                cancel: Mutex::new(None),
-                lease_session: Mutex::new(None),
+                conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(None),
             }),
+            thread: None,
         }
     }
 
@@ -949,102 +941,110 @@ impl TurnControl {
 
     // --- written by the spine, at the points that already exist -------------------------
 
-    /// The spine has handed (or journaled) this turn. Mirrors `turn_in_progress`.
+    /// A view of the same durable intake and controls for one conversation.
+    pub fn for_thread(&self, thread: &str) -> Self {
+        Self { inner: self.inner.clone(), thread: Some(thread.to_string()) }
+    }
+
+    fn key(&self) -> &str { self.thread.as_deref().unwrap_or("") }
+
+    pub fn active_turn_count(&self) -> usize {
+        self.inner.conversations.lock().unwrap().values().filter(|state|state.active.is_some()).count()
+    }
+
+    pub fn has_active_turns(&self) -> bool {self.active_turn_count()!=0}
+
+    pub fn has_active_turn_id(&self,turn_id:&str)->bool {
+        self.inner.conversations.lock().unwrap().values()
+            .any(|state|state.active.as_ref().is_some_and(|turn|turn.turn_id==turn_id))
+    }
+
     pub fn begin_turn(&self, turn: ActiveTurn) {
-        let mut active = self.inner.active.lock().unwrap();
-        if let Some(cancel) = self.inner.cancel.lock().unwrap().as_ref() {
-            cancel.begin_operation();
-        }
-        *active = Some(turn);
+        let mut states=self.inner.conversations.lock().unwrap();
+        let state=states.entry(self.key().to_string()).or_default();
+        if let Some(cancel)=state.cancel.as_ref() {cancel.begin_operation();}
+        state.active=Some(turn);
     }
 
-    /// The spine has recorded a terminal event for `turn_id`. Idempotent, and it will not
-    /// clear a DIFFERENT turn's claim on the active slot.
     pub fn end_turn(&self, turn_id: &str) {
-        let mut active = self.inner.active.lock().unwrap();
-        if active.as_ref().map(|a| a.turn_id == turn_id).unwrap_or(false) {
-            *active = None;
-            if let Some(cancel) = self.inner.cancel.lock().unwrap().as_ref() {
-                cancel.end_operation();
-            }
+        let mut states=self.inner.conversations.lock().unwrap();
+        for state in states.values_mut().filter(|state|state.active.as_ref().is_some_and(|turn|turn.turn_id==turn_id)) {
+            state.active=None;
+            if let Some(cancel)=state.cancel.as_ref() {cancel.end_operation();}
         }
     }
 
-    /// Install the lease's cancel seam. Called when a lease is attached, rotated or
-    /// recovered; `None` when there is no lease, so a stop reports `reached_lease: false`
-    /// rather than pretending.
     pub fn shutdown_lease(&self) {
-        if let Some(cancel) = self.inner.cancel.lock().unwrap().clone() { cancel.shutdown(); }
+        let cancels:Vec<_>=self.inner.conversations.lock().unwrap().iter()
+            .filter(|(key,_)|self.thread.as_ref().is_none_or(|thread|thread.as_str()==key.as_str()))
+            .filter_map(|(_,state)|state.cancel.clone()).collect();
+        for cancel in cancels {cancel.shutdown();}
     }
 
     pub fn set_cancel(&self, cancel: Option<Arc<dyn TurnCancel>>) {
-        let active = self.inner.active.lock().unwrap();
-        if let Some(turn) = active.as_ref() {
-            if let Some(handle) = cancel.as_ref() {
+        let mut states=self.inner.conversations.lock().unwrap();
+        let state=states.entry(self.key().to_string()).or_default();
+        if let Some(turn)=state.active.as_ref() {
+            if let Some(handle)=cancel.as_ref() {
                 handle.begin_operation();
-                if self.stop_claim_for(&turn.turn_id).is_some() { handle.cancel(); }
+                if state.stop.as_ref().is_some_and(|claim|claim.turn_id==turn.turn_id) {handle.cancel();}
             }
         }
-        *self.inner.cancel.lock().unwrap() = cancel;
+        state.cancel=cancel;
     }
 
-    /// Publish the current lease's session id. Written by the spine beside `set_cancel`,
-    /// at every point where `self.lease` changes — `None` when there is no lease, so the
-    /// worker path reports "no compute lease is attached" rather than reading a directory
-    /// belonging to a session that ended.
     pub fn set_lease_session(&self, session_id: Option<String>) {
-        *self.inner.lease_session.lock().unwrap() = session_id;
+        self.inner.conversations.lock().unwrap().entry(self.key().to_string()).or_default().lease_session=session_id;
     }
-
-    // --- read/written by the shell, WITHOUT the spine lock ------------------------------
 
     pub fn active_turn(&self) -> Option<ActiveTurn> {
-        self.inner.active.lock().unwrap().clone()
+        let states=self.inner.conversations.lock().unwrap();
+        if self.thread.is_some() {return states.get(self.key()).and_then(|s|s.active.clone());}
+        // Legacy unscoped callers can act only when the target is unambiguous.
+        let mut active=states.values().filter_map(|s|s.active.as_ref());
+        let turn=active.next()?.clone();
+        active.next().is_none().then_some(turn)
     }
 
-    /// The session id of the lease the app is serving RIGHT NOW, readable without the
-    /// spine lock. `None` = no lease; the caller must not substitute anything for it.
     pub fn lease_session(&self) -> Option<String> {
-        self.inner.lease_session.lock().unwrap().clone()
+        let states=self.inner.conversations.lock().unwrap();
+        if self.thread.is_some() {return states.get(self.key()).and_then(|state|state.lease_session.clone());}
+        let mut sessions=states.iter().filter(|(key,_)|!key.is_empty() || states.len()==1)
+            .filter_map(|(_,state)|state.lease_session.as_ref());
+        let session=sessions.next()?.clone();
+        sessions.next().is_none().then_some(session)
     }
 
-    /// §9.3 steps 1 and 2, in that order and never the other way round: persist the stop
-    /// request, then interrupt the active turn.
+    pub fn lease_sessions(&self)->Vec<String> {
+        self.inner.conversations.lock().unwrap().values().filter_map(|state|state.lease_session.clone()).collect()
+    }
+
     pub fn request_stop(&self) -> Result<StopOutcome, SteeringError> {
         self.request_stop_matching(None)
     }
 
-    /// Stop only the turn the caller observed. A delayed click must never cancel a
-    /// successor turn that started while the UI was switching threads or awaiting IPC.
     pub fn request_stop_for(&self, expected_turn_id: &str) -> Result<StopOutcome, SteeringError> {
         self.request_stop_matching(Some(expected_turn_id))
     }
 
     fn request_stop_matching(&self, expected_turn_id: Option<&str>) -> Result<StopOutcome, SteeringError> {
-        // Keep identity, durable claim and cancellation in one critical section.
-        // begin/end_turn and set_cancel use this same lock, so neither the turn nor
-        // its cancellation handle can advance after the identity check.
-        let guard = self.inner.active.lock().unwrap();
-        let Some(active) = guard.as_ref() else {
-            return Ok(StopOutcome::NothingRunning);
+        // Identity, durable claim and the matching lease remain in one critical section.
+        let mut states=self.inner.conversations.lock().unwrap();
+        let keys:Vec<_>=states.iter().filter(|(key,state)| {
+            self.thread.as_ref().is_none_or(|thread|thread.as_str()==key.as_str())
+                && state.active.as_ref().is_some_and(|turn|expected_turn_id.is_none_or(|id|id==turn.turn_id))
+        }).map(|(key,_)|key.clone()).collect();
+        if keys.len()!=1 {return Ok(StopOutcome::NothingRunning);}
+        let state=states.get_mut(&keys[0]).unwrap();
+        let active=state.active.as_ref().unwrap();
+        let rec={
+            let mut intake=self.inner.intake.lock().unwrap();
+            intake.as_mut().ok_or(SteeringError::NoDurableIntake)?.stop(&active.turn_id)?
         };
-        if expected_turn_id.is_some_and(|expected| expected != active.turn_id) {
-            return Ok(StopOutcome::NothingRunning);
-        }
-        let rec = {
-            let mut guard = self.inner.intake.lock().unwrap();
-            let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-            log.stop(&active.turn_id)?
-        };
-        let IntakeRecord::Stop { id, at, .. } = rec else { unreachable!("IntakeLog::stop returns Stop") };
-        *self.inner.stop.lock().unwrap() =
-            Some(StopClaim { turn_id: active.turn_id.clone(), intake_id: id, requested_at: at });
-
-        // Only now — the request is on disk, so however this goes the ledger can say what
-        // the CEO asked for.
-        let cancel = self.inner.cancel.lock().unwrap().clone();
-        let reached_lease = cancel.map(|c| c.cancel()).unwrap_or(false);
-        Ok(StopOutcome::Requested { turn_id: active.turn_id.clone(), requested_at: at, reached_lease })
+        let IntakeRecord::Stop{id,at,..}=rec else {unreachable!()};
+        state.stop=Some(StopClaim{turn_id:active.turn_id.clone(),intake_id:id,requested_at:at});
+        let reached_lease=state.cancel.as_ref().is_some_and(|cancel|cancel.cancel());
+        Ok(StopOutcome::Requested{turn_id:active.turn_id.clone(),requested_at:at,reached_lease})
     }
 
     /// §9.2: the CEO added words while Rich was working. Durable on return; delivered at
@@ -1248,16 +1248,25 @@ impl TurnControl {
     /// a stop is a statement about ONE turn, and letting it fall through onto whatever ran
     /// next would attribute a stop the CEO never asked for.
     pub fn stop_claim_for(&self, turn_id: &str) -> Option<StopClaim> {
-        let guard = self.inner.stop.lock().unwrap();
-        guard.as_ref().filter(|c| c.turn_id == turn_id).cloned()
+        self.inner.conversations.lock().unwrap().values().filter_map(|s|s.stop.as_ref())
+            .find(|claim|claim.turn_id==turn_id).cloned()
     }
 
     pub fn stop_claim(&self) -> Option<StopClaim> {
-        self.inner.stop.lock().unwrap().clone()
+        let states=self.inner.conversations.lock().unwrap();
+        if self.thread.is_some() {return states.get(self.key()).and_then(|s|s.stop.clone());}
+        let mut claims=states.values().filter_map(|s|s.stop.as_ref());
+        let claim=claims.next()?.clone();
+        claims.next().is_none().then_some(claim)
     }
 
     pub fn clear_stop_claim(&self) {
-        *self.inner.stop.lock().unwrap() = None;
+        let mut states=self.inner.conversations.lock().unwrap();
+        if self.thread.is_some() {
+            if let Some(state)=states.get_mut(self.key()) {state.stop=None;}
+        } else {
+            for state in states.values_mut() {state.stop=None;}
+        }
     }
 
     /// Undrained intake records, oldest first.
@@ -1325,6 +1334,35 @@ mod tests {
             entity_id: None,
             started_at: Some(1_000),
         }
+    }
+
+    #[test]
+    fn simultaneous_conversations_keep_their_own_stops_and_cancellation_handles() {
+        let path=tmp("parallel-stops");
+        let control=TurnControl::open(&path).unwrap();
+        let a=control.for_thread("A");
+        let b=control.for_thread("B");
+        let a_calls=Arc::new(Mutex::new(0));
+        let b_calls=Arc::new(Mutex::new(0));
+        a.set_cancel(Some(Arc::new(RecordingCancel(a_calls.clone(),true))));
+        b.set_cancel(Some(Arc::new(RecordingCancel(b_calls.clone(),true))));
+        a.begin_turn(ActiveTurn{turn_id:"a".into(),thread_id:"A".into(),..active()});
+        b.begin_turn(ActiveTurn{turn_id:"b".into(),thread_id:"B".into(),..active()});
+        assert_eq!(control.request_stop().unwrap(),StopOutcome::NothingRunning);
+        assert!(control.pending_intake().is_empty());
+        a.request_stop().unwrap();
+        b.request_stop().unwrap();
+        assert_eq!(*a_calls.lock().unwrap(),1);
+        assert_eq!(*b_calls.lock().unwrap(),1);
+        assert_eq!(a.stop_claim().unwrap().turn_id,"a");
+        assert_eq!(b.stop_claim().unwrap().turn_id,"b");
+        b.end_turn("b");
+        b.clear_stop_claim();
+        assert_eq!(a.active_turn().unwrap().turn_id,"a");
+        assert_eq!(a.stop_claim().unwrap().turn_id,"a");
+        assert!(b.active_turn().is_none());
+        assert!(b.stop_claim().is_none());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1424,7 +1462,7 @@ mod tests {
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // This is an exact lock assertion, not a scheduling-dependent sleep: the
         // successor cannot begin or replace the handle while cancel is in progress.
-        assert!(matches!(ctl.inner.active.try_lock(), Err(std::sync::TryLockError::WouldBlock)));
+        assert!(matches!(ctl.inner.conversations.try_lock(), Err(std::sync::TryLockError::WouldBlock)));
         assert!(std::fs::read_to_string(&path).unwrap().contains("\"record\":\"stop\""));
         let succeeding = ctl.clone();
         let transition = std::thread::spawn(move || {

@@ -66,7 +66,7 @@ impl SpineView for ReadView {
     fn timeline(&self, thread: &str) -> Result<Timeline, SpineError> {
         let binding = self.ledger.thread_binding(thread)?;
         let machinery = self.journal.as_ref().map(|j| j.read_thread(thread)).unwrap_or_default();
-        let workers = self.metadata.workers.read(self.metadata.control.lease_session().as_deref());
+        let workers = self.metadata.workers.read(self.metadata.control.for_thread(thread).lease_session().as_deref());
         Ok(Timeline::project_with_workers(&self.ledger, &binding, &machinery, &workers)?)
     }
     fn onboarding_state(&self, binding: &ThreadBinding) -> OnboardingState {

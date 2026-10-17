@@ -554,7 +554,10 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
         assert_eq!(control.active_turn().unwrap().turn_id,first);
         assert!(available.has_lease(),"an active provider disappeared from availability");
         available.switch_thread(&second_thread).unwrap();
-        let second=available.submit_prompt_to(&second_thread,"second request",Source::Text).unwrap();
+        control.submit_from_desk(&first_thread,Some(EntityId::parse("femcboost").unwrap()),"second request").unwrap();
+        available.poll_intake().unwrap();
+        let second=available.ledger().turns().iter().find(|turn|turn.user_text=="second request").unwrap().id.clone();
+        assert_eq!(available.active_thread(),Some(second_thread.as_str()));
         assert_eq!(control.active_turn().unwrap().turn_id,first);
         assert_eq!(available.ledger().turn(&second).unwrap().state,TurnState::Received);
         second
@@ -563,12 +566,115 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
     worker.join().unwrap().unwrap();
     let finished=shared.lock().unwrap();
     assert!(control.active_turn().is_none());
-    assert_eq!(*completed.0.lock().unwrap(),vec![(first_thread.clone(),first.clone()),(second_thread.clone(),second.clone())],
+    assert_eq!(*completed.0.lock().unwrap(),vec![(first_thread.clone(),first.clone()),(first_thread.clone(),second.clone())],
         "the ordinary completion observer must see both the original reply and its queued reply");
-    for (id,thread,text) in [(first,first_thread,"first request"),(second,second_thread,"second request")] {
+    for (id,thread,text) in [(first,first_thread.clone(),"first request"),(second,first_thread.clone(),"second request")] {
         let turn=finished.ledger().turn(&id).unwrap();
         assert_eq!(turn.state,TurnState::Completed);
         assert_eq!(turn.thread_id,thread);
         assert_eq!(turn.assistant_text,text);
     }
+}
+
+#[test]
+fn another_conversation_completes_before_the_first_reply_is_released() {
+    let (mut spine, control, _, _) = fixture();
+    let a=spine.active_thread().unwrap().to_string();
+    let b=spine.create_thread("Independent conversation", &EntityId::parse("femcboost").unwrap()).unwrap();
+    let (entered, ready)=mpsc::channel();
+    let (release, gated)=mpsc::channel();
+    spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true}));
+    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["B answered"])));
+    spine.detach_conversation_io();
+    let first=spine.submit_prompt_to(&a,"A is busy",Source::Text).unwrap();
+    let shared=Arc::new(Mutex::new(spine));
+    let driving=shared.clone();
+    let worker=std::thread::spawn(move ||richos_core::spine::drive_shared_turns(&driving));
+    ready.recv_timeout(Duration::from_secs(30)).unwrap();
+    let second={
+        let mut state=shared.lock().unwrap();
+        control.submit_from_desk(&b,Some(EntityId::parse("femcboost").unwrap()),"B question").unwrap();
+        state.poll_intake().unwrap();
+        state.ledger().thread_turns(&b).unwrap().iter().find(|t| t.source==Source::Text).map(|t|t.id.clone())
+    };
+    richos_core::spine::drive_shared_turns(&shared).unwrap();
+    let b_finished=second.as_ref().is_some_and(|id|shared.lock().unwrap().ledger().turn(id).unwrap().state==TurnState::Completed);
+    let a_still_working=shared.lock().unwrap().ledger().turn(&first).unwrap().state==TurnState::InFlight;
+    // Release the owned reply before assertions, including on the expected red.
+    release.send(()).unwrap();
+    worker.join().unwrap().unwrap();
+    assert!(b_finished,"conversation B waited for A's reply instead of running its own session");
+    assert!(a_still_working,"B's completion changed A's lifecycle");
+    let state=shared.lock().unwrap();
+    let second=state.ledger().turn(second.as_ref().unwrap()).unwrap();
+    assert_eq!(control.for_thread(&b).lease_session().as_deref(),second.session_id.as_deref(),
+        "a parked conversation lost its own session identity");
+    assert_ne!(state.ledger().turn(&first).unwrap().session_id,second.session_id);
+}
+
+struct OneConversationFactory(Mutex<Option<Box<dyn Cognition>>>);
+impl LeaseFactory for OneConversationFactory {
+    fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {Ok(self.0.lock().unwrap().take().unwrap())}
+}
+struct CancellableConversation {
+    entered:mpsc::Sender<()>,
+    stopped:mpsc::Receiver<()>,
+    cancel:Arc<NotifyCancel>,
+}
+impl Cognition for CancellableConversation {
+    fn session_id(&self)->&str {"conversation-b"}
+    fn reprime(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<(),CognitionError> {Ok(())}
+    fn cancel_handle(&self)->Option<Arc<dyn TurnCancel>> {Some(self.cancel.clone())}
+    fn prompt(&mut self,_:&str,on_item:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
+        on_item(TurnItem::Text{seq:0,text:"B partial"});
+        self.entered.send(()).unwrap();
+        // Only a hang guard: the matching native cancellation signal releases this reply.
+        self.stopped.recv_timeout(Duration::from_secs(30)).unwrap();
+        Ok(richos_core::native::STOP_REASON_CANCELLED.into())
+    }
+}
+#[test]
+fn stopping_one_of_two_live_conversations_keeps_the_other_and_its_queued_request() {
+    let (mut spine,control,_,_)=fixture();
+    let a=spine.active_thread().unwrap().to_string();
+    let b=spine.create_thread("B",&EntityId::parse("femcboost").unwrap()).unwrap();
+    let (entered,ready)=mpsc::channel();
+    let (release,gated)=mpsc::channel();
+    spine.attach_lease(Box::new(GatedReply{entered,release:gated,first:true}));
+    let (b_entered,b_ready)=mpsc::channel();
+    let (stop,stopped)=mpsc::channel();
+    spine.set_lease_factory(Box::new(OneConversationFactory(Mutex::new(Some(Box::new(CancellableConversation{
+        entered:b_entered,stopped,cancel:Arc::new(NotifyCancel(Mutex::new(stop))),
+    }))))));
+    spine.detach_conversation_io();
+    let first=spine.submit_prompt_to(&a,"A first",Source::Text).unwrap();
+    let shared=Arc::new(Mutex::new(spine));
+    let driving=shared.clone();
+    let a_worker=std::thread::spawn(move||richos_core::spine::drive_shared_turns(&driving));
+    ready.recv_timeout(Duration::from_secs(30)).unwrap();
+    let (queued,second)={
+        let mut state=shared.lock().unwrap();
+        let queued=state.submit_prompt_to(&a,"A next",Source::Text).unwrap();
+        let second=state.submit_prompt_to(&b,"B first",Source::Text).unwrap();
+        (queued,second)
+    };
+    let driving=shared.clone();
+    let b_worker=std::thread::spawn(move||richos_core::spine::drive_shared_turns(&driving));
+    b_ready.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert!(control.for_thread(&a).active_turn().is_some());
+    assert!(matches!(control.request_stop_for(&second).unwrap(),StopOutcome::Requested{reached_lease:true,..}));
+    b_worker.join().unwrap().unwrap();
+    let (a_state,queued_state,b_state)={
+        let state=shared.lock().unwrap();
+        (state.ledger().turn(&first).unwrap().state,state.ledger().turn(&queued).unwrap().state,state.ledger().turn(&second).unwrap().state)
+    };
+    release.send(()).unwrap();
+    a_worker.join().unwrap().unwrap();
+    assert_eq!(a_state,TurnState::InFlight);
+    assert_eq!(queued_state,TurnState::Received);
+    assert_eq!(b_state,TurnState::Stopped);
+    let state=shared.lock().unwrap();
+    assert_eq!(state.ledger().turn(&queued).unwrap().state,TurnState::Completed);
+    assert_eq!(state.ledger().turn(&queued).unwrap().assistant_text,"A next");
+    assert!(!control.has_active_turns());
 }
