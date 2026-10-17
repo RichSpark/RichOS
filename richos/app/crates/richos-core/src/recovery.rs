@@ -263,7 +263,7 @@ pub fn reconcile(state: &Path, repositories: &dyn Repositories) -> Reconciliatio
             // closed with RichOS, and picking it back up (`assignment::pick_up`) runs it again,
             // which asks him again if it reaches that step. Nothing re-runs it by itself (§6.3).
             AssignmentState::Blocked => {
-                let said = assignment::says::approval_lost(&record.title);
+                let said = recovery_facts(state,&record,repositories,true);
                 if assignment::advance(state, &record.entity_id, &record.thread_id, &record.id,
                                        AssignmentState::Unknown, APPROVAL_LOST_AT_RELAUNCH).is_err() {
                     report.unreadable = Some("an assignment could not be brought up to date".into());
@@ -309,7 +309,7 @@ pub fn reconcile(state: &Path, repositories: &dyn Repositories) -> Reconciliatio
             }
             // Everything else that is open was in flight when the process went away.
             _ => {
-                let said = assignment::says::unknown(&record.title, &what_was_checked(state, &record, repositories));
+                let said = recovery_facts(state,&record,repositories,false);
                 let detail = detail_for(&record);
                 let moved = assignment::advance(
                     state,
@@ -403,52 +403,31 @@ fn detail_for(record: &Assignment) -> String {
     format!("{was} when RichOS closed. Nothing has looked since, so nothing is being called finished.")
 }
 
-/// **The two witnesses, turned into one sentence he can hear.**
-///
-/// Deliberately short and deliberately partial: it says only what was established. Nothing
-/// here ever produces a sentence that could be read as a completion, which is why the
-/// worker reading contributes *"its workers had all stopped"* only alongside the standing
-/// rule that this is not a settlement.
-fn what_was_checked(state: &Path, record: &Assignment, repositories: &dyn Repositories) -> String {
-    let mut said = Vec::new();
+/// Observations for Rich, captured at reconciliation. They do not claim what is
+/// running later or prescribe what he should tell the user.
+fn recovery_facts(state:&Path,record:&Assignment,repositories:&dyn Repositories,approval_lost:bool)->String {
+    serde_json::json!({"event":"work_recovery","assignment_id":record.id,"obligation_id":record.obligation_id,
+        "title":record.title,"previous_state":record.state,"outcome":"unverified",
+        "approval_request_lost":approval_lost,"recorded_work_session":record.work_session,
+        "observations":what_was_checked(state,record,repositories)}).to_string()
+}
 
-    // 1. GIT. The assertion §7.8 wants made in the repository rather than on the screen.
-    if !record.repository_pins.is_empty() {
-        let mut unmoved = 0;
-        let mut moved = 0;
-        let mut unread = 0;
-        for pin in &record.repository_pins {
-            match (&pin.head, repositories.head(&pin.path)) {
-                (Some(before), Some(now)) if before == &now => unmoved += 1,
-                (Some(_), Some(_)) => moved += 1,
-                _ => unread += 1,
-            }
-        }
-        if moved > 0 {
-            said.push("Your repository has moved since it started, so I can't say what came from this.".to_string());
-        } else if unmoved > 0 && unread == 0 {
-            said.push("Your repository is exactly where it was, so nothing from this was landed.".to_string());
-        } else if unread > 0 {
-            said.push("I couldn't read your repository to check.".to_string());
-        }
-    }
-
-    // 2. THE EVIDENCE FILE, on the session that actually ran it. A view that is not
-    //    attributed says so; an attributed one with open workers says that; and workers
-    //    all ending says nothing about whether the assignment finished, which is why that
-    //    branch adds no sentence at all.
-    match &record.work_session {
-        None => said.push("It never reached a work connection.".to_string()),
-        Some(session) => {
-            let view = crate::app_workers::status(state, Some(session.as_str()));
-            if !view.is_attributed() {
-                said.push("I couldn't read its work records.".to_string());
-            } else if view.active > 0 || view.liveness_unknown > 0 {
-                said.push("Its own records still show helpers open.".to_string());
-            }
-        }
-    }
-    said.join(" ")
+fn what_was_checked(state:&Path,record:&Assignment,repositories:&dyn Repositories)->serde_json::Value {
+    let pins:Vec<_>=record.repository_pins.iter().map(|pin| {
+        let after=repositories.head(&pin.path);
+        let comparison=match (&pin.head,&after) {
+            (Some(before),Some(after)) if before==after=>"unchanged",
+            (Some(_),Some(_))=>"changed",
+            _=>"unreadable",
+        };
+        serde_json::json!({"path":pin.path,"before":pin.head,"after":after,"comparison":comparison})
+    }).collect();
+    let workers=record.work_session.as_ref().map(|session| {
+        let view=crate::app_workers::status(state,Some(session));
+        if view.is_attributed() {serde_json::json!({"attributed":true,"active":view.active,"liveness_unknown":view.liveness_unknown})}
+        else {serde_json::json!({"attributed":false})}
+    });
+    serde_json::json!({"repositories":pins,"workers":workers})
 }
 
 /// **Orphan standing grants (§6.3a).**
@@ -847,6 +826,19 @@ mod tests {
     /// **Row 9, in one test.** An assignment that was running when the process died comes
     /// back `unknown` — not settled, not interrupted — and the sentence he gets says so.
     #[test]
+    fn interrupted_work_produces_recovery_facts_instead_of_a_first_person_reply() {
+        let state=root();let receipt=assignment::register(&state,&registration("obligation-recovery")).unwrap();
+        assignment::advance(&state,"depot","thread-one",&receipt.id,AssignmentState::Running,"Running.").unwrap();
+        let report=reconcile(&state,&Fixed(HashMap::new()));
+        let saved=report.unknown[0].said.as_ref().unwrap();
+        let facts:serde_json::Value=serde_json::from_str(saved).expect("recovery must report facts for Rich, not impersonate him");
+        assert_eq!(facts["event"],"work_recovery");assert_eq!(facts["assignment_id"],receipt.id);
+        assert_eq!(facts["previous_state"],"running");assert_eq!(facts["outcome"],"unverified");
+        assert!(!saved.contains("Nothing is running now"));assert!(!saved.contains("Say the word"));
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
     fn a_crash_leaves_work_unknown_and_never_finished() {
         let state = root();
         let receipt = assignment::register(&state, &registration("obligation-1")).unwrap();
@@ -867,8 +859,9 @@ mod tests {
         assert_ne!(record.state, AssignmentState::Settled);
         assert_ne!(record.state, AssignmentState::Interrupted);
         let said = report.unknown[0].said.clone().unwrap();
-        assert!(said.contains("nothing from this was landed"), "{said}");
-        assert!(said.contains("nothing was finished"), "{said}");
+        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
+        assert_eq!(facts["observations"]["repositories"][0]["comparison"],"unchanged");
+        assert_eq!(facts["outcome"],"unverified");
         // He is told plainly (§6.2), durably, and exactly once — the notice is on the
         // record, undelivered, so it survives him not being here.
         assert_eq!(record.notices.last().unwrap().kind, NoticeKind::Unknown);
@@ -896,8 +889,9 @@ mod tests {
 
         let report = reconcile(&state, &at(&"b".repeat(40)));
         let said = report.unknown[0].said.clone().unwrap();
-        assert!(said.contains("moved since it started"), "{said}");
-        assert!(said.contains("can't say what came from this"), "{said}");
+        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
+        assert_eq!(facts["observations"]["repositories"][0]["comparison"],"changed");
+        assert_eq!(facts["outcome"],"unverified");
         assert_eq!(
             assignment::read(&state, "depot", "thread-one", &receipt.id).unwrap().state,
             AssignmentState::Unknown
@@ -914,8 +908,8 @@ mod tests {
             .unwrap();
         let report = reconcile(&state, &UnreadableRepositories);
         let said = report.unknown[0].said.clone().unwrap();
-        assert!(said.contains("couldn't read your repository"), "{said}");
-        assert!(!said.contains("exactly where it was"), "{said}");
+        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
+        assert_eq!(facts["observations"]["repositories"][0]["comparison"],"unreadable");
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -1002,8 +996,9 @@ mod tests {
         assert_eq!(report.unknown.len(), 1, "{report:?}");
         let notice = row.notices.last().unwrap();
         assert_eq!(notice.kind, NoticeKind::Unknown);
-        assert!(notice.text.contains("waiting on a decision from you when RichOS closed"), "{}", notice.text);
-        assert!(notice.text.contains("Say the word"), "{}", notice.text);
+        let facts:serde_json::Value=serde_json::from_str(&notice.text).unwrap();
+        assert_eq!(facts["approval_request_lost"],true);
+        assert_eq!(facts["outcome"],"unverified");
         // The way out is the ordinary one for work RichOS closed on.
         assignment::pick_up(&state, "depot", "thread-one", "landing obligation-1").unwrap();
         assert_eq!(assignment::read(&state, "depot", "thread-one", &approval.id).unwrap().state,
@@ -1067,7 +1062,8 @@ mod tests {
         // Left in `registered`: written down, nothing prepared.
         let report = reconcile(&state, &at(&"a".repeat(40)));
         let said = report.unknown[0].said.clone().unwrap();
-        assert!(said.contains("never reached a work connection"), "{said}");
+        let facts:serde_json::Value=serde_json::from_str(&said).unwrap();
+        assert!(facts["recorded_work_session"].is_null());
         let record = assignment::read(&state, "depot", "thread-one", &receipt.id).unwrap();
         assert_eq!(record.state, AssignmentState::Unknown);
         assert!(record.detail.contains("had not started"), "{}", record.detail);

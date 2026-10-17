@@ -3403,7 +3403,7 @@ module.exports = [
       "`turn_status_event`). A statement about a turn, with nothing in it for him to do.",
   },
   {
-    s: "Rich has your message",
+    s: "Rich is thinking",
     c: "INFORMATIONAL",
     why:
       "The same band's headline for `queued`: the prompt is durably `received` and no lease " +
@@ -3413,8 +3413,8 @@ module.exports = [
     s: "Waiting to start",
     c: "INFORMATIONAL",
     why:
-      "The detail line under `queued`, and the whole content of that state: the message is " +
-      "recorded and the work has not begun. It reports; it does not ask.",
+      "The conversation row's queued duration label: the message is recorded and work has " +
+      "not begun. It reports; it does not ask.",
   },
   {
     s: "Rich is picking this back up",
@@ -5040,7 +5040,6 @@ module.exports = [
   {"s":"Claude Code answered without its usage figures this time","c":"FRAGMENT","why":"Walk of nightly 36, D1 (docs/verification/2026-10-05-nightly-36-candidate-walk.md): the middle of the empty state's sentence after a null answer."},
   {"s":"Claude Code has not answered yet","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the middle of the `unavailable` empty state's sentence."},
   {"s":"Holding since .","c":"ACTIONABLE","control":"#quota-release","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `holding` card's head; Let them continue now is on the card."},
-  {"s":"Holding until there is a current reading.","c":"ACTIONABLE","control":"#quota-hold-refresh, #quota-release","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): `hold-no-reading`, while a check is on its way; Refresh now and Turn it off are on the card."},
   {"s":"If this stays empty after a refresh, Claude Code may not be signed in on this Mac.","c":"ACTIONABLE","control":"#quota-refresh","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `unavailable` empty state; Ask Claude Code is in the reading line above it."},
   {"s":"No current reading, so nothing is held.","c":"INFORMATIONAL","why":"Walk of nightly 36, D1 (docs/verification/2026-10-05-nightly-36-candidate-walk.md): the card when a check came back with no figures. Nothing is held; Refresh now is on the card for whoever wants a reading sooner."},
   {"s":"No reading yet.","c":"ACTIONABLE","control":"#quota-refresh","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the reading line with no reading; Ask Claude Code is beside it."},
@@ -5058,7 +5057,6 @@ module.exports = [
   {"s":"Weekly · per model","c":"FRAGMENT","why":"The label of the absent model-weekly row (round 16 names the model it drew; the app cannot know which is missing)."},
   {"s":"the one the pause watches","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the one-account hero heading's sub-label."},
   {"s":"window is at <b> used</b>, past your % line. at <b></b>, 20 minutes before the reset","c":"INFORMATIONAL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `holding` card's body; Let them continue now is on the card."},
-  {"s":": an old number could let work through past the line. Nothing starts a new step until Claude Code answers.","c":"FRAGMENT","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the rest of the `hold-no-reading` sentence."},
   {"s":": not reported by Claude Code for this account","c":"INFORMATIONAL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the `one-window` absent row. It reports what Claude Code supplied; nothing to change here."},
   {"s":"Automatic pause is off, so nothing acts before it reaches 100%.","c":"ACTIONABLE","control":"#quota-enabled","fixture":null,"why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): fast usage with one account and the automatic pause off; the switch beside it turns it on. tests/quota.js renders it in both themes with contrast computed."},
   {"s":"Automatic pause or switch","c":"INFORMATIONAL","why":"Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design): the decision's title with two or more accounts. tests/quota.js renders it in both themes with contrast computed."},

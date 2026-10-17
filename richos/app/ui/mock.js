@@ -2565,7 +2565,7 @@
     const window = fixture.windows.find(w => w.id === "five_hour");
     const remaining = (window?.resetsAt || 0) - Date.now();
     const high = window?.usedPercent >= quotaPolicy.pausePercent;
-    const weekly = fixture.windows.find(w => w.id === "seven_day" && w.usedPercent >= 99);
+    const weekly = fixture.windows.find(w => w.id === "seven_day" && w.usedPercent >= 99 && w.resetsAt > Date.now());
     // As quota.rs decides it: with no current reading, work waits only while a check is on its
     // way ("unknown"); once a check came back with no figures (`emptyAt`), nothing is held on it.
     const unread = { state: fixture.emptyAt ? "noReading" : "unknown" };

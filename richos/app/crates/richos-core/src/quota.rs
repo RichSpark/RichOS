@@ -296,7 +296,9 @@ pub enum Admission {
 }
 impl Admission {
     pub fn allows_work(&self) -> bool {
-        matches!(self, Self::Disabled | Self::Ready | Self::NoReading)
+        // Missing telemetry is not evidence that an account reached its limit.
+        // The provider still enforces actual limits; only an observed hold waits.
+        !matches!(self, Self::Held { .. })
     }
 }
 
@@ -597,7 +599,9 @@ impl Snapshot {
             let speed = speeds.entry("seven_day".to_string()).or_insert(0.);
             *speed = speed.max(tokens);
         }
-        let mut windows = self.windows.clone();
+        // Expired windows remain in the published telemetry, but cannot drive
+        // admission, an account switch or a worker handoff in the next window.
+        let mut windows: Vec<_> = self.windows.iter().filter(|w|w.resets_at.is_none_or(|t|t>now)).cloned().collect();
         if self.checked_at.is_some_and(|t| now.saturating_sub(t) >= REFRESH_INTERVAL_MS) && self.since_reading > 0. {
             for window in windows.iter_mut().filter(|w| w.id == "seven_day") {
                 window.used_percent = (window.used_percent + self.since_reading).min(100.);
@@ -686,15 +690,8 @@ impl Snapshot {
         } else {
             State::Stale
         };
-        // **What the pause does with no current reading** (walk of nightly 36, D1). It holds
-        // new work only while a check is on its way: at start, and in the moment between a
-        // reading going out of date and its next check coming back (`Unknown`, round 16's
-        // "Holding until there is a current reading"). Once that check has come back with no
-        // figures, the pause no longer waits on Claude Code (`NoReading`): it acts on a number,
-        // there is none, and waiting would hold every new step for as long as Claude Code
-        // keeps answering null. Figures that prove a hold still hold (`Held`, below) until
-        // their window resets; the weekly 99% hold with an expired or unreadable reset still
-        // waits for a reading of the new week, as before.
+        // Unknown and missing readings remain visible as such, but do not hold work.
+        // An observed above-threshold window still holds until its actual reset.
         let answered_empty = self.empty_at.is_some_and(|e| self.checked_at.is_none_or(|c| e >= c));
         let admission = if !policy.enabled {
             Admission::Disabled
@@ -708,9 +705,6 @@ impl Snapshot {
             // Weekly exhaustion never inherits the five-hour 20-minute exception.
             // An approval is not allowance: hold until a fresh post-reset reading.
             Admission::Held { resets_at: until }
-        } else if reading.windows.iter().any(|w| w.id == "seven_day"
-            && reading.reaches_weekly(w)) {
-            Admission::Unknown // Expired or unreadable weekly reset needs a new reading.
         } else {
             // §108: at normal speed the 93% rule exactly as before; at a measured fast speed
             // the pause comes EARLIER, when the next check would already find 100%. The
@@ -1899,21 +1893,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn weekly_99_holds_until_fresh_allowance_even_near_five_hour_reset() {
+    fn weekly_hold_ends_with_its_window_and_does_not_mask_the_five_hour_decision() {
         let mut state = snapshot(100., RESET_EXEMPTION_MS - 1);
         state.windows.push(Window { id: "seven_day".into(), label: "Weekly".into(),
             used_percent: 99., resets_at: Some(NOW + 600_000), duration_ms: 604_800_000 });
         assert_eq!(state.view(policy(), NOW).admission, Admission::Held { resets_at: NOW + 600_000 });
         // An old high reading also holds; time passing alone cannot invent allowance.
         assert!(matches!(state.view(policy(), NOW + 300_000).admission, Admission::Held { .. }));
-        assert_eq!(state.view(policy(), NOW + 600_000).admission, Admission::Unknown);
+        assert!(state.view(policy(), NOW + 600_000).admission.allows_work());
         state.windows[1].resets_at = None;
-        assert_eq!(state.view(policy(), NOW).admission, Admission::Unknown);
+        assert!(state.view(policy(), NOW).admission.allows_work());
         let fresh_five = snapshot(10., 3_600_000).windows;
         state.accept(fresh_five, NOW);
-        assert_eq!(state.view(policy(), NOW).admission, Admission::Unknown);
+        assert!(state.view(policy(), NOW).admission.allows_work());
         assert_eq!(state.view(policy(), NOW).state, State::Stale);
-        // A fresh, explicit weekly reading is required to clear that hold.
+        // A current weekly reading still applies independently of the five-hour rule.
         state.windows[1].resets_at = Some(NOW + 600_000);
         state.windows[0] = snapshot(100., RESET_EXEMPTION_MS - 1).windows.remove(0);
         state.error = None;

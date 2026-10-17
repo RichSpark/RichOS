@@ -167,7 +167,7 @@ pub fn set_actions_allowed(path: &Path, allowed: bool) -> Result<(), String> {
     write_scope(path, &scope)
 }
 
-fn read_scope(path: &Path) -> Result<AssignmentToolScope, String> {
+pub(crate) fn read_scope(path: &Path) -> Result<AssignmentToolScope, String> {
     use std::io::Read;
     let file = std::fs::File::open(path)
         .map_err(|_| "RichOS has not opened this conversation for assignments.".to_string())?;

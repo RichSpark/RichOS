@@ -3008,16 +3008,14 @@ function removeWaitBand() {
 /// WHAT THE BAND SAYS, as a pure function of what has been observed — separate from the DOM
 /// so a suite can assert on the sentence rather than on a picture of it.
 ///
-/// The headlines are the live `rich://turn-status` values and nothing else. There is no
-/// "thinking", no "almost done", no phase: `phase` is `unknown` on every message this
-/// runtime emits (live.rs, "THE MESSAGE PHASE, STATED LOUDLY"), so a band that named one
-/// would be inventing it.
+/// Headlines follow the observed turn status. The queued headline is general waiting
+/// copy, not a model-phase claim: this wire still reports `phase: unknown`.
 function waitBandCopy(t, nowMs) {
   const quietMs = nowMs - t.lastAt;
   const quiet = quietMs >= QUIET_AFTER_MS;
 
   let head;
-  if (t.status === "queued") head = "Rich has your message";
+  if (t.status === "queued") head = "Rich is thinking";
   else if (t.status === "recovering") head = "Rich is picking this back up";
   else if (t.status === "stopping") head = "Rich is letting go of this turn";
   else head = "Rich is working";
@@ -3034,7 +3032,7 @@ function waitBandCopy(t, nowMs) {
 
   let detail;
   if (quiet) detail = "Nothing new for " + gap;
-  else if (t.status === "queued") detail = "Waiting to start";
+  else if (t.status === "queued") detail = "";
   // NOTHING YET IS SAID BY SAYING NOTHING — the absence report is gone, and it was measured
   // out rather than argued out. Ray's `.20260920.1` walk in the VM
   // (`docs/verification/2026-09-20-nightly-1.2.0-nightly.20260920.1-mac-to-phone-in-the-vm-audit.md`,
@@ -4299,7 +4297,6 @@ function renderVoiceState(state, noAudio) {
 // that ends a turn; nothing here times out and nothing discards.
 let voiceBusy = false;
 let heldWorkNotices = [];
-const workNoticeDrains = new Map();
 const operatorNoticeDrains = new Map();
 /// **ONE REPORT, ONE CARD, when two lanes carry the same words.** On an operator install a
 /// report that closes an assignment is raised on the assignment's record AND said on his
@@ -4379,23 +4376,12 @@ function receiveWorkNotice(text, raisedAt, model = timelineModel, team = null, k
 /// marks each notice delivered as it hands it over, so this can be called freely and he
 /// still hears each one exactly once.
 async function drainWorkNotices() {
-  const model = timelineModel;
   const threadId = activeThreadId;
-  if (!threadId || model.threadId !== threadId) return;
-  // Pushes wake the same durable consumer as thread-open and turn-end. Serialize
-  // reads per thread so overlapping wakeups cannot both claim the same notice.
-  const previous = workNoticeDrains.get(threadId) || Promise.resolve();
-  const drain = previous.then(async () => {
-    let pending;
-    try { pending = await Bridge.invoke("take_work_notices", {threadId}); }
-    catch (_) { return; } // Still durable; a later boundary can collect it.
-    for (const notice of pending || []) {
-      receiveWorkNotice(notice.text, notice.raisedAtMs, model, null, sameWordsKey(threadId, notice.assignmentId, notice.text));
-    }
-  });
-  workNoticeDrains.set(threadId, drain);
-  try { await drain; }
-  finally { if (workNoticeDrains.get(threadId) === drain) workNoticeDrains.delete(threadId); }
+  if (!threadId || timelineModel.threadId !== threadId) return;
+  // Older hosts may still return notice prose. Only Rich's actual reply stream
+  // belongs in the conversation; never turn that payload into his words.
+  try { await Bridge.invoke("take_work_notices", {threadId}); }
+  catch (_) { /* The durable intake retains observations for delivery. */ }
 }
 
 // ---------------------------------------------------------------------------------------

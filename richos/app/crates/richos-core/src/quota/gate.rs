@@ -416,7 +416,7 @@ mod tests {
         }
         service.publish().unwrap();
         assert!(matches!(admission(&state, now), Admission::Held { .. }));
-        assert_eq!(admission(&state, now + 60_001), Admission::Unknown);
+        assert!(admission(&state, now + 60_001).allows_work());
         service.snapshot.lock().unwrap().windows[1].used_percent = 0.;
         service.publish().unwrap();
         assert_eq!(admission(&state, now), Admission::Ready);
@@ -456,6 +456,29 @@ mod tests {
             .expect("the worker was refused instead of resuming");
         worker.join().unwrap();
     }
+    #[test]
+    fn stale_or_expired_telemetry_does_not_hold_a_dispatch_but_proven_quota_still_does() {
+        let (_root,service,state,scope)=setup();let now=crate::util::now_millis();
+        atomic_write(&scope,&json!({"version":1,"actions_allowed":true})).unwrap();
+        let five=|used,resets|Window {id:"five_hour".into(),label:"Five-hour".into(),used_percent:used,resets_at:Some(resets),duration_ms:18_000_000};
+        let weekly=Window {id:"seven_day".into(),label:"Weekly".into(),used_percent:99.,resets_at:Some(now-60_000),duration_ms:604_800_000};
+        let dispatch=json!({"tool_name":"Agent","session_id":"recovered-stu"});
+        for snapshot in [Snapshot {checked_at:Some(now),windows:vec![five(3.,now-60_000)],..Default::default()},
+            Snapshot::default(),
+            Snapshot {checked_at:Some(now-3_600_000),windows:vec![five(3.,now+3_600_000)],..Default::default()}] {
+            *service.snapshot.lock().unwrap()=snapshot;service.publish().unwrap();
+            wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO)
+                .expect("unknown allowance is not evidence of a quota hold");
+        }
+        // An expired weekly figure must not mask a still-current five-hour hold.
+        *service.snapshot.lock().unwrap()=Snapshot {checked_at:Some(now),windows:vec![weekly,five(95.,now+3_600_000)],..Default::default()};
+        service.publish().unwrap();assert!(matches!(admission(&state,now),Admission::Held {..}));
+        assert!(service.view().leaving.is_empty(),"an expired weekly window ordered an account handoff");
+        assert!(wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO).is_err());
+        atomic_write(&scope,&json!({"version":1,"actions_allowed":false})).unwrap();
+        assert_eq!(wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO).unwrap_err().to_string(),WORK_ENDED);
+    }
+
     #[test]
     fn disabling_releases_unknown_quota_and_stop_revokes_waiter() {
         let (_root, service, state, scope) = setup();
@@ -661,6 +684,8 @@ mod tests {
         )
         .unwrap();
         atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
+        wait(&json!({"tool_name":"Agent"}),&state,&scope,"1",Duration::ZERO,Duration::ZERO).unwrap();
+        publish(&_service,3_600_000);
         assert!(wait(
             &json!({"tool_name":"Agent"}),
             &state,

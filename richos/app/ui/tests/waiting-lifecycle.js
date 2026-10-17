@@ -160,7 +160,7 @@ async function main() {
       });
       await advance(page, 40000); await tick(page);
       b = await band(page);
-      assertEqual(b.head, "Rich has your message");
+      assertEqual(b.head, "Rich is thinking");
       assertEqual(b.detail, "Nothing new for 40s");
       assertEqual(b.tone, "quiet");
       assertEqual(await page.locator(".tl-duration-label").last().textContent(), "Waiting to start");

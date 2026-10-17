@@ -271,7 +271,7 @@ else
 import json, sys
 try:
     d = json.load(sys.stdin)
-    if d.get("tool_name") not in (None, "", "AskUserQuestion"):
+    if d.get("tool_name") not in (None, "", "AskUserQuestion", "mcp__richos_questions__ask"):
         raise ValueError("not an AskUserQuestion call")
     print("OK\t%s\t%s" % (str(d.get("session_id", "") or ""),
                           str(d.get("agent_id", "") or "")))
@@ -434,7 +434,7 @@ META="$(printf '%s' "$INPUT" | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
-    if d.get("tool_name") not in (None, "", "AskUserQuestion"):
+    if d.get("tool_name") not in (None, "", "AskUserQuestion", "mcp__richos_questions__ask"):
         raise ValueError("not an AskUserQuestion call")
     print("OK\t%s\t%s" % (str(d.get("session_id", "") or ""),
                           str(d.get("agent_id", "") or "")))

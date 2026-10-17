@@ -334,7 +334,7 @@ async function main() {
     return "approve on the second assignment and decline on the first, each carrying its own request id";
   });
 
-  await run.check("live and durable notice delivery is single and stays on its origin", async () => {
+  await run.check("operational notice prose never becomes a Rich reply", async () => {
     const vm = require("node:vm");
     const src = fs.readFileSync(MAIN_JS, "utf8");
     const events = {};
@@ -361,11 +361,11 @@ async function main() {
     pending = [notice];
     events["rich://work-notice"]({payload: {threadId: "a", notice}});
     await vm.runInContext("drainWorkNotices()", context);
-    assertEqual(vm.runInContext("origin.items.size", context), 1, "push followed by saved drain must not duplicate");
-    // A real second notice with identical words must survive, not be text-deduplicated.
+    assertEqual(vm.runInContext("origin.items.size", context), 0, "app-authored notice became Rich's reply");
+    // A second legacy operational payload must not impersonate Rich either.
     pending = [{...notice, assignmentId: "two", raisedAtMs: 101}];
     await vm.runInContext("drainWorkNotices()", context);
-    assertEqual(vm.runInContext("origin.items.size", context), 2, "another assignment is another notice");
+    assertEqual(vm.runInContext("origin.items.size", context), 0, "a second operational notice became a reply");
     // Hold a response over navigation, then hold its delivery over a working turn.
     let release;
     delayed = new Promise(resolve => { release = resolve; });
@@ -378,8 +378,8 @@ async function main() {
     await heldDrain;
     vm.runInContext("busy = false; flushWorkNotices()", context);
     assertEqual(vm.runInContext("timelineModel.items.size", context), 0, "held notice must not leak into destination");
-    assertEqual(vm.runInContext("origin.items.size", context), 3, "origin retains delayed notice");
-    return "one durable consumer; equal text from another assignment survives; delayed notice keeps origin";
+    assertEqual(vm.runInContext("origin.items.size", context), 0, "delayed operational prose became a reply");
+    return "operational prose never enters either conversation, including delayed legacy payloads";
   });
 
   await run.check("in voice mode a held card appears once he is listening, never while either one speaks", async () => {
