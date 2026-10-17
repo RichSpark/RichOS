@@ -430,7 +430,7 @@ declare_rules() {
   # assignments unknown until re-witnessed, an orphan grant closed, a grant that could NOT be
   # closed, or an unreadable register are each a boot after something went wrong, and they
   # stay unaccounted so that boot is SEEN rather than filed as routine.
-  routine '^\[richos\] recovery: 0 assignment\(s\) unknown until re-witnessed, 0 left as recorded$' \
+  routine '^\[richos\] recovery: 0 orphan grant\(s\) closed; 0 grant\(s\) could NOT be closed$' \
     'the boot sweep ran and had nothing to re-witness; every other shape of this line stays unaccounted'
   routine '^\[richos\] memory: this folder has no company partitions;' \
     'an unpartitioned corpus, which is a shape rather than a missing setting'
