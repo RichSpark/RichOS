@@ -10,7 +10,7 @@
 //! claim "the CEO sees `You stopped after 1s`" is backed end to end without a display.
 //!
 //! The chain here is: `Spine` behind an `Arc<Mutex<..>>` exactly as the Tauri shell holds
-//! it -> a turn running on one thread and holding that lock -> `TurnControl::request_stop`
+//! it -> a turn running on one thread and holding that lock -> `ConversationControl::request_stop`
 //! from ANOTHER thread (the same call `stop_turn` makes) -> `Ledger` -> `Spine::timeline`
 //! -> `Timeline::view(ViewMode::Ceo)` -> `timeline_view::timeline_payload`, which is the
 //! same file `get_timeline` calls. Nothing here re-implements a command.
@@ -66,7 +66,7 @@ fn main() {
         script.iter().map(|s| s.as_str()).collect(),
         Duration::from_millis(25),
     )));
-    let control = TurnControl::open(dir.join("intake.jsonl")).expect("intake");
+    let control = TurnControl::open(dir.join("intake.jsonl")).expect("intake").for_thread(&thread);
     spine.set_turn_control(control.clone());
 
     let spine = Arc::new(Mutex::new(spine));

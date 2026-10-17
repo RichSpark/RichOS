@@ -248,7 +248,7 @@ fn his_send_is_accepted_while_the_spine_is_shut_for_the_pre_prime() {
         c.spine.try_lock().is_err(),
         "the pre-prime is supposed to be holding the spine — there is no contention to test"
     );
-    assert_eq!(c.control.front_desk_priming().as_deref(), Some(c.thread.as_str()));
+    assert_eq!(c.control.for_thread(&c.thread).front_desk_priming().as_deref(), Some(c.thread.as_str()));
 
     let deferred = c
         .control
@@ -282,7 +282,7 @@ fn his_send_is_accepted_while_the_spine_is_shut_for_the_pre_prime() {
         "his message reaches the lease exactly once, after the prime"
     );
     assert_eq!(c.ceo_turns(), vec!["Land the pricing branch and get the staging deploy done."]);
-    assert_eq!(c.control.front_desk_priming(), None, "the road must be shut again");
+    assert_eq!(c.control.for_thread(&c.thread).front_desk_priming(), None, "the road must be shut again");
     assert!(c.control.pending_intake().is_empty(), "a delivered record is marked drained");
 }
 
@@ -365,7 +365,7 @@ fn a_send_with_no_prime_running_is_refused_deferral_and_takes_the_ordinary_path(
     // for the overwhelming majority of sends. It is never a failure and never a loss: this
     // test sends the message the ordinary way straight afterwards and it lands.
     let c = Contended::open("no-prime-running", "On it!");
-    assert_eq!(c.control.front_desk_priming(), None);
+    assert_eq!(c.control.for_thread(&c.thread).front_desk_priming(), None);
     let deferred = c.control.defer_send(&c.thread, Some(femcboost()), "nothing is priming").unwrap();
     assert!(deferred.is_none(), "an uncontended send must not be diverted through the log");
     assert!(c.control.pending_intake().is_empty(), "and nothing was written down");
@@ -396,7 +396,7 @@ fn a_control_with_nowhere_durable_to_write_refuses_rather_than_accepting_what_it
     // message that is not written down is worse than making the caller block, because the
     // caller's fallback path works and a silently dropped sentence does not.
     let control = TurnControl::detached();
-    control.begin_front_desk_prime("thr_1");
+    control.for_thread("thr_1").begin_front_desk_prime();
     assert!(matches!(
         control.defer_send("thr_1", Some(femcboost()), "no log here"),
         Err(SteeringError::NoDurableIntake)
@@ -502,12 +502,12 @@ fn a_correction_he_types_during_a_prime_is_staged_exactly_as_one_he_types_at_any
     assert!(desk.lock().unwrap().pending().is_empty(), "nothing to correct yet");
 
     // The front desk is being primed and his correction goes down the deferred road.
-    control.begin_front_desk_prime(&thread);
+    control.for_thread(&thread).begin_front_desk_prime();
     control
         .defer_send(&thread, Some(femcboost()), "No, it's Kestrel, not Kestral.")
         .unwrap()
         .expect("accepted");
-    control.end_front_desk_prime();
+    control.for_thread(&thread).end_front_desk_prime();
     spine.poll_intake().unwrap();
 
     let guard = desk.lock().unwrap();
@@ -537,7 +537,7 @@ fn the_road_is_shut_before_the_drain_so_no_accepted_record_is_left_undelivered()
     c.release_priming.raise();
     priming.join().unwrap();
 
-    assert_eq!(c.control.front_desk_priming(), None);
+    assert_eq!(c.control.for_thread(&c.thread).front_desk_priming(), None);
     assert!(
         c.control.pending_intake().is_empty(),
         "a record accepted under the marker was left for some later boundary to find"
@@ -546,4 +546,20 @@ fn the_road_is_shut_before_the_drain_so_no_accepted_record_is_left_undelivered()
 
     // And the very next send, with the marker clear, takes the ordinary path.
     assert!(c.control.defer_send(&c.thread, Some(femcboost()), "after").unwrap().is_none());
+}
+
+
+#[test]
+fn ending_one_conversations_prime_cannot_clear_anothers_durable_intake_claim() {
+    let path=tmp_path("independent-prime-claims");
+    let control=TurnControl::open(&path).unwrap();let a=control.for_thread("a");let b=control.for_thread("b");
+    a.begin_front_desk_prime();b.begin_front_desk_prime();
+    assert_eq!(a.end_front_desk_prime().as_deref(),Some("a"));
+    assert!(a.front_desk_priming().is_none());assert_eq!(b.front_desk_priming().as_deref(),Some("b"));
+    assert!(control.defer_send("a",Some(femcboost()),"A now takes the normal road").unwrap().is_none());
+    assert!(control.defer_send("b",Some(femcboost()),"B stays durable while priming").unwrap().is_some());
+    assert_eq!(b.end_front_desk_prime().as_deref(),Some("b"));drop(control);
+    let reopened=TurnControl::open(&path).unwrap();assert_eq!(reopened.pending_intake().len(),1);
+    assert!(std::fs::read_to_string(&path).unwrap().contains("B stays durable while priming"));
+    drop(reopened);std::fs::remove_file(path).unwrap();
 }

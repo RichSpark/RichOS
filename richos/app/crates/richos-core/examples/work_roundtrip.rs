@@ -1,7 +1,7 @@
 //! Opt-in real provider dispatch through the desktop work tools, with synthetic repos.
 use richos_core::{Cognition, EntityId, EntityRegistry, Ledger, Source, Spine};
 use richos_core::{ecs::EcsBridge, native::{resolve_claude_bin, NativeCognition}};
-use std::{path::PathBuf, sync::{Arc,atomic::{AtomicBool,Ordering}}, time::{Duration,Instant}};
+use std::path::PathBuf;
 struct PermissionTrace;
 impl richos_core::machinery::MachineryObserver for PermissionTrace {
  fn on_machinery(&self, record: &richos_core::machinery::MachineryRecord) {
@@ -26,7 +26,7 @@ fn verify_worker_attribution(spine: &Spine, thread: &str, turn: &str) {
 fn main()->Result<(),Box<dyn std::error::Error>>{
  let args:Vec<_>=std::env::args_os().skip(1).collect();
  if args.first().is_some_and(|a|a=="--onboarding-mcp"){richos_core::onboarding_tools::run_stdio(&PathBuf::from(&args[1]))?;return Ok(());}
- if !(args.len()==2 || (args.len()==3 && (args[2]=="--natural" || args[2]=="--revision" || args[2]=="--permissions"))){return Err("usage: work_roundtrip ENGINE DELIVERED_RUNTIME [--natural|--revision|--permissions]".into());}
+ if !(args.len()==2 || (args.len()==3 && (args[2]=="--natural" || args[2]=="--revision"))){return Err("usage: work_roundtrip ENGINE DELIVERED_RUNTIME [--natural|--revision]".into());}
  let natural=args.len()==3 && args[2]=="--natural";
  let revision=args.len()==3 && args[2]=="--revision";
  let engine=std::fs::canonicalize(&args[0])?;
@@ -34,7 +34,7 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
  let data=root.0.join("app data");std::fs::create_dir_all(data.join("corpus/ceo/records"))?;
  let runtime=richos_core::runtime::EngineRuntime::load(&engine,Some(&PathBuf::from(&args[1])))?;
  let mut profile=richos_core::engine_profile::EngineProfile::prepare(&engine,&data,runtime.clone())?;
- let desk=profile.permissions.clone();
+
  let mut registry=EntityRegistry::from_existing_ids(&[EntityId::parse("depot")?]);
  for name in ["first project","second project"]{
   let repo=root.0.join(name);std::fs::create_dir(&repo)?;
@@ -51,27 +51,6 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
  let cognition=NativeCognition::start_with_engine(&resolve_claude_bin(),&doctrine,&skills,&std::env::current_exe()?,bridge.clone(),profile,None)?;
  let session=cognition.session_id().to_string();
  spine.set_central_root(data.join("corpus"));spine.set_onboarding_record(data.join("onboarding.json"));spine.attach_lease(Box::new(cognition));
- let no_manual=std::env::var_os("RICHOS_PROBE_NO_MANUAL").is_some() || args.get(2).is_some_and(|v|v=="--permissions");
- let finished=Arc::new(AtomicBool::new(false));
- let approval_counts=Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::<String,usize>::new()));
- let responder={let counts=approval_counts.clone();let done=finished.clone();let desk=desk.clone();let expected_thread=thread.clone();std::thread::spawn(move||{
-  let deadline=Instant::now()+Duration::from_secs(1800);
-  while !done.load(Ordering::SeqCst)&&Instant::now()<deadline{
-   if let Some(request)=desk.current(){assert_eq!(request.binding.entity_id,"depot");assert_eq!(request.binding.thread_id,expected_thread);*counts.lock().unwrap().entry(request.tool.clone()).or_default()+=1;if no_manual {eprintln!("Unexpected fixture permission: {} {}. Reason: {}",request.tool,request.input,request.reason);}desk.resolve(&request.id,!no_manual).expect("synthetic fixture permission");}
-   std::thread::sleep(Duration::from_millis(20));
-  }
- })};
- if args.get(2).is_some_and(|v|v=="--permissions") {
-  let simple=spine.submit_prompt(&format!("Use Bash to run git -C {:?} status --short --branch, then run git -C {:?} log --oneline -3. These are local read-only checks in my connected project. Report the result. If refused, stop rather than retry.",root.0.join("first project"),root.0.join("first project")),Source::Text)?;
-  eprintln!("Direct command response: {}",spine.ledger().turn(&simple).unwrap().assistant_text);
-  assert!(approval_counts.lock().unwrap().is_empty(),"routine direct commands required manual permission");
-  let turn=spine.submit_prompt(&format!("Use Bash to run this exact read-only shell command once: for p in {:?} {:?}; do /bin/ls -ld \"$p\"; done. Both are my connected local projects. Report the result. If refused, stop rather than retry.",root.0.join("first project"),root.0.join("second project")),Source::Text)?;
-  eprintln!("Permission probe response: {}",spine.ledger().turn(&turn).unwrap().assistant_text);
-  finished.store(true,Ordering::SeqCst);responder.join().unwrap();
-  assert_eq!(*approval_counts.lock().unwrap(),std::collections::BTreeMap::from([("Bash".to_string(),1)]),"one compound-command safety check should reach the exact-action desk");
-  println!("{}",serde_json::json!({"direct_commands_without_manual_approval":true,"compound_command_denied_through_native_desk":true,"installed_acceptance":false}));
-  return Ok(());
- }
  if natural {
   let backlog=root.0.join("first project/fictional-backlog.md");
   std::fs::write(&backlog,"# Fictional delivery\n\nCreate marker.txt containing exactly FICTIONAL in each connected project. No other project files should change. Verify the committed bytes, obtain independent review, integrate into each local main branch and clean up eligible workspaces. Never publish.\n")?;
@@ -106,7 +85,7 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
   let binding=bridge.request("current",serde_json::json!({}))?["binding"].clone();
   let item=bridge.request("inspect",serde_json::json!({"binding":binding,"query":{"item_id":obligation}}))?;
   assert_eq!(item["item"]["status"],"completed","parent assignment was not verified complete");
-  finished.store(true,Ordering::SeqCst);responder.join().unwrap();eprintln!("Fixture permission requests by tool (refuse all: {no_manual}): {:?}",approval_counts.lock().unwrap());if no_manual {assert!(approval_counts.lock().unwrap().is_empty(),"ordinary work still needed a manual permission response");}drop(spine);
+  drop(spine);
   println!("{}",serde_json::json!({"worker_reports_attributed_separately":true,"natural_language_assignment":true,"two_repositories_integrated":true,"independent_reviews_verified":true,"canonical_cleanup_verified":true,"parent_obligation_completed":true,"installed_acceptance":false}));return Ok(());
  }
  let projects:&[&str]=if revision { &["first project"] } else { &["first project","second project"] };
@@ -140,7 +119,7 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
  assert!(transcript.lines().filter_map(|line|serde_json::from_str::<serde_json::Value>(line).ok()).any(|row|row["evidenceSource"]=="richos-ledger-attested-hook-v1"),"visible user instruction was not attested from the ledger");
  // Replace the reasoning process while retaining the scoped obligation and work receipt.
  let mut replacement=richos_core::engine_profile::EngineProfile::prepare(&engine,&data,runtime.clone())?;
- replacement.scope_to(&spine.ledger().thread_binding(&thread)?)?;replacement.permissions=desk.clone();
+ replacement.scope_to(&spine.ledger().thread_binding(&thread)?)?;
  let fresh=NativeCognition::start_with_engine(&resolve_claude_bin(),&doctrine,&skills,&std::env::current_exe()?,bridge.clone(),replacement,None)?;
  assert_ne!(fresh.session_id(),session);spine.attach_lease(Box::new(fresh));
  let review_prompt=format!("The fictional worker's commit is ready. Its worker receipt is {}. Prepare an independent reviewer using richos_work.prepare: request_id marker-review, obligation_id marker-task, repo {}, integration main, role reviewer, review_of that worker receipt, title Review fictional marker. Require checking the exact prepared commit and confirming marker.txt contains exactly FICTIONAL with no other changes, without editing or creating commits. Submit the exact returned agent_payload to Agent once and wait through TaskOutput block:true. Then use richos_work.inspect. If the host captured a passing review, I authorize richos_work.integrate with this worker_id and the actual reviewer_id to fast-forward local main and perform canonical workspace cleanup. No publication. Report only verified results. Do not use Bash or write files yourself; use the work MCP tools, Agent and TaskOutput.",receipt["id"].as_str().unwrap(),repo.display());
@@ -169,6 +148,5 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
  assert_eq!(updated["integration"]["cleanup_pending"],serde_json::json!([]));
  assert_eq!(std::fs::read_to_string(repo.join("marker.txt"))?.trim(),"FICTIONAL");assert!(!target.exists());
  }
- finished.store(true,Ordering::SeqCst);responder.join().unwrap();eprintln!("Synthetic permission approvals by tool: {:?}",approval_counts.lock().unwrap());if no_manual {assert!(approval_counts.lock().unwrap().is_empty(),"work needed a manual permission response");}
  println!("{}",serde_json::json!({"two_repositories_integrated":!revision,"rejected_review_revised_and_verified":revision,"real_worker_dispatched":true,"worker_commit_verified":true,"target_main_untouched_before_integration":true,"ecs_completion_not_inferred_from_exit":true,"fresh_provider_recovered_work":true,"real_reviewer_observed":true,"reviewed_commit_integrated":true,"canonical_cleanup_verified":true,"host_user_instruction_attested":true,"installed_acceptance":false}));drop(spine);Ok(())
 }

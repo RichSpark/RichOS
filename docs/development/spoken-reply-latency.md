@@ -134,9 +134,12 @@ from visible request handling.
 
 Begin preparing the selected conversation during launch and immediately after a
 company is confirmed. Preparing only a spare for a future thread leaves the
-conversation actually restored on screen cold. An already active conversation
-can reopen from its reader snapshot while its own preparation holds the spine;
-switching to a different conversation still follows the serialized binding path.
+conversation actually restored on screen cold. Each conversation owns its
+connection during startup, continuity priming, rotation
+handoff, work-scope preparation and provider retry waits. Those operations run
+outside the shared state lock. Ledger and snapshot changes take short locked
+commits. Priming claims are scoped to their conversation, so preparing one does
+not block navigation, intake or another conversation's preparation and reply.
 Do not guess a company or reuse a provider spawned with another company's
 permissions to start earlier.
 

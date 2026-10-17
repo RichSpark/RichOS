@@ -1,20 +1,6 @@
-//! **THE WORK HOST OVER RECORDED REAL CLAUDE SESSIONS** (T3 idea 2; richos-hq
-//! `docs/plans/2026-10-09-automatic-second-review-and-t3-ideas.md` §3 and §4 row 6).
-//!
-//! The real [`WorkHost`] runs the real [`NativeClient`], whose child is `richos-replay`
-//! playing back a capture of a real `claude` session (`richos_core::replay`). Nothing between
-//! the host and the provider's wire is hand-written: the frames are the provider's own, with
-//! their recorded spacing, so the class of defect the six 2026-09/10 incidents shared — a
-//! command or helper that ends after the back end's turn has ended, its finish reaching nobody
-//! — is caught here in seconds instead of on a real run on his Mac or in the test VM.
-//!
-//! The only stand-ins are the ENGINE's (the seat binding, the obligation and the worker
-//! evidence), the same three the work host's own unit tests stand in for; none of them is on
-//! the provider's wire.
-//!
-//! The captures are `tests/fixtures/replay/`, scrubbed of the account that recorded them by
-//! `scripts/replay/scrub-capture.py`. Headless: no live Claude, no network, no Tauri.
-
+//! The independent Stu transport over recorded native Claude frames.
+//! Native turn completion and later command notifications cannot manufacture job
+//! completion or user replies. Stu's explicit reports and verified work tools own those.
 use richos_core::assignment::{self, PendingNotice, Registration};
 use richos_core::cognition::{
     BackgroundCommand, Cognition, CognitionError, LeaseFactory, ObligationState, TurnItem, WorkAssignment,
@@ -159,7 +145,7 @@ fn replay(capture: &str, speed: f64, requests: &[&str]) -> Replay {
     std::fs::write(root.join("conversation-ledger.jsonl"), rows.join("\n") + "\n").unwrap();
     let factory = ReplayFactory { child, cwd: root.clone(), state: state.clone(), doctrine, skills };
     let told = Arc::new(Told::default());
-    let host = WorkHost::new(&state, Box::new(factory), told.clone(), Arc::new(Default::default()));
+    let host = WorkHost::new(&state, Box::new(factory), told.clone());
     Replay { root, state, transcript, host, told, binding }
 }
 
@@ -178,7 +164,14 @@ impl Replay {
             repositories: Vec::new(),
             needs_screen: false,
         };
-        self.host.register(&self.binding, &request).unwrap().id
+        let receipt=assignment::register(&self.state,&request).unwrap();
+        let scope=richos_core::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:COMPANY.into(),thread_id:thread.into()};
+        let sender=self.root.join("rich-status.json");
+        richos_core::session_tools::bind(&sender,&scope,"replay-rich","rich",Some(richos_core::ecs::UserInstruction {
+            ledger_ref:request.instruction_ledger_ref,sha256:request.instruction_sha256,text:Some(text.into())})).unwrap();
+        richos_core::session_tools::delegate(&sender,&scope,serde_json::json!({"text":text})).unwrap();
+        self.host.wake_messages(&self.binding);
+        receipt.id
     }
 
     fn row(&self, id: &str) -> assignment::Assignment {
@@ -238,169 +231,55 @@ impl Drop for Replay {
     }
 }
 
-/// The job is answered AND he has been told `notices` things about it. Both, because the host
-/// writes the row before it raises the notice (bgdone2 run 5: the record first, then his words),
-/// so a test that read the notices the instant the row changed would read one too few.
-fn answered(r: &Replay, id: &str, notices: usize) -> bool {
-    r.row(id).was_answered() && r.told_about(id).len() >= notices
-}
 
-/// How many frames a capture holds: the replay has played it all once that many were emitted.
-fn frames_in(capture: &str) -> usize {
-    std::fs::read_to_string(Path::new(FIXTURES).join(capture))
-        .unwrap()
-        .lines()
-        .filter(|l| l.contains("\"frame\""))
-        .count()
-}
-
-/// **"THE FINISH HE NEVER HEARD", PLAYED BACK** — `cap-continue.jsonl`, recorded on `claude`
-/// 2.1.283 on 2026-09-27 (richos-hq `docs/verification/2026-09-27-background-command-finish/`
-/// §1): the back end starts `sleep 12; echo bg-marker-done` in the background and ends its
-/// turn with "Background command started."; 10.5 s later the provider's `task_notification`
-/// says it ended, outside any turn; the host asks for the report; the provider first runs a
-/// turn of its own for the notification, then ours, which reads the output and says what it
-/// printed.
-///
-/// Before `24d9930c`/`bfb20a48` the assignment settled on "Background command started." and
-/// that was the last he heard. Now the finish is his report.
-#[test]
-fn the_finish_he_never_heard_reaches_him_as_the_report_when_the_provider_says_it_ended() {
-    const ASKED: &str = "Run sleep 12; echo bg-marker-done in the background and tell me what it printed.";
-    let r = replay("2026-09-27-cap-continue.jsonl", 2.0, &[ASKED]);
-    r.host.start();
-    let job = r.register(0, ASKED);
-    assert!(r.host.wait_for_completed(1, HANG_GUARD), "the job never ended: {:#?}", r.transcript());
-    let row = r.row(&job);
-    assert!(row.was_answered(), "{:?}: {}", row.state, row.detail);
-    let told = r.told_about(&job);
-    assert_eq!(
-        told.last().map(String::as_str),
-        Some("The background command slept for 12 seconds and printed `bg-marker-done`."),
-        "the finish never reached him; all he was told: {told:?}"
-    );
-    assert_eq!(told.first().map(String::as_str), Some("Background command started."), "{told:?}");
-    let sent = r.sent();
-    assert_eq!(sent.len(), 2, "{sent:?}");
-    assert!(sent[1].contains("Background commands ended (provider observations):"), "the second message was not the report request: {}", sent[1]);
-    assert!(r.events("divergence").is_empty(), "the host left the recording: {:#?}", r.events("divergence"));
-    r.end();
-}
-
-/// **THE PROVIDER'S OWN FINISH TURN, SPOKEN TO NOBODY** — `cap-plain.jsonl`, the same session
-/// with nobody asking: after the notification the provider runs a turn of its own ("The
-/// background command completed successfully (exit code 0)") with no prompt parked, so its
-/// words go to the between-turn lane, which the host never reads. The recording ends there.
-///
-/// The host must not leave it there: once the provider says the command ended, it asks the
-/// back end for its report. That request is past the end of this recording, so the replay
-/// refuses it (exit 3) — which is exactly the evidence that it was made. A host that settled
-/// on "it has started" sends nothing, and the recording simply runs out.
-#[test]
-fn after_the_providers_own_finish_turn_the_host_asks_for_the_report() {
-    const ASKED: &str = "Run sleep 12; echo bg-marker-done in the background.";
-    let r = replay("2026-09-27-cap-plain.jsonl", 2.0, &[ASKED]);
-    r.host.start();
-    let job = r.register(0, ASKED);
-    let frames = frames_in("2026-09-27-cap-plain.jsonl");
-    // Decided by facts, never by a clock: either the host asked (the replay's divergence), or
-    // the whole recording has been played AND the host has closed the job without asking. A
-    // host that asks keeps the job open until its report turn, so the second can only happen
-    // to a host that never asks.
-    r.until("the host asked, or closed the job after the whole recording without asking", |r| {
-        !r.events("divergence").is_empty()
-            || (r.events("emitted").len() >= frames && r.host.wait_for_completed(1, Duration::ZERO))
-    });
-    let asked = r.events("divergence");
-    assert_eq!(
-        asked.len(), 1,
-        "the provider said the command ended and the host never asked the back end for its report \
-         (he was told only {:?})", r.told_about(&job)
-    );
-    assert_eq!(asked[0]["why"], "the recording has no more sends");
-    assert!(asked[0]["text"].as_str().unwrap_or_default().contains("Background commands ended (provider observations):"), "{:#?}", asked[0]);
-    r.end();
-}
-
-/// **A LONG SESSION: TWO FINISHES AFTER THEIR TURNS ENDED, A JOB BETWEEN, A FOLD BESIDE THEM** —
-/// `2026-10-09-long-session.jsonl`, recorded in the test VM on `claude` 2.1.295 (haiku) by
-/// `scripts/replay/record-long-session.py` through `scripts/testvm/replay-capture-walk.sh`, 104.8 s,
-/// the shape every one of the six 2026-09/10 incidents had (Sage, research 2026-10-08):
-///
-/// - A starts `sleep 45; echo long-marker-a` in the background and ends its turn;
-/// - B, his next job, runs on the same back end while A's command still runs;
-/// - A's command ends at 47.2 s, outside any turn; the provider runs a turn of its own for it
-///   ("The background task has finished. I'm leaving it out of this report ..."), and the host's
-///   request for A's report waits behind it;
-/// - C's background `sleep 4` ends inside C's own turn (a foreground `sleep 12` keeps it open);
-/// - D starts `sleep 30; echo long-marker-d`, ends its turn, and its finish comes 29.4 s later,
-///   outside any turn, with the host waiting on it alone.
-///
-/// Each report reaches him on its own job, B's answer carries nothing of A's, the fold is not
-/// asked about again, and the host sends exactly the six messages the provider was recorded
-/// answering, the two report requests exactly where they were recorded.
-#[test]
-fn a_long_session_reports_each_late_finish_on_its_own_job() {
-    const A: &str = "Start the long marker in the background and tell me what it printed.";
-    const B: &str = "Print the second marker.";
-    const C: &str = "Start the short marker in the background, wait twelve seconds, and tell me what it printed.";
-    const D: &str = "Start the last marker in the background and tell me what it printed.";
-    let r = replay("2026-10-09-long-session.jsonl", 4.0, &[A, B, C, D]);
-    r.host.start();
-    let a = r.register(0, A);
-    r.until("A's first words", |r| !r.told_about(&a).is_empty());
-    let b = r.register(1, B);
-    r.until("A's report and B's answer", |r| answered(r, &a, 2) && answered(r, &b, 1));
-    let c = r.register(2, C);
-    r.until("C's answer", |r| answered(r, &c, 1));
-    let d = r.register(3, D);
-    r.until("D's report", |r| answered(r, &d, 2));
-
-    let told_a = r.told_about(&a);
-    assert_eq!(told_a.len(), 2, "{told_a:?}");
-    assert!(told_a[0].contains("has started"), "{told_a:?}");
-    assert!(told_a[1].starts_with("**Report: \"start the long marker\"**") && told_a[1].contains("long-marker-a"),
-            "A's finish did not reach him as A's report: {told_a:?}");
-    assert_eq!(r.told_about(&b), ["It printed `long-marker-b`."], "B's answer is B's alone");
-    assert_eq!(r.told_about(&c), ["The background command printed `long-marker-c` and exited with code 0."]);
-    let told_d = r.told_about(&d);
-    assert_eq!(told_d.len(), 2, "{told_d:?}");
-    assert_eq!(told_d[0], "The background command `sleep 30; echo long-marker-d` has started.");
-    assert!(told_d[1].starts_with("**Report: \"start the last marker\"**") && told_d[1].contains("long-marker-d"),
-            "D's finish did not reach him as D's report: {told_d:?}");
-    // The provider's own finish turns ("I'm leaving it out of this report", "I haven't read its
-    // output file") reached nobody, as they must: they are not anybody's answer.
-    for told in [&told_a, &told_d] {
-        assert!(!told.iter().any(|t| t.contains("leaving it out") || t.contains("haven't read")), "{told:?}");
+/// Count frames before the next unrequested follow-up in these historical captures.
+/// We deliberately do not inject the deleted host-written report prompt.
+fn frames_before_user_send(capture:&str,user_send:usize)->usize {
+    let mut sends=0;let mut frames=0;
+    for line in std::fs::read_to_string(Path::new(FIXTURES).join(capture)).unwrap().lines() {
+        let row:Value=serde_json::from_str(line).unwrap();
+        if row["sent"]["type"]=="user" {sends+=1;if sends>user_send {break}}
+        if row.get("frame").is_some() {frames+=1;}
     }
-
-    let sent = r.sent();
-    assert_eq!(sent.len(), 6, "{sent:#?}");
-    let reports: Vec<usize> = (0..sent.len()).filter(|&i| sent[i].contains("Background commands ended (provider observations):")).collect();
-    assert_eq!(reports, [2, 5], "the report requests are not where the provider was recorded taking them");
-    assert!(sent[1].contains("Other assignments' background commands (observed)") && sent[1].contains(A.trim_end_matches('.')),
-            "B was not told A's command was still running: {}", sent[1]);
-    assert!(r.events("divergence").is_empty(), "the host left the recording: {:#?}", r.events("divergence"));
-    r.end();
+    frames
 }
-
-/// **A FINISH FOLDED INTO THE BACK END'S OWN TURN IS NOT ASKED ABOUT AGAIN** — `cap-fold.jsonl`:
-/// the background `sleep 4` ends at 6.9 s, inside the same turn (a foreground `sleep 12` keeps
-/// it running), and that turn's answer already describes it. One message, one report.
+fn check_saved_report(r:&Replay,id:&str) {
+    assert_eq!(r.row(id).state,assignment::AssignmentState::Registered,"a native turn or task notification inferred job completion");
+    assert!(r.told_about(id).is_empty(),"the host manufactured a reply on Stu's behalf");
+    assert!(r.events("divergence").is_empty(),"the host injected input absent from the user's handoff: {:?}",r.events("divergence"));
+}
 #[test]
-fn a_finish_folded_into_the_turn_is_reported_once_with_that_turn() {
-    const ASKED: &str = "Start sleep 4 in the background, then run sleep 12 in the foreground.";
-    let r = replay("2026-09-27-cap-fold.jsonl", 2.0, &[ASKED]);
-    r.host.start();
-    let job = r.register(0, ASKED);
-    assert!(r.host.wait_for_completed(1, HANG_GUARD), "the job never ended: {:#?}", r.transcript());
-    assert!(r.row(&job).was_answered());
-    assert_eq!(
-        r.told_about(&job),
-        ["The background command completed first (after 4 seconds) and its notification arrived while the \
-          foreground command was still running, demonstrating that background tasks don't block the main thread."]
-    );
-    assert_eq!(r.sent().len(), 1, "a folded finish was asked about again: {:?}", r.sent());
-    assert!(r.events("divergence").is_empty(), "{:#?}", r.events("divergence"));
-    r.end();
+fn a_native_turn_end_does_not_settle_or_report_the_whole_job() {
+    let r=replay("2026-09-27-cap-fold.jsonl",4.0,&["Start the requested command"]);
+    let job=r.register(0,"Start the requested command");
+    assert!(r.host.wait_for_completed(1,HANG_GUARD),"the actual receiving turn never ended");
+    check_saved_report(&r,&job);assert_eq!(r.sent().len(),1);r.end();
+}
+#[test]
+fn the_providers_own_late_finish_does_not_create_an_app_report_or_another_prompt() {
+    let capture="2026-09-27-cap-plain.jsonl";
+    let r=replay(capture,4.0,&["Start the requested command"]);let job=r.register(0,"Start the requested command");
+    let frames=frames_before_user_send(capture,1);
+    r.until("the native late-finish frames",|r|r.events("emitted").len()>=frames);
+    check_saved_report(&r,&job);assert_eq!(r.sent().len(),1);r.end();
+}
+#[test]
+fn a_late_command_notification_does_not_inject_a_hardcoded_followup() {
+    let capture="2026-09-27-cap-continue.jsonl";
+    let r=replay(capture,4.0,&["Start the requested command"]);let job=r.register(0,"Start the requested command");
+    let frames=frames_before_user_send(capture,1);
+    r.until("the native late command notification",|r|r.events("emitted").len()>=frames);
+    check_saved_report(&r,&job);assert_eq!(r.sent().len(),1);r.end();
+}
+#[test]
+fn another_job_uses_the_same_stu_without_host_completion_or_report_inference() {
+    let capture="2026-10-09-long-session.jsonl";
+    let r=replay(capture,4.0,&["Start the first command","Start the second command"]);
+    let a=r.register(0,"Start the first command");
+    assert!(r.host.wait_for_completed(1,HANG_GUARD));
+    let b=r.register(1,"Start the second command");
+    assert!(r.host.wait_for_completed(2,HANG_GUARD));
+    let frames=frames_before_user_send(capture,2);
+    r.until("the native first job notification after the second job",|r|r.events("emitted").len()>=frames);
+    check_saved_report(&r,&a);check_saved_report(&r,&b);assert_eq!(r.sent().len(),2);r.end();
 }

@@ -446,20 +446,18 @@ impl InitFact {
     }
 }
 
-/// The three init-reported facts a background assignment depends on, each paired with the
+/// The two init-reported facts a background assignment depends on, each paired with the
 /// sentence its absence is reported by — named ONCE so the two places that ask about them
 /// cannot drift into disagreeing about which fact carries which sentence.
-fn work_readiness_facts(state: &ReaderState) -> [(InitFact, &'static str); 3] {
+fn work_readiness_facts(state: &ReaderState) -> [(InitFact, &'static str); 2] {
     [
         (state.engine_plugin_loaded, ENGINE_PLUGIN_ABSENT),
         (state.work_tools_loaded, WORK_TOOLS_ABSENT),
-        (state.permissions_bypassed, BYPASS_PERMISSIONS_ABSENT),
     ]
 }
 
 pub(crate) const ENGINE_PLUGIN_ABSENT: &str = "The desktop engine plugin did not load";
 pub(crate) const WORK_TOOLS_ABSENT: &str = "The desktop work tools did not load";
-pub(crate) const BYPASS_PERMISSIONS_ABSENT: &str = "The provider did not enable bypassPermissions as requested. Reconnect with a provider that supports this permission mode before starting app work.";
 
 /// The gate at the BINDING, which runs before the work lease's first turn.
 ///
@@ -469,21 +467,21 @@ pub(crate) const BYPASS_PERMISSIONS_ABSENT: &str = "The provider did not enable 
 /// before its lease had run a single turn.
 ///
 /// The loudness is not softened, it is MOVED to where the fact exists —
-/// [`work_turn_readiness_refusal`], asked on the same lease against the same three facts
-/// with the same three sentences, once its first turn has brought the frame that answers
+/// [`work_turn_readiness_refusal`], asked on the same lease against the same two facts
+/// with the same two sentences, once its first turn has brought the frame that answers
 /// them. A plugin that really did not load still fails the job and still says so.
-fn work_binding_readiness_refusal(facts: [(InitFact, &'static str); 3]) -> Option<&'static str> {
+fn work_binding_readiness_refusal(facts: [(InitFact, &'static str); 2]) -> Option<&'static str> {
     facts.into_iter().find(|(fact, _)| *fact == InitFact::No).map(|(_, sentence)| sentence)
 }
 
-/// The same three facts, asked AFTER the work lease's turn — where anything short of a
+/// The same two facts, asked AFTER the work lease's turn — where anything short of a
 /// reported `Yes` is a refusal.
 ///
 /// [`InitFact::NotYetReported`] is a refusal on this path and not on the other one, and the
 /// asymmetry is the single fact this whole module records: the frame that answers these
 /// questions arrives with the first turn. Before that turn, silence is expected; after it,
 /// silence means the frame never came, which is its own fault and not a reason to proceed.
-fn work_turn_readiness_refusal(facts: [(InitFact, &'static str); 3]) -> Option<&'static str> {
+fn work_turn_readiness_refusal(facts: [(InitFact, &'static str); 2]) -> Option<&'static str> {
     facts.into_iter().find(|(fact, _)| *fact != InitFact::Yes).map(|(_, sentence)| sentence)
 }
 
@@ -620,47 +618,6 @@ impl From<NativeError> for CognitionError {
     }
 }
 
-// ===========================================================================================
-// THE PERMISSION SEAM (ceo-decisions.md §1 and §16)
-//
-// `acp.rs:444-479` auto-approved every `session/request_permission` by picking the first
-// `allow*` option. R2 business-action governance is DEFERRED to V2, not abandoned — §16 says
-// so in as many words: *"both paths auto-approve and both leave the same seam for the day
-// Rich should ask instead."*
-//
-// So the seam is here, and it is a NAMED, PUBLIC, TESTED function rather than a match arm
-// buried in a reader thread, because "somebody can find it" was the requirement. The day
-// Rich should ask instead of allowing, this is the one function that changes.
-// ===========================================================================================
-
-/// What RichOS answers when the agent asks whether it may use a tool.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PermissionDecision {
-    /// Proceed, with the input the agent proposed (possibly rewritten).
-    Allow { updated_input: Value },
-    /// Refuse, with a reason the agent shows in its transcript.
-    Deny { message: String },
-}
-
-impl PermissionDecision {
-    /// The word recorded on the machinery record — `"allow"` or `"deny"`.
-    pub fn behavior(&self) -> &'static str {
-        match self {
-            PermissionDecision::Allow { .. } => "allow",
-            PermissionDecision::Deny { .. } => "deny",
-        }
-    }
-}
-
-/// Legacy source-test adapter policy. The shipping desktop engine profile uses
-/// `permissions::ScopedPermissions` instead: host-scoped onboarding/continuity tools
-/// validate their own contracts and other native permission requests require an
-/// exact app decision. Hidden preparation and stopped turns remain denied.
-/// This compatibility function is not the desktop action/access contract.
-pub fn decide_permission(request: &Value) -> PermissionDecision {
-    PermissionDecision::Allow { updated_input: request.get("input").cloned().unwrap_or_else(|| json!({})) }
-}
-
 /// Map the binary's terminal `result` frame onto the one stop-reason string the rest of the
 /// app already reasons about.
 ///
@@ -680,6 +637,20 @@ pub fn stop_reason_of(result: &Value) -> String {
     // inventing `end_turn` — a turn that ended in a way we have no name for must not be
     // recorded as one that ended cleanly.
     result.get("subtype").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
+}
+
+pub(crate) fn native_result(result: &Value) -> Result<String, NativeError> {
+    let reason = stop_reason_of(result);
+    if let Some(reset) = usage_limit_signal(result) {
+        return Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &result.to_string())));
+    }
+    if reason == "child_exited" { return Err(NativeError::Closed); }
+    if result.get("is_error").and_then(Value::as_bool) == Some(true) && reason != STOP_REASON_CANCELLED {
+        let detail = result.get("errors").or_else(|| result.get("result"))
+            .map(Value::to_string).unwrap_or(reason);
+        return Err(NativeError::Protocol(detail));
+    }
+    Ok(reason)
 }
 
 /// The child's argument vector.
@@ -774,6 +745,7 @@ pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<
 /// single-threaded) and not at `dispatch` (which runs on the reader thread). A
 /// `MachineryRecord` cannot exist without its `seq`, so `dispatch` hands over the wire JSON
 /// and `prompt` normalizes it.
+#[derive(Clone)]
 enum ChunkMsg {
     /// Assistant-message text — the clean-output path, unchanged.
     Text(String),
@@ -823,6 +795,27 @@ enum TurnPhase {
     /// `result`). From here the turn in flight is OURS.
     Running,
 }
+
+fn finish_native_turn(inputs: Vec<PendingTurn>, frame: Value) {
+    // Visible prompts report through their caller. Live-only or hidden+live turns
+    // use one live callback. Every input still receives its own receipt outcome.
+    let mut reported = inputs.iter().any(|input|
+        matches!(input.sink, TurnSink::Prompt(_)) && !input.context_only);
+    for input in inputs {
+        let report = !reported && matches!(input.sink, TurnSink::Input { .. });
+        reported |= report;
+        input.finish(frame.clone(), report);
+    }
+}
+
+enum TurnSink {
+    Prompt(Sender<ChunkMsg>),
+    Input {
+        completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
+        limit: Option<Option<u64>>,
+    },
+}
+
 
 /// The prompt this client has sent and is waiting for.
 ///
@@ -898,12 +891,14 @@ enum TurnPhase {
 /// and it is named here rather than hidden.
 struct PendingTurn {
     /// Where this turn's items go.
-    sink: Sender<ChunkMsg>,
+    sink: TurnSink,
     /// The `uuid` stamped on the user message this prompt wrote, which the child echoes as
     /// `command_uuid`. Minted per prompt, so a lifecycle frame can never be matched against a
     /// previous turn's message.
     command_uuid: String,
     phase: TurnPhase,
+    /// The mode of this submitted input, not a later input queued behind it.
+    context_only: bool,
     /// **Had this child already named a turn THIS client sent, when this one was parked?**
     /// (`ReaderState::turns_named_by_the_child`, copied at the send.) Hunt 2026-09-29 part 1
     /// v2, finding 47: on such a child `Unconfirmed` is not "the child says nothing about
@@ -915,6 +910,32 @@ struct PendingTurn {
 }
 
 impl PendingTurn {
+    fn send(&mut self, chunk: ChunkMsg, frame: &Value) -> bool {
+        match &mut self.sink {
+            TurnSink::Prompt(sink) => sink.send(chunk).is_ok(),
+            TurnSink::Input { limit, .. } => {
+                if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
+                    if let Some(reset) = usage_limit_signal(frame) { *limit = Some(reset); }
+                }
+                false
+            }
+        }
+    }
+
+    fn finish(self, frame: Value, report_failure: bool) {
+        match self.sink {
+            TurnSink::Prompt(sink) => { let _ = sink.send(ChunkMsg::Done(frame)); }
+            TurnSink::Input { completed, limit } => {
+                let result = if let Some(reset) = limit {
+                    Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &frame.to_string())))
+                } else { native_result(&frame) };
+                completed(crate::steering::InputOutcome {
+                    result: result.map_err(|error| error.to_string()), report_failure,
+                });
+            }
+        }
+    }
+
     /// **Is the turn in flight positively NOT ours yet?** True when the child said our
     /// message is still queued, or when a child that names its turns has not named this one
     /// yet (finding 47). Every place that decides whether a frame belongs to this prompt asks
@@ -1028,6 +1049,7 @@ impl BetweenItem {
 /// The buffer plus §1.5's `last_session_meta` slot.
 #[derive(Default)]
 pub(crate) struct BetweenTurn {
+    sink: Option<crate::cognition::BetweenTurnSink>,
     queue: Vec<BetweenItem>,
     /// §1.5's slot, and §1.2's *"last value wins"* made real: the last payload seen for each
     /// SessionMeta family member. An identical repeat is SUPPRESSED rather than queued.
@@ -1256,7 +1278,7 @@ pub struct NativeClient {
     /// **This used to say "there is at most one turn in flight, so the next `result` ends
     /// it", and that premise is FALSE on this wire** — see [`PendingTurn`] for the run that
     /// disproved it and the correlation the child actually offers.
-    current_prompt: Arc<Mutex<Option<PendingTurn>>>,
+    current_prompt: Arc<Mutex<Vec<PendingTurn>>>,
     operation_cancel: Arc<Mutex<OperationCancellation>>,
     action_grants: Vec<ActionGrant>,
     reader_closed: Arc<AtomicBool>,
@@ -1281,7 +1303,6 @@ pub struct NativeClient {
 /// to be declared first.
 struct ReaderState {
     agent_tasks: crate::operator_lead::TaskBook,
-    input_taken: std::collections::HashMap<String, Box<dyn FnOnce() + Send>>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1292,7 +1313,6 @@ struct ReaderState {
     /// This lease's running token count, so each `result` adds what the frames never showed.
     token_tally: crate::quota::tokens::Tally,
     question_scope: Option<std::path::PathBuf>,
-    permissions: Option<crate::permissions::ScopedPermissions>,
     /// Did the child list all five `richos_work` tools? [`InitFact`], not `bool` — see its
     /// doc for what the collapse cost.
     work_tools_loaded: InitFact,
@@ -1303,8 +1323,6 @@ struct ReaderState {
     /// ASSERTED rather than merely recorded (`requires_status_tool`): it is the front desk's
     /// only read once the work tools are refused.
     status_tool_loaded: bool,
-    /// Did the child come up in `permissionMode: bypassPermissions`? [`InitFact`], for the same reason.
-    permissions_bypassed: InitFact,
     /// Host-owned phase, never set by a model frame.
     context_only: bool,
     /// The model this session is running, from `system/init.model`.
@@ -1383,7 +1401,7 @@ struct ReaderState {
     /// rows 1 and 4). A loudness layer that cannot say WHICH lease it is talking about is a
     /// false-alarm generator, and a false alarm that is believed costs more than silence.
     ///
-    /// Set at spawn from the role, beside `permissions` and `continuity_tools_grant`, which
+    /// Set at spawn from the role, beside `continuity_tools_grant`, which
     /// are the two other fields the reader cannot learn from the wire.
     tool_residency: Option<&'static str>,
     /// The [`brief_cache_identity`] of context this session completed receiving, either
@@ -1504,13 +1522,10 @@ impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
             agent_tasks: crate::operator_lead::TaskBook::default(),
-            input_taken: std::collections::HashMap::new(),
             question_scope: None,
-            permissions: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
             status_tool_loaded: false,
-            permissions_bypassed: InitFact::NotYetReported,
             context_only: false,
             session_model: None,
             context_window: None,
@@ -1710,11 +1725,7 @@ fn preflight(bin: &Path, cwd: &Path, doctrine: Option<&Path>, skills: Option<&Pa
 ///   candidate-.8 row 1 was written down as a design fact.** Its scope is written only by
 ///   `spine.rs` (`:3093`, `:3278`), so the work lease's copy named a file nothing could ever
 ///   create, and opening the grant over it was the first act of the work lease's first turn.
-/// - `richos_continuity` is on the **conversation** lease only (seam 1). The work lease
-///   never calls `checkpoint`, `receipt` or `brief`; leaving the server registered would
-///   have given it un-prompted access, because `permissions.rs:58-59` auto-allows both of
-///   that server's tools on a process-global tool-name match that discriminates on nothing
-///   per-lease, and its own gate is `actions_allowed`, which §5.4's standing grant supplies.
+/// - `richos_continuity` is scoped to each independent session.
 /// - **`richos_work` is on the WORK lease only, as of the CEO's Two Riches page.** It used
 ///   to be on both, and the comment here said so in its own words: *"`richos_work` is on
 ///   both, because the work lease is the one that needs it most."* The page's sense-check
@@ -1819,7 +1830,7 @@ impl NativeClient {
         Self::spawn_with_tools(bin, cwd, Some((doctrine, skills)), None, None, None, None, None, LeaseRole::Conversation)
     }
 
-    fn spawn_with_tools(bin: &Path, cwd: &Path, standing: Option<(&Path, &Path)>, onboarding: Option<(&Path, &Path, &Path, &Path)>, continuity: Option<(&crate::ecs::EcsBridge, &Path)>, continuity_tools: Option<&Path>, profile: Option<&crate::engine_profile::EngineProfile>, control: Option<&crate::steering::TurnControl>, role: LeaseRole) -> Result<Self, NativeError> {
+    fn spawn_with_tools(bin: &Path, cwd: &Path, standing: Option<(&Path, &Path)>, onboarding: Option<(&Path, &Path, &Path, &Path)>, continuity: Option<(&crate::ecs::EcsBridge, &Path)>, continuity_tools: Option<&Path>, profile: Option<&crate::engine_profile::EngineProfile>, control: Option<&crate::steering::ConversationControl>, role: LeaseRole) -> Result<Self, NativeError> {
         let (doctrine, skills) = (standing.map(|s| s.0), standing.map(|s| s.1));
         preflight(bin, cwd, doctrine, skills)?;
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -1902,15 +1913,12 @@ impl NativeClient {
 
         let pending: Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>> =
             Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let current_prompt: Arc<Mutex<Option<PendingTurn>>> = Arc::new(Mutex::new(None));
+        let current_prompt: Arc<Mutex<Vec<PendingTurn>>> = Arc::new(Mutex::new(Vec::new()));
         let between: Arc<Mutex<BetweenTurn>> = Arc::new(Mutex::new(BetweenTurn::default()));
         let state: Arc<Mutex<ReaderState>> = Arc::new(Mutex::new(ReaderState::default()));
         state.lock().unwrap().question_scope = onboarding.map(|(_,_,path,_)|crate::question_tools::path(path));
         state.lock().unwrap().token_sink = profile
             .and_then(|p| Some((p.claude_account.as_ref()?.id.clone(), p.token_sink.clone()?)));
-        if let (Some(profile), Some((_, scope))) = (profile, continuity) {
-            state.lock().unwrap().permissions = Some(crate::permissions::ScopedPermissions {desk: profile.permissions.clone(), scope: scope.into()});
-        }
         // **The reader is told which lease it is on, from the same pure function that set the
         // environment** — not from a second opinion about the role. See
         // `ReaderState::tool_residency`: without this the work lease raised the front desk's
@@ -1970,16 +1978,15 @@ impl NativeClient {
                     &reader_state,
                     &reader_text_deltas,
                 );
+                Self::release_between_turn(&reader_between);
             }
             // stdout closed. §5.2's POSITIVE termination signal: the child's stdout reached
             // EOF, which is a fact about the child and not an inference from silence. Fail
             // every waiter so no caller hangs forever.
             reader_pending.lock().unwrap().clear();
-            let mut current = reader_current.lock().unwrap();
             reader_closed_flag.store(true, Ordering::SeqCst);
-            if let Some(pending) = current.take() {
-                let _ = pending.sink.send(ChunkMsg::Done(json!({ "stop_reason": "child_exited" })));
-            }
+            let waiting = std::mem::take(&mut *reader_current.lock().unwrap());
+            finish_native_turn(waiting, json!({"stop_reason":"child_exited"}));
         });
 
         // A supervised leader gets SIGTERM first and reaps its tree; only a bare child (no
@@ -2067,7 +2074,7 @@ impl NativeClient {
     ///
     /// It costs NO API turn: measured 697.9 ms on 2.1.252, and `run10` of the spike
     /// established that control requests are free.
-    fn handshake_cancellable(&mut self, control: Option<&crate::steering::TurnControl>) -> Result<(), NativeError> {
+    fn handshake_cancellable(&mut self, control: Option<&crate::steering::ConversationControl>) -> Result<(), NativeError> {
         let (tx, rx): (Sender<Value>, Receiver<Value>) = channel();
         self.pending.lock().unwrap().insert("req_init".to_string(), tx);
         let msg = json!({
@@ -2216,7 +2223,7 @@ impl NativeClient {
         msg: Value,
         stdin: &Arc<Mutex<ChildStdin>>,
         pending: &Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>>,
-        current: &Arc<Mutex<Option<PendingTurn>>>,
+        current: &Arc<Mutex<Vec<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         state: &Arc<Mutex<ReaderState>>,
         text_deltas: &Arc<AtomicUsize>,
@@ -2256,13 +2263,16 @@ impl NativeClient {
             return;
         }
         if ty == "control_request" {
-            let context_only = state.lock().unwrap().context_only;
-            let permissions = state.lock().unwrap().permissions.clone();
+            let context_only = {
+                let turns = current.lock().unwrap();
+                let mut running = turns.iter().filter(|turn| !turn.not_yet_ours()).peekable();
+                running.peek().is_some() && running.all(|turn| turn.context_only)
+            };
             // **Read on the reader thread, which is also the thread the text deltas arrive
             // on** — so "has he heard anything yet" is answered in the order the wire put the
             // two events in, with no race to lose.
             let question_scope = state.lock().unwrap().question_scope.clone();
-            Self::handle_agent_request(&msg, stdin, current, between, context_only, permissions.as_ref(), question_scope.as_deref());
+            Self::handle_agent_request(&msg, stdin, current, between, context_only, question_scope.as_deref());
             return;
         }
 
@@ -2275,18 +2285,10 @@ impl NativeClient {
         if ty == "command_lifecycle" {
             let command = msg.get("command_uuid").and_then(|v| v.as_str()).unwrap_or("");
             let lifecycle = msg.get("state").and_then(|v| v.as_str()).unwrap_or("");
-            let taken = if matches!(lifecycle, "started" | "completed") {
-                state.lock().unwrap().input_taken.remove(command)
-            } else { None };
-            if let Some(taken) = taken { taken(); }
-            if matches!(lifecycle, "cancelled" | "discarded" | "refused") { // dialect-exempt: vendor wire states
-                state.lock().unwrap().input_taken.remove(command);
-            }
             let mut terminal: Option<&'static str> = None;
             {
                 let mut guard = current.lock().unwrap();
-                if let Some(pending) = guard.as_mut() {
-                    if pending.command_uuid == command {
+                if let Some(pending) = guard.iter_mut().find(|pending| pending.command_uuid == command) {
                         // **THE LOUDNESS LAYER**: said once, at the transition, on stderr.
                         // See `ReaderState::turns_named_by_the_child` — a fallback quietly
                         // carrying the whole load looks exactly like the thing working.
@@ -2316,13 +2318,14 @@ impl NativeClient {
                             "refused" => terminal = Some("refused_before_it_ran"),
                             _ => {}
                         }
-                    }
                 }
-                if let Some(reason) = terminal {
-                    if let Some(pending) = guard.take() {
-                        let _ = pending.sink.send(ChunkMsg::Done(json!({ "stop_reason": reason })));
-                    }
-                }
+            }
+            if let Some(reason) = terminal {
+                let pending = {
+                    let mut guard = current.lock().unwrap();
+                    guard.iter().position(|pending| pending.command_uuid == command).map(|index| guard.remove(index))
+                };
+                if let Some(pending) = pending { pending.finish(json!({"stop_reason":reason}), true); }
             }
             Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
             return;
@@ -2356,23 +2359,17 @@ impl NativeClient {
             // with a user send still queued — ours, the only one there can be — ends a turn
             // that was already in flight when we sent, so it is RETAINED and the parked
             // prompt keeps waiting for its own.
-            {
-                let guard = current.lock().unwrap();
-                let another_turns = guard.as_ref().is_some_and(|pending| pending.result_is_another_turns(&msg));
-                drop(guard);
-                if another_turns {
-                    between.lock().unwrap().offer_frame(msg);
-                    return;
-                }
-            }
-            let sink = current.lock().unwrap().take();
-            match sink {
-                Some(pending) => {
-                    let _ = pending.sink.send(ChunkMsg::Done(msg));
-                }
-                // A `result` with no turn in flight is a statement about a turn that has
-                // already been answered. It is retained, not dropped.
-                None => between.lock().unwrap().offer_frame(msg),
+            let ready = {
+                let mut guard = current.lock().unwrap();
+                let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut *guard).into_iter()
+                    .partition(|pending| !pending.result_is_another_turns(&msg));
+                *guard = waiting;
+                ready
+            };
+            if ready.is_empty() {
+                between.lock().unwrap().offer_frame(msg);
+            } else {
+                finish_native_turn(ready, msg);
             }
             return;
         }
@@ -2389,8 +2386,8 @@ impl NativeClient {
                 let ours_running = current
                     .lock()
                     .unwrap()
-                    .as_ref()
-                    .is_some_and(|pending| !pending.not_yet_ours());
+                    .iter()
+                    .any(|pending| !pending.not_yet_ours());
                 state.lock().unwrap().note_background(&msg, ours_running);
             }
         }
@@ -2420,7 +2417,6 @@ impl NativeClient {
                     .all(|name| msg["tools"].as_array().is_some_and(|tools| tools.iter().any(|tool| tool.as_str() == Some(name)))));
             st.assignment_tool_loaded = crate::assignment_tools::loaded_from_init(&msg);
             st.status_tool_loaded = crate::status_tools::loaded_from_init(&msg);
-            st.permissions_bypassed = InitFact::reported(msg["permissionMode"] == "bypassPermissions");
             st.engine_plugin_loaded = InitFact::reported(msg["plugins"].as_array().is_some_and(|plugins|
                 plugins.iter().any(|plugin| plugin["name"] == crate::engine_profile::PLUGIN_NAME)));
             // **THE LOUDNESS LAYER FOR [`TOOL_SEARCH_ENV`].** Read every init frame, like the
@@ -2530,22 +2526,14 @@ impl NativeClient {
     /// arriving one instant later.
     fn route(
         chunk: ChunkMsg,
-        current: &Arc<Mutex<Option<PendingTurn>>>,
+        current: &Arc<Mutex<Vec<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         frame: &Value,
     ) {
-        let routed = match current.lock().unwrap().as_ref() {
-            // **A turn whose message the child says is STILL IN ITS QUEUE has not started,
-            // so none of this is its traffic.** It belongs to the turn that is running —
-            // one the platform injected — and streaming it here would attribute another
-            // turn's words to this one (§1.4 G4). Retained on the between-turn lane, where
-            // it attaches to the THREAD and to no turn at all, which is what it is.
-            // The same holds for a child that names its turns and has not named this one yet
-            // (finding 47): what it streams is still the earlier turn's.
-            Some(pending) if pending.not_yet_ours() => false,
-            Some(pending) => pending.sink.send(chunk).is_ok(),
-            None => false,
-        };
+        let mut routed = false;
+        for pending in current.lock().unwrap().iter_mut().filter(|pending| !pending.not_yet_ours()) {
+            routed |= pending.send(chunk.clone(), frame);
+        }
         if !routed {
             between.lock().unwrap().offer_frame(frame.clone());
         }
@@ -2553,46 +2541,43 @@ impl NativeClient {
 
     /// Answer the agent's `control_request`s, AND route them as machinery.
     ///
-    /// The decision itself is [`decide_permission`] — the named seam. This function is
+    /// Business questions use the native control transport. This function is
     /// transport: it answers FIRST (the child is blocked on it, and a machinery record is
     /// never worth a millisecond of the CEO's turn latency) and routes the record after.
     fn handle_agent_request(
         msg: &Value,
         stdin: &Arc<Mutex<ChildStdin>>,
-        current: &Arc<Mutex<Option<PendingTurn>>>,
+        current: &Arc<Mutex<Vec<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         context_only: bool,
-        permissions: Option<&crate::permissions::ScopedPermissions>,
         question_scope: Option<&Path>,
     ) {
         let request_id = msg.get("request_id").cloned().unwrap_or(Value::Null);
         let request = msg.get("request").cloned().unwrap_or(Value::Null);
         let subtype = request.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
 
-        let (response, machinery) = if subtype == "can_use_tool" {
-            let decision = if context_only {
-                PermissionDecision::Deny { message: "Tools are unavailable during context restoration.".into() }
+        // Business questions still use the native control transport. Tool approvals do not.
+        let question = request["tool_name"].as_str().is_some_and(|name|
+            name == "AskUserQuestion" || name.starts_with("mcp__richos_questions__"));
+        let (response, machinery) = if subtype == "can_use_tool" && question {
+            let body = if context_only {
+                json!({"behavior":"deny", "message":"Tools are unavailable during context restoration."})
             } else if request["tool_name"] == "AskUserQuestion" {
-                let result = question_scope.ok_or_else(||"This turn has no question scope.".to_string())
-                    .and_then(|path|crate::question_tools::convert_vendor(path,&request["input"]));
-                PermissionDecision::Deny {message: match result {
-                    Ok(value)=>value["instruction"].as_str().unwrap_or("The question is recorded.").to_string(),
-                    Err(error)=>error,
-                }}
-            } else if request["tool_name"].as_str().is_some_and(|name|name.starts_with("mcp__richos_questions__")) {
-                PermissionDecision::Allow {updated_input:request["input"].clone()}
-            } else if let Some(policy) = permissions { policy.decide(&request) }
-              else { decide_permission(&request) };
-            let body = match &decision {
-                PermissionDecision::Allow { updated_input } => {
-                    json!({ "behavior": "allow", "updatedInput": updated_input })
-                }
-                PermissionDecision::Deny { message } => json!({ "behavior": "deny", "message": message }),
+                let result = question_scope.ok_or_else(|| "This turn has no question scope.".to_string())
+                    .and_then(|path| crate::question_tools::convert_vendor(path, &request["input"]));
+                let message = match result {
+                    Ok(value) => value["instruction"].as_str().unwrap_or("The question is recorded.").to_string(),
+                    Err(error) => error,
+                };
+                json!({"behavior":"deny", "message":message})
+            } else {
+                json!({"behavior":"allow", "updatedInput":request["input"]})
             };
+            let chosen = body["behavior"].as_str().unwrap().to_string();
             (
                 json!({ "type": "control_response",
                         "response": { "subtype": "success", "request_id": request_id, "response": body } }),
-                Some(BetweenItem::Permission { request, chosen: decision.behavior().to_string() }),
+                Some(BetweenItem::Permission { request, chosen }),
             )
         } else {
             // A control subtype RichOS does not implement. It is answered with a structured
@@ -2615,13 +2600,10 @@ impl NativeClient {
         let _ = Self::write_line(stdin, &response);
 
         if let Some(m) = machinery {
-            let routed = match current.lock().unwrap().as_ref() {
-                // Same rule as `route`: a turn whose message is still in the child's queue
-                // has not started, so this record is the running turn's and not its.
-                Some(pending) if pending.not_yet_ours() => false,
-                Some(pending) => pending.sink.send(m.to_chunk()).is_ok(),
-                None => false,
-            };
+            let mut routed = false;
+            for pending in current.lock().unwrap().iter_mut().filter(|pending| !pending.not_yet_ours()) {
+                routed |= pending.send(m.to_chunk(), msg);
+            }
             if !routed {
                 between.lock().unwrap().push(m);
             }
@@ -2710,6 +2692,24 @@ impl NativeClient {
         self.reader_state.lock().map(|s| s.background.clone()).unwrap_or_default()
     }
 
+    pub fn set_between_turn_sink(&self, sink: crate::cognition::BetweenTurnSink) {
+        self.between.lock().unwrap().sink = Some(sink);
+        Self::release_between_turn(&self.between);
+    }
+
+    fn release_between_turn(between: &Arc<Mutex<BetweenTurn>>) {
+        let (sink, records) = {
+            let mut lane = between.lock().unwrap();
+            let Some(sink) = lane.sink.clone() else { return };
+            let frames: Vec<Value> = std::mem::take(&mut lane.queue).into_iter().map(|item| match item {
+                BetweenItem::Frame(frame) => frame,
+                BetweenItem::Permission {request, chosen} => json!({"type":"control_request","request":request,"chosen":chosen}),
+            }).collect();
+            (sink, frames)
+        };
+        if !records.is_empty() { sink(records); }
+    }
+
     pub fn drain_between_turn(&self, session_id: &str) -> Vec<MachineryRecord> {
         self.between.lock().unwrap().drain(session_id)
     }
@@ -2796,16 +2796,17 @@ impl NativeClient {
                 // the child has named our turns before is read here, with the park (finding
                 // 47; see `PendingTurn::child_names_turns`).
                 let child_names_turns = self.reader_state.lock().unwrap().turns_named_by_the_child;
-                *current = Some(PendingTurn {
-                    sink: tx,
+                current.push(PendingTurn {
+                    sink: TurnSink::Prompt(tx),
                     command_uuid: command_uuid.clone(),
                     phase: TurnPhase::Unconfirmed,
+                    context_only: self.reader_state.lock().unwrap().context_only,
                     child_names_turns,
                 });
 
             }
             if let Err(error) = Self::write_line(&self.stdin, &msg) {
-                *self.current_prompt.lock().unwrap() = None;
+                self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
                 return Err(error);
             }
         }
@@ -2882,8 +2883,8 @@ impl NativeClient {
                         && frame["event"]["delta"]["type"]=="input_json_delta";
                     if !reply_delta && !is_ping(&frame) {release(&mut seq,on_item,&mut spelling);}
                     if let Some(text)=typed {say(&text,&mut seq,on_item,&mut spelling,&mut first_text_logged);}
-                    if let Some(resets_at) = usage_limit_signal(&frame) {
-                        limit = Some(resets_at);
+                    if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
+                        if let Some(resets_at) = usage_limit_signal(&frame) { limit = Some(resets_at); }
                     }
                     // The formatted reply has its own typed carrier. Preserve ordinary
                     // assistant text as technical commentary through the existing normalizer.
@@ -2923,7 +2924,7 @@ impl NativeClient {
                 }
                 Ok(ChunkMsg::Done(result)) => {
                     release(&mut seq, on_item, &mut spelling);
-                    let mut reason = stop_reason_of(&result);
+                    let reason = stop_reason_of(&result);
                     // **Refused for a usage limit** (fill-first's backstop): said as that, so the
                     // spine and the work host continue on the next account instead of reading an
                     // ordinary failure. Whether the child stays alive afterwards is not known
@@ -2933,14 +2934,7 @@ impl NativeClient {
                             .map(Value::to_string).unwrap_or_else(|| reason.clone());
                         return Err(limit_error(resets_at, detail));
                     }
-                    if reason == "child_exited" { return Err(NativeError::Closed); }
-                    if result.get("is_error").and_then(Value::as_bool) == Some(true)
-                        && reason != STOP_REASON_CANCELLED
-                    {
-                        let detail = result.get("errors").or_else(|| result.get("result"))
-                            .map(Value::to_string).unwrap_or_else(|| reason.clone());
-                        return Err(NativeError::Protocol(detail));
-                    }
+                    let mut reason = native_result(&result)?;
                     if let Some(decoder)=formatted.as_mut() {
                         if reason!=STOP_REASON_CANCELLED {
                             if !crate::native_reply::completed(&result) {
@@ -2961,7 +2955,7 @@ impl NativeClient {
                     // anything the agent says afterwards cannot be routed into whatever turn
                     // runs next. What was already said is released first: it is this turn's.
                     release(&mut seq, on_item, &mut spelling);
-                    *self.current_prompt.lock().unwrap() = None;
+                    self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
                     return Ok(STOP_REASON_CANCEL_UNACKNOWLEDGED.to_string());
                 }
                 Err(RecvTimeoutError::Disconnected) => {
@@ -3016,7 +3010,7 @@ fn tokens_in_context(usage: &Value) -> Option<u64> {
 /// to leave the CEO looking at a turn he ended.
 pub struct NativeCancelHandle {
     stdin: Arc<Mutex<ChildStdin>>,
-    current_prompt: Arc<Mutex<Option<PendingTurn>>>,
+    current_prompt: Arc<Mutex<Vec<PendingTurn>>>,
     operation_cancel: Arc<Mutex<OperationCancellation>>,
     action_grants: Vec<ActionGrant>,
     process_fence: crate::owned_process::ProcessFence,
@@ -3040,19 +3034,25 @@ const STOP_TASK_REPLY_WAIT: Duration = Duration::from_secs(5);
 const STOP_TASK_ENDING_WAIT: Duration = Duration::from_secs(5);
 
 impl TurnCancel for NativeCancelHandle {
-    fn send_input(&self, id: &str, text: &str, taken: Box<dyn FnOnce() + Send>) -> Result<bool, String> {
-        if self.reader_closed.load(Ordering::SeqCst) || self.operation_cancel.lock().unwrap().requested {
-            return Ok(false);
-        }
+    fn send_input(&self, id: &str, text: &str, completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool, String> {
+        let operation = self.operation_cancel.lock().unwrap();
+        if self.reader_closed.load(Ordering::SeqCst) || operation.requested { return Ok(false); }
         {
-            let mut state = self.reader_state.lock().unwrap();
-            if state.input_taken.contains_key(id) { return Ok(true); }
-            state.input_taken.insert(id.to_string(), taken);
+            let mut current = self.current_prompt.lock().unwrap();
+            if current.iter().any(|pending| pending.command_uuid == id) { return Ok(true); }
+            current.push(PendingTurn {
+                sink: TurnSink::Input { completed, limit: None }, command_uuid: id.to_string(),
+                phase: TurnPhase::Unconfirmed,
+                context_only: false,
+                // Live input always requires its own native UUID acknowledgement. A queue
+                // count cannot identify one of several independently submitted commands.
+                child_names_turns: true,
+            });
         }
         let message = json!({"type":"user", "uuid":id,
             "message":{"role":"user", "content":[{"type":"text", "text":text}]}});
         if let Err(error) = NativeClient::write_line(&self.stdin, &message) {
-            self.reader_state.lock().unwrap().input_taken.remove(id);
+            self.current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != id);
             return Err(error.to_string());
         }
         Ok(true)
@@ -3085,15 +3085,13 @@ impl TurnCancel for NativeCancelHandle {
         // reverse order would let a very fast agent's `result` overtake the wake, and the
         // loop would return `end_turn` for a turn the CEO stopped. Measured: the agent acked
         // the interrupt in 0.9 ms, so this race is real rather than theoretical.
-        let sink = match self.current_prompt.lock().unwrap().as_ref() {
-            Some(pending) => pending.sink.clone(),
-            // Nothing in flight on this session. Reported as `false` and never as a success —
-            // see `StopOutcome::reached_lease`.
-            None => {
-                if self.settle_workers_on_stop { self.process_fence.kill(); }
-                return operation.active;
-            },
-        };
+        let sinks: Vec<_> = self.current_prompt.lock().unwrap().iter().filter_map(|pending| {
+            if let TurnSink::Prompt(sink) = &pending.sink { Some(sink.clone()) } else { None }
+        }).collect();
+        if sinks.is_empty() && self.current_prompt.lock().unwrap().is_empty() {
+            if self.settle_workers_on_stop { self.process_fence.kill(); }
+            return operation.active;
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = json!({
             "type": "control_request",
@@ -3101,7 +3099,8 @@ impl TurnCancel for NativeCancelHandle {
             "request": { "subtype": "interrupt" }
         });
         let wrote = NativeClient::write_line(&self.stdin, &request).is_ok();
-        let woke = sink.send(ChunkMsg::Cancel).is_ok();
+        let no_waiter = sinks.is_empty();
+        let woke = sinks.into_iter().fold(no_waiter, |woke, sink| sink.send(ChunkMsg::Cancel).is_ok() || woke);
         if self.settle_workers_on_stop { self.process_fence.kill(); }
         wrote && woke
     }
@@ -3463,7 +3462,7 @@ impl NativeCognition {
     /// supplied by the spine before priming, never selected by the model. The host
     /// supplies its configuration folder explicitly; instruction paths do not locate state.
     pub fn start_with_onboarding(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
-        executable: &Path, control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
+        executable: &Path, control: Option<&crate::steering::ConversationControl>) -> Result<Self, NativeError> {
         let doctrine = skills.join("agents/rich.md");
         let scopes = config_dir.join("onboarding-scopes");
         std::fs::create_dir_all(&scopes)?;
@@ -3477,7 +3476,7 @@ impl NativeCognition {
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
-        control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
+        control: Option<&crate::steering::ConversationControl>) -> Result<Self, NativeError> {
         bridge.request("hello", json!({})).map_err(|e| NativeError::Protocol(e.to_string()))?;
         let doctrine = skills.join("agents/rich.md");
         let scopes = config_dir.join("onboarding-scopes");
@@ -3498,7 +3497,7 @@ impl NativeCognition {
     /// Settings-isolated desktop lease from verified engine delivery.
     pub fn start_with_engine(bin: &Path, doctrine: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge, profile: crate::engine_profile::EngineProfile,
-        control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
+        control: Option<&crate::steering::ConversationControl>) -> Result<Self, NativeError> {
         bridge.request("hello", json!({})).map_err(|e| NativeError::Protocol(e.to_string()))?;
         let scopes = profile.state.join("scopes");
         std::fs::create_dir_all(&scopes)?;
@@ -3880,9 +3879,6 @@ impl Cognition for NativeCognition {
             && !self.client.reader_state.lock().unwrap().status_tool_loaded {
             return Err(CognitionError::Protocol("The desktop status tool did not load".into()));
         }
-        if self.engine_profile.is_some() && self.client.reader_state.lock().unwrap().permissions_bypassed != InitFact::Yes {
-            return Err(CognitionError::Protocol(BYPASS_PERMISSIONS_ABSENT.into()));
-        }
         // ===================================================================================
         // HIS OWN CURSOR, ONE PER CONVERSATION THREAD
         // ===================================================================================
@@ -4160,7 +4156,7 @@ impl Cognition for NativeCognition {
     /// `audience: "worker"` (§5.8c) exists precisely to keep this lease out of it.
     ///
     /// **The readiness checks it DOES keep** are the ones about what this lease was given:
-    /// the engine plugin, the work tools, and bypass permissions. The continuity
+    /// the engine plugin and the work tools. The continuity
     /// tools are deliberately absent, so they are deliberately not asserted.
     fn bind_work_assignment(&mut self, work: &crate::cognition::WorkAssignment) -> Result<(), CognitionError> {
         if let Some(refusal) = assignment_binding_refusal(self.role) {
@@ -4203,7 +4199,7 @@ impl Cognition for NativeCognition {
         // softens.** `--plugin-dir` accepts an unusable path and reports success (cell K4),
         // and this check is still the only thing that catches that — it is now asked at
         // `Cognition::work_readiness_after_turn`, on this same lease, against these same
-        // three facts, with these same three sentences, once its first turn has brought the
+        // three facts, with these same two sentences, once its first turn has brought the
         // frame that can answer them. A plugin that really did not load still fails the job
         // and still says exactly this.
         //
@@ -4490,6 +4486,10 @@ impl Cognition for NativeCognition {
     fn drain_between_turn(&mut self) -> Vec<MachineryRecord> {
         self.client.drain_between_turn(&self.session_id)
     }
+    fn set_between_turn_sink(&mut self, sink: crate::cognition::BetweenTurnSink) {
+        self.client.set_between_turn_sink(sink);
+    }
+
 }
 
 #[cfg(test)]
@@ -4535,7 +4535,7 @@ mod native_driver_tests {
 
     /// A fake `claude` that takes one turn and answers it with `frames`. Returns what the
     /// lease's `prompt` returned.
-    fn one_limited_turn(name: &str, frames: &str) -> Result<String, NativeError> {
+    pub(super) fn one_limited_turn(name: &str, frames: &str) -> Result<String, NativeError> {
         let script = write_script(name, &(r#"
 read -r init
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
@@ -4713,17 +4713,19 @@ cat >/dev/null
         assert!(heard.recv_timeout(Duration::from_secs(5)).expect("hang guard: first prompt must enter").contains("FIRST-ACTIVE"));
         let (taken,receipt)=std::sync::mpsc::channel();
         let id=uuid::Uuid::new_v4().to_string();
-        assert!(input.send_input(&id,"Correction from Rich",Box::new(move || {taken.send(()).unwrap();})).unwrap());
+        assert!(input.send_input(&id,"Correction from Rich",Box::new(move |outcome| {taken.send(outcome.result).unwrap();})).unwrap());
         // load-bound: hang guard only; the queued marker establishes the protocol state before its receipt is released.
         assert!(heard.recv_timeout(Duration::from_secs(5)).expect("hang guard: provider must queue correction").contains("PEER-QUEUED"));
         assert!(matches!(receipt.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"queued is not consumed");
-        assert!(input.send_input(&id,"Correction from Rich",Box::new(||panic!("same input was sent twice"))).unwrap());
+        assert!(input.send_input(&id,"Correction from Rich",Box::new(|_|panic!("same input was sent twice"))).unwrap());
         NativeClient::write_line(&wire,&json!({"type":"user","message":{"role":"user","content":"advance"}})).unwrap();
         // load-bound: hang guard only; the named receipt proves consumption, with no latency assertion.
-        receipt.recv_timeout(Duration::from_secs(5)).expect("hang guard: receipt names the correction");
-        assert!(!turn.is_finished(),"correction receipt ended the original prompt");
+        assert!(matches!(receipt.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"admission completed the correction before its turn ended");
+        assert!(!turn.is_finished(),"correction admission ended the original prompt");
         NativeClient::write_line(&wire,&json!({"type":"user","message":{"role":"user","content":"finish"}})).unwrap();
         assert_eq!(turn.join().unwrap().unwrap(),"end_turn");
+        // load-bound: hang guard only; the exact native result proves completion, not elapsed time.
+        assert_eq!(receipt.recv_timeout(Duration::from_secs(5)).expect("native result did not complete live input").unwrap(),"end_turn");
     }
 
     #[test]
@@ -5233,7 +5235,7 @@ done
                 versions: Default::default(),
             },
             work_scope: None,
-            permissions: std::sync::Arc::new(crate::permissions::PermissionDesk::default()),
+
             operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
     }
@@ -5288,17 +5290,10 @@ exec /bin/sleep 1000
     /// test: the identical call with `LeaseRole::Conversation` DOES register the server,
     /// which is what makes its absence evidence rather than a config that never had it.
     ///
-    /// **Why the omission and not an allow-list entry** (spec §5.8a-ii): `permissions.rs`
-    /// auto-allows `mcp__richos_continuity__checkpoint` and `…__inspect` on a
-    /// process-global tool-name match, and those are exactly the two tools that server
-    /// exposes — so the desk cannot tell the two leases apart and the work lease would have
-    /// had un-prompted checkpoint access. That coupling is asserted here too, against the
-    /// live `permissions.rs` decision, so a later edit that removed the auto-allow would
-    /// tell whoever is reading this why this test exists.
-
     #[test]
     fn a_work_leases_config_omits_the_continuity_server_and_keeps_the_work_server() {
         let root = fixture_root().join(format!("mcp-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
         let bridge = fixture_bridge(&root);
         let profile = fixture_profile(&root);
         let scope = root.join("scope.json");
@@ -5336,22 +5331,6 @@ exec /bin/sleep 1000
         assert!(chat["mcpServers"].get(crate::status_tools::SERVER_NAME).is_some(),
             "the front desk has no way to look at what is running");
 
-        // And the reason the omission is the enforcement rather than the desk: the desk
-        // auto-allows both of that server's tools, with nothing per-lease to discriminate on.
-        let grant = root.join("grant.json");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(&grant, json!({"version":1,"actions_allowed":true,"binding":{"entity_id":"depot",
-            "thread_id":"thread","session_id":"session","turn_id":"turn","audience":"ceo","revision":1}}).to_string()).unwrap();
-        let desk = crate::permissions::ScopedPermissions {
-            desk: std::sync::Arc::new(crate::permissions::PermissionDesk::default()),
-            scope: grant,
-        };
-        for tool in ["mcp__richos_continuity__checkpoint", "mcp__richos_continuity__inspect"] {
-            assert!(
-                matches!(desk.decide(&json!({"tool_name": tool, "input": {}})), PermissionDecision::Allow { .. }),
-                "{tool} is no longer auto-allowed; seam 1's reasoning needs re-reading"
-            );
-        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -5663,7 +5642,7 @@ exec /bin/sleep 1000
         let _ = std::fs::remove_dir_all(&chat_root);
 
         // ---- C. THE FIX, BEHAVIORALLY: the same call that failed his job now takes a turn --
-        let frame = work_init_frame(true, true, true);
+        let frame = work_init_frame(true, true);
         let (mut lease, root) =
             lease_with_production_grants("work-turn", LeaseRole::Work, &one_turn_reporting(&frame));
         let mut items = 0usize;
@@ -5717,7 +5696,7 @@ exec /bin/sleep 1000
     /// | the assignment ends | `work_host`'s `run_one` step 4 → `revoke_work_assignment` | closed | withdrawn |
     #[test]
     fn a_turn_ending_keeps_the_grant_a_background_helper_acts_under_and_a_stop_takes_it() {
-        let frame = work_init_frame(true, true, true);
+        let frame = work_init_frame(true, true);
         let (mut lease, root) = lease_with_production_grants(
             "worker-grant", LeaseRole::Work, &one_turn_reporting(&frame));
         let scope = lease.continuity.as_ref().unwrap().1.clone();
@@ -5967,7 +5946,6 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         for unreported in [
             "The desktop engine plugin did not load",
             "The desktop work tools did not load",
-            "did not enable automatic permission checks",
         ] {
             assert!(
                 !refusal.contains(unreported),
@@ -5981,7 +5959,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         // And the unreported facts are still unreported — the gate passed because it asked
         // about a reported absence, not because the fields were quietly made optimistic.
         let state = lease.client.reader_state.lock().unwrap();
-        for fact in [state.engine_plugin_loaded, state.work_tools_loaded, state.permissions_bypassed] {
+        for fact in [state.engine_plugin_loaded, state.work_tools_loaded] {
             assert_eq!(fact, InitFact::NotYetReported);
         }
         drop(state);
@@ -6001,7 +5979,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         )
     }
 
-    fn work_init_frame(plugin: bool, work_tools: bool, auto: bool) -> serde_json::Value {
+    fn work_init_frame(plugin: bool, work_tools: bool) -> serde_json::Value {
         let mut plugins = vec![json!({"name":"rich-skills","version":"1.0.0"})];
         if plugin {
             plugins.push(json!({"name": crate::engine_profile::PLUGIN_NAME, "version":"1.2.0"}));
@@ -6014,8 +5992,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
             vec!["mcp__richos_work__repositories", "mcp__richos_work__prepare",
                  "mcp__richos_work__inspect", "mcp__richos_work__integrate"]
         };
-        json!({"type":"system","subtype":"init","plugins":plugins,"tools":tools,
-               "permissionMode": if auto { "bypassPermissions" } else { "auto" }})
+        json!({"type":"system","subtype":"init","plugins":plugins,"tools":tools})
     }
 
     /// **THE POSITIVE CONTROL, AND IT IS THE HALF THAT MAKES THE FIX A MOVE RATHER THAN A
@@ -6030,15 +6007,14 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     /// only thing between that and a background job that silently runs unguarded.
     #[test]
     fn a_work_lease_whose_init_frame_omits_the_engine_plugin_still_fails_the_assignment_by_name() {
-        for (plugin, work_tools, auto, expected) in [
-            (false, true, true, Some(ENGINE_PLUGIN_ABSENT)),
-            (true, false, true, Some(WORK_TOOLS_ABSENT)),
-            (true, true, false, Some(BYPASS_PERMISSIONS_ABSENT)),
-            (true, true, true, None),
+        for (plugin, work_tools, expected) in [
+            (false, true, Some(ENGINE_PLUGIN_ABSENT)),
+            (true, false, Some(WORK_TOOLS_ABSENT)),
+            (true, true, None),
         ] {
-            let frame = work_init_frame(plugin, work_tools, auto);
+            let frame = work_init_frame(plugin, work_tools);
             let (mut lease, root) = hand_built_work_lease(
-                &format!("reported-{plugin}-{work_tools}-{auto}"),
+                &format!("reported-{plugin}-{work_tools}"),
                 &one_turn_reporting(&frame),
             );
             // Before the turn there is nothing to report, so the binding gate is silent —
@@ -6080,26 +6056,25 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     #[test]
     fn only_a_reported_absence_refuses_a_binding_and_silence_refuses_only_after_a_turn() {
         use InitFact::{No, NotYetReported, Yes};
-        let facts = |plugin, tools, auto| {
-            [(plugin, ENGINE_PLUGIN_ABSENT), (tools, WORK_TOOLS_ABSENT), (auto, BYPASS_PERMISSIONS_ABSENT)]
+        let facts = |plugin, tools| {
+            [(plugin, ENGINE_PLUGIN_ABSENT), (tools, WORK_TOOLS_ABSENT)]
         };
 
         // A fresh lease: nothing reported. The binding proceeds; the post-turn gate does not.
-        let fresh = facts(NotYetReported, NotYetReported, NotYetReported);
+        let fresh = facts(NotYetReported, NotYetReported);
         assert_eq!(work_binding_readiness_refusal(fresh), None);
         assert_eq!(work_turn_readiness_refusal(fresh), Some(ENGINE_PLUGIN_ABSENT));
 
         // A fully equipped lease: both gates silent.
-        let ready = facts(Yes, Yes, Yes);
+        let ready = facts(Yes, Yes);
         assert_eq!(work_binding_readiness_refusal(ready), None);
         assert_eq!(work_turn_readiness_refusal(ready), None);
 
         // Each reported absence refuses BOTH gates, and with its own sentence — a shared
         // sentence table is worth nothing if a fact can pick up its neighbor's words.
         for (facts, expected) in [
-            (facts(No, Yes, Yes), ENGINE_PLUGIN_ABSENT),
-            (facts(Yes, No, Yes), WORK_TOOLS_ABSENT),
-            (facts(Yes, Yes, No), BYPASS_PERMISSIONS_ABSENT),
+            (facts(No, Yes), ENGINE_PLUGIN_ABSENT),
+            (facts(Yes, No), WORK_TOOLS_ABSENT),
         ] {
             assert_eq!(work_binding_readiness_refusal(facts), Some(expected));
             assert_eq!(work_turn_readiness_refusal(facts), Some(expected));
@@ -6107,7 +6082,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
 
         // A reported absence outranks an unreported fact at the binding: the gate must not
         // fall silent just because something earlier in the list has said nothing.
-        assert_eq!(work_binding_readiness_refusal(facts(NotYetReported, No, NotYetReported)), Some(WORK_TOOLS_ABSENT));
+        assert_eq!(work_binding_readiness_refusal(facts(NotYetReported, No)), Some(WORK_TOOLS_ABSENT));
     }
 
     /// The plugin's name is written by `engine_profile.rs` into the manifest and asserted by
@@ -6119,7 +6094,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     #[test]
     fn the_engine_plugin_is_named_once_and_the_manifest_and_the_wire_check_share_it() {
         assert_eq!(crate::engine_profile::PLUGIN_NAME, "richos-app-engine");
-        let listed = work_init_frame(true, true, true);
+        let listed = work_init_frame(true, true);
         let names: Vec<&str> = listed["plugins"].as_array().unwrap().iter()
             .filter_map(|p| p["name"].as_str()).collect();
         assert!(names.contains(&crate::engine_profile::PLUGIN_NAME), "{names:?}");
@@ -6859,7 +6834,7 @@ done
 "#);
         let mut client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
         let root = fixture_root().join(format!("richos-handshake-stop-{}", uuid::Uuid::new_v4()));
-        let control = crate::steering::TurnControl::open(&root).unwrap();
+        let control = crate::steering::TurnControl::open(&root).unwrap().for_thread("thread");
         control.begin_turn(crate::steering::ActiveTurn {
             turn_id: "initial-request".into(), thread_id: "thread".into(),
             entity_id: None, started_at: None,
@@ -7014,29 +6989,6 @@ done
         assert!(text.is_empty(),"untyped fallback became a user reply");
         assert_eq!(client.prompt("An interrupted question",&mut |_|{}).unwrap(),STOP_REASON_CANCELLED);
     }
-
-    #[test]
-    fn hidden_context_denies_permission_then_visible_delivery_restores_normal_policy() {
-        let script = write_script("context-only-permissions", r#"
-read -r init
-printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
-for expected in deny allow; do
-  read -r prompt
-  printf '%s\n' '{"type":"control_request","request_id":"tool-permission","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"touch should-not-run"}}}'
-  read -r answer
-  case "$answer" in
-    *\"behavior\":\"$expected\"*) ;;
-    *) exit 9 ;;
-  esac
-  printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
-done
-"#);
-        let mut client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
-        assert_eq!(client.prompt_context_only("Only context", &mut |_| {}).unwrap(), "end_turn");
-        assert!(!client.reader_state.lock().unwrap().context_only);
-        assert_eq!(client.prompt("Actual visible request", &mut |_| {}).unwrap(), "end_turn");
-    }
-
 
     #[test]
     fn the_bookkeeping_grant_is_shut_until_his_first_words_on_a_real_turn() {
@@ -7613,7 +7565,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
+                work_scope:None,  operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();
@@ -7662,38 +7614,6 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         assert_eq!(fallback,"Lead fallback");
     }
 
-    // ---- the permission seam -----------------------------------------------------------
-
-    #[test]
-    fn the_permission_seam_allows_today_and_carries_the_agents_proposed_input() {
-        // Verbatim request from `run9-rust-driven.jsonl:17`.
-        let request = json!({
-            "subtype":"can_use_tool","tool_name":"Write","display_name":"Write",
-            "input":{"file_path":"/private/tmp/claude-501/rust-probe-out.txt","content":"RUSTOK"},
-            "description":"/private/tmp/claude-501/rust-probe-out.txt",
-            "decision_reason":"Path is outside allowed working directories",
-            "decision_reason_type":"workingDir",
-            "tool_use_id":"toolu_015USp34XWJGrGpgNY6TLvbV"});
-        let decision = decide_permission(&request);
-        assert_eq!(decision.behavior(), "allow", "ported behaviour: acp.rs:469-479 auto-approved");
-        match decision {
-            PermissionDecision::Allow { updated_input } => {
-                assert_eq!(updated_input, request["input"], "the agent's own input, unrewritten");
-            }
-            other => panic!("expected Allow, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn the_permission_seam_exists_as_a_seam_and_can_answer_no() {
-        // R2 governance is DEFERRED, not abandoned (ceo-decisions §1, §16). This asserts the
-        // seam is real: a `Deny` is representable and carries a reason, so the day Rich asks
-        // the CEO instead of allowing, only `decide_permission` changes.
-        let deny = PermissionDecision::Deny { message: "the CEO declined".into() };
-        assert_eq!(deny.behavior(), "deny");
-    }
-
-    // ---- the cancel mapping (spike caveat C1) -------------------------------------------
 
     #[test]
     fn an_aborted_turn_is_reported_as_a_cancel_on_terminal_reason_not_stop_reason() {
@@ -7846,17 +7766,17 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
     }
 
     #[test]
-    fn a_permission_request_parked_between_turns_drains_as_a_permission_record() {
+    fn a_question_control_parked_between_turns_drains_as_a_machinery_record() {
         let mut lane = BetweenTurn::default();
         lane.push(BetweenItem::Permission {
-            request: json!({"subtype":"can_use_tool","tool_name":"Bash",
-                            "description":"ls -la","tool_use_id":"toolu_Z"}),
+            request: json!({"subtype":"can_use_tool","tool_name":"mcp__richos_questions__ask",
+                            "description":"Choose the report date","tool_use_id":"toolu_Z"}),
             chosen: "allow".into(),
         });
         let drained = lane.drain("sess");
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].kind, crate::machinery::MachineryKind::PermissionRequested);
-        assert_eq!(drained[0].title, "ls -la");
+        assert_eq!(drained[0].title, "Choose the report date");
         assert_eq!(drained[0].tool_call_id.as_deref(), Some("toolu_Z"));
     }
 
@@ -8336,4 +8256,350 @@ read -r keep_alive
         assert_eq!(state.agent_tasks.task_for_tool("prepared-second").as_deref(),Some("native-second"));
     }
 
+}
+
+#[cfg(test)]
+mod input_tests {
+//! Exercise the native transport and durable Host receipts together. No real provider.
+use super::*;
+use crate::{cognition::{Cognition, CognitionError, LeaseFactory}, entity::EntityId,
+    status_tools::StatusToolScope, work_host::{SilentNotifier, WorkHost}};
+use std::{path::PathBuf, sync::atomic::AtomicU64};
+
+const PROVIDER: &str = r#"#!/usr/bin/python3
+import json,pathlib,sys
+config=json.loads(pathlib.Path('config.json').read_text())
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def started(v):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':'started'})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+if config.get('recover'):
+ while True:
+  v=read()
+  if v.get('type')=='user':
+   started(v);send({'type':'result','stop_reason':'end_turn'})
+first=read();started(first)
+send({'type':'assistant','message':{'content':[{'type':'text','text':'ORIGINAL-STARTED'}]}})
+live=[read() for _ in range(config['inputs'])]
+for v in live:send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':'queued'})
+send({'type':'result','stop_reason':'end_turn','queued_turn_count':len(live)})
+for v in live:started(v)
+output=config['output']
+if output=='text':send({'type':'assistant','message':{'content':[{'type':'text','text':'Live output'}]}})
+if output=='thinking':send({'type':'stream_event','event':{'type':'content_block_delta','delta':{'type':'thinking_delta','thinking':'considering'}}})
+if output=='worker':
+ send({'type':'assistant','parent_tool_use_id':'background-worker','message':{'content':[{'type':'tool_use','id':'worker-tool','name':'Read','input':{}}]}})
+ send({'type':'result','parent_tool_use_id':'background-worker','is_error':True,'api_error_status':429})
+# Native retries are traffic within this one input, never a reason to submit it again.
+send({'type':'system','subtype':'api_retry','attempt':1,'max_retries':10,'error_status':503})
+if config['result'].get('fixture_quit'):
+ while True:read()
+for v in live:send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':'completed'})
+send(config['result'])
+while True:read()
+"#;
+
+struct Factory {
+    root: PathBuf,
+    skills: PathBuf,
+    started: Sender<()>,
+    completed: Sender<()>,
+    scheduled: Arc<AtomicU64>,
+    observed: Option<Sender<()>>,
+}
+struct Lease { client: NativeClient, started: Sender<()>, completed: Sender<()>, scheduled: Arc<AtomicU64>, observed: Option<Sender<()>> }
+struct LiveInput { inner: Arc<dyn TurnCancel>, completed: Sender<()> }
+impl LeaseFactory for Factory {
+    fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> { unreachable!() }
+    fn spawn_work(&self, _: &crate::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+        Ok(Box::new(Lease {
+            client: NativeClient::spawn(&self.root.join("provider"), &self.root,
+                &self.skills.join("agents/rich.md"), &self.skills)?,
+            started: self.started.clone(), completed: self.completed.clone(), scheduled:self.scheduled.clone(), observed:self.observed.clone(),
+        }))
+    }
+}
+impl TurnCancel for LiveInput {
+    fn cancel(&self) -> bool { self.inner.cancel() }
+    fn shutdown(&self) { self.inner.shutdown(); }
+    fn send_input(&self, id: &str, text: &str,
+        completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>) -> Result<bool, String> {
+        let done = self.completed.clone();
+        self.inner.send_input(id, text, Box::new(move |outcome| {
+            completed(outcome);
+            let _ = done.send(());
+        }))
+    }
+}
+impl Cognition for Lease {
+    fn set_between_turn_sink(&mut self, sink: crate::cognition::BetweenTurnSink) {
+        let observed = self.observed.clone();
+        self.client.set_between_turn_sink(Arc::new(move |records| {
+            let terminal = records.iter().any(|frame|
+                frame["type"] == "result" && frame.get("parent_tool_use_id").is_none_or(Value::is_null));
+            sink(records);
+            if terminal { if let Some(observed) = &observed { observed.send(()).expect("native result observer receiver dropped"); } }
+        }));
+    }
+    fn session_id(&self) -> &str { self.client.session_id() }
+    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+    fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> {
+        Some(Arc::new(LiveInput { inner: self.client.cancel_handle(), completed: self.completed.clone() }))
+    }
+    fn prompt(&mut self, input: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        self.scheduled.fetch_add(1, Ordering::SeqCst);
+        let result = self.client.prompt(input, &mut |item| {
+            let original = matches!(&item, TurnItem::Text { text, .. } if text.contains("ORIGINAL-STARTED"));
+            on(item);
+            if original { let _ = self.started.send(()); }
+        });
+        let _ = self.completed.send(());
+        Ok(result?)
+    }
+}
+
+#[test]
+fn live_native_results_retain_failed_input_report_once_and_recover_once() {
+    for inputs in [1, 2] {
+        for output in ["none", "text", "thinking", "worker"] {
+            for result in [json!({"type":"result","stop_reason":"end_turn"}),
+                json!({"type":"result","is_error":true,"errors":["API Error: 503"]}),
+                json!({"type":"result","stop_reason":"max_tokens"}), json!({"fixture_quit":true})] {
+                let success = result["stop_reason"] == "end_turn";
+                let quit = result["fixture_quit"] == true;
+                let root = std::env::temp_dir().join(format!("richos-native-input-{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir_all(&root).unwrap();
+                let script = root.join("provider");
+                std::fs::write(&script, PROVIDER).unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let skills = crate::skills::ensure_rendered(&root.join("skills"),
+                    &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+                std::fs::write(root.join("config.json"), json!({"inputs":inputs,"output":output,"result":result}).to_string()).unwrap();
+                let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+                let thread = ledger.create_thread("Native input test", &EntityId::parse("company").unwrap()).unwrap();
+                let binding = ledger.thread_binding(&thread).unwrap();
+                let scope = StatusToolScope { version:1, state_root:root.join("state"), entity_id:"company".into(), thread_id:thread };
+                let status = root.join("rich.json");
+                crate::session_tools::bind(&status, &scope, "rich-session", "rich", None).unwrap();
+                let (began, started) = channel();
+                let (done, completed) = channel();
+                let scheduled = Arc::new(AtomicU64::new(0));
+                let host = WorkHost::new(&scope.state_root, Box::new(Factory {
+                    root:root.clone(), skills:skills.clone(), started:began.clone(), completed:done.clone(), scheduled:scheduled.clone(), observed:None,
+                }), Arc::new(SilentNotifier));
+                crate::session_tools::send(&status, &scope, json!({"text":"Original input"})).unwrap();
+                host.wake_messages(&binding);
+                // load-bound: hang guard only; the native text marker proves entry.
+                started.recv_timeout(Duration::from_secs(10)).expect("original did not enter");
+                for n in 0..inputs {
+                    crate::session_tools::send(&status, &scope, json!({"text":format!("Live correction {n}")})).unwrap();
+                }
+                host.wake_messages(&binding);
+                if quit {
+                    // load-bound: hang guard only; the original result proves the live input has been read.
+                    completed.recv_timeout(Duration::from_secs(10)).expect("original result absent before Quit");
+                    assert!(host.wait_for_completed(1, Duration::from_secs(10)));
+                    host.shutdown();
+                }
+                for _ in 0..(inputs + usize::from(!quit)) {
+                    // load-bound: hang guard only; callback completion proves the durable outcome was written.
+                    completed.recv_timeout(Duration::from_secs(10)).expect("live result did not complete");
+                }
+                assert!(host.wait_for_completed(scheduled.load(Ordering::SeqCst), Duration::from_secs(10)), "original result did not complete");
+                // Repeated desktop notifications cannot submit a received input again.
+                host.wake_messages(&binding);
+                let pending = crate::session_tools::pending(&scope, "stu").unwrap();
+                assert_eq!(pending.is_none(), success, "{inputs}/{output}/{result}: incorrect durable receipt");
+                let fact = crate::session_tools::pending(&scope, "rich").unwrap();
+                assert_eq!(fact.is_none(), success || quit, "{inputs}/{output}/{result}: missing or unwanted failure fact");
+                if let Some((message, through)) = fact {
+                    assert_eq!(message.from, "work-status");
+                    assert_eq!(serde_json::from_str::<Value>(&message.text).unwrap()["event"], "upstream_turn");
+                    crate::session_tools::acknowledge(&scope, "rich", through).unwrap();
+                    assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "folded turn reported twice");
+                }
+                host.shutdown();
+                let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+                assert_eq!(sent.lines().count(), inputs + 1, "same-session duplicate: {sent}");
+                assert_eq!(sent.lines().filter(|line| line.contains("Original input")).count(), 1);
+                for n in 0..inputs { assert_eq!(sent.lines().filter(|line| line.contains(&format!("Live correction {n}"))).count(), 1); }
+                if !success {
+                    assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_some(), "Quit discarded unfinished input");
+                    std::fs::write(root.join("config.json"), r#"{"recover":true}"#).unwrap();
+                    let scheduled = Arc::new(AtomicU64::new(0));
+                    let recovered = WorkHost::new(&scope.state_root, Box::new(Factory {
+                        root:root.clone(), skills, started:began, completed:done, scheduled:scheduled.clone(), observed:None,
+                    }), Arc::new(SilentNotifier));
+                    recovered.wake_messages(&binding);
+                    for _ in 0..inputs {
+                        // load-bound: hang guard only; all native outcomes must arrive before checking recovery receipts.
+                        completed.recv_timeout(Duration::from_secs(10)).expect("recovery result absent");
+                    }
+                    assert!(recovered.wait_for_completed(scheduled.load(Ordering::SeqCst), Duration::from_secs(10)), "restart did not finish inputs");
+                    recovered.shutdown();
+                    assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_none());
+                    assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "successful recovery reported failure");
+                    let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+                    assert_eq!(sent.lines().count(), inputs * 2 + 1);
+                    for n in 0..inputs { assert_eq!(sent.lines().filter(|line| line.contains(&format!("Live correction {n}"))).count(), 2); }
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_worker_limit_does_not_fail_the_successful_native_prompt() {
+    assert_eq!(super::native_driver_tests::one_limited_turn("worker-limit-is-not-lead-limit", r#"
+printf '%s\n' '{"type":"result","parent_tool_use_id":"worker","is_error":true,"api_error_status":429}'
+printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
+"#).unwrap(), "end_turn");
+}
+
+#[test]
+fn queued_context_restoration_does_not_close_the_active_live_inputs_questions() {
+    let root = std::env::temp_dir().join(format!("richos-context-input-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let script = root.join("provider");
+    std::fs::write(&script, r#"#!/usr/bin/python3
+import json,sys
+def read():return json.loads(sys.stdin.readline())
+def send(v):print(json.dumps(v),flush=True)
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+def question(key,want):
+ send({'type':'control_request','request_id':key,'request':{'subtype':'can_use_tool','tool_name':'mcp__richos_questions__ask','input':{}}})
+ actual=read()['response']['response']['behavior']
+ assert actual==want,(key,actual,want)
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started');send({'type':'assistant','message':{'content':[{'type':'text','text':'entered'}]}})
+live=read();phase(live,'queued');send({'type':'result','stop_reason':'end_turn','queued_turn_count':1});phase(live,'started')
+hidden=read();phase(hidden,'queued')
+question('active-live','allow');send({'type':'result','stop_reason':'end_turn','queued_turn_count':1})
+phase(hidden,'started');question('hidden-context','deny');send({'type':'result','stop_reason':'end_turn'})
+while sys.stdin.readline():pass
+"#).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let skills = crate::skills::ensure_rendered(&root.join("skills"),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+    let client = NativeClient::spawn(&script, &root, &skills.join("agents/rich.md"), &skills).unwrap();
+    let input = client.cancel_handle();
+    let (start, started) = channel();
+    let active = std::thread::spawn(move || {
+        assert_eq!(client.prompt("Original", &mut |item| {
+            if matches!(item, TurnItem::Text { .. }) { let _ = start.send(()); }
+        }).unwrap(), "end_turn");
+        client
+    });
+    // load-bound: hang guard only; the marker proves the original turn entered.
+    started.recv_timeout(Duration::from_secs(10)).expect("original did not enter");
+    let (end, ended) = channel();
+    input.send_input(&uuid::Uuid::new_v4().to_string(), "Live work", Box::new(move |outcome| {
+        end.send(outcome.result).unwrap();
+    })).unwrap();
+    let mut client = active.join().unwrap();
+    assert_eq!(client.prompt_context_only("Restore context", &mut |_| {}).unwrap(), "end_turn");
+    // load-bound: hang guard only; the result proves the live turn survived the queued prime.
+    assert_eq!(ended.recv_timeout(Duration::from_secs(10)).expect("live result absent").unwrap(), "end_turn");
+    drop(client);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn worker_triggered_turns_report_once_even_when_a_new_app_input_is_queued() {
+    for queued in [false, true] {
+        let root = std::env::temp_dir().join(format!("richos-worker-turn-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("provider");
+        std::fs::write(&script, r#"#!/usr/bin/python3
+import json,pathlib,sys
+queued=json.loads(pathlib.Path('config.json').read_text())['queued']
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started')
+send({'type':'assistant','message':{'content':[{'type':'text','text':'ORIGINAL-STARTED'}]}})
+if queued:
+ live=read();phase(live,'queued')
+send({'type':'result','stop_reason':'end_turn'})
+send({'type':'system','subtype':'task_notification','task_id':'worker-one','status':'completed'})
+send({'type':'result','parent_tool_use_id':'worker-one','is_error':True,'api_error_status':429})
+send({'type':'result','stop_reason':'end_turn'})
+send({'type':'stream_event','event':{'type':'content_block_delta','delta':{'type':'thinking_delta','thinking':'landing worker output'}}})
+send({'type':'system','subtype':'api_retry','attempt':1,'error_status':503})
+send({'type':'result','is_error':True,'errors':['API Error: 503']})
+send({'type':'result','stop_reason':'max_tokens'})
+send({'type':'result','stop_reason':'cancelled'}) # dialect-exempt: native stop_reason wire value
+if queued:
+ phase(live,'started');send({'type':'result','stop_reason':'end_turn'})
+while True:read()
+"#).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("config.json"), json!({"queued":queued}).to_string()).unwrap();
+        let skills = crate::skills::ensure_rendered(&root.join("skills"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let thread = ledger.create_thread("Worker continuation", &EntityId::parse("company").unwrap()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let scope = StatusToolScope {version:1,state_root:root.join("state"),entity_id:"company".into(),thread_id:thread};
+        let status = root.join("rich.json");
+        crate::session_tools::bind(&status,&scope,"rich-session","rich",None).unwrap();
+        let (began,started) = channel();
+        let (done,completed) = channel();
+        let (observed,observations) = channel();
+        let host = WorkHost::new(&scope.state_root,Box::new(Factory {
+            root:root.clone(),skills,started:began,completed:done,scheduled:Arc::new(AtomicU64::new(0)),observed:Some(observed),
+        }),Arc::new(SilentNotifier));
+        crate::session_tools::send(&status,&scope,json!({"text":"Original input"})).unwrap();
+        host.wake_messages(&binding);
+        // load-bound: hang guard only; native output proves the initial turn entered.
+        started.recv_timeout(Duration::from_secs(10)).expect("initial turn absent");
+        if queued {
+            crate::session_tools::send(&status,&scope,json!({"text":"Queued correction"})).unwrap();
+            host.wake_messages(&binding);
+        }
+        for _ in 0..4 {
+            // load-bound: hang guard only; drained native results prove status observations have completed.
+            observations.recv_timeout(Duration::from_secs(10)).expect("worker continuation result was not observed");
+        }
+        for _ in 0..(1+usize::from(queued)) {
+            // load-bound: hang guard only; native outcomes and durable receipts, not elapsed time, are the verdict.
+            completed.recv_timeout(Duration::from_secs(10)).expect("app input result absent");
+        }
+        assert!(host.wait_for_completed(1,Duration::from_secs(10)));
+        let mut facts = Vec::new();
+        while let Some((message,through)) = crate::session_tools::pending(&scope,"rich").unwrap() {
+            assert_eq!(message.from,"work-status");
+            let fact:Value = serde_json::from_str(&message.text).unwrap();
+            assert_eq!(fact["event"],"upstream_turn");assert!(fact["input_id"].is_null());
+            facts.push(fact);
+            crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
+        }
+        assert_eq!(facts.len(),2,"missing or duplicate terminal failure: {facts:?}");
+        assert!(facts[0]["error"].as_str().unwrap().contains("503"));
+        assert_eq!(facts[1]["stop_reason"],"max_tokens");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        host.shutdown();
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"Quit produced an unwanted reply");
+        let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+        assert_eq!(sent.lines().count(),1+usize::from(queued),"worker results caused a new app send");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
 }

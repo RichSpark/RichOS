@@ -25,7 +25,12 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        point twice is a click, the way a hand clicks; `ax click --at` is
                                        System Events' accessibility press at a point and does not focus
                                        a text box (candidate 50 rewalk, run K)
-  relaunch [env[]]                     relaunch.py VM [--env KEY=VALUE ...]: the recorded app stopped by its captured PID and
+  openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
+                                       PATTERN is drawn, then open it in the guest with APP (default
+                                       Safari): the Mac's pairing address handed to the guest's phone
+                                       page, as adopt-walk.py does. No such address in time (default
+                                       30 s) is exit 1 with a sentence, never a pass
+  relaunch [env[]]                    relaunch.py VM [--env KEY=VALUE ...]: the recorded app stopped by its captured PID and
                                        started again with its fixture environment (a choice that must
                                        survive a relaunch is checked after this step)
 
@@ -39,6 +44,7 @@ step lists are checked by steps-walk-data.test.sh.
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -103,6 +109,8 @@ def step_run(vm, step, out):
         return run([str(HERE / 'relaunch.py'), vm] + extra, timeout=90)
     if op == 'pointer':
         return run([str(HERE / 'pointer-drag.sh'), vm] + step['points'] + (['--right'] if step.get('right') else []))
+    if op == 'openlink':
+        return open_link(vm, step)
     if op == 'wait':
         time.sleep(step['seconds'])
         return 0, ''
@@ -122,15 +130,33 @@ def step_run(vm, step, out):
     return 2, f'unknown op {op!r}'
 
 
+def open_link(vm, step):
+    """The first https:// address in the app window's tree that contains step['pattern'], opened
+    in the guest with step.get('app', 'Safari'). The tree is read again on each try, so an address
+    drawn a moment later is still found; none drawn in time fails the step."""
+    app = step.get('app', 'Safari')
+    deadline = time.monotonic() + step.get('seconds', 30)
+    while True:
+        # The dialog alone: a whole-window read of a busy app missed its 20 s deadline (nightly 60, run E).
+        code, text = run([str(HERE / 'ax.sh'), vm, 'tree', '--in', 'dialog', '--max', '200'])
+        found = [u for u in re.findall(r'https://[^\s\'"<>]+', text) if step['pattern'] in u] if code == 0 else []
+        if found:
+            code, said = run([str(HERE / 'guest.sh'), vm, 'open', '-a', app, found[0]])
+            return code, f'opened {found[0]} in {app}' + (f': {said}' if code else '')
+        if time.monotonic() >= deadline:
+            return 1, f"no https:// address containing {step['pattern']!r} was drawn; last: {text[:300]}"
+        time.sleep(1)
+
+
 # op -> {argument: type} every step of that op must carry; OPTIONAL ones are typed when present.
 REQUIRED = {
     'tree': {'name': str}, 'shot': {'name': str}, 'ax': {'args': list}, 'guest': {'command': str},
     'keys': {'text': str}, 'push': {'src': str, 'dest': str}, 'pull': {'src': str, 'dest': str}, 'handfile': {'mode': str, 'path': str},
     'wait': {'seconds': (int, float)}, 'until': {'args': list, 'contains': str}, 'relaunch': {},
-    'pointer': {'points': list},
+    'pointer': {'points': list}, 'openlink': {'pattern': str},
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool},
-            'relaunch': {'env': list},
+            'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
 

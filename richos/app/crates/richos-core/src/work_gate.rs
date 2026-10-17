@@ -26,7 +26,7 @@
 //!
 //! # THE THREE SOURCES, AND WHY EACH IS THE ONE IT IS
 //!
-//! **1. The active turn.** `TurnControl::active_turn()` — a MIRROR of the spine's
+//! **1. Any active turn.** `TurnControl::has_active_turns()` — a MIRROR of the spine's
 //! `turn_in_progress`, written at `spine.rs:1475` beside `mark_turn_started` and cleared at
 //! `spine.rs:1609` beside the terminal event. It is readable WITHOUT the spine's mutex,
 //! which is the only reason this is possible at all: `send_message` holds that mutex for the
@@ -259,6 +259,14 @@ pub fn workers(view: &WorkerStatusView) -> (Liveness, Option<String>) {
             Some("RichOS could not read part of its record of which workers are running.".into()),
         ),
     }
+}
+
+/// Apply the existing worker reading to every conversation session.
+/// An empty list retains the existing, explicit no-session observation.
+pub fn all_workers(views:&[WorkerStatusView])->(Liveness,Option<String>) {
+    views.iter().map(workers).reduce(worst).unwrap_or_else(||workers(&WorkerStatusView {
+        unattributed:Some(Unattributed::NoSession),..Default::default()
+    }))
 }
 
 /// What the work host's own records say about background work — counted by the shell,
@@ -609,6 +617,16 @@ mod tests {
         let v = decide(&WorkSources { workers: l, worker_gap: said, ..WorkSources::all_clear() });
         assert!(v.busy);
         assert_eq!(v.reason.as_deref(), Some("2 workers are still running."));
+    }
+
+    #[test]
+    fn all_conversation_workers_are_checked_even_when_another_session_is_quiet() {
+        assert_eq!(all_workers(&[view(0,0),view(2,0)]).0,Liveness::Busy);
+        assert_eq!(all_workers(&[view(2,0),view(0,0)]).0,Liveness::Busy);
+        let unknown=WorkerStatusView{unattributed:Some(Unattributed::AppEvidenceUnavailable),..Default::default()};
+        assert_eq!(all_workers(&[view(0,0),unknown]).0,Liveness::Unknown);
+        assert_eq!(all_workers(&[view(0,0),view(0,0)]),(Liveness::Clear,None));
+        assert_eq!(all_workers(&[]),workers(&WorkerStatusView{unattributed:Some(Unattributed::NoSession),..Default::default()}));
     }
 
     #[test]

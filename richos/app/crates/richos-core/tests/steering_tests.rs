@@ -19,7 +19,7 @@ use richos_core::entity::EntityId;
 use richos_core::ledger::{Ledger, Source, TurnState};
 use richos_core::live::{LiveEvent, LiveObserver};
 use richos_core::spine::Spine;
-use richos_core::steering::{StopOutcome, TurnCancel, TurnControl};
+use richos_core::steering::{StopOutcome, TurnCancel, TurnControl, ConversationControl};
 use richos_core::timeline::{Timeline, TimelineItem, ViewMode, WorkState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -228,7 +228,7 @@ const STOPPABLE_TURN_CHUNKS: usize = (HANG_GUARD.as_millis() / 20) as usize;
 
 /// A spine wired the way the shell wires it: durable ledger, durable intake, a lease whose
 /// turn takes long enough to be interrupted.
-fn running_spine(tag: &str, chunks: usize) -> (Arc<Mutex<Spine>>, TurnControl, RecordingLive, String) {
+fn running_spine(tag: &str, chunks: usize) -> (Arc<Mutex<Spine>>, ConversationControl, RecordingLive, String) {
     let text: Vec<String> = (0..chunks).map(|i| format!("chunk {i} ")).collect();
     let lease = CancellableMockCognition::new(
         "sess-cancellable",
@@ -238,7 +238,7 @@ fn running_spine(tag: &str, chunks: usize) -> (Arc<Mutex<Spine>>, TurnControl, R
     spine_with_lease(tag, Box::new(lease))
 }
 
-fn spine_with_lease(tag: &str, lease: Box<dyn Cognition>) -> (Arc<Mutex<Spine>>, TurnControl, RecordingLive, String) {
+fn spine_with_lease(tag: &str, lease: Box<dyn Cognition>) -> (Arc<Mutex<Spine>>, ConversationControl, RecordingLive, String) {
     let ledger_path = tmp_path(&format!("{tag}-ledger")).with_extension("jsonl");
     let intake_path = tmp_path(&format!("{tag}-intake")).with_extension("jsonl");
     let mut spine = support::spine(Ledger::open(&ledger_path).unwrap());
@@ -247,7 +247,7 @@ fn spine_with_lease(tag: &str, lease: Box<dyn Cognition>) -> (Arc<Mutex<Spine>>,
     let thread = spine.create_thread("stop me", &femcboost()).unwrap();
     spine.switch_thread(&thread).unwrap();
     spine.attach_lease(lease);
-    let control = TurnControl::open(&intake_path).unwrap();
+    let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
     spine.set_turn_control(control.clone());
     (Arc::new(Mutex::new(spine)), control, live, thread)
 }
@@ -458,7 +458,7 @@ fn a_turn_the_ceo_stopped_is_never_crash_replayed_even_when_the_lease_dies_with_
     // A factory IS attached, so recovery is fully available — and must still not fire.
     let factory = MockLeaseFactory::new(vec!["I have redone the thing you stopped"]);
     spine.set_lease_factory(Box::new(factory));
-    let control = TurnControl::open(&intake_path).unwrap();
+    let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
     spine.set_turn_control(control.clone());
 
     let spine = Arc::new(Mutex::new(spine));
@@ -500,7 +500,7 @@ fn a_stop_request_that_outlived_the_process_is_applied_at_startup_not_replayed()
         turn_id = ledger.record_prompt_received(&binding, "long job", Source::Text).unwrap();
         ledger.mark_turn_started(&turn_id, "sess-dead").unwrap();
 
-        let control = TurnControl::open(&intake_path).unwrap();
+        let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
         control.begin_turn(richos_core::steering::ActiveTurn {
             turn_id: turn_id.clone(),
             thread_id: thread.clone(),
@@ -543,7 +543,7 @@ fn a_crash_between_the_ledger_write_and_the_drain_marker_files_the_message_once_
         thread = ledger.create_thread("dedupe", &femcboost()).unwrap();
         let binding = ledger.thread_binding(&thread).unwrap();
 
-        let control = TurnControl::open(&intake_path).unwrap();
+        let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
         control.begin_turn(richos_core::steering::ActiveTurn {
             turn_id: "turn_running".into(),
             thread_id: thread.clone(),
@@ -560,7 +560,7 @@ fn a_crash_between_the_ledger_write_and_the_drain_marker_files_the_message_once_
     }
 
     let mut spine = support::spine(Ledger::open(&ledger_path).unwrap());
-    let control = TurnControl::open(&intake_path).unwrap();
+    let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
     assert_eq!(control.pending_intake().len(), 1, "the record is still undrained, as it must be");
     spine.set_turn_control(control.clone());
     spine.attach_lease(Box::new(richos_core::cognition::MockCognition::new("sess-after", vec!["on it"])));
@@ -674,7 +674,7 @@ fn a_turn_that_completed_is_never_rendered_as_one_the_ceo_stopped() {
     let running = Arc::clone(&lease.running);
     let stop_registered = Arc::clone(&lease.stop_registered);
     spine.attach_lease(Box::new(lease));
-    let control = TurnControl::open(&intake_path).unwrap();
+    let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
     spine.set_turn_control(control.clone());
 
     let spine = Arc::new(Mutex::new(spine));
@@ -752,7 +752,7 @@ fn the_stop_request_is_still_recorded_as_a_fact_that_did_not_land() {
         let running = Arc::clone(&lease.running);
         let stop_registered = Arc::clone(&lease.stop_registered);
         spine.attach_lease(Box::new(lease));
-        let control = TurnControl::open(&intake_path).unwrap();
+        let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
         spine.set_turn_control(control.clone());
 
         let spine = Arc::new(Mutex::new(spine));

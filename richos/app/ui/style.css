@@ -1939,9 +1939,6 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
      .assignment-title    --ink       on --card   12.06:1 dark   18.07:1 light  (needs 4.5:1)
      assignment detail    --ink-soft  on --card    5.78:1 dark    6.36:1 light  (needs 4.5:1)
      .assignment-stop     --ink-soft  on --card    5.78:1 dark    6.36:1 light  (needs 4.5:1)
-     .assignment-asked    --ink-soft  on --card    5.78:1 dark    6.36:1 light  (needs 4.5:1)
-     .assignment-approve  --ink-soft  on --card    5.78:1 dark    6.36:1 light  (needs 4.5:1)
-     .assignment-decline  --ink-soft  on --card    5.78:1 dark    6.36:1 light  (needs 4.5:1)
 
    `--ink-soft` is an alpha color — rgba(223,228,238,0.64) over #182440, and
    rgba(12,19,34,0.68) over #fdfcf8 — so it was composited to #979FAF and #595E66 before
@@ -1964,21 +1961,6 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
 }
 
 .assignment-stop {
-  font-size: 1rem;
-  margin-top: 8px;
-}
-
-/* HIS DECISION, where the work is already visible (spec §5.2, §7.8). Same size and same
-   colors as the stop control beside it: approving the step that changes his repository is
-   not a chore either. */
-.assignment-decisions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.assignment-approve,
-.assignment-decline {
   font-size: 1rem;
   margin-top: 8px;
 }

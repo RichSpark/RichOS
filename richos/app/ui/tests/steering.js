@@ -273,12 +273,7 @@ async function main() {
         await startTurn(p);
         await p.evaluate(() => {
           window.__previousModel = window.__RICHOS_TIMELINE__();
-          window.__stub.pending_permission = {
-            id: "pending-other-conversation", binding: {entity_id: window.__previousModel.entityId},
-            tool: "Bash", description: "An action in the original conversation", input: {command: "true"},
-          };
         });
-        await p.waitForSelector("#permission-sheet:not([hidden])");
         const group = p.locator("section.nav-group").filter({has: p.locator('.nav-thread[data-thread-id="acme"]')});
         await group.locator(newThread ? ".nav-group-add" : ".nav-group-label").click();
         await p.evaluate(() => { window.__calls = []; });
@@ -295,15 +290,15 @@ async function main() {
           original: window.__previousModel.threadId,
           current: window.__RICHOS_TIMELINE__().threadId,
           pending: window.__previousModel.turns.get("turn_live_1").live,
-          answers: window.__calls.filter(c => c.cmd === "answer_permission" || c.cmd === "stop_turn"),
+          answers: window.__calls.filter(c => c.cmd === "stop_turn"),
           sent: window.__calls.find(c => c.cmd === "send_message").args.text,
         }));
         assert(state.current !== state.original, "send kept the previous conversation binding");
         assertEqual(state.sent, "An independent conversation");
         assertEqual(state.pending, true, "opening a new conversation ended the pending turn");
-        assertEqual(state.answers, [], "navigation answered permission or stopped work");
+        assertEqual(state.answers, [], "navigation stopped work");
         assertEqual(p.__errors, [], "renderer errors");
-        return "independent send with the original permission still pending";
+        return "independent send with the original turn still pending";
       } finally { await p.close(); }
     });
   }

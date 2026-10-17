@@ -252,7 +252,6 @@ its own, because it is the same family, the same fence and the same gate.
 | `rich://thread-summary-updated` | **LIVE** | `{…fence, title, messageCount, lastActivity, status, visibility, at}` |
 | `rich://worker-upserted` | **LIVE** (2026-08-29) | one timeline `worker_activity` record + `at` (below) |
 | `rich://plan-updated` | **DEFERRED** | `plan` updates are retained as untyped machinery; their entries live **only** in the evictable Tier-B raw payload, so a plan projected from them would silently empty out after the retention window. |
-| `rich://approval-requested` | **DEFERRED** | Nothing in this runtime asks the CEO to approve anything. The permission requests that do happen are auto-approved by `native::decide_permission` and recorded as a fact — they arrive as `activity-upserted` with `activityType: "approval"`, `state: "completed"`: a thing that happened, not a decision awaiting you. |
 | `rich://approval-resolved` | **DEFERRED** | Same. |
 | `rich://artifact-upserted` | **DEFERRED** | Checked, not assumed: nothing in the ledger, the journal or machinery records an output as a deliverable. Artifacts and source provenance are Phase 5. |
 

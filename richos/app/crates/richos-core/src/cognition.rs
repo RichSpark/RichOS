@@ -31,50 +31,20 @@ pub enum CognitionError {
 /// `NativeCognition::start`; tests inject a `MockLeaseFactory`. This is what makes the
 /// swappable-lease design real: the Spine can rotate WITHOUT knowing how a lease is
 /// actually constructed.
-pub trait LeaseFactory: Send {
+pub trait LeaseFactory: Send + Sync {
     /// Spawn + initialize a fresh, un-primed lease. Fallible — e.g. the `claude` binary
     /// is missing, or Claude isn't signed in. A failure here means rotation/recovery
     /// cannot proceed and must surface honestly rather than silently keep the dead lease.
     fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError>;
 
     /// The host fixes the company/thread before the provider or its hooks start.
-    fn spawn_scoped(&self, _binding: &crate::entity::ThreadBinding, control: &crate::steering::TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_scoped(&self, _binding: &crate::entity::ThreadBinding, control: &crate::steering::ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_cancellable(control)
     }
 
     /// Stop may be recorded before a child has completed its initialize handshake.
-    fn spawn_cancellable(&self, _control: &crate::steering::TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_cancellable(&self, _control: &crate::steering::ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn()
-    }
-
-    /// **A SECOND HANDLE TO THE SAME CONFIGURATION, so a caller can spawn WITHOUT holding
-    /// the spine's mutex.** `None` — the default — means it cannot be duplicated, and the
-    /// caller then spawns under the lock exactly as it always did.
-    ///
-    /// # Why this exists, in one measurement
-    ///
-    /// `Spine::ready_a_spare_front_desk` spawns a child and spends a priming turn on it. Both
-    /// are seconds long, and until 2026-09-19 both ran with the spine's mutex held, because
-    /// the factory lives inside the `Spine` and could not be reached from outside it. On the
-    /// real window that cost the CEO his whole wait: `create_thread_in` hands the spare-priming
-    /// thread the lock microseconds before the window issues eight more bridge calls, and every
-    /// one of them queued behind it. Measured on a debug build on 2026-09-19 — *"a window
-    /// command waited 18314 ms for the spine"*, with the turn's own header starting its clock
-    /// 18.6 s after the keystroke; on the shipped candidate the same shape is Ray's 5378 ms
-    /// spare and ~6 s of pre-turn overhead
-    /// (`docs/verification/2026-09-19-nightly-1.2.0-nightly.20260919.1-mac-and-android-rewalk-audit.md`
-    /// §2).
-    ///
-    /// **It is a duplicate, not a clone of a lease.** Nothing here spawns; the implementor
-    /// returns another handle onto the same paths, the same `Arc`s and the same permission
-    /// desk, so the child this produces is the child the locked road would have produced.
-    ///
-    /// **The default is `None` on purpose.** A factory that cannot honestly duplicate itself —
-    /// a test double holding a queue of scripted replies, say — must not silently produce a
-    /// second one with a different queue. Returning `None` keeps today's behavior, which is
-    /// correct and merely slower, and slowness under a mock is nobody's wait.
-    fn duplicate(&self) -> Option<Box<dyn LeaseFactory>> {
-        None
     }
 
     /// **Fill-first** (`claude_accounts.rs`): the quota service that knows the accounts, the
@@ -240,6 +210,9 @@ pub struct CommandEnded {
     pub during_a_turn_of_ours: bool,
 }
 
+/// A consumer of the existing between-turn lane before presentation normalization.
+pub type BetweenTurnSink = Arc<dyn Fn(Vec<serde_json::Value>) + Send + Sync>;
+
 /// A disposable compute lease. One implementation per backing session.
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
@@ -384,6 +357,11 @@ pub trait Cognition: Send {
     fn drain_between_turn(&mut self) -> Vec<MachineryRecord> {
         Vec::new()
     }
+
+    /// Deliver the existing between-turn lane without waiting for another prompt.
+    /// Native Stu uses this to report turns started by its own workers as well.
+    fn set_between_turn_sink(&mut self, _sink: BetweenTurnSink) {}
+
 
     /// Bind this lease's ECS seat for ONE background assignment and write its tool scope.
     ///
@@ -640,7 +618,7 @@ impl LeaseFactory for MockLeaseFactory {
     /// Records the binding and then spawns exactly as the un-scoped path does — the real
     /// factory's own shape (`EngineLeaseFactory::spawn_scoped` is `spawn_chat` with the
     /// binding), so nothing about the lease differs and only the observation is added.
-    fn spawn_scoped(&self, binding: &crate::entity::ThreadBinding, control: &crate::steering::TurnControl)
+    fn spawn_scoped(&self, binding: &crate::entity::ThreadBinding, control: &crate::steering::ConversationControl)
         -> Result<Box<dyn Cognition>, CognitionError> {
         self.scoped_to.lock().unwrap()
             .push((binding.entity_id().to_string(), binding.thread_id().to_string()));

@@ -144,13 +144,13 @@ outage.js               @shell richos/app/ui/timeline.js richos/app/src-tauri/sr
 realbytes.js            @shell richos/app/ui/timeline.js richos/app/src-tauri/src/ richos/app/src-tauri/examples/timeline_payload.rs richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock richos/app/crates/
 restart-scope.js        @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 scale.js                @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
+escape.js               @shell @home @splash
 steering.js             @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 techy.js                @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/machinery-payload.json richos/app/src-tauri/src/machinery_view.rs richos/app/src-tauri/src/main.rs
 workers.js              @shell richos/app/ui/timeline.js
 
 # ---- the home screen and the window's chrome ---------------------------------------------
 chrome-align.js         @shell @home richos/app/ui/settings-button.js richos/app/ui/splash.css
-escape.js               @shell @home @splash richos/app/ui/permissions.js
 front-door.js           @shell @home
 home-fit.js             @shell @home
 home-team.js            @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
@@ -163,7 +163,6 @@ speckled-ground.js      @shell @home @splash richos/app/ui/speckle.js richos/app
 # ---- one screen each -----------------------------------------------------------------------
 background-work.js      @shell richos/app/ui/work-summary.js richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
 no-home-network.js      @shell @phone richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/phone/ richos/web/web-app/
-permissions.js          @shell richos/app/ui/permissions.js
 questions.js            @shell richos/app/ui/questions.js richos/app/ui/timeline.js
 phone.js                @shell @phone richos/app/ui/mock.js richos/app/src-tauri/src/phone/mod.rs richos/tools/phone-probe/lib/qr.js
 quit-question.js        @shell richos/app/ui/quit-question.js

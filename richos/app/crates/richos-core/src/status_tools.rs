@@ -74,7 +74,7 @@ pub fn tools() -> Value {
           "inputSchema":{"type":"object","required":["session_id"],"properties":{"session_id":{"type":"string"},"worker":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":131072}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
         ,{"name":"send","description":"Communicate corrections, findings or reports to the other top-level agent. Use delegate to hand a new execution request to Stu. Delivery does not require an assignment and does not wait for the recipient. The sender and recipient are fixed by the host.",
           "inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}}
-        ,{"name":"delegate","description":"Hand this turn's original user request and your context to Stu for execution. Saves once per original user request, including retries and restart. If already_saved is true, Stu already owns it; use send for additional findings or corrections. This does not create an operational assignment. Only Rich can hand work to Stu.",
+        ,{"name":"delegate","description":"Hand this turn's original user request and your context to Stu for execution. Saves once per original user request, including retries and restart. If already_saved is true, Stu already owns it; use send for additional findings or corrections. Returns the existing operational job reference saved with the handoff. Only Rich can hand work to Stu.",
           "inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}}
     ]})
 }
@@ -86,7 +86,7 @@ fn row(item: &Assignment) -> Value {
         .iter()
         .map(|notice| json!({"say": notice.text, "already_told_him": notice.delivered_at_ms.is_some()}))
         .collect();
-    json!({
+    let mut facts=json!({
         "assignment_id": item.id,
         "obligation_id": item.obligation_id,
         "instruction_ledger_ref": item.instruction_ledger_ref,
@@ -103,13 +103,18 @@ fn row(item: &Assignment) -> Value {
         // screen and deliberately does not rewrite this — the record keeps the estimate,
         // which is the only thing that can be compared against what actually happened.
         "kind": item.kind.as_str(),
-        "state": item.state.as_str(),
+        "state": item.reported_state().unwrap_or(AssignmentState::Interrupted).as_str(),
         "detail": item.detail,
         "asked_for_at_ms": item.registered_at_ms,
         "last_moved_at_ms": item.updated_at_ms,
         "user_stop_requested_at_ms": item.user_stop_requested_at_ms,
         "notices": notices,
-    })
+    });
+    if item.reported_state().is_none() {
+        facts.as_object_mut().unwrap().remove("detail");
+        facts["previous_record"]=json!({"state":item.state,"detail":item.detail});
+    }
+    facts
 }
 
 fn section(rows: &[&Assignment]) -> (Vec<Value>, usize) {
@@ -147,46 +152,22 @@ pub fn call(
     let mut waiting_for_screen: Vec<&Assignment> = Vec::new();
     let mut waiting_for_quota: Vec<&Assignment> = Vec::new();
     let mut finished: Vec<&Assignment> = Vec::new();
+    let mut unreported:Vec<&Assignment>=Vec::new();
     for item in &items {
-        match item.state {
-            // **A SECTION OF ITS OWN, for the same reason `starting` is one.** The CEO's
-            // ruling §56 work is waiting on the SCREEN and not on him, so it belongs under
-            // neither of the two headings that already exist: `waiting_for_you` would send
-            // the front desk to tell him he has something to decide when he has not, and
-            // `starting` would say it is getting under way when it is deliberately not.
-            //
-            // The bucket label is what the model reads — that is Ray's candidate-.7 row 2,
-            // recorded a few lines below — so the label has to be the true one.
-            AssignmentState::WaitingForScreen => waiting_for_screen.push(item),
-            AssignmentState::WaitingForQuota => waiting_for_quota.push(item),
-            // **`Unknown` is waiting for him, and it is not finished.** It was running when
-            // RichOS last looked and nothing has witnessed how it ended (spec §6.2), so the
-            // only thing that moves it is his word (§6.3). Sorting it under `finished`
-            // would be the completion claim row 9 exists to refuse, and sorting it under
-            // `running` would tell the front desk something is making progress when
-            // nothing is.
-            AssignmentState::Blocked | AssignmentState::Unknown => waiting.push(item),
-            // **`starting` IS A SECTION OF ITS OWN, AND THAT IS RAY'S CANDIDATE-.7 ROW 2.**
-            // These three states used to share the `running` key, so a job that had been
-            // written down and not yet touched arrived at the front desk under the heading
-            // "running" — and the front desk said so. The row itself always carried the
-            // honest state word, but a bucket label outranks a field the model has to read
-            // twice, and on his walk the model read the label.
-            //
-            // The split is the smallest thing that removes the invitation: nothing is
-            // omitted, nothing is reordered, and the two sections together are still exactly
-            // `is_open`. What changed is that the word "running" now covers only the state
-            // `work_host.rs` writes when the back end's own stream proved it took the turn.
-            AssignmentState::Registered | AssignmentState::Preparing => starting.push(item),
-            AssignmentState::Running => running.push(item),
-            AssignmentState::Settled | AssignmentState::Failed | AssignmentState::Interrupted => {
-                finished.push(item)
-            }
+        let Some(reported)=item.reported_state() else {finished.push(item);continue};
+        match reported {
+            AssignmentState::WaitingForScreen=>waiting_for_screen.push(item),
+            AssignmentState::WaitingForQuota=>waiting_for_quota.push(item),
+            AssignmentState::Blocked=>waiting.push(item),
+            AssignmentState::Unknown=>unreported.push(item),
+            AssignmentState::Registered|AssignmentState::Preparing=>starting.push(item),
+            AssignmentState::Running=>running.push(item),
+            AssignmentState::Settled|AssignmentState::Failed|AssignmentState::Interrupted=>finished.push(item),
         }
     }
     // Newest movement first in every section: the thing that just changed is the thing he
     // is most likely asking about.
-    for list in [&mut starting, &mut running, &mut waiting, &mut waiting_for_screen, &mut waiting_for_quota, &mut finished] {
+    for list in [&mut starting, &mut running, &mut waiting, &mut waiting_for_screen, &mut waiting_for_quota, &mut finished, &mut unreported] {
         list.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
     }
     let (starting_rows, starting_omitted) = section(&starting);
@@ -195,6 +176,7 @@ pub fn call(
     let (screen_rows, screen_omitted) = section(&waiting_for_screen);
     let (quota_rows, quota_omitted) = section(&waiting_for_quota);
     let (finished_rows, finished_omitted) = section(&finished);
+    let (unreported_rows,unreported_omitted)=section(&unreported);
     Ok(json!({
         "as_of_ms": assignment::now_ms(),
         "open_questions": crate::questions::Store::new(&scope.state_root).list(&scope.entity_id,&scope.thread_id)?
@@ -204,13 +186,15 @@ pub fn call(
         "waiting_for_you": waiting_rows,
         "waiting_for_the_screen": screen_rows,
         "waiting_for_allowance": quota_rows,
+        "unreported":unreported_rows,"unreported_omitted":unreported_omitted,
         "finished": finished_rows,
         "omitted": starting_omitted
             + running_omitted
             + waiting_omitted
             + screen_omitted
             + quota_omitted
-            + finished_omitted,
+            + finished_omitted
+            + unreported_omitted,
         "screen_wait_resumes_automatically": true,
         // **THE SCREEN AS IT IS RIGHT NOW** — the CEO's ruling §56's read half.
         //

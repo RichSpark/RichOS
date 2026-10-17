@@ -593,106 +593,6 @@ const FIXTURES = {
     await page.waitForSelector("#repository-company option:nth-child(2)", {state: "attached"});
     return page;
   },
-  /// **THE ASSIGNMENT WAITING FOR HIM** (background-work spec §5.2, §7.6, §7.8).
-  ///
-  /// Driven through the shell the CEO uses: the chip that counts what is waiting, the pane
-  /// it opens, and the row rendered by the shipping `work-summary.js` from the shipping
-  /// `get_assignments` shape — `awaitingYou` and all. Nothing here writes into the DOM.
-  ///
-  /// **The chip is part of the fixture rather than an implementation detail of it.** Every
-  /// other part of that chip is fed by `get_worker_status`, which is empty whenever no turn
-  /// is open — the entire window background work lives in — so without the assignment counts
-  /// there is no chip, no pane, and no way to reach the approve control at all.
-  ///
-  /// **THE STEP IT IS WAITING ON CHANGED, and the old one was a state the product can no
-  /// longer be in.** This fixture used to wait on `mcp__richos_work__integrate`. The CEO's
-  /// ruling §52 (2026-09-18) grants a land to a background lease outright, so a land never
-  /// reaches the permission desk and can never produce this row — a fixture depicting it
-  /// would have been an affordance gate held over an impossible screen. It waits on `Bash`
-  /// instead: a command on his Mac, which no standing grant covers and which is exactly what
-  /// the queue exists for now.
-  async "assignment-waiting"(browser) {
-    const page = await openApp(browser, undefined, {
-      assignments: {
-        hiring: [
-          {
-            id: "assignment-one",
-            title: "landing the three branches",
-            state: "blocked",
-            detail: "The work has run and stopped at a step that is yours to decide: running a command on your Mac.",
-            repositories: [],
-            registeredAtMs: 1,
-            canStop: true,
-            onTheConnection: false,
-            awaitingYou: {
-              requestId: "affordance-work-request",
-              asked: "running a command on your Mac",
-              tool: "Bash",
-              description: "",
-              raisedAtMs: 2,
-            },
-          },
-        ],
-      },
-    });
-    await dismissEntityPicker(page);
-    await page.click('.nav-thread[data-thread-id="hiring"]');
-    await page.waitForFunction(() =>
-      document.getElementById("drill-chip-zone").textContent.includes("1 waiting for you")
-    );
-    await page.click(".drill-chip");
-    await page.waitForSelector("#slideover-body .assignment-approve");
-    return page;
-  },
-  /// **§58's question form of `assignment-waiting`.** Same DOM, same Approve and Decline, a
-  /// different sentence — because a question that stopped at a decision of his is still a
-  /// decision of his, and the wording is what changed rather than the affordance.
-  ///
-  /// It exists as its own fixture rather than as a parameter because the registry maps ONE
-  /// sentence to ONE fixture: without it, the question sentence would be ACTIONABLE with a
-  /// control nobody had ever seen on a question's row.
-  async "assignment-question-waiting"(browser) {
-    const page = await openApp(browser, undefined, {
-      assignments: {
-        hiring: [
-          {
-            id: "question-one",
-            title: "why the nightly has been red since Tuesday",
-            kind: "check",
-            state: "blocked",
-            detail: "Answering this reached a step that is yours to decide: running a command on your Mac.",
-            repositories: [],
-            registeredAtMs: 1,
-            canStop: true,
-            onTheConnection: false,
-            awaitingYou: {
-              requestId: "affordance-question-request",
-              asked: "running a command on your Mac",
-              tool: "Bash",
-              description: "",
-              raisedAtMs: 2,
-            },
-          },
-        ],
-      },
-    });
-    await dismissEntityPicker(page);
-    await page.click('.nav-thread[data-thread-id="hiring"]');
-    await page.waitForFunction(() =>
-      document.getElementById("drill-chip-zone").textContent.includes("1 waiting for you")
-    );
-    await page.click(".drill-chip");
-    await page.waitForSelector("#slideover-body .assignment-approve");
-    return page;
-  },
-  async "permission-pending"(browser) {
-    const page = await openApp(browser);
-    await page.evaluate(() => { window.__RICHOS_MOCK_PRESET__ = {pendingPermission: {
-      id: "affordance-request", binding: {entity_id: "depot"}, tool: "Write", input: {file_path: "/fictional/file"}
-    }}; });
-    await page.waitForSelector("#permission-sheet:not([hidden])");
-    return page;
-  },
   async "provider-start-error"(browser) {
     const page = await openApp(browser, undefined, {providerAuth: "signed-out"});
     await page.waitForSelector("#provider-connect:not([hidden])");
@@ -2535,8 +2435,7 @@ async function main() {
       registeredAtMs: 1,
       canStop: true,
       onTheConnection: false,
-      awaitingYou: null,
-    });
+      });
     const page = await openApp(browser, undefined, {
       assignments: {
         hiring: [
@@ -2637,8 +2536,7 @@ async function main() {
             registeredAtMs: 1,
             canStop: true,
             onTheConnection: false,
-            awaitingYou: null,
-          },
+                  },
         ],
       },
     });

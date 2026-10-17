@@ -8,7 +8,7 @@
 // WHAT HE HAD INSTEAD, measured on richos 7088a57f before this suite existed: `main.js`
 // handled Escape for eight named surfaces, and the window ships more than eight. The gear's
 // preferences popover — `#assertiveness-popover`, the most-used popup in the product — was
-// not one of them. `#setup-sheet`, `#memory-setup`, `#set-menu`, `#permission-sheet`,
+// not one of them. `#setup-sheet`, `#memory-setup`, `#set-menu`,
 // `#repositories-sheet` and `#home-prefs` were not either; three of those carried their own
 // Escape listener bound to the popup ELEMENT, so each worked only while focus happened to be
 // inside it, and `#home-prefs` on a copy with no companies focused nothing at all and so
@@ -317,38 +317,6 @@ async function main() {
     bump(4);
     await page.close();
     return "z-index " + stack.search + " before " + stack.inspector + ", one surface per press";
-  });
-
-  await run.check("B5  a permission card leaves Escape and the composer available", async () => {
-    const page = await openApp(browser);
-    await page.evaluate(() => {
-      window.__RICHOS_MOCK_PRESET__ = {
-        pendingPermission: {
-          id: "escape-suite",
-          binding: { entity_id: "depot" },
-          tool: "Write",
-          input: { file_path: "/fictional/one.txt" },
-          description: "Write one fictional file",
-        },
-      };
-    });
-    await page.waitForSelector("#permission-sheet:not([hidden])");
-    // An inline card neither takes composer focus nor treats Escape as a decision.
-    await focusTheComposer(page);
-    await page.keyboard.press("Escape");
-    assert(await page.isVisible("#permission-sheet"), "Escape dismissed a pending permission card");
-    await page.click("#permission-deny");
-    await page.waitForSelector("#permission-sheet", { state: "hidden" });
-    // AND IT WAS ANSWERED, not merely hidden. A permission question that vanishes without an
-    // answer is the one outcome this sheet may never have.
-    assertEqual(
-      await page.evaluate(() => window.__RICHOS_MOCK_PRESET__.permissionAnswer),
-      false,
-      "The explicit Decline did not answer the request"
-    );
-    bump(2);
-    await page.close();
-    return "declined, from a hand that was nowhere near the panel";
   });
 
   await run.check("B6  the home screen's own dialog, on a copy with no companies", async () => {
@@ -745,13 +713,12 @@ main().catch((e) => {
 // A2   main.js `dismissTopmostPopup`: delete the `top.hidden = true` fallback
 //        -> an undeclared popup survives Escape, which is the CEO's rule failing quietly
 // B1   main.js: restore the eight-line `if (!someEl.hidden) return closeSomething()` chain
-//        -> #setup-sheet, #memory-setup, #set-menu, #permission-sheet
+//        -> #setup-sheet, #memory-setup, #set-menu
 //           and #repositories-sheet all survive Escape
 // B2   main.js `POPUP_CLOSERS`: drop the "set-menu" entry
 //        -> the panel is hidden by the blunt fallback and the button keeps aria-expanded=true
 // B4   main.js `openPopups`: sort ascending instead of descending
 //        -> one Escape reaches the panel underneath and leaves the overlay on top of it
-// B5   permissions.js: restore modal Escape dismissal
 //        -> Escape silently answers a request while the user is composing unrelated words
 // B6   main.js: empty `EXTERNAL_DISMISS`
 //        -> #home-prefs-panel is hidden and its scrim is left over the whole window

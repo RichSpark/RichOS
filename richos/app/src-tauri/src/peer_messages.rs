@@ -16,8 +16,7 @@ fn forward_work_notices(scope:&StatusToolScope,mut accept:impl FnMut(&str,&str)-
         .map_err(|e|e.to_string())?;
     for notice in &notices {
         let facts=serde_json::json!({"event":"work_status","assignment_id":notice.assignment_id,
-            "notice_kind":notice.kind,"observed_at_ms":notice.raised_at_ms,
-            "recovery":serde_json::from_str::<serde_json::Value>(&notice.text).ok()}).to_string();
+            "notice_kind":notice.kind,"observed_at_ms":notice.raised_at_ms}).to_string();
         accept(&facts,&notice.delivery_id(&scope.entity_id,&scope.thread_id))?;
         assignment::acknowledge_notice(&scope.state_root,&scope.entity_id,&scope.thread_id,notice).map_err(|e|e.to_string())?;
     }
@@ -117,11 +116,12 @@ mod tests {
         let mut first=None;
         assert!(forward_work_notices(&scope,|text,id| {first=Some((text.to_string(),id.to_string()));Err("acceptance uncertain".into())}).is_err());
         assert_eq!(assignment::pending_notices_of(&root,"company","thread",|kind|!kind.is_result()).unwrap().len(),1);
-        assignment::advance(&root,"company","thread",&record.id,assignment::AssignmentState::Running,"Running").unwrap();
+        assignment::record_user_stop(&root,"company","thread",&record.id).unwrap();
         assert!(forward_work_notices(&scope,|text,id| {
             assert_eq!(first.as_ref().unwrap(),&(text.to_string(),id.to_string()),"a retry changed durable input identity or facts");
             let facts:serde_json::Value=serde_json::from_str(text).unwrap();
             assert_eq!(facts["notice_kind"],"unknown");assert_eq!(facts["assignment_id"],record.id);
+            assert!(facts.get("recovery").is_none(),"obsolete restart authority entered Rich's input");
             assert!(!text.contains("Nothing is running now"));assert!(!text.contains("Say the word"));
             Ok(())
         }).unwrap());

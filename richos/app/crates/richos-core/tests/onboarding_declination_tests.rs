@@ -379,9 +379,7 @@ struct DeskFactory {
 }
 
 impl richos_core::cognition::LeaseFactory for DeskFactory {
-    fn duplicate(&self) -> Option<Box<dyn richos_core::cognition::LeaseFactory>> {
-        Some(Box::new(self.clone()))
-    }
+
     fn spawn(&self) -> Result<Box<dyn richos_core::cognition::Cognition>, richos_core::cognition::CognitionError> {
         let starting = self.starting.lock().unwrap().take();
         if let Some((entered, release)) = starting {

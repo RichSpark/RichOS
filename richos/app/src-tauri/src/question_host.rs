@@ -80,8 +80,9 @@ pub fn answer(
             &q.id,
             state
                 .control
+                .for_thread(thread)
                 .active_turn()
-                .is_some_and(|t| t.thread_id == thread),
+                .is_some(),
         )?;
     }
     Ok(result)

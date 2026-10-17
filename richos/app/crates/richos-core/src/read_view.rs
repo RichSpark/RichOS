@@ -6,7 +6,7 @@
 
 use crate::{entity::{EntityRegistry, ThreadBinding}, journal::MachineryJournal,
     ledger::{Event, Ledger, Message}, onboarding::OnboardingState,
-    spine::{Spine, SpineError, WorkerEventsSource}, steering::TurnControl,
+    spine::{Spine, SpineError, WorkerEventsSource}, steering::ConversationControl,
     thread::{summaries, ThreadSummary}, timeline::Timeline};
 use std::{path::PathBuf, sync::{Arc, RwLock}};
 
@@ -40,7 +40,7 @@ pub(crate) struct ReadMetadata {
     pub registry: EntityRegistry,
     pub machinery_root: Option<PathBuf>,
     pub workers: WorkerEventsSource,
-    pub control: TurnControl,
+    pub control: ConversationControl,
     pub central_root: Option<PathBuf>,
     pub onboarding_record: Option<PathBuf>,
 }
@@ -66,7 +66,7 @@ impl SpineView for ReadView {
     fn timeline(&self, thread: &str) -> Result<Timeline, SpineError> {
         let binding = self.ledger.thread_binding(thread)?;
         let machinery = self.journal.as_ref().map(|j| j.read_thread(thread)).unwrap_or_default();
-        let workers = self.metadata.workers.read(self.metadata.control.lease_session().as_deref());
+        let workers = self.metadata.workers.read(self.metadata.control.for_thread(thread).lease_session().as_deref());
         Ok(Timeline::project_with_workers(&self.ledger, &binding, &machinery, &workers)?)
     }
     fn onboarding_state(&self, binding: &ThreadBinding) -> OnboardingState {

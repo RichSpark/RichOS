@@ -971,7 +971,7 @@ fn work_verdict(app: &AppHandle) -> WorkVerdict {
 
     // 1. THE ACTIVE TURN — the spine's own mirror, read without the spine's mutex. Never
     //    inferred from silence (continuity §5.2).
-    let turn = if state.control.active_turn().is_some() {
+    let turn = if state.control.has_active_turns() {
         Liveness::Busy
     } else {
         Liveness::Clear
@@ -987,12 +987,11 @@ fn work_verdict(app: &AppHandle) -> WorkVerdict {
         Err(_) => Liveness::Unknown,
     };
 
-    // 3. WORKERS — the "all work" half the composer cannot see. The session id comes from
-    //    the same control, so this reads THIS session's directory and never the
-    //    mtime-newest one on the machine (`worker_status`'s own first claim).
+    // Every conversation keeps its own session, including while parked.
     let engine_state = state.data_dir.join("engine-state");
-    let view = richos_core::app_workers::status(&engine_state, state.control.lease_session().as_deref());
-    let (workers, worker_gap) = work_gate::workers(&view);
+    let views:Vec<_>=state.control.lease_sessions().iter()
+        .map(|session|richos_core::app_workers::status(&engine_state,Some(session))).collect();
+    let (workers, worker_gap) = work_gate::all_workers(&views);
 
     // 4. **BACKGROUND WORK — the second lease** (background-work spec §6.4, which calls this
     //    *"not optional and not a follow-up"*). Reading 3 is scoped to the CONVERSATION

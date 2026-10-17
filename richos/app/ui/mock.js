@@ -3403,33 +3403,6 @@
           if (onboardingDeclineFails) return Promise.reject(ONBOARDING_DECLINE_REFUSED);
           onboardingByEntity.set(args.entityId, "declined");
           return onboardingViewOf();
-        case "pending_permission":
-          return window.__RICHOS_MOCK_PRESET__?.pendingPermission || null;
-        case "answer_permission": {
-          const preset = window.__RICHOS_MOCK_PRESET__ || {};
-          const pending = preset.pendingPermission;
-          if (pending && pending.id === args.requestId) {
-            preset.permissionAnswer = args.allow;
-            preset.pendingPermission = null;
-            return null;
-          }
-          // A BACKGROUND request, answered from the assignment surface rather than from the
-          // sheet (background-work spec §5.2, §5.7). Same command, same one-exact-action
-          // rule; what differs is where the question was shown. The mock moves the row the
-          // way the backend does — approved goes back to running, declined stops — so the
-          // surface under test re-reads a state that really changed.
-          for (const rows of Object.values(preset.assignments || {})) {
-            const row = (rows || []).find((r) => r.awaitingYou && r.awaitingYou.requestId === args.requestId);
-            if (!row) continue;
-            preset.assignmentAnswers = preset.assignmentAnswers || [];
-            preset.assignmentAnswers.push({id: row.id, allow: args.allow});
-            row.awaitingYou = null;
-            row.state = args.allow ? "running" : "interrupted";
-            row.canStop = !!args.allow;
-            return null;
-          }
-          return Promise.reject("That action is no longer waiting for permission.");
-        }
         // --- THE PHONE CHANNEL (`phone.js`, plan §4.1) ---
         //
         // Three states, because the sheet has three and each one has to be reachable in a browser
@@ -3687,10 +3660,7 @@
           if (preset.workSummaryError) throw new Error(preset.workSummaryError);
           return preset.workSummaries?.[args.threadId] || {items: [], omitted: 0};
         }
-        // THE ASSIGNMENTS HE GAVE (background-work spec §1, §5.2, §7.8), shaped exactly
-        // like `get_assignments` in `main.rs` — including `awaitingYou`, which carries the
-        // ONE exact request an assignment is waiting on him for and is what turns "ready
-        // for you to approve" into a control rather than a sentence.
+        // Stu's saved work reports for this conversation.
         case "get_assignments": {
           const preset = window.__RICHOS_MOCK_PRESET__ || {};
           if (preset.assignmentsError) throw new Error(preset.assignmentsError);

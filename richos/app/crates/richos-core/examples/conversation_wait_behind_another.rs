@@ -104,7 +104,7 @@ impl LeaseFactory for Desks {
     fn spawn_scoped(
         &self,
         binding: &richos_core::entity::ThreadBinding,
-        _control: &richos_core::steering::TurnControl,
+        _control: &richos_core::steering::ConversationControl,
     ) -> Result<Box<dyn Cognition>, CognitionError> {
         Ok(self.desk(binding.thread_id()))
     }

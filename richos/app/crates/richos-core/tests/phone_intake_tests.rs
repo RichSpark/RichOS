@@ -25,7 +25,7 @@ use richos_core::entity::EntityId;
 use richos_core::ledger::{Ledger, Source};
 use richos_core::live::{LiveEvent, LiveObserver};
 use richos_core::spine::Spine;
-use richos_core::steering::{IntakeLog, IntakeRecord, SteeringError, TurnControl};
+use richos_core::steering::{IntakeLog, IntakeRecord, SteeringError, TurnControl, ConversationControl};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -47,7 +47,7 @@ fn tmp_path(tag: &str) -> std::path::PathBuf {
 
 /// A spine with a durable intake log and a lease factory, on one thread, ready to be
 /// spoken to from somewhere that is not the desktop window.
-fn phone_ready(tag: &str, replies: Vec<&'static str>) -> (Spine, TurnControl, String, std::path::PathBuf) {
+fn phone_ready(tag: &str, replies: Vec<&'static str>) -> (Spine, ConversationControl, String, std::path::PathBuf) {
     let ledger_path = tmp_path(&format!("{tag}-ledger"));
     let intake_path = tmp_path(&format!("{tag}-intake"));
     let mut spine = support::spine(Ledger::open(&ledger_path).unwrap());
@@ -56,6 +56,7 @@ fn phone_ready(tag: &str, replies: Vec<&'static str>) -> (Spine, TurnControl, St
     spine.set_lease_factory(Box::new(MockLeaseFactory::new(replies)));
     let control = TurnControl::open(&intake_path).unwrap();
     spine.set_turn_control(control.clone());
+    let control=control.for_thread(&thread);
     (spine, control, thread, ledger_path)
 }
 
@@ -113,7 +114,7 @@ fn a_channel_message_does_not_need_a_running_turn_and_steering_still_does() {
     let control = TurnControl::open(&path).unwrap();
 
     assert!(
-        matches!(control.steer("added while working"), Err(SteeringError::NoActiveTurn)),
+        matches!(control.for_thread("thr_1").steer("added while working"), Err(SteeringError::NoActiveTurn)),
         "steering with nothing running must still refuse"
     );
     assert!(

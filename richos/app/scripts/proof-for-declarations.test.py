@@ -257,7 +257,7 @@ class Declarations(unittest.TestCase):
 
     def test_lint_regressions_follow_machinery_and_keep_the_product_scan(self):
         for gate in (False, True):
-            for path in ("richos/app/crates/richos-core/src/permissions.rs",
+            for path in ("richos/app/crates/richos-core/src/native.rs",
                          "richos/app/crates/richos-core/src/app_workers.rs"):
                 with self.subTest(path=path, gate=gate):
                     result = self.select(path, gate=gate)

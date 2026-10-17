@@ -55,7 +55,7 @@ use richos_core::staging::{
     Candidate, CandidateDesk, CliVocabulary, CorrectionObserver, LearnOutcome, SharedCandidateDesk,
     Staged, EVENT_CORRECTION_STAGED,
 };
-use richos_core::steering::{IntakeRecord, StopOutcome, TurnControl};
+use richos_core::steering::{IntakeRecord, StopOutcome, TurnControl, ConversationControl};
 use richos_core::stream::{StreamEvent, TurnObserver};
 use richos_core::thread::ThreadSummary;
 use richos_core::worker_status::WorkerStatusView;
@@ -460,7 +460,7 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
             return;
         }
         if self.app.try_state::<AppState>().is_some_and(|state| questions_pending(&state)
-            || state.control.active_turn().is_some() || state.work.peer_work_pending() || !state.control.pending_intake().is_empty()) {
+            || state.control.has_active_turns() || state.work.peer_work_pending() || !state.control.pending_intake().is_empty()) {
             return;
         }
         // **A command Rich started outlives its assignment** (reap gap C5): quitting would end
@@ -520,7 +520,6 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
 /// cached before the thing it describes existed. `run_setup` writes both cells.
 struct EngineLeaseFactory {
     quota: Arc<richos_core::quota::Service>,
-    permissions: Arc<richos_core::permissions::PermissionDesk>,
     claude_bin: Arc<Mutex<PathBuf>>,
     engine_dir: Arc<Mutex<PathBuf>>,
     /// Where RichOS keeps its own files — `app_data_dir()`, the same directory the ledger,
@@ -562,34 +561,14 @@ impl LeaseFactory for EngineLeaseFactory {
     fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_chat(None, None)
     }
-    fn spawn_scoped(&self, binding: &richos_core::entity::ThreadBinding, control: &TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_scoped(&self, binding: &richos_core::entity::ThreadBinding, control: &ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_chat(Some(control), Some(binding))
     }
-    fn spawn_cancellable(&self, control: &TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_cancellable(&self, control: &ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_chat(Some(control), None)
     }
 
-    /// **A second handle onto the same configuration**, so the spare front desk can be spawned
-    /// and primed WITHOUT the spine's mutex (`spine.rs`'s
-    /// `ready_a_spare_front_desk_without_the_spine`, and the CEO's §55).
-    ///
-    /// **Every field is shared, not copied, and that is what makes it the same factory.** The
-    /// three that can change at runtime — `claude_bin` and `engine_dir`, which `run_setup`
-    /// rewrites, and the permission desk — are `Arc`s, so a duplicate handed out before an
-    /// install spawns with what the install wrote, exactly as the original would. `data_dir`
-    /// and `explicit_engine` are fixed for the life of the process (see their own notes), so
-    /// copying them cannot diverge from anything.
-    fn duplicate(&self) -> Option<Box<dyn LeaseFactory>> {
-        Some(Box::new(EngineLeaseFactory {
-            quota: self.quota.clone(),
-            permissions: self.permissions.clone(),
-            claude_bin: self.claude_bin.clone(),
-            engine_dir: self.engine_dir.clone(),
-            data_dir: self.data_dir.clone(),
-            explicit_engine: self.explicit_engine,
-            operator_desk: self.operator_desk.clone(),
-        }))
-    }
+
 
     /// Fill-first: the spine reads the accounts and the freshest readings through this.
     fn quota(&self) -> Option<Arc<richos_core::quota::Service>> {
@@ -680,7 +659,7 @@ impl LeaseFactory for EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
-        profile.permissions = self.permissions.clone();
+
         // Fill-first: the work lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
@@ -695,7 +674,7 @@ impl LeaseFactory for EngineLeaseFactory {
 }
 
 impl EngineLeaseFactory {
-    fn spawn_chat(&self, control: Option<&TurnControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_chat(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
         let dir = self
             .engine_dir
             .lock()
@@ -745,7 +724,7 @@ impl EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         if let Some(binding) = binding { profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?; }
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
-        profile.permissions = self.permissions.clone();
+
         profile.operator_desk = self.operator_desk.clone();
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
@@ -764,7 +743,7 @@ impl EngineLeaseFactory {
 /// compute lease is `Box<dyn Cognition + Send>`), so `Mutex<Spine>` is valid Tauri state.
 struct AppState {
     quota: Arc<richos_core::quota::Service>,
-    permissions: Arc<richos_core::permissions::PermissionDesk>,
+
     /// **The second compute lease and the actor that owns it** — the background-work spec
     /// §2.1's work host.
     ///
@@ -803,7 +782,7 @@ struct AppState {
     /// a thread per call to ask a question whose answer is already `AlreadyReady`. It holds the
     /// thread id rather than a bool because he has more than one conversation and each has its
     /// own desk (`spine.rs`'s residency).
-    front_desk_primed_for: Mutex<Option<String>>,
+    front_desk_primed_for: Mutex<std::collections::HashSet<String>>,
     spine: Mutex<Spine>,
     reader: SpineReader,
     /// Durable CEO-facing preferences (company name, the assertiveness dial) — stored
@@ -1133,10 +1112,10 @@ fn switch_thread(state: State<AppState>, thread_id: String) -> Result<(), String
 
 fn switch_thread_in(spine: &Mutex<Spine>, reader: &SpineReader, control: &TurnControl,
     thread_id: &str) -> Result<(), String> {
-    // Startup is already preparing this exact active conversation under the spine lock.
+    // Startup is already preparing this exact active conversation independently.
     // Reopening it is a read, not another switch. Let the window paint while preparation
-    // runs. A different thread still takes the ordinary serialized switching path.
-    if control.front_desk_priming().as_deref() == Some(thread_id)
+    // runs. A different thread takes only the short state-switching lock.
+    if control.for_thread(thread_id).front_desk_priming().is_some()
         && reader.snapshot().active_thread() == Some(thread_id) {
         return Ok(());
     }
@@ -1178,8 +1157,8 @@ fn get_timeline(app: AppHandle, state: State<AppState>, thread_id: String) -> Re
 
 /// Prepare a conversation on a background thread, once per opened thread. Startup
 /// and company confirmation ask before the window opens the conversation. The exact
-/// active conversation can be read through its snapshot while preparation holds the
-/// spine; switching to a different conversation remains serialized.
+/// active conversation can be read through its snapshot while preparation runs.
+/// Switching conversations takes only the short state lock.
 ///
 /// The priming intake marker makes messages durable while the provider is preparing.
 /// Context and company permissions retain the thread's immutable binding. Failure is
@@ -1200,20 +1179,14 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
     {
         let Some(state) = app.try_state::<AppState>() else { return };
         let mut asked = state.front_desk_primed_for.lock().unwrap();
-        if asked.as_deref() == Some(thread_id) {
-            return;
-        }
-        *asked = Some(thread_id.to_string());
+        if !asked.insert(thread_id.to_string()) {return;}
     }
     let app = app.clone();
     let thread_id = thread_id.to_string();
     std::thread::spawn(move || {
         let Some(state) = app.try_state::<AppState>() else { return };
-        let mut spine = take_the_spine(&state.spine);
-        let verdict = spine.prime_front_desk(&thread_id);
-        // Priming drains what he sent while it ran (`prime_front_desk`'s `poll_intake`), and
-        // those are real turns: their boundary is here (`adopt_at_the_turn_boundary`).
-        drop(spine);
+        let verdict = richos_core::spine::prime_front_desk_without_the_spine(&state.spine,&thread_id);
+        // Priming drains durable input; its detached replies run outside shared state.
         if let Err(error)=richos_core::spine::drive_shared_turns(&state.spine) {eprintln!("[richos] queued reply: {error}");}
         let spine=take_the_spine(&state.spine);
         adopt_at_the_turn_boundary(spine, &state.work);
@@ -1235,9 +1208,8 @@ fn ready_the_front_desk(app: &AppHandle, thread_id: &str) {
         // active context, because the active context is whatever was switched to last and a
         // spare primed for the wrong company can never be adopted.
         //
-        // It runs after the prime above rather than beside it, on this same thread, because
-        // both take the spine's mutex for a model turn and two of those racing would hold the
-        // lock for the sum of them with his own Send arriving in the middle.
+        // Prepare the selected conversation first, then its optional next-thread spare.
+        // Neither provider operation holds shared conversation state.
         let entity = take_the_spine(&state.spine).ledger().thread_binding(&thread_id).map(|b| b.entity_id().clone());
         if let Ok(entity) = entity {
             ready_a_spare_front_desk(&app, entity);
@@ -1776,7 +1748,7 @@ fn drain_incoming_messages(
 /// The send handler always drains intake under the spine after writing it, including
 /// when priming finishes between this observation and the write.
 fn desk_input_can_be_logged(control: &TurnControl, thread_id: &str) -> bool {
-    control.lease_session().is_some() || control.front_desk_priming().as_deref() == Some(thread_id)
+    control.for_thread(thread_id).lease_session().is_some() || control.for_thread(thread_id).front_desk_priming().is_some()
 }
 
 /// **A TYPED MESSAGE THAT NEVER BECAME A TURN, ON THE OPERATOR'S LOG** — the nightly's D4.
@@ -3118,7 +3090,7 @@ fn main() {
             // Attach the rotation/recovery seam REGARDLESS of initial boot success — even
             // if Claude wasn't signed in at launch, wiring the factory means a later sign-in
             // + retry (or a crash recovery attempt) has a real respawn path rather than none.
-            let permissions = Arc::new(richos_core::permissions::PermissionDesk::default());
+
             let quota = Arc::new(richos_core::quota::Service::open_account_wide(&data_dir)?);
             // THE FIRST READ OF THE WHOLE HISTORY, off the launch path (§118): every account's
             // transcripts priced once, so the Token spend screen opens on its figure. 9.28 GB took
@@ -3149,7 +3121,7 @@ fn main() {
                     // that says a line never takes the work host's locks to count.
                     if counted.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(5)) {
                         if let Some(state) = quota_app.try_state::<AppState>() {
-                            let mut sessions: Vec<String> = state.control.lease_session().into_iter().chain(state.work.lease_sessions()).collect();
+                            let mut sessions: Vec<String> = state.control.lease_sessions().into_iter().chain(state.work.lease_sessions()).collect();
                             sessions.sort(); sessions.dedup();
                             let engine_state = state.data_dir.join("engine-state");
                             quota.set_agents_working(sessions.iter()
@@ -3202,7 +3174,7 @@ fn main() {
             }
             let lease_factory = || EngineLeaseFactory {
                 quota: quota.clone(),
-                permissions: permissions.clone(),
+
                 claude_bin: Arc::clone(&claude_bin_cell),
                 engine_dir: Arc::clone(&engine_cell),
                 data_dir: data_dir.clone(),
@@ -3223,42 +3195,11 @@ fn main() {
                 &data_dir.join("engine-state"),
                 Box::new(lease_factory()),
                 Arc::new(WorkNotice { app: app.handle().clone() }),
-                // **The same desk the conversation uses** (spec §2.7/§5.5: one
-                // `Arc<PermissionDesk>`, two leases). The host holds it for the lifecycle
-                // §5.4 states — a queued request and a standing decision belong to an
-                // assignment and are released with it — and for nothing else.
-                permissions.clone(),
             );
             work.set_quota(quota.clone());
-            // **How a held queue sees the sign-in come back** (T3 idea 1, finished: richos-hq
-            // `docs/plans/2026-10-09-automatic-second-review-and-t3-ideas.md` §3, Sage's check
-            // §1.1): the same `claude auth status` reading Settings shows, for the account a
-            // work lease would run under now, with no model turn. Read at most every few
-            // minutes, and only while a queue is held (`work_host.rs`, `HOLD_CHECK_EVERY`).
-            {
-                let quota = quota.clone();
-                work.set_sign_in(Arc::new(move || {
-                    let folder = quota.lease_account().folder;
-                    match richos_core::provider_auth::status_in(&resolve_claude_bin(), folder.as_deref()).state {
-                        richos_core::provider_auth::AuthState::Connected => Some(true),
-                        richos_core::provider_auth::AuthState::SignedOut => Some(false),
-                        _ => None,
-                    }
-                }));
-            }
             // The back end's written files — its own, its workers', its commands' — reach the
             // assignment's thread's output list after every back-end turn (PRD §4.1 (b)).
             work.set_output_store(output_store.clone());
-            // An assignment its back end handled itself (a command he asked for, or an answer)
-            // closes its obligation in the engine on the words he was given.
-            work.set_answered_close(Arc::new(richos_core::operator_runtime::EcsAnsweredClose::with(
-                engine_store_call(Arc::clone(&engine_cell), &data_dir),
-            )));
-            // A hiring is briefed with his company notes, read from the folder the interview
-            // saves them in (the same root the conversation is primed from, above).
-            if let Some(root) = richos_core::company::install_central_root() {
-                work.set_central_root(root);
-            }
             if let Some(desk) = &operator_desk {
                 work.set_operator(desk.clone());
             }
@@ -3272,67 +3213,10 @@ fn main() {
                 ensure_operator_review_watch(desk, &data_dir);
             }
 
-            // ==============================================================================
-            // ROW 9 — WHAT A RELAUNCH MAY SAY ABOUT WORK IT DID NOT SEE END
-            //
-            // The CEO's row 9: "If the app crashes or restarts mid-run, nothing invents a
-            // completion." The background-work spec §6.1-§6.3 is the mechanism and
-            // `richos_core::recovery` is the whole of it; this is its one call site.
-            //
-            // IT IS HERE — after the host exists, before it can be given anything new, and
-            // before the first turn — because it is a BOUNDARY and not a timer (§6.3). It
-            // runs once per launch and never again.
-            //
-            // It reads his repositories through the DELIVERED Git, when this launch has a
-            // verified runtime (`repositories.rs`'s rule, not `PATH`). When it has not — a
-            // development build with no `engine/runtime/delivery.json` — recovery is told
-            // so, and says it could not look rather than implying it did.
-            {
-                let verified =
-                    boot_engine.as_deref().and_then(|dir| richos_core::runtime::verify_engine(dir).ok());
-                if verified.is_none() {
-                    eprintln!(
-                        "[richos] recovery: this launch has no verified Git runtime, so an \
-                         assignment's repository is recorded as unread rather than as unchanged."
-                    );
-                }
-                let reader = || -> Box<dyn richos_core::recovery::Repositories> {
-                    match &verified {
-                        Some(runtime) => Box::new(richos_core::recovery::GitRepositories::new(runtime)),
-                        None => Box::new(richos_core::recovery::UnreadableRepositories),
-                    }
-                };
-                // The same reader the host pins an assignment's starting point with, so the
-                // "before" and the "after" of a comparison are taken by one thing.
-                work.set_repositories(reader());
-                // **HOW THE MAC'S SCREEN IS READ** — the CEO's ruling §56. Installed beside
-                // the Git reader and for the same reason: `richos-core` links no framework, so
-                // the real reading comes from the shell. Without this line the host keeps its
-                // honest default (`UnknownScreen`), which never blocks — so a missing
-                // installation loses the feature and never loses the work.
-                work.set_screen(std::sync::Arc::new(screen::MacScreen));
-                let report =
-                    richos_core::recovery::reconcile(&data_dir.join("engine-state"), reader().as_ref());
-                eprintln!("[richos] {}", report.log_message());
-
-                // **His approval has to work after a relaunch.** An assignment that stopped
-                // at a step of his is still waiting for him (§7.8), and putting it back on a
-                // lease needs the ledger's thread binding — which only the ledger can mint
-                // (`entity.rs`). This hands it over and starts NOTHING (§6.3).
-                let mut remembered = 0;
-                for record in report.untouched.iter().chain(report.unknown.iter()) {
-                    if let Ok(binding) = spine.ledger().thread_binding(&record.thread_id) {
-                        work.remember_binding(&binding);
-                        remembered += 1;
-                    }
-                }
-                if remembered > 0 {
-                    eprintln!(
-                        "[richos] recovery: {remembered} conversation(s) with unresolved work can be \
-                         picked back up when he says so. Nothing was restarted."
-                    );
-                }
-            }
+            // Release grants from the old process. Stu owns job recovery through his inbox.
+            work.set_screen(std::sync::Arc::new(screen::MacScreen));
+            let recovery=richos_core::recovery::reconcile(&data_dir.join("engine-state"));
+            eprintln!("[richos] {}",recovery.log_message());
 
             // ==============================================================================
             // FIRST-RUN SETUP — what this machine is missing, named at boot
@@ -3613,7 +3497,7 @@ fn main() {
             spine.detach_conversation_io();
             app.manage(AppState {
                 quota: quota.clone(),
-                permissions,
+
                 work,
                 operator: operator_desk,
                 operator_socket,
@@ -3624,7 +3508,7 @@ fn main() {
                 can_come_back: activation.presentation == activation::Presentation::Regular,
                 provider_auth: Mutex::new(Default::default()),
                 account_auth: Mutex::new(None),
-                front_desk_primed_for: Mutex::new(None),
+                front_desk_primed_for: Mutex::new(Default::default()),
                 reader: spine.reader(),
                 spine: Mutex::new(spine),
                 config: Mutex::new(config),
@@ -3894,8 +3778,8 @@ fn main() {
             entity_choice,
             choose_entity,
             register_entity,
-            pending_permission,
-            answer_permission,
+
+
             repository_connections,
             connect_repository,
             pick_folder,
@@ -4124,11 +4008,11 @@ fn main() {
                     // every lease's supervisor after them (reap gap 1.3(c)).
                     let quit_bound = std::time::Instant::now() + std::time::Duration::from_secs(2);
                     state.quota.shutdown();
-                    let _ = state.control.request_stop();
-                    state.control.shutdown_lease();
+                    let _ = state.control.request_stop_all();
+                    state.control.shutdown_leases();
                     // **The WORK lease is stopped BY NAME, because nothing else reaches it**
-                    // (background-work spec §2.5). `shutdown_lease` above walks one cancel
-                    // handle — `TurnControl`'s single slot — and the work lease is
+                    // (background-work spec §2.5). The front-desk shutdown above covers
+                    // every conversation; the separate Stu work lease is
                     // deliberately not in it (§4.2). Destructors are not guaranteed to run
                     // on this path (tao's event loop ends in `process::exit`), and the
                     // supervisor's 100 ms parent-death poll is a backstop, not the promise.
@@ -4240,20 +4124,16 @@ fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result
 /// until Rich finished — the same reason the stop control lives on this handle (§9.3).
 #[richos_command::command]
 fn get_worker_status(state: State<AppState>, thread_id: Option<String>) -> WorkerStatusView {
-    if let Some(thread) = thread_id {
-        if !state.control.active_turn().is_some_and(|turn| turn.thread_id == thread) {
-            return WorkerStatusView::default();
-        }
-    }
-    richos_core::app_workers::status(&state.data_dir.join("engine-state"), state.control.lease_session().as_deref())
+    let thread=thread_id.or_else(||state.reader.snapshot().active_thread().map(str::to_string));
+    let session=thread.and_then(|thread|state.control.for_thread(&thread).lease_session());
+    richos_core::app_workers::status(&state.data_dir.join("engine-state"),session.as_deref())
 }
 
 /// Saved work belongs to the requested ledger thread. Do not wait on a running
 /// reasoning turn or fall back to another company's most recent receipts.
 #[richos_command::command]
 fn get_work_status(state: State<AppState>, thread_id: String) -> Result<richos_core::work_status::WorkSummary, String> {
-    let entity = if let Some(active) = state.control.active_turn() {
-        if active.thread_id != thread_id { return Err("Another conversation is working. Saved work will refresh when it settles.".into()); }
+    let entity = if let Some(active) = state.control.for_thread(&thread_id).active_turn() {
         active.entity_id.ok_or("This conversation has no company binding.")?
     } else {
         let spine = state.spine.try_lock().map_err(|_| "Work status is changing. Please try again.")?;
@@ -4286,35 +4166,8 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
         &thread_id,
     )
     .map_err(|e| e.to_string())?;
-    // THIS conversation's back end, never the host's idea of "the" one: the CEO's Two Riches
-    // spec puts one back-end Rich behind each thread, and another thread's live assignment is
-    // the one answer that is never useful on this thread's surface.
-    let live = state.work.live_on(&thread_id).map(|live| live.id);
-    // Written down and held until a sign-in or the work connection comes back: the window says
-    // these are waiting to start, never "starting" (nightly 48's walk, D26).
-    let held = state.work.held_on(&thread_id);
     Ok(serde_json::json!({
         "assignments": rows.iter().map(|row| {
-            // **What this assignment is waiting on HIM for** (spec §5.2, §5.5, §7.8). The
-            // head of that assignment's own queue at the one desk, or nothing.
-            //
-            // **`awaitingYou` is what turns §7.8's sentence into a control.** Without it the
-            // surface could say "ready for you to approve" and offer him no way to approve —
-            // which is exactly what shipped in the previous slice and is what the UI's own
-            // affordance gate caught. The id travels so the press answers THAT request and
-            // not whichever one happens to be first.
-            let waiting = state.work.pending_decision(row).map(|request| serde_json::json!({
-                "requestId": request.id,
-                // WHAT HE IS BEING ASKED, in his language and composed in ONE place.
-                // `mcp__richos_work__integrate` is a wire identifier; the question is
-                // whether to change his repository. The phrase comes from the same function
-                // that writes the blocked receipt's own sentence, so the surface and the
-                // record cannot drift into two descriptions of one step.
-                "asked": richos_core::work_host::plain_action(&request.tool),
-                "tool": request.tool,
-                "description": request.description,
-                "raisedAtMs": request.raised_at_ms,
-            }));
             serde_json::json!({
                 "id": row.id,
                 "title": row.title,
@@ -4333,8 +4186,8 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 // It is not an identifier he is ever shown — it never reaches a sentence,
                 // the same way `id` above never does.
                 "turnRef": row.instruction_ledger_ref,
-                "state": row.state.as_str(),
-                "detail": row.detail,
+                "state": row.reported_state().unwrap_or(richos_core::assignment::AssignmentState::Interrupted).as_str(),
+                "detail": row.reported_state().map(|_|row.detail.as_str()),
                 // **THE DETAIL TELLS HIM WHAT TO DO** (sign in, a helper he may stop, an answer
                 // he owes), so Under the hood shows it without Technical view (hunt 57, finding 11).
                 // So does Rich's waiting sentence while a teammate works (review of 3b91f1223).
@@ -4346,10 +4199,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "answered": row.was_answered(),
                 "repositories": row.repositories,
                 "registeredAtMs": row.registered_at_ms,
-                "canStop": row.state.is_open(),
-                "onTheConnection": live.as_deref() == Some(row.id.as_str()),
-                "held": held.contains(&row.id),
-                "awaitingYou": waiting,
+                "canStop": row.reported_state().is_some() && row.accepts_input(),
             })
         }).collect::<Vec<_>>()
     }))
@@ -4398,38 +4248,12 @@ fn stop_assignment(state: State<AppState>, thread_id: String, assignment_id: Str
     state.work.stop_assignment(entity.as_str(), &thread_id, &assignment_id)
 }
 
-/// Which company this thread belongs to, answered WITHOUT waiting on a running turn.
-///
-/// The same two conditions `get_work_status` carries, named rather than discovered: a live
-/// turn on a DIFFERENT thread is refused honestly, and with no turn at all this depends on
-/// `try_lock`, which fails during exactly the window a turn holds the spine. Neither blocks
-/// delivery on the assignment's own thread (spec §3.2).
-/// A turn is live on ANOTHER conversation, so this thread's company binding cannot be read
-/// without waiting on it. It resolves itself, and the sentence says so.
-const ASSIGNMENTS_ELSEWHERE: &str =
-    "Another conversation is working. Your assignments will refresh when it settles.";
-
-/// The spine's lock is held for the length of a turn, so this read is deferred.
-///
-/// **NOT "please try again".** The surface re-reads this every three seconds while the
-/// conversation is on screen, so telling him to do the thing that is already happening
-/// would be an instruction over a state that resolves itself — which is exactly what
-/// `ui/tests/affordances.js` exists to catch.
-///
-/// **Both sentences are named constants rather than literals inside the expression, and
-/// that is not style.** `ui/tests/lib/state-strings.js` decides a Rust literal is
-/// CEO-facing from its own line and the TWO ABOVE IT. Written inline, this sentence was
-/// visible to the affordance gate only because an unrelated `ok_or_else` happened to sit
-/// two lines up; adding a comment moved it out of the window and the gate stopped seeing
-/// it. A `const … : &str =` is one of the forms that scanner recognizes directly, so the
-/// sentence is now gated by what it IS rather than by what it sits next to.
+/// Read the requested conversation's company. A different running conversation
+/// neither supplies its binding nor prevents this lookup.
 const ASSIGNMENTS_CHANGING: &str = "Your assignments are changing. They will refresh in a moment.";
 
 fn assignment_scope(state: &State<AppState>, thread_id: &str) -> Result<EntityId, String> {
-    if let Some(active) = state.control.active_turn() {
-        if active.thread_id != thread_id {
-            return Err(ASSIGNMENTS_ELSEWHERE.into());
-        }
+    if let Some(active) = state.control.for_thread(thread_id).active_turn() {
         return active.entity_id.ok_or_else(|| "This conversation has no company binding.".into());
     }
     let spine = state.spine.try_lock().map_err(|_| ASSIGNMENTS_CHANGING)?;
@@ -4907,7 +4731,10 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
             let stop_app = app.clone();
             ctl.on_withdraw(Arc::new(move || {
                 let state = stop_app.state::<AppState>();
-                match state.control.request_stop() {
+                let view=state.reader.snapshot();
+                let outcome=view.active_thread().map(|thread|state.control.for_thread(thread).request_stop())
+                    .unwrap_or(Ok(StopOutcome::NothingRunning));
+                match outcome {
                     Ok(StopOutcome::Requested { turn_id, .. }) => eprintln!(
                         "[richos] voice: he went on before Rich answered; stopped {turn_id} so his whole thought is one request"
                     ),
@@ -6124,8 +5951,9 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
     let selected = state.engine_dir.lock().unwrap().clone();
     let registry = state.registry.lock().unwrap().clone();
     let mut spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
-    let workers = richos_core::app_workers::status(&state.data_dir.join("engine-state"), state.control.lease_session().as_deref());
-    let (worker_state, gap) = richos_core::work_gate::workers(&workers);
+    let workers:Vec<_>=state.control.lease_sessions().iter().map(|session|
+        richos_core::app_workers::status(&state.data_dir.join("engine-state"),Some(session))).collect();
+    let (worker_state, gap) = richos_core::work_gate::all_workers(&workers);
     if !worker_state.permits_action() { return Err(gap.unwrap_or_else(|| "Worker state is not settled.".into())); }
     let desk = state.correction.lock().unwrap().clone();
     let mut held_desk = match &desk {
@@ -6211,34 +6039,9 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
 /// call below do anything at all.
 fn ready_the_front_desk_after_a_repair(app: &AppHandle, thread_id: &str) {
     if let Some(state) = app.try_state::<AppState>() {
-        *state.front_desk_primed_for.lock().unwrap() = None;
+        state.front_desk_primed_for.lock().unwrap().clear();
     }
     ready_the_front_desk(app, thread_id);
-}
-
-#[richos_command::command]
-fn pending_permission(state: State<AppState>) -> Option<richos_core::permissions::PermissionRequest> {
-    let view=state.reader.snapshot();
-    state.permissions.current().filter(|request|view.active_binding().is_some_and(|b|b.thread_id()==request.binding.thread_id && b.entity_id().as_str()==request.binding.entity_id))
-}
-/// **His answer to one exact action — and the second half is the background-work spec's
-/// §5.7.**
-///
-/// If the provider call that raised the request is still waiting, it takes the decision and
-/// nothing else happens here; that is every conversation request and every background
-/// request he answers within the 300-second call. If the call already ended at its deadline —
-/// which is the ordinary case for work he was away from — the desk hands the decision to the
-/// ASSIGNMENT, and the work host is what carries it out: approved puts the assignment back on
-/// the work lease to take the step he approved, declined stops it where it stands with
-/// nothing changed.
-#[richos_command::command]
-fn answer_permission(state: State<AppState>, request_id: String, allow: bool) -> Result<(), String> {
-    match state.permissions.resolve(&request_id, allow)? {
-        richos_core::permissions::Answered::Delivered => Ok(()),
-        richos_core::permissions::Answered::ToAssignment { binding, allow } => {
-            state.work.apply_decision(&binding, allow)
-        }
-    }
 }
 
 /// Explicit repository access is separate from choosing a company folder.
@@ -6844,7 +6647,6 @@ mod operator_gate_tests {
         let binding = spine.ledger().thread_binding(&thread).unwrap();
         let factory = EngineLeaseFactory {
             quota: Arc::new(richos_core::quota::Service::open(&data).unwrap()),
-            permissions: Default::default(),
             claude_bin: Arc::new(Mutex::new(PathBuf::from("/nonexistent/claude"))),
             engine_dir: Arc::new(Mutex::new(root.join("no-engine-here"))),
             data_dir: data,
@@ -6925,19 +6727,25 @@ mod send_wait_tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("intake.jsonl");
         let control = super::TurnControl::open(&path).unwrap();
-        assert!(control.lease_session().is_none());
+        assert!(control.lease_sessions().is_empty());
         assert!(!super::desk_input_can_be_logged(&control, "thread-a"));
-        control.begin_front_desk_prime("thread-a");
+        control.for_thread("thread-a").begin_front_desk_prime();
         assert!(super::desk_input_can_be_logged(&control, "thread-a"));
         assert!(!super::desk_input_can_be_logged(&control, "thread-b"));
         control.submit_from_desk("thread-a", Some(super::EntityId::parse("alpha").unwrap()),
             "Keep this first message").unwrap();
-        control.end_front_desk_prime();
+        control.for_thread("thread-a").end_front_desk_prime();
         assert!(!super::desk_input_can_be_logged(&control, "thread-a"));
         let reopened = super::TurnControl::open(&path).unwrap();
         assert_eq!(reopened.pending_intake().len(), 1, "a cold-start message did not survive reopening its intake log");
         assert!(std::fs::read_to_string(&path).unwrap().contains("Keep this first message"));
         drop(reopened);
+        for thread in ["thread-a","thread-b"] {
+            control.for_thread(thread).set_lease_session(Some(format!("session-{thread}")));
+            assert!(super::desk_input_can_be_logged(&control,thread));
+        }
+        assert_eq!(control.lease_sessions().len(),2);
+        assert!(!super::desk_input_can_be_logged(&control,"thread-c"));
         drop(control);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -7230,7 +7038,7 @@ mod repair_priming_tests {
         let cleared = body.find(memo).expect("the memo must be cleared by name");
         let asked = body.find(concat!("ready_the_front_", "desk(app")).expect("and then the desk asked for");
         assert!(cleared < asked, "the memo must be cleared BEFORE the ask, or the ask does nothing");
-        assert!(body.contains("= None"), "the memo is cleared, not rewritten: {body}");
+        assert!(body.contains(".clear()"), "the conversation memo is cleared, not rewritten: {body}");
     }
 }
 
@@ -8245,20 +8053,20 @@ struct StopReport {
 /// in `steering.rs` rather than here.
 #[richos_command::command]
 fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>) -> Result<StopReport, String> {
-    // Which conversation his Esc was pressed in: the control's own record of the running turn,
-    // or else the thread the window shows. Both read without the spine's lock, and read BEFORE
-    // the front desk's stop below clears the running turn.
-    let team_key = state.operator.as_ref().and_then(|_| {
-        let thread = state.control.active_turn().map(|t| t.thread_id.clone())
-            .or_else(|| state.reader.snapshot().active_thread().map(str::to_string))?;
-        let entity = state.reader.snapshot().ledger().thread_binding(&thread).ok()?.entity_id().to_string();
-        Some(richos_core::operator_host::ConversationKey { entity_id: entity, thread_id: thread })
+    let view=state.reader.snapshot();
+    let thread=view.active_thread();
+    let control=thread.map(|thread|state.control.for_thread(thread));
+    let team_key=state.operator.as_ref().and_then(|_| {
+        let binding=view.active_binding()?;
+        Some(richos_core::operator_host::ConversationKey {
+            entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string(),
+        })
     });
-    let outcome = if let Some(expected) = expected_turn_id.as_deref() {
-        state.control.request_stop_for(expected).map_err(|e| e.to_string())?
-    } else {
-        state.control.request_stop().map_err(|e| e.to_string())?
-    };
+    let outcome=match (control,expected_turn_id.as_deref()) {
+        (Some(control),Some(expected))=>control.request_stop_for(expected),
+        (Some(control),None)=>control.request_stop(),
+        (None,_)=>Ok(StopOutcome::NothingRunning),
+    }.map_err(|e|e.to_string())?;
     // **HIS ESC, on an operator install, is his team's too** (r3 (d) item 6): the lead's turn in
     // that conversation ends and its agents keep running (r4 §1.2). AFTER the front desk's stop
     // and on its own thread, so a lead slow to answer the interrupt never delays the stop he
@@ -8311,7 +8119,9 @@ fn steer_message(state: State<AppState>, text: String) -> Result<SteerReport, St
     if trimmed.is_empty() {
         return Err("nothing to add".into());
     }
-    match state.control.steer(trimmed).map_err(|e| e.to_string())? {
+    let view=state.reader.snapshot();
+    let thread=view.active_thread().ok_or_else(||richos_core::steering::SteeringError::NoActiveTurn.to_string())?;
+    match state.control.for_thread(thread).steer(trimmed).map_err(|e| e.to_string())? {
         IntakeRecord::Steer { id, thread_id, steering_turn_id, at, .. } => {
             Ok(SteerReport { intake_id: id, thread_id, steering_turn_id, at })
         }
@@ -8336,7 +8146,8 @@ struct RunningTurn {
 
 #[richos_command::command]
 fn running_turn(state: State<AppState>) -> Option<RunningTurn> {
-    state.control.active_turn().map(|a| RunningTurn {
+    let view=state.reader.snapshot();
+    state.control.for_thread(view.active_thread()?).active_turn().map(|a| RunningTurn {
         turn_id: a.turn_id,
         thread_id: a.thread_id,
         entity_id: a.entity_id.map(|e| e.as_str().to_string()),
@@ -9851,7 +9662,7 @@ fn questions_pending(state: &AppState) -> bool {
 fn registered_work(state: &AppState) -> lifecycle::Registered {
     let work = state.work.background_work();
     lifecycle::Registered {
-        running: work.running + usize::from(state.control.active_turn().is_some())
+        running: work.running + usize::from(state.control.has_active_turns())
             + usize::from(state.work.peer_work_pending())
             + usize::from(!state.control.pending_intake().is_empty()),
         awaiting_you: work.awaiting_you,

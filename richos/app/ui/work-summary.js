@@ -46,44 +46,7 @@
   // chip is fed by `get_worker_status`, which returns an empty view whenever no turn is open
   // on the thread — and that window is where background work lives.
   //
-  // WORDING IS THE FEATURE, not a detail of it — and what the words are FOR changed on
-  // 2026-09-18 (CEO ruling §52): *"There's nothing that ever not lands on its own here in the
-  // terminal. Anything including things like design mockups always land before they are
-  // presented to me for review. So, yes, always land on its own."*
-  //
-  // `blocked` used to read "Ready for you to approve", because the one thing that could stop
-  // a background job was the step that would change his repository — it was not on the
-  // permission desk's list and the job waited there (spec §0 row 7, §5.4, §7.8). A job lands
-  // on its own now, so:
-  //
-  //   * `blocked` means ONE thing: a decision of his is outstanding on some step — a command,
-  //     a write outside the workspace — and Approve and Decline are beside it. It no longer
-  //     claims his repository is untouched, because a job may reach such a step AFTER landing
-  //     something, and that claim would have been false while his branch had already moved.
-  //   * `settled` and `failed` carry the OUTCOME in the sentence the backend appends after
-  //     them (`work_host.rs`'s `what_happened`, read off the land record the engine wrote):
-  //     what landed, on which branch, in which repository, and the reviewer's verdict — or,
-  //     for a job that did not land, why not.
-  //
-  // The §7.8 rule itself is untouched and still the floor: nothing that has not been witnessed
-  // finishing is ever described as finished.
-  //
-  // CONTRAST, computed rather than eyeballed, both themes. Every figure below is WebKit's
-  // own resolved color through `getComputedStyle`, taken by `ui/tests/background-work.js`
-  // on 2026-09-18 — not a stylesheet value and not a recollection:
-  //   heading    `--ink` on `--card`        12.06:1 dark   18.07:1 light   (needs 4.5:1)
-  //   title      `--ink` on `--card`        12.06:1 dark   18.07:1 light   (needs 4.5:1)
-  //   detail     `--ink-soft` on `--card`    5.78:1 dark    6.38:1 light   (needs 4.5:1)
-  //   the question, 16px, same `--ink-soft`  5.78:1 dark    6.38:1 light   (needs 4.5:1)
-  //   stop control, 16px, same `--ink-soft`  5.78:1 dark    6.38:1 light   (needs 4.5:1)
-  //   approve and decline, 16px, the same    5.78:1 dark    6.38:1 light   (needs 4.5:1)
-  // All seven at 16px, the floor for text meant to be easily read (`ceo-decisions.md` §15).
-  // `--ink-soft` is `rgba(223,228,238,0.64)` over `#182440` and `rgba(12,19,34,0.68)` over
-  // `#fdfcf8`; both were composited before the ratio was taken. Nothing here is exempt —
-  // every ratio above is re-measured under WebKit by that suite in both themes rather than
-  // trusted from this comment. (The light-mode soft figure reads 6.38:1 on this run where an
-  // earlier comment recorded 6.36:1. Nothing in this file's palette, classes or opacity
-  // changed; the measurement is the authority and the comment now carries what it measured.)
+  // Job states come from Stu's saved reports. Tool approvals have no UI.
   const STATES = {
     registered: "Written down. Nothing has been prepared yet.",
     // Plain words for a business owner (hunt 57, finding 11): it was "Getting a workspace
@@ -94,13 +57,12 @@
     // the desk holds his decision while he is away (§5.2/§5.7). The sentence names no
     // particular step — the "Waiting on you:" line below does that, in the backend's own
     // words for it — and it claims nothing about his repository (see the block above).
-    blocked: "Waiting for your decision before it can go on.",
     // THE SAME STATE WITH NO QUESTION ON THE DESK, and it is a real case rather than a
     // defensive branch: the queue lives in the running process, so an assignment that
     // stopped at his decision before a relaunch is `blocked` with nothing left to press.
     // Naming a control that is not there would be the failure slice 1's affordance gate
     // caught; the composer is a real path and this sentence names it.
-    blockedNoRequest: "Waiting for your decision. Ask Rich to continue it when you are ready.",
+    blocked: "Waiting for your decision. Ask Rich to continue it when you are ready.",
     // **WAITING FOR THE SCREEN — the CEO's ruling §56 (2026-09-18), in his own words.**
     //
     // Without this row the state word `waiting-for-screen` falls through to "Its state could
@@ -108,8 +70,7 @@
     // state and this map are one change, and the fallback is what the CEO would have seen.
     //
     // **It names no control, and that is the point.** Every other waiting sentence in this map
-    // either points at a control on the same row (`blocked`) or tells him what to ask for
-    // (`blockedNoRequest`). This one asks nothing of him at all: it is waiting on the Mac, it
+    // tells him what to ask for (`blocked`). This one asks nothing of him at all: it is waiting on the Mac, it
     // resolves itself, and the app must never tell him to go and unlock something. So it is
     // INFORMATIONAL for the affordance gate rather than actionable — there is no control that
     // could exist for it.
@@ -147,13 +108,12 @@
     registered: "Written down. Rich hasn't started looking yet.",
     preparing: "Written down. Rich hasn't started looking yet.",
     running: "Rich is looking into this.",
-    blocked: "Waiting for your decision before Rich can go on.",
     // The same stop with nothing left on the desk: the queue lives in the running process, so
     // a question that stopped at his decision before a relaunch has nothing to press. **This
     // line was dropped by the §56 rebase and the affordance gate is what found it** — without
     // it the state falls through to "Its state could not be read.", which is the honest
     // sentence for a record this build cannot parse and a false one for a record it can.
-    blockedNoRequest: "Waiting for your decision. Ask Rich to continue when you are ready.",
+    blocked: "Waiting for your decision. Ask Rich to continue when you are ready.",
     // **§56's state, in a question's words.** Without this row a question waiting on the
     // screen falls through to "Its state could not be read." — the same gap §56's own slice
     // closed for work, arriving one commit later for questions.
@@ -177,14 +137,9 @@
     return answered || kind === "check" || kind === "investigate" ? QUESTION_STATES : STATES;
   }
 
-  /// `onDecide(requestId, allow)` answers the ONE exact request this assignment is waiting
-  /// on him for. It is a request id and not an assignment id on purpose: what he approves is
-  /// one action, and the press has to carry which one (spec §5.2's *"one exact action"*
-  /// survives the queue).
-  ///
   /// `opts.technical` is `main.js`'s `techyOn()`, the same switch `render` takes above: the
   /// back end's recorded line under a row is for Technical view only (hunt 57, finding 11).
-  function renderAssignments(view, parent, onStop, onDecide, opts) {
+  function renderAssignments(view, parent, onStop, opts) {
     const technical = !!(opts && opts.technical);
     if (view.error) {
       const note = document.createElement("p");
@@ -209,9 +164,7 @@
       detail.className = "overlay-note";
       // The state's own sentence, then whatever the backend recorded about it. Two plain
       // sentences rather than a code and a label.
-      const waiting = row.awaitingYou || null;
-      const key = row.state === "blocked" && !waiting ? "blockedNoRequest" : row.state;
-      detail.textContent = sentencesFor(row.kind, row.answered)[key] || "Its state could not be read.";
+      detail.textContent = sentencesFor(row.kind, row.answered)[row.state] || "Its state could not be read.";
       // The recorded detail follows the state's sentence, because for most states it ADDS
       // something — the outcome that landed, the reason it stopped, the step it is on.
       //
@@ -242,33 +195,6 @@
         recorded.textContent = row.detail;
         recorded.style.overflowWrap = "anywhere";
         item.append(recorded);
-      }
-      if (waiting) {
-        // WHAT HE IS BEING ASKED, in the backend's own words for it — one phrase, written
-        // in one place (`work_host.rs`'s `plain_action`), so the receipt and this row can
-        // never describe one step two ways.
-        const asked = document.createElement("p");
-        asked.className = "overlay-note assignment-asked";
-        asked.textContent = "Waiting on you: " + (waiting.asked || "a step it cannot take without you") + ".";
-        const decisions = document.createElement("div");
-        decisions.className = "assignment-decisions";
-        // **Each control names its own assignment.** The same reason the stop control does:
-        // a button labeled only "Approve" beside three assignments is one he cannot use
-        // without counting rows, and spoken aloud it would name nothing at all.
-        const approve = document.createElement("button");
-        approve.type = "button";
-        approve.className = "slideover-close assignment-approve";
-        approve.textContent = "Approve this";
-        approve.setAttribute("aria-label", "Approve " + row.title);
-        approve.addEventListener("click", () => onDecide && onDecide(waiting.requestId, true));
-        const decline = document.createElement("button");
-        decline.type = "button";
-        decline.className = "slideover-close assignment-decline";
-        decline.textContent = "Decline this";
-        decline.setAttribute("aria-label", "Decline " + row.title);
-        decline.addEventListener("click", () => onDecide && onDecide(waiting.requestId, false));
-        decisions.append(approve, decline);
-        item.append(asked, decisions);
       }
       if (row.canStop) {
         const stop = document.createElement("button");

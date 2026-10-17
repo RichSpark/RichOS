@@ -561,8 +561,7 @@ class CrashMatrix(unittest.TestCase):
 
 
 class WorkCrashMatrix(unittest.TestCase):
-    """W4, the work path's matrix (richos-hq docs/plans/2026-09-27-work-path-answer-delivery-design.md §4.2):
-    its grading, graded without a guest."""
+    """Historical W4 result grading. The deleted per-assignment runner is not a current probe."""
 
     def cell(self, cell, **change):
         rec = {'cell': cell, 'register': {'assignment': 'J'}, 'reports': 1, 'walks_gone': [True, True],
@@ -621,12 +620,13 @@ class WorkCrashMatrix(unittest.TestCase):
         line was read before it arrived. 64.3 s measured on the host; the bound is 600 s."""
         self.assertGreaterEqual(gp.W4_READY_SECONDS, 600)
 
-    def test_every_work_crash_point_the_harness_names_is_in_the_rust(self):
+    def test_the_deleted_work_runner_matrix_is_retired_without_restoring_its_fault_points(self):
+        self.assertIn('W4', gp.RETIRED)
+        self.assertIn('per-assignment work runner was removed', gp.RETIRED['W4'])
         rust = (HERE.parents[2] / 'crates' / 'richos-core' / 'src' / 'work_host.rs').read_text()
-        for point in ('WORK-CARRY', 'WORK-FIRST-ITEM', 'WORK-TAKEN'):
-            self.assertIn('crash_point("%s")' % point, rust)
-        self.assertIn('work_fault("WORK-DEAD-LEASE")', rust)
-        self.assertEqual(set(gp.W4_POINT.values()), {'WORK-CARRY', 'WORK-FIRST-ITEM', 'WORK-TAKEN', 'WORK-DEAD-LEASE'})
+        for point in gp.W4_POINT.values():
+            self.assertNotIn('crash_point("%s")' % point, rust)
+            self.assertNotIn('work_fault("%s")' % point, rust)
 
 
 class Arguments(unittest.TestCase):

@@ -1,28 +1,8 @@
-//! The durable ASSIGNMENT register — what he asked for, written down before anything runs.
-//!
-//! The background-work spec (richos-hq `docs/plans/background-work-spec-2026-09-17.md`
-//! revision 5, `9255e71a`) §1: *"An assignment turn ends when the work is registered —
-//! intent recorded, receipt written — not when it settles."* This module is the receipt,
-//! and nothing in it starts, prepares or waits for anything. `register` writes one file
-//! and returns; §7.1's decided boundary — *"registration is the receipt, and `prepare`
-//! runs on the work lease after the turn has ended"* — is only true if this path is free
-//! of every second that step costs (a measured 3.0–3.8 s of guards and workspace creation
-//! per assignment, spec §7.1).
-//!
-//! **The register is not the receipt store, and the difference is the point.** Mega
-//! Lander's own work receipts (`work_status.rs`) are written by the engine and describe
-//! what a worker did. This register is written by the app and describes what the CEO
-//! ASKED FOR — it exists from the moment he speaks, before a workspace exists, so a crash
-//! in the gap leaves a record of the request rather than a gap (spec §0 row 1). The two
-//! are partitioned identically (`sha256(json([entity, thread]))`) so one thread's saved
-//! work and one thread's assignments can never be read across a company boundary.
-//!
-//! **Two things are deliberately NOT here.** Recovery (spec row 9 / §6) is the next slice:
-//! nothing in this file reconciles a state after a crash, and `Running` on disk after a
-//! restart means *"it was running when we last looked"* — spec §6.2's receipt state, not a
-//! status. And the window-closed process model (row 5 / §2.4) is the next slice too, so
-//! `open()` exists for the update gate and the settle check and is not yet wired to an
-//! exit decision.
+//! The existing durable job record, partitioned by company and conversation.
+//! Registration records the request and never dispatches it. Stu's canonical inbox
+//! carries execution authority. Stu reports progress through the engine work tools;
+//! verified completion and the user's durable Stop are the other status sources.
+//! Process shutdown, restart and permission answers never infer a job outcome.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -31,123 +11,44 @@ use std::path::{Path, PathBuf};
 #[error("{0}")]
 pub struct AssignmentError(pub String);
 
-/// The states an assignment can be in, and the two that are kept apart on purpose.
-///
-/// **`Blocked` means a decision of his is outstanding, and since 2026-09-18 that is ALL it
-/// means.** It used to be the state spec §0 row 7 existed for — the work ran to the step that
-/// would change his repository and stopped there, because `integrate` was not on the
-/// permission desk's allow-list. The CEO's ruling §52 closes that: *"There's nothing that
-/// ever not lands on its own here in the terminal. Anything including things like design
-/// mockups always land before they are presented to me for review. So, yes, always land on
-/// its own."* A land is now granted outright to a background lease (`permissions.rs`), so it
-/// can never produce this state.
-///
-/// What still can: a request the desk would have put in front of him in a visible turn and
-/// could not, because there is no turn — a command, a write outside the workspace, any tool
-/// with no standing grant (§5.2/§5.5/§5.7). It is NOT `Settled`, and it is written only when
-/// a request is actually on the desk (`work_host.rs`'s `settle`). **A run that ends with its
-/// obligation open and NOTHING waiting for him is [`Self::Failed`]** — a job that did not
-/// finish, reported as one, with the reason — and never this.
-///
-/// `Interrupted` is what a stop produces (spec §7.4a) and is never `Settled` either.
-/// Nothing in this file ever converts one into the other; that is spec §6.1's rule, and
-/// the only reason it holds here is that no transition writes `Settled` except an explicit
-/// caller that witnessed a settlement.
+/// Persisted report vocabulary. Historical variants remain readable without migration.
+/// Only primary reports and user Stop establish current execution state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssignmentState {
-    /// Written down. Nothing has been prepared; no workspace exists yet.
+    /// Request metadata recorded, before Stu reports execution.
     Registered,
-    /// **The screen is locked and this assignment needs it** — the CEO's ruling §56
-    /// (2026-09-18): *"I like that "Watch for the Mac's screen to unlock" feature that you had
-    /// running here. Should be added to the RichOS app for automatic use when Rich needs it."*
-    ///
-    /// **It is a WAIT, not a failure, and it is not waiting on him.** It resolves itself the
-    /// moment the screen unlocks ([`crate::screen`]), so unlike [`Self::Blocked`] it is
-    /// deliberately NOT [`Self::awaits_his_word`] — there is nothing for him to decide and
-    /// nothing he has to come back to. No notice is raised for it either: §56 is a wait that
-    /// looks after itself, and a push notification about one would be a nag he did not ask
-    /// for.
-    ///
-    /// **It is strictly BEFORE the lease.** `work_host.rs` gates on the screen before
-    /// `ensure_lease`, so nothing has been asked of the back end while an assignment sits
-    /// here — which is what makes it safe to leave the app in this state and what makes the
-    /// recovery treatment below honest.
-    ///
-    /// **What a relaunch does with it, and why it is not re-armed.** A crash here produces
-    /// [`Self::Unknown`] like everything else open (`recovery.rs`), and that is deliberate
-    /// rather than an omission: spec §6.3 — *"Nothing restarts work by itself"* — is not
-    /// overridden by §56, and a [`Self::Registered`] assignment that had done strictly LESS
-    /// than this one already becomes `Unknown` on a relaunch. Re-arming the wait would treat
-    /// the assignment that got further more permissively than the one that got nowhere. A
-    /// clean quit is different and is already witnessed: the quit stops the wait and the
-    /// state is [`Self::Interrupted`], which is a fact rather than an inference.
+    /// A saved report of waiting for access to the screen.
     WaitingForScreen,
-    /// An automatic background-turn hold. The existing lease and files are retained.
+    /// A saved report of waiting for provider allowance.
     WaitingForQuota,
-    /// On the work lease, inside `richos_work.prepare`.
+    /// A saved report of preparation.
     Preparing,
-    /// Prepared and dispatched. A worker start has been recorded.
+    /// Stu reported running work or the engine witnessed a worker start.
     Running,
-    /// Stopped at a decision that is his. Waiting, not finished. See this enum's own doc for
-    /// what can and can no longer produce it.
+    /// A reported outstanding user decision.
     Blocked,
-    /// Witnessed finishing. Never inferred, never a timeout, never a process exit.
+    /// Verified completion.
     Settled,
-    /// **The job did not finish.** Registration or preparation failed (spec §1.4: never
-    /// softened into "I have started it"), the lease refused to open — or, since the CEO's
-    /// ruling §52, **the work ran and did not land**: the land lock timed out, the reviewer
-    /// asked for changes, the engine refused the merge, or the run stopped short of closing
-    /// the assignment. A failed land is a failed land, and the recorded `detail` says which
-    /// of those it was in his words.
+    /// An explicit failure report.
     Failed,
-    /// Stopped by him, or by quit. Files retained.
+    /// User Stop when accompanied by durable provenance. Bare legacy labels are unreported.
     Interrupted,
-    /// **It was running when RichOS was last looking, and nothing since has witnessed how
-    /// it ended.** Spec §6.2, in its own words: *"work that was running is reported as
-    /// unknown until re-witnessed … 'It was running when we last looked' is a receipt
-    /// state, not a status."*
-    ///
-    /// **It is not `Interrupted`, and the distinction is the whole of row 9.**
-    /// `Interrupted` is a stop somebody made — him, or a quit that announced itself — and
-    /// it carries the claim that the app saw the work stop. A crash, a power cut or a
-    /// force quit carries no such claim: the process that would have witnessed the ending
-    /// is the process that died. Calling that `Interrupted` would be an inference, and
-    /// calling it `Settled` would be the completion this system exists to refuse.
-    ///
-    /// **It is deliberately NOT [`Self::is_open`].** Nothing is running on it: the work
-    /// lease and its worker group are gone with the process that held them
-    /// (`operator_main` in `richos/engine/scripts/provider-supervisor.py`, whose owner-death
-    /// reap ends the lease's tool commands too). Counting it as open would
-    /// mean the update gate reads `busy` forever over work that stopped days ago, which is
-    /// §6.5's named trap — *"an app with near-permanent background work is an app that may
-    /// never install an update"*. It is unresolved instead, which is a thing he can act on
-    /// rather than a thing that blocks him ([`Self::awaits_his_word`]).
+    /// A historical host inference, never a current report. Restart does not write it.
     Unknown,
 }
 
 impl AssignmentState {
-    /// Is this assignment still the app's problem? Used by the settle check (spec §2.9),
-    /// by the update gate (§6.4) and by the window-closed exit arm (§2.4/§2.4a).
-    ///
-    /// **`Unknown` is not here on purpose** — see its own doc. Open means *something is
-    /// running or waiting inside this app*; an assignment nobody witnessed the end of is
-    /// neither.
+    /// Whether a reported state describes unfinished work. For a persisted row,
+    /// use Assignment::reported_state first so legacy host inferences stay historical.
     pub fn is_open(self) -> bool {
         matches!(
             self,
-            // `WaitingForScreen` IS open: something is outstanding inside this app and an
-            // update must not install over it, even though nothing is on a lease yet.
             Self::Registered | Self::WaitingForScreen | Self::WaitingForQuota | Self::Preparing | Self::Running | Self::Blocked
         )
     }
-    /// Is this assignment waiting on a decision only he can make? `Blocked` is the step it
-    /// stopped at; `Unknown` is whether to pick it back up at all (spec §6.3: *"resuming is
-    /// a decision, and the decision is his"*).
-    ///
-    /// **`WaitingForScreen` is deliberately not here.** It is waiting on the SCREEN, not on
-    /// him, and it resolves itself — telling him a self-resolving wait is his to decide would
-    /// be the nag §56 was given to avoid.
+    /// Historical classification retained for notice compatibility. Current questions
+    /// are read directly from the conversation's question store.
     pub fn awaits_his_word(self) -> bool {
         matches!(self, Self::Blocked | Self::Unknown)
     }
@@ -281,6 +182,12 @@ pub struct Notice {
 
 /// The persisted assignment. `schema` is checked on every read: a record written by a
 /// newer RichOS is refused, never half-understood.
+///
+/// The app has no arbitrary execution-state writer:
+/// ```compile_fail,E0425
+/// richos_core::assignment::advance(std::path::Path::new("."), "company", "thread", "job",
+///     richos_core::assignment::AssignmentState::Interrupted, "Quit");
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Assignment {
@@ -376,8 +283,8 @@ pub struct Assignment {
     #[serde(default)]
     pub needs_screen: bool,
     /// **`detail` is Rich's waiting sentence while a teammate works** ("I've asked Will for
-    /// advice, and he's working on it now."), written by [`advance_waiting`] and cleared by
-    /// every other [`advance`]. His row shows it in both views, for a task and a question
+    /// advice, and he's working on it now."), written by Stu's work report and cleared by
+    /// every other Stu's work report. His row shows it in both views, for a task and a question
     /// alike (`work_host.rs`'s `for_him`; the review of 3b91f1223, finding 1): it is free text
     /// from the back end, so no fixed list of sentences can recognize it. Written only while
     /// it is true, so every other record keeps its shape.
@@ -392,6 +299,17 @@ pub struct Assignment {
 pub const ANSWERED_DETAIL: &str = "Answered.";
 
 impl Assignment {
+    /// User Stop has durable provenance. Old host-written interruptions are not current reports.
+    pub fn reported_state(&self)->Option<AssignmentState> {
+        if self.user_stop_requested_at_ms.is_some() {return Some(AssignmentState::Interrupted)}
+        match self.state {AssignmentState::Unknown|AssignmentState::Interrupted=>None,state=>Some(state)}
+    }
+
+    /// Unverified old process records cannot revoke the user's pending work or answers.
+    pub fn accepts_input(&self)->bool {
+        !matches!(self.reported_state(),Some(AssignmentState::Settled|AssignmentState::Failed|AssignmentState::Interrupted))
+    }
+
     /// **Was this closed by an answer on his timeline rather than by work that finished?**
     ///
     /// A settled QUESTION always was. A settled TASK was only when the back end did it itself
@@ -815,41 +733,6 @@ pub fn scan_all(state: &Path, entity: &str, thread: &str) -> Result<Scan, Assign
     Ok(scan)
 }
 
-/// The row's detail when he has said to pick back up work RichOS closed on.
-pub const PICKED_UP_DETAIL: &str = "You asked for it to be picked back up. It is starting again.";
-
-/// **His word to pick back up work RichOS closed on** — [`AssignmentState::Unknown`] is
-/// "whether to pick it back up at all", and *"resuming is a decision, and the decision is his"*
-/// (spec §6.3). The richos-hq work-path design's C6, option B, Rich's call: a started job is
-/// never re-run by itself after a crash, and when he says the word it is THE SAME assignment
-/// that goes back on the register (same obligation, same seat, same asker), so every answer he
-/// already gave it is carried to the run, and he never answers twice.
-///
-/// `title` is the row's own `what`, the only name the front desk is ever given for it. The
-/// newest `unknown` row of that name on this conversation is the one picked up; nothing else
-/// is ever moved by this.
-pub fn pick_up(state: &Path, entity: &str, thread: &str, title: &str) -> Result<Receipt, AssignmentError> {
-    let title = sanitize_title(title)?;
-    // A damaged record elsewhere on the conversation does not take his way out of an
-    // unknown one away (finding 08). If the one he named is not among the rows that could be
-    // read, and some could not, that is what he is told, never "nothing by that name".
-    let mut scan = scan_all(state, entity, thread)?;
-    let found = scan
-        .rows
-        .into_iter()
-        .filter(|row| row.state == AssignmentState::Unknown && row.title == title)
-        .max_by_key(|row| (row.updated_at_ms, row.registered_at_ms));
-    let found = match found {
-        Some(found) => found,
-        None if !scan.unreadable.is_empty() => return Err(scan.unreadable.remove(0)),
-        None => {
-            return Err(AssignmentError("nothing by that name is waiting to be picked back up in this conversation".into()))
-        }
-    };
-    advance(state, entity, thread, &found.id, AssignmentState::Registered, PICKED_UP_DETAIL)?;
-    Ok(Receipt { id: found.id, title: found.title, kind: found.kind })
-}
-
 pub fn read(state: &Path, entity: &str, thread: &str, id: &str) -> Result<Assignment, AssignmentError> {
     if !usable_identity(id) {
         return Err(AssignmentError("that assignment cannot be identified".into()));
@@ -874,10 +757,8 @@ pub fn read(state: &Path, entity: &str, thread: &str, id: &str) -> Result<Assign
 /// it — so a delivery did not merely record a wrong elapsed time, it reordered "what moved most
 /// recently" by the order notices happened to be handed over.
 ///
-/// So the stamp moves to [`advance`], which is the only function in this module that writes
-/// `record.state` — verified: `record.state =` appears at exactly one line in this file.
-/// Delivery is already recorded separately and durably, per notice, on
-/// `Notice::delivered_at_ms`; nothing needed adding for it.
+/// Movement timestamps belong to primary reports and controls. Notice delivery has
+/// its own timestamp and never changes when a job last progressed.
 fn update(
     state: &Path,
     entity: &str,
@@ -910,21 +791,43 @@ fn update(
     Ok(record)
 }
 
-/// Move an assignment's state and say what it is waiting on.
-///
-/// **There is no transition table here on purpose.** The one rule a table would have to
-/// encode — that nothing invents a completion — is enforced at the only place that can
-/// know: the caller that witnessed the settlement. A table would let this file decide that
-/// `Running` "must" become `Settled`, which is spec §6.1's forbidden inference wearing a
-/// state machine.
-/// Record the user control before any cancellation side effect. Provider outcomes
-/// may change state and detail later, but cannot erase who requested the stop.
+/// Record the user's control before cancellation. Provider observations may refine
+/// the detail but cannot erase or override this Stop.
 pub fn record_user_stop(state: &Path, entity: &str, thread: &str, id: &str) -> Result<Assignment, AssignmentError> {
     update(state, entity, thread, id, |record| {
-        record.user_stop_requested_at_ms.get_or_insert_with(crate::util::now_millis);
+        let at=*record.user_stop_requested_at_ms.get_or_insert_with(crate::util::now_millis);
+        record.state=AssignmentState::Interrupted;
+        record.detail="Stop requested by the user.".into();
+        record.updated_at_ms=at;
+        record.waiting_sentence=false;
     })
 }
 
+/// The native provider's response to an already durable user Stop. No execution state is inferred.
+pub fn record_stop_observation(state:&Path,entity:&str,thread:&str,id:&str,detail:&str)->Result<Assignment,AssignmentError> {
+    if read(state,entity,thread,id)?.user_stop_requested_at_ms.is_none() {
+        return Err(AssignmentError("No user Stop was recorded".into()))
+    }
+    let detail=sanitize_line(detail)?;
+    update(state,entity,thread,id,|record|{record.detail=detail;})
+}
+
+/// An explicit operator report after the caller verified its completion evidence.
+/// Transport, process exit and permission answers have no arbitrary job-state writer.
+pub(crate) fn record_operator_report(state:&Path,entity:&str,thread:&str,report:&crate::operator_report::ReportRecord)->Result<Assignment,AssignmentError> {
+    if report.entity_id!=entity || report.thread_id!=thread {return Err(AssignmentError("The report belongs to another conversation".into()))}
+    let id=report.handle.as_deref().ok_or_else(||AssignmentError("The report names no assignment".into()))?;
+    let to=match report.kind.as_str() {
+        "outcome"=>AssignmentState::Settled,"failed"=>AssignmentState::Failed,
+        _=>return Err(AssignmentError("Only an explicit completion report ends work".into())),
+    };
+    update(state,&report.entity_id,&report.thread_id,id,|record|{
+        if record.user_stop_requested_at_ms.is_some() {return}
+        record.state=to;record.detail=report.text.clone();record.updated_at_ms=report.at_ms;record.waiting_sentence=false;
+    })
+}
+
+#[cfg(test)]
 pub fn advance(
     state: &Path,
     entity: &str,
@@ -936,18 +839,7 @@ pub fn advance(
     move_to(state, entity, thread, id, to, detail, false)
 }
 
-/// **[`advance`] to `Running` with Rich's waiting sentence as the detail**, marked so his row
-/// shows it ([`Assignment::waiting_sentence`]). The next [`advance`] clears the mark.
-pub fn advance_waiting(
-    state: &Path,
-    entity: &str,
-    thread: &str,
-    id: &str,
-    sentence: &str,
-) -> Result<Assignment, AssignmentError> {
-    move_to(state, entity, thread, id, AssignmentState::Running, sentence, true)
-}
-
+#[cfg(test)]
 fn move_to(
     state: &Path,
     entity: &str,

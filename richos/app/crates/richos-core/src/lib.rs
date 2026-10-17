@@ -175,7 +175,7 @@ pub use reprime::{LoroContextCompiler, LoroTier, RePrimePayload, SliceRequest};
 pub use spine::{Spine, SpineError, WorkerEventsSource};
 pub use steering::{
     ActiveTurn, IntakeHealth, IntakeLog, IntakeRecord, SteeringError, StopClaim, StopOutcome, TurnCancel,
-    TurnControl, KNOWN_INTAKE_TAGS,
+    TurnControl, ConversationControl, KNOWN_INTAKE_TAGS,
 };
 pub use stream::{StreamEvent, TurnObserver};
 pub use reachability::{ReachabilityProbe, ReachabilityVerdict, WorkSize};
@@ -202,7 +202,6 @@ pub mod engine_profile;
 pub mod repositories;
 pub mod app_workers;
 pub mod work_status;
-pub mod permissions;
 
 /// The BACKGROUND-WORK leg (the background-work spec, richos-hq
 /// `docs/plans/background-work-spec-2026-09-17.md` revision 5, `9255e71a`):

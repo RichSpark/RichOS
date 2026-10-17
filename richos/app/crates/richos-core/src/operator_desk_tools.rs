@@ -36,7 +36,7 @@ pub const SERVER_NAME: &str = "richos_operator";
 pub const STOP_TOOL: &str = "stop";
 pub const READ_TOOL: &str = "read";
 pub const INTERRUPT_TOOL: &str = "interrupt";
-/// The three names the front desk's permission check allows (`permissions.rs`).
+/// The operator tools whose registration is reported by the native session.
 pub const QUALIFIED_TOOLS: [&str; 3] =
     ["mcp__richos_operator__stop", "mcp__richos_operator__read", "mcp__richos_operator__interrupt"];
 
