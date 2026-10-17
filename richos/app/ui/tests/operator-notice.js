@@ -21,11 +21,10 @@
 //      twice. The assignment is named by its title, never its identifier.
 //   4. The live half: a pushed notice is drawn; one pushed while a turn runs is HELD and drawn
 //      at the boundary, never mid-sentence and never dropped.
-//   5. One report, one card: a report that closes an assignment arrives on both lanes with
-//      the same words, in either order, and is one attributed card; two assignments that say
-//      the same sentence are still two cards.
-//   6. On any other install nothing changes: the shell asks, the answer is empty, no team
-//      card is drawn, and a background result still draws as the app's own status line.
+//   5. Legacy work prose cannot become a conversation card. Genuine operator reports keep
+//      their attribution; two assignments that say the same sentence are still two cards.
+//   6. On any other install the operator read is empty and no team card is drawn. Legacy
+//      work prose cannot fabricate a status card there either.
 //   7. It survives his next sentence (the snapshot reload), attribution included.
 //   8. CONTRAST, computed from WebKit's resolved colors, for every kind in BOTH themes: the
 //      from-line and the body at 4.5:1 and at least 16px, the left rule at 3:1.
@@ -324,11 +323,11 @@ async function main() {
     await page.fill("#input", "how is the draft going?");
     await page.press("#input", "Enter");
     await page.waitForFunction(() => anyLiveTurn(), undefined, { timeout: 5000 }); // eslint-disable-line no-undef
-    // And the work lane's background result, through the same hold: queued and read mid-turn.
-    await page.evaluate(() => {
+    // A real operator question is held; legacy app-written work prose is excluded.
+    await page.evaluate(async () => {
       window.__RICHOS_MOCK__.operatorSay("acme", { kind: "question", text: "Should the draft keep the 90-day term?", handle: "asg_7f3c9e" });
       window.__RICHOS_MOCK__.workNoticeQueue("acme", { assignmentId: "a9", title: "x", kind: "failed", text: "The nightly build stopped before it finished.", raisedAtMs: Date.now() });
-      drainWorkNotices(); // eslint-disable-line no-undef
+      await drainWorkNotices(); // eslint-disable-line no-undef
     });
     // Two of the page's own frames — the shell renders at most once per frame (§15) — rather
     // than 250ms of this process's time (audit R10): a notice that was NOT held would be on
@@ -344,25 +343,26 @@ async function main() {
     assertEqual(during.cards, 1, "his team's notice was drawn mid-sentence");
     assertEqual(during.plain, 0, "the background result was drawn mid-sentence");
     assertEqual(during.told, 0, "the read did not take it, so the hold is not what kept it off the screen");
-    // THE BOUNDARY: the turn ends, and both held notices are drawn — at THIS boundary. The
+    // THE BOUNDARY: the turn ends and the held operator notice is drawn here. The
     // mock has no later one, so a hold that waited for the next turn would time out here,
     // which is how this check found that the shipped flush never fired at a turn's end.
     await page.waitForFunction(() => !anyLiveTurn(), undefined, { timeout: 15000 }); // eslint-disable-line no-undef
     await page.waitForFunction(
-      () => document.querySelectorAll("#messages .tl-notice--team").length === 2 &&
-        document.querySelectorAll("#messages .tl-notice:not(.tl-notice--team)").length === 1,
+      () => document.querySelectorAll("#messages .tl-notice--team").length === 2,
       undefined, { timeout: 8000 }
     );
+    assertEqual(await page.locator("#messages .tl-notice:not(.tl-notice--team)").count(), 0,
+      "legacy app-written work prose became a conversation card at the boundary");
     const cards = await teamCards(page);
     assertEqual(cards[1], "question|Your team asks you · The Acme contract draft|Should the draft keep the 90-day term?",
       "the held notice as drawn at the boundary");
     assertEqual(page.__errors.length, 0, "shell errors: " + page.__errors.join(" | "));
     await page.close();
-    return "pushed: drawn at once; mid-turn: his team's notice and a background result taken, held (0 drawn while live), both drawn when the turn ended";
+    return "operator push drawn at once; mid-turn question held and drawn at the boundary; legacy work prose never drawn";
   });
 
   // ---- 5: one report, one card -------------------------------------------------------------
-  await run.check("a report on both lanes is one attributed card, in either order; two assignments stay two", async () => {
+  await run.check("legacy work prose is excluded; operator reports keep attribution, separation and hold", async () => {
     // Driven through the SHIPPING functions, in a context of their own — the same method
     // `background-work.js` uses for the work lane — because the order of two drains is
     // exactly what a whole shell cannot be made to hold still.
@@ -389,9 +389,10 @@ async function main() {
     const cards = () => vm.runInContext(`Array.from(timelineModel.items.values())
       .filter((i) => i.kind === "local_notice").map((i) => (i.team ? i.team.kind + ":" + (i.team.about || "") : "app") + "|" + i.text)`, context);
 
-    // WORK FIRST (the record is written before the operator line is said).
+    // Legacy work prose first: it is excluded before the real operator report arrives.
     lanes.work = [{ assignmentId: "one", kind: "settled", text: words, raisedAtMs: 100 }];
     await vm.runInContext("drainWorkNotices()", context);
+    assertEqual(cards().length, 0, "legacy work prose was presented as a conversation card");
     lanes.team = [{ at_ms: 101, handle: "one", kind: "outcome", text: words, delivered_at_ms: null }];
     await vm.runInContext("drainOperatorNotices()", context);
     const workFirst = cards();
@@ -417,7 +418,7 @@ async function main() {
     await vm.runInContext("drainOperatorNotices()", context);
     assertEqual(cards().length, 5, "distinct notices were merged: " + JSON.stringify(cards()));
 
-    // AND THE HOLD APPLIES TO BOTH LANES' PAIR: held mid-turn, merged at the boundary.
+    // The operator report is still held, while legacy work prose remains excluded.
     vm.runInContext(`timelineModel = window.RichTimeline.createModel();
       window.RichTimeline.bind(timelineModel, "company", "a", 1); busy = true;`, context);
     lanes.work = [{ assignmentId: "four", kind: "failed", text: "Nothing landed.", raisedAtMs: 400 }];
@@ -427,7 +428,7 @@ async function main() {
     assertEqual(cards().length, 0, "drawn mid-turn");
     vm.runInContext("busy = false; flushWorkNotices()", context);
     assertEqual(cards(), ["failed:|Nothing landed."], "held pair at the boundary");
-    return "work-then-team: 1 card (attributed); team-then-work: 1 card; same words on 2 assignments: 2; unassigned lines never merged; a held pair: 1";
+    return "legacy prose: 0 cards; operator reports retain attribution in either order, distinct assignments stay separate and the held report appears at the boundary";
   });
 
   // ---- 6: every other install --------------------------------------------------------------
@@ -451,19 +452,15 @@ async function main() {
     });
     await openThread(page, "acme");
     await page.waitForFunction(() => window.__RICHOS_MOCK__.operatorCalls().includes("acme"), undefined, { timeout: 8000 });
-    await page.waitForFunction(() => document.querySelectorAll("#messages .tl-notice").length === 1, undefined, { timeout: 8000 });
+    await page.evaluate(async () => { await drainWorkNotices(); }); // eslint-disable-line no-undef
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     assertEqual(await page.locator("#messages .tl-notice--team").count(), 0, "a product install drew his team's notice");
     assertEqual(await page.locator("#messages .tl-notice-from").count(), 0, "a product install drew a from-line");
-    // The app's own line is exactly as it was before this surface existed.
-    const plain = await page.evaluate(() => {
-      const card = document.querySelector("#messages .tl-notice");
-      return { sr: card.querySelector(".sr-only").textContent, body: card.querySelector(".tl-notice-body").innerText.trim() };
-    });
-    assertEqual(plain, { sr: "RichOS status", body: "The nightly build stopped before it finished." }, "the background result");
+    assertEqual(await page.locator("#messages .tl-notice").count(), 0,
+      "legacy app-written work prose became a status card on a product install");
     assertEqual(page.__errors.length, 0, "shell errors: " + page.__errors.join(" | "));
     await page.close();
-    return "operator control: 1 team card; product install: asked, 0 team cards, 0 from-lines, the background result unchanged";
+    return "operator control: 1 team card; product install: read completed, 0 team cards, 0 from-lines and no fabricated status card";
   });
 
   // ---- 7: his next sentence ------------------------------------------------------------------
