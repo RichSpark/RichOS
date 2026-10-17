@@ -363,7 +363,7 @@ pub const APPROVAL_LOST_AT_RELAUNCH: &str =
 fn waits_on_something_saved(state: &Path, record: &Assignment) -> bool {
     let question = crate::questions::Store::new(state).list(&record.entity_id, &record.thread_id).map(|questions| {
         questions.iter().any(|q| {
-            q.asker == record.obligation_id && !q.delivered && q.state != crate::questions::State::Withdrawn
+            (q.asker == record.obligation_id || q.obligation_id.as_deref() == Some(record.obligation_id.as_str())) && !q.delivered && q.state != crate::questions::State::Withdrawn
         })
     });
     let answer = crate::question_work::untaken(state, &record.entity_id, &record.thread_id, &record.obligation_id);
@@ -808,9 +808,9 @@ mod tests {
             let receipt = assignment::register(&state, &registration(obligation)).unwrap();
             assignment::advance(&state, "depot", "thread-one", &receipt.id, *at, detail).unwrap();
             if *answered {
-                crate::question_work::enqueue(&state, &crate::questions::Delivery { obligation_id:None,
+                crate::question_work::enqueue(&state, &crate::questions::Delivery { obligation_id:Some(obligation.to_string()),
                     id: format!("question-set:{obligation}"), entity_id: "depot".into(), thread_id: "thread-one".into(),
-                    asker: obligation.to_string(), set_id: None, text: "You answered: tomorrow".into(), receipt: None,
+                    asker: "stu".to_string(), set_id: None, text: "You answered: tomorrow".into(), receipt: None,
                 }).unwrap();
             }
             ids.push(receipt.id);
@@ -923,9 +923,9 @@ mod tests {
     /// (`questions.rs`), so it outlives the process that asked it.
     fn open_question(state: &Path, obligation: &str) {
         use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
-        Store::new(state).ask(&AskScope { obligation_id:None,
+        Store::new(state).ask(&AskScope { obligation_id:Some(obligation.into()),
             root: state.to_path_buf(), entity_id: "depot".into(), thread_id: "thread-one".into(),
-            turn_id: "turn-7".into(), asker: obligation.into(), session_id: "work-session-a".into(),
+            turn_id: "turn-7".into(), asker: "stu".into(), session_id: "work-session-a".into(),
             engine: None, entity_root: None, app_run: None,
         }, vec![QuestionInput {
             text: "Who should review it?".into(),

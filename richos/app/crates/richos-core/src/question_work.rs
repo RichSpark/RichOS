@@ -186,7 +186,7 @@ pub fn waiting(root: &Path, id: &str) -> bool {
 
 /// Is one of his answers for this asker saved and not yet taken? Recovery reads this (D6).
 pub fn untaken(root: &Path, entity: &str, thread: &str, asker: &str) -> Result<bool, String> {
-    Ok(pending(root)?.iter().any(|d| d.entity_id == entity && d.thread_id == thread && d.asker == asker))
+    Ok(pending(root)?.iter().any(|d| d.entity_id == entity && d.thread_id == thread && (d.asker == asker || d.obligation_id.as_deref() == Some(asker))))
 }
 
 /// The complete MCP result is the receiving input for a words answer. Keep it
