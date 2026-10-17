@@ -7016,6 +7016,25 @@ done
     }
 
     #[test]
+    fn a_permission_response_is_not_replayed_after_a_failed_turn() {
+        let script = write_script("permission-failed-turn", r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+printf '%s\n' '{"type":"control_request","request_id":"one-permission","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"fictional command"}}}'
+read -r answer
+case "$answer" in *'"request_id":"one-permission"'*'"behavior":"allow"'*) ;; *) exit 9 ;; esac
+printf '%s\n' '{"type":"result","stop_reason":"max_tokens"}'
+read -r next
+case "$next" in *'"type":"user"'*) ;; *) exit 10 ;; esac
+printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
+"#);
+        let client = NativeClient::spawn(&script, &std::env::temp_dir(), &doctrine_fixture(), &skills_fixture()).unwrap();
+        assert_eq!(client.prompt("First input", &mut |_| {}).unwrap(), "max_tokens");
+        assert_eq!(client.prompt("Independent next input", &mut |_| {}).unwrap(), "end_turn");
+    }
+
+    #[test]
     fn hidden_context_denies_permission_then_visible_delivery_restores_normal_policy() {
         let script = write_script("context-only-permissions", r#"
 read -r init

@@ -779,6 +779,7 @@ impl WorkHost {
             Answer(ThreadBinding, crate::questions::Delivery),
         }
         loop {
+            let live_session = backend.lease.lock().unwrap().as_ref().map(|lease| lease.session_id().to_string());
             let next = {
                 let mut inner = backend.inner.lock().unwrap();
                 loop {
@@ -793,6 +794,12 @@ impl WorkHost {
                                 !d.asker.starts_with("operator:")
                                     && d.entity_id == binding.entity_id().as_str()
                                     && d.thread_id == binding.thread_id()
+                                    && live_session.as_deref().is_none_or(|session| {
+                                        match crate::session_tools::previous_attempt(&self.message_scope(&binding), "stu", &format!("answer:{}", d.id)) {
+                                            Ok(attempt) => attempt.as_ref().and_then(|a| a["session_id"].as_str()) != Some(session),
+                                            Err(error) => { eprintln!("[richos] answer receipt remains unreadable: {error}"); false }
+                                        }
+                                    })
                             })
                         {
                             inner.processing = true;
@@ -1443,6 +1450,67 @@ mod tests {
     }
 
     #[test]
+    fn every_scheduled_input_is_delivered_once_per_live_stu_despite_a_failed_turn() {
+        for kind in ["handoff", "peer", "standing-answer", "job-answer"] {
+            for result in ["end_turn", "max_tokens", "provider_error", "io_error"] {
+                let h = harness(0);
+                let scope = h.host.message_scope(&h.binding);
+                let path = h.root.join("peer-status.json");
+                let instruction = if matches!(kind, "handoff" | "job-answer") {
+                    assignment::register(&h.state, &registration(&h)).unwrap();
+                    Some(crate::ecs::UserInstruction {
+                        ledger_ref: registration(&h).instruction_ledger_ref,
+                        sha256: registration(&h).instruction_sha256,
+                        text: None,
+                    })
+                } else {
+                    None
+                };
+                crate::session_tools::bind(&path, &scope, "front-session", "rich", instruction).unwrap();
+                h.team.lock().unwrap().turn_results.push_back(result);
+                match kind {
+                    "handoff" => { crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Input under test"})).unwrap(); }
+                    "peer" => { crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Input under test"})).unwrap(); }
+                    _ => {
+                        let answer = crate::questions::Delivery {
+                            obligation_id: (kind == "job-answer").then(|| registration(&h).obligation_id),
+                            id: "answer-under-test".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
+                            asker: "stu".into(), set_id: None, text: "Input under test".into(), receipt: None,
+                        };
+                        h.host.queue_question_answer(&h.binding, &answer).unwrap();
+                    }
+                }
+                h.host.wake_messages(&h.binding);
+                assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)));
+                crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Independent later input"})).unwrap();
+                h.host.wake_messages(&h.binding);
+                until("later input must pass an answer already received by live Stu", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("Independent later input")));
+                h.host.shutdown();
+                let prompts = h.work_prompts.lock().unwrap().clone();
+                let expected = if result == "io_error" { 2 } else { 1 };
+                assert_eq!(prompts.iter().filter(|p| p.contains("Input under test")).count(), expected,
+                    "{kind}/{result}: accepted input repeated in the same live session: {prompts:?}");
+                assert_eq!(h.spawns.load(Ordering::SeqCst), expected, "{kind}/{result}: unexpected connection replacement");
+                let before = prompts.len();
+                crate::session_tools::send(&path, &scope, serde_json::json!({"text":"After restart"})).unwrap();
+                let restarted = WorkHost::new(&h.state, Box::new(Factory {
+                    spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+                    team: h.team.clone(), gate: h.start_gate.clone(),
+                }), Arc::new(SilentNotifier), Arc::new(PermissionDesk::default()));
+                restarted.wake_messages(&h.binding);
+                until("restart must deliver its new input", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("After restart")));
+                restarted.shutdown();
+                let prompts = h.work_prompts.lock().unwrap().clone();
+                let unfinished = kind == "handoff" || !matches!(result, "end_turn" | "io_error");
+                assert_eq!(prompts[before..].iter().filter(|p| p.contains("Input under test")).count(), usize::from(unfinished),
+                    "{kind}/{result}: new session lost or repeated recovery input: {prompts:?}");
+                assert!(!prompts[before..].iter().any(|p| p.contains("Independent later input")), "completed input replayed");
+                std::fs::remove_dir_all(h.root).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn a_disconnected_stu_reconciles_unfinished_input_in_a_new_session_once() {
         let h=harness(1);assignment::register(&h.state,&registration(&h)).unwrap();
         let scope=h.host.message_scope(&h.binding);let path=h.root.join("peer-status.json");
@@ -1665,9 +1733,18 @@ mod tests {
         .unwrap();
         let pending=crate::session_tools::pending(&scope,"stu").unwrap().expect("native turn completion erased the job");
         assert_eq!(pending.0.work.as_ref().unwrap().assignment_id,receipt.id);
+        drop(running);
+        *backend.lease.lock().unwrap()=Some(Box::new(Lease {
+            session:"same-stu".into(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),
+        }));
+        h.team.lock().unwrap().turn_results.push_back("max_tokens");
+        let message=crate::session_tools::Message {handoff:false,from:"rich".into(),text:"Receiving turn".into(),instruction:None,work:None};
+        assert!(h.host.run_message(&backend,&h.binding,&message,"live-input-receiving-turn").is_err());
+        let after=backend.inner.lock().unwrap().peer_active_through.unwrap();
+        assert!(crate::session_tools::pending_after(&scope,"stu",after).unwrap().is_none(),"accepted live input became new after the receiving turn failed");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"failed turn lost the unfinished handoff");
         assignment::advance(&h.state,"depot","thread-one",&receipt.id,AssignmentState::Settled,"Stu reported completion").unwrap();
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"completed job replayed after Stu's report");
-        drop(running);
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
     }
