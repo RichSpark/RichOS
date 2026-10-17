@@ -598,28 +598,6 @@ impl IntakeLog {
         Ok(())
     }
 
-    /// Durably record one steering message. Returns its id.
-    pub fn steer(
-        &mut self,
-        thread_id: &str,
-        steering_turn_id: &str,
-        entity_id: Option<EntityId>,
-        text: &str,
-    ) -> Result<IntakeRecord, SteeringError> {
-        let rec = IntakeRecord::Steer {
-            id: self.next_id,
-            thread_id: thread_id.to_string(),
-            steering_turn_id: steering_turn_id.to_string(),
-            entity_id,
-            text: text.to_string(),
-            at: now_millis(),
-        };
-        self.write(&rec)?;
-        self.next_id += 1;
-        self.pending.push(rec.clone());
-        Ok(rec)
-    }
-
     /// Durably record one message that arrived from a channel other than the desktop
     /// window — the phone (plan §4.2 i). Returns it, carrying the `id` the caller answers
     /// the phone with.
@@ -695,8 +673,29 @@ impl IntakeLog {
         Ok(rec)
     }
 
-    /// Durably record one stop request. Returns it, carrying the timestamp that
-    /// `Ledger::stop_turn` will quote.
+    /// Durably record one steering message. Returns its id.
+    pub fn steer(
+        &mut self,
+        thread_id: &str,
+        steering_turn_id: &str,
+        entity_id: Option<EntityId>,
+        text: &str,
+    ) -> Result<IntakeRecord, SteeringError> {
+        let rec = IntakeRecord::Steer {
+            id: self.next_id,
+            thread_id: thread_id.to_string(),
+            steering_turn_id: steering_turn_id.to_string(),
+            entity_id,
+            text: text.to_string(),
+            at: now_millis(),
+        };
+        self.write(&rec)?;
+        self.next_id += 1;
+        self.pending.push(rec.clone());
+        Ok(rec)
+    }
+
+    /// Durably record one stop request, including its timestamp.
     pub fn stop(&mut self, turn_id: &str) -> Result<IntakeRecord, SteeringError> {
         let rec = IntakeRecord::Stop { id: self.next_id, turn_id: turn_id.to_string(), at: now_millis() };
         self.write(&rec)?;
@@ -854,7 +853,7 @@ pub enum StopOutcome {
 }
 
 #[derive(Default)]
-struct ConversationControl {
+struct ConversationState {
     active: Option<ActiveTurn>,
     stop: Option<StopClaim>,
     cancel: Option<Arc<dyn TurnCancel>>,
@@ -863,7 +862,7 @@ struct ConversationControl {
 
 struct Inner {
     intake: Mutex<Option<IntakeLog>>,
-    conversations: Mutex<std::collections::HashMap<String, ConversationControl>>,
+    conversations: Mutex<std::collections::HashMap<String, ConversationState>>,
     /// **The thread whose front desk is being primed RIGHT NOW, or `None`** — the one fact
     /// `send_message` needs in order to not block, and the one place it can be read from.
     ///
@@ -888,17 +887,22 @@ struct Inner {
 
 /// The shared, lock-free-with-respect-to-the-spine control surface for §9.2 and §9.3.
 ///
+/// Single-conversation actions require an explicit view:
+/// ```compile_fail,E0599
+/// let controls=richos_core::steering::TurnControl::detached();
+/// controls.request_stop();
+/// ```
+///
 /// Cloning clones the `Arc`: the Tauri shell keeps one handle beside the `Mutex<Spine>`
 /// and the spine holds the same one, so a stop command never queues behind a turn.
 #[derive(Clone)]
 pub struct TurnControl {
     inner: Arc<Inner>,
-    thread: Option<String>,
 }
 
 impl std::fmt::Debug for TurnControl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TurnControl").field("active", &self.active_turn()).finish_non_exhaustive()
+        f.debug_struct("TurnControl").field("active_count", &self.active_turn_count()).finish_non_exhaustive()
     }
 }
 
@@ -912,7 +916,6 @@ impl TurnControl {
                 conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(None),
             }),
-            thread: None,
         })
     }
 
@@ -927,7 +930,6 @@ impl TurnControl {
                 conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(None),
             }),
-            thread: None,
         }
     }
 
@@ -942,11 +944,9 @@ impl TurnControl {
     // --- written by the spine, at the points that already exist -------------------------
 
     /// A view of the same durable intake and controls for one conversation.
-    pub fn for_thread(&self, thread: &str) -> Self {
-        Self { inner: self.inner.clone(), thread: Some(thread.to_string()) }
+    pub fn for_thread(&self, thread: &str) -> ConversationControl {
+        ConversationControl {shared:self.clone(),thread:thread.to_string()}
     }
-
-    fn key(&self) -> &str { self.thread.as_deref().unwrap_or("") }
 
     pub fn active_turn_count(&self) -> usize {
         self.inner.conversations.lock().unwrap().values().filter(|state|state.active.is_some()).count()
@@ -959,13 +959,6 @@ impl TurnControl {
             .any(|state|state.active.as_ref().is_some_and(|turn|turn.turn_id==turn_id))
     }
 
-    pub fn begin_turn(&self, turn: ActiveTurn) {
-        let mut states=self.inner.conversations.lock().unwrap();
-        let state=states.entry(self.key().to_string()).or_default();
-        if let Some(cancel)=state.cancel.as_ref() {cancel.begin_operation();}
-        state.active=Some(turn);
-    }
-
     pub fn end_turn(&self, turn_id: &str) {
         let mut states=self.inner.conversations.lock().unwrap();
         for state in states.values_mut().filter(|state|state.active.as_ref().is_some_and(|turn|turn.turn_id==turn_id)) {
@@ -974,90 +967,39 @@ impl TurnControl {
         }
     }
 
-    pub fn shutdown_lease(&self) {
-        let cancels:Vec<_>=self.inner.conversations.lock().unwrap().iter()
-            .filter(|(key,_)|self.thread.as_ref().is_none_or(|thread|thread.as_str()==key.as_str()))
-            .filter_map(|(_,state)|state.cancel.clone()).collect();
+    fn record_stop(&self,state:&mut ConversationState)->Result<(String,u64),SteeringError> {
+        let active=state.active.as_ref().expect("only active turns are stopped");
+        let record=self.inner.intake.lock().unwrap().as_mut().ok_or(SteeringError::NoDurableIntake)?.stop(&active.turn_id)?;
+        let IntakeRecord::Stop{id,at,..}=record else {unreachable!()};
+        state.stop=Some(StopClaim{turn_id:active.turn_id.clone(),intake_id:id,requested_at:at});
+        Ok((active.turn_id.clone(),at))
+    }
+
+    /// Persist all active Stops before any cancellation or lease shutdown.
+    pub fn request_stop_all(&self)->Result<Vec<StopOutcome>,SteeringError> {
+        let mut states=self.inner.conversations.lock().unwrap();
+        let mut saved=Vec::new();
+        for (thread,state) in states.iter_mut().filter(|(_,state)|state.active.is_some()) {
+            let (turn,at)=self.record_stop(state)?;
+            saved.push((thread.clone(),turn,at));
+        }
+        Ok(saved.into_iter().map(|(thread,turn_id,requested_at)| {
+            let reached_lease=states[&thread].cancel.as_ref().is_some_and(|cancel|cancel.cancel());
+            StopOutcome::Requested{turn_id,requested_at,reached_lease}
+        }).collect())
+    }
+
+    pub fn shutdown_leases(&self) {
+        let cancels:Vec<_>=self.inner.conversations.lock().unwrap().values().filter_map(|state|state.cancel.clone()).collect();
         for cancel in cancels {cancel.shutdown();}
     }
 
-    pub fn set_cancel(&self, cancel: Option<Arc<dyn TurnCancel>>) {
-        let mut states=self.inner.conversations.lock().unwrap();
-        let state=states.entry(self.key().to_string()).or_default();
-        if let Some(turn)=state.active.as_ref() {
-            if let Some(handle)=cancel.as_ref() {
-                handle.begin_operation();
-                if state.stop.as_ref().is_some_and(|claim|claim.turn_id==turn.turn_id) {handle.cancel();}
-            }
-        }
-        state.cancel=cancel;
-    }
-
-    pub fn set_lease_session(&self, session_id: Option<String>) {
-        self.inner.conversations.lock().unwrap().entry(self.key().to_string()).or_default().lease_session=session_id;
-    }
-
-    pub fn active_turn(&self) -> Option<ActiveTurn> {
-        let states=self.inner.conversations.lock().unwrap();
-        if self.thread.is_some() {return states.get(self.key()).and_then(|s|s.active.clone());}
-        // Legacy unscoped callers can act only when the target is unambiguous.
-        let mut active=states.values().filter_map(|s|s.active.as_ref());
-        let turn=active.next()?.clone();
-        active.next().is_none().then_some(turn)
-    }
-
-    pub fn lease_session(&self) -> Option<String> {
-        let states=self.inner.conversations.lock().unwrap();
-        if self.thread.is_some() {return states.get(self.key()).and_then(|state|state.lease_session.clone());}
-        let mut sessions=states.iter().filter(|(key,_)|!key.is_empty() || states.len()==1)
-            .filter_map(|(_,state)|state.lease_session.as_ref());
-        let session=sessions.next()?.clone();
-        sessions.next().is_none().then_some(session)
-    }
-
     pub fn lease_sessions(&self)->Vec<String> {
-        self.inner.conversations.lock().unwrap().values().filter_map(|state|state.lease_session.clone()).collect()
-    }
-
-    pub fn request_stop(&self) -> Result<StopOutcome, SteeringError> {
-        self.request_stop_matching(None)
-    }
-
-    pub fn request_stop_for(&self, expected_turn_id: &str) -> Result<StopOutcome, SteeringError> {
-        self.request_stop_matching(Some(expected_turn_id))
-    }
-
-    fn request_stop_matching(&self, expected_turn_id: Option<&str>) -> Result<StopOutcome, SteeringError> {
-        // Identity, durable claim and the matching lease remain in one critical section.
-        let mut states=self.inner.conversations.lock().unwrap();
-        let keys:Vec<_>=states.iter().filter(|(key,state)| {
-            self.thread.as_ref().is_none_or(|thread|thread.as_str()==key.as_str())
-                && state.active.as_ref().is_some_and(|turn|expected_turn_id.is_none_or(|id|id==turn.turn_id))
-        }).map(|(key,_)|key.clone()).collect();
-        if keys.len()!=1 {return Ok(StopOutcome::NothingRunning);}
-        let state=states.get_mut(&keys[0]).unwrap();
-        let active=state.active.as_ref().unwrap();
-        let rec={
-            let mut intake=self.inner.intake.lock().unwrap();
-            intake.as_mut().ok_or(SteeringError::NoDurableIntake)?.stop(&active.turn_id)?
-        };
-        let IntakeRecord::Stop{id,at,..}=rec else {unreachable!()};
-        state.stop=Some(StopClaim{turn_id:active.turn_id.clone(),intake_id:id,requested_at:at});
-        let reached_lease=state.cancel.as_ref().is_some_and(|cancel|cancel.cancel());
-        Ok(StopOutcome::Requested{turn_id:active.turn_id.clone(),requested_at:at,reached_lease})
-    }
-
-    /// §9.2: the CEO added words while Rich was working. Durable on return; delivered at
-    /// the next turn boundary (see the module doc — this does not join the running turn).
-    pub fn steer(&self, text: &str) -> Result<IntakeRecord, SteeringError> {
-        let active = self.active_turn().ok_or(SteeringError::NoActiveTurn)?;
-        let mut guard = self.inner.intake.lock().unwrap();
-        let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-        log.steer(&active.thread_id, &active.turn_id, active.entity_id.clone(), text)
+        self.inner.conversations.lock().unwrap().iter().filter(|(thread,_)|!thread.is_empty()).filter_map(|(_,state)|state.lease_session.clone()).collect()
     }
 
     /// **The phone's road in** (plan §4.2 i). Durable on return, and it does NOT require a
-    /// turn to be running — which is the one way it differs from [`steer`](Self::steer),
+    /// turn to be running — which is the one way it differs from [`ConversationControl::steer`],
     /// and the reason it is a different function rather than a relaxed flag on that one.
     ///
     /// `steer` REFUSES when nothing is running, correctly: "add this to what Rich is
@@ -1252,23 +1194,6 @@ impl TurnControl {
             .find(|claim|claim.turn_id==turn_id).cloned()
     }
 
-    pub fn stop_claim(&self) -> Option<StopClaim> {
-        let states=self.inner.conversations.lock().unwrap();
-        if self.thread.is_some() {return states.get(self.key()).and_then(|s|s.stop.clone());}
-        let mut claims=states.values().filter_map(|s|s.stop.as_ref());
-        let claim=claims.next()?.clone();
-        claims.next().is_none().then_some(claim)
-    }
-
-    pub fn clear_stop_claim(&self) {
-        let mut states=self.inner.conversations.lock().unwrap();
-        if self.thread.is_some() {
-            if let Some(state)=states.get_mut(self.key()) {state.stop=None;}
-        } else {
-            for state in states.values_mut() {state.stop=None;}
-        }
-    }
-
     /// Undrained intake records, oldest first.
     pub fn pending_intake(&self) -> Vec<IntakeRecord> {
         self.inner.intake.lock().unwrap().as_ref().map(|l| l.pending().to_vec()).unwrap_or_default()
@@ -1302,6 +1227,102 @@ impl TurnControl {
             Some(log) => log.mark_drained(through),
             None => Ok(()),
         }
+    }
+}
+
+
+/// A control view bound to one conversation. It shares the app's intake and map.
+#[derive(Clone)]
+pub struct ConversationControl {
+    shared:TurnControl,
+    thread:String,
+}
+impl std::ops::Deref for ConversationControl {
+    type Target=TurnControl;
+    fn deref(&self)->&Self::Target {&self.shared}
+}
+impl std::fmt::Debug for ConversationControl {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
+        f.debug_struct("ConversationControl").field("thread",&self.thread).field("active",&self.active_turn()).finish_non_exhaustive()
+    }
+}
+impl From<ConversationControl> for TurnControl {
+    fn from(control:ConversationControl)->Self {control.shared}
+}
+impl ConversationControl {
+    fn key(&self)->&str {&self.thread}
+
+    pub fn begin_turn(&self, turn: ActiveTurn) {
+        assert_eq!(turn.thread_id,self.thread,"turn control belongs to another conversation");
+        let mut states=self.shared.inner.conversations.lock().unwrap();
+        let state=states.entry(self.key().to_string()).or_default();
+        if let Some(cancel)=state.cancel.as_ref() {cancel.begin_operation();}
+        state.active=Some(turn);
+    }
+
+    pub fn shutdown_lease(&self) {
+        let cancel=self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.cancel.clone());
+        if let Some(cancel)=cancel {cancel.shutdown();}
+    }
+
+    pub fn set_cancel(&self, cancel: Option<Arc<dyn TurnCancel>>) {
+        let mut states=self.shared.inner.conversations.lock().unwrap();
+        let state=states.entry(self.key().to_string()).or_default();
+        if let Some(turn)=state.active.as_ref() {
+            if let Some(handle)=cancel.as_ref() {
+                handle.begin_operation();
+                if state.stop.as_ref().is_some_and(|claim|claim.turn_id==turn.turn_id) {handle.cancel();}
+            }
+        }
+        state.cancel=cancel;
+    }
+
+    pub fn set_lease_session(&self, session_id: Option<String>) {
+        self.shared.inner.conversations.lock().unwrap().entry(self.key().to_string()).or_default().lease_session=session_id;
+    }
+
+    pub fn active_turn(&self)->Option<ActiveTurn> {
+        self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.active.clone())
+    }
+
+    pub fn lease_session(&self)->Option<String> {
+        self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.lease_session.clone())
+    }
+
+    pub fn request_stop(&self) -> Result<StopOutcome, SteeringError> {
+        self.request_stop_matching(None)
+    }
+
+    pub fn request_stop_for(&self, expected_turn_id: &str) -> Result<StopOutcome, SteeringError> {
+        self.request_stop_matching(Some(expected_turn_id))
+    }
+
+    fn request_stop_matching(&self,expected:Option<&str>)->Result<StopOutcome,SteeringError> {
+        let mut states=self.shared.inner.conversations.lock().unwrap();
+        let Some(state)=states.get_mut(self.key()) else {return Ok(StopOutcome::NothingRunning)};
+        let Some(active)=state.active.as_ref() else {return Ok(StopOutcome::NothingRunning)};
+        if expected.is_some_and(|id|id!=active.turn_id) {return Ok(StopOutcome::NothingRunning)}
+        let (turn_id,requested_at)=self.shared.record_stop(state)?;
+        let reached_lease=state.cancel.as_ref().is_some_and(|cancel|cancel.cancel());
+        Ok(StopOutcome::Requested{turn_id,requested_at,reached_lease})
+    }
+
+    /// §9.2: the CEO added words while Rich was working. Durable on return; delivered at
+    /// the next turn boundary (see the module doc — this does not join the running turn).
+    pub fn steer(&self, text: &str) -> Result<IntakeRecord, SteeringError> {
+        let active = self.active_turn().ok_or(SteeringError::NoActiveTurn)?;
+        let mut guard = self.inner.intake.lock().unwrap();
+        let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
+        log.steer(&active.thread_id, &active.turn_id, active.entity_id.clone(), text)
+    }
+
+
+    pub fn stop_claim(&self)->Option<StopClaim> {
+        self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.stop.clone())
+    }
+
+    pub fn clear_stop_claim(&self) {
+        if let Some(state)=self.shared.inner.conversations.lock().unwrap().get_mut(self.key()) {state.stop=None;}
     }
 }
 
@@ -1348,7 +1369,7 @@ mod tests {
         b.set_cancel(Some(Arc::new(RecordingCancel(b_calls.clone(),true))));
         a.begin_turn(ActiveTurn{turn_id:"a".into(),thread_id:"A".into(),..active()});
         b.begin_turn(ActiveTurn{turn_id:"b".into(),thread_id:"B".into(),..active()});
-        assert_eq!(control.request_stop().unwrap(),StopOutcome::NothingRunning);
+        assert_eq!(a.request_stop_for("b").unwrap(),StopOutcome::NothingRunning);
         assert!(control.pending_intake().is_empty());
         a.request_stop().unwrap();
         b.request_stop().unwrap();
@@ -1366,6 +1387,39 @@ mod tests {
     }
 
     #[test]
+    fn all_conversation_stops_are_durable_before_any_cancel_or_shutdown() {
+        struct ChecksStops {path:PathBuf,calls:Arc<Mutex<usize>>}
+        impl ChecksStops {
+            fn check(&self) {
+                let log=IntakeLog::open(&self.path).unwrap();
+                let mut turns:Vec<_>=log.pending().iter().filter_map(|record|match record {
+                    IntakeRecord::Stop{turn_id,..}=>Some(turn_id.as_str()),_=>None,
+                }).collect();
+                turns.sort_unstable();
+                assert_eq!(turns,vec!["one","three","two"],"a lease ended before every Stop was durable");
+                *self.calls.lock().unwrap()+=1;
+            }
+        }
+        impl TurnCancel for ChecksStops {
+            fn cancel(&self)->bool {self.check();true}
+            fn shutdown(&self) {self.check();}
+        }
+        let path=tmp("all-stops");
+        let control=TurnControl::open(&path).unwrap();
+        let calls=Arc::new(Mutex::new(0));
+        for thread in ["one","two","three"] {
+            let conversation=control.for_thread(thread);
+            conversation.set_cancel(Some(Arc::new(ChecksStops{path:path.clone(),calls:calls.clone()})));
+            conversation.begin_turn(ActiveTurn{turn_id:thread.into(),thread_id:thread.into(),..active()});
+        }
+        assert_eq!(control.active_turn_count(),3);
+        assert_eq!(control.request_stop_all().unwrap().len(),3);
+        control.shutdown_leases();
+        assert_eq!(*calls.lock().unwrap(),6);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn a_stop_request_is_on_disk_before_the_lease_is_ever_touched() {
         // §9.3's step ORDER, proven by making the cancel seam read the file it must not be
         // able to beat: if the write happened after the cancel, this read finds nothing.
@@ -1378,7 +1432,7 @@ mod tests {
             }
         }
         let path = tmp("order");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         ctl.begin_turn(active());
         let saw = Arc::new(Mutex::new(false));
         ctl.set_cancel(Some(Arc::new(ReadsTheLog(path.clone(), saw.clone()))));
@@ -1391,7 +1445,7 @@ mod tests {
     #[test]
     fn stopping_nothing_is_an_answer_not_an_error() {
         let path = tmp("nothing");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         let calls = Arc::new(Mutex::new(0));
         ctl.set_cancel(Some(Arc::new(RecordingCancel(calls.clone(), true))));
         assert_eq!(ctl.request_stop().unwrap(), StopOutcome::NothingRunning);
@@ -1402,7 +1456,7 @@ mod tests {
     #[test]
     fn a_delayed_targeted_stop_never_writes_or_cancels_a_successor_turn() {
         let path = tmp("targeted-successor");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         let calls = Arc::new(Mutex::new(0));
         ctl.set_cancel(Some(Arc::new(RecordingCancel(calls.clone(), true))));
         assert_eq!(ctl.request_stop_for("turn_1").unwrap(), StopOutcome::NothingRunning);
@@ -1450,7 +1504,7 @@ mod tests {
             }
         }
         let path = tmp("targeted-atomic");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         ctl.set_cancel(Some(Arc::new(BlockingCancel {
@@ -1482,7 +1536,7 @@ mod tests {
     #[test]
     fn a_cancel_that_reached_nothing_is_reported_as_reaching_nothing() {
         let path = tmp("unreached");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         ctl.begin_turn(active());
         // No cancel seam installed at all — the honest degrade.
         match ctl.request_stop().unwrap() {
@@ -1507,7 +1561,7 @@ mod tests {
 
     #[test]
     fn without_a_durable_intake_a_stop_is_refused_rather_than_faked() {
-        let ctl = TurnControl::detached();
+        let ctl = TurnControl::detached().for_thread("thr_1");
         ctl.begin_turn(active());
         assert!(matches!(ctl.request_stop(), Err(SteeringError::NoDurableIntake)));
         assert!(matches!(ctl.steer("go on then"), Err(SteeringError::NoDurableIntake)));
@@ -1516,7 +1570,7 @@ mod tests {
     #[test]
     fn steering_with_nothing_running_is_refused_so_it_never_becomes_a_second_send_path() {
         let path = tmp("nosteer");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         assert!(matches!(ctl.steer("hello"), Err(SteeringError::NoActiveTurn)));
         let _ = std::fs::remove_file(&path);
     }
@@ -1525,13 +1579,13 @@ mod tests {
     fn undrained_records_survive_a_reopen_and_drained_ones_do_not() {
         let path = tmp("replay");
         {
-            let ctl = TurnControl::open(&path).unwrap();
+            let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
             ctl.begin_turn(active());
             let a = ctl.steer("first").unwrap();
             ctl.steer("second").unwrap();
             ctl.mark_drained(a.id()).unwrap();
         }
-        let reopened = TurnControl::open(&path).unwrap();
+        let reopened = TurnControl::open(&path).unwrap().for_thread("thr_1");
         let pending = reopened.pending_intake();
         assert_eq!(pending.len(), 1);
         match &pending[0] {
@@ -1549,7 +1603,7 @@ mod tests {
     fn a_torn_final_line_is_skipped_and_the_rest_of_the_log_still_replays() {
         let path = tmp("torn");
         {
-            let ctl = TurnControl::open(&path).unwrap();
+            let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
             ctl.begin_turn(active());
             ctl.steer("intact").unwrap();
         }
@@ -1558,7 +1612,7 @@ mod tests {
         f.write_all(b"{\"record\":\"steer\",\"id\":9,\"thre").unwrap();
         drop(f);
 
-        let reopened = TurnControl::open(&path).unwrap();
+        let reopened = TurnControl::open(&path).unwrap().for_thread("thr_1");
         assert_eq!(reopened.pending_intake().len(), 1);
         reopened.begin_turn(active());
         reopened.steer("accepted after recovery").unwrap();
@@ -1572,7 +1626,7 @@ mod tests {
     #[test]
     fn a_stop_claim_belongs_to_one_turn_and_never_falls_through_onto_the_next() {
         let path = tmp("claim");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         ctl.begin_turn(active());
         ctl.request_stop().unwrap();
         assert!(ctl.stop_claim_for("turn_1").is_some());
@@ -1583,7 +1637,7 @@ mod tests {
     #[test]
     fn a_full_drain_compacts_the_file_without_ever_emptying_it() {
         let path = tmp("compact");
-        let ctl = TurnControl::open(&path).unwrap();
+        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
         ctl.begin_turn(active());
         // Two lines per action (the steer, then its drain marker), so this crosses
         // COMPACT_AFTER_LINES = 256 with room to spare.
@@ -1597,7 +1651,7 @@ mod tests {
         assert!(!lines.is_empty(), "compaction must never leave the file empty");
 
         // And it still replays to the same place.
-        let reopened = TurnControl::open(&path).unwrap();
+        let reopened = TurnControl::open(&path).unwrap().for_thread("thr_1");
         assert!(reopened.pending_intake().is_empty());
         let _ = std::fs::remove_file(&path);
     }

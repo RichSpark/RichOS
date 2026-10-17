@@ -1819,7 +1819,7 @@ impl NativeClient {
         Self::spawn_with_tools(bin, cwd, Some((doctrine, skills)), None, None, None, None, None, LeaseRole::Conversation)
     }
 
-    fn spawn_with_tools(bin: &Path, cwd: &Path, standing: Option<(&Path, &Path)>, onboarding: Option<(&Path, &Path, &Path, &Path)>, continuity: Option<(&crate::ecs::EcsBridge, &Path)>, continuity_tools: Option<&Path>, profile: Option<&crate::engine_profile::EngineProfile>, control: Option<&crate::steering::TurnControl>, role: LeaseRole) -> Result<Self, NativeError> {
+    fn spawn_with_tools(bin: &Path, cwd: &Path, standing: Option<(&Path, &Path)>, onboarding: Option<(&Path, &Path, &Path, &Path)>, continuity: Option<(&crate::ecs::EcsBridge, &Path)>, continuity_tools: Option<&Path>, profile: Option<&crate::engine_profile::EngineProfile>, control: Option<&crate::steering::ConversationControl>, role: LeaseRole) -> Result<Self, NativeError> {
         let (doctrine, skills) = (standing.map(|s| s.0), standing.map(|s| s.1));
         preflight(bin, cwd, doctrine, skills)?;
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -2067,7 +2067,7 @@ impl NativeClient {
     ///
     /// It costs NO API turn: measured 697.9 ms on 2.1.252, and `run10` of the spike
     /// established that control requests are free.
-    fn handshake_cancellable(&mut self, control: Option<&crate::steering::TurnControl>) -> Result<(), NativeError> {
+    fn handshake_cancellable(&mut self, control: Option<&crate::steering::ConversationControl>) -> Result<(), NativeError> {
         let (tx, rx): (Sender<Value>, Receiver<Value>) = channel();
         self.pending.lock().unwrap().insert("req_init".to_string(), tx);
         let msg = json!({
@@ -3463,7 +3463,7 @@ impl NativeCognition {
     /// supplied by the spine before priming, never selected by the model. The host
     /// supplies its configuration folder explicitly; instruction paths do not locate state.
     pub fn start_with_onboarding(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
-        executable: &Path, control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
+        executable: &Path, control: Option<&crate::steering::ConversationControl>) -> Result<Self, NativeError> {
         let doctrine = skills.join("agents/rich.md");
         let scopes = config_dir.join("onboarding-scopes");
         std::fs::create_dir_all(&scopes)?;
@@ -3477,7 +3477,7 @@ impl NativeCognition {
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
-        control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
+        control: Option<&crate::steering::ConversationControl>) -> Result<Self, NativeError> {
         bridge.request("hello", json!({})).map_err(|e| NativeError::Protocol(e.to_string()))?;
         let doctrine = skills.join("agents/rich.md");
         let scopes = config_dir.join("onboarding-scopes");
@@ -3498,7 +3498,7 @@ impl NativeCognition {
     /// Settings-isolated desktop lease from verified engine delivery.
     pub fn start_with_engine(bin: &Path, doctrine: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge, profile: crate::engine_profile::EngineProfile,
-        control: Option<&crate::steering::TurnControl>) -> Result<Self, NativeError> {
+        control: Option<&crate::steering::ConversationControl>) -> Result<Self, NativeError> {
         bridge.request("hello", json!({})).map_err(|e| NativeError::Protocol(e.to_string()))?;
         let scopes = profile.state.join("scopes");
         std::fs::create_dir_all(&scopes)?;
@@ -6859,7 +6859,7 @@ done
 "#);
         let mut client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
         let root = fixture_root().join(format!("richos-handshake-stop-{}", uuid::Uuid::new_v4()));
-        let control = crate::steering::TurnControl::open(&root).unwrap();
+        let control = crate::steering::TurnControl::open(&root).unwrap().for_thread("thread");
         control.begin_turn(crate::steering::ActiveTurn {
             turn_id: "initial-request".into(), thread_id: "thread".into(),
             entity_id: None, started_at: None,

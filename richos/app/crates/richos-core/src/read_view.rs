@@ -6,7 +6,7 @@
 
 use crate::{entity::{EntityRegistry, ThreadBinding}, journal::MachineryJournal,
     ledger::{Event, Ledger, Message}, onboarding::OnboardingState,
-    spine::{Spine, SpineError, WorkerEventsSource}, steering::TurnControl,
+    spine::{Spine, SpineError, WorkerEventsSource}, steering::ConversationControl,
     thread::{summaries, ThreadSummary}, timeline::Timeline};
 use std::{path::PathBuf, sync::{Arc, RwLock}};
 
@@ -40,7 +40,7 @@ pub(crate) struct ReadMetadata {
     pub registry: EntityRegistry,
     pub machinery_root: Option<PathBuf>,
     pub workers: WorkerEventsSource,
-    pub control: TurnControl,
+    pub control: ConversationControl,
     pub central_root: Option<PathBuf>,
     pub onboarding_record: Option<PathBuf>,
 }

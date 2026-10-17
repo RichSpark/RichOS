@@ -38,12 +38,12 @@ pub trait LeaseFactory: Send {
     fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError>;
 
     /// The host fixes the company/thread before the provider or its hooks start.
-    fn spawn_scoped(&self, _binding: &crate::entity::ThreadBinding, control: &crate::steering::TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_scoped(&self, _binding: &crate::entity::ThreadBinding, control: &crate::steering::ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_cancellable(control)
     }
 
     /// Stop may be recorded before a child has completed its initialize handshake.
-    fn spawn_cancellable(&self, _control: &crate::steering::TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_cancellable(&self, _control: &crate::steering::ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn()
     }
 
@@ -640,7 +640,7 @@ impl LeaseFactory for MockLeaseFactory {
     /// Records the binding and then spawns exactly as the un-scoped path does — the real
     /// factory's own shape (`EngineLeaseFactory::spawn_scoped` is `spawn_chat` with the
     /// binding), so nothing about the lease differs and only the observation is added.
-    fn spawn_scoped(&self, binding: &crate::entity::ThreadBinding, control: &crate::steering::TurnControl)
+    fn spawn_scoped(&self, binding: &crate::entity::ThreadBinding, control: &crate::steering::ConversationControl)
         -> Result<Box<dyn Cognition>, CognitionError> {
         self.scoped_to.lock().unwrap()
             .push((binding.entity_id().to_string(), binding.thread_id().to_string()));

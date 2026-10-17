@@ -488,7 +488,7 @@ fn an_overload_waits_out_his_schedule_on_the_same_session_and_a_success_resets_i
 /// The way out of the wait: his Stop during it ends it at once, and his turn is not sent again.
 #[test]
 fn his_stop_during_the_wait_ends_it_and_nothing_is_sent_again() {
-    struct StopsDuringTheWait(TurnControl, Mutex<Vec<Duration>>);
+    struct StopsDuringTheWait(richos_core::steering::ConversationControl, Mutex<Vec<Duration>>);
     impl RetryClock for StopsDuringTheWait {
         fn wait(&self, wait: Duration, stop_asked: &dyn Fn() -> bool) -> bool {
             self.1.lock().unwrap().push(wait);
@@ -501,9 +501,9 @@ fn his_stop_during_the_wait_ends_it_and_nothing_is_sent_again() {
     let control = TurnControl::open(&intake).unwrap();
     let mut spine = support::spine(ledger);
     spine.set_turn_control(control.clone());
-    let clock = Arc::new(StopsDuringTheWait(control, Mutex::new(Vec::new())));
-    spine.set_retry_clock(clock.clone());
     let thread = spine.create_thread("General", &femcboost()).unwrap();
+    let clock = Arc::new(StopsDuringTheWait(control.for_thread(&thread), Mutex::new(Vec::new())));
+    spine.set_retry_clock(clock.clone());
     let script = Arc::new(Mutex::new(VecDeque::from([true; 8])));
     let prompts = Arc::new(Mutex::new(Vec::new()));
     spine.attach_lease(Box::new(ScriptedCognition {

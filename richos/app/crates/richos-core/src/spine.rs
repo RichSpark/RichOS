@@ -32,7 +32,7 @@ use crate::reprime::{
 use crate::correction::{ProposalObserver, SharedCorrectionDesk};
 use crate::loro::SharedSliceProvenance;
 use crate::staging::{CorrectionObserver, SharedCandidateDesk};
-use crate::steering::{ActiveTurn, IntakeRecord, StopClaim, TurnControl};
+use crate::steering::{ActiveTurn, IntakeRecord, StopClaim, TurnControl, ConversationControl};
 use crate::stream::{StreamEvent, TurnObserver};
 use crate::thread::{summaries, ThreadSummary};
 use crate::timeline::Timeline;
@@ -308,7 +308,7 @@ struct SparePlan {
     /// see [`crate::cognition::LeaseFactory::duplicate`]. `None` puts the spawn back under the
     /// lock and changes nothing else.
     factory: Option<Box<dyn crate::cognition::LeaseFactory>>,
-    control: crate::steering::TurnControl,
+    control: crate::steering::ConversationControl,
     /// What `front_desk_generation` read when this was decided. Step 5 compares.
     generation: u64,
     started: std::time::Instant,
@@ -712,7 +712,7 @@ pub struct Spine {
     /// Defaults to `TurnControl::detached()`: turn bookkeeping works, stop and steer are
     /// REFUSED, because there is nowhere durable to record the request. Every pre-existing
     /// test and headless run therefore behaves exactly as it did.
-    control: TurnControl,
+    control: ConversationControl,
     /// THE CENTRAL FOLDER, or `None` when nobody has told this spine where it is.
     ///
     /// `None` is the shipped default and it is a real state rather than a placeholder: every
@@ -854,7 +854,7 @@ impl Spine {
             turn_in_progress: false,
             detached_delivery: false,
             pending_delivery: VecDeque::new(),
-            control: TurnControl::detached(),
+            control: TurnControl::detached().for_thread(""),
             central_root: None,
             onboarding_record: None,
             onboarding_primed_block: None,
@@ -1437,11 +1437,11 @@ impl Spine {
         Ok(SparePlan {
             entity: entity.clone(),
             binding,
+            control: self.control.for_thread(&reserved),
             reserved,
             // `None` is not a failure: it means this factory cannot hand out a second handle,
             // so step 2 runs under the caller's lock the way it always did.
             factory: self.lease_factory.as_ref().and_then(|f| f.duplicate()),
-            control: self.control.clone(),
             generation: self.front_desk_generation,
             started: std::time::Instant::now(),
         })
@@ -1599,17 +1599,18 @@ impl Spine {
     /// Install the shared stop/steer control (UX §9.2/§9.3). The shell keeps a clone of
     /// the same handle beside the `Mutex<Spine>`; this is the only channel by which
     /// anything reaches a turn that is already running.
-    pub fn set_turn_control(&mut self, control: TurnControl) {
-        let control=self.lease_primed_thread.as_deref().or(self.active_thread())
-            .map(|thread|control.for_thread(thread)).unwrap_or(control);
-        control.set_cancel(self.lease.as_ref().and_then(|l| l.cancel_handle()));
-        control.set_lease_session(self.lease.as_ref().map(|l| l.session_id().to_string()));
-        self.control = control;
+    pub fn set_turn_control(&mut self, control: impl Into<TurnControl>) {
+        let shared=control.into();
+        let thread=self.lease_primed_thread.as_deref().or(self.active_thread()).unwrap_or("");
+        let control=shared.for_thread(thread);
+        control.set_cancel(self.lease.as_ref().and_then(|lease|lease.cancel_handle()));
+        control.set_lease_session(self.lease.as_ref().map(|lease|lease.session_id().to_string()));
+        self.control=control;
         self.publish_read_metadata();
     }
 
     /// A clone of the shared control handle, for the shell's own commands.
-    pub fn turn_control(&self) -> TurnControl {
+    pub fn turn_control(&self) -> ConversationControl {
         self.control.clone()
     }
 

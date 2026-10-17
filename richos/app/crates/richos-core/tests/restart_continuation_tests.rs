@@ -127,7 +127,7 @@ fn durable_user_stop_prevents_automatic_continuation() {
         .unwrap();
     l.mark_turn_started(&id, "prior").unwrap();
     drop(l);
-    let control = TurnControl::open(&intake).unwrap();
+    let control = TurnControl::open(&intake).unwrap().for_thread(&thread);
     control.begin_turn(ActiveTurn {
         turn_id: id.clone(),
         thread_id: thread.clone(),
@@ -186,7 +186,7 @@ fn a_stop_saved_between_replay_and_delivery_stops_the_continuation() {
             .record_prompt_received(&binding, "Finish the authorized work", Source::Text)
             .unwrap();
         ledger.mark_turn_started(&original, "prior-native").unwrap();
-        let control = TurnControl::open(&intake).unwrap();
+        let control = TurnControl::open(&intake).unwrap().for_thread(&thread);
         control.begin_turn(ActiveTurn {
             turn_id: original.clone(),
             thread_id: thread.clone(),
@@ -270,7 +270,7 @@ fn recovery_delivers_older_ledger_requests_before_newer_intake_and_applies_stops
                 let binding = ledger.thread_binding(&thread).unwrap();
                 let older = ledger.record_prompt_received(&binding, "Use Monday", Source::Text).unwrap();
                 if inflight { ledger.mark_turn_started(&older, "before-restart").unwrap(); }
-                let control = TurnControl::open(&intake).unwrap();
+                let control = TurnControl::open(&intake).unwrap().for_thread(&thread);
                 if stopped {
                     control.begin_turn(ActiveTurn { turn_id: older.clone(), thread_id: thread.clone(), entity_id: Some(entity.clone()), started_at: None });
                     control.request_stop().unwrap();

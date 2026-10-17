@@ -554,7 +554,7 @@ impl richos_core::cognition::LeaseFactory for ProbeLeaseFactory {
     fn spawn_scoped(
         &self,
         binding: &richos_core::entity::ThreadBinding,
-        control: &richos_core::steering::TurnControl,
+        control: &richos_core::steering::ConversationControl,
     ) -> Result<Box<dyn Cognition>, richos_core::cognition::CognitionError> {
         use richos_core::cognition::CognitionError;
         let mut profile =
@@ -586,7 +586,7 @@ impl richos_core::cognition::LeaseFactory for NoEngineFactory {
     fn spawn_scoped(
         &self,
         _binding: &richos_core::entity::ThreadBinding,
-        _control: &richos_core::steering::TurnControl,
+        _control: &richos_core::steering::ConversationControl,
     ) -> Result<Box<dyn Cognition>, richos_core::cognition::CognitionError> {
         Err(richos_core::cognition::CognitionError::Io(
             "there is no engine on this machine yet".into(),

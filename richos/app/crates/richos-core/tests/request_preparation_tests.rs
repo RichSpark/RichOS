@@ -7,7 +7,7 @@ use richos_core::{
     ledger::{Ledger, Source, TurnState},
     live::{LiveEvent, LiveObserver},
     spine::Spine,
-    steering::{StopOutcome, TurnCancel, TurnControl},
+    steering::{StopOutcome, TurnCancel, TurnControl, ConversationControl},
 };
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -33,7 +33,7 @@ impl Events {
             .collect()
     }
 }
-fn fixture() -> (Spine, TurnControl, Events, std::path::PathBuf) {
+fn fixture() -> (Spine, ConversationControl, Events, std::path::PathBuf) {
     let root = std::env::temp_dir().join(format!("richos-preparation-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let mut spine = support::spine(Ledger::open(root.join("ledger.jsonl")).unwrap());
@@ -42,6 +42,7 @@ fn fixture() -> (Spine, TurnControl, Events, std::path::PathBuf) {
         .unwrap();
     let control = TurnControl::open(root.join("intake.jsonl")).unwrap();
     spine.set_turn_control(control.clone());
+    let control=spine.turn_control();
     let events = Events::default();
     spine.set_live_observer(Box::new(events.clone()));
     (spine, control, events, root)
@@ -234,7 +235,7 @@ impl LeaseFactory for WaitingFactory {
     fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
         panic!("must use cancellable launch")
     }
-    fn spawn_cancellable(&self, c: &TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_cancellable(&self, c: &ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.entered.lock().unwrap().send(()).unwrap();
         let start = std::time::Instant::now();
         while c.stop_claim().is_none() {
@@ -267,7 +268,7 @@ fn stop_during_initial_launch_is_terminal_and_never_retried() {
 }
 
 struct UnacknowledgedPrime {
-    control: TurnControl,
+    control: ConversationControl,
     dropped: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Drop for UnacknowledgedPrime {
@@ -459,7 +460,7 @@ fn deferred_rotation_never_files_the_outgoing_company_summary_under_the_new_comp
 }
 
 struct SteerThenFailPrime {
-    control: TurnControl,
+    control: ConversationControl,
     first: bool,
 }
 impl Cognition for SteerThenFailPrime {
@@ -662,7 +663,7 @@ fn stopping_one_of_two_live_conversations_keeps_the_other_and_its_queued_request
     let b_worker=std::thread::spawn(move||richos_core::spine::drive_shared_turns(&driving));
     b_ready.recv_timeout(Duration::from_secs(30)).unwrap();
     assert!(control.for_thread(&a).active_turn().is_some());
-    assert!(matches!(control.request_stop_for(&second).unwrap(),StopOutcome::Requested{reached_lease:true,..}));
+    assert!(matches!(control.for_thread(&b).request_stop_for(&second).unwrap(),StopOutcome::Requested{reached_lease:true,..}));
     b_worker.join().unwrap().unwrap();
     let (a_state,queued_state,b_state)={
         let state=shared.lock().unwrap();
@@ -677,4 +678,35 @@ fn stopping_one_of_two_live_conversations_keeps_the_other_and_its_queued_request
     assert_eq!(state.ledger().turn(&queued).unwrap().state,TurnState::Completed);
     assert_eq!(state.ledger().turn(&queued).unwrap().assistant_text,"A next");
     assert!(!control.has_active_turns());
+}
+
+#[test]
+fn quitting_records_every_active_stop_and_restart_replays_neither_conversation() {
+    let (mut spine,control,_,root)=fixture();
+    let a=spine.active_thread().unwrap().to_string();
+    let b=spine.create_thread("B",&EntityId::parse("femcboost").unwrap()).unwrap();
+    spine.attach_lease(Box::new(MockCognition::new("quit-a",vec!["unused"])));
+    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["unused"])));
+    spine.detach_conversation_io();
+    let first=spine.submit_prompt_to(&a,"A unfinished",Source::Text).unwrap();
+    let second=spine.submit_prompt_to(&b,"B unfinished",Source::Text).unwrap();
+    assert_eq!(control.active_turn_count(),2);
+    // The shipping Quit calls, before either delivery has finished.
+    let stopped=control.request_stop_all();
+    control.shutdown_leases();
+    let durable=control.pending_intake().iter().filter(|record|matches!(record,richos_core::steering::IntakeRecord::Stop{..})).count();
+    drop(spine);
+    let mut restarted=support::spine(Ledger::open(root.join("ledger.jsonl")).unwrap());
+    restarted.set_turn_control(TurnControl::open(root.join("intake.jsonl")).unwrap());
+    let recovered=restarted.reconcile_intake();
+    let states=[first,second].map(|id|restarted.ledger().turn(&id).unwrap().state);
+    let replayed=restarted.ledger().turns().iter().filter(|turn|turn.superseded_by.is_some()).count();
+    drop(restarted);
+    drop(control);
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(stopped.is_ok());
+    assert_eq!(durable,2,"Quit did not persist every active conversation's Stop before shutdown");
+    assert!(recovered.is_ok());
+    assert_eq!(states,[TurnState::Stopped,TurnState::Stopped]);
+    assert_eq!(replayed,0,"a request the user stopped on Quit was replayed after restart");
 }

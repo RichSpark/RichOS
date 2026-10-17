@@ -7213,7 +7213,7 @@ mod tests {
     fn stop_turn_never_cancels_the_work_lease() {
         use crate::steering::TurnControl;
         let h = harness(3000);
-        let control = TurnControl::open(h.root.join("steering")).unwrap();
+        let control = TurnControl::open(h.root.join("steering")).unwrap().for_thread("thread-one");
         let _runner = h.host.start();
         h.host.register(&h.binding, &registration(&h)).unwrap();
         until_live(&h.host);

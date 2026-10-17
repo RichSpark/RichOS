@@ -55,7 +55,7 @@ use richos_core::staging::{
     Candidate, CandidateDesk, CliVocabulary, CorrectionObserver, LearnOutcome, SharedCandidateDesk,
     Staged, EVENT_CORRECTION_STAGED,
 };
-use richos_core::steering::{IntakeRecord, StopOutcome, TurnControl};
+use richos_core::steering::{IntakeRecord, StopOutcome, TurnControl, ConversationControl};
 use richos_core::stream::{StreamEvent, TurnObserver};
 use richos_core::thread::ThreadSummary;
 use richos_core::worker_status::WorkerStatusView;
@@ -562,10 +562,10 @@ impl LeaseFactory for EngineLeaseFactory {
     fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_chat(None, None)
     }
-    fn spawn_scoped(&self, binding: &richos_core::entity::ThreadBinding, control: &TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_scoped(&self, binding: &richos_core::entity::ThreadBinding, control: &ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_chat(Some(control), Some(binding))
     }
-    fn spawn_cancellable(&self, control: &TurnControl) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_cancellable(&self, control: &ConversationControl) -> Result<Box<dyn Cognition>, CognitionError> {
         self.spawn_chat(Some(control), None)
     }
 
@@ -695,7 +695,7 @@ impl LeaseFactory for EngineLeaseFactory {
 }
 
 impl EngineLeaseFactory {
-    fn spawn_chat(&self, control: Option<&TurnControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
+    fn spawn_chat(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
         let dir = self
             .engine_dir
             .lock()
@@ -4108,11 +4108,11 @@ fn main() {
                     // every lease's supervisor after them (reap gap 1.3(c)).
                     let quit_bound = std::time::Instant::now() + std::time::Duration::from_secs(2);
                     state.quota.shutdown();
-                    let _ = state.control.request_stop();
-                    state.control.shutdown_lease();
+                    let _ = state.control.request_stop_all();
+                    state.control.shutdown_leases();
                     // **The WORK lease is stopped BY NAME, because nothing else reaches it**
-                    // (background-work spec §2.5). `shutdown_lease` above walks one cancel
-                    // handle — `TurnControl`'s single slot — and the work lease is
+                    // (background-work spec §2.5). The front-desk shutdown above covers
+                    // every conversation; the separate Stu work lease is
                     // deliberately not in it (§4.2). Destructors are not guaranteed to run
                     // on this path (tao's event loop ends in `process::exit`), and the
                     // supervisor's 100 ms parent-death poll is a backstop, not the promise.
@@ -6883,7 +6883,7 @@ mod send_wait_tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("intake.jsonl");
         let control = super::TurnControl::open(&path).unwrap();
-        assert!(control.lease_session().is_none());
+        assert!(control.lease_sessions().is_empty());
         assert!(!super::desk_input_can_be_logged(&control, "thread-a"));
         control.begin_front_desk_prime("thread-a");
         assert!(super::desk_input_can_be_logged(&control, "thread-a"));
@@ -6900,7 +6900,7 @@ mod send_wait_tests {
             control.for_thread(thread).set_lease_session(Some(format!("session-{thread}")));
             assert!(super::desk_input_can_be_logged(&control,thread));
         }
-        assert!(control.lease_session().is_none(),"two live identities are ambiguous without a thread");
+        assert_eq!(control.lease_sessions().len(),2);
         assert!(!super::desk_input_can_be_logged(&control,"thread-c"));
         drop(control);
         std::fs::remove_dir_all(root).unwrap();
