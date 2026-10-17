@@ -44,6 +44,7 @@ struct Inner {
     last_rotation_reason: Option<String>,
     lease_repositories: Option<Vec<PathBuf>>,
     lease_team: Option<String>,
+    upstream_budget: crate::upstream::RetryBudget,
 }
 struct Backend {
     lease: Mutex<Option<Box<dyn Cognition>>>,
@@ -60,6 +61,7 @@ impl Backend {
     }
 }
 pub struct WorkHost {
+    retry_clock: Arc<dyn crate::upstream::RetryClock>,
     state: PathBuf,
     factory: Arc<dyn LeaseFactory>,
     backends: Mutex<std::collections::HashMap<String, Arc<Backend>>>,
@@ -81,6 +83,7 @@ impl WorkHost {
         desk: Arc<PermissionDesk>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            retry_clock: Arc::new(crate::upstream::SystemRetryClock),
             state: state.into(),
             factory: Arc::from(factory),
             backends: Mutex::new(Default::default()),
@@ -310,6 +313,7 @@ impl WorkHost {
         }
         let original = serde_json::to_string(message).map_err(|e| e.to_string())?;
         let mut input = original.clone();
+        backend.inner.lock().unwrap().upstream_budget.new_message();
         loop {
             self.ensure_lease(backend, binding)?;
             let mut guard = backend.lease.lock().unwrap();
@@ -346,13 +350,18 @@ impl WorkHost {
             }
             let mut diagnostics = String::new();
             let mut published = false;
+            let mut model_activity = false;
             let result = lease.prompt(&input, &mut |item| {
                 if !published {
                     published = true;
                     self.publish_peer_input(backend, binding);
                 }
-                if let TurnItem::Text { text, .. } = item {
-                    diagnostics.push_str(text)
+                match item {
+                    TurnItem::Text { text, .. } => diagnostics.push_str(text),
+                    TurnItem::AnswerComplete => model_activity = true,
+                    TurnItem::Machinery(record) => model_activity |= matches!(record.kind,
+                        crate::machinery::MachineryKind::ToolCall | crate::machinery::MachineryKind::Thought |
+                        crate::machinery::MachineryKind::PermissionRequested | crate::machinery::MachineryKind::ClientFsCall),
                 }
             });
             let result =
@@ -367,13 +376,43 @@ impl WorkHost {
                 drop(guard.take());
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
+            let failure = crate::upstream::UpstreamFailure::classify_lines(&diagnostics)
+                .or_else(|| result.as_ref().err().and_then(|e| crate::upstream::UpstreamFailure::classify_lines(&e.to_string())))
+                .or_else(||result.as_ref().err().filter(|e|crate::claude_accounts::parse_usage_limit(&e.to_string()).is_some()).map(|e|crate::upstream::UpstreamFailure {
+                    fault:crate::upstream::UpstreamFault::RateLimited,status:Some(429),request_id:None,model:None,raw:e.to_string()
+                }));
+            let model_started = model_activity || !crate::upstream::split_at_vendor_diagnostic(&diagnostics).0.trim().is_empty()
+                || result.as_ref().is_ok_and(|reason| reason == "max_tokens");
+            let incomplete=failure.is_some() || !result.as_ref().is_ok_and(|reason|reason=="end_turn");
+            if incomplete {
+                let (wait, attempts) = if let Some(failure)=&failure {
+                    let mut inner = backend.inner.lock().unwrap();
+                    let allowed = inner.upstream_budget.charge(failure.fault);
+                    ((allowed && !model_started && guard.is_some()).then(||inner.upstream_budget.wait_before_retry().unwrap_or_default()), Some(inner.upstream_budget.attempts()))
+                } else {(None,None)};
+                if !backend.inner.lock().unwrap().closing && !stopped()? {
+                    crate::session_tools::observe_work_status(&self.message_scope(binding), serde_json::json!({
+                        "event":"upstream_input","input_id":turn,"session_id":session,"work":message.work,
+                        "model_started":model_started,"fault":failure.as_ref().map(|f|f.fault.tag()),
+                        "provider_detail":failure.as_ref().map(|f|f.raw.clone()).unwrap_or_else(||match &result {Ok(reason)=>reason.clone(),Err(error)=>error.to_string()}),
+                        "attempts":attempts,"retry_wait_ms":wait.map(|d| d.as_millis() as u64)
+                    }))?;
+                }
+                if let Some(wait) = wait {
+                    if self.retry_clock.wait(wait, &|| backend.inner.lock().unwrap().closing || stopped().unwrap_or(true)) {
+                        continue;
+                    }
+                    return Err("The unfinished input remains saved after its retry wait ended.".into());
+                }
+            }
             let reason = result.map_err(|e| e.to_string())?;
             if reason != "end_turn" {
                 return Err(format!("Operator input did not complete: {reason}"));
             }
-            if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {
+            if failure.is_some() {
                 return Err(diagnostics);
             }
+            backend.inner.lock().unwrap().upstream_budget.succeeded();
             crate::session_tools::complete_live_inputs(
                 &self.message_scope(binding),
                 "stu",
@@ -1272,6 +1311,17 @@ mod tests {
             }
             let result=team.turn_results.pop_front().unwrap_or("end_turn");
             drop(team);
+            if result=="native_quota" {return Err(CognitionError::Protocol(crate::claude_accounts::usage_limit_error(None,"native quota refusal")))}
+            if result=="max_tokens_no_text" {return Ok("max_tokens".into())}
+            if let Some(status)=result.strip_prefix("pre_model_") {
+                if status=="protocol" {return Err(CognitionError::Protocol("API Error: 503 Server error.".into()))}
+                let text=match status {"529"=>"API Error: 529 Overloaded.","429"=>"API Error: 429 Rate limited.",_=>"API Error: 503 Server error."};
+                on(TurnItem::Text {seq:0,text});return Ok("end_turn".into());
+            }
+            if result=="tool_error" {
+                for record in crate::machinery::MachineryRecord::from_native_event(&serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-one","name":"Bash","input":{"command":"fictional"}}]}}),&self.session,0) {on(TurnItem::Machinery(record));}
+                return Err(CognitionError::Protocol("API Error: 503 Server error.".into()));
+            }
             on(TurnItem::Text {
                 seq: 0,
                 text: "Recorded reply",
@@ -1312,7 +1362,15 @@ mod tests {
             }))
         }
     }
+    #[derive(Default)]
+    struct RetryWaits(Mutex<Vec<std::time::Duration>>);
+    impl crate::upstream::RetryClock for RetryWaits {
+        fn wait(&self,wait:std::time::Duration,stopped:&dyn Fn()->bool)->bool {
+            self.0.lock().unwrap().push(wait);!stopped()
+        }
+    }
     struct Harness {
+        retry_waits:Arc<RetryWaits>,
         root: PathBuf,
         state: PathBuf,
         host: Arc<WorkHost>,
@@ -1348,13 +1406,16 @@ mod tests {
             team: team.clone(),
             gate: start_gate.clone(),
         };
-        let host = WorkHost::new(
+        let mut host = WorkHost::new(
             &state,
             Box::new(factory),
             Arc::new(SilentNotifier),
             Arc::new(PermissionDesk::default()),
         );
+        let retry_waits=Arc::new(RetryWaits::default());
+        Arc::get_mut(&mut host).unwrap().retry_clock=retry_waits.clone();
         Harness {
+            retry_waits,
             root,
             state,
             host,
@@ -1452,7 +1513,7 @@ mod tests {
     #[test]
     fn every_scheduled_input_is_delivered_once_per_live_stu_despite_a_failed_turn() {
         for kind in ["handoff", "peer", "standing-answer", "job-answer"] {
-            for result in ["end_turn", "max_tokens", "provider_error", "io_error"] {
+            for result in ["end_turn", "max_tokens", "provider_error", "io_error", "pre_model_503", "pre_model_529", "pre_model_429", "pre_model_protocol", "tool_error", "exhaust_503", "exhaust_529", "native_quota", "max_tokens_no_text"] {
                 let h = harness(0);
                 let scope = h.host.message_scope(&h.binding);
                 let path = h.root.join("peer-status.json");
@@ -1467,7 +1528,11 @@ mod tests {
                     None
                 };
                 crate::session_tools::bind(&path, &scope, "front-session", "rich", instruction).unwrap();
-                h.team.lock().unwrap().turn_results.push_back(result);
+                match result {
+                    "exhaust_503"=>h.team.lock().unwrap().turn_results.extend(["pre_model_503";2]),
+                    "exhaust_529"=>h.team.lock().unwrap().turn_results.extend(["pre_model_529";8]),
+                    _=>h.team.lock().unwrap().turn_results.push_back(result),
+                }
                 match kind {
                     "handoff" => { crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Input under test"})).unwrap(); }
                     "peer" => { crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Input under test"})).unwrap(); }
@@ -1487,10 +1552,28 @@ mod tests {
                 until("later input must pass an answer already received by live Stu", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("Independent later input")));
                 h.host.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
-                let expected = if result == "io_error" { 2 } else { 1 };
+                let expected = match result {"exhaust_529"=>8,"io_error"|"pre_model_503"|"pre_model_529"|"pre_model_protocol"|"exhaust_503"=>2,_=>1};
                 assert_eq!(prompts.iter().filter(|p| p.contains("Input under test")).count(), expected,
                     "{kind}/{result}: accepted input repeated in the same live session: {prompts:?}");
-                assert_eq!(h.spawns.load(Ordering::SeqCst), expected, "{kind}/{result}: unexpected connection replacement");
+                assert_eq!(h.spawns.load(Ordering::SeqCst), if result=="io_error" {2}else{1}, "{kind}/{result}: unexpected connection replacement");
+                let waits=h.retry_waits.0.lock().unwrap().clone();
+                match result {
+                    "exhaust_529"=>assert_eq!(waits,crate::upstream::OVERLOAD_RETRY_WAITS),
+                    "pre_model_529"=>assert_eq!(waits,vec![crate::upstream::OVERLOAD_RETRY_WAITS[0]]),
+                    "pre_model_503"|"pre_model_protocol"|"exhaust_503"=>assert_eq!(waits,vec![std::time::Duration::ZERO]),
+                    _=>assert!(waits.is_empty(),"started input or a quota refusal was retried"),
+                }
+                if matches!(result,"exhaust_529"|"exhaust_503"|"pre_model_429"|"native_quota") {
+                    let mut facts=Vec::new();
+                    while let Some((message,through))=crate::session_tools::pending(&scope,"rich").unwrap() {
+                        assert_eq!(message.from,"work-status");assert!(message.instruction.is_none());
+                        facts.push(serde_json::from_str::<serde_json::Value>(&message.text).unwrap());
+                        crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
+                    }
+                    let last=facts.last().expect("exhausted input stalled without telling Rich");
+                    assert_eq!(last["model_started"],false);assert!(last["retry_wait_ms"].is_null());
+                    assert_eq!(last["attempts"],expected);
+                }
                 let before = prompts.len();
                 crate::session_tools::send(&path, &scope, serde_json::json!({"text":"After restart"})).unwrap();
                 let restarted = WorkHost::new(&h.state, Box::new(Factory {
@@ -1501,12 +1584,53 @@ mod tests {
                 until("restart must deliver its new input", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("After restart")));
                 restarted.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
-                let unfinished = kind == "handoff" || !matches!(result, "end_turn" | "io_error");
+                let unfinished = kind == "handoff" || !matches!(result, "end_turn" | "io_error" | "pre_model_503" | "pre_model_529" | "pre_model_protocol");
                 assert_eq!(prompts[before..].iter().filter(|p| p.contains("Input under test")).count(), usize::from(unfinished),
                     "{kind}/{result}: new session lost or repeated recovery input: {prompts:?}");
                 assert!(!prompts[before..].iter().any(|p| p.contains("Independent later input")), "completed input replayed");
                 std::fs::remove_dir_all(h.root).unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn stop_and_quit_interrupt_an_unreceived_inputs_existing_retry_wait() {
+        struct Clock { entered:std::sync::mpsc::SyncSender<()>, release:Mutex<std::sync::mpsc::Receiver<()>> }
+        impl crate::upstream::RetryClock for Clock {
+            fn wait(&self,_:std::time::Duration,stopped:&dyn Fn()->bool)->bool {
+                self.entered.send(()).unwrap();
+                self.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+                !stopped()
+            }
+        }
+        for quit in [false,true] {
+            let mut h=harness(0);
+            let (entered,ready)=std::sync::mpsc::sync_channel(0);
+            let (release,held)=std::sync::mpsc::sync_channel(0);
+            Arc::get_mut(&mut h.host).unwrap().retry_clock=Arc::new(Clock{entered,release:Mutex::new(held)});
+            let record=assignment::register(&h.state,&registration(&h)).unwrap();
+            let scope=h.host.message_scope(&h.binding);let path=h.root.join("peer-status.json");
+            crate::session_tools::bind(&path,&scope,"front-session","rich",Some(crate::ecs::UserInstruction{ledger_ref:registration(&h).instruction_ledger_ref,sha256:registration(&h).instruction_sha256,text:None})).unwrap();
+            h.team.lock().unwrap().turn_results.push_back("pre_model_529");
+            crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"Input under test"})).unwrap();
+            h.host.wake_messages(&h.binding);
+            ready.recv_timeout(std::time::Duration::from_secs(30)).expect("retry wait never started");
+            let (_,through)=crate::session_tools::pending(&scope,"rich").unwrap().expect("retry facts did not reach Rich");
+            crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
+            if quit {
+                let host=h.host.clone();let shutdown=std::thread::spawn(move||host.shutdown());
+                until("quit must mark this host closing",||*h.host.closing.lock().unwrap());
+                release.send(()).unwrap();shutdown.join().unwrap();
+                assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"Quit lost unfinished input");
+            } else {
+                assignment::record_user_stop(&h.state,"depot","thread-one",&record.id).unwrap();
+                release.send(()).unwrap();assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(30)));
+                h.host.shutdown();
+                assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"Stopped input remained dispatchable");
+            }
+            assert_eq!(h.work_prompts.lock().unwrap().len(),1,"retry ran after Stop or Quit");
+            assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"an unwanted work-status input followed Stop or Quit");
+            std::fs::remove_dir_all(h.root).unwrap();
         }
     }
 

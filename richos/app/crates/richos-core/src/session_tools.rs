@@ -145,6 +145,10 @@ pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String>
     append(scope,"stu",&Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None})
 }
 
+pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<(),String> {
+    append(scope,"rich",&Message {handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})
+}
+
 pub(crate) fn observe_user_stop(scope:&StatusToolScope,assignment:&str,obligation:&str,at:u64)->Result<(),String> {
     append(scope,"stu",&Message {handoff:false,from:"user-control".into(),text:json!({"event":"user_stop",
         "assignment_id":assignment,"obligation_id":obligation,"requested_at_ms":at}).to_string(),instruction:None,work:None})
