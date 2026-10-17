@@ -30,6 +30,7 @@ const HANDOFF_ASK: &str = r#"{"event":"session_handoff_requested","max_chars":15
 #[derive(Default)]
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
+    /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     peer_active_through: Option<u64>,
     peer_stopper: Option<(String, Arc<dyn TurnCancel>)>,
     processing: bool,
@@ -327,7 +328,9 @@ impl WorkHost {
                     .cancel
                     .clone()
                     .map(|handle| (lease.session_id().to_string(), handle));
-                inner.peer_active_through = turn.strip_prefix("peer:").and_then(|n| n.parse().ok());
+                if let Some(through)=turn.strip_prefix("peer:").and_then(|n| n.parse::<u64>().ok()) {
+                    inner.peer_active_through=Some(inner.peer_active_through.unwrap_or(0).max(through));
+                }
             }
             crate::session_tools::begin_attempt(
                 &self.message_scope(binding),
@@ -369,6 +372,7 @@ impl WorkHost {
             if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {
                 return Err(diagnostics);
             }
+            backend.inner.lock().unwrap().peer_active_through=Some(received_through);
             crate::session_tools::complete_live_inputs(
                 &self.message_scope(binding),
                 "stu",
@@ -793,7 +797,7 @@ impl WorkHost {
                             inner.processing = true;
                             break Next::Answer(binding, answer);
                         }
-                        match crate::session_tools::pending(&self.message_scope(&binding), "stu") {
+                        match crate::session_tools::pending_after(&self.message_scope(&binding), "stu",inner.peer_active_through.unwrap_or(0)) {
                             Ok(Some((message, through))) => {
                                 inner.processing = true;
                                 break Next::Message(binding, message, through);
@@ -847,7 +851,7 @@ impl WorkHost {
             };
             let mut inner = backend.inner.lock().unwrap();
             inner.peer_input = None;
-            inner.peer_active_through = None;
+            if result.is_err(){inner.peer_active_through=None;}
             inner.processing = false;
             inner.completed += 1;
             backend.wake.notify_all();
@@ -1381,6 +1385,44 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_native_turn_keeps_its_unfinished_job_resumable_after_quit() {
+        for terminal in [Some(AssignmentState::Settled),Some(AssignmentState::Failed),None] {
+        let h=harness(1);let record=assignment::register(&h.state,&registration(&h)).unwrap();
+        assignment::advance(&h.state,"depot","thread-one",&record.id,AssignmentState::Running,"Worker start observed").unwrap();
+        let scope=h.host.message_scope(&h.binding);let path=h.root.join("peer-status.json");
+        crate::session_tools::bind(&path,&scope,"front-session","rich",Some(crate::ecs::UserInstruction{ledger_ref:registration(&h).instruction_ledger_ref,sha256:registration(&h).instruction_sha256,text:None})).unwrap();
+        crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"Land the three branches"})).unwrap();
+        let through=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(30)),"native turn did not end");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"native end_turn erased the still-unfinished handoff");
+        assert!(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{through}")).unwrap().is_some(),"native end_turn erased Stu's recovery evidence");
+        crate::session_tools::complete_attempt(&scope,"stu",&format!("peer:{through}")).unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"generic attempt completion bypassed the job's primary report");
+        // A later correction is independent input, not a request to execute the handoff again.
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        h.host.wake_messages(&h.binding);assert!(h.host.wait_for_completed(2,std::time::Duration::from_secs(30)));
+        let prompts=h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(),2,"unfinished work was repeatedly redispatched to the same Stu: {prompts:?}");
+        assert!(prompts[1].contains("Keep the original release date"));
+        h.host.shutdown();
+        let resumed=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();assert_eq!(resumed.1,through);
+        let factory=Factory{spawns:h.spawns.clone(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),gate:h.start_gate.clone()};
+        let restarted=WorkHost::new(&h.state,Box::new(factory),Arc::new(SilentNotifier),Arc::new(PermissionDesk::default()));
+        restarted.wake_messages(&h.binding);assert!(restarted.wait_for_completed(1,std::time::Duration::from_secs(30)));
+        let prompts=h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(),3,"restart did not reconcile the one unfinished handoff exactly once: {prompts:?}");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some());
+        // Only Stu's actual terminal report retires the original input.
+        if let Some(terminal)=terminal {assignment::advance(&h.state,"depot","thread-one",&record.id,terminal,"Stu's terminal report").unwrap();}
+        else {assignment::record_user_stop(&h.state,"depot","thread-one",&record.id).unwrap();}
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        assert!(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{through}")).unwrap().is_none());
+        restarted.shutdown();
+        }
+    }
+
+    #[test]
     fn one_stu_connection_can_open_while_another_is_still_starting() {
         struct IndependentFactory(Arc<StartGate>);
         impl LeaseFactory for IndependentFactory {
@@ -1583,12 +1625,10 @@ mod tests {
             backend.inner.lock().unwrap().peer_active_through.unwrap(),
         )
         .unwrap();
-        assert!(
-            crate::session_tools::pending(&scope, "stu")
-                .unwrap()
-                .is_none(),
-            "completed live input was replayed after restart"
-        );
+        let pending=crate::session_tools::pending(&scope,"stu").unwrap().expect("native turn completion erased the job");
+        assert_eq!(pending.0.work.as_ref().unwrap().assignment_id,receipt.id);
+        assignment::advance(&h.state,"depot","thread-one",&receipt.id,AssignmentState::Settled,"Stu reported completion").unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"completed job replayed after Stu's report");
         drop(running);
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
@@ -1625,12 +1665,17 @@ mod tests {
             let path = crate::session_tools::inbox(&scope, "stu").unwrap();
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             let add = |label: &str| {
+                use sha2::Digest;
+                let request=Registration{obligation_id:format!("work-{label}"),instruction_ledger_ref:format!("ledger:thread-one:{label}"),
+                    instruction_sha256:format!("{:x}",sha2::Sha256::digest(label)),..registration(&h)};
+                let receipt=assignment::register(&h.state,&request).unwrap();
+                let instruction=crate::ecs::UserInstruction::with_text(request.instruction_ledger_ref,request.instruction_sha256,Some(label));
                 let message = crate::session_tools::Message {
                     handoff: true,
                     from: "rich".into(),
                     text: label.into(),
-                    instruction: None,
-                    work: None,
+                    instruction: Some(instruction),
+                    work: Some(crate::session_tools::WorkReference{assignment_id:receipt.id,obligation_id:request.obligation_id}),
                 };
                 let mut file = std::fs::OpenOptions::new()
                     .create(true)
@@ -1733,9 +1778,11 @@ mod tests {
             crate::session_tools::acknowledge(&scope, "stu", a).unwrap();
             // The existing completion API is bounded by actual receipts in the fix.
             crate::session_tools::complete_live_inputs(&scope, "stu", "after-relaunch", c).unwrap();
-            assert!(crate::session_tools::pending(&scope, "stu")
-                .unwrap()
-                .is_none());
+            assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some(),"end_turn erased unfinished jobs");
+            for record in assignment::read_all(&h.state,"depot","thread-one").unwrap(){
+                assignment::advance(&h.state,"depot","thread-one",&record.id,AssignmentState::Settled,"Stu's terminal report").unwrap();
+            }
+            assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
             drop(lease);
             h.host.shutdown();
             std::fs::remove_dir_all(h.root).unwrap();
@@ -2041,7 +2088,7 @@ mod tests {
         };
         let run = |n| {
             h.host
-                .run_message(&backend, &h.binding, &message, &format!("peer:{n}"))
+                .run_message(&backend, &h.binding, &message, &format!("team-test:{n}"))
                 .unwrap()
         };
         run(2);

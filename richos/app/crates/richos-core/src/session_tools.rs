@@ -1,4 +1,6 @@
 //! Direct native-session evidence and durable peer input. No provider turn lock is used.
+//! Transport acceptance advances the existing cursor. An accepted handoff stays active
+//! until its matching Stu report is terminal or the user's Stop is durable.
 use crate::status_tools::StatusToolScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -284,55 +286,65 @@ pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u6
     pending_after(scope,role,0)
 }
 
-/// Read unfinished input in durable order, skipping only what this live turn has taken.
+/// Read an existing inbox record by its bounded frame offset, independent of history.
+fn input_at(path:&Path,through:u64)->Result<Message,String> {
+    let mut file=std::fs::File::open(path).map_err(|e|e.to_string())?;
+    if through==0 || through>file.metadata().map_err(|e|e.to_string())?.len(){return Err("Unfinished input no longer matches its durable inbox".into())}
+    let start=through.saturating_sub(256*1024+1);file.seek(SeekFrom::Start(start)).map_err(|e|e.to_string())?;
+    let mut bytes=Vec::new();file.take(through-start).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+    if bytes.last()!=Some(&b'\n'){return Err("Unfinished input is not a complete durable record".into())}
+    let end=bytes.len()-1;let from=bytes[..end].iter().rposition(|b|*b==b'\n').map_or(0,|n|n+1);
+    if from==0 && start>0{return Err("Unfinished input exceeds the existing frame limit".into())}
+    serde_json::from_slice(&bytes[from..end]).map_err(|e|e.to_string())
+}
+
+/// Only the matching Stu-authored terminal report or durable user Stop ends a handoff.
+fn handoff_finished(scope:&StatusToolScope,message:&Message)->Result<bool,String> {
+    if !message.handoff{return Ok(true)}
+    let reference=match &message.work {Some(work)=>Some(work.clone()),None=>work_reference(scope,message)?};
+    let Some(work)=reference else{return Ok(false)};
+    let record=crate::assignment::read(&scope.state_root,&scope.entity_id,&scope.thread_id,&work.assignment_id).map_err(|e|e.to_string())?;
+    if record.obligation_id!=work.obligation_id || message.instruction.as_ref().is_some_and(|i|record.instruction_ledger_ref!=i.ledger_ref || record.instruction_sha256!=i.sha256){return Err("The handoff's terminal report belongs to a different request".into())}
+    Ok(record.user_stop_requested_at_ms.is_some() || matches!(record.reported_state(),Some(crate::assignment::AssignmentState::Settled|crate::assignment::AssignmentState::Failed)))
+}
+
+/// Read unfinished input in durable order, skipping only what this live connection took.
 pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
-    let path=inbox(scope,role)?;
-    let cursor=cursor_state(&path)?;
-    let accepted=cursor["through"].as_u64().unwrap();
-    let mut unfinished=None;
+    let path=inbox(scope,role)?;let mut cursor=cursor_state(&path)?;
+    let accepted=cursor["through"].as_u64().unwrap();let mut unfinished=None;let mut retired=false;
     for input in cursor["active"].as_object().unwrap().keys() {
-        let Some(offset)=input.strip_prefix("peer:") else {continue};
+        let Some(offset)=input.strip_prefix("peer:") else{continue};
         let offset=offset.parse::<u64>().map_err(|_|"Invalid unfinished input identity")?;
-        if offset<=accepted && offset>after {unfinished=Some(unfinished.map_or(offset,|old:u64|old.min(offset)));}
-    }
-    if let Some(through)=unfinished {
-        // A live correction can advance acceptance past the native turn still
-        // executing. Recover that exact saved input and its previous session.
-        // The existing frame bound keeps this read independent of inbox history.
-        let mut file=std::fs::File::open(&path).map_err(|e|e.to_string())?;
-        let length=file.metadata().map_err(|e|e.to_string())?.len();
-        if through==0 || through>length || accepted>length {
-            return Err("Unfinished input no longer matches its durable inbox".into());
+        if role=="stu" {
+            let message=input_at(&path,offset)?;
+            if message.handoff && handoff_finished(scope,&message)?{acknowledge(scope,role,offset)?;retired=true;continue}
         }
-        let start=through.saturating_sub(256*1024+1);
-        file.seek(SeekFrom::Start(start)).map_err(|e|e.to_string())?;
-        let mut bytes=Vec::new();file.take(through-start).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
-        if bytes.last()!=Some(&b'\n') {return Err("Unfinished input is not a complete durable record".into())}
-        let end=bytes.len()-1;
-        let from=bytes[..end].iter().rposition(|byte|*byte==b'\n').map_or(0,|n|n+1);
-        if from==0 && start>0 {return Err("Unfinished input exceeds the existing frame limit".into())}
-        let message=serde_json::from_slice(&bytes[from..end]).map_err(|e|e.to_string())?;
-        return Ok(Some((message,through)));
+        if offset<=accepted && offset>after{unfinished=Some(unfinished.map_or(offset,|old:u64|old.min(offset)));}
     }
-    let mut file=match std::fs::File::open(&path) {Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
+    if retired {cursor=cursor_state(&path)?;}
+    let accepted=cursor["through"].as_u64().unwrap();
+    if let Some(through)=unfinished {
+        if accepted>std::fs::metadata(&path).map_err(|e|e.to_string())?.len(){return Err("Message input is shorter than its saved cursor".into())}
+        return Ok(Some((input_at(&path,through)?,through)))
+    }
+    let mut file=match std::fs::File::open(&path){Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
     let mut through=accepted.max(after);
-    if through>file.metadata().map_err(|e|e.to_string())?.len() {return Err("Message input is shorter than its saved cursor".into())}
-    file.seek(SeekFrom::Start(through)).map_err(|e|e.to_string())?;
-    let mut reader=BufReader::new(file);
+    if through>file.metadata().map_err(|e|e.to_string())?.len(){return Err("Message input is shorter than its saved cursor".into())}
+    file.seek(SeekFrom::Start(through)).map_err(|e|e.to_string())?;let mut reader=BufReader::new(file);
     loop {
         let mut line=String::new();let count=(&mut reader).take(256*1024+1).read_line(&mut line).map_err(|e|e.to_string())?;
-        if count>256*1024 {return Err("Saved peer input exceeds its frame limit".into())}
-        if count==0 || !line.ends_with('\n') {return Ok(None)}
-        through+=count as u64;
-        if cursor["accepted"].get(through.to_string()).is_some()
-            && cursor["active"].get(format!("peer:{through}")).is_none() {continue}
+        if count>256*1024{return Err("Saved peer input exceeds its frame limit".into())}
+        if count==0 || !line.ends_with('\n'){return Ok(None)}through+=count as u64;
+        if cursor["accepted"].get(through.to_string()).is_some() && cursor["active"].get(format!("peer:{through}")).is_none(){continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
+        if role=="stu" && message.handoff && handoff_finished(scope,&message)?{acknowledge(scope,role,through)?;continue}
         return Ok(Some((message,through)))
     }
 }
 
 pub fn acknowledge(scope:&StatusToolScope,role:&str,through:u64)->Result<(),String> {
-    accept_input(scope,role,through,true)
+    let finished=role!="stu" || handoff_finished(scope,&input_at(&inbox(scope,role)?,through)?)?;
+    accept_input(scope,role,through,finished)
 }
 
 /// Acceptance between tool calls keeps the interrupted-turn recovery witness.
@@ -343,7 +355,9 @@ pub(crate) fn accept_live_handoff(scope:&StatusToolScope,role:&str,through:u64)-
 fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool)->Result<(),String> {
     let path=inbox(scope,role)?;
     update_cursor(scope,role,|cursor| {
-        if finished {cursor["active"].as_object_mut().unwrap().remove(&format!("peer:{through}"));}
+        let input=format!("peer:{through}");
+        if finished {cursor["active"].as_object_mut().unwrap().remove(&input);}
+        else if cursor["active"].get(&input).is_none(){cursor["active"][&input]=json!({"input":input,"session_id":null});}
         let mut frontier=cursor["through"].as_u64().unwrap();
         if through<=frontier {return Ok(())}
         cursor["accepted"][through.to_string()]=json!(true);
@@ -362,17 +376,17 @@ fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool)->Res
     })
 }
 
-/// Only the live inputs this native turn actually accepted are finished with it.
+/// Native turn completion finishes ordinary live input, never its unfinished jobs.
 pub(crate) fn complete_live_inputs(scope:&StatusToolScope,role:&str,session:&str,received_through:u64)->Result<(),String> {
+    let path=inbox(scope,role)?;
     update_cursor(scope,role,|cursor| {
-        let through=cursor["through"].as_u64().unwrap();
-        let done:Vec<_>=cursor["active"].as_object().unwrap().iter().filter_map(|(key,value)| {
-            let offset=key.strip_prefix("peer:")?.parse::<u64>().ok()?;
-            (offset<=received_through && value["session_id"]==session && (offset<=through || cursor["accepted"].get(offset.to_string()).is_some()))
-                .then(||key.clone())
-        }).collect();
-        for key in done {cursor["active"].as_object_mut().unwrap().remove(&key);}
-        Ok(())
+        let through=cursor["through"].as_u64().unwrap();let mut done=Vec::new();
+        for (key,value) in cursor["active"].as_object().unwrap() {
+            let Some(offset)=key.strip_prefix("peer:").and_then(|n|n.parse::<u64>().ok()) else{continue};
+            if offset<=received_through && value["session_id"]==session && (offset<=through || cursor["accepted"].get(offset.to_string()).is_some())
+                && (role!="stu" || handoff_finished(scope,&input_at(&path,offset)?)?) {done.push(key.clone());}
+        }
+        for key in done{cursor["active"].as_object_mut().unwrap().remove(&key);}Ok(())
     })
 }
 
@@ -407,6 +421,7 @@ pub fn previous_attempt(scope:&StatusToolScope,role:&str,input:&str)->Result<Opt
 
 /// Keep uncertain peer delivery and question-answer evidence independently until accepted.
 pub fn complete_attempt(scope:&StatusToolScope,role:&str,input:&str)->Result<(),String> {
+    if let Some(offset)=input.strip_prefix("peer:"){return acknowledge(scope,role,offset.parse().map_err(|_|"Invalid peer input identity")?)}
     update_cursor(scope, role, |cursor| { cursor["active"].as_object_mut().unwrap().remove(input); Ok(()) })
 }
 
