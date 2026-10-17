@@ -1184,11 +1184,14 @@ impl WorkHost {
             use sha2::Digest;
             let digest=sha2::Sha256::digest(format!("{}\0{}\0{through}",scope.entity_id,scope.thread_id));
             let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
-            let text=serde_json::to_string(&message).map_err(|e|e.to_string())?;
+            let mut payload=serde_json::to_value(&message).map_err(|e|e.to_string())?;
+            payload["previous_delivery_attempt"]=serde_json::to_value(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{through}"))?).map_err(|e|e.to_string())?;
+            let text=payload.to_string();
             let host=Arc::downgrade(self);
+            let receiving=Arc::downgrade(&backend);
             let binding=binding.clone();
-            if let Some(session)=session {
-                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),&session)?;
+            if let Some(session)=&session {
+                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),session)?;
             }
             input.send_input(&id,&text,Box::new(move || {
                 let accepted=if message.handoff {crate::session_tools::accept_live_handoff(&scope,"stu",through)}
@@ -1196,6 +1199,12 @@ impl WorkHost {
                 if let Err(error)=accepted {
                     eprintln!("[richos] operator input was taken but its receipt remains pending: {error}");
                     return;
+                }
+                if let Some(backend)=receiving.upgrade() {
+                    let mut inner=backend.inner.lock().unwrap();
+                    if inner.lease_session==session {
+                        inner.peer_active_through=Some(inner.peer_active_through.unwrap_or(0).max(through));
+                    }
                 }
                 if let Some(host)=host.upgrade() {host.wake_messages(&binding)}
             }))?;
@@ -1279,16 +1288,18 @@ impl WorkHost {
                 if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
             });
             let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
-            {
+            let received_through={
                 let mut inner=backend.inner.lock().unwrap();
-                inner.peer_input=None;inner.peer_active_through=None;inner.cancel=None;
-            }
+                inner.peer_input=None;inner.cancel=None;
+                inner.peer_active_through.take().unwrap_or(0)
+            };
             if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
             let reason=result.map_err(|e|e.to_string())?;
             if reason != "end_turn" {
                 return Err(format!("Operator input did not complete: {reason}"));
             }
             if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
+            crate::session_tools::complete_live_inputs(&self.message_scope(binding),"stu",&session,received_through)?;
             let lease=guard.as_mut().ok_or("The operator connection closed during team reload")?;
             if !self.refresh_peer_team(backend,lease.as_mut())? {return Ok(session)}
             input=TEAM_CHANGED_CONTINUATION.to_string();
@@ -1542,11 +1553,7 @@ impl WorkHost {
             let binding = match next {
                 Next::Message(binding,message,through)=>{
                     if let Err(error)=self.run_message(&backend,&binding,&message,&format!("peer:{through}"))
-                        .and_then(|session| {
-                            let scope=self.message_scope(&binding);
-                            crate::session_tools::acknowledge(&scope,"stu",through)?;
-                            crate::session_tools::complete_live_inputs(&scope,"stu",&session)
-                        }) {
+                        .and_then(|_|crate::session_tools::acknowledge(&self.message_scope(&binding),"stu",through)) {
                         eprintln!("[richos] operator message remains pending: {error}");
                         // The ordinary host owns retry and shutdown. No message is acknowledged on failure.
                         let mut inner=backend.inner.lock().unwrap();
@@ -1567,7 +1574,7 @@ impl WorkHost {
                     match result {
                         Ok(session)=>if let Err(error)=crate::question_work::taken(&self.state,std::slice::from_ref(&delivery.id),&session)
                             .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id)))
-                            .and_then(|_|crate::session_tools::complete_live_inputs(&self.message_scope(&binding),"stu",&session)) {
+                            {
                             eprintln!("[richos] operator answer acknowledgement: {error}");
                         },
                         Err(error)=>{
@@ -5817,9 +5824,58 @@ mod tests {
         h.host.wake_messages(&h.binding);
         let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: a queued new job must not block a quick correction to current work");
         assert!(text.contains("do not change the date"));taken();
-        crate::session_tools::complete_live_inputs(&scope,"stu","same-stu").unwrap();
+        crate::session_tools::complete_live_inputs(&scope,"stu","same-stu",backend.inner.lock().unwrap().peer_active_through.unwrap()).unwrap();
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"completed live input was replayed after restart");
         drop(running);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn unfinished_live_handoffs_reach_recovered_stu_before_newer_input() {
+        use std::io::Write as _;
+        type Delivery=(String,Box<dyn FnOnce()+Send>);
+        struct Input {seen:Mutex<std::collections::HashSet<String>>,tx:std::sync::mpsc::Sender<Delivery>}
+        impl TurnCancel for Input {
+            fn cancel(&self)->bool {panic!("live recovery must not interrupt Stu")}
+            fn send_input(&self,id:&str,text:&str,taken:Box<dyn FnOnce()+Send>)->Result<bool,String> {
+                if !self.seen.lock().unwrap().insert(id.into()) {return Ok(false)}
+                self.tx.send((text.into(),taken)).unwrap();Ok(true)
+            }
+        }
+        for advanced_frontier in [false,true] {
+            let h=harness(0);let scope=h.host.message_scope(&h.binding);
+            let path=crate::session_tools::inbox(&scope,"stu").unwrap();std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let add=|label:&str| {
+                let message=crate::session_tools::Message {handoff:true,from:"rich".into(),text:label.into(),instruction:None,work:None};
+                let mut file=std::fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
+                writeln!(file,"{}",serde_json::to_string(&message).unwrap()).unwrap();file.sync_all().unwrap();file.metadata().unwrap().len()
+            };
+            let a=add("A");crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{a}"),"before-relaunch").unwrap();
+            let b=add("B");crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{b}"),"before-relaunch").unwrap();
+            crate::session_tools::accept_live_handoff(&scope,"stu",b).unwrap();
+            if advanced_frontier {crate::session_tools::accept_live_handoff(&scope,"stu",a).unwrap();}
+            assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().0.text,"A");
+            crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{a}"),"after-relaunch").unwrap();
+            let c=add("C");let backend=Backend::new();let (tx,rx)=std::sync::mpsc::channel();
+            {let mut inner=backend.inner.lock().unwrap();inner.binding=Some(h.binding.clone());inner.peer_active_through=Some(a);
+                inner.peer_input=Some(Arc::new(Input {seen:Mutex::new(Default::default()),tx}));inner.lease_session=Some("after-relaunch".into());}
+            h.host.backends.lock().unwrap().insert(h.binding.thread_id().into(),backend.clone());
+            let lease=backend.lease.lock().unwrap();h.host.wake_messages(&h.binding);
+            let (text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: recovered B must reach Stu while A still holds the lease");
+            let message:crate::session_tools::Message=serde_json::from_str(&text).unwrap();assert_eq!(message.text,"B","new C overtook unfinished B");
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["previous_delivery_attempt"]["session_id"],"before-relaunch");
+            crate::session_tools::complete_live_inputs(&scope,"stu","after-relaunch",a).unwrap();
+            assert!(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{b}")).unwrap().is_some(),"sending without a provider receipt was called complete");
+            h.host.wake_messages(&h.binding);assert!(rx.try_recv().is_err(),"C was sent before B's actual receipt");
+            taken();
+            let (text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: B's receipt must release C through the same input");
+            assert_eq!(serde_json::from_str::<crate::session_tools::Message>(&text).unwrap().text,"C");taken();
+            assert_eq!(backend.inner.lock().unwrap().peer_active_through,Some(c));
+            crate::session_tools::acknowledge(&scope,"stu",a).unwrap();
+            // The existing completion API is bounded by actual receipts in the fix.
+            crate::session_tools::complete_live_inputs(&scope,"stu","after-relaunch",c).unwrap();
+            assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+            drop(lease);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+        }
     }
 
     #[test]
@@ -6600,6 +6656,10 @@ mod tests {
         let h = harness(5);
         let quota = Arc::new(crate::quota::Service::open(&h.root).unwrap());
         quota.set_policy(crate::quota::Policy { enabled: true, pause_percent: 93 }).unwrap();
+        let now=crate::util::now_millis();
+        drop(quota.before_turn("1",Some((vec![crate::quota::Window {id:"five_hour".into(),label:"Five-hour".into(),
+            used_percent:95.,resets_at:Some(now+3_600_000),duration_ms:18_000_000}],now))));
+        assert!(matches!(quota.view().admission,crate::quota::Admission::Held {..}));
         h.host.set_quota(quota.clone());
         h.host.start();
         let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();
@@ -6891,6 +6951,10 @@ mod tests {
         let h = harness(5);
         let quota = Arc::new(crate::quota::Service::open(&h.root).unwrap());
         quota.set_policy(crate::quota::Policy { enabled: true, pause_percent: 93 }).unwrap();
+        let now=crate::util::now_millis();
+        drop(quota.before_turn("1",Some((vec![crate::quota::Window {id:"five_hour".into(),label:"Five-hour".into(),
+            used_percent:95.,resets_at:Some(now+3_600_000),duration_ms:18_000_000}],now))));
+        assert!(matches!(quota.view().admission,crate::quota::Admission::Held {..}));
         h.host.set_quota(quota);
         h.host.start();
         let receipt = h.host.register(&h.binding, &registration(&h)).unwrap();

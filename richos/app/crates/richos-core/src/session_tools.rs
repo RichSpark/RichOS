@@ -281,6 +281,11 @@ fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bo
 
 /// The cursor is acknowledged only after the receiving path durably accepts the record.
 pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u64)>,String> {
+    pending_after(scope,role,0)
+}
+
+/// Read unfinished input in durable order, skipping only what this live turn has taken.
+pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
     let path=inbox(scope,role)?;
     let cursor=cursor_state(&path)?;
     let accepted=cursor["through"].as_u64().unwrap();
@@ -288,7 +293,7 @@ pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u6
     for input in cursor["active"].as_object().unwrap().keys() {
         let Some(offset)=input.strip_prefix("peer:") else {continue};
         let offset=offset.parse::<u64>().map_err(|_|"Invalid unfinished input identity")?;
-        if offset<=accepted {unfinished=Some(unfinished.map_or(offset,|old:u64|old.min(offset)));}
+        if offset<=accepted && offset>after {unfinished=Some(unfinished.map_or(offset,|old:u64|old.min(offset)));}
     }
     if let Some(through)=unfinished {
         // A live correction can advance acceptance past the native turn still
@@ -309,15 +314,8 @@ pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u6
         let message=serde_json::from_slice(&bytes[from..end]).map_err(|e|e.to_string())?;
         return Ok(Some((message,through)));
     }
-    pending_after(scope, role, 0)
-}
-
-/// Skip only input already being handled on this live session, without acknowledging it.
-pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
-    let path=inbox(scope,role)?;
     let mut file=match std::fs::File::open(&path) {Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
-    let cursor=cursor_state(&path)?;
-    let mut through=cursor["through"].as_u64().ok_or("Invalid input cursor")?.max(after);
+    let mut through=accepted.max(after);
     if through>file.metadata().map_err(|e|e.to_string())?.len() {return Err("Message input is shorter than its saved cursor".into())}
     file.seek(SeekFrom::Start(through)).map_err(|e|e.to_string())?;
     let mut reader=BufReader::new(file);
@@ -326,7 +324,8 @@ pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<
         if count>256*1024 {return Err("Saved peer input exceeds its frame limit".into())}
         if count==0 || !line.ends_with('\n') {return Ok(None)}
         through+=count as u64;
-        if cursor["accepted"].get(through.to_string()).is_some() {continue}
+        if cursor["accepted"].get(through.to_string()).is_some()
+            && cursor["active"].get(format!("peer:{through}")).is_none() {continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
         return Ok(Some((message,through)))
     }
@@ -364,12 +363,12 @@ fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool)->Res
 }
 
 /// Only the live inputs this native turn actually accepted are finished with it.
-pub(crate) fn complete_live_inputs(scope:&StatusToolScope,role:&str,session:&str)->Result<(),String> {
+pub(crate) fn complete_live_inputs(scope:&StatusToolScope,role:&str,session:&str,received_through:u64)->Result<(),String> {
     update_cursor(scope,role,|cursor| {
         let through=cursor["through"].as_u64().unwrap();
         let done:Vec<_>=cursor["active"].as_object().unwrap().iter().filter_map(|(key,value)| {
             let offset=key.strip_prefix("peer:")?.parse::<u64>().ok()?;
-            (value["session_id"]==session && (offset<=through || cursor["accepted"].get(offset.to_string()).is_some()))
+            (offset<=received_through && value["session_id"]==session && (offset<=through || cursor["accepted"].get(offset.to_string()).is_some()))
                 .then(||key.clone())
         }).collect();
         for key in done {cursor["active"].as_object_mut().unwrap().remove(&key);}
@@ -502,18 +501,18 @@ mod tests {
         send(&path,&scope,json!({"text":"B"})).unwrap();let b=pending_after(&scope,"stu",a).unwrap().unwrap().1;
         begin_attempt(&scope,"stu",&format!("peer:{b}"),"before-crash").unwrap();
         accept_live_handoff(&scope,"stu",b).unwrap();
-        send(&path,&scope,json!({"text":"correction"})).unwrap();let correction=pending_after(&scope,"stu",a).unwrap().unwrap().1;
+        send(&path,&scope,json!({"text":"correction"})).unwrap();let correction=pending_after(&scope,"stu",b).unwrap().unwrap().1;
         acknowledge(&scope,"stu",correction).unwrap();
         assert_eq!(pending(&scope,"stu").unwrap().unwrap().1,a);
         acknowledge(&scope,"stu",a).unwrap();
-        complete_live_inputs(&scope,"stu","after-crash").unwrap();
+        complete_live_inputs(&scope,"stu","after-crash",correction).unwrap();
         assert_eq!(pending(&scope,"stu").unwrap().unwrap().1,b,"a different session cannot erase unfinished B");
         assert_eq!(previous_attempt(&scope,"stu",&format!("peer:{b}")).unwrap().unwrap()["session_id"],"before-crash");
         acknowledge(&scope,"stu",b).unwrap();
         assert!(pending(&scope,"stu").unwrap().is_none());
         send(&path,&scope,json!({"text":"C"})).unwrap();let c=pending(&scope,"stu").unwrap().unwrap().1;
         begin_attempt(&scope,"stu",&format!("peer:{c}"),"completed-session").unwrap();accept_live_handoff(&scope,"stu",c).unwrap();
-        complete_live_inputs(&scope,"stu","completed-session").unwrap();
+        complete_live_inputs(&scope,"stu","completed-session",c).unwrap();
         assert!(pending(&scope,"stu").unwrap().is_none(),"completed live input replayed");
         std::fs::remove_dir_all(root).unwrap();
     }

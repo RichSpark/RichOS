@@ -4821,6 +4821,11 @@ while read -r line; do :; done
             saved.push_str(&serde_json::to_string(&message).unwrap());saved.push('\n');messages.push(message);
         }
         std::fs::write(&inbox,&saved).unwrap();cognition.engine_profile=Some(profile);
+        let a=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{a}"),"old-stu").unwrap();
+        let b=crate::session_tools::pending_after(&scope,"stu",a).unwrap().unwrap().1;
+        crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{b}"),"old-stu").unwrap();
+        crate::session_tools::accept_live_handoff(&scope,"stu",b).unwrap();
         cognition.prepare_agent_message(&binding,"peer:original",&messages[0]).unwrap();
         let records=crate::assignment::read_all(&scope.state_root,&scope.entity_id,&thread).unwrap();assert_eq!(records.len(),2);
         let context:Value=serde_json::from_str(cognition.pending_context_brief.as_ref().unwrap()).unwrap();
