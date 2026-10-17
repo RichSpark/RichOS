@@ -833,6 +833,8 @@ struct PendingTurn {
     /// `command_uuid`. Minted per prompt, so a lifecycle frame can never be matched against a
     /// previous turn's message.
     command_uuid: String,
+    prompt_text: String,
+    hook_prompt_id: Option<String>,
     /// Host metadata returned by the native prompt hook, never prepended to user text.
     prepare: Option<NativePreparation>,
     complete: Option<NativeCompletion>,
@@ -1219,6 +1221,7 @@ pub struct NativeClient {
     settle_workers_on_stop: bool,
     stdin: Arc<Mutex<ChildStdin>>,
     session_id: String,
+    app_message_ids: Arc<Mutex<std::collections::HashSet<String>>>,
     next_id: Arc<AtomicI64>,
     /// Control-request replies, keyed by our `request_id`.
     pending: Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>>,
@@ -1253,7 +1256,6 @@ pub struct NativeClient {
 /// to be declared first.
 struct ReaderState {
     agent_tasks: crate::operator_lead::TaskBook,
-    current_command: Option<String>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
@@ -1465,7 +1467,6 @@ impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
             agent_tasks: crate::operator_lead::TaskBook::default(),
-            current_command: None,
             question_scope: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
@@ -1787,6 +1788,27 @@ fn native_resume(profile: Option<&crate::engine_profile::EngineProfile>,
     Ok(Some((binding.session_id, path)))
 }
 
+// Native stores UserPromptSubmit context as hook_additional_context attachments.
+// Reuse that history after resume instead of maintaining a second delivery ledger.
+fn native_app_message_ids(path:&Path)->Result<std::collections::HashSet<String>,NativeError> {
+    let mut ids=std::collections::HashSet::new();
+    for line in BufReader::new(std::fs::File::open(path)?).lines() {
+        let line=line?;
+        let Ok(record)=serde_json::from_str::<Value>(&line) else {continue};
+        if record.pointer("/attachment/type").and_then(Value::as_str)!=Some("hook_additional_context") {continue}
+        let Some(contents)=record.pointer("/attachment/content").and_then(Value::as_array) else {continue};
+        for content in contents.iter().filter_map(Value::as_str) {
+            for line in content.lines() {
+                let Ok(packet)=serde_json::from_str::<Value>(line) else {continue};
+                if let Some(messages)=packet["richos_app_messages"].as_array() {
+                    ids.extend(messages.iter().filter_map(|message|message["id"].as_str().map(str::to_string)));
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
 impl NativeClient {
     /// Spawn `claude`, run the `initialize` handshake, and return a client whose session id
     /// is already known.
@@ -1809,6 +1831,7 @@ impl NativeClient {
         let (doctrine, skills) = (standing.map(|s| s.0), standing.map(|s| s.1));
         preflight(bin, cwd, doctrine, skills)?;
         let remembered = native_resume(profile, continuity, role)?;
+        let app_message_ids=match &remembered {Some((_,path))=>native_app_message_ids(path)?,None=>Default::default()};
         let session_id = remembered.as_ref().map(|(session,_)|session.clone())
             .unwrap_or_else(||uuid::Uuid::new_v4().to_string());
         let role_name = match role { LeaseRole::Conversation => "rich", LeaseRole::Work => "stu" };
@@ -1986,6 +2009,7 @@ impl NativeClient {
             settle_workers_on_stop: profile.is_some(),
             stdin,
             session_id,
+            app_message_ids: Arc::new(Mutex::new(app_message_ids)),
             next_id: Arc::new(AtomicI64::new(1)),
             pending,
             current_prompt,
@@ -2234,9 +2258,20 @@ impl NativeClient {
         }
         if ty == "control_request" && msg.pointer("/request/subtype").and_then(Value::as_str) == Some("hook_callback")
             && msg.pointer("/request/callback_id").and_then(Value::as_str) == Some("richos-input-context") {
-            let command = state.lock().unwrap().current_command.clone();
-            let prepare = command.as_deref().and_then(|command| current.lock().unwrap().iter_mut()
-                .find(|input| input.command_uuid == command).and_then(|input| input.prepare.take()));
+            // Folded inputs run this hook before their started lifecycle. The native
+            // prompt identity claims the oldest matching original input once, including
+            // two identical messages. A repeated callback cannot claim the next input.
+            let prompt_id=msg.pointer("/request/input/prompt_id").and_then(Value::as_str);
+            let text=msg.pointer("/request/input/prompt").and_then(Value::as_str);
+            let (command,prepare)={
+                let mut inputs=current.lock().unwrap();
+                let known=prompt_id.and_then(|id|inputs.iter().position(|input|input.hook_prompt_id.as_deref()==Some(id)));
+                let index=known.or_else(||prompt_id.zip(text).and_then(|(id,text)| {
+                    let index=inputs.iter().position(|input|input.hook_prompt_id.is_none()&&input.prompt_text==text)?;
+                    inputs[index].hook_prompt_id=Some(id.into());Some(index)
+                }));
+                match index {Some(index)=>(Some(inputs[index].command_uuid.clone()),inputs[index].prepare.take()),None=>(None,None)}
+            };
             let body = match prepare.map(|prepare| prepare()).transpose() {
                 Ok(Some(Some(context))) => json!({"hookSpecificOutput":{
                     "hookEventName":"UserPromptSubmit","additionalContext":context
@@ -2272,7 +2307,6 @@ impl NativeClient {
         if ty == "command_lifecycle" {
             let command = msg.get("command_uuid").and_then(|v| v.as_str()).unwrap_or("");
             let lifecycle = msg.get("state").and_then(|v| v.as_str()).unwrap_or("");
-            if lifecycle == "started" { state.lock().unwrap().current_command = Some(command.to_string()); }
             let mut terminal: Option<&'static str> = None;
             {
                 let mut guard = current.lock().unwrap();
@@ -2524,9 +2558,19 @@ impl NativeClient {
         frame: &Value,
     ) {
         let mut routed = false;
-        for pending in current.lock().unwrap().iter_mut().filter(|pending| !pending.not_yet_ours()) {
-            routed |= pending.send(chunk.clone(), frame);
+        let mut inputs=current.lock().unwrap();
+        if matches!(chunk,ChunkMsg::Text(_)) {
+            // Native folds share one response. Its text belongs to the latest admitted
+            // input; earlier inputs still receive their own terminal receipt.
+            if let Some(input)=inputs.iter_mut().rev().find(|input|!input.not_yet_ours()) {
+                routed=input.send(chunk,frame);
+            }
+        } else {
+            for input in inputs.iter_mut().filter(|input|!input.not_yet_ours()) {
+                routed|=input.send(chunk.clone(),frame);
+            }
         }
+        drop(inputs);
         if !routed {
             between.lock().unwrap().offer_frame(frame.clone());
         }
@@ -2785,6 +2829,7 @@ impl NativeClient {
                 current.push(PendingTurn {
                     sink: TurnSink::Prompt(tx),
                     command_uuid: command_uuid.clone(),
+                    prompt_text: text.to_string(), hook_prompt_id: None,
                     prepare,
                     complete,
                     preparation_error: None,
@@ -3039,6 +3084,7 @@ impl TurnCancel for NativeCancelHandle {
             if current.iter().any(|pending| pending.command_uuid == id) { return Ok(true); }
             current.push(PendingTurn {
                 sink: TurnSink::Input { completed, limit: None }, command_uuid: id.to_string(),
+                prompt_text: text.to_string(), hook_prompt_id: None,
                 prepare: None,
                 complete: None,
                 preparation_error: None,
@@ -3514,6 +3560,7 @@ pub struct NativeCognition {
     pending_onboarding: Option<crate::onboarding_tools::OnboardingToolScope>,
     pending_channel: Option<String>,
     routing_context: String,
+    app_messages: Vec<(String,String)>,
 }
 
 impl NativeCognition {
@@ -3532,7 +3579,7 @@ impl NativeCognition {
     pub fn start(claude_bin: &Path, engine_cwd: &Path, doctrine: &Path, skills: &Path) -> Result<Self, NativeError> {
         let client = NativeClient::spawn(claude_bin, engine_cwd, doctrine, skills)?;
         let session_id = client.session_id().to_string();
-        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+        Ok(NativeCognition { client, session_id, onboarding_scope: None, assignments_scope: None, status_scope: None, continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
     }
     /// A chat lease with app-owned, company-scoped persistence tools. The scope is
     /// supplied by the spine before priming, never selected by the model. The host
@@ -3548,7 +3595,7 @@ impl NativeCognition {
         let status = scopes.join(format!("{identity}-status.json"));
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)), Some((executable, &scope, &assignments, &status)), None, None, None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: None, continuity_tools_scope: None, work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
     }
     pub fn start_with_continuity(bin: &Path, cwd: &Path, config_dir: &Path, skills: &Path,
         executable: &Path, bridge: crate::ecs::EcsBridge,
@@ -3567,7 +3614,7 @@ impl NativeCognition {
         let client = NativeClient::spawn_with_tools(bin, cwd, Some((&doctrine, skills)),
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), None, control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
-        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+        Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status), continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: None, role: LeaseRole::Conversation, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
     }
 
     /// Settings-isolated desktop lease from verified engine delivery.
@@ -3595,7 +3642,7 @@ impl NativeCognition {
             Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation)?;
         let session_id = client.session_id().to_string();
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, classifier, routing_context: String::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, classifier, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
     }
 
     /// **The WORK lease** — the background-work spec §2.1's second compute lease, in the
@@ -3637,7 +3684,7 @@ impl NativeCognition {
             // A work lease has no `richos_continuity` server, so there is no second scope for
             // one — the file it does read is `richos_work`'s, and its grant is §5.4's standing
             // one, opened per assignment rather than per reply.
-            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, classifier: None, routing_context: String::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
+            continuity: Some((bridge, continuity_scope)), continuity_tools_scope: None, work_binding: None, engine_profile: Some(profile), role: LeaseRole::Work, ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None })
     }
 
 
@@ -3744,6 +3791,7 @@ impl Drop for NativeCognition {
 }
 
 impl Cognition for NativeCognition {
+    fn set_app_messages(&mut self,messages:Vec<(String,String)>) {self.app_messages=messages;}
     fn set_conversation_context(&mut self,context:&str) {self.routing_context=context.to_string();}
     fn set_company_context(&mut self,context:Option<&str>)->Result<bool,CognitionError> {
         self.company_context=Some(context.unwrap_or("No company setup material is currently available.").to_string());
@@ -3973,6 +4021,8 @@ impl Cognition for NativeCognition {
     fn enqueue_prompt(&mut self, text: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>) -> Result<crate::cognition::PendingReply, CognitionError> {
         let prepared = self.prepared_scope.take();
         let company=self.company_context.clone();
+        let app_messages=self.app_messages.clone();
+        let app_message_ids=self.client.app_message_ids.clone();
         let onboarding = self.pending_onboarding.take().zip(self.onboarding_scope.clone());
         let channel = self.pending_channel.take();
         let question_scope = self.client.reader_state.lock().unwrap().question_scope.clone();
@@ -4011,6 +4061,13 @@ impl Cognition for NativeCognition {
                 Err(error)=>Some(json!({"event":"execution_routing","owner":"unknown","error":error}).to_string()),
             };
             if let Some(routing)=routing { context_data.push_str(&format!("\n{routing}")); }
+            let mut seen=app_message_ids.lock().unwrap();
+            let fresh:Vec<_>=app_messages.iter().filter(|(id,_)|!seen.contains(id))
+                .map(|(id,text)|json!({"id":id,"text":text})).collect();
+            if !fresh.is_empty() {
+                context_data.push_str(&format!("\n{}",json!({"richos_app_messages":fresh})));
+                seen.extend(fresh.iter().filter_map(|message|message["id"].as_str().map(str::to_string)));
+            }
             Ok((!context_data.is_empty()).then_some(context_data))
         });
         let complete = if self.role == LeaseRole::Conversation {
@@ -4938,7 +4995,7 @@ exec /bin/sleep 1000
             script_body.replace_range(start..start+"read -r line".len(), "read -r prompt");
         }
         let hooked = script_body.replace("read -r prompt", r#"read -r prompt
-python3 -c 'import json,sys; command=json.loads(sys.argv[1])["uuid"]; print(json.dumps({"type":"command_lifecycle","state":"started","command_uuid":command})); print(json.dumps({"type":"control_request","request_id":"fixture_scope","request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit"}}}))' "$prompt"
+python3 -c 'import json,sys; command=json.loads(sys.argv[1])["uuid"]; print(json.dumps({"type":"command_lifecycle","state":"started","command_uuid":command})); print(json.dumps({"type":"control_request","request_id":"fixture_scope","request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt_id":command,"prompt":json.loads(sys.argv[1])["message"]["content"][0]["text"]}}}))' "$prompt"
 read -r scope_response"#);
         let script = write_script(&format!("grant-{tag}"), &hooked);
         let client = NativeClient::spawn_with_tools(
@@ -4974,7 +5031,7 @@ read -r scope_response"#);
             work_binding: None,
             engine_profile: None,
             role,
-            ceo_thread_seats: None, classifier: None, routing_context: String::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None,
+            ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None,
         };
         (lease, root)
     }
@@ -5238,7 +5295,7 @@ read -r scope_response"#);
             work_binding: None,
             engine_profile: Some(fixture_profile(&root)),
             role: LeaseRole::Work,
-            ceo_thread_seats: None, classifier: None, routing_context: String::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None,
+            ceo_thread_seats: None, classifier: None, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None,
         };
         (lease, root)
     }
@@ -6291,7 +6348,7 @@ def read(): return json.loads(sys.stdin.readline())
 def send(frame): print(json.dumps(frame),flush=True)
 def hook(command,expected):
     send({"type":"command_lifecycle","command_uuid":command["uuid"],"state":"started"})
-    send({"type":"control_request","request_id":expected,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"prompt_id":"native-prompt-id","hook_event_name":"UserPromptSubmit","prompt":command["message"]["content"][0]["text"]}}})
+    send({"type":"control_request","request_id":expected,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"prompt_id":"native-"+command["uuid"],"hook_event_name":"UserPromptSubmit","prompt":command["message"]["content"][0]["text"]}}})
     while True:
         frame=read()
         if frame["type"]=="user":
@@ -6398,6 +6455,92 @@ send({"type":"result","stop_reason":"end_turn"})
         NativeClient::write_line(&client.stdin,&json!({"type":"fixture-release"})).unwrap();
         assert_eq!(first.wait(&mut |_|{}).unwrap(),STOP_REASON_CANCELLED);
         assert_eq!(second.wait(&mut |_|{}).unwrap(),"end_turn");
+    }
+
+    #[test]
+    fn app_messages_enter_native_context_once_and_resume_from_its_attachments() {
+        let script=write_script("app-context-once",r#"
+exec python3 -u -c '
+import json,sys
+from pathlib import Path
+history=Path(sys.argv[1]+".history")
+def read():return json.loads(sys.stdin.readline())
+def send(frame):print(json.dumps(frame),flush=True)
+read()
+send({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})
+while True:
+    command=read()
+    text=command["message"]["content"][0]["text"]
+    send({"type":"command_lifecycle","command_uuid":command["uuid"],"state":"started"})
+    send({"type":"control_request","request_id":command["uuid"],"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt_id":command["uuid"],"prompt":text}}})
+    context=read()["response"]["response"].get("hookSpecificOutput",{}).get("additionalContext","")
+    packets=[json.loads(line) for line in context.splitlines() if line.startswith("{\"richos_app_messages\"")]
+    ids=[message["id"] for packet in packets for message in packet["richos_app_messages"]]
+    expected={"first":["intro"],"again":[],"resumed":["changed","settings-action"]}[text]
+    assert ids==expected,(text,ids,expected)
+    with history.open("a") as output:output.write(json.dumps({"type":"attachment","attachment":{"type":"hook_additional_context","content":[context]}})+"\n")
+    send({"type":"result","stop_reason":"end_turn"})
+' "$0"
+"#);
+        let root=fixture_root();
+        let mut first=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        first.set_app_messages(vec![("intro".into(),"Dictation key is F2".into())]);
+        first.prompt("first",&mut |_|{}).unwrap();
+        first.prompt("again",&mut |_|{}).unwrap();
+        drop(first);
+        let history=std::path::PathBuf::from(format!("{}.history",script.display()));
+        let ids=native_app_message_ids(&history).unwrap();
+        assert_eq!(ids,std::collections::HashSet::from(["intro".to_string()]));
+        let mut resumed=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+        // The normal spawn uses this same history reader before native --resume.
+        *resumed.client.app_message_ids.lock().unwrap()=ids;
+        resumed.set_app_messages(vec![("intro".into(),"Dictation key is F2".into()),
+            ("changed".into(),"Dictation key is F3".into()),("settings-action".into(),"Key changed from F2 to F3".into())]);
+        resumed.prompt("resumed",&mut |_|{}).unwrap();
+        assert_eq!(native_app_message_ids(&history).unwrap().len(),3);
+        drop(resumed);std::fs::remove_file(history).unwrap();
+    }
+
+    #[test]
+    fn folded_identical_inputs_prepare_before_started_and_deliver_each_text_once() {
+        let script=write_script("folded-input",r#"
+exec python3 -u -c '
+import json,sys
+waiting=[]
+def read():return json.loads(sys.stdin.readline())
+def send(frame):print(json.dumps(frame),flush=True)
+def hook(command,identity,expected):
+    frame={"type":"control_request","request_id":identity,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt_id":identity,"prompt":command["message"]["content"][0]["text"]}}}
+    send(frame)
+    while True:
+        reply=read()
+        if reply["type"]=="user":waiting.append(reply)
+        else:
+            assert reply["response"]["response"]==expected,reply
+            return
+read()
+send({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})
+first=read()
+send({"type":"command_lifecycle","command_uuid":first["uuid"],"state":"started"})
+hook(first,"native-first",{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"first-context"}})
+second=waiting.pop(0) if waiting else read()
+send({"type":"command_lifecycle","command_uuid":second["uuid"],"state":"queued"})
+hook(second,"native-second",{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"second-context"}})
+hook(second,"native-second",{})
+send({"type":"command_lifecycle","command_uuid":second["uuid"],"state":"started"})
+send({"type":"assistant","message":{"content":[{"type":"text","text":"Single folded reply."}]}})
+for command in [first,second]:send({"type":"command_lifecycle","command_uuid":command["uuid"],"state":"completed"})
+send({"type":"result","stop_reason":"end_turn"})
+'
+"#);
+        let client=NativeClient::spawn(&script,fixture_root(),&doctrine_fixture(),&skills_fixture()).unwrap();
+        let first=client.enqueue_prompt("Same original words",Some("first-context")).unwrap();
+        let second=client.enqueue_prompt("Same original words",Some("second-context")).unwrap();
+        let mut one=String::new();let mut two=String::new();
+        first.wait(&mut |item|if let TurnItem::Text{text,..}=item{one.push_str(text)}).unwrap();
+        second.wait(&mut |item|if let TurnItem::Text{text,..}=item{two.push_str(text)}).unwrap();
+        assert!(one.is_empty(),"folded text duplicated into the earlier input: {one}");
+        assert_eq!(two,"Single folded reply.");
     }
 
     #[test]

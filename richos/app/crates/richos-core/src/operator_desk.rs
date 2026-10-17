@@ -56,7 +56,7 @@ pub const HANDED_OVER: &str = "Your team has it.";
 pub const TITLE_LABEL: &str = "Title (the front desk's label for the job, not his words):";
 /// (s) rule 4 as it applies to an assignment: its turn's mouth was never recorded.
 pub const NO_ORIGIN_WORK: &str =
-    "RichOS can't tell where this was asked from, so RichOS didn't hand it to your team. Ask Rich again at your desk.";
+    "RichOS couldn't tell whether this came from your Mac or your phone, so it didn't hand it to your team. Ask Rich again at your Mac.";
 /// The turn the register names is not in the ledger, or its words are not the ones the
 /// register attested.
 pub const UNVERIFIED: &str = "RichOS couldn't confirm your original words, so RichOS didn't hand this to your team. Ask Rich again.";

@@ -327,7 +327,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     }
     let prepared=prepare_connection(state,plan,&delivery.lease).and_then(|_| {
         if plan.control.stop_claim_for(&delivery.turn_id).is_some(){return Ok(())}
-        let (original,source,conversation,channel)=state.state(|s| {
+        let (original,source,conversation,channel,app_messages)=state.state(|s| {
             let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
             while let Some(previous)=s.ledger.turns().iter().find(|t|t.superseded_by.as_deref()==Some(successor)&&t.thread_id==plan.binding.thread_id()&&seen.insert(t.id.clone())) {
                 successor=&previous.id;
@@ -337,7 +337,13 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
             let mut conversation=String::new();
             for message in s.ledger.messages_scoped(&plan.binding)?.into_iter().filter(|m|m.turn_id!=delivery.turn_id){conversation.push_str(&format!("{}: {}\n",message.role,message.text));}
             let mut from=conversation.len().saturating_sub(8192);while !conversation.is_char_boundary(from){from+=1;}
-            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel))
+            let scoped=s.ledger.thread_turns(plan.binding.thread_id())?;
+            let current=|id:&str|scoped.iter().any(|turn|turn.id==id&&turn.superseded_by.is_none());
+            let mut app_messages:Vec<_>=scoped.iter().filter(|turn|turn.source==Source::Proactive&&turn.superseded_by.is_none())
+                .map(|turn|(turn.id.clone(),turn.assistant_text.clone())).collect();
+            app_messages.extend(s.ledger.actions().iter().filter(|action|action.kind=="settings_change"&&action.turn_id.as_deref().is_some_and(current))
+                .map(|action|(action.id.clone(),action.detail.clone())));
+            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages))
         })?;
         let mut slot=delivery.lease.lock().unwrap();
         let lease=slot.as_mut().ok_or(SpineError::NoLease)?;
@@ -348,6 +354,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
         lease.set_company_context(company.as_deref())?;
         lease.prepare_work_turn(&plan.binding,&delivery.turn_id,&original,source,&delivery.text,&mut |item|retain_preparation_item(state,&plan.binding,Some(&delivery.turn_id),item))?;
         lease.set_conversation_context(&conversation);
+        lease.set_app_messages(app_messages);
         lease.set_input_channel(channel.as_deref())?;
     let control = plan.control.clone();
     let turn = ActiveTurn { turn_id: delivery.turn_id.clone(), thread_id: delivery.binding.thread_id().into(),

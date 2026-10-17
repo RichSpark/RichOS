@@ -3814,7 +3814,7 @@
             // affordance suite asserts the two are byte-identical, so the preview cannot
             // quietly rehearse a sentence the product no longer says.
             return Promise.reject(
-              "RichOS couldn't send your message to Rich because Claude Code isn't ready. Quit RichOS and open it again, then send your message again."
+              "RichOS couldn't reach Claude Code, which Rich runs on. Quit RichOS and open it again, then send your message again."
             );
           }
           // §26's scenario is started BY THE CEO PRESSING ENTER, not by a side door. The

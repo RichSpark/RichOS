@@ -274,6 +274,9 @@ pub trait Cognition: Send {
     /// The host's current visible conversation, separate from instructions and hidden context.
     fn set_conversation_context(&mut self, _context: &str) {}
 
+    /// App-authored conversation facts, identified by their existing ledger IDs.
+    fn set_app_messages(&mut self, _messages: Vec<(String,String)>) {}
+
     /// Current company setup data, delivered separately from the user input.
     fn set_company_context(&mut self, _context: Option<&str>) -> Result<bool, CognitionError> { Ok(false) }
 
@@ -402,6 +405,7 @@ pub struct MockCognition {
     pub request_origins: Arc<Mutex<Vec<(String,String)>>>,
     pub conversation_contexts: Arc<Mutex<Vec<String>>>,
     pub company_contexts: Arc<Mutex<Vec<String>>>,
+    pub app_messages: Arc<Mutex<Vec<(String,String)>>>,
     /// RAW native frames a test parked as between-turn traffic (§1.5 gap #1).
     ///
     /// Raw wire JSON, NOT pre-built records, deliberately: a test that pushed a finished
@@ -424,6 +428,7 @@ impl MockCognition {
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
             company_contexts: Arc::new(Mutex::new(Vec::new())),
+            app_messages: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -442,6 +447,7 @@ impl MockCognition {
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
             company_contexts: Arc::new(Mutex::new(Vec::new())),
+            app_messages: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -458,6 +464,7 @@ impl Cognition for MockCognition {
         self.company_contexts.lock().unwrap().push(context.unwrap_or("").to_string());
         Ok(true)
     }
+    fn set_app_messages(&mut self,messages:Vec<(String,String)>) {*self.app_messages.lock().unwrap()=messages;}
     fn set_conversation_context(&mut self, context:&str) {self.conversation_contexts.lock().unwrap().push(context.into());}
 
     fn prepare_work_turn(&mut self, _: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,

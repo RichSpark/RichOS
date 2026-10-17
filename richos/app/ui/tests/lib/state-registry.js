@@ -245,7 +245,7 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
-    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Put it back in the box to restore your message, then send your message again.",
+    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -256,7 +256,7 @@ module.exports = [
       "no button' could just mean the card stopped drawing one.",
   },
   {
-    s: "Rich's answer stopped early and RichOS can't tell you why. Press Put it back in the box to restore your message, then send your message again.",
+    s: "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -445,7 +445,7 @@ module.exports = [
   // NEEDS SOMEONE ELSE
   // -------------------------------------------------------------------------------------
   {
-    s: "RichOS couldn't send your message to Rich because Claude Code isn't ready. Quit RichOS and open it again, then send your message again.",
+    s: "RichOS couldn't reach Claude Code, which Rich runs on. Quit RichOS and open it again, then send your message again.",
     c: "ACTIONABLE",
     control: "#send",
     fixture: "not-connected",
@@ -879,7 +879,7 @@ module.exports = [
   { s: "+ New thread", c: "CONTROL", why: "#rail-new-thread." },
   { s: "Start a new thread instead", c: "CONTROL", why: "#unbound-new-thread — §21's way out." },
   {
-    s: "Put it back in the box",
+    s: "Restore my message",
     c: "CONTROL",
     why:
       "`timeline.js`'s RETRY_LABEL — the one control on both intervention cards. It read " +

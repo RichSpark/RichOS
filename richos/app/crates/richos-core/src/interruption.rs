@@ -203,10 +203,10 @@ impl InterruptionCause {
                 "Stopped, as you asked."
             }
             InterruptionCause::Transient => {
-                "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Put it back in the box to restore your message, then send your message again."
+                "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again."
             }
             InterruptionCause::Unknown => {
-                "Rich's answer stopped early and RichOS can't tell you why. Press Put it back in the box to restore your message, then send your message again."
+                "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again."
             }
         }
     }

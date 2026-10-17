@@ -130,3 +130,28 @@ for index,prompt in enumerate([first,second]):
     assert_eq!(spine.ledger().thread_turns(&thread).unwrap().len(),2);
     drop(spine);std::fs::remove_dir_all(root).unwrap();
 }
+
+
+#[test]
+fn app_introductions_and_key_changes_follow_their_conversation_without_a_hidden_turn() {
+    use richos_core::cognition::MockCognition;
+    let (root,mut spine,company)=fixture();
+    let (thread,intro)=spine.open_conversation_with_message(&company,"Dictation","Use F2 for dictation.").unwrap();
+    spine.open_conversation_with_message(&company,"Unrelated","Unrelated company thread notice").unwrap();
+    spine.switch_thread(&thread).unwrap();
+    let first=MockCognition::new("before-change",vec!["Ready"]);
+    let first_messages=first.app_messages.clone();
+    spine.attach_lease(Box::new(first));
+    spine.submit_prompt("Which key?",Source::Text).unwrap();
+    assert_eq!(*first_messages.lock().unwrap(),[(intro.clone(),"Use F2 for dictation.".into())]);
+    let changed=spine.replace_app_message(&thread,Some(&intro),"Use F3 for dictation.","Changed dictation key from F2 to F3.").unwrap();
+    let second=MockCognition::new("after-change",vec!["F3"]);
+    let messages=second.app_messages.clone();
+    spine.attach_lease(Box::new(second));
+    spine.submit_prompt("And now?",Source::Text).unwrap();
+    let observed=messages.lock().unwrap();
+    assert_eq!(observed.len(),2,"only the current message and its settings action belong here");
+    assert!(observed.contains(&(changed,"Use F3 for dictation.".into())));
+    assert!(observed.iter().any(|(_,text)|text.contains("Changed dictation key from F2 to F3")));
+    drop(observed);drop(spine);std::fs::remove_dir_all(root).unwrap();
+}

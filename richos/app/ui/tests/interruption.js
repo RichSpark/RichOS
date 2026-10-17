@@ -67,7 +67,7 @@ const ONLY_HIS_WORDS = "Your message is saved. Rich hadn't written any of his an
 // The two generic sentences, which must NOT appear when a cause is known.
 const GENERIC_BODY = "I hit a snag mid-thought and had to stop";
 // The one label for the one action, after D6. `timeline.js`'s `RETRY_LABEL`.
-const RETRY_LABEL = "Put it back in the box";
+const RETRY_LABEL = "Restore my message";
 const GENERIC_NOTE = "Everything I'd already written above is saved.";
 
 // ---------------------------------------------------------------------------------------

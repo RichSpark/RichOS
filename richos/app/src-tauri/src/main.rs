@@ -1798,7 +1798,7 @@ fn refused_send(why: &str, ceo_sentence: String) -> String {
 /// preview's `_notConnected` switch. The affordance suite asserts the two are identical, so
 /// they cannot drift silently.
 const LEASE_UNAVAILABLE_MESSAGE: &str =
-    "RichOS couldn't send your message to Rich because Claude Code isn't ready. Quit RichOS and open it again, then send your message again.";
+    "RichOS couldn't reach Claude Code, which Rich runs on. Quit RichOS and open it again, then send your message again.";
 
 /// What the CEO is told when there is no corpus this install could write a correction to.
 ///
@@ -7100,7 +7100,7 @@ mod lease_gate_tests {
         assert!(setup.contains("resolve_claude_bin()") && setup.contains("state.claude_bin.lock()"),
             "setup must refresh the factory with the newly installed executable");
         // And the sentence they refuse with is still the one the CEO was written for.
-        assert!(crate::LEASE_UNAVAILABLE_MESSAGE.starts_with("RichOS couldn't send your message to Rich"));
+        assert!(crate::LEASE_UNAVAILABLE_MESSAGE.starts_with("RichOS couldn't reach Claude Code"));
     }
 
     /// INVARIANT: **the first-run arm is never conjoined with `has_lease_factory()`.**

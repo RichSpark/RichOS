@@ -198,7 +198,7 @@ async function main() {
       assert(await page.isHidden("#stop"), "no misleading Stop after failure");
       const text = await page.locator("#messages").innerText();
       assert(text.includes("Draft the Q4 board memo"), "accepted user words survive");
-      assert(text.includes("Put it back in the box"), "the failure has an actionable control");
+      assert(text.includes("Restore my message"), "the failure has an actionable control");
       assert(!text.includes("cognition io"), "raw machinery is not a user explanation");
       await page.close();
     });
@@ -217,7 +217,7 @@ async function main() {
       assertEqual(await band(page), null);
       assertEqual(await page.inputValue("#input"), "", "accepted text is not duplicated into a resend draft");
       assert(!(await page.locator("#messages").innerText()).includes("broken pipe"));
-      assertEqual(await page.getByRole("button", { name: "Put it back in the box", exact: true }).count(), 1);
+      assertEqual(await page.getByRole("button", { name: "Restore my message", exact: true }).count(), 1);
       await page.close();
     });
 

@@ -139,6 +139,7 @@ pub const PUSH_HOST_SUFFIX: &str = ".push.apple.com";
 #[derive(Debug)]
 pub enum PhoneError {
     Io(String),
+    PortInUse,
     /// A shelled-out tool (`/usr/bin/openssl`, `/usr/bin/security`, `/usr/sbin/scutil`)
     /// exited non-zero or could not be run. Carries what it said.
     Tool { tool: String, detail: String },
@@ -171,6 +172,7 @@ impl fmt::Display for PhoneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PhoneError::Io(e) => write!(f, "phone channel io: {e}"),
+            PhoneError::PortInUse => write!(f,"phone channel address already in use"),
             PhoneError::Tool { tool, detail } => write!(f, "{tool}: {detail}"),
             PhoneError::ToolTimedOut { tool, seconds } => {
                 write!(f, "{tool}: still running after {seconds}s, killed")
@@ -228,6 +230,9 @@ Nothing was changed. Ask Rich to set your phone up again."
             PhoneError::Tool { .. } => {
                 "RichOS couldn't find a network address your phone can use, so phone setup did not finish. Check that your Mac is connected to your network, then ask Rich to set your phone up again."
             }
+            PhoneError::PortInUse => {
+                "Another program on this Mac is using the connection your phone needs. If a second copy of RichOS is open, quit it, then ask Rich to set your phone up again."
+            }
             PhoneError::Io(_) => {
                 "RichOS couldn't finish connecting your phone on this Mac. Ask Rich to set your phone up again."
             }
@@ -256,7 +261,8 @@ Nothing was changed. Ask Rich to set your phone up again."
 
 impl From<std::io::Error> for PhoneError {
     fn from(e: std::io::Error) -> Self {
-        PhoneError::Io(e.to_string())
+        if e.kind()==std::io::ErrorKind::AddrInUse {PhoneError::PortInUse}
+        else {PhoneError::Io(e.to_string())}
     }
 }
 
@@ -1830,6 +1836,14 @@ fn phone_assets() -> assets::PhoneApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_address_in_use_claims_another_program_holds_the_connection() {
+        let busy=PhoneError::from(std::io::Error::from(std::io::ErrorKind::AddrInUse));
+        let denied=PhoneError::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert!(busy.ceo_sentence().contains("Another program"));
+        assert!(!denied.ceo_sentence().contains("Another program"));
+    }
 
     /// **An action that holds the connection lock can run another action inside it** (hunt part 1,
     /// finding 10). `begin_connect` holds the lock, calls `start`, whose final `status()` sweeps an
