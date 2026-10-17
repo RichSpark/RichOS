@@ -520,7 +520,6 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
 /// cached before the thing it describes existed. `run_setup` writes both cells.
 struct EngineLeaseFactory {
     quota: Arc<richos_core::quota::Service>,
-    permissions: Arc<richos_core::permissions::PermissionDesk>,
     claude_bin: Arc<Mutex<PathBuf>>,
     engine_dir: Arc<Mutex<PathBuf>>,
     /// Where RichOS keeps its own files — `app_data_dir()`, the same directory the ledger,
@@ -660,7 +659,7 @@ impl LeaseFactory for EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
-        profile.permissions = self.permissions.clone();
+
         // Fill-first: the work lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
@@ -725,7 +724,7 @@ impl EngineLeaseFactory {
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         if let Some(binding) = binding { profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?; }
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
-        profile.permissions = self.permissions.clone();
+
         profile.operator_desk = self.operator_desk.clone();
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
@@ -744,7 +743,7 @@ impl EngineLeaseFactory {
 /// compute lease is `Box<dyn Cognition + Send>`), so `Mutex<Spine>` is valid Tauri state.
 struct AppState {
     quota: Arc<richos_core::quota::Service>,
-    permissions: Arc<richos_core::permissions::PermissionDesk>,
+
     /// **The second compute lease and the actor that owns it** — the background-work spec
     /// §2.1's work host.
     ///
@@ -3091,7 +3090,7 @@ fn main() {
             // Attach the rotation/recovery seam REGARDLESS of initial boot success — even
             // if Claude wasn't signed in at launch, wiring the factory means a later sign-in
             // + retry (or a crash recovery attempt) has a real respawn path rather than none.
-            let permissions = Arc::new(richos_core::permissions::PermissionDesk::default());
+
             let quota = Arc::new(richos_core::quota::Service::open_account_wide(&data_dir)?);
             // THE FIRST READ OF THE WHOLE HISTORY, off the launch path (§118): every account's
             // transcripts priced once, so the Token spend screen opens on its figure. 9.28 GB took
@@ -3175,7 +3174,7 @@ fn main() {
             }
             let lease_factory = || EngineLeaseFactory {
                 quota: quota.clone(),
-                permissions: permissions.clone(),
+
                 claude_bin: Arc::clone(&claude_bin_cell),
                 engine_dir: Arc::clone(&engine_cell),
                 data_dir: data_dir.clone(),
@@ -3196,11 +3195,6 @@ fn main() {
                 &data_dir.join("engine-state"),
                 Box::new(lease_factory()),
                 Arc::new(WorkNotice { app: app.handle().clone() }),
-                // **The same desk the conversation uses** (spec §2.7/§5.5: one
-                // `Arc<PermissionDesk>`, two leases). The host holds it for the lifecycle
-                // §5.4 states — a queued request and a standing decision belong to an
-                // assignment and are released with it — and for nothing else.
-                permissions.clone(),
             );
             work.set_quota(quota.clone());
             // The back end's written files — its own, its workers', its commands' — reach the
@@ -3503,7 +3497,7 @@ fn main() {
             spine.detach_conversation_io();
             app.manage(AppState {
                 quota: quota.clone(),
-                permissions,
+
                 work,
                 operator: operator_desk,
                 operator_socket,
@@ -3784,8 +3778,8 @@ fn main() {
             entity_choice,
             choose_entity,
             register_entity,
-            pending_permission,
-            answer_permission,
+
+
             repository_connections,
             connect_repository,
             pick_folder,
@@ -4174,26 +4168,6 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
     .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "assignments": rows.iter().map(|row| {
-            // **What this assignment is waiting on HIM for** (spec §5.2, §5.5, §7.8). The
-            // head of that assignment's own queue at the one desk, or nothing.
-            //
-            // **`awaitingYou` is what turns §7.8's sentence into a control.** Without it the
-            // surface could say "ready for you to approve" and offer him no way to approve —
-            // which is exactly what shipped in the previous slice and is what the UI's own
-            // affordance gate caught. The id travels so the press answers THAT request and
-            // not whichever one happens to be first.
-            let waiting = state.work.pending_decision(row).map(|request| serde_json::json!({
-                "requestId": request.id,
-                // WHAT HE IS BEING ASKED, in his language and composed in ONE place.
-                // `mcp__richos_work__integrate` is a wire identifier; the question is
-                // whether to change his repository. The phrase comes from the same function
-                // that writes the blocked receipt's own sentence, so the surface and the
-                // record cannot drift into two descriptions of one step.
-                "asked": richos_core::work_host::plain_action(&request.tool),
-                "tool": request.tool,
-                "description": request.description,
-                "raisedAtMs": request.raised_at_ms,
-            }));
             serde_json::json!({
                 "id": row.id,
                 "title": row.title,
@@ -4226,7 +4200,6 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "repositories": row.repositories,
                 "registeredAtMs": row.registered_at_ms,
                 "canStop": row.reported_state().is_some() && row.accepts_input(),
-                "awaitingYou": waiting,
             })
         }).collect::<Vec<_>>()
     }))
@@ -6071,17 +6044,6 @@ fn ready_the_front_desk_after_a_repair(app: &AppHandle, thread_id: &str) {
     ready_the_front_desk(app, thread_id);
 }
 
-#[richos_command::command]
-fn pending_permission(state: State<AppState>) -> Option<richos_core::permissions::PermissionRequest> {
-    let view=state.reader.snapshot();
-    state.permissions.current().filter(|request|view.active_binding().is_some_and(|b|b.thread_id()==request.binding.thread_id && b.entity_id().as_str()==request.binding.entity_id))
-}
-/// Resolve the exact native action that is still waiting for this decision.
-#[richos_command::command]
-fn answer_permission(state: State<AppState>, request_id: String, allow: bool) -> Result<(), String> {
-    state.permissions.resolve(&request_id,allow).map(|_|())
-}
-
 /// Explicit repository access is separate from choosing a company folder.
 #[richos_command::command]
 fn repository_connections(state: State<AppState>) -> serde_json::Value {
@@ -6685,7 +6647,6 @@ mod operator_gate_tests {
         let binding = spine.ledger().thread_binding(&thread).unwrap();
         let factory = EngineLeaseFactory {
             quota: Arc::new(richos_core::quota::Service::open(&data).unwrap()),
-            permissions: Default::default(),
             claude_bin: Arc::new(Mutex::new(PathBuf::from("/nonexistent/claude"))),
             engine_dir: Arc::new(Mutex::new(root.join("no-engine-here"))),
             data_dir: data,

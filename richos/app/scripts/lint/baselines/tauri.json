@@ -295,10 +295,6 @@
       "language": "rust",
       "role": "production"
     },
-    "richos/app/crates/richos-core/src/permissions.rs": {
-      "language": "rust",
-      "role": "production"
-    },
     "richos/app/crates/richos-core/src/provider_auth.rs": {
       "language": "rust",
       "role": "production"

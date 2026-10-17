@@ -145,7 +145,7 @@ fn replay(capture: &str, speed: f64, requests: &[&str]) -> Replay {
     std::fs::write(root.join("conversation-ledger.jsonl"), rows.join("\n") + "\n").unwrap();
     let factory = ReplayFactory { child, cwd: root.clone(), state: state.clone(), doctrine, skills };
     let told = Arc::new(Told::default());
-    let host = WorkHost::new(&state, Box::new(factory), told.clone(), Arc::new(Default::default()));
+    let host = WorkHost::new(&state, Box::new(factory), told.clone());
     Replay { root, state, transcript, host, told, binding }
 }
 

@@ -66,7 +66,7 @@ struct RealWorkLeases {
     runtime: richos_core::runtime::EngineRuntime,
     doctrine: PathBuf,
     skills: PathBuf,
-    permissions: Arc<richos_core::permissions::PermissionDesk>,
+
     spawns: Arc<AtomicUsize>,
 }
 impl LeaseFactory for RealWorkLeases {
@@ -78,7 +78,7 @@ impl LeaseFactory for RealWorkLeases {
         let mut profile = richos_core::engine_profile::EngineProfile::prepare(&self.engine, &self.data, self.runtime.clone())
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
-        profile.permissions = self.permissions.clone();
+
         let bridge = EcsBridge::new(&self.runtime.python, &self.engine, &self.data.join("ecs"))
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         let lease = richos_core::native::NativeCognition::start_work_lease(
@@ -249,14 +249,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     out.line(&json!({"event":"recovery","log":reconciled.log_message(),
         "grants_closed":reconciled.grants_closed,"grants_unreconciled":reconciled.grants_unreconciled}));
 
-    let permissions = Arc::new(richos_core::permissions::PermissionDesk::default());
     let spawns = Arc::new(AtomicUsize::new(0));
     let host = WorkHost::new(&state, Box::new(RealWorkLeases {
         engine: engine.clone(), data: data.clone(), runtime: runtime.clone(),
         doctrine: richos_core::doctrine::ensure_rendered(&data, &Default::default())?,
         skills: richos_core::skills::ensure_rendered(&data, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app"))?,
-        permissions: permissions.clone(), spawns: spawns.clone(),
-    }), Arc::new(Says { out: out.clone(), names: names.clone() }), permissions.clone());
+        spawns: spawns.clone(),
+    }), Arc::new(Says { out: out.clone(), names: names.clone() }));
     let walk = Walk {
         ledger: Mutex::new(Ledger::open(data.join("walk-ledger.jsonl"))?),
         bridge: EcsBridge::new(&runtime.python, &engine, &data.join("ecs"))?,
@@ -268,20 +267,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     walk.host.start();
-    // Exact-action requests are approved and printed, as `work_lease_roundtrip.rs` does, so a
-    // routine command never parks the fixture.
-    {
-        let desk = permissions.clone();
-        std::thread::spawn(move || loop {
-            if let Some(request) = desk.current() {
-                eprintln!("PERMISSION {} {}", request.tool, request.input);
-                if let Err(e) = desk.resolve(&request.id, true) {
-                    eprintln!("work_walk: the permission could not be answered: {e:?}");
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        });
-    }
     // The launch wake: the app's observer wakes the question worker once at start.
     walk.wake();
     out.line(&json!({"ready": true, "pid": std::process::id()}));

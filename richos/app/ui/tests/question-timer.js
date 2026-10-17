@@ -69,7 +69,6 @@ function assignmentRow(kind, state, registeredAtMs) {
     turnRef: "ledger:" + F.THREAD + ":" + F.TURN,
     canStop: state === "registered" || state === "preparing" || state === "running",
     onTheConnection: state === "running",
-    awaitingYou: null,
   };
 }
 
@@ -309,7 +308,7 @@ async function main() {
           // Same turn id, different thread — the register is per conversation, and the
           // reference is what carries which one.
           turnRef: "ledger:thr_other:" + snapshot.items[0].turnId,
-          canStop: true, onTheConnection: true, awaitingYou: null,
+          canStop: true, onTheConnection: true,
         };
         window.RichTimeline.setQuestionsInFlight(model, [foreign], snapshot.threadId);
         return { size: model.questions.size, live: window.RichTimeline.hasLiveRow(model) };

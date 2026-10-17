@@ -5,7 +5,6 @@ use super::*;
 use richos_core::assignment::{self, AssignmentState, Registration};
 use richos_core::cognition::TurnItem;
 use richos_core::entity::ThreadBinding;
-use richos_core::permissions::PermissionDesk;
 use richos_core::work_host::{SilentNotifier, WorkHost};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -120,7 +119,7 @@ fn a_mac(tag: &str) -> Mac {
         &state,
         Box::new(RecordsWorkStarts(started.clone())),
         Arc::new(SilentNotifier),
-        Arc::new(PermissionDesk::default()),
+
     );
     work.start();
     Mac { root, state, spine: Mutex::new(spine), work, started, control, shown, other }

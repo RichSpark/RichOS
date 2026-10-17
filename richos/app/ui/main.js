@@ -128,7 +128,7 @@ const inputEl = el("input");
 /// `inputEl.focus()` while the user was typing their answer in the panel, so the next words and
 /// Return went to Rich as a conversation message. Every app call that focuses this box goes
 /// through this one method, whichever file makes it (`main.js`, `home.js`, `questions.js`,
-/// `permissions.js` reach it as `#input`), so the rule is here and not in each caller. The user
+/// other UI modules reach it as `#input`), so the rule is here and not in each caller. The user
 /// can still click or Tab into the box: neither calls `focus()`. `bug-dock-open` is the panel's
 /// own state (`bug-report.js` `showDock`/`hideDock`); once it closes, focus calls work again.
 inputEl.focus = (function (focus) {
@@ -3907,14 +3907,9 @@ function renderDrillChip() {
   if (savedWork.items?.length) parts.push(counted(savedWork.items.length, "team job", "team jobs"));
   // A read that failed is not on this line (hunt 57, finding 12): it keeps the last reading,
   // and the reason is shown under Technical view in the panel this line opens.
-  // THE ASSIGNMENTS, AND THE REASON THEY ARE ON THIS CHIP AT ALL (background-work spec §7's
-  // observability note, §7.8). This chip is the only way to open the pane the assignments
-  // live in, and every other part of it is fed by `get_worker_status`, which is EMPTY
-  // whenever no turn is open — the entire window background work lives in. Without these
-  // two parts an assignment waiting for his approval could not be reached: no chip, no
-  // pane, no approve control, however plainly the notice said it was ready for him.
+  // Keep the work pane reachable for the open states Stu reports.
   const rows = assignments.rows || [];
-  const awaiting = rows.filter((row) => row.awaitingYou).length;
+  const awaiting = rows.filter((row) => row.state === "blocked").length;
   // **A JOB THAT HAS BEEN WRITTEN DOWN IS NOT RUNNING**, and this chip said it was. The line
   // here counted `["registered", "preparing", "running"]` together and printed
   // "N assignments running" — so the instant an assignment was registered, before a workspace
@@ -3938,7 +3933,7 @@ function renderDrillChip() {
   // added a first-class state for work that is waiting on the Mac being unlocked. It is
   // `is_open` in `AssignmentState` and deliberately NOT `awaits_his_word` — it resolves itself,
   // and "waiting for you" would be the nag §56 was given to avoid. So it appears in neither
-  // `awaiting` above nor the two counts below, and an assignment in that state was his ONLY
+  // the blocked count above nor the two counts below, and an assignment in that state was his ONLY
   // open work would leave `parts` empty, hide the chip, and take the assignments pane with it —
   // no chip, no pane, no way to see the work at all. Raised by `echo-opus-screenwait1` as
   // `esc-20260918T114550Z-64ae379a`.
@@ -3959,11 +3954,11 @@ function renderDrillChip() {
   const held = rows.filter((row) => row.held && notStarted(row)).length;
   const starting = rows.filter((row) => !row.held && notStarted(row)).length;
   const running = rows.filter((row) => row.state === "running").length;
-  if (awaiting) parts.push(`${awaiting} waiting for you`);
   if (forScreen) parts.push(counted(forScreen, "assignment", "assignments") + " waiting for the screen");
   if (forQuota) parts.push(counted(forQuota, "assignment", "assignments") + " waiting to continue");
   if (held) parts.push(counted(held, "assignment", "assignments") + " waiting to start");
   if (starting) parts.push(counted(starting, "assignment", "assignments") + " starting");
+  if (awaiting) parts.push(`${awaiting} waiting for you`);
   if (running) parts.push(counted(running, "assignment", "assignments") + " running");
   // Plain language for the state the design calls `not_found`. "1 unknown" reads like an
   // error code; this says what actually happened.
@@ -4026,25 +4021,7 @@ function renderSlideOver() {
   // The assignments, with their own stop control (background-work spec §4.2: "where the
   // work is already visible"). Rendered after the receipts because a receipt is evidence
   // and an assignment is a thing he can still act on.
-  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, answerAssignment, {technical: techyOn()});
-}
-
-/// **His decision on the one step an assignment stopped at** (background-work spec §5.2,
-/// §5.7, §7.8).
-///
-/// It is the SAME command the permission sheet uses, because it is the same desk and the
-/// same one-exact-action rule: what differs is where the question is shown. A refusal —
-/// the assignment was stopped while he was reading, say — is relayed in words rather than
-/// swallowed, and the surface is re-read either way so it never keeps offering a control
-/// over a question that has gone.
-async function answerAssignment(requestId, allow) {
-  try {
-    await Bridge.invoke("answer_permission", {requestId, allow});
-  } catch (error) {
-    receiveWorkNotice(String(error));
-  }
-  await pollWorkerStatus();
-  if (!slideoverEl.hidden) renderSlideOver();
+  window.RichWorkSummary.renderAssignments(assignments, slideoverBody, stopAssignment, {technical: techyOn()});
 }
 
 /// **Stop ONE assignment.** Not `stop_turn` — that stays the conversation's, which is what
@@ -9037,7 +9014,7 @@ document.addEventListener("keydown", (e) => {
 // WHAT WAS HERE BEFORE WAS A LIST, AND A LIST IS WHAT FAILED HIM. The handler above named
 // eight surfaces. The window ships more than eight: `#assertiveness-popover` — the gear, the
 // most-used popup in the product — was never in it, and neither were `#setup-sheet`,
-// `#memory-setup`, `#set-menu`, `#permission-sheet`, `#repositories-sheet` or `#home-prefs`.
+// `#memory-setup`, `#set-menu`, `#repositories-sheet` or `#home-prefs`.
 // Three of those carry their OWN Escape handler bound to the popup element, which means each
 // works only while focus is inside it: click the dimmed area beside a permission request and
 // the keyboard could no longer answer it at all. Adding seven more lines to the list would

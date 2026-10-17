@@ -62,7 +62,7 @@ struct RealWorkLeases {
     runtime: richos_core::runtime::EngineRuntime,
     doctrine: PathBuf,
     skills: PathBuf,
-    permissions: Arc<richos_core::permissions::PermissionDesk>,
+
 }
 
 impl LeaseFactory for RealWorkLeases {
@@ -80,7 +80,7 @@ impl LeaseFactory for RealWorkLeases {
         )
         .map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
-        profile.permissions = self.permissions.clone();
+
         let bridge = EcsBridge::new(&self.runtime.python, &self.engine, &self.data.join("ecs"))
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         let lease = richos_core::native::NativeCognition::start_work_lease(
@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Obligation opened: {}", serde_json::to_string(&opened)?);
 
     // ---- the host, with the real factory --------------------------------------------------
-    let permissions = Arc::new(richos_core::permissions::PermissionDesk::default());
+
     let notices = Arc::new(Collected::default());
     // **THE HOST'S STATE ROOT IS `engine-state`, NOT THE DATA DIRECTORY — and getting this
     // wrong made a run that SUCCEEDED report itself as a failure.**
@@ -211,29 +211,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             runtime: runtime.clone(),
             doctrine,
             skills,
-            permissions: permissions.clone(),
+
         }),
         notices.clone(),
-        permissions.clone(),
     );
     host.remember_binding(&binding);
     host.start();
-
-    // Answer the exact-action desk so a routine command does not park forever. Every request
-    // is printed, so the record says what the back end actually asked to do.
-    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let watcher = {
-        let (desk, done) = (permissions.clone(), done.clone());
-        std::thread::spawn(move || {
-            while !done.load(std::sync::atomic::Ordering::SeqCst) {
-                if let Some(request) = desk.current() {
-                    eprintln!("PERMISSION {} {}", request.tool, request.input);
-                    let _ = desk.resolve(&request.id, true);
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        })
-    };
 
     // ---- register, which is the whole of his turn -----------------------------------------
     let registered_at = Instant::now();
@@ -291,9 +274,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let final_row = assignment::read(&state, "qa-test-co", &thread, &receipt.id)?;
     let elapsed = registered_at.elapsed();
 
-    done.store(true, std::sync::atomic::Ordering::SeqCst);
     host.shutdown();
-    let _ = watcher.join();
 
     // ---- the fixture's log AFTER ----------------------------------------------------------
     let after = git(&runtime, &repo, &["log", "--oneline"]);

@@ -446,20 +446,18 @@ impl InitFact {
     }
 }
 
-/// The three init-reported facts a background assignment depends on, each paired with the
+/// The two init-reported facts a background assignment depends on, each paired with the
 /// sentence its absence is reported by — named ONCE so the two places that ask about them
 /// cannot drift into disagreeing about which fact carries which sentence.
-fn work_readiness_facts(state: &ReaderState) -> [(InitFact, &'static str); 3] {
+fn work_readiness_facts(state: &ReaderState) -> [(InitFact, &'static str); 2] {
     [
         (state.engine_plugin_loaded, ENGINE_PLUGIN_ABSENT),
         (state.work_tools_loaded, WORK_TOOLS_ABSENT),
-        (state.permissions_bypassed, BYPASS_PERMISSIONS_ABSENT),
     ]
 }
 
 pub(crate) const ENGINE_PLUGIN_ABSENT: &str = "The desktop engine plugin did not load";
 pub(crate) const WORK_TOOLS_ABSENT: &str = "The desktop work tools did not load";
-pub(crate) const BYPASS_PERMISSIONS_ABSENT: &str = "The provider did not enable bypassPermissions as requested. Reconnect with a provider that supports this permission mode before starting app work.";
 
 /// The gate at the BINDING, which runs before the work lease's first turn.
 ///
@@ -469,21 +467,21 @@ pub(crate) const BYPASS_PERMISSIONS_ABSENT: &str = "The provider did not enable 
 /// before its lease had run a single turn.
 ///
 /// The loudness is not softened, it is MOVED to where the fact exists —
-/// [`work_turn_readiness_refusal`], asked on the same lease against the same three facts
-/// with the same three sentences, once its first turn has brought the frame that answers
+/// [`work_turn_readiness_refusal`], asked on the same lease against the same two facts
+/// with the same two sentences, once its first turn has brought the frame that answers
 /// them. A plugin that really did not load still fails the job and still says so.
-fn work_binding_readiness_refusal(facts: [(InitFact, &'static str); 3]) -> Option<&'static str> {
+fn work_binding_readiness_refusal(facts: [(InitFact, &'static str); 2]) -> Option<&'static str> {
     facts.into_iter().find(|(fact, _)| *fact == InitFact::No).map(|(_, sentence)| sentence)
 }
 
-/// The same three facts, asked AFTER the work lease's turn — where anything short of a
+/// The same two facts, asked AFTER the work lease's turn — where anything short of a
 /// reported `Yes` is a refusal.
 ///
 /// [`InitFact::NotYetReported`] is a refusal on this path and not on the other one, and the
 /// asymmetry is the single fact this whole module records: the frame that answers these
 /// questions arrives with the first turn. Before that turn, silence is expected; after it,
 /// silence means the frame never came, which is its own fault and not a reason to proceed.
-fn work_turn_readiness_refusal(facts: [(InitFact, &'static str); 3]) -> Option<&'static str> {
+fn work_turn_readiness_refusal(facts: [(InitFact, &'static str); 2]) -> Option<&'static str> {
     facts.into_iter().find(|(fact, _)| *fact != InitFact::Yes).map(|(_, sentence)| sentence)
 }
 
@@ -618,47 +616,6 @@ impl From<NativeError> for CognitionError {
             other => CognitionError::Io(other.to_string()),
         }
     }
-}
-
-// ===========================================================================================
-// THE PERMISSION SEAM (ceo-decisions.md §1 and §16)
-//
-// `acp.rs:444-479` auto-approved every `session/request_permission` by picking the first
-// `allow*` option. R2 business-action governance is DEFERRED to V2, not abandoned — §16 says
-// so in as many words: *"both paths auto-approve and both leave the same seam for the day
-// Rich should ask instead."*
-//
-// So the seam is here, and it is a NAMED, PUBLIC, TESTED function rather than a match arm
-// buried in a reader thread, because "somebody can find it" was the requirement. The day
-// Rich should ask instead of allowing, this is the one function that changes.
-// ===========================================================================================
-
-/// What RichOS answers when the agent asks whether it may use a tool.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PermissionDecision {
-    /// Proceed, with the input the agent proposed (possibly rewritten).
-    Allow { updated_input: Value },
-    /// Refuse, with a reason the agent shows in its transcript.
-    Deny { message: String },
-}
-
-impl PermissionDecision {
-    /// The word recorded on the machinery record — `"allow"` or `"deny"`.
-    pub fn behavior(&self) -> &'static str {
-        match self {
-            PermissionDecision::Allow { .. } => "allow",
-            PermissionDecision::Deny { .. } => "deny",
-        }
-    }
-}
-
-/// Legacy source-test adapter policy. The shipping desktop engine profile uses
-/// `permissions::ScopedPermissions` instead: host-scoped onboarding/continuity tools
-/// validate their own contracts and other native permission requests require an
-/// exact app decision. Hidden preparation and stopped turns remain denied.
-/// This compatibility function is not the desktop action/access contract.
-pub fn decide_permission(request: &Value) -> PermissionDecision {
-    PermissionDecision::Allow { updated_input: request.get("input").cloned().unwrap_or_else(|| json!({})) }
 }
 
 /// Map the binary's terminal `result` frame onto the one stop-reason string the rest of the
@@ -1292,7 +1249,6 @@ struct ReaderState {
     /// This lease's running token count, so each `result` adds what the frames never showed.
     token_tally: crate::quota::tokens::Tally,
     question_scope: Option<std::path::PathBuf>,
-    permissions: Option<crate::permissions::ScopedPermissions>,
     /// Did the child list all five `richos_work` tools? [`InitFact`], not `bool` — see its
     /// doc for what the collapse cost.
     work_tools_loaded: InitFact,
@@ -1304,7 +1260,6 @@ struct ReaderState {
     /// only read once the work tools are refused.
     status_tool_loaded: bool,
     /// Did the child come up in `permissionMode: bypassPermissions`? [`InitFact`], for the same reason.
-    permissions_bypassed: InitFact,
     /// Host-owned phase, never set by a model frame.
     context_only: bool,
     /// The model this session is running, from `system/init.model`.
@@ -1383,7 +1338,7 @@ struct ReaderState {
     /// rows 1 and 4). A loudness layer that cannot say WHICH lease it is talking about is a
     /// false-alarm generator, and a false alarm that is believed costs more than silence.
     ///
-    /// Set at spawn from the role, beside `permissions` and `continuity_tools_grant`, which
+    /// Set at spawn from the role, beside `continuity_tools_grant`, which
     /// are the two other fields the reader cannot learn from the wire.
     tool_residency: Option<&'static str>,
     /// The [`brief_cache_identity`] of context this session completed receiving, either
@@ -1506,11 +1461,9 @@ impl Default for ReaderState {
             agent_tasks: crate::operator_lead::TaskBook::default(),
             input_taken: std::collections::HashMap::new(),
             question_scope: None,
-            permissions: None,
             work_tools_loaded: InitFact::NotYetReported,
             assignment_tool_loaded: false,
             status_tool_loaded: false,
-            permissions_bypassed: InitFact::NotYetReported,
             context_only: false,
             session_model: None,
             context_window: None,
@@ -1710,11 +1663,7 @@ fn preflight(bin: &Path, cwd: &Path, doctrine: Option<&Path>, skills: Option<&Pa
 ///   candidate-.8 row 1 was written down as a design fact.** Its scope is written only by
 ///   `spine.rs` (`:3093`, `:3278`), so the work lease's copy named a file nothing could ever
 ///   create, and opening the grant over it was the first act of the work lease's first turn.
-/// - `richos_continuity` is on the **conversation** lease only (seam 1). The work lease
-///   never calls `checkpoint`, `receipt` or `brief`; leaving the server registered would
-///   have given it un-prompted access, because `permissions.rs:58-59` auto-allows both of
-///   that server's tools on a process-global tool-name match that discriminates on nothing
-///   per-lease, and its own gate is `actions_allowed`, which §5.4's standing grant supplies.
+/// - `richos_continuity` is scoped to each independent session.
 /// - **`richos_work` is on the WORK lease only, as of the CEO's Two Riches page.** It used
 ///   to be on both, and the comment here said so in its own words: *"`richos_work` is on
 ///   both, because the work lease is the one that needs it most."* The page's sense-check
@@ -1908,9 +1857,6 @@ impl NativeClient {
         state.lock().unwrap().question_scope = onboarding.map(|(_,_,path,_)|crate::question_tools::path(path));
         state.lock().unwrap().token_sink = profile
             .and_then(|p| Some((p.claude_account.as_ref()?.id.clone(), p.token_sink.clone()?)));
-        if let (Some(profile), Some((_, scope))) = (profile, continuity) {
-            state.lock().unwrap().permissions = Some(crate::permissions::ScopedPermissions {desk: profile.permissions.clone(), scope: scope.into()});
-        }
         // **The reader is told which lease it is on, from the same pure function that set the
         // environment** — not from a second opinion about the role. See
         // `ReaderState::tool_residency`: without this the work lease raised the front desk's
@@ -2257,12 +2203,11 @@ impl NativeClient {
         }
         if ty == "control_request" {
             let context_only = state.lock().unwrap().context_only;
-            let permissions = state.lock().unwrap().permissions.clone();
             // **Read on the reader thread, which is also the thread the text deltas arrive
             // on** — so "has he heard anything yet" is answered in the order the wire put the
             // two events in, with no race to lose.
             let question_scope = state.lock().unwrap().question_scope.clone();
-            Self::handle_agent_request(&msg, stdin, current, between, context_only, permissions.as_ref(), question_scope.as_deref());
+            Self::handle_agent_request(&msg, stdin, current, between, context_only, question_scope.as_deref());
             return;
         }
 
@@ -2420,7 +2365,6 @@ impl NativeClient {
                     .all(|name| msg["tools"].as_array().is_some_and(|tools| tools.iter().any(|tool| tool.as_str() == Some(name)))));
             st.assignment_tool_loaded = crate::assignment_tools::loaded_from_init(&msg);
             st.status_tool_loaded = crate::status_tools::loaded_from_init(&msg);
-            st.permissions_bypassed = InitFact::reported(msg["permissionMode"] == "bypassPermissions");
             st.engine_plugin_loaded = InitFact::reported(msg["plugins"].as_array().is_some_and(|plugins|
                 plugins.iter().any(|plugin| plugin["name"] == crate::engine_profile::PLUGIN_NAME)));
             // **THE LOUDNESS LAYER FOR [`TOOL_SEARCH_ENV`].** Read every init frame, like the
@@ -2553,7 +2497,7 @@ impl NativeClient {
 
     /// Answer the agent's `control_request`s, AND route them as machinery.
     ///
-    /// The decision itself is [`decide_permission`] — the named seam. This function is
+    /// Business questions use the native control transport. This function is
     /// transport: it answers FIRST (the child is blocked on it, and a machinery record is
     /// never worth a millisecond of the CEO's turn latency) and routes the record after.
     fn handle_agent_request(
@@ -2562,37 +2506,34 @@ impl NativeClient {
         current: &Arc<Mutex<Option<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         context_only: bool,
-        permissions: Option<&crate::permissions::ScopedPermissions>,
         question_scope: Option<&Path>,
     ) {
         let request_id = msg.get("request_id").cloned().unwrap_or(Value::Null);
         let request = msg.get("request").cloned().unwrap_or(Value::Null);
         let subtype = request.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
 
-        let (response, machinery) = if subtype == "can_use_tool" {
-            let decision = if context_only {
-                PermissionDecision::Deny { message: "Tools are unavailable during context restoration.".into() }
+        // Business questions still use the native control transport. Tool approvals do not.
+        let question = request["tool_name"].as_str().is_some_and(|name|
+            name == "AskUserQuestion" || name.starts_with("mcp__richos_questions__"));
+        let (response, machinery) = if subtype == "can_use_tool" && question {
+            let body = if context_only {
+                json!({"behavior":"deny", "message":"Tools are unavailable during context restoration."})
             } else if request["tool_name"] == "AskUserQuestion" {
-                let result = question_scope.ok_or_else(||"This turn has no question scope.".to_string())
-                    .and_then(|path|crate::question_tools::convert_vendor(path,&request["input"]));
-                PermissionDecision::Deny {message: match result {
-                    Ok(value)=>value["instruction"].as_str().unwrap_or("The question is recorded.").to_string(),
-                    Err(error)=>error,
-                }}
-            } else if request["tool_name"].as_str().is_some_and(|name|name.starts_with("mcp__richos_questions__")) {
-                PermissionDecision::Allow {updated_input:request["input"].clone()}
-            } else if let Some(policy) = permissions { policy.decide(&request) }
-              else { decide_permission(&request) };
-            let body = match &decision {
-                PermissionDecision::Allow { updated_input } => {
-                    json!({ "behavior": "allow", "updatedInput": updated_input })
-                }
-                PermissionDecision::Deny { message } => json!({ "behavior": "deny", "message": message }),
+                let result = question_scope.ok_or_else(|| "This turn has no question scope.".to_string())
+                    .and_then(|path| crate::question_tools::convert_vendor(path, &request["input"]));
+                let message = match result {
+                    Ok(value) => value["instruction"].as_str().unwrap_or("The question is recorded.").to_string(),
+                    Err(error) => error,
+                };
+                json!({"behavior":"deny", "message":message})
+            } else {
+                json!({"behavior":"allow", "updatedInput":request["input"]})
             };
+            let chosen = body["behavior"].as_str().unwrap().to_string();
             (
                 json!({ "type": "control_response",
                         "response": { "subtype": "success", "request_id": request_id, "response": body } }),
-                Some(BetweenItem::Permission { request, chosen: decision.behavior().to_string() }),
+                Some(BetweenItem::Permission { request, chosen }),
             )
         } else {
             // A control subtype RichOS does not implement. It is answered with a structured
@@ -3880,9 +3821,6 @@ impl Cognition for NativeCognition {
             && !self.client.reader_state.lock().unwrap().status_tool_loaded {
             return Err(CognitionError::Protocol("The desktop status tool did not load".into()));
         }
-        if self.engine_profile.is_some() && self.client.reader_state.lock().unwrap().permissions_bypassed != InitFact::Yes {
-            return Err(CognitionError::Protocol(BYPASS_PERMISSIONS_ABSENT.into()));
-        }
         // ===================================================================================
         // HIS OWN CURSOR, ONE PER CONVERSATION THREAD
         // ===================================================================================
@@ -4160,7 +4098,7 @@ impl Cognition for NativeCognition {
     /// `audience: "worker"` (§5.8c) exists precisely to keep this lease out of it.
     ///
     /// **The readiness checks it DOES keep** are the ones about what this lease was given:
-    /// the engine plugin, the work tools, and bypass permissions. The continuity
+    /// the engine plugin and the work tools. The continuity
     /// tools are deliberately absent, so they are deliberately not asserted.
     fn bind_work_assignment(&mut self, work: &crate::cognition::WorkAssignment) -> Result<(), CognitionError> {
         if let Some(refusal) = assignment_binding_refusal(self.role) {
@@ -4203,7 +4141,7 @@ impl Cognition for NativeCognition {
         // softens.** `--plugin-dir` accepts an unusable path and reports success (cell K4),
         // and this check is still the only thing that catches that — it is now asked at
         // `Cognition::work_readiness_after_turn`, on this same lease, against these same
-        // three facts, with these same three sentences, once its first turn has brought the
+        // three facts, with these same two sentences, once its first turn has brought the
         // frame that can answer them. A plugin that really did not load still fails the job
         // and still says exactly this.
         //
@@ -5233,7 +5171,7 @@ done
                 versions: Default::default(),
             },
             work_scope: None,
-            permissions: std::sync::Arc::new(crate::permissions::PermissionDesk::default()),
+
             operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
     }
@@ -5288,17 +5226,10 @@ exec /bin/sleep 1000
     /// test: the identical call with `LeaseRole::Conversation` DOES register the server,
     /// which is what makes its absence evidence rather than a config that never had it.
     ///
-    /// **Why the omission and not an allow-list entry** (spec §5.8a-ii): `permissions.rs`
-    /// auto-allows `mcp__richos_continuity__checkpoint` and `…__inspect` on a
-    /// process-global tool-name match, and those are exactly the two tools that server
-    /// exposes — so the desk cannot tell the two leases apart and the work lease would have
-    /// had un-prompted checkpoint access. That coupling is asserted here too, against the
-    /// live `permissions.rs` decision, so a later edit that removed the auto-allow would
-    /// tell whoever is reading this why this test exists.
-
     #[test]
     fn a_work_leases_config_omits_the_continuity_server_and_keeps_the_work_server() {
         let root = fixture_root().join(format!("mcp-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
         let bridge = fixture_bridge(&root);
         let profile = fixture_profile(&root);
         let scope = root.join("scope.json");
@@ -5336,22 +5267,6 @@ exec /bin/sleep 1000
         assert!(chat["mcpServers"].get(crate::status_tools::SERVER_NAME).is_some(),
             "the front desk has no way to look at what is running");
 
-        // And the reason the omission is the enforcement rather than the desk: the desk
-        // auto-allows both of that server's tools, with nothing per-lease to discriminate on.
-        let grant = root.join("grant.json");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(&grant, json!({"version":1,"actions_allowed":true,"binding":{"entity_id":"depot",
-            "thread_id":"thread","session_id":"session","turn_id":"turn","audience":"ceo","revision":1}}).to_string()).unwrap();
-        let desk = crate::permissions::ScopedPermissions {
-            desk: std::sync::Arc::new(crate::permissions::PermissionDesk::default()),
-            scope: grant,
-        };
-        for tool in ["mcp__richos_continuity__checkpoint", "mcp__richos_continuity__inspect"] {
-            assert!(
-                matches!(desk.decide(&json!({"tool_name": tool, "input": {}})), PermissionDecision::Allow { .. }),
-                "{tool} is no longer auto-allowed; seam 1's reasoning needs re-reading"
-            );
-        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -5663,7 +5578,7 @@ exec /bin/sleep 1000
         let _ = std::fs::remove_dir_all(&chat_root);
 
         // ---- C. THE FIX, BEHAVIORALLY: the same call that failed his job now takes a turn --
-        let frame = work_init_frame(true, true, true);
+        let frame = work_init_frame(true, true);
         let (mut lease, root) =
             lease_with_production_grants("work-turn", LeaseRole::Work, &one_turn_reporting(&frame));
         let mut items = 0usize;
@@ -5717,7 +5632,7 @@ exec /bin/sleep 1000
     /// | the assignment ends | `work_host`'s `run_one` step 4 → `revoke_work_assignment` | closed | withdrawn |
     #[test]
     fn a_turn_ending_keeps_the_grant_a_background_helper_acts_under_and_a_stop_takes_it() {
-        let frame = work_init_frame(true, true, true);
+        let frame = work_init_frame(true, true);
         let (mut lease, root) = lease_with_production_grants(
             "worker-grant", LeaseRole::Work, &one_turn_reporting(&frame));
         let scope = lease.continuity.as_ref().unwrap().1.clone();
@@ -5967,7 +5882,6 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         for unreported in [
             "The desktop engine plugin did not load",
             "The desktop work tools did not load",
-            "did not enable automatic permission checks",
         ] {
             assert!(
                 !refusal.contains(unreported),
@@ -5981,7 +5895,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         // And the unreported facts are still unreported — the gate passed because it asked
         // about a reported absence, not because the fields were quietly made optimistic.
         let state = lease.client.reader_state.lock().unwrap();
-        for fact in [state.engine_plugin_loaded, state.work_tools_loaded, state.permissions_bypassed] {
+        for fact in [state.engine_plugin_loaded, state.work_tools_loaded] {
             assert_eq!(fact, InitFact::NotYetReported);
         }
         drop(state);
@@ -6001,7 +5915,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         )
     }
 
-    fn work_init_frame(plugin: bool, work_tools: bool, auto: bool) -> serde_json::Value {
+    fn work_init_frame(plugin: bool, work_tools: bool) -> serde_json::Value {
         let mut plugins = vec![json!({"name":"rich-skills","version":"1.0.0"})];
         if plugin {
             plugins.push(json!({"name": crate::engine_profile::PLUGIN_NAME, "version":"1.2.0"}));
@@ -6014,8 +5928,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
             vec!["mcp__richos_work__repositories", "mcp__richos_work__prepare",
                  "mcp__richos_work__inspect", "mcp__richos_work__integrate"]
         };
-        json!({"type":"system","subtype":"init","plugins":plugins,"tools":tools,
-               "permissionMode": if auto { "bypassPermissions" } else { "auto" }})
+        json!({"type":"system","subtype":"init","plugins":plugins,"tools":tools})
     }
 
     /// **THE POSITIVE CONTROL, AND IT IS THE HALF THAT MAKES THE FIX A MOVE RATHER THAN A
@@ -6030,15 +5943,14 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     /// only thing between that and a background job that silently runs unguarded.
     #[test]
     fn a_work_lease_whose_init_frame_omits_the_engine_plugin_still_fails_the_assignment_by_name() {
-        for (plugin, work_tools, auto, expected) in [
-            (false, true, true, Some(ENGINE_PLUGIN_ABSENT)),
-            (true, false, true, Some(WORK_TOOLS_ABSENT)),
-            (true, true, false, Some(BYPASS_PERMISSIONS_ABSENT)),
-            (true, true, true, None),
+        for (plugin, work_tools, expected) in [
+            (false, true, Some(ENGINE_PLUGIN_ABSENT)),
+            (true, false, Some(WORK_TOOLS_ABSENT)),
+            (true, true, None),
         ] {
-            let frame = work_init_frame(plugin, work_tools, auto);
+            let frame = work_init_frame(plugin, work_tools);
             let (mut lease, root) = hand_built_work_lease(
-                &format!("reported-{plugin}-{work_tools}-{auto}"),
+                &format!("reported-{plugin}-{work_tools}"),
                 &one_turn_reporting(&frame),
             );
             // Before the turn there is nothing to report, so the binding gate is silent —
@@ -6080,26 +5992,25 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     #[test]
     fn only_a_reported_absence_refuses_a_binding_and_silence_refuses_only_after_a_turn() {
         use InitFact::{No, NotYetReported, Yes};
-        let facts = |plugin, tools, auto| {
-            [(plugin, ENGINE_PLUGIN_ABSENT), (tools, WORK_TOOLS_ABSENT), (auto, BYPASS_PERMISSIONS_ABSENT)]
+        let facts = |plugin, tools| {
+            [(plugin, ENGINE_PLUGIN_ABSENT), (tools, WORK_TOOLS_ABSENT)]
         };
 
         // A fresh lease: nothing reported. The binding proceeds; the post-turn gate does not.
-        let fresh = facts(NotYetReported, NotYetReported, NotYetReported);
+        let fresh = facts(NotYetReported, NotYetReported);
         assert_eq!(work_binding_readiness_refusal(fresh), None);
         assert_eq!(work_turn_readiness_refusal(fresh), Some(ENGINE_PLUGIN_ABSENT));
 
         // A fully equipped lease: both gates silent.
-        let ready = facts(Yes, Yes, Yes);
+        let ready = facts(Yes, Yes);
         assert_eq!(work_binding_readiness_refusal(ready), None);
         assert_eq!(work_turn_readiness_refusal(ready), None);
 
         // Each reported absence refuses BOTH gates, and with its own sentence — a shared
         // sentence table is worth nothing if a fact can pick up its neighbor's words.
         for (facts, expected) in [
-            (facts(No, Yes, Yes), ENGINE_PLUGIN_ABSENT),
-            (facts(Yes, No, Yes), WORK_TOOLS_ABSENT),
-            (facts(Yes, Yes, No), BYPASS_PERMISSIONS_ABSENT),
+            (facts(No, Yes), ENGINE_PLUGIN_ABSENT),
+            (facts(Yes, No), WORK_TOOLS_ABSENT),
         ] {
             assert_eq!(work_binding_readiness_refusal(facts), Some(expected));
             assert_eq!(work_turn_readiness_refusal(facts), Some(expected));
@@ -6107,7 +6018,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
 
         // A reported absence outranks an unreported fact at the binding: the gate must not
         // fall silent just because something earlier in the list has said nothing.
-        assert_eq!(work_binding_readiness_refusal(facts(NotYetReported, No, NotYetReported)), Some(WORK_TOOLS_ABSENT));
+        assert_eq!(work_binding_readiness_refusal(facts(NotYetReported, No)), Some(WORK_TOOLS_ABSENT));
     }
 
     /// The plugin's name is written by `engine_profile.rs` into the manifest and asserted by
@@ -6119,7 +6030,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     #[test]
     fn the_engine_plugin_is_named_once_and_the_manifest_and_the_wire_check_share_it() {
         assert_eq!(crate::engine_profile::PLUGIN_NAME, "richos-app-engine");
-        let listed = work_init_frame(true, true, true);
+        let listed = work_init_frame(true, true);
         let names: Vec<&str> = listed["plugins"].as_array().unwrap().iter()
             .filter_map(|p| p["name"].as_str()).collect();
         assert!(names.contains(&crate::engine_profile::PLUGIN_NAME), "{names:?}");
@@ -7016,48 +6927,6 @@ done
     }
 
     #[test]
-    fn a_permission_response_is_not_replayed_after_a_failed_turn() {
-        let script = write_script("permission-failed-turn", r#"
-read -r init
-printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
-read -r prompt
-printf '%s\n' '{"type":"control_request","request_id":"one-permission","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"fictional command"}}}'
-read -r answer
-case "$answer" in *'"request_id":"one-permission"'*'"behavior":"allow"'*) ;; *) exit 9 ;; esac
-printf '%s\n' '{"type":"result","stop_reason":"max_tokens"}'
-read -r next
-case "$next" in *'"type":"user"'*) ;; *) exit 10 ;; esac
-printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
-"#);
-        let client = NativeClient::spawn(&script, &std::env::temp_dir(), &doctrine_fixture(), &skills_fixture()).unwrap();
-        assert_eq!(client.prompt("First input", &mut |_| {}).unwrap(), "max_tokens");
-        assert_eq!(client.prompt("Independent next input", &mut |_| {}).unwrap(), "end_turn");
-    }
-
-    #[test]
-    fn hidden_context_denies_permission_then_visible_delivery_restores_normal_policy() {
-        let script = write_script("context-only-permissions", r#"
-read -r init
-printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
-for expected in deny allow; do
-  read -r prompt
-  printf '%s\n' '{"type":"control_request","request_id":"tool-permission","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"touch should-not-run"}}}'
-  read -r answer
-  case "$answer" in
-    *\"behavior\":\"$expected\"*) ;;
-    *) exit 9 ;;
-  esac
-  printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
-done
-"#);
-        let mut client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
-        assert_eq!(client.prompt_context_only("Only context", &mut |_| {}).unwrap(), "end_turn");
-        assert!(!client.reader_state.lock().unwrap().context_only);
-        assert_eq!(client.prompt("Actual visible request", &mut |_| {}).unwrap(), "end_turn");
-    }
-
-
-    #[test]
     fn the_bookkeeping_grant_is_shut_until_his_first_words_on_a_real_turn() {
         let body = r#"
 read -r init
@@ -7632,7 +7501,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                work_scope:None, permissions:Default::default(), operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
+                work_scope:None,  operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();
@@ -7681,38 +7550,6 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         assert_eq!(fallback,"Lead fallback");
     }
 
-    // ---- the permission seam -----------------------------------------------------------
-
-    #[test]
-    fn the_permission_seam_allows_today_and_carries_the_agents_proposed_input() {
-        // Verbatim request from `run9-rust-driven.jsonl:17`.
-        let request = json!({
-            "subtype":"can_use_tool","tool_name":"Write","display_name":"Write",
-            "input":{"file_path":"/private/tmp/claude-501/rust-probe-out.txt","content":"RUSTOK"},
-            "description":"/private/tmp/claude-501/rust-probe-out.txt",
-            "decision_reason":"Path is outside allowed working directories",
-            "decision_reason_type":"workingDir",
-            "tool_use_id":"toolu_015USp34XWJGrGpgNY6TLvbV"});
-        let decision = decide_permission(&request);
-        assert_eq!(decision.behavior(), "allow", "ported behaviour: acp.rs:469-479 auto-approved");
-        match decision {
-            PermissionDecision::Allow { updated_input } => {
-                assert_eq!(updated_input, request["input"], "the agent's own input, unrewritten");
-            }
-            other => panic!("expected Allow, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn the_permission_seam_exists_as_a_seam_and_can_answer_no() {
-        // R2 governance is DEFERRED, not abandoned (ceo-decisions §1, §16). This asserts the
-        // seam is real: a `Deny` is representable and carries a reason, so the day Rich asks
-        // the CEO instead of allowing, only `decide_permission` changes.
-        let deny = PermissionDecision::Deny { message: "the CEO declined".into() };
-        assert_eq!(deny.behavior(), "deny");
-    }
-
-    // ---- the cancel mapping (spike caveat C1) -------------------------------------------
 
     #[test]
     fn an_aborted_turn_is_reported_as_a_cancel_on_terminal_reason_not_stop_reason() {
@@ -7865,17 +7702,17 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
     }
 
     #[test]
-    fn a_permission_request_parked_between_turns_drains_as_a_permission_record() {
+    fn a_question_control_parked_between_turns_drains_as_a_machinery_record() {
         let mut lane = BetweenTurn::default();
         lane.push(BetweenItem::Permission {
-            request: json!({"subtype":"can_use_tool","tool_name":"Bash",
-                            "description":"ls -la","tool_use_id":"toolu_Z"}),
+            request: json!({"subtype":"can_use_tool","tool_name":"mcp__richos_questions__ask",
+                            "description":"Choose the report date","tool_use_id":"toolu_Z"}),
             chosen: "allow".into(),
         });
         let drained = lane.drain("sess");
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].kind, crate::machinery::MachineryKind::PermissionRequested);
-        assert_eq!(drained[0].title, "ls -la");
+        assert_eq!(drained[0].title, "Choose the report date");
         assert_eq!(drained[0].tool_call_id.as_deref(), Some("toolu_Z"));
     }
 

@@ -129,11 +129,11 @@ async function main() {
     const errors = []; page.on("pageerror", e => errors.push(String(e)));
     await page.addInitScript((retry) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [
       {id: "p", title: "Prepare the report", state: "preparing", detail: "Opening the work connection.",
-       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, awaitingYou: null},
+       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false},
       {id: "b", title: "Hire a bookkeeper", state: "blocked", detail: retry,
-       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false, awaitingYou: null},
+       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false},
       {id: "s", title: "The nightly build", state: "settled", detail: "It landed on cc/echo-1 in project.",
-       repositories: [], registeredAtMs: 3, canStop: false, onTheConnection: false, awaitingYou: null},
+       repositories: [], registeredAtMs: 3, canStop: false, onTheConnection: false},
     ]}}, retry);
     await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
     await openThread(page,"hiring");
@@ -173,13 +173,13 @@ async function main() {
     const errors = []; page.on("pageerror", e => errors.push(String(e)));
     await page.addInitScript(({signIn, longer}) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [
       {id: "h", title: "Prepare the report", state: "registered", detail: signIn, forYou: true,
-       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, held: true, awaitingYou: null},
+       repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, held: true},
       {id: "q", title: "How many invoices are open?", kind: "check", state: "registered", detail: signIn, forYou: true,
-       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false, held: true, awaitingYou: null},
+       repositories: [], registeredAtMs: 2, canStop: true, onTheConnection: false, held: true},
       {id: "r", title: "Hire a bookkeeper", state: "running", detail: longer, forYou: true,
-       repositories: [], registeredAtMs: 3, canStop: true, onTheConnection: false, awaitingYou: null},
+       repositories: [], registeredAtMs: 3, canStop: true, onTheConnection: false},
       {id: "p", title: "The nightly build", state: "preparing", detail: "Opening the work connection.", forYou: false,
-       repositories: [], registeredAtMs: 4, canStop: true, onTheConnection: false, awaitingYou: null},
+       repositories: [], registeredAtMs: 4, canStop: true, onTheConnection: false},
     ]}}, {signIn, longer});
     await page.goto("file://" + path.join(UI_DIR,"index.html")); await leaveHome(page);
     await openThread(page,"hiring");
@@ -232,7 +232,7 @@ async function main() {
       hiring: [{
         id: "leak-one", title: "landing the three branches", state: "running",
         detail: "Running.", repositories: [], registeredAtMs: 1, canStop: true,
-        onTheConnection: true, awaitingYou: null,
+        onTheConnection: true,
       }],
       // `acme` deliberately absent: the mock answers an unknown thread with [], which is
       // the honest shape of "this conversation has no assignments".
@@ -322,7 +322,7 @@ async function main() {
   //
   // 3,000 ms IS UNIQUE TO THE WORKER POLL in the shipping UI — `main.js` also creates a
   // 1,000 ms timer tick and a 1,000 ms wait band, `phone.js` a 2,000 ms poller and
-  // `permissions.js` a 500 ms one — so the filter hits exactly one interval, and the run
+  // so the filter hits exactly one interval and the run
   // ASSERTS that rather than assuming it. A future `WORKER_POLL_MS` that stops being 3,000
   // fails here loudly instead of quietly disarming the control.
   await run.check("the work chip carries this conversation's work in the FIRST rendered state — at launch and after a switch, with the 3,000 ms refill taken away", async () => {
@@ -339,7 +339,7 @@ async function main() {
         hiring: [{
           id: "first-second", title: "landing the three branches", state: "running",
           detail: "Running.", repositories: [], registeredAtMs: 1, canStop: true,
-          onTheConnection: true, awaitingYou: null,
+          onTheConnection: true,
         }],
       }};
     });
@@ -380,7 +380,7 @@ async function main() {
     const errors = []; page.on("pageerror", e => errors.push(String(e)));
     const row = (id, title, held) => ({
       id, title, state: "registered", detail: held ? "Waiting for you to sign in to Claude, in Settings under Claude accounts." : "Written down.",
-      repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, held, awaitingYou: null,
+      repositories: [], registeredAtMs: 1, canStop: true, onTheConnection: false, held,
     });
     await page.addInitScript((rows) => window.__RICHOS_MOCK_PRESET__ = {assignments: rows}, {
       hiring: [row("held-1", "Prepare the Northwind invoice summary", true), row("held-2", "the request behind it", true)],

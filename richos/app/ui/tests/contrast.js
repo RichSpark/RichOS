@@ -545,16 +545,6 @@ const SURFACES = [
     },
   })),
   {
-    name: "permission",
-    what: "a native action request with its description, input and scoped decision controls",
-    preset: {pendingPermission: {id: "contrast-permission", binding: {entity_id: "depot"}, tool: "Write", input: {file_path: "/fictional/example.txt"}, description: "Write the requested example file"}},
-    drive: async (p) => {
-      await p.waitForSelector("#permission-sheet:not([hidden])");
-      await p.waitForFunction(() => document.getElementById("permission-input").textContent.includes("example.txt"));
-      await overlaySettled(p, "#permission-sheet");
-    },
-  },
-  {
     name: "quit-question",
     what: "the question he is asked before a quit stops running background work",
     // **Raised through the sheet's own entry point, not a copy of it.** The shell emits

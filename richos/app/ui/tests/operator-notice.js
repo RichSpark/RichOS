@@ -180,7 +180,7 @@ function teamCards(page) {
 const ACME_ROWS = [
   { id: "asg_7f3c9e", title: "The Acme contract draft", kind: "task", turnRef: "ledger:acme:t0",
     state: "running", detail: "", repositories: [], registeredAtMs: 1, canStop: true,
-    onTheConnection: false, awaitingYou: null },
+    onTheConnection: false },
 ];
 
 async function main() {

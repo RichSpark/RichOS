@@ -419,7 +419,7 @@ fn host(data: &Path, _driver_state: &Path, root: &Path) -> Result<(), String> {
         gate: Box::new(move || gate(&gate_dir)),
     });
     let work_leases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let work = WorkHost::new(state, Box::new(CountingLeases(work_leases.clone())), Arc::new(SilentNotifier), Default::default());
+    let work = WorkHost::new(state, Box::new(CountingLeases(work_leases.clone())), Arc::new(SilentNotifier));
     work.set_operator(desk.clone());
     work.start();
     let socket = DeskSocket::serve_with_lead(desk.clone(), &socket_path, &desk_token, Some(&lead_token))

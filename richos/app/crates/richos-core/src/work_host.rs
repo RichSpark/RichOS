@@ -4,7 +4,6 @@
 use crate::assignment::{self, Assignment, AssignmentState, PendingNotice};
 use crate::cognition::{Cognition, CognitionError, LeaseFactory, TurnItem};
 use crate::entity::ThreadBinding;
-use crate::permissions::PermissionDesk;
 use crate::steering::{CommandStop, TurnCancel};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -67,7 +66,6 @@ pub struct WorkHost {
     backends: Mutex<std::collections::HashMap<String, Arc<Backend>>>,
     closing: Mutex<bool>,
     notifier: Arc<dyn WorkNotifier>,
-    desk: Arc<PermissionDesk>,
     seen: Mutex<std::collections::HashSet<String>>,
     screen: Mutex<Arc<dyn crate::screen::ScreenSource>>,
     quota: Mutex<Option<Arc<crate::quota::Service>>>,
@@ -80,7 +78,6 @@ impl WorkHost {
         state: &Path,
         factory: Box<dyn LeaseFactory>,
         notifier: Arc<dyn WorkNotifier>,
-        desk: Arc<PermissionDesk>,
     ) -> Arc<Self> {
         Arc::new(Self {
             retry_clock: Arc::new(crate::upstream::SystemRetryClock),
@@ -89,7 +86,6 @@ impl WorkHost {
             backends: Mutex::new(Default::default()),
             closing: Mutex::new(false),
             notifier,
-            desk,
             seen: Mutex::new(Default::default()),
             screen: Mutex::new(Arc::new(crate::screen::UnknownScreen)),
             quota: Mutex::new(None),
@@ -486,20 +482,6 @@ impl WorkHost {
 
     pub fn start(self: &Arc<Self>) {
         *self.closing.lock().unwrap() = false;
-    }
-
-    pub fn pending_decision(
-        &self,
-        record: &Assignment,
-    ) -> Option<crate::permissions::PermissionRequest> {
-        self.desk.background_queue().into_iter().find(|request| {
-            crate::permissions::assignment_key(&request.binding)
-                == (
-                    record.entity_id.clone(),
-                    record.thread_id.clone(),
-                    record.obligation_id.clone(),
-                )
-        })
     }
 
     pub fn deliver_team_answers(
@@ -1006,7 +988,7 @@ impl WorkHost {
                 }
                 let awaiting_you = open
                     .iter()
-                    .filter(|row| self.pending_decision(row).is_some())
+                    .filter(|row| row.reported_state() == Some(AssignmentState::Blocked))
                     .count();
                 crate::work_gate::BackgroundWork {
                     running: open.len() - awaiting_you,
@@ -1063,7 +1045,6 @@ impl WorkHost {
             stop_detail(&outcomes),
         )
         .map_err(|e| e.to_string())?;
-        self.desk.forget(entity, thread, &record.obligation_id);
         crate::questions::Store::new(&self.state).close(
             entity,
             thread,
@@ -1201,14 +1182,6 @@ pub(crate) fn verified_instruction(
         found = Some(text.to_owned());
     }
     found.ok_or(UNAVAILABLE)
-}
-
-pub fn plain_action(tool: &str) -> &'static str {
-    match tool {
-        "Bash" => "running a command on your Mac",
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => "changing a file on your Mac",
-        _ => "a step it cannot take without you",
-    }
 }
 
 pub const STARTED_DETAIL: &str = "Rich has started on it.";
@@ -1410,7 +1383,7 @@ mod tests {
             &state,
             Box::new(factory),
             Arc::new(SilentNotifier),
-            Arc::new(PermissionDesk::default()),
+
         );
         let retry_waits=Arc::new(RetryWaits::default());
         Arc::get_mut(&mut host).unwrap().retry_clock=retry_waits.clone();
@@ -1491,7 +1464,7 @@ mod tests {
         h.host.shutdown();
         let resumed=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();assert_eq!(resumed.1,through);
         let factory=Factory{spawns:h.spawns.clone(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),gate:h.start_gate.clone()};
-        let restarted=WorkHost::new(&h.state,Box::new(factory),Arc::new(SilentNotifier),Arc::new(PermissionDesk::default()));
+        let restarted=WorkHost::new(&h.state,Box::new(factory),Arc::new(SilentNotifier));
         let recovered=if result=="end_turn" {1}else{2};
         restarted.wake_messages(&h.binding);assert!(restarted.wait_for_completed(recovered,std::time::Duration::from_secs(30)));
         let prompts=h.work_prompts.lock().unwrap().clone();
@@ -1579,7 +1552,7 @@ mod tests {
                 let restarted = WorkHost::new(&h.state, Box::new(Factory {
                     spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
                     team: h.team.clone(), gate: h.start_gate.clone(),
-                }), Arc::new(SilentNotifier), Arc::new(PermissionDesk::default()));
+                }), Arc::new(SilentNotifier));
                 restarted.wake_messages(&h.binding);
                 until("restart must deliver its new input", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("After restart")));
                 restarted.shutdown();
@@ -1679,7 +1652,7 @@ mod tests {
             &h.state,
             Box::new(IndependentFactory(gate.clone())),
             Arc::new(SilentNotifier),
-            Arc::new(PermissionDesk::default()),
+
         );
         let a = Backend::new();
         let b = Backend::new();

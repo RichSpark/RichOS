@@ -1479,7 +1479,7 @@ async function main() {
     await page.waitForSelector("#first-run[data-state='declined']");
     const afterDecline = await where();
     await page.keyboard.type(" markertwo");
-    // Any other caller, the way home.js, questions.js and permissions.js reach the box.
+    // Any other caller, the way home.js and questions.js reach the box.
     await page.evaluate(() => document.getElementById("input").focus());
     const afterOther = await where();
     await page.keyboard.type(" markerthree");

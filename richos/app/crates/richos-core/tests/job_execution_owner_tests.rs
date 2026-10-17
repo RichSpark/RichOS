@@ -2,7 +2,6 @@
 use richos_core::{
     assignment::{self, AssignmentState, Registration},
     cognition::{Cognition, CognitionError, LeaseFactory},
-    permissions::PermissionDesk,
     session_tools::{self, Message, WorkReference},
     status_tools::{self, StatusToolScope},
     work_host::{WorkHost, WorkNotifier},
@@ -96,7 +95,7 @@ fn ordinary_quit_and_restart_preserve_stus_reports_and_input_receipts() {
             &scope.state_root,
             Box::new(NoLease),
             Arc::new(Quiet),
-            Arc::new(PermissionDesk::default()),
+
         );
         host.shutdown();
         richos_core::recovery::reconcile(&scope.state_root);

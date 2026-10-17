@@ -202,7 +202,6 @@ pub mod engine_profile;
 pub mod repositories;
 pub mod app_workers;
 pub mod work_status;
-pub mod permissions;
 
 /// The BACKGROUND-WORK leg (the background-work spec, richos-hq
 /// `docs/plans/background-work-spec-2026-09-17.md` revision 5, `9255e71a`):

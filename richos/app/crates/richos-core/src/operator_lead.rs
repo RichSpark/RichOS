@@ -450,30 +450,19 @@ pub trait LeadSink: Send + Sync {
 }
 
 /// How a control request FROM the lead is answered (`can_use_tool`, and anything else the
-/// platform asks). r3 (h): the route to the permission desk is kept as a safety net, and P14
-/// measured that nothing arrives on it in bypass mode.
+/// platform asks). Unsupported requests return the existing protocol error.
 pub trait ControlRoute: Send + Sync {
     /// The `response` body for a `can_use_tool`, or `Err` for a request this route cannot answer.
     fn answer(&self, request: &Value) -> Result<Value, String>;
 }
 
-/// What a refused permission request tells the lead (F17 / Frank Q3 (a)). It never invites a
-/// question: his answer could not approve a call already refused, so asking would unlock
-/// nothing. It says what the lead can do instead.
-pub const PERMISSION_REFUSED: &str =
-    "Refused: nobody approves tool calls here, and no later answer can approve this one. Find another way to do it, \
-or report `failed` on the assignment's handle.";
-
-/// The route with nobody behind it: a permission question is denied with a sentence the lead
-/// can act on, and anything else is refused as not supported (native.rs answers the same way).
+/// Unsupported control requests have no human approval route.
 pub struct NoPermissionDesk;
 
 impl ControlRoute for NoPermissionDesk {
     fn answer(&self, request: &Value) -> Result<Value, String> {
-        match request.get("subtype").and_then(Value::as_str) {
-            Some("can_use_tool") => Ok(json!({"behavior": "deny", "message": PERMISSION_REFUSED})),
-            other => Err(format!("RichOS does not answer {} requests on this lead.", other.unwrap_or("unnamed"))),
-        }
+        Err(format!("RichOS does not answer {} requests on this lead.",
+            request.get("subtype").and_then(Value::as_str).unwrap_or("unnamed")))
     }
 }
 
@@ -1241,40 +1230,6 @@ done
         let lead = OperatorLead::spawn(fake(&g.root, ""), "s-6", Collect::new(), Arc::new(NoPermissionDesk)).unwrap();
         lead.initialize(Duration::from_secs(10)).unwrap();
         assert!(matches!(lead.quit(Duration::from_secs(5)), Quit::Terminated { .. }));
-    }
-
-    #[test]
-    fn a_permission_question_from_the_lead_is_answered_on_the_route() {
-        let f = fixture();
-        let ask = r#"printf '{"type":"control_request","request_id":"perm-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{}}}\n'"#;
-        let sink = Collect::new();
-        let lead = OperatorLead::spawn(fake(&f.root, ask), "s-7", sink.clone(), Arc::new(NoPermissionDesk)).unwrap();
-        lead.initialize(Duration::from_secs(10)).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut answer = None;
-        while answer.is_none() && Instant::now() < deadline {
-            answer = written(&f.root).into_iter().find(|l| l["response"]["request_id"] == "perm-1");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let answer = answer.expect("the permission question was answered");
-        assert_eq!(answer["response"]["response"]["behavior"], "deny");
-        // F17 / Frank Q3 (a): the host is told a permission request arrived, with the tool, so
-        // it can log it as the CLI having changed (P14 measured none in bypass mode).
-        let asked = sink.wait_for(|e| matches!(e, LeadEvent::PermissionAsked(_)), Duration::from_secs(10));
-        assert!(matches!(asked, Some(LeadEvent::PermissionAsked(ref tool)) if tool == "Write"), "{asked:?}");
-    }
-
-    /// **F17 / Frank Q3 (a).** The refusal never invites a question: his answer cannot approve a
-    /// call that was already refused. It says nobody approves tool calls here, and what the
-    /// lead can do instead.
-    #[test]
-    fn the_permission_refusal_says_nobody_approves_here_and_never_to_ask_him() {
-        let reply = NoPermissionDesk.answer(&json!({"subtype": "can_use_tool", "tool_name": "Write", "input": {}})).unwrap();
-        assert_eq!(reply["behavior"], "deny");
-        let message = reply["message"].as_str().unwrap();
-        assert_eq!(message, PERMISSION_REFUSED);
-        assert!(message.contains("nobody approves tool calls here") && message.contains("report `failed`"), "{message}");
-        assert!(!message.contains("ask him") && !message.contains("question"), "{message}");
     }
 
     #[test]

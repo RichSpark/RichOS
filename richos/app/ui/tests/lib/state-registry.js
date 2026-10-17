@@ -3607,23 +3607,11 @@ module.exports = [
 
   { s: "Stopping work in the previous conversation", c: "INFORMATIONAL", why: "A durable Stop receipt disables repeat Stop while awaiting its terminal event." },
 
-  // Shipped repository, permission, account and saved-work surfaces.
+  // Shipped repository, account and saved-work surfaces.
   {
     "s": "<div class=\"overlay-panel overlay-panel--compact\"> <h2 id=\"repositories-title\" class=\"overlay-title\">Connected project folders (repositories)</h2> <p class=\"overlay-note\">Connect a project folder as this company’s home for Rich. Connecting it does not move or change its existing files.</p> <p class=\"overlay-note repository-guidance\">One folder per company is usually enough. But in rare cases additional folders might be needed. Ask Rich if you’re unsure.</p> <label class=\"entity-add-label\" for=\"repository-company\">Company</label> <select id=\"repository-company\" class=\"entity-add-input\"></select> <ul id=\"repository-list\"></ul> <label class=\"entity-add-label\" for=\"repository-folder\">Project folder location</label> <input id=\"repository-folder\" class=\"entity-add-input\" type=\"text\" placeholder=\"Click and select folder\" autocomplete=\"off\" spellcheck=\"false\"> <p id=\"repository-message\" class=\"overlay-note\" role=\"status\"></p> <div class=\"desk-card-actions\"><button id=\"repository-connect\" class=\"desk-btn desk-btn--confirm\" type=\"button\">Connect folder</button> <button id=\"repository-close\" class=\"desk-btn\" type=\"button\">Close</button></div></div>",
     "c": "FRAGMENT",
     "why": "Composite HTML for the repository connection dialog. Its interactive controls and visible wording are exercised by the dedicated browser suite; this literal is parsed as markup rather than rendered as one sentence."
-  },  // The disclosure over the raw request (audit-9 row 5). Two labels, one control: each says
-  // what the press does, and both survive being spoken aloud. The state they report is also
-  // on the element as `aria-expanded`, so a screen reader is not relying on the wording.
-  {
-    "s": "Show the technical detail",
-    "c": "CONTROL",
-    "why": "The label of #permission-detail while the exact request is closed. It is an affordance, not a state: pressing it opens the `<pre>` beside it and nothing else. `tests/permissions.js` check 4 drives it by keyboard."
-  },
-  {
-    "s": "Hide the technical detail",
-    "c": "CONTROL",
-    "why": "The same control's label once the exact request is open. Both halves are asserted in `tests/permissions.js` check 4, so a label that stopped matching the state would fail there."
   },
   // ---------------------------------------------------------------------------------------
   // THE QUIT QUESTION — the background-work spec §2.5/§2.5a, and the CEO's row 5.
@@ -3713,13 +3701,7 @@ module.exports = [
     "control": "#repository-company",
     "fixture": "repository-empty"
   },
-  {
-    "s": "Rich needs permission to run the action shown below.",
-    "c": "ACTIONABLE",
-    "why": "The request can be declined or explicitly approved through its two scoped action buttons.",
-    "control": "#permission-deny",
-    "fixture": "permission-pending"
-  },
+
   {
     "s": "Saved work is unavailable:",
     "c": "FRAGMENT",
@@ -3738,11 +3720,6 @@ module.exports = [
     "why": "A failed sign-in start re-enables the initiating button.",
     "control": "#provider-connect",
     "fixture": "provider-start-error"
-  },
-  {
-    "s": "The action's state could not be verified. Approval is unavailable.",
-    "c": "INFORMATIONAL",
-    "why": "Approval is disabled until a subsequent poll can establish the current action state."
   },
   {
     "s": "The software is installed.",
@@ -4026,17 +4003,7 @@ module.exports = [
   // means a decision of his is outstanding on SOME step — and the row no longer claims his
   // repository is untouched, because a job may reach such a step after landing something.
   //
-  // THE GAP THIS BLOCK ONCE CARRIED IS STILL CLOSED, and by the same mechanism: the desk
-  // holds his decision while he is away (§5.2/§5.5/§5.7), so the sentence names Approve and
-  // Decline controls that are on the same surface — driven against the real DOM by the
-  // `assignment-waiting` fixture rather than asserted here.
-  //
-  // THE SECOND SENTENCE IS NOT A DUPLICATE AND IT IS NOT A HEDGE. The queue lives in the
-  // running process: an assignment that stopped at his decision before a relaunch is still
-  // `blocked` and has nothing left to press, because §6's recovery is the next slice. That
-  // state keeps the composer, which is a real path, rather than naming a control that is not
-  // there.
-  // -------------------------------------------------------------------------------------
+  // Saved work is read from Stu's existing reports.
   {
     "s": "What you have asked for",
     "c": "INFORMATIONAL",
@@ -4056,20 +4023,7 @@ module.exports = [
     "c": "INFORMATIONAL",
     "why": "The preparing state: the work lease is inside the spawn preparer. Nothing is asked of him.",
   },
-  {
-    "s": "Waiting for your decision before it can go on.",
-    "c": "ACTIONABLE",
-    "why":
-      "The job ran and stopped at a step the permission desk would have asked him about in a " +
-      "visible turn and could not, because there is no turn — a command, a write outside its " +
-      "workspace. The request is held at the desk until he answers it (§5.2/§5.7), so the row " +
-      "carries Approve and Decline beside this sentence, and the 'Waiting on you:' line names " +
-      "the step in the backend's own words. It says nothing about his repository: since the " +
-      "CEO's ruling §52 a job lands on its own, so it may reach a step like this AFTER landing " +
-      "something, and the old promise that nothing had changed there would be false.",
-    "control": ".assignment-approve",
-    "fixture": "assignment-waiting",
-  },
+
   {
     "s": "Waiting for your decision. Ask Rich to continue it when you are ready.",
     "c": "ACTIONABLE",
@@ -4094,23 +4048,11 @@ module.exports = [
       "and asks nothing of him. The state resolves itself with no press anywhere, which is " +
       "exactly what INFORMATIONAL is for.",
   },
-  {
-    "s": "a step it cannot take without you",
-    "c": "FRAGMENT",
-    "why":
-      "The tail of 'Waiting on you: …' when the backend sent no plain phrase for the step — " +
-      "an action this build has no wording for. It never renders alone, and it deliberately " +
-      "describes nothing: inventing a description of an action he is about to authorize " +
-      "would be worse than saying only that it needs him.",
-  },
+
   {
     "s": "waiting for you",
     "c": "FRAGMENT",
-    "why":
-      "The tail of the work chip's own count — '1 waiting for you' — which is how an " +
-      "assignment stopped at his decision becomes reachable at all: every other part of that " +
-      "chip comes from `get_worker_status`, which is empty whenever no turn is open. The " +
-      "count and its control are the chip itself, classified below with the rest of it.",
+    "why": "The work chip counts jobs Stu reports blocked. Opening it shows the existing saved-work pane; tool approval controls do not exist.",
   },
   {
     "s": "waiting for the screen",
@@ -4136,15 +4078,7 @@ module.exports = [
       "renders alone, and the count IS the affordance, the chip opening the pane the " +
       "assignments live in. The hold's own notice says what ends it.",
   },
-  {
-    "s": "Waiting on you:",
-    "c": "FRAGMENT",
-    "why":
-      "The prefix of the one-line question on a blocked assignment: 'Waiting on you: ' plus " +
-      "the step itself, in the backend's own plain phrase for it (`work_host.rs`'s " +
-      "`plain_action`, which the blocked receipt uses too). It never renders alone, and the " +
-      "sentence it belongs to is the ACTIONABLE row above, with the same controls.",
-  },
+
   {
     "s": "Stopped before it finished. Ask Rich what it needs.",
     "c": "ACTIONABLE",
@@ -4201,18 +4135,7 @@ module.exports = [
       "The running state for a question. The row carries its own Stop control, but the state " +
       "asks nothing of him: the answer arrives on the conversation when it arrives.",
   },
-  {
-    "s": "Waiting for your decision before Rich can go on.",
-    "c": "ACTIONABLE",
-    "why":
-      "Answering a question reached a step the permission desk would have asked him about in " +
-      "a visible turn and could not — a command, a write outside its workspace. Identical to " +
-      "the work row above in every respect except the wording, and it carries the same " +
-      "Approve and Decline beside it; the `assignment-question-waiting` fixture proves the " +
-      "control is really on screen for a question and not only for a task.",
-    "control": ".assignment-approve",
-    "fixture": "assignment-question-waiting",
-  },
+
   {
     "s": "Waiting for your decision. Ask Rich to continue when you are ready.",
     "c": "ACTIONABLE",
@@ -4977,8 +4900,7 @@ module.exports = [
     "c": "INFORMATIONAL",
     "why": "The recovery monitor retries the stopped listener without replacing identity; the saved-pairing card retains its Forget control."
   },
-  // Non-blocking questions and inline permission states, round 13.
-  {"s":"<div><h2 id=\"permission-title\" class=\"overlay-title\">Allow this action?</h2> <p id=\"permission-description\" class=\"overlay-note\"></p><p id=\"permission-scope\" class=\"overlay-note\"></p> <button id=\"permission-detail\" class=\"desk-btn desk-btn--plain\" type=\"button\" aria-expanded=\"false\" aria-controls=\"permission-input\">Show the technical detail</button> <pre id=\"permission-input\" class=\"desk-preview\" style=\"max-height:45vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere\" hidden></pre> <p id=\"permission-status\" class=\"overlay-note\" role=\"status\">This permission applies only to this action.</p> <div class=\"desk-card-actions\"><button id=\"permission-deny\" class=\"desk-btn\" type=\"button\">Decline</button> <button id=\"permission-allow\" class=\"desk-btn desk-btn--confirm\" type=\"button\">Allow action</button></div></div>","c":"FRAGMENT","why":"Part of the inline question or permission renderer, completed by live content. Dedicated card tests exercise the visible controls."},
+  // Non-blocking questions, round 13.
   {"s":"Change your answer before Rich receives it.","c":"ACTIONABLE","control":".question-option","fixture":"question-edit","why":"The rendered state retains the adjacent retry, answer or recovery control; the fixture exercises the production renderer."},
   {"s":"Copy saved answer","c":"CONTROL","why":"Label of the inline question control, not a separate state."},
   {"s":"It reaches Rich when his current reply ends","c":"INFORMATIONAL","why":"The accepted answer waits for the active turn boundary; no extra permission or send is required."},
@@ -4991,10 +4913,9 @@ module.exports = [
   {"s":"Question tool server: {error}","c":"NOT-RENDERED","why":"Internal command/server validation or fallback implementation diagnostic. Question UI renders its own saved-answer recovery wording; this literal is not a desktop instruction."},
   {"s":"Retry saved answer","c":"CONTROL","why":"Label of the inline question control, not a separate state."},
   {"s":"Rich has your answer","c":"INFORMATIONAL","why":"The durable receiving input has been handed off."},
-  {"s":"Rich no longer needs this:","c":"FRAGMENT","why":"Part of the inline question or permission renderer, completed by live content. Dedicated card tests exercise the visible controls."},
+  {"s":"Rich no longer needs this:","c":"FRAGMENT","why":"Part of the inline question renderer, completed by live content. Dedicated card tests exercise the visible controls."},
   {"s":"Saving your answer…","c":"INFORMATIONAL","why":"The current submission is in progress; duplicate submission is prevented."},
   {"s":"This job stopped before Rich got your answer.","c":"INFORMATIONAL","why":"The job ended (his Stop, or its second failed delivery try) before any back end took the answer; nothing on this card can send it to that ended job."},
-  {"s":"This action is waiting for your permission. You can keep talking to Rich.","c":"ACTIONABLE","control":"#permission-deny","fixture":"permission-pending","why":"The rendered state retains the adjacent retry, answer or recovery control; the fixture exercises the production renderer."},
   {"s":"This conversation was deleted. This answer was not sent:","c":"ACTIONABLE","control":".question-recovery button","fixture":"question-deleted","why":"The rendered state retains the adjacent retry, answer or recovery control; the fixture exercises the production renderer."},
   {"s":"This conversation was deleted. Your answer was not sent. You can copy it below.","c":"ACTIONABLE","control":".question-recovery button","fixture":"question-deleted","why":"The rendered state retains the adjacent retry, answer or recovery control; the fixture exercises the production renderer."},
   {"s":"Unknown desktop answer method.","c":"NOT-RENDERED","why":"Internal command/server validation or fallback implementation diagnostic. Question UI renders its own saved-answer recovery wording; this literal is not a desktop instruction."},
@@ -5003,8 +4924,8 @@ module.exports = [
   {"s":"Your answer is saved here and has not been confirmed.","c":"ACTIONABLE","control":".question-controls button","fixture":"question-saved","why":"The rendered state retains the adjacent retry, answer or recovery control; the fixture exercises the production renderer."},
   {"s":"Your saved answer could not be confirmed. Retry it when the connection is available.","c":"ACTIONABLE","control":".question-controls button","fixture":"question-retry","why":"The rendered state retains the adjacent retry, answer or recovery control; the fixture exercises the production renderer."},
   {"s":"Your team recommends","c":"INFORMATIONAL","why":"Attributes an optional recommendation. No option is preselected."},
-  {"s":"· through Rich","c":"FRAGMENT","why":"Part of the inline question or permission renderer, completed by live content. Dedicated card tests exercise the visible controls."},
-  {"s":"↑ ↓ move · 1- choose · · Esc back to the composer","c":"FRAGMENT","why":"Part of the inline question or permission renderer, completed by live content. Dedicated card tests exercise the visible controls."},
+  {"s":"· through Rich","c":"FRAGMENT","why":"Part of the inline question renderer, completed by live content. Dedicated card tests exercise the visible controls."},
+  {"s":"↑ ↓ move · 1- choose · · Esc back to the composer","c":"FRAGMENT","why":"Part of the inline question renderer, completed by live content. Dedicated card tests exercise the visible controls."},
   // Desktop Claude quota and weekly reset states. The dedicated quota.js suite walks these controls.
   // Fill-first: several Claude accounts in the quota panel.
   // Round 16: the panel rebuilt to the CEO's chosen design (lanes, the one sentence, speed, the switch).
