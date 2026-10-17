@@ -56,18 +56,18 @@ pub const HANDED_OVER: &str = "Your team has it.";
 pub const TITLE_LABEL: &str = "Title (the front desk's label for the job, not his words):";
 /// (s) rule 4 as it applies to an assignment: its turn's mouth was never recorded.
 pub const NO_ORIGIN_WORK: &str =
-    "I can't tell where this was asked from, so I didn't hand it to your team. Ask me again at your desk.";
+    "RichOS can't tell where this was asked from, so RichOS didn't hand it to your team. Ask Rich again at your desk.";
 /// The turn the register names is not in the ledger, or its words are not the ones the
 /// register attested.
-pub const UNVERIFIED: &str = "I couldn't confirm your original words, so I didn't hand this to your team. Ask me again.";
+pub const UNVERIFIED: &str = "RichOS couldn't confirm your original words, so RichOS didn't hand this to your team. Ask Rich again.";
 /// The declaration on disk is no longer the one this launch opened his team with.
-pub const CHANGED_SINCE_LAUNCH: &str = "Your team's settings changed after RichOS started, so I didn't hand this to \
-                                         your team. Quit RichOS and open it again, then ask me again.";
+pub const CHANGED_SINCE_LAUNCH: &str = "Your team's settings changed after RichOS started, so RichOS didn't hand this to \
+                                         your team. Quit RichOS and open it again, then ask Rich again.";
 /// The declaration is gone since launch.
-pub const OFF_SINCE_LAUNCH: &str = "Your team was switched off after RichOS started, so I didn't hand this to your \
-                                     team. Quit RichOS and open it again, then ask me again.";
+pub const OFF_SINCE_LAUNCH: &str = "Your team was switched off after RichOS started, so RichOS didn't hand this to your \
+                                     team. Quit RichOS and open it again, then ask Rich again.";
 /// Quit has begun.
-pub const CLOSING: &str = "RichOS is closing, so I didn't hand this to your team.";
+pub const CLOSING: &str = "RichOS is closing, so RichOS didn't hand this to your team.";
 /// The per-assignment Stop found no agent on that assignment.
 pub const NOTHING_ON_IT: &str = "None of your team's agents is working on this one. To stop what your team is \
                                   doing in this conversation, press Stop there.";

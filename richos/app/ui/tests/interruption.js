@@ -54,15 +54,15 @@ function rustSentence(needle) {
   return unique[0];
 }
 
-const NOT_SIGNED_IN = rustSentence("not connected to your Claude account");
-const TRANSIENT = rustSentence("lost my connection to the part of me that thinks");
+const NOT_SIGNED_IN = rustSentence("isn't connected to your Claude account");
+const TRANSIENT = rustSentence("RichOS lost its connection to Claude Code");
 
 // The exact sentence `InterruptionRecord::new` writes when Rich had written nothing. It is
 // a `format`-free literal in Rust, but it lives in `InterruptionRecord::new` rather than in
 // a `ceo_message()` body, so the scraper does not see it and this is the one string the
 // suite states. The core test `nothing_written_means_no_claim_about_a_saved_answer_is_made`
 // pins the same bytes on the Rust side, so a change breaks there first.
-const ONLY_HIS_WORDS = "Your message is saved. I hadn't written any of my answer yet.";
+const ONLY_HIS_WORDS = "Your message is saved. Rich hadn't written any of his answer yet.";
 
 // The two generic sentences, which must NOT appear when a cause is known.
 const GENERIC_BODY = "I hit a snag mid-thought and had to stop";
@@ -301,7 +301,7 @@ async function main() {
     assertEqual(calls, [TURN], "one press, one put-back call on this turn");
     // The card's own prose still refuses to promise the failure has cleared.
     const whole = c.body.concat(c.notes).join(" ");
-    assert(/send this to me again/.test(whole), "the sentence that makes this control necessary is gone: " + whole);
+    assert(/send this again/.test(whole), "the sentence that makes this control necessary is gone: " + whole);
     return `1 control, ${JSON.stringify(RETRY_LABEL)}, one press -> one put-back call, no retry promised anywhere on the card`;
   });
 

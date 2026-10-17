@@ -207,32 +207,32 @@ impl PhoneError {
     pub fn ceo_sentence(&self) -> String {
         match self {
             PhoneError::Tool { tool, .. } if tool == "openssl" => {
-                "Your Mac's own certificate tool would not run, so I could not make a certificate                  for your phone. Nothing on your Mac was changed."
+                "Your Mac's own certificate tool would not run, so RichOS could not make a certificate                  for your phone. Nothing on your Mac was changed."
             }
             PhoneError::Tool { tool, .. } if tool == "security" => {
-                "Your Mac's keychain would not let me keep the key your phone needs. Nothing was                  changed, and I have not stored anything."
+                "Your Mac's keychain would not let RichOS keep the key your phone needs. Nothing was                  changed, and RichOS has not stored anything."
             }
             // **THE TOOL NEVER ANSWERED**, which on this Mac means a keychain window is open
             // somewhere he cannot see, and is therefore a thing he can go and do something
             // about. So the sentence names the window, names where to look, and names the
             // control on this same screen that starts it again.
             PhoneError::ToolTimedOut { tool, .. } if tool == "security" => {
-                "Your Mac's keychain did not answer, so I stopped waiting and nothing was stored. \
+                "Your Mac's keychain did not answer, so RichOS stopped waiting and nothing was stored. \
 macOS may be holding a keychain window open behind this one. Look for it, answer it, then \
 press Set my phone up again."
             }
             PhoneError::ToolTimedOut { .. } => {
-                "A tool this Mac needs to set your phone up did not answer, so I stopped waiting. \
-Nothing was changed. Ask me to set your phone up again."
+                "A tool this Mac needs to set your phone up did not answer, so RichOS stopped waiting. \
+Nothing was changed. Ask Rich to set your phone up again."
             }
             PhoneError::Tool { .. } => {
-                "I could not find the name this Mac publishes on your network, so there is no                  address your phone could use."
+                "RichOS could not find the name this Mac publishes on your network, so there is no                  address your phone could use."
             }
             PhoneError::Io(_) => {
-                "Something else on this Mac is already using the port your phone needs. If you have                  a second copy of RichOS open, quit it and ask me again."
+                "Something else on this Mac is already using the port your phone needs. If you have                  a second copy of RichOS open, quit it and ask Rich again."
             }
             PhoneError::NoSecret(_) => {
-                "The key for your phone is not on this Mac any more. Ask me to set your phone up                  again and I will make a new one."
+                "The key for your phone is not on this Mac any more. Ask Rich to set your phone up                  again and RichOS will make a new one."
             }
             PhoneError::Crypto(_) => {
                 "Your Mac refused to make the keys your phone needs. Nothing was changed."

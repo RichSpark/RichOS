@@ -158,7 +158,7 @@ fn nothing_written_means_no_claim_about_a_saved_answer_is_made() {
 
     assert_eq!(
         record.loss_message.as_deref(),
-        Some("Your message is saved. I hadn't written any of my answer yet."),
+        Some("Your message is saved. Rich hadn't written any of his answer yet."),
         "the only true thing to say here is about HIS words"
     );
     let whole = format!("{} {:?}", record.ceo_message, record.loss_message);

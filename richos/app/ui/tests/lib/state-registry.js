@@ -195,9 +195,9 @@ module.exports = [
   // -----------------------------------------------------------------------------------
   {
     s:
-      "I couldn't start that, because I'm not connected to your Claude account right " +
+      "RichOS couldn't start that, because it isn't connected to your Claude account right " +
       "now. Either nobody has signed in on this Mac yet, or the sign-in ran out. You can " +
-      "connect it in Settings, under Claude accounts, and then send this to me again.",
+      "connect it in Settings, under Claude accounts, and then send this again.",
     c: "ACTIONABLE",
     control: "#set-btn",
     fixture: null,
@@ -211,9 +211,9 @@ module.exports = [
   },
   {
     s:
-      "I couldn't start that. There is an account credential set up on this Mac and " +
+      "RichOS couldn't start that. There is an account credential set up on this Mac and " +
       "Anthropic turned it down, so the request never left the machine. This one needs " +
-      "whoever set RichOS up. It isn't something you can fix from here, and asking me " +
+      "whoever set RichOS up. It isn't something you can fix from here, and asking " +
       "again won't change it.",
     c: "NEEDS-SOMEONE-ELSE",
     party: true,
@@ -229,9 +229,9 @@ module.exports = [
   },
   {
     s:
-      "I couldn't start that. The copy of Claude Code RichOS tried to run isn't on this Mac " +
-      "where I expected it, so there was nothing here to think with. This one needs whoever " +
-      "set RichOS up. It isn't something you can fix from here, and asking me again won't " +
+      "RichOS couldn't start that. The copy of Claude Code RichOS tried to run isn't on this Mac " +
+      "where RichOS expected it, so there was nothing here to think with. This one needs whoever " +
+      "set RichOS up. It isn't something you can fix from here, and asking again won't " +
       "change it.",
     c: "NEEDS-SOMEONE-ELSE",
     party: true,
@@ -257,7 +257,7 @@ module.exports = [
   },
   {
     s:
-      "I lost my connection to the part of me that thinks, partway through. That kind of " +
+      "RichOS lost its connection to Claude Code, partway through. That kind of " +
       "thing usually clears on its own, so asking again is worth a try.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
@@ -270,7 +270,7 @@ module.exports = [
   },
   {
     s:
-      "That stopped before I finished, and I can't tell you why: I don't recognize what " +
+      "That stopped before Rich finished, and RichOS can't tell you why: it doesn't recognize what " +
       "came back. Asking again is reasonable; if it stops the same way, it needs whoever " +
       "set RichOS up.",
     c: "ACTIONABLE",
@@ -468,7 +468,7 @@ module.exports = [
   // NEEDS SOMEONE ELSE
   // -------------------------------------------------------------------------------------
   {
-    s: "I'm not connected to my thinking right now, so I can't take that on. Quit RichOS and open it again. That clears it most of the time. If it keeps happening, whoever set RichOS up has to sign me back in; that part isn't yours to fix.",
+    s: "RichOS isn't connected to Claude Code right now, so it can't take that on. Quit RichOS and open it again. That clears it most of the time. If it keeps happening, whoever set RichOS up has to sign Claude Code back in; that part isn't yours to fix.",
     c: "NEEDS-SOMEONE-ELSE",
     party: true,
     control: "#send",
