@@ -89,7 +89,9 @@ GATE_BUDGETS = {
     # rounded up to five minutes. The 1200 s it replaces was 2x the four-shard reference on an
     # otherwise free Mac, which the gate never gets beside workspace-mutants.
     "gates/ui-suite": 3300,
-    "gates/privacy-sweep": 120, # At least 4x a full scan; no receipt-reuse assumption.
+    # A full public-tree scan exceeded 120 s of execution in three contended builds.
+    # Use the normal focused-check hang guard; admission still has its separate clock.
+    "gates/privacy-sweep": 600,
 }
 # How long a mutation batch's proof-run may wait for a proof-run slot, as admission and outside
 # the gate's deadline: proof_slots.DEFAULT_WAIT_SECONDS, the line behind two full runs.
