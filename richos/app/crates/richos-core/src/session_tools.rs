@@ -24,10 +24,10 @@ pub fn bind(scope_path: &Path, scope: &StatusToolScope, session: &str, role: &st
     if !component(session) || !matches!(role, "rich" | "stu") {
         return Err("Invalid native session binding".into());
     }
-    let instruction=instruction.or_else(||std::fs::read(scope_path.with_extension("session.json")).ok()
+    let instruction=if role == "stu" {None} else {instruction.or_else(||std::fs::read(scope_path.with_extension("session.json")).ok()
         .and_then(|bytes|serde_json::from_slice::<Session>(&bytes).ok())
         .filter(|old|old.session_id==session && old.role==role && old.entity_id==scope.entity_id && old.thread_id==scope.thread_id)
-        .and_then(|old|old.instruction));
+        .and_then(|old|old.instruction))};
     let record = Session {session_id:session.into(), role:role.into(),
         entity_id:scope.entity_id.clone(), thread_id:scope.thread_id.clone(),instruction};
     let text = serde_json::to_string(&record).map_err(|e|e.to_string())?;
@@ -458,7 +458,10 @@ mod tests {
     fn native_transcript_read_needs_the_host_binding_and_reads_current_tool_results() {
         let root=std::env::temp_dir().join(format!("richos-native-read-{}",uuid::Uuid::new_v4()));
         let scope=StatusToolScope {version:1,state_root:root.clone(),entity_id:"company".into(),thread_id:"thread".into()};
-        let path=root.join("status.json");bind(&path,&scope,"native-stu","stu",None).unwrap();
+        let path=root.join("status.json");bind(&path,&scope,"native-stu","stu",Some(crate::ecs::UserInstruction {
+            ledger_ref:"ledger:thread:latest-job".into(),sha256:"a".repeat(64),text:None})).unwrap();
+        let bound:Session=serde_json::from_slice(&std::fs::read(path.with_extension("session.json")).unwrap()).unwrap();
+        assert!(bound.instruction.is_none(),"Stu must not inherit a job's authority from session binding");
         let transcript=root.join("native-stu.jsonl");std::fs::write(&transcript,b"{\"type\":\"tool_result\",\"content\":\"actual-output\"}\n").unwrap();
         std::fs::write(root.join("evidence/native-stu/callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":transcript}}))).unwrap();
         let listed=call(&scope,"sessions",json!({})).unwrap();

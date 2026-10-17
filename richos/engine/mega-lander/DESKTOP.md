@@ -124,4 +124,4 @@ remains. A complete set of answers returns to this same assignment at a turn bou
 including phone taps, typed answers and voice answers. No desktop approval is needed.
 Withdraw your own moot questions with `richos_questions.withdraw` and a short reason.
 
-Stu's own shell commands run as native background tasks so each command can be stopped independently. The shell command and its other arguments are preserved. Read the native task result before treating the command as finished. A user Stop revokes that request's tools; status inspection and communication with Rich remain available.
+Stu uses the native tools as in a terminal session. A user Stop is a saved instruction to end that job: the app stops its recorded native tasks and delivers the Stop fact to Stu. It does not replace Stu’s session or revoke tools for other work. Stop your own background commands for that job with native task controls. Do not resume stopped work unless the user asks. Read actual native results before claiming a task ended. Questions about a job name that job’s existing obligation_id; conversation questions name none.

@@ -361,10 +361,7 @@ def capture(payload, state_root, instruction=None, app_data=None, worktrees=None
         root = folder.parent
         transcript = folder / "guard-transcript.jsonl"
         record = project(payload, instruction)
-        row = {"schema": 1, "callback": payload}
-        if payload.get("hook_event_name") == "PreToolUse" and not payload.get("agent_id") and instruction:
-            row["instruction"] = instruction
-        append(folder / "callbacks.jsonl", row)
+        append(folder / "callbacks.jsonl", {"schema": 1, "callback": payload})
         if record is not None:
             append(transcript, record)
         # The output record's witnesses. Never the app's own data, never this evidence, except

@@ -4531,9 +4531,7 @@ impl WorkHost {
             let dispatch_lock = crate::work_status::lock_receipts(&self.state, entity, thread)?;
             let trail = crate::work_status::trail(&self.state, entity, thread, &record.obligation_id)?;
             drop(dispatch_lock);
-            let mut targets = trail.stop_targets;
-            targets.extend(crate::work_status::direct_stop_targets(&self.state, &session,
-                &record.instruction_ledger_ref, &record.instruction_sha256)?.into_iter().map(|tool| (session.clone(), tool)));
+            let targets = trail.stop_targets;
             let outcomes: Vec<CommandStop> = targets.iter().map(|(owner, tool)| {
                 if owner == &session {
                     stopper.stop_worker(tool)
@@ -4543,7 +4541,7 @@ impl WorkHost {
             crate::questions::Store::new(&self.state).close(entity,thread,Some(&record.obligation_id),"The assignment was stopped",false)?;
             drop(crate::question_work::discard(&self.state,entity,thread,&record.obligation_id));
             assignment::advance(&self.state, entity, thread, id, AssignmentState::Interrupted,
-                if outcomes.is_empty() { "Stop requested by the user. No native execution is recorded." }
+                if outcomes.is_empty() { "Stop requested by the user. No worker task is recorded; Stu is notified to stop his own background commands." }
                 else { watched_stop_detail(true, &outcomes) }).map_err(|e| e.to_string())?;
             let scope = crate::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:entity.into(),thread_id:thread.into()};
             crate::session_tools::observe_user_stop(&scope, id, &record.obligation_id, stopped.user_stop_requested_at_ms.unwrap())?;
@@ -5836,12 +5834,15 @@ mod tests {
         let args=serde_json::json!({"questions":[{"text":"When should the release ship?", "options":[
             {"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More checks"}]}]});
         let current=crate::question_tools::call(&qscope,"ask",args.clone()).unwrap();
-        assert_eq!(current["questions"][0]["obligation_id"],"work-B");
+        assert!(current["questions"][0]["obligation_id"].is_null(), "a conversation question must not inherit the latest job");
+        let mut for_b=args.clone();for_b["obligation_id"]="work-B".into();
+        assert_eq!(crate::question_tools::call(&qscope,"ask",for_b.clone()).unwrap()["questions"][0]["obligation_id"],"work-B");
         let mut for_a=args.clone();for_a["obligation_id"]=record.obligation_id.clone().into();
         let owned=crate::question_tools::call(&qscope,"ask",for_a.clone()).unwrap();
         assert_eq!(owned["questions"][0]["obligation_id"],record.obligation_id);
         assignment::record_user_stop(&h.state,"depot","thread-one",&b.id).unwrap();
-        assert!(crate::question_tools::call(&qscope,"ask",args).is_err());
+        assert!(crate::question_tools::call(&qscope,"ask",for_b).is_err());
+        assert!(crate::question_tools::call(&qscope,"ask",args).is_ok(), "job Stop must not close conversation questions");
         assert!(crate::question_tools::call(&qscope,"ask",for_a).is_ok(),"B's Stop revoked questions about A");
         assignment::record_user_stop(&h.state,"depot","thread-one",&a.id).unwrap();
         assert!(h.host.question_answer_instruction(&selected).is_err(),"stale answer reauthorized a stopped job");
@@ -10881,19 +10882,8 @@ mod tests {
                 "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"independent-stu"},
                 "request":{"obligation_id":obligation,"role":"worker"},"status":"running","tool_use_id":tool}).to_string()).unwrap();
         }
-        let evidence=h.state.join("evidence/independent-stu");
-        std::fs::create_dir_all(&evidence).unwrap();
-        let selected=assignment::read(&h.state,"depot","thread-one",&first.id).unwrap();
-        let callbacks=[serde_json::json!({"schema":1,"instruction":{"ledger_ref":selected.instruction_ledger_ref,"sha256":selected.instruction_sha256},
-            "callback":{"session_id":"independent-stu","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"direct-first"}}),
-            serde_json::json!({"schema":1,"instruction":{"ledger_ref":"ledger:thread-one:another-request","sha256":"other"},
-            "callback":{"session_id":"independent-stu","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"direct-second"}})];
-        // A standing session can have a long history and large unrelated tool output.
-        let history=serde_json::json!({"schema":1,"callback":{"session_id":"independent-stu", "hook_event_name":"PostToolUse",
-            "tool_name":"Read","tool_response":"x".repeat(1024 * 1024 + 1)}}).to_string()+"\n";
-        std::fs::write(evidence.join("callbacks.jsonl"),history.repeat(17)+&callbacks.iter().map(|row|row.to_string()+"\n").collect::<String>()).unwrap();
         h.host.stop_assignment("depot","thread-one",&first.id).unwrap();
-        assert_eq!(*stopper.0.lock().unwrap(),vec!["call-first","direct-first"]);
+        assert_eq!(*stopper.0.lock().unwrap(),vec!["call-first"]);
         let stopped=assignment::read(&h.state,"depot","thread-one",&first.id).unwrap();
         assert!(stopped.user_stop_requested_at_ms.is_some());
         let control=crate::session_tools::pending(&h.host.message_scope(&h.binding),"stu").unwrap().unwrap().0;

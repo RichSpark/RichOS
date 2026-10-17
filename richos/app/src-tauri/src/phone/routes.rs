@@ -2556,7 +2556,7 @@ mod tests {
     fn question_answers_use_signed_messages_and_authoritative_revisions() {
         use richos_core::questions::{Store,AskScope,QuestionInput,OptionInput};
         let mut f=fixture("question-answers");let store=Store::new(&f.dir.0);
-        let scope=AskScope{root:f.dir.0.clone(),entity_id:"femcboost".into(),thread_id:"thr_5c1e".into(),turn_id:"ask".into(),asker:"front_desk".into(),session_id:"session".into(),engine:None,entity_root:None,app_run:None};
+        let scope=AskScope{obligation_id:None,root:f.dir.0.clone(),entity_id:"femcboost".into(),thread_id:"thr_5c1e".into(),turn_id:"ask".into(),asker:"front_desk".into(),session_id:"session".into(),engine:None,entity_root:None,app_run:None};
         let q=store.ask(&scope,vec![QuestionInput{text:"When should the release ship?".into(),options:vec![OptionInput{label:"Today".into(),description:"Earlier fixes".into()},OptionInput{label:"Tomorrow".into(),description:"More tests".into()}],multiple:false,free_answer:true,recommended:None}]).unwrap().remove(0);
         f.channel.bridge=Arc::new(FakeBridge{submitted:Mutex::new(vec![]),client_ids:Mutex::new(vec![]),refuse:false,voice:false,rows:0,questions:Some(store.clone())});
         let body=json!({"kind":"answer","client_id":"phone-answer","thread_id":"thr_5c1e","question_id":q.id,"option_ids":[q.options[0].id]}).to_string();

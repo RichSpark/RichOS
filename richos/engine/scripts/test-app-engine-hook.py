@@ -132,48 +132,33 @@ class DesktopHooks(unittest.TestCase):
             tool_input={"subagent_type":"worker", "prompt":"Edit an arbitrary file"})
         self.assertEqual(result.returncode, 2)
 
-    def test_stopping_an_assignment_revokes_its_direct_stu_tools_only(self):
+    def test_stu_native_tools_do_not_inherit_a_jobs_stopped_authority(self):
         import hashlib
         partition = hashlib.sha256(b'["company","thread"]').hexdigest()
         assignments = self.root / "state/assignments" / partition
         assignments.mkdir(parents=True)
-        original = {"ledger_ref":"ledger:thread:original", "sha256":"a" * 64}
+        stopped = {"ledger_ref":"ledger:thread:stopped", "sha256":"a" * 64}
         (assignments / "job.json").write_text(json.dumps({"schema":1, "id":"job",
             "entity_id":"company", "thread_id":"thread", "obligation_id":"work-job",
-            "instruction_ledger_ref":original["ledger_ref"], "instruction_sha256":original["sha256"],
+            "instruction_ledger_ref":stopped["ledger_ref"], "instruction_sha256":stopped["sha256"],
             "state":"interrupted", "user_stop_requested_at_ms":1234}))
         grant = {"version":1, "actions_allowed":True, "background_work_allowed":True,
             "binding":{"entity_id":"company", "thread_id":"thread", "session_id":"fictional-session", "turn_id":"peer:1"}}
-        for instruction in [None, original, {"ledger_ref":"ledger:thread:other", "sha256":"b" * 64}]:
+        # Old saved metadata must not become a per-action grant either.
+        for instruction in [None, stopped, {"ledger_ref":"ledger:thread:other", "sha256":"b" * 64}]:
             self.scope.write_text(json.dumps({**grant, "user_instruction":instruction}))
-            for tool, args in [("Bash", {"command":"true"}), ("Write", {"file_path":str(self.coordination / "result.txt"), "content":"after Stop"}),
+            for tool, args in [("Bash", {"command":"true", "run_in_background":False}),
+                               ("Write", {"file_path":str(self.coordination / "result.txt"), "content":"A continues"}),
                                ("Read", {"file_path":str(self.scope)}),
-                               ("TaskOutput", {"task_id":"command-for-other-job", "block":False, "timeout":1000})]:
+                               ("TaskOutput", {"task_id":"command-for-other-job", "block":False, "timeout":1000}),
+                               ("mcp__richos_status__send", {"text":"Stopped B; continuing A"}),
+                               ("mcp__richos_questions__withdraw", {"question_id":"own-question", "reason":"Stopped"})]:
                 result = self.hook("PreToolUse", tool_name=tool, tool_use_id="direct-" + tool, tool_input=args)
-                self.assertEqual(result.returncode, 0 if tool in ("Read", "TaskOutput") or instruction and instruction != original else 2, result.stderr)
-                if result.returncode == 0 and tool == "Bash":
-                    self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]["updatedInput"], {**args, "run_in_background":True})
-            if instruction == original:
-                self.assertEqual(self.hook("PreToolUse", tool_name="mcp__richos_status__send", tool_use_id="stop-report", tool_input={"text":"Stopped"}).returncode, 0)
-        # A standing Stu session can finish A after a newer, independent B was stopped.
-        for tool, args in [("mcp__richos_work__report", {"obligation_id":"work-other", "state":"running", "detail":"Worker finished"}),
-                           ("mcp__richos_work__complete", {"obligation_id":"work-other", "answer":"Verified answer"}),
-                           ("mcp__richos_work__inspect", {}), ("mcp__richos_work__repositories", {}),
-                           ("mcp__richos_status__sessions", {}), ("mcp__richos_status__transcript", {"session_id":"fictional-session"}),
-                           ("mcp__richos_questions__withdraw", {"question_id":"own-question", "reason":"Stopped"}),
-                           ("mcp__richos_questions__ask", {"obligation_id":"work-other", "questions":[]})]:
-            self.scope.write_text(json.dumps({**grant, "user_instruction":original}))
-            result = self.hook("PreToolUse", tool_name=tool, tool_use_id="other-job", tool_input=args)
-            self.assertEqual(result.returncode, 0, tool + result.stderr)
-            if "obligation_id" in args:
-                refused = self.hook("PreToolUse", tool_name=tool, tool_use_id="stopped-job",
-                                    tool_input={**args, "obligation_id":"work-job"})
-                self.assertEqual(refused.returncode, 2, refused.stderr)
-        self.scope.write_text(json.dumps({**grant, "user_instruction":{"ledger_ref":"ledger:thread:other", "sha256":"b" * 64}}))
-        self.assertFalse((self.coordination / "result.txt").exists(), "the fixture never executes a requested tool")
-        callbacks = [json.loads(line) for line in (self.root / "state/evidence/fictional-session/callbacks.jsonl").read_text().splitlines()]
-        direct = [row for row in callbacks if row["callback"].get("tool_use_id") == "direct-Bash"]
-        self.assertEqual(direct[-1]["instruction"]["ledger_ref"], "ledger:thread:other")
+                self.assertEqual(result.returncode, 0, tool + result.stderr)
+                if result.stdout.strip():
+                    self.assertNotIn("updatedInput", json.loads(result.stdout).get("hookSpecificOutput", {}),
+                                     "the app must not rewrite Stu's native command")
+        self.assertFalse((self.coordination / "result.txt").exists(), "the fixture only runs the production hook")
 
 
 if __name__ == "__main__":

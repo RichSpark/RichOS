@@ -160,19 +160,6 @@ def assignment_record(scope, obligation):
     return matches[0] if matches else None
 
 
-def require_direct_not_stopped(scope):
-    instruction = scope.get("user_instruction") or {}
-    ref, digest = instruction.get("ledger_ref"), instruction.get("sha256")
-    if not ref or not digest:
-        raise ValueError("direct work has no original user request")
-    for record in assignment_records(scope):
-        if record.get("instruction_ledger_ref") == ref:
-            if record.get("instruction_sha256") != digest:
-                raise ValueError("direct work differs from its original user request")
-            if record.get("user_stop_requested_at_ms") is not None:
-                raise ValueError("the user stopped this assignment")
-
-
 def require_not_stopped(scope, obligation):
     record = assignment_record(scope, obligation)
     if record is not None and record.get("user_stop_requested_at_ms") is not None:
@@ -1398,27 +1385,6 @@ def worker_context(scope, payload):
     """Host context and direct file boundaries derived from an observed Agent ID."""
     aid = payload.get("agent_id")
     if not aid:
-        tool = str(payload.get("tool_name", ""))
-        communication = tool in ("mcp__richos_status__send", "mcp__richos_status__background_work",
-                                 "mcp__richos_status__sessions", "mcp__richos_status__transcript", "mcp__richos_questions__withdraw")
-        inspection = tool in ("Read", "Grep", "Glob", "TaskOutput", "TaskList", "ToolSearch")
-        if scope.get("background_work_allowed") is True and not communication and not inspection:
-            if tool == "mcp__richos_questions__ask" and payload.get("tool_input", {}).get("obligation_id"):
-                require_not_stopped(scope, payload["tool_input"]["obligation_id"])
-                return None
-            if tool.startswith("mcp__richos_work__"):
-                # Work tools own their selected obligation; the session's latest input may be another job.
-                if tool in ("mcp__richos_work__prepare", "mcp__richos_work__report", "mcp__richos_work__complete"):
-                    require_not_stopped(scope, carried_obligation(scope) or text(payload.get("tool_input", {}), "obligation_id"))
-                return None
-            if tool == "Agent":
-                # dispatch_intent checks the matched prepared receipt's obligation below.
-                return None
-            require_direct_not_stopped(scope)
-            if tool == "Bash":
-                # Native per-task Stop cannot target a foreground Bash call.
-                return {"hookSpecificOutput":{"hookEventName":"PreToolUse",
-                    "updatedInput":{**payload.get("tool_input", {}), "run_in_background":True}}}
         return None
     with locked(scope) as root:
         matches=[]

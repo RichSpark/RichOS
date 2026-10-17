@@ -4070,23 +4070,19 @@ impl Cognition for NativeCognition {
     fn prepare_agent_message(&mut self, binding:&crate::entity::ThreadBinding, turn:&str,
         message:&crate::session_tools::Message) -> Result<(),CognitionError> {
         self.pending_context_brief=None;
-        let instruction=message.instruction.clone().or_else(||self.status_scope.as_ref()
-            .and_then(|path|std::fs::read(path.with_extension("session.json")).ok())
-            .and_then(|bytes|serde_json::from_slice::<crate::session_tools::Session>(&bytes).ok())
-            .filter(|old|old.entity_id==binding.entity_id().as_str() && old.thread_id==binding.thread_id())
-            .and_then(|old|old.instruction));
+        let instruction=message.instruction.clone();
         let Some((bridge,path))=&self.continuity else {return Err(CognitionError::Protocol("Missing operator scope".into()))};
         let seat=format!("stu-thread:{}",binding.thread_id());
         let bound=bridge.bind(binding.entity_id().as_str(),binding.thread_id(),&self.session_id,turn,Some(&seat),"rich")
             .map_err(|e|CognitionError::Io(e.to_string()))?;
         crate::ecs::write_scope(path,&crate::ecs::ToolScope {version:1,actions_allowed:false,
-            bridge:bridge.clone(),binding:bound.clone(),user_instruction:instruction.clone(),
+            bridge:bridge.clone(),binding:bound.clone(),user_instruction:None,
             seat:Some(seat.clone()),background_work_allowed:true}).map_err(|e|CognitionError::Io(e.to_string()))?;
         if let (Some(profile),Some(status))=(&self.engine_profile,&self.status_scope) {
             let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
             crate::status_tools::write_scope(status,&scope).map_err(CognitionError::Io)?;
-            crate::session_tools::bind(status,&scope,&self.session_id,"stu",instruction.clone()).map_err(CognitionError::Io)?;
+            crate::session_tools::bind(status,&scope,&self.session_id,"stu",None).map_err(CognitionError::Io)?;
             if let (Some(assignments),Some(instruction))=(&self.assignments_scope,&instruction) {
                 crate::assignment_tools::write_scope(assignments,&crate::assignment_tools::AssignmentToolScope {
                     version:1,actions_allowed:false,state_root:profile.state.clone(),entity_id:scope.entity_id,
@@ -4708,6 +4704,29 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         let qs=crate::questions::Store::new(root).list("company","thread").unwrap();
         assert_eq!(qs.len(),1);assert_eq!(qs[0].state,crate::questions::State::Open);
         assert!(qs[0].shown.is_none(),"persisting a question must not claim it was shown");
+    }
+
+    #[test]
+    fn stu_peer_inputs_do_not_install_a_current_job_tool_grant() {
+        let script=write_script("stu-no-current-grant",r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+while read -r line; do :; done
+"#);
+        let root=script.parent().unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine"),&root.join("ecs")).unwrap();
+        let mut cognition=NativeCognition::start_with_continuity(&script,root,root,&skills_fixture(),&script,bridge,None).unwrap();
+        let binding=crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),crate::entity::EntityId::parse("company").unwrap(),"thread",1);
+        for id in ["A","B"] {
+            let message=crate::session_tools::Message {handoff:true,from:"rich".into(),text:id.into(),instruction:Some(crate::ecs::UserInstruction {
+                ledger_ref:format!("ledger:thread:{id}"),sha256:"a".repeat(64),text:Some(id.into())})};
+            cognition.prepare_agent_message(&binding,id,&message).unwrap();
+            let scope:crate::ecs::ToolScope=serde_json::from_slice(&std::fs::read(&cognition.continuity.as_ref().unwrap().1).unwrap()).unwrap();
+            assert!(scope.user_instruction.is_none(),"accepting B must not change authority for A's later tools");
+            assert_eq!(scope.seat.as_deref(),Some("stu-thread:thread"));
+        }
     }
 
     #[test]
