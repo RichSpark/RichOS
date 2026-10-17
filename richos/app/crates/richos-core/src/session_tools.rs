@@ -140,6 +140,10 @@ pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Va
     Ok(json!({"saved":true,"to":peer}))
 }
 
+/// A host observation is information, never a user instruction or a peer's authorship.
+pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String> {
+    append(scope,"stu",&Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None})
+}
 
 pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<(),String> {
     append(scope,"rich",&Message {handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})

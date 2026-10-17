@@ -1210,8 +1210,57 @@ impl ActionGrant {
     }
 }
 
+/// The existing engine monitor, owned by Stu's native lease. Its policy stays in the engine.
+struct StallWatch {
+    _child: crate::owned_process::OwnedChild,
+    _output: JoinHandle<()>,
+}
+
+impl StallWatch {
+    fn start(profile: Option<&crate::engine_profile::EngineProfile>, role: LeaseRole,
+        environment: &Command, session: &str, lease_pid: u32, closed: Arc<AtomicBool>)
+        -> Result<Option<Self>, NativeError> {
+        let Some(profile)=profile.filter(|_|role==LeaseRole::Work) else {return Ok(None)};
+        let (entity,thread)=profile.work_scope.as_ref().ok_or_else(||NativeError::Protocol("Stu's monitor requires a conversation scope".into()))?;
+        let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),entity_id:entity.clone(),thread_id:thread.clone()};
+        let script=profile.engine.join("scripts/stall-watch.sh");
+        if !script.is_file() {return Err(NativeError::Protocol("The engine's stall monitor is missing".into()))}
+        let mut command=Command::new("/bin/bash");
+        for (key,value) in environment.get_envs() {
+            if let Some(value)=value {command.env(key,value);} else {command.env_remove(key);}
+        }
+        command.arg(script).args(["--monitor","--jsonl"])
+            .current_dir(&profile.coordination).env("RICHOS_SESSION_ID",session)
+            .env("RICHOS_SESSION_PID",lease_pid.to_string())
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        crate::owned_process::OwnedChild::configure(&mut command);
+        let mut child=command.spawn().map_err(NativeError::Io)?;
+        let output=child.stdout.take().ok_or(NativeError::Closed)?;
+        let child=crate::owned_process::OwnedChild::new(child);
+        let output=std::thread::Builder::new().name("richos-stall-watch".into()).spawn(move || {
+            for line in BufReader::new(output).lines() {
+                let observation=(|| {
+                    let line=line.map_err(|e|e.to_string())?;
+                    let value:Value=serde_json::from_str(&line).map_err(|e|e.to_string())?;
+                    value["text"].as_str().map(str::to_owned).ok_or_else(||"missing monitor text".to_string())
+                })();
+                let text=match observation {Ok(text)=>text,Err(error)=>{eprintln!("[richos] stall-watch output: {error}");return}};
+                // Keep this whole block until the existing durable input accepts it.
+                loop {
+                    match crate::session_tools::observe_stall(&scope,&text) {
+                        Ok(())=>break,
+                        Err(error)=>{eprintln!("[richos] stall-watch input remains pending: {error}");if closed.load(Ordering::SeqCst) {return} std::thread::sleep(Duration::from_secs(5));}
+                    }
+                }
+            }
+        }).map_err(NativeError::Io)?;
+        Ok(Some(Self {_child:child,_output:output}))
+    }
+}
+
 /// A live session to a native `claude` child.
 pub struct NativeClient {
+    stall_watch: Option<StallWatch>,
     child: crate::owned_process::OwnedChild,
     /// The supervisor's per-lease state file, when this lease is supervised (the product reap,
     /// `lease_commands.rs`): which tool commands are running outside the provider's group.
@@ -1854,6 +1903,7 @@ impl NativeClient {
                 _ => NativeError::Io(e),
             })?;
 
+        let lease_pid=child.id();
         let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or(NativeError::Closed)?));
         let stdout = child.stdout.take().ok_or(NativeError::Closed)?;
         let stderr = child.stderr.take().ok_or(NativeError::Closed)?;
@@ -1943,6 +1993,7 @@ impl NativeClient {
             crate::lease_commands::LiveLeases::process().register(&session_id, state);
         }
         let mut client = NativeClient {
+            stall_watch: None,
             child: if reap_state.is_some() {
                 crate::owned_process::OwnedChild::supervised(child)
             } else {
@@ -2006,6 +2057,7 @@ impl NativeClient {
             _stderr: stderr_handle,
         };
         client.handshake_cancellable(control)?;
+        client.stall_watch=StallWatch::start(profile,role,&command,&client.session_id,lease_pid,Arc::clone(&client.reader_closed))?;
         Ok(client)
     }
 
@@ -3102,6 +3154,7 @@ impl TurnCancel for NativeCancelHandle {
 
 impl Drop for NativeClient {
     fn drop(&mut self) {
+        drop(self.stall_watch.take());
         let _ = self.child.kill();
         let _ = self.child.wait();
         if self.reap_state.is_some() {
@@ -5159,6 +5212,49 @@ done
             operator_desk: None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
     }
+
+    #[test]
+    fn stu_monitor_keeps_whole_observations_scoped_and_ends_with_its_owner() {
+        let root=fixture_root().join(format!("monitor-{}",uuid::Uuid::new_v4()));
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company-a".into(),"thread-a".into()));
+        std::fs::create_dir_all(profile.engine.join("scripts")).unwrap();
+        std::fs::create_dir_all(&profile.coordination).unwrap();
+        std::fs::write(profile.engine.join("scripts/stall-watch.sh"),r#"
+[ "$1" = --monitor ] && [ "$2" = --jsonl ] || exit 2
+[ "${RICHOS_PROJECTS_DIR+set}" != set ] && [ "${RICHOS_SESSIONS_DIR+set}" != set ] || exit 2
+printf '{"text":"%s|%s|%s|%s|%s\\nSecond line"}\n' "$RICHOS_SESSION_ID" "$RICHOS_APP_ENTITY" "$RICHOS_APP_THREAD" "$RICHOS_SESSION_PID" "$STALL_WATCH_STATE_DIR"
+exec /bin/sleep 1000
+"#).unwrap();
+        let mut environment=Command::new("/fictional/provider");
+        environment.env("RICHOS_PROJECTS_DIR","/fictional/terminal-projects")
+            .env("RICHOS_SESSIONS_DIR","/fictional/terminal-sessions");
+        profile.configure(&mut environment,Path::new("/fictional/provider"),"stu-session",&root.join("scope.json"));
+        let closed=Arc::new(AtomicBool::new(false));
+        assert!(StallWatch::start(Some(&profile),LeaseRole::Conversation,&environment,"rich-session",std::process::id(),Arc::clone(&closed)).unwrap().is_none());
+        let monitor=StallWatch::start(Some(&profile),LeaseRole::Work,&environment,"stu-session",std::process::id(),closed).unwrap().unwrap();
+        let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),entity_id:"company-a".into(),thread_id:"thread-a".into()};
+        // load-bound: hang guard only; the complete durable observation, never elapsed time, is the verdict.
+        let deadline=std::time::Instant::now()+Duration::from_secs(10);
+        let (message,through)=loop {
+            if let Some(message)=crate::session_tools::pending(&scope,"stu").unwrap() {break message}
+            assert!(std::time::Instant::now()<deadline,"monitor did not save its observation");
+            // load-bound: backoff only; the verdict is the complete saved block, with the separate deadline catching hangs.
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(message.from,"stall-watch");
+        assert!(message.instruction.is_none());
+        assert_eq!(message.text,format!("stu-session|company-a|thread-a|{}|{}\nSecond line",std::process::id(),profile.state.join("stall-watch").display()));
+        assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1,through,"saving is not receipt");
+        let other=crate::status_tools::StatusToolScope {thread_id:"thread-b".into(),..scope.clone()};
+        assert!(crate::session_tools::pending(&other,"stu").unwrap().is_none());
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none());
+        let StallWatch {_child:child,_output:output}=monitor;
+        drop(child);
+        output.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
 
     /// **SEAM 1.** The work lease's MCP config does not register `richos_continuity`, and
     /// the conversation lease's does.
