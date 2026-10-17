@@ -147,7 +147,7 @@ class DesktopHooks(unittest.TestCase):
         # Old saved metadata must not become a per-action grant either.
         for instruction in [None, stopped, {"ledger_ref":"ledger:thread:other", "sha256":"b" * 64}]:
             self.scope.write_text(json.dumps({**grant, "user_instruction":instruction}))
-            for tool, args in [("Bash", {"command":"true", "run_in_background":False}),
+            for tool, args in [("Bash", {"command":"true", "run_in_background":False, "timeout":30000, "description":"Unchanged command"}),
                                ("Write", {"file_path":str(self.coordination / "result.txt"), "content":"A continues"}),
                                ("Read", {"file_path":str(self.scope)}),
                                ("TaskOutput", {"task_id":"command-for-other-job", "block":False, "timeout":1000}),
@@ -155,10 +155,18 @@ class DesktopHooks(unittest.TestCase):
                                ("mcp__richos_questions__withdraw", {"question_id":"own-question", "reason":"Stopped"})]:
                 result = self.hook("PreToolUse", tool_name=tool, tool_use_id="direct-" + tool, tool_input=args)
                 self.assertEqual(result.returncode, 0, tool + result.stderr)
-                if result.stdout.strip():
-                    self.assertNotIn("updatedInput", json.loads(result.stdout).get("hookSpecificOutput", {}),
-                                     "the app must not rewrite Stu's native command")
+                output = json.loads(result.stdout).get("hookSpecificOutput", {}) if result.stdout.strip() else {}
+                if tool == "Bash":
+                    self.assertEqual(output.get("updatedInput"), {**args, "run_in_background":True},
+                                     "§129 changes only the native background option")
+                else:
+                    self.assertNotIn("updatedInput", output, "unrelated native arguments must stay unchanged")
         self.assertFalse((self.coordination / "result.txt").exists(), "the fixture only runs the production hook")
+        self.scope.write_text(json.dumps({**grant, "background_work_allowed":False}))
+        rich = self.hook("PreToolUse", tool_name="Bash", tool_use_id="rich-command", tool_input={"command":"true", "run_in_background":False})
+        self.assertEqual(rich.returncode, 0, rich.stderr)
+        rich_output = json.loads(rich.stdout).get("hookSpecificOutput", {}) if rich.stdout.strip() else {}
+        self.assertNotIn("updatedInput", rich_output, "§129 applies to Stu's commands")
 
 
 if __name__ == "__main__":
