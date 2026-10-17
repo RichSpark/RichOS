@@ -49,7 +49,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 /// r3 (q) item 4: a lead with nothing running is retired after this long idle.
-pub const LEAD_IDLE: Duration = Duration::from_secs(30 * 60);
 /// r3 (d) item 3: "Still ALIVE after 10 s: he hears so and the stop is sent once more."
 pub const STOP_WAIT: Duration = Duration::from_secs(10);
 /// (s) rule 1, verbatim from r3.
@@ -574,7 +573,6 @@ struct Conversation {
     awaiting: BTreeSet<String>,
     in_turn: bool,
     last_relay: Option<SystemTime>,
-    last_activity: Instant,
     texts: VecDeque<String>,
     /// The text of this turn's last report, for the B5 edge.
     turn_report: Option<String>,
@@ -756,7 +754,7 @@ impl OperatorHost {
         let first_after_resume = record.last_session.is_some();
         let conversation = Arc::new(Mutex::new(Conversation {
             key: key.clone(), title: title.to_string(), paths, lead: None, record, sent: HashMap::new(),
-            awaiting: BTreeSet::new(), in_turn: false, last_relay: None, last_activity: Instant::now(),
+            awaiting: BTreeSet::new(), in_turn: false, last_relay: None,
             texts: VecDeque::new(), turn_report: None, handle_agents: HashMap::new(), turn_handle: None, banner: None,
             pending_init: None, fences: Ok(()), checked: false, quitting: false, started_digest: String::new(), told_protocol: false, told_permission: false,
             first_after_resume, questions: Vec::new(), retry_starts: 0, opened_by: None,
@@ -933,7 +931,6 @@ impl OperatorHost {
         c.sent.insert(uuid.clone(), handle.map(str::to_string));
         c.awaiting.insert(uuid.clone());
         c.last_relay = Some(SystemTime::now());
-        c.last_activity = Instant::now();
         // Every untold held handle was named in this message (above), and it was written.
         c.record.untold.clear();
         if let Some(h) = handle {
@@ -1194,7 +1191,6 @@ impl OperatorHost {
             // item 5): every agent it starts from here is that assignment's.
             LeadEvent::Took(uuid) => {
                 let mut c = conversation.lock().unwrap();
-                c.last_activity = Instant::now();
                 if !c.in_turn {
                     c.opened_by = Some(uuid.clone());
                 }
@@ -1243,7 +1239,6 @@ impl OperatorHost {
             }
             LeadEvent::Agent(task) => {
                 let mut c = conversation.lock().unwrap();
-                c.last_activity = Instant::now();
                 c.opened_by = None; // an agent's frame proves a turn is running
                 c.in_turn = true;
                 if task.status == TaskStatus::Running {
@@ -1568,7 +1563,6 @@ impl OperatorHost {
         c.retry_starts = 0; // the lead works: an answer's retries may start it again
         // A turn completed after every answer it had taken: the lead has acted on them.
         self.close_answer_turns(&mut c);
-        c.last_activity = Instant::now();
         let key = c.key.clone();
         let deliver = end.text.filter(|t| last_report.as_deref().map(str::trim) != Some(t.trim()));
         if let Some(text) = &deliver {
@@ -1789,7 +1783,6 @@ impl OperatorHost {
                     Ok(uuid) => {
                         c.sent.insert(uuid.clone(), None);
                         c.awaiting.insert(uuid);
-                        c.last_activity = Instant::now();
                         true
                     }
                     Err(e) => {
@@ -1949,10 +1942,9 @@ impl OperatorHost {
         all.iter().filter(|c| c.lock().unwrap().lead.as_ref().is_some_and(|l| !l.exited())).count()
     }
 
-    /// (q) item 4: retire every lead with nothing running that has been idle `idle_after`, or
-    /// at once when its start-time snapshot is stale. Returns the conversations retired. The
+    /// Retire an idle lead only when its start-time rules snapshot is stale. The
     /// next message resumes each (r3 (l)).
-    pub fn retire_idle(&self, idle_after: Duration) -> Vec<ConversationKey> {
+    pub fn retire_idle(&self) -> Vec<ConversationKey> {
         let digest = snapshot_digest(&self.declaration);
         let leases = self.engine.held_leases();
         let all: Vec<Arc<Mutex<Conversation>>> = self.conversations.lock().unwrap().values().cloned().collect();
@@ -1961,7 +1953,7 @@ impl OperatorHost {
             let mut c = conversation.lock().unwrap();
             let Some(lead) = c.lead.clone() else { continue };
             let stale = c.started_digest != digest;
-            if c.in_turn || !c.awaiting.is_empty() || (!stale && c.last_activity.elapsed() < idle_after) {
+            if c.in_turn || !c.awaiting.is_empty() || !stale {
                 continue;
             }
             // Nothing running: no ALIVE (or undecided) agent, no live descendant outside the
@@ -2825,7 +2817,8 @@ pub(crate) mod tests {
         let paths = ConversationPaths::under(&r.root.join("operator"), &key("a"));
         std::fs::write(&paths.reap_state, r#"{"outside_provider_group": []}"#).unwrap();
         r.engine.not_alive.lock().unwrap().clear();
-        assert_eq!(r.host.retire_idle(Duration::ZERO), [key("a")], "retired idle, never held by the drop");
+        std::fs::write(r.declaration.entity_root.join("CLAUDE.md"), "rules updated after the drop\n").unwrap();
+        assert_eq!(r.host.retire_idle(), [key("a")], "stale idle lead retired, never held by the drop");
         // A drop inside a turn that was already running leaves that turn running.
         r.host.relay(&key("a"), "A", Some("h-2"), "go", Origin::DeskTyped).unwrap();
         r.host.handle(&key("a"), LeadEvent::Took("u-1".into()));
@@ -3615,21 +3608,21 @@ pub(crate) mod tests {
         r.host.relay(&key("a"), "A", None, "go", Origin::DeskTyped).unwrap();
         let state = ConversationPaths::under(&r.root.join("operator"), &key("a")).reap_state;
         // A message is awaiting its turn: not idle.
-        assert!(r.host.retire_idle(Duration::ZERO).is_empty());
+        assert!(r.host.retire_idle().is_empty());
+        std::fs::write(r.declaration.entity_root.join("CLAUDE.md"), "rules changed while busy\n").unwrap();
         r.host.handle(&key("a"), turn(&["u-1"], Some("ok")));
         // No snapshot yet: undecided, not idle.
-        assert!(r.host.retire_idle(Duration::ZERO).is_empty());
+        assert!(r.host.retire_idle().is_empty());
         std::fs::write(&state, json!({"outside_provider_group": [4242]}).to_string()).unwrap();
-        assert!(r.host.retire_idle(Duration::ZERO).is_empty(), "a background command outside the lead's group runs");
+        assert!(r.host.retire_idle().is_empty(), "a background command outside the lead's group runs");
         std::fs::write(&state, json!({"outside_provider_group": []}).to_string()).unwrap();
         r.engine.leases.lock().unwrap().push("land-lease: repository /r; lease live, held by the conversation \"A\" for 2 min; at rest.".into());
-        assert!(r.host.retire_idle(Duration::ZERO).is_empty(), "a land lease held by this conversation");
+        assert!(r.host.retire_idle().is_empty(), "a land lease held by this conversation");
         r.engine.leases.lock().unwrap().clear();
         agent(&lead_of(&r, "a"), "t-a", "still-alive", "task-a");
-        assert!(r.host.retire_idle(Duration::ZERO).is_empty(), "an ALIVE agent of the lead");
+        assert!(r.host.retire_idle().is_empty(), "an ALIVE agent of the lead");
         r.engine.not_alive.lock().unwrap().insert("task-a".into());
-        assert!(r.host.retire_idle(Duration::from_secs(3600)).is_empty(), "not idle long enough, snapshot fresh");
-        assert_eq!(r.host.retire_idle(Duration::ZERO), [key("a")]);
+        assert_eq!(r.host.retire_idle(), [key("a")]);
         let first = lead_of(&r, "a");
         assert_eq!(*first.quits.lock().unwrap(), 1, "by the quit path");
         r.host.relay(&key("a"), "A", None, "again", Origin::DeskTyped).unwrap();
@@ -3644,9 +3637,9 @@ pub(crate) mod tests {
         r.host.handle(&key("a"), turn(&["u-1"], Some("ok")));
         let state = ConversationPaths::under(&r.root.join("operator"), &key("a")).reap_state;
         std::fs::write(&state, json!({"outside_provider_group": []}).to_string()).unwrap();
-        assert!(r.host.retire_idle(Duration::from_secs(3600)).is_empty());
+        assert!(r.host.retire_idle().is_empty());
         std::fs::write(r.declaration.entity_root.join("CLAUDE.md"), "rules, edited\n").unwrap();
-        assert_eq!(r.host.retire_idle(Duration::from_secs(3600)), [key("a")]);
+        assert_eq!(r.host.retire_idle(), [key("a")]);
     }
 
     #[test]

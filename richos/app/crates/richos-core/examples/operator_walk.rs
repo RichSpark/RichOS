@@ -507,7 +507,7 @@ fn host(data: &Path, _driver_state: &Path, root: &Path) -> Result<(), String> {
                        "descendants": reading.descendants, "descendants_unknown": reading.descendants_unknown,
                        "liveness": format!("{liveness:?}"), "sentence": sentence, "quit_sheet": quit_sheet})
             }
-            "retire" => json!({"retired": app.desk.retire_idle_now(Duration::from_secs(v["idle_seconds"].as_u64().unwrap_or(0)))
+            "retire" => json!({"retired": app.desk.retire_idle_now()
                 .iter().map(|k| app.names.lock().unwrap().by_id.get(&k.thread_id).cloned().unwrap_or_else(|| k.thread_id.clone()))
                 .collect::<Vec<_>>()}),
             "take" => match &thread_id {
