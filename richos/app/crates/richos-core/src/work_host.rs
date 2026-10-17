@@ -23,6 +23,12 @@ pub trait AnsweredClose: Send + Sync {
 pub type LeadSink<'a> = &'a dyn Fn(&crate::questions::Delivery) -> Result<String, String>;
 pub const ROTATION_WAITS_FOR_COMMANDS: std::time::Duration = std::time::Duration::from_secs(600);
 
+#[derive(Clone)]
+enum InputReceipt { Peer(u64), Answer(String) }
+impl InputReceipt {
+    fn input_id(&self)->String {match self {Self::Peer(through)=>format!("peer:{through}"),Self::Answer(id)=>format!("answer:{id}")}}
+}
+
 #[derive(Default)]
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
@@ -117,7 +123,7 @@ impl WorkHost {
     }
 
     fn live_completion(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
-        message: crate::session_tools::Message, delivered: (u64, Option<String>), text: String,
+        message: crate::session_tools::Message, delivered: (InputReceipt, Option<String>), text: String,
     ) -> Box<dyn FnOnce(crate::steering::InputOutcome) + Send> {
         let host = Arc::downgrade(self);
         let receiving = Arc::downgrade(backend);
@@ -125,12 +131,16 @@ impl WorkHost {
         Box::new(move |outcome| {
             let Some(host) = host.upgrade() else { return };
             let Some(backend) = receiving.upgrade() else { return };
-            let (through, session) = delivered;
+            let (input, session) = delivered;
+            let input_id=input.input_id();
             let scope = host.message_scope(&binding);
-            let receipt = if outcome.result.as_ref().is_ok_and(|reason| reason == "end_turn") {
-                crate::session_tools::acknowledge(&scope, "stu", through)
-            } else {
-                crate::session_tools::accept_live_handoff(&scope, "stu", through)
+            let succeeded=outcome.result.as_ref().is_ok_and(|reason| reason=="end_turn");
+            let receipt = match &input {
+                InputReceipt::Peer(through) if succeeded=>crate::session_tools::acknowledge(&scope,"stu",*through),
+                InputReceipt::Peer(through)=>crate::session_tools::accept_live_handoff(&scope,"stu",*through),
+                InputReceipt::Answer(id) if succeeded=>crate::question_work::taken(&host.state,std::slice::from_ref(id),session.as_deref().unwrap_or(""))
+                    .and_then(|_|crate::session_tools::complete_attempt(&scope,"stu",&input_id)),
+                InputReceipt::Answer(_)=>Ok(()),
             };
             if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
             if outcome.report_failure {
@@ -142,6 +152,8 @@ impl WorkHost {
                     let retry_message = message.clone();
                     let retry_session = session.clone();
                     let original_error = outcome.result.clone();
+                    let retry_receipt=input.clone();
+                    let retry_input_id=input_id.clone();
                     let retry = std::thread::Builder::new().name("richos-stu-overload".into()).spawn(move || {
                         let (Some(host), Some(backend)) = (retry_host.upgrade(), retry_backend.upgrade()) else { return };
                         let owner = retry_session.as_deref().unwrap_or("");
@@ -152,11 +164,11 @@ impl WorkHost {
                         let input = backend.inner.lock().unwrap().peer_stopper.clone()
                             .filter(|(session, _)| session == owner).map(|(_, input)| input);
                         let completed = host.live_completion(&backend, &retry_binding, retry_message.clone(),
-                            (through, retry_session.clone()), text.clone());
+                            (retry_receipt, retry_session.clone()), text.clone());
                         let sent = input.map(|input|input.send_input(&uuid::Uuid::new_v4().to_string(), &text, completed));
                         if !matches!(sent, Some(Ok(true))) {
                             if let Err(error) = host.observe_turn_result(&retry_binding, Some(&retry_message),
-                                Some(&format!("peer:{through}")), owner, &original_error) {
+                                Some(&retry_input_id), owner, &original_error) {
                                 eprintln!("[richos] native input status: {error}");
                             }
                         }
@@ -164,7 +176,7 @@ impl WorkHost {
                     if retry.is_ok() { backend.wake.notify_all(); return; }
                 }
                 if let Err(error) = host.observe_turn_result(&binding, Some(&message),
-                    Some(&format!("peer:{through}")), session.as_deref().unwrap_or(""), &outcome.result) {
+                    Some(&input_id), session.as_deref().unwrap_or(""), &outcome.result) {
                     eprintln!("[richos] native input status: {error}");
                 }
             }
@@ -249,6 +261,31 @@ impl WorkHost {
         let Some(input) = input else { return };
         let scope = self.message_scope(binding);
         let result = (|| {
+            if let Some(session)=session.as_deref() {
+                for answer in crate::question_work::pending(&self.state)?.into_iter().filter(|answer|
+                    !answer.asker.starts_with("operator:") && answer.entity_id==binding.entity_id().as_str() && answer.thread_id==binding.thread_id()) {
+                    let input_id=format!("answer:{}",answer.id);
+                    if crate::session_tools::previous_attempt(&scope,"stu",&input_id)?.as_ref()
+                        .and_then(|attempt|attempt["session_id"].as_str())==Some(session) {continue}
+                    let instruction=self.question_answer_instruction(&answer)?;
+                    let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:answer.text.clone(),instruction,work:None};
+                    let text=serde_json::to_string(&message).map_err(|e|e.to_string())?;
+                    use sha2::Digest;
+                    let digest=sha2::Sha256::digest(format!("{}\0{}\0{input_id}",scope.entity_id,scope.thread_id));
+                    let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
+                    crate::session_tools::begin_attempt(&scope,"stu",&input_id,session)?;
+                    let completed=self.live_completion(&backend,binding,message.clone(),
+                        (InputReceipt::Answer(answer.id.clone()),Some(session.to_string())),text.clone());
+                    match input.send_input(&id,&text,completed) {
+                        Ok(true)=>{},
+                        Ok(false)=>{crate::session_tools::complete_attempt(&scope,"stu",&input_id)?;return Ok(())},
+                        Err(error)=>{
+                            self.observe_turn_result(binding,Some(&message),Some(&input_id),session,&Err(error.clone()))?;
+                            return Err(error);
+                        }
+                    }
+                }
+            }
             let mut after = after;
             loop {
             let (mut message, through) = loop {
@@ -282,7 +319,7 @@ impl WorkHost {
                 crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),session)?;
             }
             let completed = self.live_completion(&backend, binding, message.clone(),
-                (through, session.clone()), text.clone());
+                (InputReceipt::Peer(through), session.clone()), text.clone());
             let delivered = match input.send_input(&id, &text, completed) {
                 Ok(delivered)=>delivered,
                 Err(error)=>{
@@ -418,14 +455,16 @@ impl WorkHost {
             let mut published = false;
             let result = loop {
                 let mut said = String::new();
-                let mut sent = lease.prompt(&input, &mut |item| {
+                let mut sent=lease.enqueue_prompt(&input,Box::new(||Ok(()))).and_then(|reply| {
                     if !published {
-                        published = true;
-                        self.publish_peer_input(backend, binding);
+                        published=true;
+                        self.publish_peer_input(backend,binding);
                     }
-                    if let TurnItem::Text { text, .. } = item {
-                        if said.len() < 64 * 1024 { said.push_str(text); }
-                    }
+                    reply.wait(&mut |item| {
+                        if let TurnItem::Text {text,..}=item {
+                            if said.len()<64*1024 {said.push_str(text);}
+                        }
+                    })
                 });
                 if let Some(failure) = crate::upstream::UpstreamFailure::classify_lines(&said)
                     .filter(|failure|failure.fault == crate::upstream::UpstreamFault::Overloaded) {
@@ -437,9 +476,10 @@ impl WorkHost {
                 if !clock.wait(wait, &||self.retry_stopped(backend, binding, message, &session)) { break sent; }
             };
             {
-                let mut inner = backend.inner.lock().unwrap();
-                inner.peer_input = None;
-                inner.cancel = None;
+                let _delivery=backend.live_delivery.lock().unwrap();
+                let mut inner=backend.inner.lock().unwrap();
+                inner.peer_input=None;
+                inner.cancel=None;
             }
             if matches!(&result, Err(CognitionError::Io(_))) {
                 drop(guard.take());
@@ -874,7 +914,7 @@ impl WorkHost {
             .backend_for(binding.thread_id())
             .ok_or("RichOS is closing")?;
         backend.inner.lock().unwrap().binding = Some(binding.clone());
-        backend.wake.notify_all();
+        self.wake_messages(binding);
         Ok(format!("work-input:{}", delivery.id))
     }
 
@@ -1522,7 +1562,7 @@ mod tests {
         let native = Arc::new(NativeInput { calls:calls.clone(), finished });
         backend.inner.lock().unwrap().peer_stopper = Some((session.clone(), native.clone()));
         let completed = h.host.live_completion(&backend, &h.binding, message,
-            (through, Some(session)), "Original live input".into());
+            (InputReceipt::Peer(through), Some(session)), "Original live input".into());
         let (returned, reader_returned) = mpsc::channel();
         let reader = std::thread::spawn(move || {
             completed(crate::steering::InputOutcome { result:Err("API Error: 529 Overloaded.".into()), report_failure:true });
@@ -2041,6 +2081,83 @@ mod tests {
             .unwrap()
             .is_none());
         h.host.shutdown();
+    }
+
+    #[test]
+    fn peer_input_and_question_answer_reach_stu_before_his_first_output_or_result() {
+        type Delivery=(String,Box<dyn FnOnce(crate::steering::InputOutcome)+Send>);
+        struct Input(std::sync::mpsc::Sender<Delivery>);
+        impl TurnCancel for Input {
+            fn cancel(&self)->bool {false}
+            fn send_input(&self,_:&str,text:&str,completed:Box<dyn FnOnce(crate::steering::InputOutcome)+Send>)->Result<bool,String> {
+                self.0.send((text.to_string(),completed)).map_err(|e|e.to_string())?;
+                Ok(true)
+            }
+        }
+        struct Early {
+            input:Arc<Input>,
+            entered:std::sync::mpsc::Sender<()>,
+            release:Option<std::sync::mpsc::Receiver<()>>,
+        }
+        impl Cognition for Early {
+            fn session_id(&self)->&str {"early-native-stu"}
+            fn cancel_handle(&self)->Option<Arc<dyn TurnCancel>> {Some(self.input.clone())}
+            fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {panic!("submit must precede reply waiting")}
+            fn enqueue_prompt(&mut self,_:&str,started:Box<dyn FnOnce()->Result<(),String>+Send>)->Result<crate::cognition::PendingReply,CognitionError> {
+                started().map_err(CognitionError::Protocol)?;
+                self.entered.send(()).unwrap();
+                let release=self.release.take().unwrap();
+                Ok(crate::cognition::PendingReply::new(move |_| {
+                    // load-bound: a positive release owns the answer; this deadline only catches a hang.
+                    release.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+                    Ok("end_turn".into())
+                }))
+            }
+        }
+        struct Factory(Mutex<Option<Early>>);
+        impl LeaseFactory for Factory {
+            fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+            fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+                Ok(Box::new(self.0.lock().unwrap().take().expect("Stu must keep one native session")))
+            }
+        }
+        let h=harness(0);
+        let (sent,received)=std::sync::mpsc::channel();
+        let (entered,ready)=std::sync::mpsc::channel();
+        let (release,waiting)=std::sync::mpsc::channel();
+        let host=WorkHost::new(&h.state,Box::new(Factory(Mutex::new(Some(Early {
+            input:Arc::new(Input(sent)),entered,release:Some(waiting),
+        })))),Arc::new(SilentNotifier));
+        let scope=host.message_scope(&h.binding);
+        let path=h.state.join("early-rich.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"First input"})).unwrap();
+        host.wake_messages(&h.binding);
+        // load-bound: only a hang guard; the first reply cannot finish before release is sent.
+        ready.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        until("Stu's input handle waited for output",||host.backend("thread-one").unwrap().inner.lock().unwrap().peer_input.is_some());
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Correction before any output"})).unwrap();
+        host.wake_messages(&h.binding);
+        // load-bound: wait for the actual submitted input, with the first reply still held.
+        let (peer,complete_peer)=received.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        assert!(peer.contains("Correction before any output"));
+        let answer=crate::questions::Delivery {obligation_id:None,id:"early-answer".into(),entity_id:"depot".into(),
+            thread_id:"thread-one".into(),asker:"stu".into(),set_id:None,text:"Use Friday".into(),receipt:None};
+        host.queue_question_answer(&h.binding,&answer).unwrap();
+        // load-bound: a submitted answer is the verdict; the first result remains impossible until release.
+        let (text,complete_answer)=received.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        assert!(text.contains("Use Friday"));
+        host.wake_messages(&h.binding);
+        assert!(received.try_recv().is_err(),"a repeated wake duplicated native input");
+        assert!(crate::question_work::waiting(&h.state,&answer.id),"stdin submission falsely marked the answer taken");
+        complete_peer(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
+        complete_answer(crate::steering::InputOutcome{result:Ok("end_turn".into()),report_failure:true});
+        assert!(!crate::question_work::waiting(&h.state,&answer.id));
+        release.send(()).unwrap();
+        assert!(host.wait_for_completed(1,std::time::Duration::from_secs(30)));
+        host.shutdown();
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]
