@@ -470,6 +470,24 @@ fn a_lease_registers_the_always_active_and_the_users_team_and_drops_what_is_no_l
         assert!(!registered(&first).contains(&name) && !on_roster().contains(&name), "{name} is on the shelf");
     }
 
+    // The same live plugin and guard roster accept a new hire without another profile.
+    std::fs::write(team.join("fresh.md"), "---\nname: fresh\nmodel: sonnet\n---\nFictional newly hired teammate.\n").unwrap();
+    let reloaded=first.refresh_team().unwrap();
+    assert!(reloaded.contains(&"richos-app-engine:fresh".to_string()));
+    assert!(registered(&first).contains(&"fresh".to_string()));
+    assert_eq!(std::fs::read(first.plugin.join("agents/fresh.md")).unwrap(),std::fs::read(team.join("fresh.md")).unwrap());
+    let loaded_mark=std::fs::read(first.plugin.join("agents/mark.md")).unwrap();
+    let revised_mark="---\nname: mark\nmodel: opus\n---\nRevised definition for the next Stu session.\n";
+    std::fs::write(team.join("mark.md"),revised_mark).unwrap();
+    first.refresh_team().unwrap();
+    assert_eq!(std::fs::read(first.plugin.join("agents/mark.md")).unwrap(),loaded_mark,"a saved revision must not change a loaded definition");
+    let later=prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(std::fs::read_to_string(later.plugin.join("agents/mark.md")).unwrap(),revised_mark);
+    std::fs::remove_file(team.join("fresh.md")).unwrap();
+    first.refresh_team().unwrap();
+    assert!(!first.plugin.join("agents/fresh.md").exists());
+    assert!(!roster.join("fresh.md").exists());
+
     // Mark is retired and a stale file from an older lease sits on the roster: the next lease
     // drops both and falls back to the stock Dean once the user's refit is gone.
     std::fs::remove_file(team.join("mark.md")).unwrap();

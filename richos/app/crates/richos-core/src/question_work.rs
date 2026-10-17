@@ -161,7 +161,7 @@ pub fn discard(root: &Path, entity: &str, thread: &str, asker: &str) -> Result<(
     let mut untaken = Vec::new();
     for mut input in all(root)? {
         let d = &input.delivery;
-        if d.entity_id != entity || d.thread_id != thread || d.asker != asker || input.discarded {
+        if d.entity_id != entity || d.thread_id != thread || (d.asker != asker && d.obligation_id.as_deref() != Some(asker)) || input.discarded {
             continue;
         }
         let path = path(root, &d.id);
@@ -186,7 +186,7 @@ pub fn waiting(root: &Path, id: &str) -> bool {
 
 /// Is one of his answers for this asker saved and not yet taken? Recovery reads this (D6).
 pub fn untaken(root: &Path, entity: &str, thread: &str, asker: &str) -> Result<bool, String> {
-    Ok(pending(root)?.iter().any(|d| d.entity_id == entity && d.thread_id == thread && d.asker == asker))
+    Ok(pending(root)?.iter().any(|d| d.entity_id == entity && d.thread_id == thread && (d.asker == asker || d.obligation_id.as_deref() == Some(asker))))
 }
 
 /// The complete MCP result is the receiving input for a words answer. Keep it

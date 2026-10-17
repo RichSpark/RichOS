@@ -1,19 +1,5 @@
-//! **WORK HE GIVES ALOUD OR FROM THE PHONE STARTS LIKE TYPED WORK** — the shell's turn
-//! boundary, entrance by entrance.
-//!
-//! CEO ruling §88: *"The user should be able to answer on their phone just as well as they
-//! can answer on the desktop app."* Until 2026-09-26 only `send_message` adopted the work Rich
-//! wrote down during a turn; a spoken turn and the phone's drain adopted nothing, so an
-//! assignment he gave either way sat `Registered` until he next typed
-//! (esc-20260926T083231Z-23865924).
-//!
-//! The fixture is the real pair: a real `Spine` over a real ledger, and a real `WorkHost` over
-//! a state directory beside it, exactly as `main.rs` lays them out (`<data>/conversation-
-//! ledger.jsonl`, `<data>/engine-state`). The conversation's lease does what the real one does
-//! when Rich calls `richos_assignments.record`: it writes a `Registered` assignment, scoped by
-//! the host to the turn he gave it in, and ends the turn on the receipt. The work host's
-//! factory records every work lease it is asked for, which is the moment the assignment has
-//! left `Registered` and is running — and then refuses, so nothing real is started.
+//! Typed, spoken and phone handoffs wake Stu through the same durable peer inbox.
+//! Writing an operational assignment is not a second dispatch channel.
 
 use super::*;
 use richos_core::assignment::{self, AssignmentState, Registration};
@@ -43,12 +29,13 @@ impl Cognition for WritesItDown {
     fn prepare_work_turn(
         &mut self,
         binding: &ThreadBinding,
-        turn: &str,
+        _turn: &str,
+        original_turn: &str,
         _source: Source,
         text: &str,
         _on_item: &mut dyn FnMut(TurnItem),
     ) -> Result<(), CognitionError> {
-        self.scope = Some((binding.clone(), turn.to_string(), text.to_string()));
+        self.scope = Some((binding.clone(), original_turn.to_string(), text.to_string()));
         Ok(())
     }
     fn prompt(&mut self, _: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
@@ -65,6 +52,11 @@ impl Cognition for WritesItDown {
             needs_screen: false,
         };
         assignment::register(&self.state, &request).map_err(|e| CognitionError::Protocol(e.to_string()))?;
+        let scope=richos_core::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),
+            entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
+        let path=self.state.join(format!("{}-status.json",binding.thread_id()));
+        richos_core::session_tools::bind(&path,&scope,"writes-it-down","rich",None).map_err(CognitionError::Protocol)?;
+        richos_core::session_tools::send(&path,&scope,serde_json::json!({"text":request.title})).map_err(CognitionError::Protocol)?;
         on_item(TurnItem::Text { seq: 0, text: "On it!" });
         Ok("end_turn".into())
     }
@@ -89,7 +81,7 @@ impl LeaseFactory for RecordsWorkStarts {
     }
     fn spawn_work(&self, binding: &ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
         self.0.lock().unwrap().push(binding.thread_id().to_string());
-        Err(CognitionError::Protocol("the test opens no work lease".into()))
+        Ok(Box::new(richos_core::cognition::MockCognition::new("independent-stu", vec![])))
     }
 }
 
@@ -198,14 +190,14 @@ fn work_he_gives_from_the_phone_starts_without_a_typed_message() {
 /// the spine, with no boundary, leaves the task `Registered` and nothing asked for: the host
 /// has no timer that would have picked it up, so the two tests above are measuring the door.
 #[test]
-fn without_the_boundary_the_task_stays_registered_and_the_door_starts_it() {
+fn the_boundary_wakes_peer_input_without_dispatching_the_record() {
     let mac = a_mac("door");
     let mut spine = mac.spine.lock().unwrap();
     spine.submit_prompt_spoken(HIS_TASK, Source::Jam, false).unwrap();
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(mac.states(&mac.shown), vec![AssignmentState::Registered]);
     assert!(mac.started.lock().unwrap().is_empty(), "nothing may start work but a turn boundary");
-    assert_eq!(adopt_at_the_turn_boundary(spine, &mac.work), 1);
+    assert_eq!(adopt_at_the_turn_boundary(spine, &mac.work), 0, "records never independently dispatch");
     assert!(mac.work_started_on(&mac.shown, Duration::from_secs(10)));
     mac.finish();
 }

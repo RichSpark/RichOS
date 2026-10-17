@@ -3577,7 +3577,7 @@
                 "path from the top of the disk. Give me a folder that's already on this Mac, " +
                 "or leave it blank: a company works without one."
             );
-          entities.push({ id, display_name: displayName, status: "active", roots: folder ? [folder] : [] });
+          entities.push({ id, display_name: displayName, status: "active", roots: folder ? [folder] : [], connected_repositories: folder ? [folder] : [] });
           // The real command makes the first company the one in force and opens a thread in
           // it — only when nothing has been chosen and the environment has not decided.
           if (!chosenEntityId && !entityPinnedByEnvironment) {

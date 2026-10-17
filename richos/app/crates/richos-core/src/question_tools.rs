@@ -48,11 +48,31 @@ pub fn tools() -> Value {
     let option = json!({"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label","description"],"additionalProperties":false});
     let question = json!({"type":"object","properties":{"text":{"type":"string"},"options":{"type":"array","minItems":2,"maxItems":4,"items":option},"multiple":{"type":"boolean"},"free_answer":{"type":"boolean"},"recommended":{"type":"integer","minimum":0,"maximum":3}},"required":["text","options"],"additionalProperties":false});
     json!({"tools":[
-        {"name":"ask","description":"Save questions with two to four spoken-safe options. Returns the saved records immediately; answers arrive separately.","inputSchema":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":question}},"required":["questions"],"additionalProperties":false}},
+        {"name":"ask","description":"Save questions with two to four spoken-safe options. Returns immediately; answers arrive separately. For a job question, supply its real obligation_id. Omit it for a conversation question.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"questions":{"type":"array","minItems":1,"maxItems":4,"items":question}},"required":["questions"],"additionalProperties":false}},
         {"name":"withdraw","description":"Withdraw one of the current agent's open questions with a recorded reason.","inputSchema":{"type":"object","properties":{"question_id":{"type":"string"},"reason":{"type":"string"}},"required":["question_id","reason"],"additionalProperties":false}},
         {"name":"answer","description":"Record the user's typed or spoken answer using app option ids. Available to the front desk. Returns the complete resolved set, including earlier taps.","inputSchema":{"type":"object","properties":{"question_id":{"type":"string"},"client_id":{"type":"string"},"option_ids":{"type":"array","items":{"type":"string"}},"text":{"type":"string"},"expected_revision":{"type":"integer"}},"required":["question_id","client_id"],"additionalProperties":false}}
     ]})
 }
+/// Recipient and execution owner differ for Stu's standing session.
+fn owned_context(context: &AskScope, selected: Option<&str>) -> Result<AskScope, String> {
+    let mut context=context.clone();
+    if context.asker != "stu" {
+        if selected.is_some() { return Err("Only Stu selects a background assignment.".into()); }
+        return Ok(context);
+    }
+    let Some(selected)=selected else { return Ok(context); };
+    let records=crate::assignment::read_all(&context.root,&context.entity_id,&context.thread_id).map_err(|e|e.to_string())?;
+    let matches:Vec<_>=records.into_iter().filter(|record|record.obligation_id==selected).collect();
+    if matches.len()!=1 {
+        return Err("Select the actual obligation_id for this question.".into());
+    }
+    if let Some(record)=matches.first() {
+        if record.user_stop_requested_at_ms.is_some() {return Err("The user stopped this assignment.".into());}
+        context.obligation_id=Some(record.obligation_id.clone());
+    }
+    Ok(context)
+}
+
 pub fn call(path: &Path, name: &str, args: Value) -> Result<Value, String> {
     let scope = read_scope(path)?;
     if !scope.actions_allowed {
@@ -64,7 +84,7 @@ pub fn call(path: &Path, name: &str, args: Value) -> Result<Value, String> {
         .as_object()
         .ok_or("Tool arguments must be an object.")?;
     let allowed: &[&str] = match name {
-        "ask" => &["questions"],
+        "ask" => &["questions", "obligation_id"],
         "withdraw" => &["question_id", "reason"],
         "answer" => &[
             "question_id",
@@ -83,7 +103,8 @@ pub fn call(path: &Path, name: &str, args: Value) -> Result<Value, String> {
             let qs: Vec<QuestionInput> =
                 serde_json::from_value(args.get("questions").cloned().ok_or("Supply questions.")?)
                     .map_err(|e| e.to_string())?;
-            let questions = store.ask(s, qs)?;
+            let context=owned_context(s,args.get("obligation_id").map(|id|id.as_str().ok_or("Invalid obligation_id.")).transpose()?)?;
+            let questions = store.ask(&context, qs)?;
             Ok(
                 json!({"recorded":true,"questions":questions,"answer_delivery":"later_turn"}),
             )
@@ -148,8 +169,9 @@ pub fn convert_vendor_scoped(context: &AskScope, input: &Value) -> Result<Value,
     let questions = input["questions"].as_array().ok_or("Supply questions.")?;
     let mapped:Vec<_>=questions.iter().map(|q|json!({"text":q["question"],"options":q["options"],"multiple":q["multiSelect"].as_bool().unwrap_or(false)})).collect();
     let inputs = serde_json::from_value(json!(mapped)).map_err(|e| e.to_string())?;
+    let context=owned_context(context,None)?;
     let questions = Store::new(&context.root).ask_bounded(
-        context,
+        &context,
         inputs,
         std::time::Duration::from_millis(800),
     )?;

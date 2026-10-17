@@ -9,7 +9,7 @@ impl Fixture {
     fn new() -> Self {
         let root =
             std::env::temp_dir().join(format!("richos-questions-test-{}", uuid::Uuid::new_v4()));
-        let scope = AskScope {
+        let scope = AskScope { obligation_id:None,
             root: root.clone(),
             entity_id: "entity".into(),
             thread_id: "thread".into(),
@@ -452,6 +452,27 @@ fn a_job_that_ends_before_the_taker_has_the_answer_marks_the_card() {
         f.store.close("entity", "thread", Some(asker), "The assignment was stopped", false).unwrap();
         richos_core::question_work::discard(&f.root, "entity", "thread", asker).unwrap();
     };
+
+    // Independent Stu owns two jobs; a Stop must select ownership, not the recipient.
+    f.scope.asker="stu".into();
+    f.scope.obligation_id=Some("independent-A".into());
+    let open_a=f.ask(1).remove(0);
+    let queued_a=f.ask(1).remove(0);
+    f.answer(&queued_a,"independent-answer-A",0,None);
+    f.scope.obligation_id=Some("independent-B".into());
+    let open_b=f.ask(1).remove(0);
+    let queued_b=f.ask(1).remove(0);
+    f.answer(&queued_b,"independent-answer-B",1,None);
+    inbox(&f,"stu");
+    end(&f,"independent-A");
+    assert_eq!(card(&f,&open_a.id).state,State::Withdrawn);
+    assert_eq!(card(&f,&open_b.id).state,State::Open);
+    let pending=richos_core::question_work::pending(&f.root).unwrap();
+    assert!(!pending.iter().any(|d|d.set_id.as_deref()==Some(&queued_a.set_id)));
+    assert!(pending.iter().any(|d|d.set_id.as_deref()==Some(&queued_b.set_id)));
+    assert!(card(&f,&queued_a.id).ended_before_taken);
+    assert!(!card(&f,&queued_b.id).ended_before_taken);
+    f.scope.obligation_id=None;
 
     // Stopped while his answer sat in the inbox, untaken.
     f.scope.asker = "work-1".into();

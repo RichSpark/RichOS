@@ -251,6 +251,19 @@ impl TaskBook {
         }
     }
 
+    /// Native task identity for one tool call, including calls without a model-supplied name.
+    pub fn task_for_tool(&self, tool: &str) -> Option<String> {
+        let mut tasks = self.task_tool.iter().filter(|(_, id)| id.as_str() == tool).map(|(task, _)| task);
+        let task = tasks.next()?.clone();
+        if tasks.next().is_some() { return None; }
+        Some(task)
+    }
+
+    pub fn task_ended(&self, task: &str) -> bool {
+        self.early_status.get(task).is_some_and(|status| !status.is_running())
+            || self.agents.iter().any(|row| row.task_id == task && !row.status.is_running())
+    }
+
     /// The latest row for `name`, which is the one a stop means.
     pub fn latest(&self, name: &str) -> Option<&AgentTask> {
         self.agents.iter().rev().find(|a| a.name == name)

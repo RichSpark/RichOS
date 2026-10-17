@@ -42,6 +42,114 @@ def _alive(pid):
 DUTY_TOP={"worker":"# Your duty in this assignment: implement","reviewer":"# Your duty in this assignment: review"}
 
 class DesktopWork(unittest.TestCase):
+    def test_independent_stu_cannot_mark_unresolved_execution_failed(self):
+        self.call("prepare",self.args)
+        with self.assertRaisesRegex(ValueError,"unresolved execution"):
+            self.call("report",{"obligation_id":"fixture-task","state":"failed","detail":"Cannot finish"})
+        self.assertEqual(self.call("inspect")["records"][0]["status"],"prepared")
+
+    def test_independent_stu_closes_reviewed_work_and_an_answer_on_their_own_records(self):
+        words={"fixture-task":"Create the fictional result without publication.","answer-task":"What is five plus five?"}
+        identity=json.dumps(["depot","thread-a"],separators=(",", ":"))
+        root=self.root/"engine-state/assignments"/hashlib.sha256(identity.encode()).hexdigest();root.mkdir(parents=True)
+        rows=[]
+        for obligation,text in words.items():
+            ref="ledger:thread-a:"+obligation
+            row={"schema":1,"id":obligation,"entity_id":"depot","thread_id":"thread-a","obligation_id":obligation,"instruction_ledger_ref":ref,"instruction_sha256":hashlib.sha256(text.encode()).hexdigest(),"state":"registered","detail":"Registered","work_session":None,"updated_at_ms":0}
+            (root/(obligation+".json")).write_text(json.dumps(row))
+            rows.append({"event":"PromptReceived","turn_id":obligation,"entity_id":"depot","thread_id":"thread-a","source":"text","text":text})
+        (self.root/"conversation-ledger.jsonl").write_text("".join(json.dumps(row)+"\n" for row in rows))
+        seat="stu-thread:thread-a";self.scope["binding"]=self.bind_seat(seat,"peer:current",audience="rich",session=self.session);self.scope["seat"]=seat
+        self.scope_path.write_text(json.dumps(self.scope))
+        self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],"request_id":"answer-job","checkpoint":{"statements":[{"verb":"open_loop","fields":{"id":"answer-task","title":"A question"}}]}})
+        self.assertEqual(self.call("report",{"obligation_id":"fixture-task","state":"running","detail":"Working on the requested result"})["state"],"running")
+        pair=self.reviewed_pair("independent-lifecycle")
+        saved=root/"fixture-task.json"
+        self.assertEqual(json.loads(saved.read_text())["detail"],"Working on the requested result")
+        before=saved.read_bytes();self.call("inspect")
+        self.assertEqual(saved.read_bytes(),before,"inspection fabricated new activity")
+        with self.assertRaisesRegex(ValueError,"implementation work"):
+            self.call("complete",{"obligation_id":"fixture-task","answer":"It is done"})
+        self.call("integrate",pair)
+        result=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[pair["worker_id"]]})
+        self.assertTrue(result["obligation_closed"])
+        self.assertFalse(result["published"])
+        answer=self.call("complete",{"obligation_id":"answer-task","answer":"Five plus five is ten."})
+        self.assertTrue(answer["obligation_closed"])
+        for obligation in words:
+            self.assertEqual(json.loads((root/(obligation+".json")).read_text())["state"],"settled")
+        self.assertFalse((self.root/"engine-state/messages").exists(),"operational completion manufactured a peer report")
+
+    def test_selected_assignment_keeps_its_original_request_after_another_peer_input(self):
+        words="Create the original result. Keep it private."
+        other="A different request with different constraints."
+        first_ref="ledger:thread-a:turn-a"
+        identity=json.dumps(["depot","thread-a"],separators=(",", ":"))
+        folder=self.root/"engine-state/assignments"/hashlib.sha256(identity.encode()).hexdigest();folder.mkdir(parents=True)
+        (folder/"original.json").write_text(json.dumps({"schema":1,"id":"original","entity_id":"depot","thread_id":"thread-a","obligation_id":"fixture-task","instruction_ledger_ref":first_ref,"instruction_sha256":hashlib.sha256(words.encode()).hexdigest()}))
+        ledger=self.root/"conversation-ledger.jsonl"
+        ledger.write_text(json.dumps({"event":"PromptReceived","turn_id":"turn-a","entity_id":"depot","thread_id":"thread-a","source":"text","text":words})+"\n")
+        seat="stu-thread:thread-a"
+        self.scope["binding"]=self.bind_seat(seat,"peer:later",audience="rich",session=self.session)
+        self.scope["seat"]=seat
+        self.scope["user_instruction"]={"ledger_ref":"ledger:thread-a:later","sha256":hashlib.sha256(other.encode()).hexdigest(),"text":other}
+        self.scope_path.write_text(json.dumps(self.scope))
+        ready=self.call("prepare",self.args)
+        self.assertEqual((self.app.folder(self.scope)/(ready["id"]+".words")).read_text(),words)
+        payload={"session_id":self.session,"tool_use_id":"selected-original","tool_input":ready["agent_payload"]}
+        authority=self.app.dispatch_intent(self.scope,payload,inspect_only=True)
+        self.assertEqual(authority["instruction"]["text"],words)
+        self.assertEqual(authority["authority"],first_ref)
+        self.assertNotEqual(authority["instruction"]["text"],other)
+        ledger.write_text(ledger.read_text().replace(words,"Tampered request"))
+        with self.assertRaisesRegex(ValueError,"host attestation"):
+            self.call("prepare",{**self.args,"request_id":"tampered"})
+
+    def test_stop_blocks_prepared_dispatch_and_worker_tools_without_blocking_other_obligations(self):
+        first=self.call("prepare",self.args)
+        self.start_fixture_worker(first,"stopped-worker")
+        second=self.call("prepare",{**self.args,"request_id":"prepared-before-stop","brief":"A different part of the same assignment"})
+        identity=json.dumps(["depot","thread-a"],separators=(",", ":"))
+        root=self.root/"engine-state/assignments"/hashlib.sha256(identity.encode()).hexdigest()
+        root.mkdir(parents=True)
+        (root/"stopped.json").write_text(json.dumps({"schema":1,"entity_id":"depot","thread_id":"thread-a","obligation_id":"fixture-task","user_stop_requested_at_ms":1}))
+        with self.assertRaisesRegex(ValueError,"user stopped"):
+            self.call("prepare",{**self.args,"request_id":"after-stop"})
+        with self.assertRaisesRegex(ValueError,"user stopped"):
+            self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"after-stop","tool_input":second["agent_payload"]})
+        with self.assertRaisesRegex(ValueError,"user stopped"):
+            self.app.worker_context(self.scope,{"session_id":self.session,"agent_id":"stopped-worker","tool_name":"Bash","tool_input":{"command":"echo forbidden"}})
+        self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],"request_id":"other-after-stop","checkpoint":{"statements":[{"verb":"commitment","fields":{"id":"unrelated","title":"Other work"}}]}})
+        other=self.call("prepare",{**self.args,"request_id":"unrelated","obligation_id":"unrelated"})
+        self.assertEqual(other["status"],"prepared")
+        self.assertEqual(other["request"]["obligation_id"],"unrelated")
+
+    def test_independent_stu_prepares_two_obligations_without_rebinding_to_a_worker(self):
+        seat="stu-thread:thread-a"
+        self.scope["binding"]=self.bind_seat(seat,"peer:1",audience="rich",session=self.session)
+        self.scope["seat"]=seat
+        self.scope["background_work_allowed"]=True
+        self.scope_path.write_text(json.dumps(self.scope))
+        self.assertIsNone(self.app.carried_obligation(self.scope))
+        tool={t["name"]:t for t in self.app.available_tools()}
+        for name in ("prepare","complete"):
+            self.assertIn("independent Stu",tool[name]["description"])
+            self.assertNotIn("leave obligation_id out",tool[name]["description"])
+        self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],"request_id":"second-obligation","checkpoint":{"statements":[{"verb":"commitment","fields":{"id":"fixture-two","title":"A separate result"}}]}})
+        first=self.call("prepare",self.args)
+        second=self.call("prepare",{**self.args,"request_id":"prepare-two","obligation_id":"fixture-two","title":"A separate result"})
+        self.assertNotEqual(first["id"],second["id"])
+        self.start_fixture_worker(first,"independent-one")
+        self.start_fixture_worker(second,"independent-two")
+        rows=self.call("inspect")["records"]
+        self.assertEqual({row["request"]["obligation_id"] for row in rows},{"fixture-task","fixture-two"})
+        self.assertEqual({row["binding"]["audience"] for row in rows},{"rich"})
+        self.assertEqual({row["binding"]["turn_id"] for row in rows},{"peer:1"})
+        self.assertEqual({row["agent_id"] for row in rows},{"independent-one","independent-two"})
+        with self.assertRaises(self.app.ECS.ScopeError):
+            self.call("prepare",{**self.args,"request_id":"invented","obligation_id":"invented"})
+        self.assertEqual(len(self.call("inspect")["records"]),2)
+
     def test_pierce_findings_leave_dispatch_retryable_and_allow_revised_preparation(self):
         ready = self.call("prepare", self.args)
         envelope = {"session_id": self.session, "tool_use_id": "pierce-call",

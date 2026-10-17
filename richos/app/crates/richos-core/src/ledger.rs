@@ -562,6 +562,8 @@ pub enum Event {
     /// edited in place) but is EXCLUDED from `messages()`/re-prime once superseded, so
     /// the CEO sees one clean exchange (the successful replay), not a duplicate.
     TurnSuperseded { turn_id: String, by_turn_id: String, at: u64 },
+    /// One durable record creates a continuation and supersedes the uncertain attempt.
+    TurnReplayed { turn_id: String, by_turn_id: String, at: u64 },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -793,6 +795,7 @@ pub const KNOWN_EVENT_TAGS: &[&str] = &[
     "ProactiveMessage",
     "HandoffSummaryUpdated",
     "TurnSuperseded",
+    "TurnReplayed",
 ];
 
 /// The vocabulary for a record this build could not read — SHARED with `steering.rs`'s
@@ -1267,6 +1270,29 @@ impl Ledger {
             }
             Event::HandoffSummaryUpdated { thread_id, summary, .. } => {
                 self.handoff_summaries.insert(thread_id, summary);
+            }
+            Event::TurnReplayed { turn_id, by_turn_id, at } => {
+                if let Some(index) = self.turns.iter().position(|turn| turn.id == turn_id) {
+                    let original = self.turns[index].clone();
+                    if matches!(original.state, TurnState::Received | TurnState::InFlight) {
+                        let retired = self.turn_mut(&turn_id).unwrap();
+                        retired.state = TurnState::Interrupted;
+                        retired.ended_at = None;
+                    }
+                    self.apply(Event::PromptReceived {
+                        turn_id: by_turn_id.clone(), thread_id: original.thread_id,
+                        text: original.user_text, source: original.source, at,
+                        entity_id: original.entity_id, binding_revision: original.binding_revision,
+                        intake_id: None, rich_audible: original.rich_audible,
+                        channel: original.channel, client_id: None,
+                        voice_note: original.voice_note, pressed: original.pressed,
+                    });
+                    // A continuation replaces this request's place in acceptance order.
+                    // Appending it after later requests reverses corrections on another restart.
+                    let continuation = self.turns.pop().unwrap();
+                    self.turns.insert(index + 1, continuation);
+                    self.apply(Event::TurnSuperseded { turn_id, by_turn_id, at });
+                }
             }
             Event::TurnSuperseded { turn_id, by_turn_id, .. } => {
                 if let Some(t) = self.turn_mut(&turn_id) {
@@ -2009,17 +2035,37 @@ impl Ledger {
     /// hold a real stop request must use [`interrupt_turn`](Self::interrupt_turn): there is
     /// no code path that turns a crash into a CEO stop.
     pub fn stop_turn(&mut self, turn_id: &str, requested_at: u64) -> Result<(), LedgerError> {
-        self.append(
-            Event::TurnStopped { turn_id: turn_id.to_string(), requested_at, at: now_millis(), recovered_after_restart: false },
-            true,
-        )
+        self.stop_delivery_chain(turn_id, requested_at, false)
     }
 
     /// Honor a durable Stop after a crash without inventing the time it took effect.
     pub fn stop_turn_after_restart(&mut self, turn_id: &str, requested_at: u64) -> Result<(), LedgerError> {
-        self.append(Event::TurnStopped {
-            turn_id: turn_id.to_string(), requested_at, at: now_millis(), recovered_after_restart: true,
-        }, true)
+        self.stop_delivery_chain(turn_id, requested_at, true)
+    }
+
+    /// Existing replay links identify attempts of the same request, within one scope.
+    pub(crate) fn delivery_chain(&self, turn_id: &str) -> Vec<String> {
+        let scope = self.turn(turn_id).map(|turn| (turn.thread_id.clone(), turn.entity_id.clone()));
+        let mut next = Some(turn_id.to_string());
+        let mut chain = Vec::new();
+        while let Some(id) = next {
+            if chain.contains(&id) { break; }
+            next = self.turn(&id).and_then(|turn| turn.superseded_by.clone()).filter(|successor| {
+                self.turn(successor).is_some_and(|turn|
+                    scope.as_ref() == Some(&(turn.thread_id.clone(), turn.entity_id.clone())))
+            });
+            chain.push(id);
+        }
+        chain
+    }
+
+    fn stop_delivery_chain(&mut self, turn_id: &str, requested_at: u64, recovered_after_restart: bool) -> Result<(), LedgerError> {
+        for id in self.delivery_chain(turn_id) {
+            self.append(Event::TurnStopped {
+                turn_id: id, requested_at, at: now_millis(), recovered_after_restart,
+            }, true)?;
+        }
+        Ok(())
     }
 
     /// Claim a CEO-FACING, turn-scoped action BEFORE executing it (claim-then-execute,
@@ -2128,6 +2174,18 @@ impl Ledger {
     /// the deterministic structured digest in `reprime.rs` covers that gap.
     pub fn handoff_summary(&self, thread_id: &str) -> Option<&str> {
         self.handoff_summaries.get(thread_id).map(|s| s.as_str())
+    }
+
+    /// Persist both sides of a continuation in one fsynced event. A crash cannot
+    /// leave a second input without its supersession, or retire the only saved input.
+    pub fn replay_turn(&mut self, binding: &ThreadBinding, turn_id: &str) -> Result<String, LedgerError> {
+        self.verify_binding(binding)?;
+        let original = self.thread_turns(binding.thread_id())?.into_iter()
+            .find(|turn| turn.id == turn_id).ok_or_else(|| LedgerError::UnknownTurn(turn_id.into()))?;
+        if let Some(id) = &original.superseded_by { return Ok(id.clone()); }
+        let by_turn_id = new_id("turn");
+        self.append(Event::TurnReplayed { turn_id: turn_id.into(), by_turn_id: by_turn_id.clone(), at: now_millis() }, true)?;
+        Ok(by_turn_id)
     }
 
     /// Mark `turn_id` as superseded by `by_turn_id` (mid-turn-crash replay, §5.3). Not
@@ -2240,7 +2298,7 @@ impl Ledger {
     pub fn pending_turns(&self) -> Vec<&Turn> {
         self.turns
             .iter()
-            .filter(|t| !t.quarantined && matches!(t.state, TurnState::Received | TurnState::InFlight))
+            .filter(|t| !t.quarantined && t.superseded_by.is_none() && matches!(t.state, TurnState::Received | TurnState::InFlight))
             .collect()
     }
 

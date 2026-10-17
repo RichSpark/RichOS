@@ -433,11 +433,6 @@ struct WorkNotice {
 
 impl richos_core::work_host::WorkNotifier for WorkNotice {
     fn raised(&self, thread_id: &str, notice: &richos_core::assignment::PendingNotice) {
-        if notice.kind.is_result() {
-            if let Some(state) = self.app.try_state::<AppState>() {
-                queue_work_messages(&self.app, &state.data_dir.join("engine-state"), thread_id);
-            }
-        }
         let _ = self.app.emit(
             EVENT_WORK_NOTICE,
             serde_json::json!({"threadId": thread_id, "notice": notice}),
@@ -3669,22 +3664,6 @@ fn main() {
                 boot_engine,
             });
 
-            // Replay durable reports independently of which conversation the UI opens.
-            {
-                let state = app.state::<AppState>();
-                let engine_state = state.data_dir.join("engine-state");
-                for thread in state.reader.snapshot().threads() {
-                    let Some(entity) = thread.entity_id.as_deref() else { continue };
-                    let pending = richos_core::assignment::pending_notices_of(
-                        &engine_state, entity, &thread.id, |kind| kind.is_result());
-                    match pending {
-                        Ok(notices) if !notices.is_empty() => queue_work_messages(app.handle(), &engine_state, &thread.id),
-                        Ok(_) => {},
-                        Err(error) => eprintln!("[richos] work: pending reports could not be read: {error}"),
-                    }
-                }
-            }
-
             // Resume only after AppState exists: PhoneBridge::new immediately reads
             // the spine to prime the paired phone's conversation. The window was
             // created above for first paint, but setup has not returned to the event
@@ -4376,47 +4355,17 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
     }))
 }
 
-/// Everything he has not been told yet — **and taking them marks them told.**
-///
-/// Spec §3.4: the notice is durable, so it survives him being away and it survives a
-/// relaunch; this is the read the surface does on launch as well as on the pushed event,
-/// and the durable flag is what stops him hearing the same thing twice.
-///
-/// **A job's result is not handed back here: it is written into his conversation as Rich's
-/// message** (nightly 57's hunt, finding 6: "Will and Beth have both joined your team" was a
-/// card in the window and was gone after a relaunch). With the conversation free it is written
-/// now; while a turn holds it, one waiter writes it the moment the turn lets go. Either way the
-/// window hears `rich://proactive-message` and draws it from the conversation. What is handed
-/// back is the rest, which says where a job stands now and stays a card.
+/// Consume operational notice cards. Stu's authored reports reach Rich through the
+/// peer intake; operational state must not create a second conversation input.
 #[richos_command::command]
 fn take_work_notices(
-    app: AppHandle,
     state: State<AppState>,
     thread_id: String,
 ) -> Result<Vec<richos_core::assignment::PendingNotice>, String> {
     let entity = assignment_scope(&state, &thread_id)?;
     let engine_state = state.data_dir.join("engine-state");
-    queue_work_messages(&app, &engine_state, &thread_id);
     richos_core::assignment::take_pending_notices_of(&engine_state, entity.as_str(), &thread_id, |kind| !kind.is_result())
         .map_err(|e| e.to_string())
-}
-
-/// Transfer durable agent messages to the ordinary conversation intake.
-fn queue_work_messages(app: &AppHandle, engine_state: &Path, thread_id: &str) {
-    let Some(state) = app.try_state::<AppState>() else { return };
-    let result = (|| -> Result<(), String> {
-        let entity = state.reader.snapshot().ledger().thread_binding(thread_id).map_err(|e|e.to_string())?.entity_id().clone();
-        let notices = richos_core::assignment::pending_notices_of(engine_state, entity.as_str(), thread_id, |kind|kind.is_result()).map_err(|e|e.to_string())?;
-        for notice in notices {
-            let sender = if notice.kind == richos_core::assignment::NoticeKind::Answer { "stu" } else { "work_host" };
-            let message = serde_json::json!({"from":sender,"request":notice.title,"kind":notice.kind,"message":notice.text}).to_string();
-            state.control.submit_agent_message(thread_id, Some(entity.clone()), &message, sender, &notice.delivery_id(entity.as_str(),thread_id)).map_err(|e|e.to_string())?;
-            richos_core::assignment::acknowledge_notice(engine_state, entity.as_str(),thread_id,&notice).map_err(|e|e.to_string())?;
-        }
-        Ok(())
-    })();
-    if let Err(error)=result { eprintln!("[richos] incoming work message: {error}"); }
-    if let Err(error)=dispatch_incoming_messages(app,thread_id) { eprintln!("[richos] incoming message dispatch: {error}"); }
 }
 
 /// All asynchronous incoming messages use the same turn, stream and phone delivery.
@@ -6568,9 +6517,15 @@ fn register_entity(
         None => Vec::new(),
     };
 
+    // A selected company folder is also its connected project folder. Reuse the
+    // Settings connection path, including scope checks and Git initialization.
+    let engine = state.engine_dir.lock().unwrap().clone();
+    let runtime = if roots.is_empty() { None } else {
+        Some(richos_core::runtime::verify_engine(&engine).map_err(|e| e.to_string())?)
+    };
     // Lock order everywhere in this file: config, then registry, then entity, then spine.
     let mut current_registry = state.registry.lock().unwrap();
-    let (id, next) = {
+    let (id, mut next) = {
         let current = &*current_registry;
         let id = entity_id_from_name(&name, &current)?;
         let mut next = current.clone();
@@ -6597,6 +6552,10 @@ fn register_entity(
     };
 
     let mut registry_spine = state.spine.try_lock().map_err(|_| "Wait for the current turn to stop before adding a company.".to_string())?;
+    if let (Some(root), Some(runtime)) = (roots.first(), runtime.as_ref()) {
+        next = richos_core::repositories::connect_folder(&next, &id, root, runtime,
+            &[&engine, &state.data_dir])?.0;
+    }
     // PROPERTY 1: durable first. Nothing in memory has moved yet.
     next.save(&state.registry_path).map_err(|e| {
         format!(

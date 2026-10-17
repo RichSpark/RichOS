@@ -1,71 +1,7 @@
-//! The app-owned MCP endpoint that ENDS THE TURN — `richos_assignments.record`.
-//!
-//! **This is the piece the background-work spec specifies the consequences of and does not
-//! name, so the decision is made here and stated rather than left to be discovered.**
-//!
-//! §1.1: *"An assignment turn ends when the work is registered — intent recorded, receipt
-//! written — not when it settles."* §7.1 then decides: *"registration is the receipt, and
-//! `prepare` runs on the work lease after the turn has ended."* Neither says what the
-//! conversation CALLS to register, and `richos_work.prepare` cannot be it:
-//!
-//! - it is synchronous to the end — it runs the canonical spawn preparer and waits
-//!   (`richos/engine/mega-lander/app.py:362-370`), which is the 3.0–3.8 measured seconds
-//!   §7.1 moved off his turn;
-//! - and it refuses without a live visible turn (`app.py:255-257`, `:41-42`), so it cannot
-//!   be the thing that runs after the turn has ended either.
-//!
-//! **So registration is an app-owned tool, in the shape this app already ships one in.**
-//! `richos_onboarding` is served by the app's own executable over stdio
-//! (`native.rs`'s MCP config, `main.rs`'s `--onboarding-mcp`), reads a scope the app wrote
-//! for this turn, and writes an app-owned record. This is that, with one tool. It needs no
-//! engine change, it cannot be confused with the work tools, and `richos_work.prepare`
-//! keeps its contract exactly (`docs/architecture/desktop-work.md:15-17`) — it is simply
-//! called later, by the work lease.
-//!
-//! **Rejected: teaching `prepare` to return early.** That is an engine change, it breaks
-//! the contract above, and it would make "prepared" a state the caller observes, which
-//! `app.py:370-373` deliberately never lets happen.
-//!
-//! **The record is the channel.** This server runs in its own short-lived process, so it
-//! cannot hand anything to the live work host. It does not need to: it writes the durable
-//! assignment (`assignment::register`), and the host adopts it at the turn boundary
-//! (`work_host::adopt_registered`). That makes registration crash-safe by construction —
-//! spec §0 row 1's *"a crash between 'he asked' and 'a workspace exists' leaves a record of
-//! what he asked for, not a gap"* — rather than by a second mechanism.
-//!
-//! # THE REGISTER OPENS THE OBLIGATION ITSELF (2026-09-18)
-//!
-//! **The obligation was a MODEL ARGUMENT until today, and that made §55 and the dispatch
-//! contract contradict each other.** `mega-lander/app.py:318-321` refuses a dispatch unless
-//! the assignment's obligation names an ECS item whose status is `accepted`/`active`/
-//! `pending`/`blocked`; the only tool the front desk holds that can create one is
-//! `mcp__richos_continuity__checkpoint`. So on 2026-09-18 both halves were measured and both
-//! were wrong (`docs/verification/first-words-2026-09-18.md`):
-//!
-//! - run A obeyed §55 — the register first, nothing before the reply — and wrote **no ECS
-//!   record at all**, so both of its assignments carried an obligation that had never been
-//!   opened and `prepare` would have refused them;
-//! - run B opened the obligation first and cost him **3.0 s and 2.4 s** of silence for it,
-//!   because a model-written checkpoint is a whole extra round trip.
-//!
-//! **So the app opens it, here, in the same call that writes the assignment down.** The id is
-//! the app's (`work-<uuid>`), the model never sees it and never types it, and one ECS
-//! `checkpoint` through [`crate::ecs::EcsBridge`] measured **143.4 ms** on this Mac against
-//! the 6.358 s his warm first words took (2026-09-18, `hello` alone is 148.4 ms, so the whole
-//! of it is interpreter start). That is 2.2% of his wait instead of a round trip, and it is
-//! spent on the register's own thread while the model is already finished talking.
-//!
-//! **Order, and what a crash can leave behind.** The obligation is opened BEFORE the
-//! assignment file is written, so the only residue a crash between them can leave is an open
-//! item nothing is working on — never an assignment whose obligation is missing, which is the
-//! state `prepare` and `work_host::outcome` cannot recover from. A registration that fails
-//! after the open cancels it on the way out ([`ObligationOpener::abandon`]), best effort.
-//!
-//! **It is idempotent by construction, and that is measured too.** The `request_id` is derived
-//! from the obligation, so the identical call twice returns the engine's own receipt with
-//! `duplicate: true` and ONE item; and if a model ever opened the same id afterwards under its
-//! own `request_id`, the engine rejects that one statement with *"continuity item already
-//! exists"* rather than making a second item (both measured 2026-09-18).
+//! Scoped operational assignment records and their existing ECS obligations.
+//! Records preserve work facts. They do not send a message or dispatch execution.
+//! Rich and Stu communicate through the durable peer inbox. Stu is an independent
+//! top-level session and selects obligations by the identifiers returned here.
 
 use crate::assignment::{self, AssignmentKind, Registration};
 use serde::{Deserialize, Serialize};
@@ -293,13 +229,13 @@ struct RecordArguments {
 pub fn tools() -> Value {
     json!({"tools":[
         {"name":RECORD_TOOL_NAME,
-         "description":"Create an operational work record with its original user-request reference and an open obligation. Returns registration facts without waiting for execution. Registration is distinct from peer messaging, execution and completion.",
+         "description":"Create an operational work record with its original user-request reference and an open obligation. Returns registration facts without waiting for execution. Registration never dispatches work. Send a peer handoff separately. Reuse existing records for existing work; background_work exposes their assignment_id and obligation_id. Stu uses the selected obligation_id with work tools.",
          "inputSchema":{"type":"object","properties":{
              "assignment":{"type":"string","minLength":1,"maxLength":4096,"description":"Your complete handoff to Stu: outcome or question, relevant context, constraints and decisions. Preserved in full; a shortened display title is stored separately."},
              "repositories":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":4096},"description":"Absolute paths of the repositories this assignment touches, if he named any. Omit when he did not. Only a repository connected to this company is kept; any other path is left out of the record."},
              "needs_screen":{"type":"boolean","description":"True if this work needs the Mac's screen to be unlocked: it drives the app's own window, takes screenshots, walks a build on screen, or otherwise cannot be done while the screen is locked. If the screen is locked when this comes up, the app waits for the unlock and carries on by itself; nobody is asked anything. Omit it for ordinary work, which is almost all work."},
              "picks_up":{"type":"string","minLength":1,"maxLength":4096,"description":"Only when he asks you to pick back up work that RichOS closed on: work the read lists under `waiting_for_you` with state `unknown`. Set this to that row's `what`, exactly as the read gave it. It puts THAT work back on, with every answer he already gave it, and opens nothing new; `assignment` is then his request in his own terms as usual. Omit it for anything else."},
-             "kind":{"type":"string","enum":["task","check","investigate"],"description":"What this is. `task`: work he asked for; omit it and you get this. `check`: a QUESTION of his whose answer you expect quickly, because it is on file somewhere and only has to be looked up. `investigate`: a QUESTION of his that needs real digging: repositories, logs, the web, several places. A rough estimate of the kind of work is all that is wanted here; nobody is timing it, and the app says the right thing either way if it takes longer than you thought."}
+             "kind":{"type":"string","enum":["task","check","investigate"],"description":"What this is. `task`: work he asked for; omit it and you get this. `check`: a QUESTION of his whose answer you expect quickly, because it is on file somewhere and only has to be looked up. `investigate`: a QUESTION of his that needs real digging: repositories, logs, the web, several places. This is operational metadata, not a reply template or an execution route."}
          },"required":["assignment"],"additionalProperties":false},
          "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}}
     ]})
@@ -368,9 +304,12 @@ pub fn call_with(
         }
         let receipt = assignment::pick_up(&scope.state_root, &scope.entity_id, &scope.thread_id, what)
             .map_err(|e| format!("{e}: use the exact `what` of an `unknown` row from the read, or write it down as new work without picks_up. Nothing was recorded."))?;
+        let record = assignment::read(&scope.state_root, &scope.entity_id, &scope.thread_id, &receipt.id)
+            .map_err(|e| e.to_string())?;
         return Ok(json!({
             "recorded": true,
-            "assignment_id": receipt.id, "state": "registered", "kind": receipt.kind.as_str(),
+            "assignment_id": receipt.id, "obligation_id": record.obligation_id,
+            "state": "registered", "kind": receipt.kind.as_str(),
         }));
     }
     // ===================================================================================
@@ -420,7 +359,8 @@ pub fn call_with(
     // Rich interprets these receipt facts and authors his own acknowledgment.
     Ok(json!({
         "recorded": true,
-        "assignment_id": receipt.id, "state": "registered", "kind": receipt.kind.as_str(),
+        "assignment_id": receipt.id, "obligation_id": obligation_id,
+        "state": "registered", "kind": receipt.kind.as_str(),
     }))
 }
 
@@ -861,6 +801,7 @@ mod tests {
         assert_eq!(rows[0].instruction_ledger_ref, "ledger:thread-one:turn-7");
         assert_eq!(rows[0].repositories, vec!["/fictional/project".to_string()]);
         assert_eq!(result["assignment_id"], rows[0].id);
+        assert_eq!(result["obligation_id"], rows[0].obligation_id);
         let handoff = "The pricing review. Preserve these agreed constraints: ".to_string() + &"context and decisions. ".repeat(30);
         let asked = call_with(&fixture.scope, RECORD_TOOL_NAME,
             json!({"assignment":handoff}), &desk).unwrap();

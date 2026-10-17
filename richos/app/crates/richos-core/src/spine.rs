@@ -2975,8 +2975,42 @@ impl Spine {
                         Self::retain_and_emit_machinery(journal, observer, record.stamp(thread_id, Some(turn_id), true));
                     }
                 };
+                let mut attempts = Vec::new();
+                let mut successor = turn_id;
+                let mut seen = std::collections::HashSet::new();
+                while let Some(previous) = self.ledger.turns().iter().find(|turn|
+                    turn.superseded_by.as_deref() == Some(successor)
+                    && turn.thread_id == thread_id && seen.insert(turn.id.clone())) {
+                    attempts.push(serde_json::json!({
+                        "turn_id": previous.id, "session_id": previous.session_id,
+                        "started_sessions": previous.started_sessions,
+                        "assistant_text": previous.assistant_text,
+                        "delivery_outcome": "unknown"
+                    }));
+                    successor = &previous.id;
+                }
+                // Delivery gets a new lifecycle ID after restart; execution retains the
+                // original user request identity for attestation and handoff deduplication.
                 self.lease.as_mut().ok_or(SpineError::NoLease)?
-                    .prepare_work_turn(binding, turn_id, self.ledger.turn(turn_id).ok_or_else(|| SpineError::NoLease)?.source, text, &mut on_item).map_err(SpineError::from)?;
+                    .prepare_work_turn(binding, turn_id, successor, self.ledger.turn(turn_id).ok_or(SpineError::NoLease)?.source, text, &mut on_item).map_err(SpineError::from)?;
+                // Reuse the user-visible ledger view. Native transcripts also contain
+                // preparation and commentary, and formatted replies live in tool input.
+                let mut conversation=String::new();
+                for message in self.ledger.messages_scoped(binding)?.into_iter().filter(|m|m.turn_id!=turn_id) {
+                    conversation.push_str(&format!("{}: {}\n",message.role,message.text));
+                }
+                let mut from=conversation.len().saturating_sub(8192);
+                while !conversation.is_char_boundary(from) {from+=1;}
+                self.lease.as_mut().ok_or(SpineError::NoLease)?.set_conversation_context(&conversation[from..]);
+                // A same-session overload retry already has its own context. Only
+                // a replacement session needs prior native attempts for reconciliation.
+                if let Some(previous) = attempts.first().filter(|previous|
+                    previous["session_id"].as_str() != self.lease_session_id()) {
+                    let context = serde_json::json!({"previous_delivery_attempt": previous,
+                        "earlier_delivery_attempts": &attempts[1..]}).to_string();
+                    self.lease.as_mut().ok_or(SpineError::NoLease)?
+                        .set_previous_delivery_attempt(&context).map_err(SpineError::from)?;
+                }
                 let channel = self.input_channels.get(turn_id).cloned()
                     .or_else(|| self.ledger.turn(turn_id).and_then(|turn| turn.channel.clone()));
                 self.lease.as_mut().ok_or(SpineError::NoLease)?.set_input_channel(channel.as_deref()).map_err(SpineError::from)
@@ -3702,20 +3736,10 @@ impl Spine {
                     self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;
                 }
                 IntakeRecord::Stop { id, turn_id, at } => {
-                    // Reached only when a stop outlived the process (see
-                    // `reconcile_intake`) or named a turn that had already ended. A turn
-                    // still open is stopped; anything else is left exactly as it is,
-                    // because `Ledger::stop_turn` refuses to rewrite a terminal state.
-                    let open = self
-                        .ledger
-                        .turn(&turn_id)
-                        .map(|t| {
-                            matches!(
-                                t.state,
-                                crate::ledger::TurnState::Received | crate::ledger::TurnState::InFlight
-                            )
-                        })
-                        .unwrap_or(false);
+                    let open = self.ledger.delivery_chain(&turn_id).iter().any(|id| {
+                        self.ledger.turn(id).is_some_and(|turn| matches!(turn.state,
+                            crate::ledger::TurnState::Received | crate::ledger::TurnState::InFlight))
+                    });
                     if open {
                         self.ledger.stop_turn(&turn_id, at)?;
                     }
@@ -3827,7 +3851,6 @@ impl Spine {
                 self.ledger.stop_turn_after_restart(&turn_id, at)?;
             }
         }
-        self.drain_intake()?;
         for id in interrupted {
             let Some(turn) = self.ledger.turn(&id) else { continue };
             if !matches!(turn.state, crate::ledger::TurnState::Received | crate::ledger::TurnState::InFlight) {
@@ -3840,10 +3863,14 @@ impl Spine {
                 }
                 continue;
             }
-            self.ledger.interrupt_turn_after_restart(&id, "RichOS closed before this request finished. Your message is saved; send it again to retry.")?;
-            self.emit_live(self.turn_status_event(&binding, &id, TurnStatus::Failed, None));
-            self.emit_live(self.thread_summary_event(&binding, &id, ThreadStatus::Failed));
+            let text = turn.user_text.clone();
+            let replay = self.ledger.replay_turn(&binding, &id)?;
+            self.queue.push_back(Queued { turn_id: replay, binding, text, intake_id: None });
+
         }
+        // Restore the already accepted ledger requests before appending newer intake.
+        // Durable Stops above still take precedence over both paths.
+        self.drain_intake()?;
         self.drain_queue()
     }
 
@@ -4198,16 +4225,10 @@ impl Spine {
     ) -> Result<(), SpineError> {
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
-        // A pressed button's words stay pressed through the replay (finding 14).
-        let source = self.ledger.turn(failed_turn_id).map(|t| t.source).unwrap_or(Source::Text);
-        let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
-        let retry_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
-            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, source)?,
-            Some(channel) => self.record_prompt(binding, original_text, source, None, None, &channel)?,
-            None => self.ledger.record_prompt_received(binding, original_text, source)?,
-        };
+        // One fsynced transition preserves provenance and retires the previous
+        // attempt before either the retry wait or another process can recover it.
+        let retry_turn_id = self.ledger.replay_turn(binding, failed_turn_id)?;
         if let Some(channel) = original_channel { self.input_channels.insert(retry_turn_id.clone(), channel); }
-        self.ledger.mark_turn_superseded(failed_turn_id, &retry_turn_id)?;
         self.emit_live(self.turn_status_event(
             binding, &retry_turn_id, TurnStatus::Queued, Some(failed_turn_id.to_string()),
         ));
@@ -4243,15 +4264,8 @@ impl Spine {
         let original_channel = self.input_channels.get(failed_turn_id).cloned()
             .or_else(|| self.ledger.turn(failed_turn_id).and_then(|t| t.channel.clone()));
         // A pressed button's words stay pressed through the replay (finding 14).
-        let source = self.ledger.turn(failed_turn_id).map(|t| t.source).unwrap_or(Source::Text);
-        let pressed = self.ledger.turn(failed_turn_id).is_some_and(|t| t.pressed);
-        let replay_turn_id = match original_channel.clone().filter(|_| self.keep_intake_channel) {
-            _ if pressed => self.ledger.record_prompt_received_pressed(binding, original_text, source)?,
-            Some(channel) => self.record_prompt(binding, original_text, source, None, None, &channel)?,
-            None => self.ledger.record_prompt_received(binding, original_text, source)?,
-        };
+        let replay_turn_id = self.ledger.replay_turn(binding, failed_turn_id)?;
         if let Some(channel) = original_channel { self.input_channels.insert(replay_turn_id.clone(), channel); }
-        self.ledger.mark_turn_superseded(failed_turn_id, &replay_turn_id)?;
         self.emit_live(self.turn_status_event(
             binding, &replay_turn_id, TurnStatus::Queued, Some(failed_turn_id.to_string()),
         ));

@@ -285,12 +285,23 @@ pub trait Cognition: Send {
     /// Host-issued visible-turn scope. Hidden preparation records are retained as
     /// internal machinery and never receive a mutation grant.
     fn set_input_channel(&mut self, _channel: Option<&str>) -> Result<(), CognitionError> { Ok(()) }
-    fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
+    fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str, _original_turn: &str,
         _source: crate::ledger::Source, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+
+    /// The host's current visible conversation, separate from instructions and hidden context.
+    fn set_conversation_context(&mut self, _context: &str) {}
+
+    /// Previous delivery facts, separate from the unchanged user instruction.
+    fn set_previous_delivery_attempt(&mut self, _context: &str) -> Result<(), CognitionError> {
+        Err(CognitionError::Protocol("this adapter cannot reconcile an uncertain delivery".into()))
+    }
 
     /// Prepare ordinary peer input without manufacturing an assignment.
     fn prepare_agent_message(&mut self,_binding:&crate::entity::ThreadBinding,_turn:&str,
         _message:&crate::session_tools::Message)->Result<(),CognitionError> {Ok(())}
+
+    /// Reload the existing native roster without replacing this session or its workers.
+    fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(false)}
 
     /// Give the session the context brief his next turn would otherwise supply first, while
     /// nobody is waiting: called right after the priming turn, under that turn's own ledger
@@ -450,6 +461,9 @@ pub struct MockCognition {
     /// Shared handles so tests can inspect calls after the mock is boxed into the Spine.
     pub reprimes: Arc<Mutex<Vec<String>>>,
     pub prompts: Arc<Mutex<Vec<String>>>,
+    pub recovery_contexts: Arc<Mutex<Vec<String>>>,
+    pub request_origins: Arc<Mutex<Vec<(String,String)>>>,
+    pub conversation_contexts: Arc<Mutex<Vec<String>>>,
     /// RAW native frames a test parked as between-turn traffic (§1.5 gap #1).
     ///
     /// Raw wire JSON, NOT pre-built records, deliberately: a test that pushed a finished
@@ -468,6 +482,9 @@ impl MockCognition {
             replies: Arc::new(Mutex::new(replies.into_iter().map(|s| s.to_string()).collect())),
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
+            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
+            request_origins: Arc::new(Mutex::new(Vec::new())),
+            conversation_contexts: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -482,6 +499,9 @@ impl MockCognition {
             replies,
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
+            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
+            request_origins: Arc::new(Mutex::new(Vec::new())),
+            conversation_contexts: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -494,6 +514,17 @@ impl MockCognition {
 }
 
 impl Cognition for MockCognition {
+    fn set_conversation_context(&mut self, context:&str) {self.conversation_contexts.lock().unwrap().push(context.into());}
+
+    fn prepare_work_turn(&mut self, _: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,
+        _: crate::ledger::Source, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+        self.request_origins.lock().unwrap().push((turn.into(),original_turn.into())); Ok(())
+    }
+
+    fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
+        self.recovery_contexts.lock().unwrap().push(context.into()); Ok(())
+    }
+
     fn session_id(&self) -> &str {
         &self.session_id
     }
@@ -655,6 +686,7 @@ pub struct CancellableMockCognition {
     cancel: Arc<CancelFlag>,
     /// Every prompt this lease was handed, for ordering assertions.
     pub prompts: Arc<Mutex<Vec<String>>>,
+    pub recovery_contexts: Arc<Mutex<Vec<String>>>,
     /// How many chunks were actually delivered before the cancel landed.
     pub delivered: Arc<Mutex<usize>>,
 }
@@ -686,6 +718,7 @@ impl CancellableMockCognition {
             step,
             cancel: Arc::new(CancelFlag { flag: AtomicBool::new(false), requested: AtomicBool::new(false) }),
             prompts: Arc::new(Mutex::new(Vec::new())),
+            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             delivered: Arc::new(Mutex::new(0)),
         }
     }
@@ -696,6 +729,10 @@ impl CancellableMockCognition {
 }
 
 impl Cognition for CancellableMockCognition {
+    fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
+        self.recovery_contexts.lock().unwrap().push(context.into()); Ok(())
+    }
+
     fn session_id(&self) -> &str {
         &self.session_id
     }

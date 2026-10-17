@@ -72,17 +72,14 @@ pub fn tools() -> Value {
           "inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
         ,{"name":"transcript","description":"Read original native session JSONL directly, including live messages, tool calls and results. No peer request or turn lock. Defaults to the latest 64 KiB; use byte offsets to page earlier content. Optional worker selects a native subagent transcript within that session.",
           "inputSchema":{"type":"object","required":["session_id"],"properties":{"session_id":{"type":"string"},"worker":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":131072}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
-        ,{"name":"send","description":"Save your own message to the other top-level agent in this conversation. Delivery does not require an assignment and does not wait for the recipient. The sender and recipient are fixed by the host.",
+        ,{"name":"send","description":"Communicate corrections, findings or reports to the other top-level agent. Use delegate to hand a new execution request to Stu. Delivery does not require an assignment and does not wait for the recipient. The sender and recipient are fixed by the host.",
+          "inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}}
+        ,{"name":"delegate","description":"Hand this turn's original user request and your context to Stu for execution. Saves once per original user request, including retries and restart. If already_saved is true, Stu already owns it; use send for additional findings or corrections. This does not create an operational assignment. Only Rich can hand work to Stu.",
           "inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}}
     ]})
 }
 
-/// One assignment, rendered for the front desk — his words, never an identifier.
-///
-/// **No id, no seat, no obligation, no path.** `desktop-work.md` puts receipt ids on the
-/// app's side of the line and `assignment_tools.rs` already refuses to hand the model one
-/// when it registers; handing one back on the READ would undo that in the other direction.
-/// What the front desk gets is the sentence it would say out loud.
+/// Scoped work facts, including the real identifiers used by independent Stu.
 fn row(item: &Assignment) -> Value {
     let notices: Vec<Value> = item
         .notices
@@ -90,6 +87,9 @@ fn row(item: &Assignment) -> Value {
         .map(|notice| json!({"say": notice.text, "already_told_him": notice.delivered_at_ms.is_some()}))
         .collect();
     json!({
+        "assignment_id": item.id,
+        "obligation_id": item.obligation_id,
+        "instruction_ledger_ref": item.instruction_ledger_ref,
         "what": item.title,
         // **WORK HE ASKED FOR, OR A QUESTION HE ASKED** — the CEO's ruling §58, 2026-09-18.
         //
@@ -107,6 +107,7 @@ fn row(item: &Assignment) -> Value {
         "detail": item.detail,
         "asked_for_at_ms": item.registered_at_ms,
         "last_moved_at_ms": item.updated_at_ms,
+        "user_stop_requested_at_ms": item.user_stop_requested_at_ms,
         "notices": notices,
     })
 }
@@ -122,6 +123,7 @@ pub fn call(
     name: &str,
     arguments: Value,
 ) -> Result<Value, String> {
+    if name == "delegate" {return crate::session_tools::delegate(scope_path, &read_scope(scope_path)?, arguments)}
     if name == "send" {return crate::session_tools::send(scope_path, &read_scope(scope_path)?, arguments)}
     if name == "transcript" || name == "sessions" {
         if name == "sessions" && arguments != json!({}) {return Err("sessions takes no arguments".into())}
@@ -575,8 +577,7 @@ mod tests {
         let covers = answer["this_answer_covers"].as_str().unwrap();
         assert!(covers.contains("`check` or `investigate` is a QUESTION"), "{covers}");
         assert!(covers.contains("These kinds describe intent, not a result"), "{covers}");
-        // Still no identifier on the way back out.
-        assert!(!answer.to_string().contains(&quick), "an identifier reached the front desk");
+        assert!(answer.to_string().contains(&quick), "the scoped work identity was lost");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -677,9 +678,11 @@ mod tests {
         // Direct session reads are read-only; peer send has a separate host-bound contract.
         let listed = tools();
         let listed = listed["tools"].as_array().unwrap();
-        assert_eq!(listed.len(), 4);
+        assert_eq!(listed.len(), 5);
         assert!(listed[..3].iter().all(|t|t["annotations"]["readOnlyHint"]==true));
         assert_eq!(listed[3]["name"],"send");
+        assert_eq!(listed[4]["name"],"delegate");
+        assert!(call(&scope,&UnknownScreen,"delegate",json!({"text":"hello","from":"stu"})).is_err());
         assert!(call(&scope,&UnknownScreen,"send",json!({"text":"hello","from":"stu"})).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -716,21 +719,16 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// Nothing it returns is an identifier. `assignment_tools.rs` refuses to hand the model
-    /// an id on the WRITE; handing one back on the read would undo that from the other side.
     #[test]
-    fn nothing_in_the_answer_is_an_identifier_he_could_be_read_aloud() {
+    fn work_facts_expose_real_scoped_ids_for_independent_stu() {
         let (root, scope) = fixture();
         let id = register(&root, "thread-one", "landing the three branches");
         let rows = assignment::read_all(&root.join("engine-state"), "depot", "thread-one").unwrap();
-        let seat = rows[0].seat.clone();
-        let obligation = rows[0].obligation_id.clone();
-        let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap().to_string();
-        assert!(!answer.contains(&id), "the assignment id reached the model");
-        assert!(!answer.contains(&seat), "the seat reached the model");
-        assert!(!answer.contains(&obligation), "the obligation id reached the model");
-        // Positive control: the thing that IS meant to be there is there.
-        assert!(answer.contains("landing the three branches"));
+        let answer = call(&scope, &UnknownScreen, LOOK_TOOL_NAME, json!({})).unwrap();
+        assert_eq!(answer["starting"][0]["assignment_id"],id);
+        assert_eq!(answer["starting"][0]["obligation_id"],rows[0].obligation_id);
+        assert_eq!(answer["starting"][0]["instruction_ledger_ref"],rows[0].instruction_ledger_ref);
+        assert_eq!(answer["starting"][0]["what"],"landing the three branches");
         std::fs::remove_dir_all(root).unwrap();
     }
 

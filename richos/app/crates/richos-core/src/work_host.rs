@@ -238,6 +238,7 @@ enum CommandWait {
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
     peer_active_through: Option<u64>,
+    peer_stopper: Option<(String, Arc<dyn TurnCancel>)>,
     // Includes pre-lease waits and final receipt writes, not just a live lease.
     processing: bool,
     /// Jobs whose background commands outlived their wait ([`Watched`]).
@@ -352,6 +353,7 @@ impl Backend {
                 cancel: None,
                 peer_input: None,
                 peer_active_through: None,
+                peer_stopper: None,
                 lease_session: None,
                 stopped: Vec::new(),
                 screen_wait: None,
@@ -1171,7 +1173,7 @@ impl WorkHost {
         let Some(input)=input else {return};
         let scope=self.message_scope(binding);
         let result=(|| {
-            let Some((message,through))=crate::session_tools::pending_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
+            let Some((message,through))=crate::session_tools::pending_live_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
             use sha2::Digest;
             let digest=sha2::Sha256::digest(format!("{}\0{}\0{through}",scope.entity_id,scope.thread_id));
             let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
@@ -1206,39 +1208,80 @@ impl WorkHost {
             entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()}
     }
 
+    fn refresh_peer_team(&self,backend:&Arc<Backend>,lease:&mut dyn Cognition)->Result<bool,String> {
+        let team=self.factory.lock().unwrap().team_digest();
+        if team.is_none() || team==backend.inner.lock().unwrap().lease_team {return Ok(false)}
+        let changed=lease.refresh_team().map_err(|e|e.to_string())?;
+        backend.inner.lock().unwrap().lease_team=team;
+        Ok(changed)
+    }
+
     fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
         message:&crate::session_tools::Message,turn:&str)->Result<String,String> {
-        self.ensure_lease(backend,binding)?;
-        let mut guard=backend.lease.lock().unwrap();
-        let lease=guard.as_mut().ok_or("The operator connection closed")?;
-        lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
-        {
-            let mut inner=backend.inner.lock().unwrap();
-            inner.cancel=lease.cancel_handle();
-            inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
+        // This is queue cancellation, not per-tool authority on Stu's session.
+        let stopped=||->Result<bool,String> {
+            let Some(instruction)=message.instruction.as_ref().filter(|_|message.handoff) else {return Ok(false)};
+            Ok(assignment::read_all(&self.state,binding.entity_id().as_str(),binding.thread_id())
+                .map_err(|e|e.to_string())?.iter().any(|record|
+                    record.instruction_ledger_ref==instruction.ledger_ref
+                    && record.instruction_sha256==instruction.sha256
+                    && record.user_stop_requested_at_ms.is_some()))
+        };
+        // A native connection owns its workers as well as its shell commands.
+        let workers_finished=|| {
+            let session=backend.inner.lock().unwrap().lease_session.clone();
+            session.is_none_or(|session| {
+                let view=crate::app_workers::status(&self.state,Some(&session));
+                view.is_attributed() && view.active + view.liveness_unknown == 0
+            })
+        };
+        // Peer delivery uses the same connection lifecycle as assignment delivery.
+        if workers_finished() {
+            self.renew_if_repositories_changed(backend,binding);
+            self.renew_if_account_changed(backend,binding);
+            self.renew_if_model_changed(backend,binding);
         }
-        let session=lease.session_id().to_string();
-        crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
-        let mut diagnostics=String::new();
-        let mut published=false;
-        let result=lease.prompt(&serde_json::to_string(message).map_err(|e|e.to_string())?,&mut |item| {
-            if !published {published=true;self.publish_peer_input(backend,binding);}
-            if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
-        });
-        let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
-        {
-            let mut inner=backend.inner.lock().unwrap();
-            inner.peer_input=None;inner.peer_active_through=None;inner.cancel=None;
+        let original=serde_json::to_string(message).map_err(|e|e.to_string())?;
+        let mut input=original.clone();
+        loop {
+            self.ensure_lease(backend,binding)?;
+            let mut guard=backend.lease.lock().unwrap();
+            let lease=guard.as_mut().ok_or("The operator connection closed")?;
+            let session=lease.session_id().to_string();
+            if stopped()? {return Ok(session)}
+            self.refresh_peer_team(backend,lease.as_mut())?;
+            lease.prepare_agent_message(binding,turn,message).map_err(|e|e.to_string())?;
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.cancel=lease.cancel_handle();
+                inner.peer_stopper=inner.cancel.clone().map(|handle|(lease.session_id().to_string(),handle));
+                inner.peer_active_through=turn.strip_prefix("peer:").and_then(|n|n.parse().ok());
+            }
+            crate::session_tools::begin_attempt(&self.message_scope(binding),"stu",turn,&session)?;
+            // Stop may have arrived during connection/scope preparation, before a
+            // native stop handle existed. Never deliver that saved handoff afterward.
+            if stopped()? {return Ok(session)}
+            let mut diagnostics=String::new();
+            let mut published=false;
+            let result=lease.prompt(&input,&mut |item| {
+                if !published {published=true;self.publish_peer_input(backend,binding);}
+                if let TurnItem::Text {text,..}=item {diagnostics.push_str(text)}
+            });
+            let result=result.and_then(|reason|lease.work_readiness_after_turn().map(|_|reason));
+            {
+                let mut inner=backend.inner.lock().unwrap();
+                inner.peer_input=None;inner.peer_active_through=None;inner.cancel=None;
+            }
+            if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
+            let reason=result.map_err(|e|e.to_string())?;
+            if reason != "end_turn" {
+                return Err(format!("Operator input did not complete: {reason}"));
+            }
+            if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
+            let lease=guard.as_mut().ok_or("The operator connection closed during team reload")?;
+            if !self.refresh_peer_team(backend,lease.as_mut())? {return Ok(session)}
+            input=TEAM_CHANGED_CONTINUATION.to_string();
         }
-        if matches!(&result,Err(CognitionError::Io(_))) {drop(guard.take());}
-        let reason=result.map_err(|e|e.to_string())?;
-        if reason != "end_turn" {
-            return Err(format!("Operator input did not complete: {reason}"));
-        }
-        if crate::upstream::UpstreamFailure::classify_lines(&diagnostics).is_some() {return Err(diagnostics)}
-        drop(guard);
-        self.adopt_registered(binding);
-        Ok(session)
     }
 
     /// **The turn boundary, and the whole of it.** Spec §1.1: the assignment is recorded,
@@ -1286,19 +1329,14 @@ impl WorkHost {
         Ok(receipt)
     }
 
-    /// **Pick up assignments that were registered by the tool process, at the turn
-    /// boundary.** This is §7.1's decision made literal: the assignment was written down
-    /// inside his turn by the app-owned `richos_assignments` server, the turn ended on that
-    /// receipt, and everything the work costs starts here — after it.
-    ///
-    /// **It is a directory read at a boundary, not a timer.** Spec §6.3 refuses anything
-    /// that restarts work by itself, and the September 9 shape it names is a retry loop.
-    /// Nothing here retries: an assignment is adopted once, when the turn that created it
-    /// ends, and a record already known to this host is skipped.
-    ///
-    /// Returns how many were adopted. Zero is the ordinary answer.
+    /// Wake the peer inbox at a conversation boundary. An operational record never
+    /// independently starts desktop work. Only the separate operator client adopts
+    /// records into its explicit intake; that client has no peer handoff path.
     pub fn adopt_registered(self: &Arc<Self>, binding: &ThreadBinding) -> usize {
         self.wake_messages(binding);
+        // Desktop work is dispatched only through Stu's durable peer input.
+        // The separate operator client retains its explicit assignment intake.
+        if self.operator.lock().unwrap().is_none() { return 0; }
         let Ok(rows) = assignment::read_all(&self.state, &binding.entity_id().to_string(), binding.thread_id())
         else {
             return 0;
@@ -1507,8 +1545,11 @@ impl WorkHost {
                     binding
                 }
                 Next::Answer(binding,delivery)=>{
-                    let message=crate::session_tools::Message {from:"user".into(),text:delivery.text.clone(),instruction:None};
-                    match self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id)) {
+                    let result=self.question_answer_instruction(&delivery).and_then(|instruction| {
+                        let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:delivery.text.clone(),instruction};
+                        self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id))
+                    });
+                    match result {
                         Ok(session)=>if let Err(error)=crate::question_work::taken(&self.state,std::slice::from_ref(&delivery.id),&session)
                             .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id))) {
                             eprintln!("[richos] operator answer acknowledgement: {error}");
@@ -3613,6 +3654,18 @@ impl WorkHost {
         }
     }
 
+    fn question_answer_instruction(&self, delivery:&crate::questions::Delivery)->Result<Option<crate::ecs::UserInstruction>,String> {
+        let Some(owner)=delivery.obligation_id.as_deref() else {return Ok(None)};
+        let record=assignment::read_all(&self.state,&delivery.entity_id,&delivery.thread_id).map_err(|e|e.to_string())?
+            .into_iter().find(|record|record.obligation_id==owner).ok_or("The asking assignment is unavailable")?;
+        if record.user_stop_requested_at_ms.is_some() || (!record.state.is_open() && record.state != AssignmentState::Unknown) {
+            crate::question_work::discard(&self.state,&delivery.entity_id,&delivery.thread_id,owner)?;
+            return Err("The asking assignment has stopped".into());
+        }
+        let text=instruction_for(&self.state,&record).ok().filter(|text|text.len()<=crate::ecs::INSTRUCTION_TEXT_LIMIT);
+        Ok(Some(crate::ecs::UserInstruction {ledger_ref:record.instruction_ledger_ref,sha256:record.instruction_sha256,text}))
+    }
+
     /// Both surfaces enter the same durable receiving inbox, without a permission hold.
     pub fn queue_question_answer(
         self: &Arc<Self>,
@@ -3625,6 +3678,7 @@ impl WorkHost {
             return Err("Question scope mismatch".into());
         }
         if delivery.asker=="stu" {
+            self.question_answer_instruction(delivery)?;
             crate::question_work::enqueue(&self.state,delivery)?;
             self.wake_messages(binding);
             return Ok(format!("work-input:{}",delivery.id));
@@ -4473,15 +4527,44 @@ impl WorkHost {
     /// assignment is the one on it. A queued assignment is marked and never starts. Spec
     /// §5.4: *"Stopping one assignment revokes one grant and one seat and leaves every
     /// other assignment's pair alone."*
-    pub fn stop_assignment(&self, entity: &str, thread: &str, id: &str) -> Result<(), String> {
-        // His team's assignment is stopped by stopping its agents, on his team's desk.
+    pub fn stop_assignment(self: &Arc<Self>, entity: &str, thread: &str, id: &str) -> Result<(), String> {
+        let record = assignment::read(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
+        if !record.state.is_open() {
+            return Err("That assignment has already stopped.".into());
+        }
+        // Revocation must outlive a crash even while dispatch holds its receipt lock.
+        let stopped = assignment::record_user_stop(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
         let operator = self.operator.lock().unwrap().clone();
         if let Some(operator) = operator {
             return operator.stop(entity, thread, id);
         }
-        let record = assignment::read(&self.state, entity, thread, id).map_err(|e| e.to_string())?;
-        if !record.state.is_open() {
-            return Err("That assignment has already stopped.".into());
+        let peer = self.backend(thread).and_then(|backend| {
+            let inner = backend.inner.lock().unwrap();
+            if inner.live.is_some() { return None; }
+            inner.peer_stopper.clone()
+        });
+        if let Some((session, stopper)) = peer {
+            let dispatch_lock = crate::work_status::lock_receipts(&self.state, entity, thread)?;
+            let trail = crate::work_status::trail(&self.state, entity, thread, &record.obligation_id)?;
+            drop(dispatch_lock);
+            let targets = trail.stop_targets;
+            let outcomes: Vec<CommandStop> = targets.iter().map(|(owner, tool)| {
+                if owner == &session {
+                    stopper.stop_worker(tool)
+                } else { CommandStop::NotDelivered }
+            }).collect();
+            self.forget_at_the_desk(&record);
+            crate::questions::Store::new(&self.state).close(entity,thread,Some(&record.obligation_id),"The assignment was stopped",false)?;
+            drop(crate::question_work::discard(&self.state,entity,thread,&record.obligation_id));
+            assignment::advance(&self.state, entity, thread, id, AssignmentState::Interrupted,
+                if outcomes.is_empty() { "Stop requested by the user. No worker task is recorded; Stu is notified to stop his own background commands." }
+                else { watched_stop_detail(true, &outcomes) }).map_err(|e| e.to_string())?;
+            let scope = crate::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:entity.into(),thread_id:thread.into()};
+            crate::session_tools::observe_user_stop(&scope, id, &record.obligation_id, stopped.user_stop_requested_at_ms.unwrap())?;
+            if let Some(binding) = self.backend(thread).and_then(|b| b.inner.lock().unwrap().binding.clone()) {
+                self.wake_messages(&binding);
+            }
+            return Ok(());
         }
         // **Stopping one assignment takes its question off his screen** (spec §5.4: one
         // grant, one seat, one queue entry, all released together and none of anybody
@@ -5304,6 +5387,7 @@ mod tests {
     }
 
     impl Cognition for WorkLease {
+        fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(true)}
         fn session_id(&self) -> &str {
             &self.session
         }
@@ -5697,6 +5781,21 @@ mod tests {
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"finishing the original turn must not rewind the consumed cursor");
         assert!(backend.inner.lock().unwrap().processing,"the running job was not ended to deliver input");
         assert!(h.host.open_assignments().unwrap().is_empty());
+        use sha2::Digest;
+        let instruction=crate::ecs::UserInstruction::with_text("ledger:thread-one:turn-7".into(),
+            format!("{:x}",sha2::Sha256::digest("landing the three branches")),Some("landing the three branches"));
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",Some(instruction)).unwrap();
+        crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"New execution request"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(matches!(rx.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"new work must wait for a prepared turn, not replace current authority through live input");
+        let queued=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Correction to the current job: do not change the date"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: a queued new job must not block a quick correction to current work");
+        assert!(text.contains("do not change the date"));taken();
+        assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1,queued,"the unprepared job was lost behind the correction receipt");
+        crate::session_tools::acknowledge(&scope,"stu",queued).unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"an accepted live correction was replayed after restart");
         drop(running);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
@@ -5720,7 +5819,7 @@ mod tests {
     #[test]
     fn a_standing_stu_question_answer_reaches_his_turn_without_an_assignment() {
         let h=harness(0);
-        let answer=crate::questions::Delivery {id:"standing-answer".into(),entity_id:"depot".into(),
+        let answer=crate::questions::Delivery { obligation_id:None,id:"standing-answer".into(),entity_id:"depot".into(),
             thread_id:"thread-one".into(),asker:"stu".into(),set_id:Some("standing-choice".into()),
             text:"Use the existing launch date".into(),receipt:None};
         h.host.queue_question_answer(&h.binding,&answer).unwrap();
@@ -5732,7 +5831,39 @@ mod tests {
         assert!(crate::question_work::pending(&h.state).unwrap().is_empty());
         let wrong=ThreadBinding::new(PersonId::default_ceo(),EntityId::parse("depot").unwrap(),"thread-two",1);
         assert!(h.host.queue_question_answer(&wrong,&answer).is_err());
-        h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+        h.host.shutdown();
+        // A's answer retains A's authority even when B is the latest session input.
+        let a=assignment::register(&h.state,&registration(&h)).unwrap();
+        let b=assignment::register(&h.state,&Registration {obligation_id:"work-B".into(),
+            instruction_ledger_ref:"ledger:thread-one:turn-B".into(),instruction_sha256:"b".repeat(64),..registration(&h)}).unwrap();
+        let record=assignment::read(&h.state,"depot","thread-one",&a.id).unwrap();
+        let selected=crate::questions::Delivery {obligation_id:Some(record.obligation_id.clone()),..answer.clone()};
+        assert_eq!(h.host.question_answer_instruction(&selected).unwrap().unwrap().ledger_ref,record.instruction_ledger_ref);
+        let b_record=assignment::read(&h.state,"depot","thread-one",&b.id).unwrap();
+        let status=h.state.join("stu-status.json");
+        crate::session_tools::bind(&status,&h.host.message_scope(&h.binding),"question-stu","stu",Some(crate::ecs::UserInstruction {
+            ledger_ref:b_record.instruction_ledger_ref,sha256:b_record.instruction_sha256,text:None})).unwrap();
+        let qscope=h.state.join("questions-scope.json");
+        crate::question_tools::write_scope(&qscope,&crate::question_tools::Scope {context:crate::questions::AskScope {
+            obligation_id:None,root:h.state.clone(),entity_id:"depot".into(),thread_id:"thread-one".into(),turn_id:"peer:latest-B".into(),
+            asker:"stu".into(),session_id:"question-stu".into(),engine:None,entity_root:None,app_run:None},
+            actions_allowed:true,answer_method:"typed".into(),surface:"mac".into()}).unwrap();
+        let args=serde_json::json!({"questions":[{"text":"When should the release ship?", "options":[
+            {"label":"Ship today","description":"Earlier fixes"},{"label":"Ship tomorrow","description":"More checks"}]}]});
+        let current=crate::question_tools::call(&qscope,"ask",args.clone()).unwrap();
+        assert!(current["questions"][0]["obligation_id"].is_null(), "a conversation question must not inherit the latest job");
+        let mut for_b=args.clone();for_b["obligation_id"]="work-B".into();
+        assert_eq!(crate::question_tools::call(&qscope,"ask",for_b.clone()).unwrap()["questions"][0]["obligation_id"],"work-B");
+        let mut for_a=args.clone();for_a["obligation_id"]=record.obligation_id.clone().into();
+        let owned=crate::question_tools::call(&qscope,"ask",for_a.clone()).unwrap();
+        assert_eq!(owned["questions"][0]["obligation_id"],record.obligation_id);
+        assignment::record_user_stop(&h.state,"depot","thread-one",&b.id).unwrap();
+        assert!(crate::question_tools::call(&qscope,"ask",for_b).is_err());
+        assert!(crate::question_tools::call(&qscope,"ask",args).is_ok(), "job Stop must not close conversation questions");
+        assert!(crate::question_tools::call(&qscope,"ask",for_a).is_ok(),"B's Stop revoked questions about A");
+        assignment::record_user_stop(&h.state,"depot","thread-one",&a.id).unwrap();
+        assert!(h.host.question_answer_instruction(&selected).is_err(),"stale answer reauthorized a stopped job");
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     fn harness(step_ms: u64) -> Harness {
@@ -5907,15 +6038,12 @@ mod tests {
         assert_eq!(h.host.stop_assignment("depot", "thread-one", &receipt.id), Ok(()));
         assert_eq!(*intake.stopped.lock().unwrap(), std::slice::from_ref(&receipt.id));
 
-        // The positive control: the same registration on a product host reaches a lease.
+        // Desktop records alone never dispatch. Its peer handoff is tested separately.
         let product = harness(0);
         assignment::register_kind(&product.state, &registration(&product), assignment::AssignmentKind::Task).unwrap();
-        assert_eq!(product.host.adopt_registered(&product.binding), 1);
-        let began = std::time::Instant::now();
-        while product.spawns.load(Ordering::SeqCst) == 0 && began.elapsed() < std::time::Duration::from_secs(10) {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(product.spawns.load(Ordering::SeqCst), 1, "the product host opens its lease");
+        assert_eq!(product.host.adopt_registered(&product.binding), 0);
+        assert_eq!(product.spawns.load(Ordering::SeqCst), 0, "a record is not an execution channel");
+        product.host.shutdown();
     }
 
     #[test]
@@ -5984,7 +6112,7 @@ mod tests {
         let h=harness(1);
         let receipt=assignment::register(&h.state,&registration(&h)).unwrap();
         let record=assignment::read(&h.state,"depot","thread-one",&receipt.id).unwrap();
-        let d=crate::questions::Delivery{id:"saved-before-crash".into(),entity_id:"depot".into(),thread_id:"thread-one".into(),asker:record.obligation_id.clone(),set_id:Some("release-set".into()),text:"When should the release ship? You answered: Ship tomorrow (phone_tap on phone)".into(),receipt:None};
+        let d=crate::questions::Delivery{ obligation_id:None,id:"saved-before-crash".into(),entity_id:"depot".into(),thread_id:"thread-one".into(),asker:record.obligation_id.clone(),set_id:Some("release-set".into()),text:"When should the release ship? You answered: Ship tomorrow (phone_tap on phone)".into(),receipt:None};
         crate::question_work::enqueue(&h.state,&d).unwrap();
         // Both durable inputs exist, with no process-local schedule after the crash.
         h.host.queue_question_answer(&h.binding,&d).unwrap();
@@ -6006,7 +6134,7 @@ mod tests {
         *h.answer_reply.lock().unwrap() = "I checked the release notes.".into();
         let request = registration(&h);
         let store = Store::new(&h.state);
-        let question = store.ask(&AskScope {
+        let question = store.ask(&AskScope { obligation_id:None,
             root: h.state.clone(),
             entity_id: "depot".into(),
             thread_id: "thread-one".into(),
@@ -7309,6 +7437,7 @@ mod tests {
             detail: String::new(),
             registered_at_ms: 0,
             updated_at_ms: 0,
+            user_stop_requested_at_ms: None,
             notices: Vec::new(),
             work_session: None,
             repository_pins: Vec::new(),
@@ -8538,16 +8667,10 @@ mod tests {
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
-    /// **A job that changes no repository is reported in his terms, with none of the machinery**
-    /// (vm-run-2: *"there won't be anything to review or merge"*, *"My system's step for formally
-    /// closing an assignment only takes finished code changes ... It's still open there"*).
-    ///
-    /// The task brief told every job to report "the branch, the repository and the reviewer's
-    /// verdict" and never to call an open assignment finished, and `DESKTOP.md` step 7 and the
-    /// `complete` tool said only a code assignment closes; a back end that ran a command for
-    /// him obeyed all three by explaining the bookkeeping to him. All three now say the app
-    /// closes such a job from its report, and the land report stays for a job that changed a
-    /// repository.
+    /// Non-repository work can close without a code worker. Independent Stu must
+    /// select its existing obligation; a legacy assignment-bound host can still
+    /// close from the observed native report. The loaded instructions and schema
+    /// must describe both paths rather than contradicting each other.
     #[test]
     fn a_job_that_changes_no_repository_is_reported_without_the_machinery() {
         let h = harness(5);
@@ -8559,13 +8682,17 @@ mod tests {
         assert_eq!(input["assignment"]["question"], false);
         let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine/mega-lander");
         let desktop = std::fs::read_to_string(engine.join("DESKTOP.md")).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(desktop.contains("Work that changes no repository needs no code worker or `complete`"),
+        assert!(desktop.contains("Work that changes no repository needs no code worker."),
                 "the tool contract wrongly requires code work for a non-repository assignment");
-        assert!(desktop.contains("the host records its established outcome from your report"));
-        assert!(desktop.contains("A consult needs no reviewer, no `integrate` and no `complete`."));
+        assert!(desktop.contains("Close its obligation with `complete` and your verified `answer`"));
+        assert!(desktop.contains("A legacy assignment-bound host can also record an established outcome from its native report."));
+        assert!(desktop.contains("A consult needs no reviewer or `integrate`."));
+        assert!(desktop.contains("Supply the selected real `obligation_id`"));
+        assert!(!desktop.contains("leave it out"), "the shared contract must not tell independent Stu to omit his obligation");
         let tools = std::fs::read_to_string(engine.join("app.py")).unwrap();
-        assert!(tools.contains("An assignment you handled yourself, with no worker, is closed by the app from your report: do not call this for it."),
-                "the complete tool does not say who closes a job with no worker");
+        assert!(tools.contains("For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids."),
+                "the complete tool does not explain non-repository completion");
+        assert!(tools.contains("Completion updates the operational record but never sends Rich a message."));
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
@@ -9065,7 +9192,7 @@ mod tests {
     /// One saved answer of his for `record`, in the inbox, and handed to the host the way the
     /// question worker hands it (reader 2).
     fn his_answer(h: &Harness, record: &Assignment, id: &str, text: &str) -> crate::questions::Delivery {
-        let answer = crate::questions::Delivery {
+        let answer = crate::questions::Delivery { obligation_id:None,
             id: id.into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None, text: text.into(), receipt: None,
         };
@@ -9085,7 +9212,7 @@ mod tests {
     /// A question of his the job asked and he has not answered, so its runs end blocked on it.
     fn open_question(h: &Harness, record: &Assignment) {
         use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
-        Store::new(&h.state).ask(&AskScope {
+        Store::new(&h.state).ask(&AskScope { obligation_id:None,
             root: h.state.clone(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             turn_id: "turn-7".into(), asker: record.obligation_id.clone(), session_id: "work-session-one".into(),
             engine: None, entity_root: None, app_run: None,
@@ -9246,7 +9373,7 @@ mod tests {
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(10)));
         // Its next run is going when he answers again and RichOS closes: the crash, on disk.
         assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "The back end has started on it.").unwrap();
-        let second = crate::questions::Delivery {
+        let second = crate::questions::Delivery { obligation_id:None,
             id: "answer-2".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None, text: "Who reviews? You answered: Dana".into(), receipt: None,
         };
@@ -9264,7 +9391,10 @@ mod tests {
 
         // His word.
         assignment::pick_up(&h.state, "depot", "thread-one", &record.title).unwrap();
-        assert_eq!(after.adopt_registered(&h.binding), 1);
+        // Explicit legacy intake resumes this saved assignment. Desktop peer
+        // delivery never dispatches an operational record at the boundary.
+        let picked = assignment::read(&h.state, "depot", "thread-one", &record.id).unwrap();
+        assert!(after.enqueue(&h.binding, picked));
         assert!(after.wait_for_completed(1, std::time::Duration::from_secs(10)));
         let prompts = h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 2, "{prompts:?}");
@@ -9391,7 +9521,7 @@ mod tests {
         let q = store.list("depot", "thread-one").unwrap().remove(0);
         store.answer("depot", "thread-one", AnswerRequest { question_id: q.id.clone(), client_id: "tap".into(),
             option_ids: vec![q.options[0].id.clone()], text: String::new(), expected_revision: None }, "click", "mac").unwrap();
-        crate::question_work::enqueue(&h.state, &crate::questions::Delivery {
+        crate::question_work::enqueue(&h.state, &crate::questions::Delivery { obligation_id:None,
             id: "operator-answer".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: "operator:conversation".into(), set_id: None, text: "for his team".into(), receipt: None,
         }).unwrap();
@@ -9589,7 +9719,7 @@ mod tests {
         every_worker_observed_ending(&h);
         *h.obligation.lock().unwrap() = Some(crate::cognition::ObligationState::Open);
         let record = waiting_job(&h);
-        let legacy = crate::questions::Delivery {
+        let legacy = crate::questions::Delivery { obligation_id:None,
             id: "legacy-1".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None, text: "Which branch? You answered: integration".into(), receipt: None,
         };
@@ -9634,7 +9764,7 @@ mod tests {
         let record = assignment::read(&h.state, "depot", "thread-one", &job.id).unwrap();
         assert_eq!(record.detail, COMMAND_STILL_RUNNING_DETAIL);
 
-        let answer = crate::questions::Delivery {
+        let answer = crate::questions::Delivery { obligation_id:None,
             id: "answer-1".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             asker: record.obligation_id.clone(), set_id: None,
             text: "When should it ship? You answered: tomorrow".into(), receipt: None,
@@ -9726,6 +9856,7 @@ mod tests {
             detail: String::new(),
             registered_at_ms: 0,
             updated_at_ms: 0,
+            user_stop_requested_at_ms: None,
             notices: Vec::new(),
             work_session: None,
             repository_pins: Vec::new(),
@@ -9761,7 +9892,7 @@ mod tests {
     /// which is the real order: the job asks, then its turn ends around the question.
     fn a_question_for_him(h: &Harness, obligation: &str) {
         use crate::questions::{AskScope, OptionInput, QuestionInput, Store};
-        Store::new(&h.state).ask(&AskScope {
+        Store::new(&h.state).ask(&AskScope { obligation_id:None,
             root: h.state.clone(), entity_id: "depot".into(), thread_id: "thread-one".into(),
             turn_id: "turn-7".into(), asker: obligation.into(), session_id: "work-session-one".into(),
             engine: None, entity_root: None, app_run: None,
@@ -10660,5 +10791,182 @@ mod tests {
         ] {
             assert!(!tells_him_what_to_do(record), "a back-end record is shown as his to act on: {record:?}");
         }
+    }    #[test]
+    fn peer_handoff_with_operational_record_executes_once() {
+        let h=harness(0);
+        h.team.lock().unwrap().digest=Some("stock".into());
+        every_worker_observed_ending(&h);
+        for n in 1..=4 {
+            let folder=h.state.join("evidence").join(format!("work-session-rotated-{n}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("callbacks.jsonl"),"").unwrap();
+            std::fs::write(folder.join(".lock"),"").unwrap();
+        }
+        let scope=h.host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        let receipt=assignment::register(&h.state,&registration(&h)).unwrap();
+        assert_eq!(h.host.adopt_registered(&h.binding),0,"an operational record must never dispatch a second execution");
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Inspect the current evidence"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        // load-bound: hang guard only; the verdict is one consumed prompt and an empty inbox, not elapsed time.
+        assert!(h.host.wait_for_completed(1,std::time::Duration::from_secs(10)),"hang guard: wait for peer consumption");
+        assert_eq!(h.host.adopt_registered(&h.binding),0);
+        assert_eq!(assignment::read(&h.state,"depot","thread-one",&receipt.id).unwrap().state,AssignmentState::Registered);
+        assert_eq!(h.work_prompts.lock().unwrap().len(),1);
+        assert!(h.bound.lock().unwrap().is_empty(),"Stu was rebound to a formal assignment");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        let backend=h.host.backend_for("thread-one").unwrap();
+        let message=crate::session_tools::Message { handoff:true, from:"rich".into(),
+            text:"Use the saved teammate for this authorized work".into(), instruction:None };
+        let run=|n| h.host.run_message(&backend,&h.binding,&message,&format!("peer:{n}")).unwrap();
+        run(2);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"unchanged team renewed unnecessarily");
+        h.team.lock().unwrap().digest=Some("stock and mark".into());
+        let evidence=h.state.join("evidence/work-session-one/callbacks.jsonl");
+        let start=serde_json::json!({"schema":1,"callback":{"session_id":"work-session-one","hook_event_name":"SubagentStart","agent_id":"live-worker"}}).to_string()+"\n";
+        std::fs::write(&evidence,&start).unwrap();
+        run(3);
+        assert_eq!(backend.inner.lock().unwrap().lease_team.as_deref(),Some("stock and mark"));
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"renewal killed a live native worker");
+        let end=serde_json::json!({"schema":1,"callback":{"session_id":"work-session-one","hook_event_name":"SubagentStop","agent_id":"live-worker"}}).to_string()+"\n";
+        std::fs::write(&evidence,start+&end).unwrap();
+        run(4);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
+        *h.commands.lock().unwrap()=Some(crate::lease_commands::CommandReading::Running(1));
+        h.team.lock().unwrap().digest=Some("stock, mark and norm".into());
+        run(5);
+        assert_eq!(backend.inner.lock().unwrap().lease_team.as_deref(),Some("stock, mark and norm"));
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
+        *h.commands.lock().unwrap()=Some(crate::lease_commands::CommandReading::Clear);
+        run(6);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
+        h.team.lock().unwrap().in_turn.push_back(Some("stock, mark, norm and echo".into()));
+        run(7);
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"team reload must retain Stu and his native descendants");
+        let prompts=h.work_prompts.lock().unwrap();
+        assert_eq!(prompts.len(),8,"same handoff did not continue after registering the new teammate");
+        assert!(prompts.last().unwrap().starts_with(TEAM_CHANGED_CONTINUATION));
+        assert_eq!(prompts.last().unwrap(),TEAM_CHANGED_CONTINUATION,"roster reload must not replay the accepted handoff");
+        drop(prompts);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
     }
+
+    #[test]
+    fn stopped_peer_handoff_is_not_delivered_after_first_connection_opens() {
+        for during_open in [false,true] {
+            let h=harness(0);
+            let record=assignment::register(&h.state,&registration(&h)).unwrap();
+            let scope=h.host.message_scope(&h.binding);
+            let path=h.state.join("rich-status.json");
+            let instruction=crate::ecs::UserInstruction::with_text("ledger:thread-one:turn-7".into(),
+                registration(&h).instruction_sha256,Some("landing the three branches"));
+            crate::session_tools::bind(&path,&scope,"native-rich","rich",Some(instruction)).unwrap();
+            crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"Land the three branches"})).unwrap();
+            let (message,through)=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();
+            let backend=Backend::new();
+            backend.inner.lock().unwrap().binding=Some(h.binding.clone());
+            h.host.backends.lock().unwrap().insert("thread-one".into(),backend.clone());
+            if during_open {h.start_gate.shut()} else {h.host.stop_assignment("depot","thread-one",&record.id).unwrap()}
+            let host=h.host.clone();let binding=h.binding.clone();
+            let run=std::thread::spawn(move || {
+                host.run_message(&backend,&binding,&message,&format!("peer:{through}")).unwrap();
+                crate::session_tools::acknowledge(&host.message_scope(&binding),"stu",through).unwrap();
+            });
+            if during_open {
+                // load-bound: hang guard only; the locked factory proves spawn is
+                // inside its closed gate before Stop, not merely scheduled later.
+                until("the first peer connection never reached its opening gate",||h.host.factory.try_lock().is_err());
+                h.host.stop_assignment("depot","thread-one",&record.id).unwrap();
+                h.start_gate.release();
+            }
+            run.join().unwrap();
+            assert!(h.work_prompts.lock().unwrap().is_empty(),"the stopped handoff reached Stu");
+            assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"stopped delivery must not replay on restart");
+            assert_eq!(assignment::read(&h.state,"depot","thread-one",&record.id).unwrap().state,AssignmentState::Interrupted);
+            h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn independent_stu_stop_is_durable_while_a_dispatch_writer_is_busy() {
+        struct Noop;
+        impl TurnCancel for Noop { fn cancel(&self) -> bool { false } }
+        let h = harness(0);
+        let receipt = assignment::register(&h.state, &registration(&h)).unwrap();
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().peer_stopper = Some(("independent-stu".into(), Arc::new(Noop)));
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+        let writer = crate::work_status::lock_receipts(&h.state, "depot", "thread-one").unwrap();
+        let host = h.host.clone();
+        let id = receipt.id.clone();
+        let stop = std::thread::spawn(move || host.stop_assignment("depot", "thread-one", &id));
+        // The existing bounded wait is a hang guard. The verdict requires the
+        // actual Stop fact while the dispatch lock is still held, never elapsed time.
+        let durable = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| until(
+            "the Stop fact waited for the dispatch writer", || assignment::read(
+                &h.state, "depot", "thread-one", &receipt.id).unwrap().user_stop_requested_at_ms.is_some()
+        ))).is_ok();
+        drop(writer);
+        stop.join().unwrap().unwrap();
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+        assert!(durable, "the user's Stop must be durable before waiting for a busy dispatch writer");
+    }
+
+    #[test]
+    fn independent_stu_stop_reaches_only_the_selected_assignments_worker() {
+        struct Stops(Mutex<Vec<String>>);
+        impl TurnCancel for Stops {
+            fn cancel(&self)->bool { panic!("per-assignment Stop must not cancel Stu") }
+            fn stop_worker(&self, tool:&str)->CommandStop {
+                self.0.lock().unwrap().push(tool.into()); CommandStop::Ended
+            }
+        }
+        let h=harness(0);
+        let first=assignment::register(&h.state,&registration(&h)).unwrap();
+        let second=assignment::register(&h.state,&Registration {obligation_id:"another-obligation".into(),..registration(&h)}).unwrap();
+        let backend=Backend::new();let stopper=Arc::new(Stops(Mutex::new(vec![])));
+        {let mut inner=backend.inner.lock().unwrap();inner.lease_session=Some("independent-stu".into());inner.peer_stopper=Some(("independent-stu".into(),stopper.clone()));}
+        h.host.backends.lock().unwrap().insert("thread-one".into(),backend);
+        let root=h.state.join("work-receipts").join({use sha2::Digest;format!("{:x}",sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"))});
+        std::fs::create_dir_all(&root).unwrap();
+        for (id,obligation,tool) in [("first","obligation-7","call-first"),("second","another-obligation","call-second")] {
+            std::fs::write(root.join(format!("{id}.json")),serde_json::json!({"schema":1,"id":id,
+                "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"independent-stu"},
+                "request":{"obligation_id":obligation,"role":"worker"},"status":"running","tool_use_id":tool}).to_string()).unwrap();
+        }
+        h.host.stop_assignment("depot","thread-one",&first.id).unwrap();
+        assert_eq!(*stopper.0.lock().unwrap(),vec!["call-first"]);
+        let stopped=assignment::read(&h.state,"depot","thread-one",&first.id).unwrap();
+        assert!(stopped.user_stop_requested_at_ms.is_some());
+        let control=crate::session_tools::pending(&h.host.message_scope(&h.binding),"stu").unwrap().unwrap().0;
+        assert_eq!(control.from,"user-control");
+        let facts:serde_json::Value=serde_json::from_str(&control.text).unwrap();
+        assert_eq!(facts["event"],"user_stop");assert_eq!(facts["assignment_id"],first.id);
+        assert_eq!(facts["requested_at_ms"],stopped.user_stop_requested_at_ms.unwrap());
+        assert!(crate::session_tools::pending(&h.host.message_scope(&h.binding),"rich").unwrap().is_none());
+        assert_eq!(stopped.state,AssignmentState::Interrupted);
+        assert_eq!(assignment::read(&h.state,"depot","thread-one",&second.id).unwrap().state,AssignmentState::Registered);
+        h.host.shutdown();std::fs::remove_dir_all(&h.root).unwrap();
+    }
+   #[test]
+   fn user_stop_provenance_survives_state_changes_and_reload() {
+       let h = harness(0);
+       let receipt = assignment::register(&h.state, &registration(&h)).unwrap();
+       let before = serde_json::to_value(assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap()).unwrap();
+       assert!(before.get("user_stop_requested_at_ms").is_none_or(|value|value.is_null()));
+       h.host.stop_assignment("depot", "thread-one", &receipt.id).unwrap();
+       let read = || assignment::read(&h.state, "depot", "thread-one", &receipt.id).unwrap();
+       let stopped = serde_json::to_value(read()).unwrap();
+       let at = stopped["user_stop_requested_at_ms"].as_u64().expect("the user's Stop is a durable source fact");
+       assert!(at > 0);
+       assert_eq!(read().state, AssignmentState::Interrupted);
+       assignment::advance(&h.state, "depot", "thread-one", &receipt.id, AssignmentState::Interrupted, "Provider cancellation outcome recorded separately").unwrap();
+       assert_eq!(serde_json::to_value(read()).unwrap()["user_stop_requested_at_ms"], at);
+       h.host.shutdown();
+       std::fs::remove_dir_all(&h.root).unwrap();
+   }
+
 }

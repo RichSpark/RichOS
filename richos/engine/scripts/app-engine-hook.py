@@ -121,17 +121,18 @@ def handle(payload):
     if not root.is_absolute() or not coordination.is_absolute():
         raise ValueError("desktop roots must be explicit and absolute")
     event = payload.get("hook_event_name")
+    presentation = event in ("PreToolUse", "PostToolUse", "PostToolUseFailure") and payload.get("tool_name") == "StructuredOutput" and not payload.get("agent_id")
     if event == "PreToolUse" and payload.get("tool_name") == "SendMessage":
         pause_protocol = load("richos_pause_protocol", ENGINE / "scripts/lib/pause_protocol.py")
         pause_protocol.validate_payload(payload)
     if event == "PreToolUse":
         active = scope()
-        if active.get("actions_allowed") is not True \
+        if active.get("actions_allowed") is not True and not presentation \
                 and not a_worker_this_lease_already_dispatched(active, payload):
             raise ValueError("This app turn is stopped or is supplying context. New actions are unavailable.")
     evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
     instruction = None
-    if event == "UserPromptSubmit":
+    if event in ("UserPromptSubmit", "PreToolUse"):
         active = scope()
         if active.get("actions_allowed") is True and active.get("binding", {}).get("session_id") == payload.get("session_id"):
             instruction = active.get("user_instruction")
@@ -140,6 +141,9 @@ def handle(payload):
     # worktrees under it, where every back-end worker works (the carve-out, slice S2b).
     payload = evidence.capture(payload, root / "evidence", instruction, app_data=root.parent,
                                worktrees=root / "target-worktrees")
+    # Local response formatting performs no work and grants no tool authority.
+    if presentation:
+        return
     ws = [sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--entity", str(coordination)]
     work = load("richos_desktop_work", ENGINE / "mega-lander/app.py")
     if event == "PreToolUse":
@@ -150,7 +154,8 @@ def handle(payload):
             recovery, host = work.W._recovery_adapter()
             notice = recovery.cancellation_notice(host, str(payload.get("session_id") or ""))
             if notice:
-                context = {"hookSpecificOutput":{"hookEventName":"PreToolUse", "additionalContext":notice}}
+                context = context or {"hookSpecificOutput":{"hookEventName":"PreToolUse"}}
+                context["hookSpecificOutput"]["additionalContext"] = notice
 
         def emit(notice):
             # One JSON answer per hook call: the verdict joins the worker's host context.

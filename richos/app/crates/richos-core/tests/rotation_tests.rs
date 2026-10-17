@@ -1038,6 +1038,9 @@ fn phone_answer_provenance_survives_a_lease_crash_without_changing_product_reten
         channels: Arc<Mutex<Vec<Option<String>>>>,
     }
     impl Cognition for Capture {
+        fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
+            self.inner.set_previous_delivery_attempt(context)
+        }
         fn session_id(&self) -> &str { self.inner.session_id() }
         fn reprime(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
             self.inner.reprime(text,on_item)
@@ -1098,6 +1101,12 @@ struct AccountLease {
     prompts: Arc<Mutex<Vec<(String, String)>>>,
 }
 impl Cognition for AccountLease {
+    fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
+        let facts: serde_json::Value = serde_json::from_str(context).unwrap();
+        assert_eq!(facts["previous_delivery_attempt"]["session_id"], "sess-account-1");
+        assert_eq!(facts["previous_delivery_attempt"]["delivery_outcome"], "unknown");
+        Ok(())
+    }
     fn session_id(&self) -> &str { &self.session_id }
     fn account(&self) -> Option<&str> { Some(&self.account) }
     fn streamed_usage(&self) -> Option<richos_core::quota::StreamedReading> { self.streamed.lock().unwrap().clone() }

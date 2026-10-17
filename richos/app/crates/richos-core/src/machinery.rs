@@ -18,6 +18,11 @@
 //! observer trait, and its own Tauri event name — `rich://machinery` — and the default
 //! UI's subscription list is the proof.
 //!
+//! Rich's formatted conversation lease takes its visible words only from the
+//! native `StructuredOutput.reply` field. Its ordinary assistant text uses this
+//! existing machinery lane as technical commentary. Worker and legacy leases
+//! retain their original text path.
+//!
 //! ## ONE event name, deliberately (design §1.3)
 //! `stream.rs` and `voice/event.rs` use one Tauri event per semantic event because those
 //! sets are OURS and closed. The agent's frame set is the VENDOR's and open. One name plus

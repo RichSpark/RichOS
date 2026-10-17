@@ -189,7 +189,7 @@ fn prime_failure_has_one_bounded_recovery_and_one_visible_exchange() {
     );
 }
 #[test]
-fn restart_marks_orphan_received_and_inflight_requests_failed_without_replaying() {
+fn restart_continues_saved_requests_and_preserves_uncertain_attempt_timing() {
     let (spine, _, _, root) = fixture();
     let binding = spine.active_binding().unwrap().clone();
     drop(spine);
@@ -206,9 +206,10 @@ fn restart_marks_orphan_received_and_inflight_requests_failed_without_replaying(
     restored.set_turn_control(TurnControl::open(root.join("intake.jsonl")).unwrap());
     let mock = MockCognition::new("new", vec![]);
     let prompts = mock.prompts.clone();
+    let contexts = mock.recovery_contexts.clone();
     restored.attach_lease(Box::new(mock));
     restored.reconcile_intake().unwrap();
-    for id in [first.clone(), second] {
+    for id in [first.clone(), second.clone()] {
         let turn = restored.ledger().turn(&id).unwrap();
         assert_eq!(turn.state,if id==first {TurnState::Completed}else{TurnState::Interrupted});
         if id==first {continue}
@@ -217,7 +218,14 @@ fn restart_marks_orphan_received_and_inflight_requests_failed_without_replaying(
         let reloaded = Ledger::open(root.join("ledger.jsonl")).unwrap();
         assert_eq!(reloaded.turn(&id).unwrap().active_ms(), None);
     }
-    assert_eq!(*prompts.lock().unwrap(),vec!["not started"]);
+    assert_eq!(*prompts.lock().unwrap(),vec!["not started", "may have side effects"]);
+    let prior: serde_json::Value = serde_json::from_str(&contexts.lock().unwrap()[0]).unwrap();
+    assert_eq!(prior["previous_delivery_attempt"]["turn_id"], second);
+    assert_eq!(prior["previous_delivery_attempt"]["session_id"], "old");
+    assert_eq!(prior["previous_delivery_attempt"]["delivery_outcome"], "unknown");
+    let successor = restored.ledger().turn(&second).unwrap().superseded_by.as_ref().unwrap();
+    assert_eq!(restored.ledger().turn(successor).unwrap().state, TurnState::Completed);
+    assert_eq!(restored.messages(binding.thread_id()).unwrap().iter().filter(|m| m.role == "user").count(), 2);
 }
 struct WaitingFactory {
     entered: Mutex<mpsc::Sender<()>>,
