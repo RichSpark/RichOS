@@ -209,7 +209,7 @@ def report_assignment(scope, obligation, status, detail, observed_start=False):
         record = bounded(path)
         if record.get("user_stop_requested_at_ms") is not None:
             raise ValueError("the user stopped this assignment")
-        if record["state"] in ("settled", "interrupted"):
+        if record["state"] == "settled":
             return {"recorded":True, "state":record["state"]}
         if observed_start and record["state"] == "running":
             return {"recorded":True, "state":record["state"]}

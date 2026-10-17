@@ -237,7 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ---- register, which is the whole of his turn -----------------------------------------
     let registered_at = Instant::now();
-    let receipt = host.register(&binding, &Registration {
+    let receipt = assignment::register(&state, &Registration {
         entity_id: "qa-test-co".into(),
         thread_id: thread.clone(),
         obligation_id: obligation.into(),
@@ -248,6 +248,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         repositories: vec![repo.display().to_string()],
         needs_screen: false,
     })?;
+    let scope=richos_core::status_tools::StatusToolScope {version:1,state_root:state.clone(),entity_id:"qa-test-co".into(),thread_id:thread.clone()};
+    let sender=data.join("probe-rich-status.json");
+    let record=assignment::read(&state,"qa-test-co",&thread,&receipt.id)?;
+    richos_core::session_tools::bind(&sender,&scope,"probe-rich","rich",Some(richos_core::ecs::UserInstruction {
+        ledger_ref:record.instruction_ledger_ref,sha256:record.instruction_sha256,text:None}))?;
+    richos_core::session_tools::delegate(&sender,&scope,serde_json::json!({"text":record.handoff}))?;
+    host.wake_messages(&binding);
     eprintln!("REGISTERED {} at t+0", receipt.id);
 
     // ---- watch it move, and time every transition against registration --------------------

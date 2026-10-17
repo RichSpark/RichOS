@@ -218,12 +218,7 @@ struct RecordArguments {
     /// every caller before today meant.
     #[serde(default)]
     kind: Option<String>,
-    /// **Pick back up work RichOS closed on** — the `what` of a `waiting_for_you` row in state
-    /// `unknown`. The same assignment goes back on the register ([`assignment::pick_up`]), with
-    /// every answer he already gave it; nothing new is opened. The richos-hq work-path design's
-    /// C6, option B.
-    #[serde(default)]
-    picks_up: Option<String>,
+
 }
 
 pub fn tools() -> Value {
@@ -234,7 +229,7 @@ pub fn tools() -> Value {
              "assignment":{"type":"string","minLength":1,"maxLength":4096,"description":"Your complete handoff to Stu: outcome or question, relevant context, constraints and decisions. Preserved in full; a shortened display title is stored separately."},
              "repositories":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":4096},"description":"Absolute paths of the repositories this assignment touches, if he named any. Omit when he did not. Only a repository connected to this company is kept; any other path is left out of the record."},
              "needs_screen":{"type":"boolean","description":"True if this work needs the Mac's screen to be unlocked: it drives the app's own window, takes screenshots, walks a build on screen, or otherwise cannot be done while the screen is locked. If the screen is locked when this comes up, the app waits for the unlock and carries on by itself; nobody is asked anything. Omit it for ordinary work, which is almost all work."},
-             "picks_up":{"type":"string","minLength":1,"maxLength":4096,"description":"Only when he asks you to pick back up work that RichOS closed on: work the read lists under `waiting_for_you` with state `unknown`. Set this to that row's `what`, exactly as the read gave it. It puts THAT work back on, with every answer he already gave it, and opens nothing new; `assignment` is then his request in his own terms as usual. Omit it for anything else."},
+
              "kind":{"type":"string","enum":["task","check","investigate"],"description":"What this is. `task`: work he asked for; omit it and you get this. `check`: a QUESTION of his whose answer you expect quickly, because it is on file somewhere and only has to be looked up. `investigate`: a QUESTION of his that needs real digging: repositories, logs, the web, several places. This is operational metadata, not a reply template or an execution route."}
          },"required":["assignment"],"additionalProperties":false},
          "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}}
@@ -260,7 +255,7 @@ pub fn call_with(
         return Err("That assignment tool does not exist. Nothing was recorded.".into());
     }
     let args: RecordArguments = serde_json::from_value(arguments).map_err(|_| {
-        "Use only assignment, repositories, needs_screen, kind and picks_up. Nothing was recorded."
+        "Use only assignment, repositories, needs_screen and kind. Nothing was recorded."
             .to_string()
     })?;
     // Reject unknown kinds before opening an obligation.
@@ -290,27 +285,6 @@ pub fn call_with(
             return Ok(json!({"recorded": false, "reason": "work_origin_not_allowed",
                 "origin": origin.declared(), "allowed_origins": listed}));
         }
-    }
-    // ===================================================================================
-    // HIS WORD TO PICK BACK UP WORK RICHOS CLOSED ON (the work-path design's C6, option B)
-    // ===================================================================================
-    //
-    // Nothing is opened: the assignment, its obligation and his answers already exist. It goes
-    // back on the register and the host adopts it at this turn's boundary like any other. His
-    // team's install has no such row to pick up from this path, so it is refused there.
-    if let Some(what) = args.picks_up.as_deref() {
-        if listed.is_some() {
-            return Err("Picking work back up is not available in this conversation. Nothing was recorded.".into());
-        }
-        let receipt = assignment::pick_up(&scope.state_root, &scope.entity_id, &scope.thread_id, what)
-            .map_err(|e| format!("{e}: use the exact `what` of an `unknown` row from the read, or write it down as new work without picks_up. Nothing was recorded."))?;
-        let record = assignment::read(&scope.state_root, &scope.entity_id, &scope.thread_id, &receipt.id)
-            .map_err(|e| e.to_string())?;
-        return Ok(json!({
-            "recorded": true,
-            "assignment_id": receipt.id, "obligation_id": record.obligation_id,
-            "state": "registered", "kind": receipt.kind.as_str(),
-        }));
     }
     // ===================================================================================
     // THE OBLIGATION, OPENED HERE, WITH AN ID THE MODEL NEVER SEES
@@ -648,36 +622,6 @@ mod tests {
         let opened = Opened::default();
         assert!(call_with(&broken.scope, RECORD_TOOL_NAME, json!({"assignment":"land it"}), &opened).is_err());
         assert!(opened.ids().is_empty());
-    }
-
-    /// **His word to pick back up work RichOS closed on** (the work-path design's C6, option
-    /// B). The same assignment goes back on the register, nothing new is opened, and a name
-    /// that is not an `unknown` row on this conversation moves nothing.
-    #[test]
-    fn picks_up_puts_the_same_unknown_assignment_back_and_opens_nothing() {
-        let fixture = fixture();
-        let state = fixture.state();
-        let receipt = assignment::register(&state, &Registration {
-            entity_id: "depot".into(), thread_id: "thread-one".into(), obligation_id: "work-closed-on".into(),
-            instruction_ledger_ref: "ledger:thread-one:turn-7".into(), instruction_sha256: "a".repeat(64),
-            title: "land the three branches".into(), repositories: vec![], needs_screen: false,
-        }).unwrap();
-        let opened = Opened::default();
-        // Not unknown yet: nothing to pick up, and nothing moves.
-        assert!(call_with(&fixture.scope, RECORD_TOOL_NAME,
-            json!({"assignment":"pick it back up","picks_up":"land the three branches"}), &opened).is_err());
-        assignment::advance(&state, "depot", "thread-one", &receipt.id, assignment::AssignmentState::Unknown, "It was running.").unwrap();
-        assert!(call_with(&fixture.scope, RECORD_TOOL_NAME,
-            json!({"assignment":"pick it back up","picks_up":"some other work"}), &opened).is_err());
-        assert_eq!(fixture.rows()[0].state, assignment::AssignmentState::Unknown);
-        let result = call_with(&fixture.scope, RECORD_TOOL_NAME,
-            json!({"assignment":"pick it back up","picks_up":"land the three branches"}), &opened).unwrap();
-        assert_eq!(result["recorded"], true);
-        let rows = fixture.rows();
-        assert_eq!(rows.len(), 1, "a second assignment was written");
-        assert_eq!((rows[0].id.as_str(), rows[0].obligation_id.as_str(), rows[0].state),
-                   (receipt.id.as_str(), "work-closed-on", assignment::AssignmentState::Registered));
-        assert!(opened.ids().is_empty(), "an obligation was opened for work that already has one");
     }
 
     /// What the register asked the ECS desk to do, recorded rather than performed — so every

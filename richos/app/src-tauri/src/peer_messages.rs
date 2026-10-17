@@ -116,7 +116,7 @@ mod tests {
         let mut first=None;
         assert!(forward_work_notices(&scope,|text,id| {first=Some((text.to_string(),id.to_string()));Err("acceptance uncertain".into())}).is_err());
         assert_eq!(assignment::pending_notices_of(&root,"company","thread",|kind|!kind.is_result()).unwrap().len(),1);
-        assignment::advance(&root,"company","thread",&record.id,assignment::AssignmentState::Running,"Running").unwrap();
+        assignment::record_user_stop(&root,"company","thread",&record.id).unwrap();
         assert!(forward_work_notices(&scope,|text,id| {
             assert_eq!(first.as_ref().unwrap(),&(text.to_string(),id.to_string()),"a retry changed durable input identity or facts");
             let facts:serde_json::Value=serde_json::from_str(text).unwrap();

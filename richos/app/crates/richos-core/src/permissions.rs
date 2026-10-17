@@ -88,17 +88,10 @@ pub struct PermissionDesk { inner: Mutex<Desk>, changed: Condvar }
 pub struct ScopedPermissions { pub desk: Arc<PermissionDesk>, pub scope: PathBuf }
 
 /// What [`PermissionDesk::resolve`] did with his answer.
-///
-/// **`ToAssignment` is no longer produced** (2026-10-13): it carried an answer he gave after
-/// a BACKGROUND call had ended, and background work no longer waits on him at all
-/// ([`BACKGROUND_STEP_REFUSED`]). The variant is kept only so the shell and the work host,
-/// which still match on it, change in their own follow-up rather than in this fix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answered {
     /// The call that raised it is still waiting and has taken the decision itself.
     Delivered,
-    /// Never produced since 2026-10-13; see the type's doc.
-    ToAssignment { binding: Binding, allow: bool },
 }
 
 /// **What a background step is told when it reaches this desk** (the CEO, 2026-10-13: work he

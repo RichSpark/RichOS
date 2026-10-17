@@ -121,11 +121,10 @@ async function main() {
   // after a state's sentence, whatever the back end recorded ("The back end couldn't take it
   // yet", "Opening the work connection.", "It landed on cc/echo-1 in project."). In the
   // ordinary view each row is its title and the state's plain sentence; the recorded detail
-  // shows only with Technical view on. The retry sentence is read from `work_host.rs`, so this
-  // check follows the words the back end really writes.
+  // shows only with Technical view on. Job details are supplied by Stu, so these
+  // fixtures exercise arbitrary report text rather than app-written progress sentences.
   await run.check("the assignment rows in Under the hood speak plain words, and the back end's own lines show only in Technical view", async () => {
-    const retry = require("fs").readFileSync(path.join(UI_DIR, "..", "crates", "richos-core", "src", "work_host.rs"), "utf8")
-      .match(/pub const ANSWER_RETRY_DETAIL: &str = "([^"]+)";/)[1];
+    const retry = "The reviewer has not replied yet.";
     const page = await browser.newPage({viewport: {width:1280, height:900}});
     const errors = []; page.on("pageerror", e => errors.push(String(e)));
     await page.addInitScript((retry) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [
@@ -166,14 +165,10 @@ async function main() {
   // 25b540804, rv-20261015T113335Z-25b54080-3123). Hiding every recorded line also hid
   // "Waiting for you to sign in to Claude, in Settings under Claude accounts." under a held job,
   // which then read only "Written down. Nothing has been prepared yet.", and the long-wait line
-  // that names Stop. The shell marks those rows `forYou` (`work_host.rs`'s
-  // `tells_him_what_to_do`); the sentences are read from `work_host.rs`, so this check follows
-  // the words the back end really writes.
+  // that names Stop. A Stu-authored waiting sentence marked `forYou` remains visible
+  // in both views. There is no list of app-generated job status sentences.
   await run.check("a line that tells him what to do shows in the ordinary view, and the back end's own lines still do not", async () => {
-    const host = require("fs").readFileSync(path.join(UI_DIR, "..", "crates", "richos-core", "src", "work_host.rs"), "utf8");
-    const constant = (name) => JSON.parse('"' + host.match(new RegExp("pub const " + name + ": &str =\\s*\"([\\s\\S]*?)\";"))[1]
-      .replace(/\\\r?\n\s*/g, "") + '"');
-    const signIn = constant("HELD_FOR_SIGN_IN"), longer = constant("HELPER_TAKING_LONGER_DETAIL");
+    const signIn = "Please sign in to Claude in Settings.", longer = "You can stop this job while its reviewer is working.";
     const page = await browser.newPage({viewport: {width:1280, height:900}});
     const errors = []; page.on("pageerror", e => errors.push(String(e)));
     await page.addInitScript(({signIn, longer}) => window.__RICHOS_MOCK_PRESET__ = {assignments: {hiring: [

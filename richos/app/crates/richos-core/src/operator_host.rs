@@ -1406,6 +1406,10 @@ impl OperatorHost {
     }
 
     fn report(&self, conversation: &Arc<Mutex<Conversation>>, key: &ConversationKey, record: &ReportRecord) -> Close {
+        if record.entity_id!=key.entity_id || record.thread_id!=key.thread_id {
+            self.log("An operator report named a different company or conversation; nothing was changed");
+            return Close::Done;
+        }
         {
             let mut c = conversation.lock().unwrap();
             c.turn_report = Some(record.text.clone());
@@ -1490,15 +1494,9 @@ impl OperatorHost {
         let source = format!("operator-report:{}:{}", record.lead, record.at_ms);
         match self.settle.complete(key, &item.obligation_id, &source, status, &evidence, &record.text) {
             Ok(()) => {
-                let (to, kind) = if failed {
-                    (AssignmentState::Failed, NoticeKind::Failed)
-                } else if item.kind.is_question() {
-                    (AssignmentState::Settled, NoticeKind::Answer)
-                } else {
-                    (AssignmentState::Settled, NoticeKind::Settled)
-                };
+                let kind = if failed {NoticeKind::Failed} else if item.kind.is_question() {NoticeKind::Answer} else {NoticeKind::Settled};
                 let detail = if failed { "Your team reported that it could not be done." } else { "Your team reported it done." };
-                if let Err(e) = assignment::advance(&self.state, &key.entity_id, &key.thread_id, handle, to, detail)
+                if let Err(e) = assignment::record_operator_report(&self.state,&key.entity_id,&key.thread_id,record)
                     .and_then(|_| assignment::raise_notice(&self.state, &key.entity_id, &key.thread_id, handle, kind, text)) {
                     self.log(&format!("{}/{}: {handle} settled in the engine; the register could not be updated ({e})",
                                       key.entity_id, key.thread_id));
@@ -2260,6 +2258,7 @@ pub(crate) mod tests {
         let path = ConversationPaths::under(&r.root.join("operator"), &key(thread)).outbox;
         let mut text = std::fs::read_to_string(&path).unwrap_or_default();
         for v in records {
+            let mut v=v.clone();v["thread_id"]=thread.into();
             text.push_str(&v.to_string());
             text.push('\n');
         }
@@ -2390,6 +2389,21 @@ pub(crate) mod tests {
     }
 
     // ---- (c) reports settle; the last text ---------------------------------------------------
+
+    #[test]
+    fn a_report_from_another_conversation_cannot_close_this_conversations_work() {
+        let r=rig();let handle=register(&r,"a",AssignmentKind::Task);
+        r.host.relay(&key("a"),"A",Some(&handle),"Finish it.",Origin::DeskTyped).unwrap();
+        let path=ConversationPaths::under(&r.root.join("operator"),&key("a")).outbox;
+        std::fs::write(&path,report(Some(&handle),"outcome","A different thread's report").to_string()+"\n").unwrap();
+        r.host.handle(&key("a"),turn(&[],None));
+        assert!(r.settle.calls.lock().unwrap().is_empty());
+        assert_eq!(assignment::read(&r.state,"femcboost","a",&handle).unwrap().state,AssignmentState::Registered);
+        outbox(&r,"a",&[report(Some(&handle),"outcome","The correct thread's report")]);
+        r.host.handle(&key("a"),turn(&[],None));
+        assert_eq!(r.settle.calls.lock().unwrap().len(),1);
+        assert_eq!(assignment::read(&r.state,"femcboost","a",&handle).unwrap().state,AssignmentState::Settled);
+    }
 
     #[test]
     fn only_a_report_settles_and_its_lands_are_the_evidence() {

@@ -42,6 +42,24 @@ def _alive(pid):
 DUTY_TOP={"worker":"# Your duty in this assignment: implement","reviewer":"# Your duty in this assignment: review"}
 
 class DesktopWork(unittest.TestCase):
+    def test_stu_replaces_legacy_host_interruption_but_cannot_override_user_stop(self):
+        identity=json.dumps(["depot","thread-a"],separators=(",", ":"))
+        root=self.root/"engine-state/assignments"/hashlib.sha256(identity.encode()).hexdigest();root.mkdir(parents=True)
+        saved=root/"fixture-task.json"
+        record={"schema":1,"id":"fixture-task","entity_id":"depot","thread_id":"thread-a",
+                "obligation_id":"fixture-task","state":"interrupted","detail":"Old host Quit inference",
+                "work_session":"old-session","updated_at_ms":0}
+        saved.write_text(json.dumps(record))
+        result=self.call("report",{"obligation_id":"fixture-task","state":"running","detail":"Reconciled the previous attempt"})
+        self.assertEqual(result["state"],"running")
+        observed=json.loads(saved.read_text())
+        self.assertEqual(observed["work_session"],self.session)
+        observed["user_stop_requested_at_ms"]=1;saved.write_text(json.dumps(observed))
+        before=saved.read_bytes()
+        with self.assertRaisesRegex(ValueError,"user stopped"):
+            self.call("report",{"obligation_id":"fixture-task","state":"running","detail":"Must not resume"})
+        self.assertEqual(saved.read_bytes(),before)
+
     def test_independent_stu_cannot_mark_unresolved_execution_failed(self):
         self.call("prepare",self.args)
         with self.assertRaisesRegex(ValueError,"unresolved execution"):

@@ -150,7 +150,7 @@ impl Walk {
         if opened["accepted"] != true {
             return Err(format!("the obligation was not opened: {opened}"));
         }
-        let receipt = self.host.register_kind(&binding, &Registration {
+        let receipt = assignment::register_kind(&self.state, &Registration {
             entity_id: ENTITY.into(),
             thread_id: thread.clone(),
             obligation_id: obligation.clone(),
@@ -159,7 +159,14 @@ impl Walk {
             title: title.into(),
             repositories: vec![],
             needs_screen: false,
-        }, AssignmentKind::Task)?;
+        }, AssignmentKind::Task).map_err(|e|e.to_string())?;
+        let scope=richos_core::status_tools::StatusToolScope {version:1,state_root:self.state.clone(),entity_id:ENTITY.into(),thread_id:thread.clone()};
+        let sender=self.data.join(format!("walk-rich-{thread}.json"));
+        richos_core::session_tools::bind(&sender,&scope,&session,"rich",Some(richos_core::ecs::UserInstruction {
+            ledger_ref:format!("ledger:{thread}:{turn}"),sha256:format!("{:x}",<sha2::Sha256 as sha2::Digest>::digest(text.as_bytes())),text:Some(text.into())}))?;
+        richos_core::session_tools::delegate(&sender,&scope,json!({"text":text}))?;
+        self.host.wake_messages(&binding);
+
         Ok(json!({"assignment": receipt.id, "obligation": obligation, "thread_id": thread}))
     }
 

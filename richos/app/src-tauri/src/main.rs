@@ -3230,35 +3230,9 @@ fn main() {
                 permissions.clone(),
             );
             work.set_quota(quota.clone());
-            // **How a held queue sees the sign-in come back** (T3 idea 1, finished: richos-hq
-            // `docs/plans/2026-10-09-automatic-second-review-and-t3-ideas.md` §3, Sage's check
-            // §1.1): the same `claude auth status` reading Settings shows, for the account a
-            // work lease would run under now, with no model turn. Read at most every few
-            // minutes, and only while a queue is held (`work_host.rs`, `HOLD_CHECK_EVERY`).
-            {
-                let quota = quota.clone();
-                work.set_sign_in(Arc::new(move || {
-                    let folder = quota.lease_account().folder;
-                    match richos_core::provider_auth::status_in(&resolve_claude_bin(), folder.as_deref()).state {
-                        richos_core::provider_auth::AuthState::Connected => Some(true),
-                        richos_core::provider_auth::AuthState::SignedOut => Some(false),
-                        _ => None,
-                    }
-                }));
-            }
             // The back end's written files — its own, its workers', its commands' — reach the
             // assignment's thread's output list after every back-end turn (PRD §4.1 (b)).
             work.set_output_store(output_store.clone());
-            // An assignment its back end handled itself (a command he asked for, or an answer)
-            // closes its obligation in the engine on the words he was given.
-            work.set_answered_close(Arc::new(richos_core::operator_runtime::EcsAnsweredClose::with(
-                engine_store_call(Arc::clone(&engine_cell), &data_dir),
-            )));
-            // A hiring is briefed with his company notes, read from the folder the interview
-            // saves them in (the same root the conversation is primed from, above).
-            if let Some(root) = richos_core::company::install_central_root() {
-                work.set_central_root(root);
-            }
             if let Some(desk) = &operator_desk {
                 work.set_operator(desk.clone());
             }
@@ -3272,51 +3246,10 @@ fn main() {
                 ensure_operator_review_watch(desk, &data_dir);
             }
 
-            // ==============================================================================
-            // ROW 9 — WHAT A RELAUNCH MAY SAY ABOUT WORK IT DID NOT SEE END
-            //
-            // The CEO's row 9: "If the app crashes or restarts mid-run, nothing invents a
-            // completion." The background-work spec §6.1-§6.3 is the mechanism and
-            // `richos_core::recovery` is the whole of it; this is its one call site.
-            //
-            // IT IS HERE — after the host exists, before it can be given anything new, and
-            // before the first turn — because it is a BOUNDARY and not a timer (§6.3). It
-            // runs once per launch and never again.
-            //
-            // It reads his repositories through the DELIVERED Git, when this launch has a
-            // verified runtime (`repositories.rs`'s rule, not `PATH`). When it has not — a
-            // development build with no `engine/runtime/delivery.json` — recovery is told
-            // so, and says it could not look rather than implying it did.
-            {
-                let verified =
-                    boot_engine.as_deref().and_then(|dir| richos_core::runtime::verify_engine(dir).ok());
-                if verified.is_none() {
-                    eprintln!(
-                        "[richos] recovery: this launch has no verified Git runtime, so an \
-                         assignment's repository is recorded as unread rather than as unchanged."
-                    );
-                }
-                let reader = || -> Box<dyn richos_core::recovery::Repositories> {
-                    match &verified {
-                        Some(runtime) => Box::new(richos_core::recovery::GitRepositories::new(runtime)),
-                        None => Box::new(richos_core::recovery::UnreadableRepositories),
-                    }
-                };
-                // The same reader the host pins an assignment's starting point with, so the
-                // "before" and the "after" of a comparison are taken by one thing.
-                work.set_repositories(reader());
-                // **HOW THE MAC'S SCREEN IS READ** — the CEO's ruling §56. Installed beside
-                // the Git reader and for the same reason: `richos-core` links no framework, so
-                // the real reading comes from the shell. Without this line the host keeps its
-                // honest default (`UnknownScreen`), which never blocks — so a missing
-                // installation loses the feature and never loses the work.
-                work.set_screen(std::sync::Arc::new(screen::MacScreen));
-                let report =
-                    richos_core::recovery::reconcile(&data_dir.join("engine-state"));
-                eprintln!("[richos] {}", report.log_message());
-
-
-            }
+            // Release grants from the old process. Stu owns job recovery through his inbox.
+            work.set_screen(std::sync::Arc::new(screen::MacScreen));
+            let recovery=richos_core::recovery::reconcile(&data_dir.join("engine-state"));
+            eprintln!("[richos] {}",recovery.log_message());
 
             // ==============================================================================
             // FIRST-RUN SETUP — what this machine is missing, named at boot
@@ -4266,13 +4199,6 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
         &thread_id,
     )
     .map_err(|e| e.to_string())?;
-    // THIS conversation's back end, never the host's idea of "the" one: the CEO's Two Riches
-    // spec puts one back-end Rich behind each thread, and another thread's live assignment is
-    // the one answer that is never useful on this thread's surface.
-    let live = state.work.live_on(&thread_id).map(|live| live.id);
-    // Written down and held until a sign-in or the work connection comes back: the window says
-    // these are waiting to start, never "starting" (nightly 48's walk, D26).
-    let held = state.work.held_on(&thread_id);
     Ok(serde_json::json!({
         "assignments": rows.iter().map(|row| {
             // **What this assignment is waiting on HIM for** (spec §5.2, §5.5, §7.8). The
@@ -4313,8 +4239,8 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 // It is not an identifier he is ever shown — it never reaches a sentence,
                 // the same way `id` above never does.
                 "turnRef": row.instruction_ledger_ref,
-                "state": row.state.as_str(),
-                "detail": row.detail,
+                "state": row.reported_state().unwrap_or(richos_core::assignment::AssignmentState::Unknown).as_str(),
+                "detail": row.reported_state().map(|_|row.detail.as_str()),
                 // **THE DETAIL TELLS HIM WHAT TO DO** (sign in, a helper he may stop, an answer
                 // he owes), so Under the hood shows it without Technical view (hunt 57, finding 11).
                 // So does Rich's waiting sentence while a teammate works (review of 3b91f1223).
@@ -4326,9 +4252,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 "answered": row.was_answered(),
                 "repositories": row.repositories,
                 "registeredAtMs": row.registered_at_ms,
-                "canStop": row.state.is_open(),
-                "onTheConnection": live.as_deref() == Some(row.id.as_str()),
-                "held": held.contains(&row.id),
+                "canStop": row.accepts_input(),
                 "awaitingYou": waiting,
             })
         }).collect::<Vec<_>>()
@@ -6179,24 +6103,10 @@ fn pending_permission(state: State<AppState>) -> Option<richos_core::permissions
     let view=state.reader.snapshot();
     state.permissions.current().filter(|request|view.active_binding().is_some_and(|b|b.thread_id()==request.binding.thread_id && b.entity_id().as_str()==request.binding.entity_id))
 }
-/// **His answer to one exact action — and the second half is the background-work spec's
-/// §5.7.**
-///
-/// If the provider call that raised the request is still waiting, it takes the decision and
-/// nothing else happens here; that is every conversation request and every background
-/// request he answers within the 300-second call. If the call already ended at its deadline —
-/// which is the ordinary case for work he was away from — the desk hands the decision to the
-/// ASSIGNMENT, and the work host is what carries it out: approved puts the assignment back on
-/// the work lease to take the step he approved, declined stops it where it stands with
-/// nothing changed.
+/// Resolve the exact native action that is still waiting for this decision.
 #[richos_command::command]
 fn answer_permission(state: State<AppState>, request_id: String, allow: bool) -> Result<(), String> {
-    match state.permissions.resolve(&request_id, allow)? {
-        richos_core::permissions::Answered::Delivered => Ok(()),
-        richos_core::permissions::Answered::ToAssignment { binding, allow } => {
-            state.work.apply_decision(&binding, allow)
-        }
-    }
+    state.permissions.resolve(&request_id,allow).map(|_|())
 }
 
 /// Explicit repository access is separate from choosing a company folder.

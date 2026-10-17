@@ -250,18 +250,12 @@ richos/app/
     tests/native_cancel_tests.rs 8 interrupt tests against a REAL CHILD PROCESS over real
                               stdio (a POSIX-sh fake `claude` the test writes itself), in two
                               variants: compliant, and deliberately deaf to the interrupt
-    tests/replay_work_host_tests.rs 4 tests running the REAL work host and the REAL
-                              NativeClient over RECORDED REAL `claude` sessions: the child is
-                              `richos-replay` (src/replay.rs) playing a capture of the
-                              provider's own wire (tests/fixtures/replay/, scrubbed of the
-                              account by scripts/replay/scrub-capture.py). A background
-                              command's finish reaches him as the report, the host asks for it
-                              after the provider's own finish turn, and a finish folded into
-                              the turn is not asked about again. RED against b33a1ba42 and
-                              24d9930c5 (the commits before the fix), green after. The fourth
-                              is a LONG session recorded in the test VM
-                              (scripts/testvm/replay-capture-walk.sh): two commands finishing
-                              after their turns ended, a job between, a fold beside them
+    tests/replay_work_host_tests.rs 4 recorded-provider checks: native turn endings and
+                              late command notifications never manufacture job completion,
+                              a user reply or another model prompt. Separate handoffs
+                              use the same independent Stu session.
+    tests/job_execution_owner_tests.rs preserves Stu's reports and inbox receipts
+                              across ordinary Quit and restart.
     src/skills.rs             THE SKILLS RichOS gives its inner Rich — the on-demand half of
                               src/doctrine.rs. Rendered as a PLUGIN into the app's own
                               directory and passed with `--plugin-dir`, because a project
@@ -1224,7 +1218,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 2019 tests + 6 doc-tests (2015 direct, 4 ignored)
+cargo test -p richos-core                       # 1925 tests + 7 doc-tests (1921 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside

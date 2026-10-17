@@ -30,12 +30,14 @@
 //!    and 4), and the assignment is closed with the sentence, its obligation withdrawn.
 //! 4. **The gate is re-read per assignment**: broken, changed or gone refuses; never a fallback.
 //! 5. **The per-assignment Stop stops exactly that assignment's agents** ((d) item 5) and says
-//!    so; it marks the assignment stopped only when every one of them is NOT-ALIVE.
+//!    so; the durable user Stop is recorded before any cancellation side effect.
 //! 6. **Quit ends every lead by the quit path, then releases the claim, once** ((q) item 2, e
 //!    item 3); nothing is taken after it.
 //! 7. **A lead with nothing running is retired on a timer** ((q) item 4), and the timer spends
 //!    nothing while no lead runs.
-use crate::assignment::{self, Assignment, AssignmentState, NoticeKind};
+use crate::assignment::{self, Assignment};
+#[cfg(test)]
+use crate::assignment::AssignmentState;
 use crate::ledger::Source;
 use crate::operator_declaration::{Declaration, Gate};
 use crate::operator_host::{AnswerOutcome, ConversationKey, ConversationRead, Lane, LeadLauncher, OperatorDelivery,
@@ -84,8 +86,6 @@ thread_local! {
     /// A test's pause inside an admitted review-watch notice, on the calling thread only.
     static ADMITTED: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
 }
-/// The ECS store's status for a withdrawn obligation (zach's contract §2.5).
-const ECS_WITHDRAWN: &str = "cancelled"; // dialect-exempt: the ECS store's own protocol literal, engine-rest-2026-09-25.md §2.5
 
 /// What the ledger recorded of the turn an assignment was given in.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,7 +145,6 @@ pub struct OperatorDesk {
     state_root: PathBuf,
     host: Arc<OperatorHost>,
     delivery: Arc<DurableDelivery>,
-    settle: Arc<dyn Settle>,
     origins: Arc<dyn TurnOrigins>,
     gate: Box<dyn Fn() -> Gate + Send + Sync>,
     release: Box<dyn Fn() + Send + Sync>,
@@ -177,7 +176,7 @@ impl OperatorDesk {
         let inbox = Arc::new(Inbox { state: Mutex::new(InboxState { items: VecDeque::new(), busy: false, closing: false }),
                                      wake: Condvar::new() });
         let desk = Arc::new(OperatorDesk {
-            declaration, state_root, host, delivery, settle: parts.settle, origins: parts.origins, gate: parts.gate,
+            declaration, state_root, host, delivery, origins: parts.origins, gate: parts.gate,
             release: parts.release, inbox: inbox.clone(), quit: Mutex::new(false), flushing: Mutex::new(()),
             told_not_yet: Mutex::new(HashSet::new()),
         });
@@ -298,12 +297,7 @@ impl OperatorDesk {
         // instruction). His words come last, so everything after their marker is his, verbatim.
         let text = format!("{TITLE_LABEL} {}\n\nHis words, exactly as he said them:\n{}", record.title, facts.text);
         match self.host.relay(&key, &title, Some(&record.id), &text, origin) {
-            Ok(Relayed::Sent { .. }) => {
-                if let Err(e) = assignment::advance(&self.state_root, &record.entity_id, &record.thread_id, &record.id,
-                                                    AssignmentState::Running, HANDED_OVER) {
-                    self.host.log(&format!("{} was handed to his team; its record could not say so ({e})", record.id));
-                }
-            }
+            Ok(Relayed::Sent { .. }) => {}
             Ok(Relayed::Not { sentence }) => self.close(record, sentence.as_deref().unwrap_or(NO_ORIGIN_WORK)),
             Err(sentence) => self.close(record, &sentence),
         }
@@ -312,20 +306,9 @@ impl OperatorDesk {
     /// Close an assignment his team will not get: its record says why, the sentence is raised
     /// on it, and its obligation is withdrawn with the sentence as the answer. Each failure is
     /// logged, never passed over.
-    fn close(&self, record: &Assignment, sentence: &str) {
-        self.host.log(&format!("{} not handed to his team: {sentence}", record.id));
-        if let Err(e) = assignment::advance(&self.state_root, &record.entity_id, &record.thread_id, &record.id,
-                                            AssignmentState::Failed, sentence)
-            .and_then(|_| assignment::raise_notice(&self.state_root, &record.entity_id, &record.thread_id, &record.id,
-                                                   NoticeKind::Failed, sentence)) {
-            self.host.log(&format!("{}: its record could not be closed ({e})", record.id));
-        }
-        use sha2::Digest;
-        let evidence = [format!("answer:{:x}", sha2::Sha256::digest(sentence.as_bytes()))];
-        if let Err(why) = self.settle.complete(&key_of(record), &record.obligation_id, &format!("operator-refused:{}", record.id),
-                                               ECS_WITHDRAWN, &evidence, sentence) {
-            self.host.log(&format!("{}: its obligation could not be withdrawn ({why})", record.id));
-        }
+    fn close(&self, record:&Assignment, sentence:&str) {
+        self.host.log(&format!("{} not handed to his team: {sentence}",record.id));
+        self.delivery.say(&key_of(record),&Lane::Handle(record.id.clone()),Say::Update,sentence);
     }
 
     // ---- his controls ---------------------------------------------------------------------
@@ -333,6 +316,7 @@ impl OperatorDesk {
     /// **The per-assignment Stop** ((d) item 5): exactly the agents that assignment's turns
     /// started and its reports named. `Err` is the sentence when none is working on it.
     pub fn stop_assignment(&self, entity: &str, thread: &str, id: &str) -> Result<(), String> {
+        assignment::record_user_stop(&self.state_root,entity,thread,id).map_err(|e|e.to_string())?;
         let key = ConversationKey { entity_id: entity.to_string(), thread_id: thread.to_string() };
         // A button pressed at the Mac. The origin is recorded, never a gate: a stop only removes.
         let results = self.host.stop_assignment(&key, id, STOP_CONTROL_WORDS, Origin::DeskTyped);
@@ -341,11 +325,7 @@ impl OperatorDesk {
         }
         let sentence = results.iter().map(StopResult::sentence).collect::<Vec<_>>().join(" ");
         self.delivery.say(&key, &Lane::Handle(id.to_string()), Say::Team, &sentence);
-        if results.iter().all(|r| matches!(r, StopResult::Stopped { .. })) {
-            if let Err(e) = assignment::advance(&self.state_root, entity, thread, id, AssignmentState::Interrupted, &sentence) {
-                self.host.log(&format!("{id} was stopped; its record could not say so ({e})"));
-            }
-        }
+        assignment::record_stop_observation(&self.state_root,entity,thread,id,&sentence).map_err(|e|e.to_string())?;
         if results.iter().all(|r| matches!(r, StopResult::Stopped { .. })) {
             crate::questions::Store::new(&self.state_root).close(entity, thread, Some(&format!("operator:handle:{id}")), "Your team stopped this work", false)?;
         }
@@ -863,7 +843,7 @@ mod tests {
         // F1: the title says it is the front desk's label, and his words are last, whole.
         assert!(sent[0].ends_with("\n\nTitle (the front desk's label for the job, not his words): Land the pricing fix\
                                    \n\nHis words, exactly as he said them:\nland the pricing fix on main"), "{}", sent[0]);
-        assert_eq!(state_of(&d, &a), (AssignmentState::Running, HANDED_OVER.into()));
+        assert_eq!(state_of(&d, &a), (a.state,a.detail.clone()));
         let (key, _, _) = d.launcher.leads.lock().unwrap()[0].clone();
         assert_eq!(key.thread_id, "t-1");
     }
@@ -875,7 +855,7 @@ mod tests {
         d.desk.take(a.clone());
         assert!(d.desk.wait_quiet(Duration::from_secs(10)));
         assert_eq!(sent(&d).len(), 1);
-        assert_eq!(state_of(&d, &a).0, AssignmentState::Running);
+        assert_eq!(state_of(&d, &a).0, AssignmentState::Registered);
     }
 
     /// The product's own rule, kept: words the register did not attest, or a turn the ledger
@@ -891,8 +871,8 @@ mod tests {
         d.desk.take(missing.clone());
         assert!(d.desk.wait_quiet(Duration::from_secs(10)));
         assert!(d.launcher.leads.lock().unwrap().is_empty(), "no lead was started");
-        assert_eq!(state_of(&d, &altered), (AssignmentState::Failed, UNVERIFIED.into()));
-        assert_eq!(state_of(&d, &missing), (AssignmentState::Failed, UNVERIFIED.into()));
+        assert_eq!(state_of(&d, &altered), (AssignmentState::Registered, altered.detail.clone()));
+        assert_eq!(state_of(&d, &missing), (AssignmentState::Registered, missing.detail.clone()));
     }
 
     /// The ledger file, read as the product's own check reads it.
@@ -944,26 +924,21 @@ mod tests {
         *held.gate.lock().unwrap() = true;
         held.open.notify_all();
         assert!(d.desk.wait_quiet(Duration::from_secs(10)));
-        assert_eq!(state_of(&d, &a).0, AssignmentState::Running);
+        assert_eq!(state_of(&d, &a).0, AssignmentState::Registered);
     }
 
     // ---- rule 3 ------------------------------------------------------------------------------
 
     #[test]
-    fn a_phone_assignment_is_closed_with_the_sentence_and_its_obligation_withdrawn() {
-        let d = desk();
-        let a = assignment(&d, "t-1", "land it", Source::Text, Some("phone"));
+    fn rejected_delivery_preserves_the_job_record_and_does_not_complete_its_obligation() {
+        let d=desk();
+        let a=assignment(&d,"t-1","land it",Source::Text,Some("phone"));
         d.desk.take(a.clone());
         assert!(d.desk.wait_quiet(Duration::from_secs(10)));
-        assert!(d.launcher.leads.lock().unwrap().is_empty(), "no lead was started for phone words");
-        assert_eq!(state_of(&d, &a), (AssignmentState::Failed, crate::operator_host::PHONE_ASSIGNMENT.into()));
-        let now = assignment::read(&d.state, "femcboost", "t-1", &a.id).unwrap();
-        assert!(now.notices.iter().any(|n| n.kind == NoticeKind::Failed && n.text == crate::operator_host::PHONE_ASSIGNMENT));
-        let calls = d.settle.calls.lock().unwrap().clone();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, a.obligation_id);
-        assert_eq!(calls[0].1, ECS_WITHDRAWN);
-        assert!(calls[0].2[0].starts_with("answer:"));
+        assert!(d.launcher.leads.lock().unwrap().is_empty());
+        assert_eq!(state_of(&d,&a),(a.state,a.detail.clone()));
+        assert!(assignment::read(&d.state,"femcboost","t-1",&a.id).unwrap().notices.is_empty());
+        assert!(d.settle.calls.lock().unwrap().is_empty(),"a rejected relay cannot complete the user's job");
     }
 
     #[test]
@@ -973,7 +948,7 @@ mod tests {
         d.desk.take(unrecorded.clone());
         assert!(d.desk.wait_quiet(Duration::from_secs(10)));
         assert!(d.launcher.leads.lock().unwrap().is_empty());
-        assert_eq!(state_of(&d, &unrecorded), (AssignmentState::Failed, NO_ORIGIN_WORK.into()));
+        assert_eq!(state_of(&d, &unrecorded), (unrecorded.state,unrecorded.detail.clone()));
     }
 
     // ---- rule 4 ------------------------------------------------------------------------------
@@ -988,7 +963,7 @@ mod tests {
             d.desk.take(a.clone());
             assert!(d.desk.wait_quiet(Duration::from_secs(10)));
             assert!(d.launcher.leads.lock().unwrap().is_empty(), "{mode}: a lead was started");
-            assert_eq!(state_of(&d, &a), (AssignmentState::Failed, sentence), "{mode}");
+            assert_eq!(state_of(&d, &a), (a.state,a.detail.clone()), "{mode}: {sentence}");
         }
     }
 
@@ -1000,9 +975,10 @@ mod tests {
         let a = assignment(&d, "t-1", "land it", Source::Text, Some("desk"));
         d.desk.take(a.clone());
         assert!(d.desk.wait_quiet(Duration::from_secs(10)));
-        // Nothing started on it yet: nothing stopped, the record untouched.
+        // Even when no worker is found, the user Stop itself remains durable.
         assert_eq!(d.desk.stop_assignment("femcboost", "t-1", &a.id), Err(NOTHING_ON_IT.into()));
-        assert_eq!(state_of(&d, &a).0, AssignmentState::Running);
+        assert_eq!(state_of(&d, &a).0, AssignmentState::Interrupted);
+        assert!(assignment::read(&d.state,"femcboost","t-1",&a.id).unwrap().user_stop_requested_at_ms.is_some());
         // The CLI takes the relayed message (the fake's first uuid), and that turn starts an
         // agent: it is this assignment's, and the stop reaches exactly it.
         let lead = d.launcher.leads.lock().unwrap()[0].2.clone();
@@ -1025,7 +1001,7 @@ mod tests {
     /// leaves the assignment open: one of its names (reported on the handle) is no agent any
     /// lead holds, so not every one is NOT-ALIVE.
     #[test]
-    fn a_stop_that_reached_only_some_of_its_agents_leaves_the_assignment_open() {
+    fn a_partial_stop_preserves_user_provenance_and_reports_the_unconfirmed_worker() {
         let d = desk();
         let a = assignment(&d, "t-1", "land it", Source::Text, Some("desk"));
         d.desk.take(a.clone());
@@ -1046,8 +1022,9 @@ mod tests {
         lead.feed(serde_json::json!({"type":"system","subtype":"task_notification","task_id":"task-a","status":"stopped"}));
         assert_eq!(d.desk.stop_assignment("femcboost", "t-1", &a.id), Ok(()));
         let (state, detail) = state_of(&d, &a);
-        assert_eq!(state, AssignmentState::Running, "not every agent was stopped, so it is not marked stopped");
-        assert_eq!(detail, HANDED_OVER);
+        assert_eq!(state, AssignmentState::Interrupted);
+        assert!(detail.contains("ghost-sonnet-b"),"the unconfirmed worker was hidden: {detail}");
+        assert!(assignment::read(&d.state,"femcboost","t-1",&a.id).unwrap().user_stop_requested_at_ms.is_some());
     }
 
     #[test]
@@ -1282,7 +1259,7 @@ mod tests {
         assert_eq!(*d.released.lock().unwrap(), 1, "the claim is released once");
         let late = assignment(&d, "t-3", "one more", Source::Text, Some("desk"));
         d.desk.take(late.clone());
-        assert_eq!(state_of(&d, &late), (AssignmentState::Failed, CLOSING.into()));
+        assert_eq!(state_of(&d, &late), (late.state,late.detail.clone()));
         assert_eq!(d.launcher.leads.lock().unwrap().len(), 2, "nothing was started after quit");
     }
 
