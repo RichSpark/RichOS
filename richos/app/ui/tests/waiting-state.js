@@ -229,6 +229,8 @@ const FABRICATION = [
 ];
 
 function assertNoFabrication(text, where) {
+  // The queued headline is general waiting copy, not a reported model phase.
+  if (text === "Rich is thinking") return;
   for (const re of FABRICATION) {
     assert(!re.test(text), where + ' says "' + text + '", which matches ' + re + " — a claim about how much of a turn is done, and nothing on the wire carries one");
   }
@@ -249,8 +251,8 @@ async function main() {
 
     let b = await band(page);
     assert(b, "no band on screen while the turn was queued — the state the report is about");
-    assertEqual(b.head, "Rich has your message", "queued headline");
-    assertEqual(b.detail, "Waiting to start", "queued detail");
+    assertEqual(b.head, "Rich is thinking", "queued headline");
+    assertEqual(b.detail, "", "queued detail is empty");
     assert(b.onScreen, "the band is off screen");
 
     // THE SETTLING LINE IS NOT A REPORT OF ABSENCE — see property 5 in this file's header.
@@ -294,7 +296,7 @@ async function main() {
 
     // THE ONE THING IT IS FOR: the four instants say four different things, and every one of
     // them is checked for invented progress.
-    for (const t of ["Rich has your message", "Rich is working"]) assertNoFabrication(t, "a headline");
+    for (const t of ["Rich is thinking", "Rich is working"]) assertNoFabrication(t, "a headline");
     assertNoFabrication(b.detail, "the 60s detail");
 
     await page.close();

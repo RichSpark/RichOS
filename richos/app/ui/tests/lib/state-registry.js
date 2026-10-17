@@ -3403,7 +3403,7 @@ module.exports = [
       "`turn_status_event`). A statement about a turn, with nothing in it for him to do.",
   },
   {
-    s: "Rich has your message",
+    s: "Rich is thinking",
     c: "INFORMATIONAL",
     why:
       "The same band's headline for `queued`: the prompt is durably `received` and no lease " +
@@ -3413,8 +3413,8 @@ module.exports = [
     s: "Waiting to start",
     c: "INFORMATIONAL",
     why:
-      "The detail line under `queued`, and the whole content of that state: the message is " +
-      "recorded and the work has not begun. It reports; it does not ask.",
+      "The conversation row's queued duration label: the message is recorded and work has " +
+      "not begun. It reports; it does not ask.",
   },
   {
     s: "Rich is picking this back up",

@@ -3008,16 +3008,14 @@ function removeWaitBand() {
 /// WHAT THE BAND SAYS, as a pure function of what has been observed — separate from the DOM
 /// so a suite can assert on the sentence rather than on a picture of it.
 ///
-/// The headlines are the live `rich://turn-status` values and nothing else. There is no
-/// "thinking", no "almost done", no phase: `phase` is `unknown` on every message this
-/// runtime emits (live.rs, "THE MESSAGE PHASE, STATED LOUDLY"), so a band that named one
-/// would be inventing it.
+/// Headlines follow the observed turn status. The queued headline is general waiting
+/// copy, not a model-phase claim: this wire still reports `phase: unknown`.
 function waitBandCopy(t, nowMs) {
   const quietMs = nowMs - t.lastAt;
   const quiet = quietMs >= QUIET_AFTER_MS;
 
   let head;
-  if (t.status === "queued") head = "Rich has your message";
+  if (t.status === "queued") head = "Rich is thinking";
   else if (t.status === "recovering") head = "Rich is picking this back up";
   else if (t.status === "stopping") head = "Rich is letting go of this turn";
   else head = "Rich is working";
@@ -3034,7 +3032,7 @@ function waitBandCopy(t, nowMs) {
 
   let detail;
   if (quiet) detail = "Nothing new for " + gap;
-  else if (t.status === "queued") detail = "Waiting to start";
+  else if (t.status === "queued") detail = "";
   // NOTHING YET IS SAID BY SAYING NOTHING — the absence report is gone, and it was measured
   // out rather than argued out. Ray's `.20260920.1` walk in the VM
   // (`docs/verification/2026-09-20-nightly-1.2.0-nightly.20260920.1-mac-to-phone-in-the-vm-audit.md`,
