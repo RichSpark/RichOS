@@ -65,6 +65,9 @@ mod tests {
         let i=UserInstruction::with_text(format!("ledger:{thread}:{turn}"),format!("{:x}",sha2::Sha256::digest(text)),Some(text));
         let scope=StatusToolScope {version:1,state_root:root.join("engine-state"),entity_id:entity.to_string(),thread_id:thread.clone()};
         let path=root.join("status.json");session_tools::bind(&path,&scope,"native-rich","rich",Some(i.clone())).unwrap();
+        crate::assignment::register(&scope.state_root,&crate::assignment::Registration {
+            entity_id:scope.entity_id.clone(),thread_id:scope.thread_id.clone(),obligation_id:"work-fixture".into(),
+            instruction_ledger_ref:i.ledger_ref.clone(),instruction_sha256:i.sha256.clone(),title:text.into(),repositories:vec![],needs_screen:false}).unwrap();
         let active=ToolScope {version:1,actions_allowed:true,background_work_allowed:false,user_instruction:Some(i),seat:None,
             bridge:EcsBridge {python:root.join("python"),component:root.join("ecs"),state_root:root.join("state")},
             binding:Binding {entity_id:entity.to_string(),thread_id:thread,session_id:"native-rich".into(),turn_id:turn,audience:"rich".into(),revision:1}};

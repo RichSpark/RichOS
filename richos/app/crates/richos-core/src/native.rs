@@ -1756,9 +1756,11 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             "args": ["--onboarding-mcp", onboarding_scope]
         });
     }
-    config["mcpServers"][crate::assignment_tools::SERVER_NAME] = json!({
-        "type":"stdio","command":executable,"args":["--assignments-mcp",assignments_scope]
-    });
+    if role == LeaseRole::Conversation {
+        config["mcpServers"][crate::assignment_tools::SERVER_NAME] = json!({
+            "type":"stdio","command":executable,"args":["--assignments-mcp",assignments_scope]
+        });
+    }
     if role == LeaseRole::Conversation {
         // **HIS TEAM'S TOOLS, on an operator install only** (operator back-end spec r3 (d),
         // (o); the operator-client record's §7 item 2): stop named agents, stop his team's
@@ -2034,7 +2036,7 @@ impl NativeClient {
             // the seat that says it.
             action_grants: onboarding.filter(|_| role == LeaseRole::Conversation)
                 .map(|(_, path, _, _)| ActionGrant::Onboarding(path.into())).into_iter()
-                .chain(onboarding.map(|(_, _, path, _)| ActionGrant::Assignments(path.into())))
+                .chain(onboarding.filter(|_|role == LeaseRole::Conversation).map(|(_, _, path, _)| ActionGrant::Assignments(path.into())))
                 .chain(onboarding.map(|(_,_,path,_)|ActionGrant::Questions(crate::question_tools::path(path))))
                 .chain(continuity.map(|(_, path)| ActionGrant::Continuity(path.into())))
                 // **The continuity tools' own grant is in this list for the CLOSING half
@@ -3996,7 +3998,7 @@ impl Cognition for NativeCognition {
             let scope=crate::status_tools::StatusToolScope {version:1,state_root:state_root.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
             crate::status_tools::write_scope(path,&scope).map_err(CognitionError::Io)?;
-            crate::session_tools::bind(path,&scope,&self.session_id,"rich",user_instruction.clone()).map_err(CognitionError::Io)?;
+            crate::session_tools::bind_with_assignments(path,&scope,&self.session_id,"rich",user_instruction.clone(),self.assignments_scope.as_deref()).map_err(CognitionError::Io)?;
         }
         brief.push_str(&self.question_context()?);
         // **His team's desk, for this turn's conversation** — only when this lease was given
@@ -4095,27 +4097,42 @@ impl Cognition for NativeCognition {
         crate::ecs::write_scope(path,&crate::ecs::ToolScope {version:1,actions_allowed:false,
             bridge:bridge.clone(),binding:bound.clone(),user_instruction:None,
             seat:Some(seat.clone()),background_work_allowed:true}).map_err(|e|CognitionError::Io(e.to_string()))?;
+        let mut work=message.work.clone();
         if let (Some(profile),Some(status))=(&self.engine_profile,&self.status_scope) {
             let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
             crate::status_tools::write_scope(status,&scope).map_err(CognitionError::Io)?;
             crate::session_tools::bind(status,&scope,&self.session_id,"stu",None).map_err(CognitionError::Io)?;
-            if let (Some(assignments),Some(instruction))=(&self.assignments_scope,&instruction) {
-                crate::assignment_tools::write_scope(assignments,&crate::assignment_tools::AssignmentToolScope {
-                    version:1,actions_allowed:false,state_root:profile.state.clone(),entity_id:scope.entity_id,
-                    thread_id:scope.thread_id,instruction_ledger_ref:instruction.ledger_ref.clone(),
-                    instruction_sha256:instruction.sha256.clone(),obligation_desk:Some(crate::assignment_tools::ObligationDesk {
-                        bridge:bridge.clone(),binding:bound,seat:Some(seat)})}).map_err(CognitionError::Io)?;
-            } else if let Some(assignments)=&self.assignments_scope {
-                if let Err(error)=std::fs::remove_file(assignments) {
-                    if error.kind()!=std::io::ErrorKind::NotFound {return Err(CognitionError::Io(error.to_string()))}
+            // Older inbox records predate registration at handoff save. Reconcile
+            // them before opening live input, through the existing register only.
+            let mut pending=vec![message.clone()];
+            let mut after=0;
+            while let Some((queued,through))=crate::session_tools::pending_after(&scope,"stu",after).map_err(CognitionError::Io)? {
+                pending.push(queued);after=through;
+            }
+            for mut queued in pending.into_iter().filter(|m|m.handoff) {
+                let existing=crate::session_tools::work_reference(&scope,&queued).map_err(CognitionError::Io)?;
+                if existing.is_none() {
+                    let instruction=queued.instruction.as_ref().ok_or_else(||CognitionError::Protocol("Handoff has no original request".into()))?;
+                    let assignments=self.assignments_scope.as_ref().ok_or_else(||CognitionError::Protocol("Missing assignment register".into()))?;
+                    crate::assignment_tools::write_scope(assignments,&crate::assignment_tools::AssignmentToolScope {
+                        version:1,actions_allowed:true,state_root:profile.state.clone(),entity_id:scope.entity_id.clone(),
+                        thread_id:scope.thread_id.clone(),instruction_ledger_ref:instruction.ledger_ref.clone(),
+                        instruction_sha256:instruction.sha256.clone(),obligation_desk:Some(crate::assignment_tools::ObligationDesk {
+                            bridge:bridge.clone(),binding:bound.clone(),seat:Some(seat.clone())})}).map_err(CognitionError::Io)?;
+                    let recorded=crate::session_tools::record_pending_handoff(&scope,&mut queued,assignments);
+                    let removed=std::fs::remove_file(assignments).map_err(|e|e.to_string());
+                    recorded.and(removed).map_err(CognitionError::Io)?;
+                } else {queued.work=existing;}
+                if queued.instruction.as_ref().map(|i|&i.ledger_ref)==instruction.as_ref().map(|i|&i.ledger_ref) {
+                    work=queued.work;
                 }
             }
         }
         if let Some(profile)=&self.engine_profile {
             let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
-            self.pending_context_brief=Some(json!({"original_user_request":instruction,
+            self.pending_context_brief=Some(json!({"original_user_request":instruction,"work":work,
                 "previous_delivery_attempt":crate::session_tools::previous_attempt(&scope,"stu",turn).map_err(CognitionError::Io)?}).to_string());
         }
         self.prepare_question_scope(binding.entity_id().as_str(),binding.thread_id(),turn,"stu","typed")?;
@@ -4772,12 +4789,46 @@ while read -r line; do :; done
         let binding=crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),crate::entity::EntityId::parse("company").unwrap(),"thread",1);
         for id in ["A","B"] {
             let message=crate::session_tools::Message {handoff:true,from:"rich".into(),text:id.into(),instruction:Some(crate::ecs::UserInstruction {
-                ledger_ref:format!("ledger:thread:{id}"),sha256:"a".repeat(64),text:Some(id.into())})};
+                ledger_ref:format!("ledger:thread:{id}"),sha256:"a".repeat(64),text:Some(id.into())}),work:None};
             cognition.prepare_agent_message(&binding,id,&message).unwrap();
             let scope:crate::ecs::ToolScope=serde_json::from_slice(&std::fs::read(&cognition.continuity.as_ref().unwrap().1).unwrap()).unwrap();
             assert!(scope.user_instruction.is_none(),"accepting B must not change authority for A's later tools");
             assert_eq!(scope.seat.as_deref(),Some("stu-thread:thread"));
         }
+    }
+
+    #[test]
+    fn older_pending_handoffs_get_existing_job_records_before_live_input_opens() {
+        use crate::ledger::{Ledger,Source};
+        use sha2::Digest;
+        let script=write_script("stu-older-handoffs",SILENT_AFTER_HANDSHAKE);
+        let root=script.parent().unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine"),&root.join("ecs")).unwrap();
+        let mut cognition=NativeCognition::start_with_continuity(&script,root,root,&skills_fixture(),&script,bridge,None).unwrap();
+        let profile=fixture_profile(root);
+        let mut ledger=Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
+        let entity=crate::entity::EntityId::parse("company").unwrap();
+        let thread=ledger.create_thread("work",&entity).unwrap();let binding=ledger.thread_binding(&thread).unwrap();
+        let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),entity_id:entity.to_string(),thread_id:thread.clone()};
+        let inbox=crate::session_tools::inbox(&scope,"stu").unwrap();std::fs::create_dir_all(inbox.parent().unwrap()).unwrap();
+        let mut messages=vec![];let mut saved=String::new();
+        for text in ["Investigate A","Investigate B"] {
+            let turn=ledger.record_prompt_received(&binding,text,Source::Text).unwrap();
+            let message=crate::session_tools::Message {handoff:true,from:"rich".into(),text:text.into(),work:None,
+                instruction:Some(crate::ecs::UserInstruction::with_text(format!("ledger:{thread}:{turn}"),format!("{:x}",sha2::Sha256::digest(text)),Some(text)))};
+            saved.push_str(&serde_json::to_string(&message).unwrap());saved.push('\n');messages.push(message);
+        }
+        std::fs::write(&inbox,&saved).unwrap();cognition.engine_profile=Some(profile);
+        cognition.prepare_agent_message(&binding,"peer:original",&messages[0]).unwrap();
+        let records=crate::assignment::read_all(&scope.state_root,&scope.entity_id,&thread).unwrap();assert_eq!(records.len(),2);
+        let context:Value=serde_json::from_str(cognition.pending_context_brief.as_ref().unwrap()).unwrap();
+        assert_eq!(context["work"]["assignment_id"],crate::session_tools::work_reference(&scope,&messages[0]).unwrap().unwrap().assignment_id);
+        assert!(!cognition.assignments_scope.as_ref().unwrap().exists(),"a latest-request recording scope escaped the upgrade");
+        cognition.prepare_agent_message(&binding,"peer:retry",&messages[0]).unwrap();
+        assert_eq!(crate::assignment::read_all(&scope.state_root,&scope.entity_id,&thread).unwrap().len(),2,"recovery duplicated job records");
+        assert_eq!(std::fs::read_to_string(inbox).unwrap(),saved,"upgrade rewrote durable inbox history");
     }
 
     #[test]
@@ -5263,8 +5314,8 @@ exec /bin/sleep 1000
         assert!(servers.get("richos_onboarding").is_none(),
             "the work lease was given the company-notes server over a scope only spine.rs writes");
         // And it cannot register more assignments for itself (`assignment_tools.rs`).
-        assert!(servers.get(crate::assignment_tools::SERVER_NAME).is_some(),
-            "Stu cannot record operational work");
+        assert!(servers.get(crate::assignment_tools::SERVER_NAME).is_none(),
+            "Stu still has a register bound to the last request instead of each saved handoff");
         // Nor read the front desk's record (`status_tools.rs`).
         assert!(servers.get(crate::status_tools::SERVER_NAME).is_some(),
             "Stu cannot inspect the shared record");
@@ -5383,7 +5434,7 @@ exec /bin/sleep 1000
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Work, Path::new("claude"));
         assert_eq!(
             names(&work),
-            vec!["richos_assignments", "richos_continuity", "richos_questions", "richos_quota", "richos_status", "richos_work"],
+            vec!["richos_continuity", "richos_questions", "richos_quota", "richos_status", "richos_work"],
             "the back end's tool list moved"
         );
         // **The back end holds the work and NOTHING ELSE, and that is the third absence.**
@@ -5582,7 +5633,7 @@ exec /bin/sleep 1000
             lease_with_production_grants("work-list", LeaseRole::Work, SILENT_AFTER_HANDSHAKE);
         assert_eq!(
             grant_names(&work.client),
-            vec!["assignments", "questions", "continuity"],
+            vec!["questions", "continuity"],
             "a work lease's grant list is not just its own continuity scope"
         );
         assert!(

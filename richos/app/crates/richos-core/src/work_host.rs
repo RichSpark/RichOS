@@ -1159,7 +1159,7 @@ impl WorkHost {
         }
     }
 
-    /// The existing filesystem watcher wakes the runner and forwards corrections
+    /// The existing filesystem watcher wakes the runner and forwards peer input
     /// through its current session, including while that runner is inside a job.
     pub fn wake_messages(self:&Arc<Self>,binding:&ThreadBinding) {
         let Some(backend)=self.backend_for(binding.thread_id()) else {return};
@@ -1173,7 +1173,14 @@ impl WorkHost {
         let Some(input)=input else {return};
         let scope=self.message_scope(binding);
         let result=(|| {
-            let Some((message,through))=crate::session_tools::pending_live_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
+            let mut after=after;
+            let (mut message,through)=loop {
+                let Some((message,through))=crate::session_tools::pending_after(&scope,"stu",after)? else {return Ok::<_,String>(())};
+                if !self.handoff_stopped(binding,&message)? {break (message,through)}
+                crate::session_tools::acknowledge(&scope,"stu",through)?;
+                after=through;
+            };
+            if message.handoff {message.work=crate::session_tools::work_reference(&scope,&message)?;}
             use sha2::Digest;
             let digest=sha2::Sha256::digest(format!("{}\0{}\0{through}",scope.entity_id,scope.thread_id));
             let id=uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
@@ -1184,7 +1191,9 @@ impl WorkHost {
                 crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),&session)?;
             }
             input.send_input(&id,&text,Box::new(move || {
-                if let Err(error)=crate::session_tools::acknowledge(&scope,"stu",through) {
+                let accepted=if message.handoff {crate::session_tools::accept_live_handoff(&scope,"stu",through)}
+                    else {crate::session_tools::acknowledge(&scope,"stu",through)};
+                if let Err(error)=accepted {
                     eprintln!("[richos] operator input was taken but its receipt remains pending: {error}");
                     return;
                 }
@@ -1216,17 +1225,19 @@ impl WorkHost {
         Ok(changed)
     }
 
+    fn handoff_stopped(&self,binding:&ThreadBinding,message:&crate::session_tools::Message)->Result<bool,String> {
+        let Some(instruction)=message.instruction.as_ref().filter(|_|message.handoff) else {return Ok(false)};
+        Ok(assignment::read_all(&self.state,binding.entity_id().as_str(),binding.thread_id())
+            .map_err(|e|e.to_string())?.iter().any(|record|
+                record.instruction_ledger_ref==instruction.ledger_ref
+                && record.instruction_sha256==instruction.sha256
+                && record.user_stop_requested_at_ms.is_some()))
+    }
+
     fn run_message(self:&Arc<Self>,backend:&Arc<Backend>,binding:&ThreadBinding,
         message:&crate::session_tools::Message,turn:&str)->Result<String,String> {
         // This is queue cancellation, not per-tool authority on Stu's session.
-        let stopped=||->Result<bool,String> {
-            let Some(instruction)=message.instruction.as_ref().filter(|_|message.handoff) else {return Ok(false)};
-            Ok(assignment::read_all(&self.state,binding.entity_id().as_str(),binding.thread_id())
-                .map_err(|e|e.to_string())?.iter().any(|record|
-                    record.instruction_ledger_ref==instruction.ledger_ref
-                    && record.instruction_sha256==instruction.sha256
-                    && record.user_stop_requested_at_ms.is_some()))
-        };
+        let stopped=||self.handoff_stopped(binding,message);
         // A native connection owns its workers as well as its shell commands.
         let workers_finished=|| {
             let session=backend.inner.lock().unwrap().lease_session.clone();
@@ -1531,7 +1542,11 @@ impl WorkHost {
             let binding = match next {
                 Next::Message(binding,message,through)=>{
                     if let Err(error)=self.run_message(&backend,&binding,&message,&format!("peer:{through}"))
-                        .and_then(|_|crate::session_tools::acknowledge(&self.message_scope(&binding),"stu",through)) {
+                        .and_then(|session| {
+                            let scope=self.message_scope(&binding);
+                            crate::session_tools::acknowledge(&scope,"stu",through)?;
+                            crate::session_tools::complete_live_inputs(&scope,"stu",&session)
+                        }) {
                         eprintln!("[richos] operator message remains pending: {error}");
                         // The ordinary host owns retry and shutdown. No message is acknowledged on failure.
                         let mut inner=backend.inner.lock().unwrap();
@@ -1546,12 +1561,13 @@ impl WorkHost {
                 }
                 Next::Answer(binding,delivery)=>{
                     let result=self.question_answer_instruction(&delivery).and_then(|instruction| {
-                        let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:delivery.text.clone(),instruction};
+                        let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:delivery.text.clone(),instruction,work:None};
                         self.run_message(&backend,&binding,&message,&format!("answer:{}",delivery.id))
                     });
                     match result {
                         Ok(session)=>if let Err(error)=crate::question_work::taken(&self.state,std::slice::from_ref(&delivery.id),&session)
-                            .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id))) {
+                            .and_then(|_|crate::session_tools::complete_attempt(&self.message_scope(&binding),"stu",&format!("answer:{}",delivery.id)))
+                            .and_then(|_|crate::session_tools::complete_live_inputs(&self.message_scope(&binding),"stu",&session)) {
                             eprintln!("[richos] operator answer acknowledgement: {error}");
                         },
                         Err(error)=>{
@@ -5784,19 +5800,60 @@ mod tests {
         use sha2::Digest;
         let instruction=crate::ecs::UserInstruction::with_text("ledger:thread-one:turn-7".into(),
             format!("{:x}",sha2::Sha256::digest("landing the three branches")),Some("landing the three branches"));
+        let mut request=registration(&h);
+        request.instruction_ledger_ref=instruction.ledger_ref.clone();request.instruction_sha256=instruction.sha256.clone();
+        let receipt=assignment::register(&h.state,&request).unwrap();
         crate::session_tools::bind(&path,&scope,"native-rich","rich",Some(instruction)).unwrap();
         crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"New execution request"})).unwrap();
         h.host.wake_messages(&h.binding);
-        assert!(matches!(rx.try_recv(),Err(std::sync::mpsc::TryRecvError::Empty)),"new work must wait for a prepared turn, not replace current authority through live input");
-        let queued=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("hang guard: a new handoff must reach the same live input before Stu ends his current turn");
+        let handoff:crate::session_tools::Message=serde_json::from_str(&text).unwrap();
+        assert!(handoff.handoff);
+        assert_eq!(handoff.text,"New execution request");
+        assert_eq!(handoff.work.as_ref().unwrap().assignment_id,receipt.id);
+        taken();
         crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Correction to the current job: do not change the date"})).unwrap();
         h.host.wake_messages(&h.binding);
         let (_,text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: a queued new job must not block a quick correction to current work");
         assert!(text.contains("do not change the date"));taken();
-        assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1,queued,"the unprepared job was lost behind the correction receipt");
-        crate::session_tools::acknowledge(&scope,"stu",queued).unwrap();
-        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"an accepted live correction was replayed after restart");
+        crate::session_tools::complete_live_inputs(&scope,"stu","same-stu").unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(),"completed live input was replayed after restart");
         drop(running);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn stopped_new_handoff_is_skipped_on_live_input_without_blocking_a_correction() {
+        type Delivery=(String,Box<dyn FnOnce()+Send>);
+        struct Input(std::sync::mpsc::Sender<Delivery>);
+        impl TurnCancel for Input {
+            fn cancel(&self)->bool {panic!("Stop of B must not cancel Stu's other work")}
+            fn send_input(&self,_:&str,text:&str,taken:Box<dyn FnOnce()+Send>)->Result<bool,String> {
+                self.0.send((text.into(),taken)).unwrap();Ok(true)
+            }
+        }
+        let h=harness(0);let scope=h.host.message_scope(&h.binding);let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"A is running"})).unwrap();
+        let a=crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1;
+        let record=assignment::register(&h.state,&registration(&h)).unwrap();
+        let instruction=crate::ecs::UserInstruction::with_text("ledger:thread-one:turn-7".into(),registration(&h).instruction_sha256,Some("landing the three branches"));
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",Some(instruction)).unwrap();
+        crate::session_tools::delegate(&path,&scope,serde_json::json!({"text":"B must never start"})).unwrap();
+        assignment::record_user_stop(&h.state,"depot","thread-one",&record.id).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Correction to A"})).unwrap();
+        let backend=Backend::new();let (tx,rx)=std::sync::mpsc::channel();
+        {let mut inner=backend.inner.lock().unwrap();inner.binding=Some(h.binding.clone());inner.peer_active_through=Some(a);
+            inner.peer_input=Some(Arc::new(Input(tx)));inner.lease_session=Some("same-stu".into());}
+        h.host.backends.lock().unwrap().insert(h.binding.thread_id().into(),backend.clone());
+        let lease=backend.lease.lock().unwrap();h.host.wake_messages(&h.binding);
+        let (text,taken)=rx.recv_timeout(std::time::Duration::from_secs(5)).expect("hang guard: stopped B must not block A's correction");
+        let message:crate::session_tools::Message=serde_json::from_str(&text).unwrap();
+        assert!(!message.handoff);assert_eq!(message.text,"Correction to A");taken();
+        assert!(rx.try_recv().is_err(),"a stopped handoff was sent");
+        crate::session_tools::acknowledge(&scope,"stu",a).unwrap();
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+        drop(lease);h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]
@@ -10818,7 +10875,7 @@ mod tests {
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
         let backend=h.host.backend_for("thread-one").unwrap();
         let message=crate::session_tools::Message { handoff:true, from:"rich".into(),
-            text:"Use the saved teammate for this authorized work".into(), instruction:None };
+            text:"Use the saved teammate for this authorized work".into(), instruction:None,work:None };
         let run=|n| h.host.run_message(&backend,&h.binding,&message,&format!("peer:{n}")).unwrap();
         run(2);
         assert_eq!(h.spawns.load(Ordering::SeqCst),1,"unchanged team renewed unnecessarily");
