@@ -619,6 +619,40 @@ fn restart_stops_saved_direct_speech_and_pressed_inputs() {
     }
 }
 
+// Stop pressed on the loading screen goes to the conversation it names (follow-ups after
+// nightly 65, item 9; review rv-20261018T050016Z-78f97c9d-30c4). Opening B activates it
+// before its saved messages are read, while the screen still offers Stop for A.
+#[test]
+fn stop_pressed_while_another_conversation_opens_reaches_the_one_it_names() {
+    use richos_core::{read_view::SpineView, steering::{StopOutcome, TurnCancel, TurnControl}};
+    struct Counted(Arc<AtomicUsize>);
+    impl TurnCancel for Counted {
+        fn cancel(&self) -> bool { self.0.fetch_add(1, Ordering::SeqCst); true }
+    }
+    let (root, mut spine, company) = fixture();
+    let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(controls.clone());
+    let previous = spine.create_thread("Previous conversation", &company).unwrap();
+    let destination = spine.create_thread("Destination conversation", &company).unwrap();
+    spine.switch_thread(&previous).unwrap();
+    spine.detach_conversation_io();
+    spine.submit_prompt("Keep working on this", Source::Text).unwrap();
+    let cancels = Arc::new(AtomicUsize::new(0));
+    controls.for_thread(&previous).set_cancel(Some(Arc::new(Counted(cancels.clone()))));
+    let reader = spine.reader();
+    spine.switch_thread(&destination).unwrap();
+    let view = reader.snapshot();
+    assert_eq!(view.active_thread(), Some(destination.as_str()));
+    let named = view.stop_conversation(Some(&previous));
+    assert_eq!(named, Some(previous.as_str()), "Stop for the previous conversation was dropped");
+    let outcome = controls.for_thread(named.unwrap()).request_stop().unwrap();
+    assert!(matches!(outcome, StopOutcome::Requested { reached_lease: true, .. }), "{outcome:?}");
+    assert_eq!(cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(view.stop_conversation(None), Some(destination.as_str()));
+    assert_eq!(view.stop_conversation(Some("thr_not_in_this_ledger")), None);
+    drop(view); drop(spine); std::fs::remove_dir_all(root).unwrap();
+}
+
 // A question-card answer is something he sent, so his Stop covers it like a typed
 // message (follow-ups after nightly 65, item 8; review rv-20261018T045039Z-78f97c9d-20fc#1).
 fn card_answer(thread: &str, company: &EntityId, id: &str, text: &str) -> richos_core::questions::Delivery {

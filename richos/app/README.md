@@ -232,7 +232,7 @@ richos/app/
                               classified identically, which is what makes the operator line
                               impossible to write for only one surface
     tests/native_input_provenance_tests.rs 1 native input provenance witness.
-    tests/terminal_session_tests.rs 14 native session continuity and overlapping-input regressions.
+    tests/terminal_session_tests.rs 15 native session continuity and overlapping-input regressions.
     tests/rotation_tests.rs 11 account-resume, native model-control and quota-notice tests.
     tests/questions.rs       23 tests: durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
     tests/action_ledger_tests.rs 5 action-ledger WRITER tests (the ledger is non-empty
@@ -1196,7 +1196,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1810 tests + 8 doc-tests (1806 direct, 4 ignored)
+cargo test -p richos-core                       # 1811 tests + 8 doc-tests (1807 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1887,7 +1887,7 @@ explicit triggers), self-authored handoff summaries on clean rotation, mid-turn-
 recovery/replay (bounded to one attempt, clean-render dedup via superseded turns), and the
 identity/action-ledger re-prime that structurally excludes false attribution — all wired
 in `richos-core::spine` (`LeaseFactory`, `rotate_lease`, `recover_and_replay`) and proven
-both headless (`cargo test -p richos-core`, `tests/terminal_session_tests.rs`, 14 tests) and live
+both headless (`cargo test -p richos-core`, `tests/terminal_session_tests.rs`, 15 tests) and live
 against the real binary (`examples/rotation_roundtrip.rs` — a forced mid-conversation
 rotation swaps the backing Claude session and the successor correctly recalls the prior
 exchange purely via the re-prime payload). Company name, the assertiveness dial, and the
