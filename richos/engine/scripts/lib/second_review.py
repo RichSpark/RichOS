@@ -123,6 +123,13 @@ THE VERDICT (plan §2.2, §2.4)
   * A passed review files each finding it did not block on, new or still open
     from earlier, in <state>/review-follow-ups.jsonl, once; the stdout line
     says how many and where.
+  * THE LEAD'S RULING (§116: "Rich applies the same test"; richos-hq
+    docs/plans/2026-10-18-review-rule-redesign.md D1, with Sage's check):
+    `--follow-up <review-id>#<n> --why '...'` files a blocking finding as a
+    follow-up in <state>/review-deferrals.jsonl and review-follow-ups.jsonl.
+    The gate (operator_fences.review_of) then stops holding the work for it at
+    every later commit, and each later reviewer of a commit built on that
+    review is told it is already filed. `--reopen` undoes it.
   * One row per review in <state>/reviews.jsonl and the full text, answer and
     fixtures in <state>/reviews/<id>/ (<state> is ~/.claude/state, outside
     every repository and session, like the escalation ledger). One line on
@@ -243,6 +250,10 @@ def ledger_path():
 
 def follow_ups_path():
     return os.path.join(state_root(), "review-follow-ups.jsonl")
+
+
+def deferrals_path():
+    return os.path.join(state_root(), "review-deferrals.jsonl")
 
 
 def read_ledger():
@@ -469,6 +480,86 @@ def earlier_findings(work_key, tip, repo, repo_id=""):
     return list(fences.open_review_findings(rows).items())
 
 
+def is_ancestor(repo, older, newer):
+    return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", older, newer],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def filed_findings(repo, repo_id, tip):
+    """(the findings the lander filed as follow-ups whose review was of `tip` or a
+    commit it was built on, in THIS repository: [(id, ruling)], every filed id of
+    this repository). Linked by commit ancestry, never by work key: a by-hand
+    review's key is its base, so it never shares one with the handovers of the
+    same branch (Sage's check of the review rule redesign, F2)."""
+    import operator_fences as fences
+    mine = {fid: d for fid, d in fences.read_deferrals(ledger_path()).items() if same_repo(d, repo, repo_id)}
+    return ([(fid, d) for fid, d in mine.items() if d.get("tip") and is_ancestor(repo, d["tip"], tip)],
+            set(mine))
+
+
+def follow_up(finding, why, reopen=False):
+    """`--follow-up <review-id>#<n> --why '...'`: the lander rules a blocking
+    finding a follow-up (ruling §116: "Rich applies the same test to any finding
+    the reviewer has not sorted"), and the gate stops holding work for it at
+    every later commit of the same work. `--reopen` undoes it; the later row wins.
+
+    Only the lead rules: refused for a teammate's call (agent_hold.py exports
+    RICHOS_AGENT_OWNER into every subagent's shell) and for a caller with no
+    Claude session in its ancestry (Codex), so an author never files its own
+    finding. No land lease is needed or taken: a ruling writes no checkout."""
+    import operator_fences as fences
+    owner = (os.environ.get("RICHOS_AGENT_OWNER") or "").strip()
+    who = fences.claude_session()
+    if owner:
+        raise Refused("only the lead rules on a finding; this is a teammate's call (RICHOS_AGENT_OWNER=%s)" % owner)
+    if not who or "error" in who:
+        raise Refused("only the lead rules on a finding; no Claude session runs this command%s"
+                      % (" (%s)" % who["error"] if who else ""))
+    rid, sep, n = finding.partition("#")
+    if not sep or not rid or not n:
+        raise Refused("name the finding as <review-id>#<n>, as the refusal lists it")
+    rows = read_ledger()
+    at = next((i for i, r in enumerate(rows) if r.get("id") == rid and r.get("verdict")), None)
+    if at is None:
+        raise Refused("no review %s with a verdict in %s" % (rid, ledger_path()))
+    source = rows[at]
+    current = fences.read_deferrals(ledger_path()).get(finding)
+    if reopen:
+        if not current:
+            raise Refused("%s is not filed as a follow-up; there is nothing to reopen" % finding)
+        f = current
+    else:
+        if not (why or "").strip():
+            raise Refused("--why is required: who rules, and why")
+        if current:
+            raise Refused("%s is already filed as a follow-up (%s: %s)" % (finding, current.get("at"), current.get("why")))
+        repo_id = source.get("repo_id") or ""
+        # The finding as the reviews of its repository left it: the review that raised it and every
+        # later one that was asked about it (open_review_findings, the gate's own reading).
+        history = [r for r in rows[at:] if same_repo(r, source.get("repo"), repo_id) and r.get("verdict")
+                   and (r.get("id") == rid or any(e.get("id") == finding for e in
+                                                   fences.review_record(r).get("earlier_findings_in") or []))]
+        f = fences.open_review_findings(history).get(finding)
+        if not f or f.get("blocks") is False:
+            raise Refused("%s is not an open blocking finding in %s, so it holds no land" % (finding, ledger_path()))
+    row = {"at": iso(), "action": "reopen" if reopen else "follow-up", "finding": finding, "review": rid,
+           "repo": source.get("repo"), "repo_id": source.get("repo_id") or repo_identity(source.get("repo")),
+           "branch": source.get("branch") or "", "tip": source.get("tip"), "work": source.get("work") or "",
+           "priority": f.get("priority"), "title": f.get("title"), "files": f.get("files") or [],
+           "why": why or "", "who": who}
+    append_row(row, deferrals_path())
+    if reopen:
+        print("SECOND-REVIEW %s reopened: it blocks again. Record: %s" % (finding, deferrals_path()))
+        return 0
+    append_row({"at": row["at"], "review": rid, "finding": finding, "repo": row["repo"], "branch": row["branch"],
+                "tip": row["tip"], "work": row["work"], "priority": f.get("priority"), "title": f.get("title"),
+                "files": f.get("files") or [], "evidence": f.get("evidence"), "fixture": f.get("fixture") or "",
+                "filed_by": "lander", "why": why}, follow_ups_path())
+    print("SECOND-REVIEW %s filed as a follow-up: it no longer holds a land. Records: %s, %s"
+          % (finding, deferrals_path(), follow_ups_path()))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # the export and the input
 # ---------------------------------------------------------------------------
@@ -562,6 +653,14 @@ def build_input(w, a, export, earlier):
         parts.append("\n")
     else:
         parts.append("None. `earlier_findings` is an empty list.\n\n")
+    filed = getattr(w, "filed", None) or []
+    if filed:
+        parts.append("## Already filed as follow-ups\n\nThe lander ruled these follow-ups. Do not report them "
+                     "again, in `findings` or in `earlier_findings`.\n\n")
+        for fid, d in filed:
+            parts.append("- `%s` (P%s) %s (%s). Why: %s\n" % (fid, d.get("priority"), d.get("title"),
+                                                            ", ".join(d.get("files") or []), d.get("why")))
+        parts.append("\n")
     parts.append("## The repository's own rules (as they are at the tip)\n\n")
     for rel in RULE_FILES:
         text = read_rule(tree, rel)
@@ -1188,7 +1287,9 @@ def _review_owned(a, w):
     recovery_record = getattr(w, "recovery_record", None)
     say = lambda s: (sys.stderr.write(s + "\n"), sys.stderr.flush())
     repo_id = repo_identity(w.repo)
-    earlier = earlier_findings(w.work_key, w.tip, w.repo, repo_id)
+    filed, filed_ids = filed_findings(w.repo, repo_id, w.tip)
+    earlier = [(fid, f) for fid, f in earlier_findings(w.work_key, w.tip, w.repo, repo_id) if fid not in filed_ids]
+    w.filed = filed
     started_at = time.time()
     rid = "rv-%s-%s-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(started_at)), w.tip[:8], secrets.token_hex(2))
     record = os.path.join(state_root(), "reviews", rid)
@@ -1407,6 +1508,10 @@ def main(argv):
     ap.add_argument("--author-model", default="", help="the author's model, when no transcript says it")
     ap.add_argument("--work", default="", help="the key that ties rechecks of one piece of work together")
     ap.add_argument("--recheck", default="", help="the prior review id intentionally rechecked on the same source")
+    ap.add_argument("--follow-up", default="", metavar="REVIEW-ID#N",
+                    help="file a blocking finding as a follow-up (the lead's ruling); it holds no land after this")
+    ap.add_argument("--reopen", default="", metavar="REVIEW-ID#N", help="undo --follow-up: the finding blocks again")
+    ap.add_argument("--why", default="", help="with --follow-up: who rules, and why")
     ap.add_argument("--trigger", default="manual", choices=["handover", "long-job", "quiet", "manual"])
     ap.add_argument("--reviewer", default="auto", choices=["auto", "codex", "claude"])
     ap.add_argument("--claude", default="", help="the Claude CLI to review with (the app passes the one it ships)")
@@ -1419,6 +1524,10 @@ def main(argv):
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, _on_stop)
     try:
+        if a.follow_up or a.reopen:
+            if a.follow_up and a.reopen:
+                raise Refused("--follow-up and --reopen are two rulings; give one")
+            return follow_up(a.follow_up or a.reopen, a.why, reopen=bool(a.reopen))
         return review(a)
     except Refused as exc:
         sys.stderr.write("second-review: %s\n" % exc)

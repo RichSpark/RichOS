@@ -57,7 +57,13 @@
 #        never set, first run) Claude; on with Codex signed in, Codex with every
 #        isolation flag; on with Codex signed out (what `codex login status`
 #        reports), Claude, and no Codex review is run; on with Codex missing, Claude
+#   C21  the lead files a blocking finding as a follow-up (--follow-up, --reopen):
+#        a teammate's shell or a caller with no Claude session is refused and
+#        writes nothing; the lead's ruling writes one deferral and one follow-up
+#        row; the next reviewer of a descendant tip, whatever its work key, is
+#        told it is already filed and never asked to judge it again
 #
+
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
 set -uo pipefail
@@ -718,6 +724,66 @@ assert sr.review(a)==0 and len(calls)==2
 print('shared execution, manual deduplication and explicit rechecks passed')
 PYTEST
 check "C20 every writer claims source execution; exact duplicates reuse; changed inputs require an explicit recheck" $? "shared writer assertion failed"
+
+# --- C21 ---------------------------------------------------------------------
+# Follow-up 12 (D1, with Sage's check F1 and F2): the lead files a blocking finding as a
+# follow-up with one command. On 2026-10-18 nightly 63 was held on a finding the CEO had ruled
+# a follow-up, and the only way through was switching the gate off.
+unset RICHOS_AGENT_OWNER CLAUDE_PID
+DEF="$SB/state/review-deferrals.jsonl"
+printf 'base\nslice one\nfix\nmore\nby hand\n' >"$REPO/a.txt"
+G commit -qam "Dictation slice 1: reviewed by hand"
+TIPM="$(G rev-parse HEAD)"
+FAKE_MODE=blocking-passed run --repo "$REPO" --tip "$TIPM" --base "$BASE" --words-file "$SB/codex-words.txt"
+RIDM="$(field "$(last_row)" 'r["id"]')"
+[ "$RC" -eq 1 ]; check "C21 setup: a by-hand review with one blocking finding" $? "rc=$RC out=$OUT"
+FU_N="$(wc -l <"$FU" | tr -d ' ')"
+RICHOS_AGENT_OWNER=teammate-x run --follow-up "$RIDM#1" --why "the author's own ruling"
+[ "$RC" -eq 64 ] && [ ! -e "$DEF" ] && [ "$(wc -l <"$FU" | tr -d ' ')" = "$FU_N" ] && has "$OUT" "teammate"
+check "C21 a teammate's shell (RICHOS_AGENT_OWNER) is refused and writes nothing" $? "rc=$RC out=$OUT"
+run --follow-up "$RIDM#1" --why "no Claude session"
+[ "$RC" -eq 64 ] && [ ! -e "$DEF" ] && has "$OUT" "no Claude session"
+check "C21 a caller with no Claude session in its ancestry (Codex) is refused and writes nothing" $? "rc=$RC out=$OUT"
+mkdir -p "$RUN_CFG/sessions"
+printf '{"pid": %d, "sessionId": "lead-session", "procStart": "%s", "kind": "interactive"}' "$$" \
+    "$(TZ=UTC0 LC_ALL=C ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ //;s/ $//')" >"$RUN_CFG/sessions/$$.json"
+run --follow-up "$RIDM#1" --why "Rich: a narrow race, not this work's normal use"
+python3 - "$DEF" "$FU" "$RIDM" "$TIPM" <<'PY'
+import json, sys
+dp, fp, rid, tip = sys.argv[1:5]
+d = [json.loads(l) for l in open(dp)]
+f = [json.loads(l) for l in open(fp) if json.loads(l).get("filed_by") == "lander"]
+ok = (len(d) == 1 and d[0]["action"] == "follow-up" and d[0]["finding"] == rid + "#1" and d[0]["tip"] == tip
+      and d[0]["why"] == "Rich: a narrow race, not this work's normal use" and d[0]["who"]["kind"] == "claude"
+      and d[0]["title"] == "Shutdown leaves audio on disk"
+      and len(f) == 1 and f[0]["finding"] == rid + "#1" and f[0]["why"] == d[0]["why"])
+sys.exit(0 if ok else 1)
+PY
+check "C21 the lead's ruling writes one deferral row (finding, tip, who, why) and one follow-up row" $? \
+    "rc=$RC out=$OUT deferrals=$(cat "$DEF" 2>/dev/null)"
+run --follow-up "$RIDM#2" --why "a finding that never blocked"
+[ "$RC" -eq 64 ] && has "$OUT" "not an open blocking finding" && [ "$(wc -l <"$DEF" | tr -d ' ')" = "1" ]
+check "C21 a finding that holds no land is refused" $? "rc=$RC out=$OUT"
+printf 'base\nslice one\nfix\nmore\nby hand\nafter the ruling\n' >"$REPO/a.txt"
+G commit -qam "Dictation slice 1: after the ruling"
+FAKE_MODE=pass run --name echo-sonnet-x1 --repo "$REPO" --trigger handover
+P="$(cat "$(last_call)/prompt.md" 2>/dev/null)"
+[ "$RC" -eq 0 ] && has "$P" "## Already filed as follow-ups" && has "$P" "\`$RIDM#1\` (P2) Shutdown leaves audio on disk" \
+  && ! has "$P" "**$RIDM#1**"
+check "C21 the next handover reviewer of a descendant tip is told the by-hand finding is already filed (linked by ancestry, not work key)" $? \
+    "rc=$RC prompt=$(last_call)/prompt.md"
+FAKE_MODE=pass run --repo "$REPO" --tip "$(G rev-parse HEAD)" --base "$BASE" --words-file "$SB/codex-words.txt"
+P="$(cat "$(last_call)/prompt.md" 2>/dev/null)"
+[ "$RC" -eq 0 ] && has "$P" "\`$RIDM#1\`" && ! has "$P" "**$RIDM#1**" && has "$P" "**$RIDM#2**"
+check "C21 a recheck of the same work lists the filed finding as filed, never among the earlier findings to judge" $? \
+    "rc=$RC prompt=$(last_call)/prompt.md"
+run --reopen "$RIDM#1"
+[ "$RC" -eq 0 ] && [ "$(tail -1 "$DEF" | python3 -c 'import json,sys; print(json.load(sys.stdin)["action"])')" = "reopen" ]
+check "C21 --reopen undoes the ruling (the later row wins)" $? "rc=$RC out=$OUT"
+FAKE_MODE=pass run --repo "$REPO" --tip "$(G rev-parse HEAD)" --base "$BASE" --words-file "$SB/codex-words.txt"
+P="$(cat "$(last_call)/prompt.md" 2>/dev/null)"
+! has "$P" "## Already filed as follow-ups"
+check "C21 after --reopen the finding is no longer listed as filed" $? "rc=$RC prompt=$(last_call)/prompt.md"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"
