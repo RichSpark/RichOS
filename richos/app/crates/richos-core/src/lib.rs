@@ -42,9 +42,6 @@
 //!   - `journal`   — the per-thread, day-sharded machinery journal (separate store; not the ledger).
 //!   - `timeline`  — the TYPED TIMELINE records (UX brief §12): the projection a renderer
 //!                   reads, with entity scope on every item and visibility as a gate.
-//!   - `reachability` — CAN CLAUDE BE REACHED **AT THE SIZE THE WORK IS**? A degraded API
-//!                   fails the expensive requests first, so a verdict of "reachable" cannot
-//!                   be constructed by a probe smaller than the measured floor. Row 3.30.
 //!   - `upstream`  — the UPSTREAM MODEL-API failure vocabulary: `529` overload vs `429`
 //!                   quota, classified from the vendor's own structural tokens, with the
 //!                   bounded+visible retry budget and the what-survived statement.
@@ -182,7 +179,7 @@ pub use screen::{
     SCREEN_POLL,
 };
 pub use upstream::{
-    FakeUpstream, RetryBudget, RetryClock, SystemRetryClock, TurnLoss, UpstreamFailure, UpstreamFault,
+    RetryBudget, RetryClock, SystemRetryClock, TurnLoss, UpstreamFailure, UpstreamFault,
     MAX_OVERLOAD_RETRIES, MAX_UPSTREAM_RETRIES, OVERLOAD_RETRY_WAITS,
 };
 pub use timeline::{
