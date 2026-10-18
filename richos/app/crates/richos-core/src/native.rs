@@ -8461,6 +8461,19 @@ fn worker_notices(received: &str) -> Vec<Value> {
     }).collect()
 }
 
+/// Review rv-20261018T205954Z-3590e78c-d3fa: Claude Code 2.1.302 ends repeated overloads with
+/// its own spelling, `API Error: Repeated 529 Overloaded errors.`, on an assistant frame marked
+/// `server_error`. It is an overload, so the worker or turn it ended gets the CEO's waits.
+#[test]
+fn claude_codes_repeated_529_message_is_an_overload() {
+    let text = "API Error: Repeated 529 Overloaded errors. The API is at capacity \u{2014} this is usually temporary. \
+        Try again in a moment. If it persists, check https://status.claude.com.";
+    let frame = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call","error":"server_error",
+        "message":{"content":[{"type":"text","text":text}]}});
+    let failure = overloaded_api_error_message(&frame).expect("Claude Code's repeated-529 message was not taken for an overload");
+    assert_eq!((failure.fault, failure.status, failure.raw.as_str()), (crate::upstream::UpstreamFault::Overloaded, Some(529), text));
+}
+
 /// Follow-up 11 (2026-10-18): a worker stopped by an overload gets the CEO's waits too. The
 /// host waits the schedule's next wait and then tells Stu, through his own inbox, to restart it;
 /// a worker's ordinary answer from the API starts the schedule again. The worker's message
