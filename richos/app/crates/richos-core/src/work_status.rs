@@ -419,6 +419,30 @@ pub struct WorkTrail {
     pub stop_targets: Vec<(String, String)>,
 }
 
+/// The worker a native tool call started, as its job knows it: the assignment's obligation,
+/// the duty, the repositories and the description, read from the dispatch receipt the engine
+/// stamped with that call (`tool_use_id`, `engine/mega-lander/app.py`). Two jobs' workers never
+/// share it however alike their descriptions, and a worker Stu restarts for the same job under
+/// the same description has it again (stu.md). `None` when no readable receipt names the call.
+pub fn worker_identity(state: &Path, entity: &str, thread: &str, call: &str) -> Option<String> {
+    let identity = serde_json::to_vec(&[entity, thread]).ok()?;
+    let parent = state.join("work-receipts");
+    let root = parent.join(format!("{:x}", Sha256::digest(identity)));
+    if parent.is_symlink() || root.is_symlink() { return None; }
+    std::fs::read_dir(root).ok()?.flatten().map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "json"))
+        .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() <= 1024 * 1024))
+        .filter_map(|path| serde_json::from_slice::<Value>(&std::fs::read(path).ok()?).ok())
+        .find(|row| row["schema"] == 1 && row["tool_use_id"] == call
+            && row["binding"]["entity_id"] == entity && row["binding"]["thread_id"] == thread)
+        .map(|row| {
+            let request = &row["request"];
+            let mut repos: Vec<&str> = request["repos"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            repos.sort_unstable();
+            serde_json::json!([request["obligation_id"], request["role"], repos, request["title"]]).to_string()
+        })
+}
+
 /// Read one assignment's trail. `obligation` is the assignment's obligation id, which the
 /// engine stamps on every receipt it writes for it (`request.obligation_id`).
 ///

@@ -41,11 +41,16 @@ struct Inner {
     /// counted apart from his own so a turn of his that succeeds does not restart theirs, and
     /// one per worker: an overload hits every running worker at once, so a shared count would
     /// let one worker's answer restart another's waits and several workers use up each other's
-    /// retries. Keyed by [`Inner::worker_names`], so a restarted worker keeps its place.
+    /// retries. Keyed by [`Inner::worker_keys`], so a restarted worker keeps its place.
     workers: std::collections::HashMap<String, crate::upstream::RetryBudget>,
+    /// Each worker run's schedule key, by the tool call that started it: its job, duty,
+    /// repositories and description from the dispatch receipt
+    /// ([`crate::work_status::worker_identity`]), read once per run. Workers of different jobs
+    /// never share one, however alike their descriptions; a worker Stu restarts for the same job
+    /// under the same description is the same worker. A run no receipt names is its tool call.
+    worker_keys: std::collections::HashMap<String, String>,
     /// The description each worker run was started under, by the tool call that started it
-    /// (Claude Code's `task_started`). A worker Stu restarts under the same description is the
-    /// same worker; a run with no description seen is known by its tool call alone.
+    /// (Claude Code's `task_started`), told to Stu as the worker's task.
     worker_names: std::collections::HashMap<String, String>,
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
@@ -218,9 +223,16 @@ impl WorkHost {
         }
         if frame["type"] != "assistant" { return; }
         let call = frame["parent_tool_use_id"].as_str().unwrap_or_default();
+        let known = backend.inner.lock().unwrap().worker_keys.get(call).cloned();
+        let worker = known.unwrap_or_else(|| {
+            // Once per run, off the lock: the receipt was stamped before the Agent call ran.
+            let key = crate::work_status::worker_identity(&self.state, &binding.entity_id().to_string(),
+                binding.thread_id(), call).unwrap_or_else(|| call.to_string());
+            backend.inner.lock().unwrap().worker_keys.insert(call.to_string(), key.clone());
+            key
+        });
         let mut inner = backend.inner.lock().unwrap();
         let name = inner.worker_names.get(call).cloned();
-        let worker = name.clone().unwrap_or_else(|| call.to_string());
         let Some(failure) = crate::native::overloaded_api_error_message(frame) else {
             if frame.get("error").is_none_or(serde_json::Value::is_null) { inner.workers.remove(&worker); }
             return;
@@ -1817,6 +1829,9 @@ mod tests {
         observe(answered("B"));
         observe(overloaded("A"));
         for n in 1..=8 { observe(overloaded(&format!("W{n}"))); }
+        // Stu restarts the worker for the same job under the same description: a new receipt.
+        dispatched(&h, "receipt-first", "first-run", "obligation-7", "worker", "/repos/app", "Fix the login page");
+        dispatched(&h, "receipt-restarted", "restarted-run", "obligation-7", "worker", "/repos/app", "Fix the login page");
         observe(started("first-run"));
         observe(overloaded("first-run"));
         observe(started("restarted-run"));
@@ -1834,6 +1849,64 @@ mod tests {
         expected.extend((1..=8).map(|n| (format!("W{n}"), Some(1), Some(1))));
         expected.sort();
         assert_eq!(told, expected, "the workers' schedules were not each their own");
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// The dispatch receipt `engine/mega-lander/app.py` writes for a worker run, with the native
+    /// tool call its Agent call was given (`status="dispatching", tool_use_id=...`).
+    fn dispatched(h: &Harness, id: &str, call: &str, obligation: &str, role: &str, repo: &str, title: &str) {
+        use sha2::Digest;
+        let root = h.state.join("work-receipts").join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]")));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(format!("{id}.json")), serde_json::json!({"schema":1,"id":id,
+            "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"stu-session"},
+            "request":{"obligation_id":obligation,"role":role,"repo":repo,"repos":[repo],"title":title},
+            "status":"running","tool_use_id":call}).to_string()).unwrap();
+    }
+
+    /// Review rv-20261018T205042Z-e82b04f5-720c: independent workers in different jobs are
+    /// normally started under the same short description ("Review changes"), so a schedule
+    /// keyed by the description alone was shared again. Eight such workers overloaded together
+    /// each wait the first minute, and one's ordinary answer does not restart another's waits.
+    #[test]
+    fn workers_of_different_jobs_under_one_description_keep_their_own_overload_schedules() {
+        let h = harness(0);
+        h.host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
+        let overloaded = |call: &str| serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"overloaded",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
+        let started = |call: &str| serde_json::json!({"type":"system","subtype":"task_started","task_id":format!("agent-{call}"),
+            "tool_use_id":call,"description":"Review changes","task_type":"local_agent"});
+        for n in 1..=8 {
+            let call = format!("review-{n}");
+            dispatched(&h, &format!("receipt-{n}"), &call, &format!("job-{n}"), "reviewer", &format!("/repos/r{n}"), "Review changes");
+            observe(started(&call));
+            observe(overloaded(&call));
+        }
+        dispatched(&h, "receipt-a", "A", "job-a", "reviewer", "/repos/a", "Review changes");
+        dispatched(&h, "receipt-b", "B", "job-b", "reviewer", "/repos/b", "Review changes");
+        observe(started("A"));
+        observe(started("B"));
+        observe(overloaded("A"));
+        observe(serde_json::json!({"type":"assistant","parent_tool_use_id":"B",
+            "message":{"content":[{"type":"text","text":"Review complete."}]}}));
+        observe(overloaded("A"));
+        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
+            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
+            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
+        }).collect::<Vec<_>>();
+        until("Stu was not told about each worker's overload", || notices().len() == 10);
+        let mut told: Vec<_> = notices().iter().map(|fact| (fact["worker"]["tool_use_id"].as_str().unwrap_or("").to_string(),
+            fact["waited_minutes"].as_u64(), fact["retries_used_up"].as_bool())).collect();
+        told.sort();
+        let mut expected = vec![("A".to_string(), Some(1), Some(false)), ("A".into(), Some(2), Some(false))];
+        expected.extend((1..=8).map(|n| (format!("review-{n}"), Some(1), Some(false))));
+        expected.sort();
+        assert_eq!(told, expected, "workers of different jobs under one description shared a schedule");
         backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
