@@ -33,6 +33,22 @@ fn restart_recovers_scoped_obligations_and_receipts_without_auto_memory() {
     assert!(!bridge.brief(&other, None).unwrap().contains("depot manual"));
 }
 
+#[test]
+fn restarted_stu_can_reenter_a_saved_turn_after_a_question_answer() {
+    let (_fixture, bridge) = fixture();
+    let seat = "stu-thread:thread-a";
+    let original = bridge.bind("depot", "thread-a", "session-stu", "peer:11104", Some(seat), "rich").unwrap();
+    let answer = bridge.bind("depot", "thread-a", "session-stu", "answer:tone", Some(seat), "rich").unwrap();
+    assert_ne!(original.revision, answer.revision);
+    // Reopening the bridge carries no in-memory transition identity across restart.
+    let restarted = EcsBridge::new(&bridge.python, bridge.component.parent().unwrap(), &bridge.state_root).unwrap();
+    let resumed = restarted.bind("depot", "thread-a", "session-stu", "peer:11104", Some(seat), "rich").unwrap();
+    assert_ne!(answer.revision, resumed.revision);
+    assert!(bridge.brief(&original, Some(seat)).is_err(), "the original receipt became current again");
+    assert_eq!(resumed, restarted.bind("depot", "thread-a", "session-stu", "peer:11104", Some(seat), "rich").unwrap());
+    assert!(restarted.brief(&resumed, Some(seat)).is_ok());
+}
+
 /// **The app's answer close against the REAL engine** (bgdone2 item 1): the obligation is opened
 /// the way the register opens it, on the conversation's own per-thread seat; his next turn
 /// makes that binding stale; `EcsAnsweredClose` still closes it, and the host's own settle

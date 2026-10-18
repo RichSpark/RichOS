@@ -184,6 +184,20 @@ pub fn saved_handoff(scope:&StatusToolScope,instruction:&crate::ecs::UserInstruc
 }
 
 fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstruction)->Result<Option<(Message,u64)>,String> {
+    find_record(reader,|message| {
+        if !message.handoff || message.instruction.as_ref().is_none_or(|i|i.ledger_ref!=instruction.ledger_ref) {return Ok(false)}
+        if message.instruction.as_ref().unwrap().sha256!=instruction.sha256 {return Err("Saved handoff disagrees with the original request".into())}
+        Ok(true)
+    })
+}
+
+fn work_failure_input(message:&Message)->Option<String> {
+    if message.from!="work-status" {return None}
+    let facts:Value=serde_json::from_str(&message.text).ok()?;
+    (facts["event"]=="upstream_turn").then(||facts["input_id"].as_str().map(str::to_string)).flatten()
+}
+
+fn find_record(reader:&mut impl BufRead,mut matches:impl FnMut(&Message)->Result<bool,String>)->Result<Option<(Message,u64)>,String> {
     let mut through=0;
     loop {
         let mut line=String::new();
@@ -192,10 +206,7 @@ fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstructio
         if count==0 || !line.ends_with('\n') {return Ok(None)}
         through+=count as u64;
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
-        if message.handoff && message.instruction.as_ref().is_some_and(|i|i.ledger_ref==instruction.ledger_ref) {
-            if message.instruction.as_ref().unwrap().sha256!=instruction.sha256 {return Err("Saved handoff disagrees with the original request".into())}
-            return Ok(Some((message,through)))
-        }
+        if matches(&message)? {return Ok(Some((message,through)))}
     }
 }
 
@@ -268,6 +279,14 @@ fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bo
             let complete=tail.iter().rposition(|b|*b==b'\n').map(|n|start+n as u64+1).unwrap_or(0);
             if complete==0 && start>0 {return Err("Incomplete message exceeds the frame limit".into())}
             file.set_len(complete).map_err(|e|e.to_string())?;
+        }
+    }
+    // Retries and restarts report one failed logical input, using the inbox itself.
+    // Scan acknowledged records too: Rich having read a failure cannot make it new.
+    if let Some(input)=work_failure_input(message) {
+        file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
+        if let Some((_,through))=find_record(&mut BufReader::new(&mut file),|saved|Ok(work_failure_input(saved).as_ref()==Some(&input)))? {
+            return Ok((through,true))
         }
     }
     if unique {

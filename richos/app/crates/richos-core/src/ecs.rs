@@ -341,7 +341,9 @@ impl EcsBridge {
             "scope": {"entity_id":entity,"thread_id":thread,"session_id":session,"turn_id":turn,"audience":audience},
             "expected_revision":current.pointer("/binding/revision"),
             "source_ref":format!("ledger:{thread}:{turn}"),
-            "request_id":format!("{session}:{turn}")
+            // Re-entering a saved turn after an answer is a new cursor transition.
+            // Retries from the same revision retain the same immutable envelope.
+            "request_id":format!("{session}:{turn}:from:{}",current.pointer("/binding/revision").unwrap_or(&Value::Null))
         })))?;
         serde_json::from_value(result["binding"].clone()).map_err(|e| EcsError(e.to_string()))
     }
