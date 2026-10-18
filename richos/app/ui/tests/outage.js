@@ -332,7 +332,7 @@ async function main() {
     await page.evaluate((s) => window.__render(s), snapshot(null));
     const c = await cardText(page);
     assert(c, "the generic failure card must still render");
-    assert(/^RichOS\b/.test(c.body[0]), "the fallback names the app: " + JSON.stringify(c.body));
+    assert(/\bRich\b/.test(c.body[0]), "the fallback names whose answer was cut off: " + JSON.stringify(c.body));
     assert(!/\bI\b/.test(c.body.concat(c.notes).join(" ")), "the app cannot speak as Rich");
     assert(!c.notes.some((n) => n.includes(GENERIC_NOTE)), "no unchecked saved-answer claim");
     assertEqual(c.action, RETRY_LABEL);

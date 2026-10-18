@@ -2978,7 +2978,7 @@
       if (outage.retryMessage) card.appendChild(elem("p", "tl-intervention-note", outage.retryMessage));
     } else {
       card.appendChild(elem("p", "tl-intervention-body",
-        "RichOS did not receive a complete reply."));
+        "Rich's answer was cut off before he finished."));
       card.appendChild(elem("p", "tl-intervention-note",
         "Press Restore my message to put your words back in the box."));
     }

@@ -390,7 +390,7 @@ async function main() {
         const c = await cardText(page);
         const whole = c.body.concat(c.notes).join(" ");
         assert(!/\bI\b/.test(whole), "the app must not speak as Rich: " + whole);
-        assert(c.body.some((t) => /^RichOS\b/.test(t)), "the fallback must name RichOS: " + whole);
+        assert(c.body.some((t) => /\bRich\b/.test(t)), "the fallback must say whose answer was cut off: " + whole);
         assert(!whole.includes(GENERIC_NOTE), "the fallback cannot claim an unchecked saved answer: " + whole);
         assert(!/snag|already written above/.test(whole), "the fallback cannot invent a failure or saved work: " + whole);
         assertEqual(c.actionCount, 1, "the original message remains restorable");

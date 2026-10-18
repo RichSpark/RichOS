@@ -167,13 +167,13 @@ module.exports = [
       "on screen afterwards, so deferring can never become the §21 armed-composer leak.",
   },
   {
-    s: "RichOS did not receive a complete reply.",
+    s: "Rich's answer was cut off before he finished.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: "failed-turn",
     why:
       "The renderer's fallback when no interruption or outage record explains an incomplete " +
-      "reply, including after a normal close. It names RichOS without guessing a cause or " +
+      "reply, including after a normal close. It speaks about Rich without guessing a cause or " +
       "claiming saved answer text. The original message can be restored with this control.",
   },
 
