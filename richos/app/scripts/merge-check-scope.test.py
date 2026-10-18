@@ -234,6 +234,19 @@ class Scope(unittest.TestCase):
         self.assertEqual(len(weights), 1, weights)
         self.assertTrue(0 < weights[0] < 600, weights)
 
+    def test_the_scratch_reapers_suite_is_left_to_the_nightly_by_the_merge(self):
+        # It took 2238 s in a land check on a 91% busy host (2026-10-18), past the 600 s cap.
+        # Its header declares it, so the merge moves its unit to the nightly engine run.
+        unit = 'scripts/scratch-reaper.test.sh'
+        ac = load('merge_scope_autocheck_reaper', 'richos/app/scripts/autocheck/autocheck.py')
+        repo = SimpleNamespace(top=ROOT)
+        self.assertTrue(ac.mutation_unit(repo, unit))
+        runner, flag = 'scripts/ci-shard.sh', '--only-units'
+        line = f'cd richos/engine && bash {runner} {flag} {unit}'
+        kept, moved = ac.for_the_nightly(repo, [line])
+        self.assertEqual(kept, [])
+        self.assertEqual([m['check'] for m in moved], ['engine ' + unit])
+
     def test_a_workspaces_change_starts_the_fourteen_point_suites_plain_run_in_the_merge_gate(self):
         # The merge of c2e47cfb7 changed workspaces.py. Its gate selected this suite, planned it at
         # the table's 2811.7 s (its run WITH the mutation pass the gate switches off), left it out

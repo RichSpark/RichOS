@@ -261,7 +261,7 @@ async function main() {
     // of it on five healthy turns.
     await goWorking(page, fence, "t_silent");
     b = await band(page);
-    assertEqual(b.head, "Rich is working", "working headline");
+    assertEqual(b.head, "Rich is thinking", "working with nothing back from Rich yet is still the CEO's 'Rich is thinking'");
     assertEqual(b.detail, "", "with zero events there is nothing true to add to the headline, so nothing is said");
 
     // 10s: an elapsed number, derived from the ledger's `startedAt`, shown ONCE — by the
@@ -303,6 +303,43 @@ async function main() {
   });
 
   // =====================================================================================
+  // 1a. "RICH IS THINKING" UNTIL SOMETHING COMES BACK — the CEO's order, 2026-10-17 08:13Z
+  // =====================================================================================
+  //
+  // He asked what the user sees during the request classifier's second, then ordered:
+  // *"Replace this text: "Rich has your message · Waiting to start" with: "Rich is thinking""*.
+  // Ray's nightly 61 and 63 walks framed that second on the real app: the spine has already
+  // sent `working` (it does so before the classifier runs), so the band read "Rich is working"
+  // at +0.25 s and +1 s, and "Rich is thinking" never showed on an ordinary send. So the
+  // headline follows what has come back from Rich, not only the ledger status: nothing back
+  // yet reads "Rich is thinking", and the first reply text, step or worker row ends it.
+
+  await run.check("an ordinary send reads 'Rich is thinking' until the first thing comes back from Rich", async () => {
+    const page = await openApp(browser, "dark");
+    const fence = await startTurn(page, "t_ordinary");
+    assertEqual((await band(page)).head, "Rich is thinking", "queued");
+    await goWorking(page, fence, "t_ordinary");
+    let b = await band(page);
+    assertEqual(b.head, "Rich is thinking", "the spine's `working` arrives before Rich has said anything");
+    await advance(page, 1000);
+    await tick(page);
+    b = await band(page);
+    assertEqual(b.head, "Rich is thinking", "+1 s, the instant Ray framed 'Rich is working' on nightly 63");
+    assertEqual(b.tone, "working", "the tone is the working one; only the words are his");
+
+    await page.evaluate((f) => {
+      window.__emit("rich://activity-upserted", Object.assign({}, f, {
+        kind: "activity", id: "mach_ordinary", turnId: "t_ordinary", createdAt: Date.now(), sequence: 1,
+        slot: "stream", visibility: "ceo", activityType: "command", state: "running",
+        summary: "Read the Q3 board pack", at: Date.now(),
+      }));
+    }, fence);
+    b = await band(page);
+    assertEqual(b.head, "Rich is working", "the first thing back from Rich");
+    await page.close();
+  });
+
+  // =====================================================================================
   // 1b. THE SETTLING LINE IS NEVER A REPORT OF ABSENCE — Ray's defect 2, as an assertion
   // =====================================================================================
   //
@@ -340,7 +377,7 @@ async function main() {
         await tick(page);
       }
       const b = await band(page);
-      assertEqual(b.head, "Rich is working", "at +" + s + "s the headline must still carry the turn");
+      assertEqual(b.head, "Rich is thinking", "at +" + s + "s the headline must still carry the turn");
       assertEqual(b.tone, "working", "at +" + s + "s the tone must stay working — nothing here is quiet");
       assertEqual(b.detail, "", "at +" + s + "s the band must add nothing to the headline: it has nothing true to add");
       assert(b.onScreen, "at +" + s + "s the band left the screen, which is the 2026-09-06 report itself");
@@ -367,6 +404,7 @@ async function main() {
     }, { fence, summary: SUMMARY });
     let b = await band(page);
     assertEqual(b.detail, SUMMARY, "the detail element is alive and relays the backend's own sentence");
+    assertEqual(b.head, "Rich is working", "the first thing back from Rich ends 'Rich is thinking'");
     assertEqual(
       b.height,
       heightWhileSilent,
@@ -601,7 +639,7 @@ async function main() {
       visibility: "ceo", at: Date.now(),
     }), fence);
     await goWorking(page, fence, "t_followup");
-    assertEqual((await band(page)).head, "Rich is working", "the admitted follow-up owns the band");
+    assertEqual((await band(page)).head, "Rich is thinking", "the admitted follow-up owns the band");
 
     // And the turn's own end is reported as it always was, with its measured duration.
     await page.evaluate((f) => {
@@ -612,7 +650,7 @@ async function main() {
     await page
       .waitForFunction(() => [...document.querySelectorAll(".tl-duration-label")].some((n) => n.textContent === "Worked for 30s"), null, { timeout: 30000 })
       .catch(() => {});
-    assertEqual((await band(page)).head, "Rich is working", "the earlier turn cannot clear its follow-up's band");
+    assertEqual((await band(page)).head, "Rich is thinking", "the earlier turn cannot clear its follow-up's band");
     assert((await timers(page)).includes("Worked for 30s"), "the earlier turn's measured end");
     await advance(page, 1000);
     await page.evaluate(f => window.__emit("rich://turn-status", {

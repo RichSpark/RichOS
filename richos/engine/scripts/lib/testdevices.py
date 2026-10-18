@@ -1149,7 +1149,8 @@ def cleanup_run_simulators(run_id, budget=15):
             os.stat(registry_dir())
         except FileNotFoundError:
             return []
-        with registry_lock(CLI_REGISTRY_LOCK_SECONDS):
+        # Waits as long as the collector tolerates: a healthy holder can sit in simctl for 120 s.
+        with registry_lock(COLLECTOR_BUSY_ALERT_SECONDS):
             token = _DEADLINE.set(time.time() + budget)
             regs = [r for r in records() if r["kind"] == "ios-simulator" and any(
                 o.get("verification_run") == run_id for o in r.get("owners", [r.get("owner", {})]))]
