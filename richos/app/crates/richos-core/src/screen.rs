@@ -44,7 +44,7 @@
 //!
 //! ## NOTHING HERE HAS A TIMER, AND THAT IS STRUCTURAL
 //!
-//! Same discipline as [`crate::reachability`]: this module spawns no thread and starts no
+//! This module spawns no thread and starts no
 //! background poll. There is no `std::thread::spawn` in this file. A sample is taken only
 //! inside [`ScreenWatch::wait_for_screen`], by the thread that is doing the waiting — so an
 //! app with nothing screen-bound outstanding does not read the screen at all, ever, and

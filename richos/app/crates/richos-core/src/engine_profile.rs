@@ -504,8 +504,8 @@ impl EngineProfile {
     /// machine the app happens to be running on has installed for its own sessions.
     ///
     /// **IT IS AN ACCESSOR BECAUSE A SECOND CALLER GOT IT WRONG BY OMISSION.** The
-    /// `first_reply_timing_e2e` probe drives `prepare` directly, built its own environment,
-    /// and never set this — so on 2026-09-18 it measured `spawn.py` collecting all NINE of
+    /// `first_reply_timing_e2e` probe (deleted 2026-10-18) drove `prepare` directly, built its
+    /// own environment, and never set this — so on 2026-09-18 it measured `spawn.py` collecting all NINE of
     /// the ENGINE's PreToolUse[Agent] guards and being refused by `guard-owned-state.sh` over
     /// the development session's paused CI. That refusal was real, reproducible, and about a
     /// path the shipped app never takes: the same binary, with this variable set the way
