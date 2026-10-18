@@ -125,7 +125,12 @@ function createStubMac(options) {
 		vapidPublicKey: opts.vapidPublicKey || 'BJ-harness-vapid-public-key',
 		// Both are what the stub IS, and both are overridable so a check can drive a Mac that
 		// cannot take a voice note without a second server.
-		capabilities: opts.capabilities || ['text', 'voice'],
+		// `questions`: the real Mac names it whenever its bridge can take an answer, which is
+		// every shipped build (`phone/bridge.rs` `questions_available`, `routes.rs`
+		// `channel_capabilities`), and this stub takes `kind: "answer"` below.
+		capabilities: opts.capabilities || ['text', 'voice', 'questions'],
+		// Every `kind: "answer"` body the phone sent, as it arrived.
+		answers: [],
 		build: opts.build || '0.0.0-harness',
 		autoReply: opts.autoReply !== false,
 		// **THE PRESS ON THE MAC** (Sage's pairing review F1). The real Mac answers every signed
@@ -453,6 +458,41 @@ function createStubMac(options) {
 				} else {
 					let body = {};
 					try { body = JSON.parse(bodyBytes.toString('utf8')); } catch { send(res, 400, { error: 'bad json' }); return; }
+					// AN ANSWER TO A QUESTION CARD — `routes.rs` `messages`, `kind: "answer"`: the
+					// Mac answers with the question as it now stands and publishes the changed row
+					// on the stream (`phone/mod.rs` `question_changed`). Never a message row.
+					if (body.kind === 'answer') {
+						state.answers.push(body);
+						const held = state.ledger.find((r) => r.kind === 'question' && r.question && r.question.id === body.question_id);
+						const q = held && held.question;
+						const ids = [...new Set(Array.isArray(body.option_ids) ? body.option_ids : [])].sort();
+						const text = (body.text || '').trim();
+						// As `questions.rs` `answer`: an open question, or an answered one he is
+						// changing at the revision he saw; the same answer again is `already_answered`
+						// with the question unchanged and nothing published.
+						const same = q && q.answer && JSON.stringify(q.answer.option_ids) === JSON.stringify(ids) && q.answer.text === text;
+						const editable = q && q.state === 'answered' && !q.delivered && body.expected_revision === q.revision;
+						if (!q || body.thread_id !== held.thread_id || !(same || q.state === 'open' || editable)
+							|| !ids.every((id) => q.options.some((o) => o.id === id)) || (!q.multiple && ids.length > 1)
+							|| (!ids.length && !text)) {
+							send(res, 422, { retry: false, reason: 'Choose only this question\'s available options.' },
+								{ 'X-RichOS-Challenge': newChallenge(who.deviceId) });
+							return;
+						}
+						if (same) {
+							send(res, 200, { outcome: 'already_answered', question: q, message_id: body.client_id, thread_id: held.thread_id, cursor: held.cursor },
+								{ 'X-RichOS-Challenge': newChallenge(who.deviceId) });
+							return;
+						}
+						held.question = Object.assign({}, q, {
+							state: 'answered', revision: q.revision + 1,
+							answer: { option_ids: ids, text, method: 'phone_tap', surface: 'phone' }
+						});
+						broadcast('message', held);
+						send(res, 200, { outcome: 'accepted', question: held.question, message_id: body.client_id, thread_id: held.thread_id, cursor: held.cursor },
+							{ 'X-RichOS-Challenge': newChallenge(who.deviceId) });
+						return;
+					}
 					clientId = body.client_id;
 					row = {
 						id: `m-${state.nextCursor}`,
@@ -634,6 +674,15 @@ function createStubMac(options) {
 			for (const id of ids) releaseHold(id, 'refused');
 		},
 		received() { return state.received; },
+		/// Rich asks a question card, as `phone/rows.rs` `row_from_item` puts one on the phone:
+		/// role `rich`, kind `question`, the rendered text, and the question itself beside it.
+		ask(question) {
+			const q = Object.assign({ thread_id: threadId, multiple: false, free_answer: true, recommended: null,
+				state: 'open', answer: null, revision: 0, delivered: false, asker: 'Rich', set_index: 1, set_count: 1 }, question);
+			const text = [q.text, ...q.options.map((o) => `${o.label}: ${o.description}`)].join('\n');
+			return appendRow({ id: q.id, thread_id: threadId, cursor: state.nextCursor++, role: 'rich', kind: 'question', text,
+				question: q, created_at: new Date().toISOString(), complete: true, state: 'complete', has_audio: false });
+		},
 		pushTo(client, payload) { return payload; }
 	};
 }
