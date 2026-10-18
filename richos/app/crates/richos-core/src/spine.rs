@@ -1433,15 +1433,13 @@ impl Spine {
             Some(reserved) => {
                 let id = self.ledger.create_thread_with_reserved_id(&reserved, title, entity_id)?;
                 let spare = self.spare.take().expect("checked directly above");
-                self.resident.insert(id.clone(), Resident {
+                self.restore_front_desk(&id, Resident {
                     lease: std::sync::Arc::new(std::sync::Mutex::new(Some(spare.lease))),
                     upstream_budget:crate::upstream::RetryBudget::new(),
                     context_usage: None,
                     parked_at_ms: now_millis(),
                 });
-                // Never the desk just filed — it is the most recently parked, and the cap
-                // retires the LEAST recently spoken.
-                self.evict_beyond_the_cap();
+                // The common restore path registers live controls and enforces the cap.
                 id
             }
             None => self.ledger.create_thread(title, entity_id)?,

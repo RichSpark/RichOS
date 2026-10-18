@@ -155,3 +155,45 @@ fn app_introductions_and_key_changes_follow_their_conversation_without_a_hidden_
     assert!(observed.iter().any(|(_,text)|text.contains("Changed dictation key from F2 to F3")));
     drop(observed);drop(spine);std::fs::remove_dir_all(root).unwrap();
 }
+
+
+#[test]
+fn adopted_and_cold_sessions_both_register_stop_and_live_model_controls() {
+    use richos_core::{cognition::LeaseFactory,config::ModelChoice,steering::{ConversationControl,TurnCancel,TurnControl}};
+    struct Signal {models:AtomicUsize,stops:AtomicUsize}
+    impl TurnCancel for Signal {
+        fn cancel(&self)->bool {self.stops.fetch_add(1,Ordering::SeqCst);true}
+        fn set_model(&self,_:ModelChoice)->Result<bool,String> {self.models.fetch_add(1,Ordering::SeqCst);Ok(true)}
+    }
+    struct Session {control:ConversationControl,signal:Arc<Signal>}
+    impl Cognition for Session {
+        fn session_id(&self)->&str {"controlled-session"}
+        fn cancel_handle(&self)->Option<Arc<dyn TurnCancel>> {Some(self.signal.clone())}
+        fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
+            self.control.request_stop().unwrap();Ok("end_turn".into())
+        }
+    }
+    struct Factory(Arc<Signal>);
+    impl LeaseFactory for Factory {
+        fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {panic!("a conversation must have its own scope")}
+        fn spawn_scoped(&self,_:&richos_core::entity::ThreadBinding,control:&ConversationControl)->Result<Box<dyn Cognition>,CognitionError> {
+            Ok(Box::new(Session {control:control.clone(),signal:self.0.clone()}))
+        }
+    }
+    for adopt in [false,true] {
+        let (root,mut spine,company)=fixture();
+        spine.set_turn_control(TurnControl::open(root.join("intake.jsonl")).unwrap());
+        let signal=Arc::new(Signal {models:AtomicUsize::new(0),stops:AtomicUsize::new(0)});
+        spine.set_lease_factory(Box::new(Factory(signal.clone())));
+        if adopt {spine.ready_a_spare_front_desk(&company);}
+        let thread=spine.create_thread("Conversation",&company).unwrap();
+        spine.prime_front_desk(&thread);
+        let control=spine.turn_control();
+        assert_eq!(control.lease_session().as_deref(),Some("controlled-session"),"adopted={adopt}");
+        assert!(control.set_model(ModelChoice::Fable).unwrap(),"adopted={adopt}");
+        assert_eq!(signal.models.load(Ordering::SeqCst),1);
+        drop(spine.submit_prompt("Stop this request",Source::Text));
+        assert!(signal.stops.load(Ordering::SeqCst)>0,"Stop missed adopted={adopt}");
+        drop(spine);std::fs::remove_dir_all(root).unwrap();
+    }
+}

@@ -834,7 +834,7 @@ struct PendingTurn {
     /// previous turn's message.
     command_uuid: String,
     prompt_text: String,
-    hook_prompt_id: Option<String>,
+    hook_request_id: Option<String>,
     /// Host metadata returned by the native prompt hook, never prepended to user text.
     prepare: Option<NativePreparation>,
     complete: Option<NativeCompletion>,
@@ -2259,16 +2259,16 @@ impl NativeClient {
         if ty == "control_request" && msg.pointer("/request/subtype").and_then(Value::as_str) == Some("hook_callback")
             && msg.pointer("/request/callback_id").and_then(Value::as_str) == Some("richos-input-context") {
             // Folded inputs run this hook before their started lifecycle. The native
-            // prompt identity claims the oldest matching original input once, including
+            // control request claims the oldest matching original input once, including
             // two identical messages. A repeated callback cannot claim the next input.
-            let prompt_id=msg.pointer("/request/input/prompt_id").and_then(Value::as_str);
+            let request_id=msg.get("request_id").and_then(Value::as_str);
             let text=msg.pointer("/request/input/prompt").and_then(Value::as_str);
             let (command,prepare)={
                 let mut inputs=current.lock().unwrap();
-                let known=prompt_id.and_then(|id|inputs.iter().position(|input|input.hook_prompt_id.as_deref()==Some(id)));
-                let index=known.or_else(||prompt_id.zip(text).and_then(|(id,text)| {
-                    let index=inputs.iter().position(|input|input.hook_prompt_id.is_none()&&input.prompt_text==text)?;
-                    inputs[index].hook_prompt_id=Some(id.into());Some(index)
+                let known=request_id.and_then(|id|inputs.iter().position(|input|input.hook_request_id.as_deref()==Some(id)));
+                let index=known.or_else(||request_id.zip(text).and_then(|(id,text)| {
+                    let index=inputs.iter().position(|input|input.hook_request_id.is_none()&&input.prompt_text==text)?;
+                    inputs[index].hook_request_id=Some(id.into());Some(index)
                 }));
                 match index {Some(index)=>(Some(inputs[index].command_uuid.clone()),inputs[index].prepare.take()),None=>(None,None)}
             };
@@ -2829,7 +2829,7 @@ impl NativeClient {
                 current.push(PendingTurn {
                     sink: TurnSink::Prompt(tx),
                     command_uuid: command_uuid.clone(),
-                    prompt_text: text.to_string(), hook_prompt_id: None,
+                    prompt_text: text.to_string(), hook_request_id: None,
                     prepare,
                     complete,
                     preparation_error: None,
@@ -3084,7 +3084,7 @@ impl TurnCancel for NativeCancelHandle {
             if current.iter().any(|pending| pending.command_uuid == id) { return Ok(true); }
             current.push(PendingTurn {
                 sink: TurnSink::Input { completed, limit: None }, command_uuid: id.to_string(),
-                prompt_text: text.to_string(), hook_prompt_id: None,
+                prompt_text: text.to_string(), hook_request_id: None,
                 prepare: None,
                 complete: None,
                 preparation_error: None,
@@ -6510,7 +6510,7 @@ waiting=[]
 def read():return json.loads(sys.stdin.readline())
 def send(frame):print(json.dumps(frame),flush=True)
 def hook(command,identity,expected):
-    frame={"type":"control_request","request_id":identity,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt_id":identity,"prompt":command["message"]["content"][0]["text"]}}}
+    frame={"type":"control_request","request_id":identity,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt_id":"ambient-running-prompt","prompt":command["message"]["content"][0]["text"]}}}
     send(frame)
     while True:
         reply=read()
