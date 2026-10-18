@@ -1949,8 +1949,10 @@
   /// `links` (optional) is the output record's lookup, so a code span naming a recorded file is
   /// a link to it (§6.5). Everything else about the subset is unchanged by it.
   ///
-  /// `opts.document` turns on THE DOCUMENT EXTENSION below, for a file previewed in the Output
-  /// panel. Without it — every call that draws Rich's answers — not one branch below changes.
+  /// THE BLOCKS BELOW (tables, quotations, rules, fenced code) are drawn for every caller: Rich
+  /// answers with tables, and on nightly 64 a stopped answer's table read as raw `| ... |` lines
+  /// (Ray, s5). `opts.document` (a file previewed in the Output panel) adds only INLINE things:
+  /// backslash escapes and `[label](target)` drawn as its label.
   function renderMarkdownInto(root, text, links, opts) {
     root.textContent = "";
     const doc = !!(opts && opts.document);
@@ -1963,13 +1965,11 @@
         continue;
       }
 
-      if (doc) {
-        const block = mdDocumentBlock(lines, i, opts);
-        if (block) {
-          root.appendChild(block.node);
-          i = block.next;
-          continue;
-        }
+      const block = mdDocumentBlock(lines, i, links, opts);
+      if (block) {
+        root.appendChild(block.node);
+        i = block.next;
+        continue;
       }
 
       const heading = MD_HEADING.exec(line);
@@ -1992,7 +1992,7 @@
         const list = elem(ordered ? "ol" : "ul", "tl-md-list");
         if (ordered && ordered[1] !== "1") list.setAttribute("start", ordered[1]);
         while (i < lines.length) {
-          if (doc && MD_RULE.test(lines[i])) break;
+          if (MD_RULE.test(lines[i])) break;
           const m = ordered ? MD_ORDERED.exec(lines[i]) : MD_BULLET.exec(lines[i]);
           if (!m) break;
           const li = elem("li", "tl-md-item");
@@ -2012,7 +2012,7 @@
         !MD_HEADING.test(lines[i]) &&
         !MD_ORDERED.test(lines[i]) &&
         !MD_BULLET.test(lines[i]) &&
-        !(doc && mdStartsDocumentBlock(lines, i))
+        !mdStartsDocumentBlock(lines, i)
       ) {
         buf.push(lines[i]);
         i += 1;
@@ -2024,12 +2024,13 @@
 
   // ---- THE DOCUMENT EXTENSION (output side-panel PRD §7, slice S5) ---------------------------
   //
-  // A Markdown FILE in the Output panel is a document, not an answer: Rich writes briefs and
-  // summaries with tables, quotations, rules and fenced code, and §7 asks for "the app's
-  // DOM-only renderer extended with tables, blockquotes, horizontal rules and fenced code; links
-  // render as their text (no navigation out of the panel)". These four blocks, backslash
-  // escapes and `[label](target)` are drawn ONLY under `opts.document`; Rich's answers keep the
-  // subset above exactly as it was, which `markdown.js` checks both ways.
+  // A Markdown FILE in the Output panel is a document: Rich writes briefs and summaries with
+  // tables, quotations, rules and fenced code, and §7 asks for "the app's DOM-only renderer
+  // extended with tables, blockquotes, horizontal rules and fenced code; links render as their
+  // text (no navigation out of the panel)". Rich's ANSWERS use the same four blocks, because he
+  // writes tables there too (nightly 64 s5: a stopped answer's table read as raw `|` lines).
+  // Backslash escapes and `[label](target)` stay ONLY under `opts.document`, so a link in an
+  // answer still reads as written; `markdown.js` checks both.
   //
   // THE SAME GUARANTEE HOLDS: every leaf is a text node, every container `createElement`. A
   // fenced block's contents are one text node inside `<pre><code>`, a table cell is inline
@@ -2096,7 +2097,9 @@
   }
 
   /// One document block starting at `lines[i]`, or null when none does: `{ node, next }`.
-  function mdDocumentBlock(lines, i, opts) {
+  /// `links` and `opts` are the caller's, so a cell or a quotation reads like the text around it.
+  function mdDocumentBlock(lines, i, links, opts) {
+    const doc = !!(opts && opts.document);
     const line = lines[i];
 
     const fence = MD_FENCE_OPEN.exec(line);
@@ -2130,7 +2133,7 @@
       }
       const quote = elem("blockquote", "tl-md-quote");
       // Each line lost its `>`, so the inside is strictly shorter: the recursion ends.
-      renderMarkdownInto(quote, inner.join("\n"), null, opts);
+      renderMarkdownInto(quote, inner.join("\n"), links, opts);
       return { node: quote, next: k };
     }
 
@@ -2146,7 +2149,7 @@
       head.forEach((c, n) => {
         const th = elem("th");
         if (align[n]) th.style.textAlign = align[n];
-        markdownInline(c, th, null, true);
+        markdownInline(c, th, links, doc);
         tr.appendChild(th);
       });
       thead.appendChild(tr);
@@ -2159,7 +2162,7 @@
         for (let n = 0; n < head.length; n += 1) {
           const td = elem("td");
           if (align[n]) td.style.textAlign = align[n];
-          markdownInline(cells[n] || "", td, null, true);
+          markdownInline(cells[n] || "", td, links, doc);
           row.appendChild(td);
         }
         tbody.appendChild(row);
