@@ -242,7 +242,7 @@ impl Cognition for Busy {
 }
 
 #[test]
-fn an_account_resumes_between_answers_without_a_separate_command_wait() {
+fn an_account_resumes_only_after_running_commands_and_the_answer_are_clear() {
     use richos_core::lease_commands::CommandReading;
     let (dir, quota) = two_accounts("switch-waits", 60.);
     // The five-hour switch acts only while the automatic switch is on (e1ac24d27).
@@ -264,16 +264,16 @@ fn an_account_resumes_between_answers_without_a_separate_command_wait() {
         streamed: Arc::new(Mutex::new(None)), prompts: prompts.clone() }));
 
     spine.submit_prompt("Is the build done?", Source::Text).unwrap();
-    assert_eq!(*spawned.lock().unwrap(),vec!["2".to_string()]);
+    assert!(spawned.lock().unwrap().is_empty(),"account resume killed the running command");
     *commands.lock().unwrap() = Some(CommandReading::Unreadable);
     spine.submit_prompt("And now?", Source::Text).unwrap();
-    assert_eq!(*spawned.lock().unwrap(),vec!["2".to_string()],"the normal opener was used once");
+    assert!(spawned.lock().unwrap().is_empty(),"unreadable commands must not be treated as clear");
 
     *commands.lock().unwrap() = Some(CommandReading::Clear);
     spine.submit_prompt("It finished", Source::Text).unwrap();
     assert_eq!(*spawned.lock().unwrap(), vec!["2".to_string()]);
     let ran: Vec<_> = prompts.lock().unwrap().iter().filter(|(_, t)| !t.is_empty()).cloned().collect();
-    assert!(ran.contains(&("2".to_string(), "Is the build done?".to_string())), "{ran:?}");
+    assert!(ran.contains(&("1".to_string(), "Is the build done?".to_string())), "{ran:?}");
     assert!(ran.contains(&("2".to_string(), "It finished".to_string())), "{ran:?}");
     drop(std::fs::remove_file(&path));
     drop(std::fs::remove_dir_all(dir));

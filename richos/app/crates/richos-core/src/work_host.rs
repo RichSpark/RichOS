@@ -692,7 +692,7 @@ impl WorkHost {
         // Both processes have the same native session ID and must never overlap.
         {
             let mut lease = backend.lease.lock().unwrap();
-            if lease.as_ref().is_some_and(|lease| lease.has_pending_input()) {
+            if lease.as_ref().is_some_and(|lease|crate::cognition::account_resume_blocked(lease.as_ref())) {
                 return;
             }
             let mut inner = backend.inner.lock().unwrap();
@@ -724,9 +724,7 @@ impl WorkHost {
         let lease=backend.lease.lock().unwrap();
         let Some(lease)=lease.as_ref() else {return false};
         let Some(account)=lease.account() else {return false};
-        if quota.before_turn(account,lease.streamed_usage())==account {return false}
-        !matches!(lease.running_commands(),Some(
-            crate::lease_commands::CommandReading::Running(_)|crate::lease_commands::CommandReading::Unreadable))
+        quota.before_turn(account,lease.streamed_usage())!=account
     }
 
     pub fn rotations(&self, thread: &str) -> (u64, Option<String>) {

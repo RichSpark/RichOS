@@ -227,6 +227,13 @@ impl PendingReply {
 // Synchronous adapters, including deterministic fixtures, retain their existing prompt API.
 enum RetainedItem { Text(u64, String), Machinery(Box<MachineryRecord>), AnswerComplete }
 
+// Resuming native history cannot restore a killed OS command. Both role owners
+// use this same boundary before ending their current provider.
+pub(crate) fn account_resume_blocked(lease:&dyn Cognition)->bool {
+    lease.has_pending_input() || matches!(lease.running_commands(),Some(
+        crate::lease_commands::CommandReading::Running(_)|crate::lease_commands::CommandReading::Unreadable))
+}
+
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
     /// A stable identifier for the backing session (for the ledger's rotation record).
