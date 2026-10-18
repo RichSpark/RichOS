@@ -1,0 +1,18 @@
+{
+  "build": true,
+  "version": "1.2.0",
+  "tag": "v1.2.0",
+  "source_commit": "ae1cc433d850c153ff42be84fe02821d476a9d36",
+  "created_at": "2026-10-18T23:37:57.204086+00:00",
+  "run_id": "20261018T233747Z-92a643c4",
+  "run_attempt": "1",
+  "channel": "stable",
+  "platform": "darwin-aarch64",
+  "endpoint": "https://github.com/WebDevBooster/richos/releases/latest/download/latest.json",
+  "promoted_from": "v1.2.0-nightly.20261018.65",
+  "promoted_from_version": "1.2.0-nightly.20261018.65",
+  "promotion_decided_on": "2026-10-19",
+  "promotion_words": "OK, I'm definitely seeing a few issues in the nightly 65 that need fixing, but overall, the first impression is: usable. So, go ahead and promote this nightly to v1.2.0 stable.",
+  "reservation_ref": "refs/candidates/stable/v1.2.0",
+  "reservation_base": ""
+}
