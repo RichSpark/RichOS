@@ -5542,10 +5542,12 @@ def _review_check(todo, entities=()):
             # and lists nothing, and no launcher carries a ledger: positive
             # evidence, never a fallback.
             continue
-        row, _mid = F.review_of(F.read_reviews(ledgers[0]), t, main)
+        row, _mid = F.review_of(F.read_reviews(ledgers[0]), t, main, F.read_deferrals(ledgers[0]))
         para = "Second review: %s, %s by %s (%s), %s finding(s)." % (
             row.get("verdict"), row.get("id"), row.get("reviewer"), row.get("reviewer_model"), row.get("findings"))
         notes = ["P%s %s (%s)" % f for f in F.review_findings(row, limit=20)]
+        notes += ["Filed as a follow-up: %s %s. Why: %s" % (fid, d.get("title") or "", d.get("why") or "")
+                  for fid, d in sorted((row.get("deferred") or {}).items())]
         out[t] = para + ("\n" + "\n".join(notes) if notes else "")
     if refusals:
         raise SpecError("nothing was merged.\n" + "\n".join(refusals))
