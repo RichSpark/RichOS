@@ -618,3 +618,252 @@ fn restart_stops_saved_direct_speech_and_pressed_inputs() {
         }
     }
 }
+
+// Stop pressed on the loading screen goes to the conversation it names (follow-ups after
+// nightly 65, item 9; review rv-20261018T050016Z-78f97c9d-30c4). Opening B activates it
+// before its saved messages are read, while the screen still offers Stop for A.
+#[test]
+fn stop_pressed_while_another_conversation_opens_reaches_the_one_it_names() {
+    use richos_core::{read_view::SpineView, steering::{StopOutcome, TurnCancel, TurnControl}};
+    struct Counted(Arc<AtomicUsize>);
+    impl TurnCancel for Counted {
+        fn cancel(&self) -> bool { self.0.fetch_add(1, Ordering::SeqCst); true }
+    }
+    let (root, mut spine, company) = fixture();
+    let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(controls.clone());
+    let previous = spine.create_thread("Previous conversation", &company).unwrap();
+    let destination = spine.create_thread("Destination conversation", &company).unwrap();
+    spine.switch_thread(&previous).unwrap();
+    spine.detach_conversation_io();
+    spine.submit_prompt("Keep working on this", Source::Text).unwrap();
+    let cancels = Arc::new(AtomicUsize::new(0));
+    controls.for_thread(&previous).set_cancel(Some(Arc::new(Counted(cancels.clone()))));
+    let reader = spine.reader();
+    spine.switch_thread(&destination).unwrap();
+    let view = reader.snapshot();
+    assert_eq!(view.active_thread(), Some(destination.as_str()));
+    let named = view.stop_conversation(Some(&previous));
+    assert_eq!(named, Some(previous.as_str()), "Stop for the previous conversation was dropped");
+    let outcome = controls.for_thread(named.unwrap()).request_stop().unwrap();
+    assert!(matches!(outcome, StopOutcome::Requested { reached_lease: true, .. }), "{outcome:?}");
+    assert_eq!(cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(view.stop_conversation(None), Some(destination.as_str()));
+    assert_eq!(view.stop_conversation(Some("thr_not_in_this_ledger")), None);
+    drop(view); drop(spine); std::fs::remove_dir_all(root).unwrap();
+}
+
+// A question-card answer is something he sent, so his Stop covers it like a typed
+// message (follow-ups after nightly 65, item 8; review rv-20261018T045039Z-78f97c9d-20fc#1).
+fn card_answer(thread: &str, company: &EntityId, id: &str, text: &str) -> richos_core::questions::Delivery {
+    richos_core::questions::Delivery {
+        id: id.into(), entity_id: company.to_string(), thread_id: thread.into(), asker: "front_desk".into(),
+        obligation_id: None, set_id: Some("questions".into()), text: text.into(), receipt: None, order: None,
+    }
+}
+
+#[derive(Default)]
+struct HeldProvider { state: std::sync::Mutex<(usize, bool)>, changed: std::sync::Condvar }
+impl HeldProvider {
+    fn await_inputs(&self, count: usize) {
+        let guard = self.state.lock().unwrap();
+        let (guard, _) = self.changed.wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| s.0 < count).unwrap();
+        assert!(guard.0 >= count, "input never submitted");
+    }
+}
+impl richos_core::steering::TurnCancel for HeldProvider {
+    fn cancel(&self) -> bool {
+        self.state.lock().unwrap().1 = true;
+        self.changed.notify_all();
+        true
+    }
+}
+struct HeldLease(Arc<HeldProvider>);
+impl Cognition for HeldLease {
+    fn session_id(&self) -> &str { "held-session" }
+    fn is_closed(&self) -> bool { self.0.state.lock().unwrap().1 }
+    fn cancel_handle(&self) -> Option<Arc<dyn richos_core::steering::TurnCancel>> { Some(self.0.clone()) }
+    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        unreachable!("replies are detached, as in the app")
+    }
+    fn enqueue_prompt(&mut self, _: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>)
+        -> Result<richos_core::cognition::PendingReply, CognitionError> {
+        started().map_err(CognitionError::Protocol)?;
+        self.0.state.lock().unwrap().0 += 1;
+        self.0.changed.notify_all();
+        let provider = self.0.clone();
+        Ok(richos_core::cognition::PendingReply::new(move |_| {
+            let guard = provider.state.lock().unwrap();
+            let (guard, _) = provider.changed.wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| !s.1).unwrap();
+            assert!(guard.1, "Stop never closed the provider");
+            Err(CognitionError::from(richos_core::native::NativeError::Closed))
+        }))
+    }
+}
+
+#[test]
+fn stop_covers_a_question_card_answer_sent_before_it() {
+    use richos_core::{ledger::TurnState, spine::drive_shared_turns, steering::{ActiveTurn, TurnControl}};
+    use std::sync::Mutex;
+
+    // (1) The answer waits behind the request Rich is working on when he presses Stop.
+    let (root, mut spine, company) = fixture();
+    let thread = spine.create_thread("Conversation", &company).unwrap();
+    let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(controls.clone());
+    let factory = MockLeaseFactory::new(vec!["Continued despite Stop"]);
+    let prompts = factory.spawned_prompts.clone();
+    spine.set_lease_factory(Box::new(factory));
+    spine.detach_conversation_io();
+    let first = spine.submit_prompt("First request", Source::Text).unwrap();
+    let answer = spine.queue_question_answer(&card_answer(&thread, &company, "queued", "My answer sent before Stop")).unwrap();
+    controls.for_thread(&thread).request_stop().unwrap();
+    let shared = Mutex::new(spine);
+    drive_shared_turns(&shared).unwrap();
+    let spine = shared.into_inner().unwrap();
+    assert_eq!(spine.ledger().turn(&first).unwrap().state, TurnState::Stopped);
+    assert_eq!(spine.ledger().turn(&answer).unwrap().state, TurnState::Stopped, "a card answer sent before Stop ran after it");
+    let sent: Vec<_> = prompts.lock().unwrap().iter().flat_map(|p| p.lock().unwrap().clone()).collect();
+    assert!(!sent.iter().any(|p| p.contains("My answer sent before Stop")), "sent after Stop: {sent:?}");
+    drop(spine); std::fs::remove_dir_all(root).unwrap();
+
+    // (2) Rich is answering the card when he types a follow-up, then presses Stop.
+    let (root, mut spine, company) = fixture();
+    let thread = spine.create_thread("Conversation", &company).unwrap();
+    let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(controls.clone());
+    let provider = Arc::new(HeldProvider::default());
+    spine.attach_lease(Box::new(HeldLease(provider.clone())));
+    spine.detach_conversation_io();
+    let answer = spine.queue_question_answer(&card_answer(&thread, &company, "live", "My clicked answer")).unwrap();
+    let shared = Arc::new(Mutex::new(spine));
+    let first_driver = { let shared = shared.clone(); std::thread::spawn(move || drive_shared_turns(&shared)) };
+    provider.await_inputs(1);
+    let typed = shared.lock().unwrap().submit_prompt("Typed follow-up", Source::Text).unwrap();
+    let second_driver = { let shared = shared.clone(); std::thread::spawn(move || drive_shared_turns(&shared)) };
+    provider.await_inputs(2);
+    controls.for_thread(&thread).request_stop().unwrap();
+    drop(first_driver.join().unwrap()); drop(second_driver.join().unwrap());
+    let spine = shared.lock().unwrap();
+    assert_eq!(spine.ledger().turn(&answer).unwrap().state, TurnState::Stopped, "the card answer's reply was not stopped");
+    assert_eq!(spine.ledger().turn(&typed).unwrap().state, TurnState::Stopped);
+    drop(spine); drop(shared); std::fs::remove_dir_all(root).unwrap();
+
+    // (3) The app ends before the Stop settles; with and without an account continuation.
+    for continued in [false, true] {
+        let (root, mut spine, company) = fixture();
+        let path = root.join("conversation.jsonl");
+        let intake = root.join("intake.jsonl");
+        let thread = spine.create_thread("Conversation", &company).unwrap();
+        let controls = TurnControl::open(&intake).unwrap();
+        spine.set_turn_control(controls.clone());
+        spine.detach_conversation_io();
+        let mut answer = spine.queue_question_answer(&card_answer(&thread, &company, "saved", "Saved clicked answer")).unwrap();
+        let typed = spine.submit_prompt("Typed follow-up", Source::Text).unwrap();
+        drop(spine);
+        let mut ledger = Ledger::open(&path).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        if continued { answer = ledger.replay_turn(&binding, &answer).unwrap(); }
+        ledger.mark_turn_started(&answer, "saved-native-session").unwrap();
+        ledger.mark_turn_started(&typed, "saved-native-session").unwrap();
+        controls.for_thread(&thread).begin_turn(ActiveTurn { turn_id: typed.clone(), thread_id: thread.clone(),
+            entity_id: Some(company.clone()), started_at: Some(1) });
+        controls.for_thread(&thread).request_stop().unwrap();
+        let next = controls.submit_from_desk(&thread, Some(company), "New request after Stop").unwrap();
+        drop(ledger); drop(controls);
+        let mut restored = Spine::new(Ledger::open(&path).unwrap());
+        restored.set_entity_registry(EntityRegistry::new(vec![Entity::new("example", "Example", &["/fixture/example"]).unwrap()]).unwrap());
+        restored.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["Next reply"])));
+        restored.set_turn_control(TurnControl::open(&intake).unwrap());
+        restored.reconcile_intake().unwrap();
+        assert_eq!(restored.ledger().turn(&answer).unwrap().state, TurnState::Stopped, "continuation {continued}");
+        assert_eq!(restored.ledger().turn(&typed).unwrap().state, TurnState::Stopped);
+        assert_eq!(restored.ledger().turn_for_intake(next.id()).unwrap().state, TurnState::Completed);
+        drop(restored); std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // (4) The click is accepted and saved, he presses Stop, and only then does the delivery
+    // worker hand the answer to the spine (review rv-20261018T195734Z-6e3fa251-5bed#1). The
+    // order is taken where the app's click handler takes it (question_host::answer).
+    use richos_core::questions::{AnswerRequest, AskScope, OptionInput, QuestionInput, Store};
+    let (root, mut spine, company) = fixture();
+    let thread = spine.create_thread("Conversation", &company).unwrap();
+    let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(controls.clone());
+    spine.detach_conversation_io();
+    let factory = MockLeaseFactory::new(vec!["Continued despite Stop"]);
+    let prompts = factory.spawned_prompts.clone();
+    spine.set_lease_factory(Box::new(factory));
+    let first = spine.submit_prompt("Keep working", Source::Text).unwrap();
+    let store = Store::new(root.join("engine-state"));
+    let q = store.ask(&AskScope { root: root.join("engine-state"), entity_id: company.to_string(), thread_id: thread.clone(),
+        turn_id: first.clone(), asker: "front_desk".into(), obligation_id: None, session_id: "fixture-session".into(),
+        engine: None, entity_root: None, app_run: None }, vec![QuestionInput {
+        text: "When should the release ship?".into(), multiple: false, free_answer: true, recommended: Some(1),
+        options: vec![OptionInput { label: "Today".into(), description: "Sooner".into() },
+            OptionInput { label: "Tomorrow".into(), description: "More checking".into() }] }]).unwrap().remove(0);
+    let order = controls.take_input_order();
+    let accepted = store.answer_in_order(company.as_str(), &thread, AnswerRequest { question_id: q.id.clone(),
+        client_id: "clicked-before-stop".into(), option_ids: vec![q.options[1].id.clone()], text: String::new(),
+        expected_revision: None }, "click", "mac", order).unwrap();
+    assert_eq!(accepted.outcome, "accepted");
+    assert_eq!(store.highest_order().unwrap(), order, "a restart advances past the saved order");
+    controls.for_thread(&thread).request_stop().unwrap();
+    let mut answer = None;
+    store.deliver(company.as_str(), &thread, "front_desk", |delivery| {
+        let id = spine.queue_question_answer(delivery).map_err(|e| e.to_string())?;
+        answer = Some(id.clone());
+        Ok(id)
+    }).unwrap();
+    let answer = answer.expect("the saved answer was delivered");
+    assert_eq!(spine.ledger().turn(&answer).unwrap().intake_id, order, "the order taken at the click reaches the ledger");
+    let shared = Mutex::new(spine);
+    drive_shared_turns(&shared).unwrap();
+    let spine = shared.into_inner().unwrap();
+    assert_eq!(spine.ledger().turn(&first).unwrap().state, TurnState::Stopped);
+    assert_eq!(spine.ledger().turn(&answer).unwrap().state, TurnState::Stopped, "an answer clicked before Stop ran after it");
+    let sent: Vec<_> = prompts.lock().unwrap().iter().flat_map(|p| p.lock().unwrap().clone()).collect();
+    assert!(!sent.iter().any(|p| p.contains("Tomorrow")), "sent after Stop: {sent:?}");
+    drop(spine); std::fs::remove_dir_all(root).unwrap();
+
+    // (5) As (4), but the stopped turn finishes and its Stop settles before the delivery
+    // worker gets the spine (review rv-20261018T203003Z-956a6d9c-1297#1).
+    let (root, mut spine, company) = fixture();
+    let thread = spine.create_thread("Conversation", &company).unwrap();
+    let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(controls.clone());
+    spine.detach_conversation_io();
+    let factory = MockLeaseFactory::new(vec!["Continued despite Stop"]);
+    let prompts = factory.spawned_prompts.clone();
+    spine.set_lease_factory(Box::new(factory));
+    let first = spine.submit_prompt("Keep working", Source::Text).unwrap();
+    let store = Store::new(root.join("engine-state"));
+    let q = store.ask(&AskScope { root: root.join("engine-state"), entity_id: company.to_string(), thread_id: thread.clone(),
+        turn_id: first.clone(), asker: "front_desk".into(), obligation_id: None, session_id: "fixture-session".into(),
+        engine: None, entity_root: None, app_run: None }, vec![QuestionInput {
+        text: "When should the release ship?".into(), multiple: false, free_answer: true, recommended: Some(1),
+        options: vec![OptionInput { label: "Today".into(), description: "Sooner".into() },
+            OptionInput { label: "Tomorrow".into(), description: "More checking".into() }] }]).unwrap().remove(0);
+    let order = controls.take_input_order();
+    store.answer_in_order(company.as_str(), &thread, AnswerRequest { question_id: q.id.clone(),
+        client_id: "clicked-before-stop".into(), option_ids: vec![q.options[1].id.clone()], text: String::new(),
+        expected_revision: None }, "click", "mac", order).unwrap();
+    controls.for_thread(&thread).request_stop().unwrap();
+    let shared = Mutex::new(spine);
+    drive_shared_turns(&shared).unwrap();
+    assert_eq!(shared.lock().unwrap().ledger().turn(&first).unwrap().state, TurnState::Stopped);
+    assert!(controls.for_thread(&thread).stop_claim().is_none(), "the Stop settled before delivery");
+    let mut answer = None;
+    store.deliver(company.as_str(), &thread, "front_desk", |delivery| {
+        let id = shared.lock().unwrap().queue_question_answer(delivery).map_err(|e| e.to_string())?;
+        answer = Some(id.clone());
+        Ok(id)
+    }).unwrap();
+    drive_shared_turns(&shared).unwrap();
+    let spine = shared.into_inner().unwrap();
+    let answer = answer.expect("the saved answer was delivered");
+    assert_eq!(spine.ledger().turn(&answer).unwrap().state, TurnState::Stopped, "an answer clicked before Stop ran after it settled");
+    let sent: Vec<_> = prompts.lock().unwrap().iter().flat_map(|p| p.lock().unwrap().clone()).collect();
+    assert!(!sent.iter().any(|p| p.contains("Tomorrow")), "sent after Stop: {sent:?}");
+    drop(spine); std::fs::remove_dir_all(root).unwrap();
+}
