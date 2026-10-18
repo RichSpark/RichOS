@@ -56,7 +56,7 @@ const NOT_ON_DISK = rustSentence("Not on disk: everything the session had worked
 // The two generic sentences, which must NOT appear when an outage is explained.
 const GENERIC_BODY = "I hit a snag mid-thought and had to stop";
 // The one label for the one action, after the 2026-09-17 nightly's D6.
-const RETRY_LABEL = "Put it back in the box";
+const RETRY_LABEL = "Restore my message";
 const GENERIC_NOTE = "Everything I'd already written above is saved.";
 
 // ---------------------------------------------------------------------------------------

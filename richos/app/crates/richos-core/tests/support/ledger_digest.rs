@@ -189,11 +189,6 @@ pub fn digest_ledger(src: &Path, copy_to: &Path) -> Result<Vec<String>, String> 
             // Hashed anyway, on the rule that this tool emits no string it did not choose.
             Err(e) => out.push(format!("messages {id} | refused={}", digest(&e.to_string()))),
         }
-        out.push(format!(
-            "handoff_summary {} = {}",
-            id,
-            ledger.handoff_summary(id).map(digest).unwrap_or_else(|| "-".into())
-        ));
     }
 
     out.push(format!("scope_violations.count = {}", ledger.scope_violations().len()));

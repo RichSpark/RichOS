@@ -214,8 +214,30 @@ pub struct CommandEnded {
 pub type BetweenTurnSink = Arc<dyn Fn(Vec<serde_json::Value>) + Send + Sync>;
 
 /// A disposable compute lease. One implementation per backing session.
+/// A submitted request's reply stream. Waiting owns no conversation connection.
+type ReplyWait = Box<dyn FnOnce(&mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> + Send>;
+pub struct PendingReply(ReplyWait);
+impl PendingReply {
+    pub fn new(wait: impl FnOnce(&mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> + Send + 'static) -> Self {
+        Self(Box::new(wait))
+    }
+    pub fn wait(self, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> { (self.0)(on_item) }
+}
+
+// Synchronous adapters, including deterministic fixtures, retain their existing prompt API.
+enum RetainedItem { Text(u64, String), Machinery(Box<MachineryRecord>), AnswerComplete }
+
+// Resuming native history cannot restore a killed OS command. Both role owners
+// use this same boundary before ending their current provider.
+pub(crate) fn account_resume_blocked(lease:&dyn Cognition)->bool {
+    lease.has_pending_input() || matches!(lease.running_commands(),Some(
+        crate::lease_commands::CommandReading::Running(_)|crate::lease_commands::CommandReading::Unreadable))
+}
+
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
+    /// Positive provider EOF, never inferred from silence or an API error.
+    fn is_closed(&self)->bool {false}
     /// A stable identifier for the backing session (for the ledger's rotation record).
     fn session_id(&self) -> &str;
 
@@ -232,6 +254,8 @@ pub trait Cognition: Send {
     /// Scoped operational sessions cannot be reused for another thread.
     fn requires_thread_isolation(&self) -> bool { false }
     fn worker_status(&self) -> Option<crate::worker_status::WorkerStatusView> { None }
+    /// Whether native input is already awaiting admission or a result on this connection.
+    fn has_pending_input(&self) -> bool { false }
     /// Tool commands this lease has running outside its provider's group, which retiring the
     /// lease would end (the product reap, `lease_commands.rs`). `None`: nothing supervises
     /// this lease's commands, so there is nothing to read.
@@ -248,12 +272,7 @@ pub trait Cognition: Send {
         _record_path: &std::path::Path,
     ) -> Result<(), CognitionError> { Ok(()) }
 
-    /// Stage current host-owned company material as data for the next visible request.
-    /// Returning false keeps the separate priming fallback for adapters that cannot carry
-    /// context separately from the original user instruction.
-    fn set_company_context(&mut self, _context: Option<&str>) -> Result<bool, CognitionError> {
-        Ok(false)
-    }
+
 
     /// Host-issued visible-turn scope. Hidden preparation records are retained as
     /// internal machinery and never receive a mutation grant.
@@ -264,10 +283,13 @@ pub trait Cognition: Send {
     /// The host's current visible conversation, separate from instructions and hidden context.
     fn set_conversation_context(&mut self, _context: &str) {}
 
-    /// Previous delivery facts, separate from the unchanged user instruction.
-    fn set_previous_delivery_attempt(&mut self, _context: &str) -> Result<(), CognitionError> {
-        Err(CognitionError::Protocol("this adapter cannot reconcile an uncertain delivery".into()))
-    }
+    /// App-authored conversation facts, identified by their existing ledger IDs.
+    fn set_app_messages(&mut self, _messages: Vec<(String,String)>) {}
+
+    /// Current company setup data, delivered separately from the user input.
+    fn set_company_context(&mut self, _context: Option<&str>) -> Result<bool, CognitionError> { Ok(false) }
+
+
 
     /// Prepare ordinary peer input without manufacturing an assignment.
     fn prepare_agent_message(&mut self,_binding:&crate::entity::ThreadBinding,_turn:&str,
@@ -276,38 +298,7 @@ pub trait Cognition: Send {
     /// Reload the existing native roster without replacing this session or its workers.
     fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(false)}
 
-    /// Give the session the context brief his next turn would otherwise supply first, while
-    /// nobody is waiting: called right after the priming turn, under that turn's own ledger
-    /// id. His turn's [`Self::prepare_work_turn`] then finds the same brief already held and
-    /// sends his words straight away. Adapters without a context brief keep the no-op.
-    fn supply_context_ahead(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str,
-        _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
 
-    /// Prepare session history and continuity together before the visible request.
-    /// Adapters can combine both into one hidden request. The fallback preserves the
-    /// older two-step adapter contract and leaves a failed prefetch to visible preparation.
-    fn prime_with_continuity(&mut self, binding: &crate::entity::ThreadBinding, turn: &str,
-        priming: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.reprime(priming, on_item)?;
-        if let Err(error) = self.supply_context_ahead(binding, turn, on_item) {
-            eprintln!("[richos] continuity prefetch failed ({error}); visible preparation will retry");
-        }
-        Ok(())
-    }
-
-    /// Inject the re-prime payload as an INTERNAL, non-rendered priming turn.
-    /// Called once when the lease is (re)spawned, before any CEO-visible turn.
-    ///
-    /// It runs a REAL turn, so it produces real machinery — which techy-mode §1.5 says
-    /// must be recorded and never rendered (`internal: true`, `turn_id: None`). That is
-    /// why this now takes a sink at all: before, the real `reprime` ran into a
-    /// `|_| {}` and the machinery had nowhere to go. Its assistant TEXT is still
-    /// discarded by every caller — the priming turn is never rendered.
-    fn reprime(
-        &mut self,
-        priming_text: &str,
-        on_item: &mut dyn FnMut(TurnItem),
-    ) -> Result<(), CognitionError>;
 
     /// Run one CEO turn. Streams items to `on_item` in the order they actually happened,
     /// each stamped with the ONE shared per-turn `seq` (§1.4 G1).
@@ -322,25 +313,29 @@ pub trait Cognition: Send {
         on_item: &mut dyn FnMut(TurnItem),
     ) -> Result<String, CognitionError>;
 
-    /// Run hidden context maintenance without granting tools or onboarding writes.
-    /// Adapters with side-effecting tools must override this method.
-    fn prompt_context_only(
-        &mut self, text: &str, on_item: &mut dyn FnMut(TurnItem),
-    ) -> Result<String, CognitionError> { self.prompt(text, on_item) }
-
-    /// A handle that interrupts the CURRENTLY RUNNING `prompt` from another thread
-    /// (UX §9.3 step 2).
-    ///
-    /// It has to be obtainable WITHOUT `&mut self`, because while a turn is running the
-    /// `&mut` is held by `prompt` itself and the whole spine is behind one `Mutex`. That
-    /// constraint is the entire shape of this method: `&self`, `Arc`, `Send + Sync`.
-    ///
-    /// The default is `None` — "this lease cannot be interrupted" — so a lease with no
-    /// cancel story reports one honestly instead of silently accepting a stop that will
-    /// never arrive. `StopOutcome::reached_lease` carries that fact to the UI.
-    fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> {
-        None
+    /// Submit before waiting. Native sessions override this to return after the stdin write.
+    fn enqueue_prompt(&mut self, text: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>) -> Result<PendingReply, CognitionError> {
+        started().map_err(CognitionError::Protocol)?;
+        let mut items = Vec::new();
+        let result = self.prompt(text, &mut |item| items.push(match item {
+            TurnItem::Text { seq, text } => RetainedItem::Text(seq, text.to_string()),
+            TurnItem::Machinery(record) => RetainedItem::Machinery(Box::new(record)),
+            TurnItem::AnswerComplete => RetainedItem::AnswerComplete,
+        }));
+        Ok(PendingReply::new(move |on_item| {
+            for item in items {
+                on_item(match item {
+                    RetainedItem::Text(seq, ref text) => TurnItem::Text { seq, text },
+                    RetainedItem::Machinery(record) => TurnItem::Machinery(*record),
+                    RetainedItem::AnswerComplete => TurnItem::AnswerComplete,
+                });
+            }
+            result
+        }))
     }
+
+    /// This session's control handle remains available while its prompt is running.
+    fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> { None }
 
     /// Take everything the backing session emitted while NO turn was in flight (techy-mode
     /// §1.5, gap #1): session-start traffic, and whatever arrives after a prompt response
@@ -387,30 +382,6 @@ pub trait Cognition: Send {
         ))
     }
 
-    /// What this lease's own `system/init` frame said about the three facts a background
-    /// assignment depends on — the engine plugin, the work tools, and automatic permission
-    /// checks. **Asked after its first turn, because that is when the frame arrives.**
-    ///
-    /// [`Cognition::bind_work_assignment`] cannot ask: it runs before the lease has ever
-    /// taken a turn (`work_host.rs`'s `run_one` — `ensure_lease`, bind, then the turn), so
-    /// the child has reported nothing at that point. A bind that treated an unreported fact
-    /// as a refusal refused **every** background job this product was given, on every
-    /// machine, for the whole life of the feature: candidate .7, 2026-09-18, two assignments
-    /// failed 6.545 s and 7.486 s after registration with `work_session: null`.
-    ///
-    /// So the bind refuses only a reported absence and this is where the rest is settled. It
-    /// is a MOVE and not a relaxation: the check exists because `--plugin-dir` accepts a path
-    /// it cannot use and still reports success (`native.rs`'s module doc, measured cell K4),
-    /// so a genuinely absent plugin must still fail the job and still say so in the same
-    /// words. Anything short of a reported `Yes` is a refusal on this path.
-    ///
-    /// **The default is `Ok(())`**, and that is not a soft default: a cognition with no init
-    /// frame of its own has nothing to report, and manufacturing a refusal from an absence of
-    /// machinery is the same mistake one level up.
-    fn work_readiness_after_turn(&self) -> Result<(), CognitionError> {
-        Ok(())
-    }
-
     /// Revoke the standing action grant this lease is holding (spec §5.4: a grant and its
     /// seat are created together and revoked together, per assignment). Idempotent, and
     /// safe to call on a lease that never held one.
@@ -430,8 +401,8 @@ pub trait Cognition: Send {
     }
 }
 
-/// A scripted Cognition for tests. Records every call so tests can assert that
-/// re-prime happened and that the right prompts were delivered in the right order.
+/// A scripted Cognition for tests. Records submitted inputs and their scopes
+/// so tests can verify ownership and delivery order.
 pub struct MockCognition {
     session_id: String,
     /// Canned replies, consumed FIFO. If exhausted, echoes a default.
@@ -439,9 +410,10 @@ pub struct MockCognition {
     /// Shared handles so tests can inspect calls after the mock is boxed into the Spine.
     pub reprimes: Arc<Mutex<Vec<String>>>,
     pub prompts: Arc<Mutex<Vec<String>>>,
-    pub recovery_contexts: Arc<Mutex<Vec<String>>>,
     pub request_origins: Arc<Mutex<Vec<(String,String)>>>,
     pub conversation_contexts: Arc<Mutex<Vec<String>>>,
+    pub company_contexts: Arc<Mutex<Vec<String>>>,
+    pub app_messages: Arc<Mutex<Vec<(String,String)>>>,
     /// RAW native frames a test parked as between-turn traffic (§1.5 gap #1).
     ///
     /// Raw wire JSON, NOT pre-built records, deliberately: a test that pushed a finished
@@ -460,9 +432,10 @@ impl MockCognition {
             replies: Arc::new(Mutex::new(replies.into_iter().map(|s| s.to_string()).collect())),
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
-            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
+            company_contexts: Arc::new(Mutex::new(Vec::new())),
+            app_messages: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -477,9 +450,10 @@ impl MockCognition {
             replies,
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
-            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
+            company_contexts: Arc::new(Mutex::new(Vec::new())),
+            app_messages: Arc::new(Mutex::new(Vec::new())),
             between_updates: Arc::new(Mutex::new(VecDeque::new())),
             between_seq: Arc::new(Mutex::new(0)),
         }
@@ -492,6 +466,11 @@ impl MockCognition {
 }
 
 impl Cognition for MockCognition {
+    fn set_company_context(&mut self,context:Option<&str>)->Result<bool,CognitionError> {
+        self.company_contexts.lock().unwrap().push(context.unwrap_or("").to_string());
+        Ok(true)
+    }
+    fn set_app_messages(&mut self,messages:Vec<(String,String)>) {*self.app_messages.lock().unwrap()=messages;}
     fn set_conversation_context(&mut self, context:&str) {self.conversation_contexts.lock().unwrap().push(context.into());}
 
     fn prepare_work_turn(&mut self, _: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,
@@ -499,18 +478,13 @@ impl Cognition for MockCognition {
         self.request_origins.lock().unwrap().push((turn.into(),original_turn.into())); Ok(())
     }
 
-    fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
-        self.recovery_contexts.lock().unwrap().push(context.into()); Ok(())
-    }
+
 
     fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    fn reprime(&mut self, priming_text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.reprimes.lock().unwrap().push(priming_text.to_string());
-        Ok(())
-    }
+
 
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.prompts.lock().unwrap().push(text.to_string());
@@ -664,7 +638,6 @@ pub struct CancellableMockCognition {
     cancel: Arc<CancelFlag>,
     /// Every prompt this lease was handed, for ordering assertions.
     pub prompts: Arc<Mutex<Vec<String>>>,
-    pub recovery_contexts: Arc<Mutex<Vec<String>>>,
     /// How many chunks were actually delivered before the cancel landed.
     pub delivered: Arc<Mutex<usize>>,
 }
@@ -696,7 +669,6 @@ impl CancellableMockCognition {
             step,
             cancel: Arc::new(CancelFlag { flag: AtomicBool::new(false), requested: AtomicBool::new(false) }),
             prompts: Arc::new(Mutex::new(Vec::new())),
-            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             delivered: Arc::new(Mutex::new(0)),
         }
     }
@@ -707,17 +679,15 @@ impl CancellableMockCognition {
 }
 
 impl Cognition for CancellableMockCognition {
-    fn set_previous_delivery_attempt(&mut self, context: &str) -> Result<(), CognitionError> {
-        self.recovery_contexts.lock().unwrap().push(context.into()); Ok(())
-    }
+    // Match desktop Native: Stop closes the provider; the ordinary opener resumes it.
+    fn is_closed(&self) -> bool { self.cancel.requested.load(Ordering::SeqCst) }
+
 
     fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    fn reprime(&mut self, _priming_text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
 
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.prompts.lock().unwrap().push(text.to_string());

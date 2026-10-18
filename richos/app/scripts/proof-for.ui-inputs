@@ -141,7 +141,7 @@ operator-notice.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 markdown.js             @shell richos/app/ui/timeline.js
 memory-strategy.js      @shell richos/app/ui/timeline.js richos/app/ui/mock.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
 outage.js               @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs richos/app/src-tauri/src/ richos/app/crates/
-realbytes.js            @shell richos/app/ui/timeline.js richos/app/src-tauri/src/ richos/app/src-tauri/examples/timeline_payload.rs richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock richos/app/crates/
+realbytes.js            @shell richos/app/ui/timeline.js richos/app/src-tauri/src/ richos/app/src-tauri/examples/timeline_payload.rs richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Cargo.lock richos/app/crates/ richos/app/src-tauri/examples/machinery_payload.rs
 restart-scope.js        @shell richos/app/ui/timeline.js richos/app/ui/mock.js
 scale.js                @shell richos/app/ui/timeline.js richos/app/src-tauri/src/main.rs
 escape.js               @shell @home @splash

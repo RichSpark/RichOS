@@ -63,9 +63,7 @@ impl Cognition for Desk {
     fn requires_thread_isolation(&self) -> bool {
         true
     }
-    fn reprime(&mut self, _p: &str, _on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         std::thread::sleep(self.thinks_for);
         let reply = format!("{}: {text}", self.session);

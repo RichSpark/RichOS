@@ -160,13 +160,13 @@ pub struct AgentTask {
 /// out of the name map (the host still counts it through `agent-liveness.sh`, (m)).
 #[derive(Clone, Debug, Default)]
 pub struct TaskBook {
-    /// `Agent` tool_use id → the name its input gave.
+    /// `Agent` tool_use id → its optional name (empty for an unnamed worker).
     names: HashMap<String, String>,
     /// task id → tool_use id, for tasks whose `task_started` arrived.
     task_tool: HashMap<String, String>,
     /// Status seen for a task id before its name was known.
     early_status: HashMap<String, TaskStatus>,
-    /// Named agents in start order. A name started twice keeps both rows; the latest decides.
+    /// Native agents in start order. A named agent started twice keeps both rows.
     agents: Vec<AgentTask>,
 }
 
@@ -182,7 +182,7 @@ impl TaskBook {
                         && matches!(block.get("name").and_then(Value::as_str), Some("Agent" | "Task"));
                     let name = block.pointer("/input/name").and_then(Value::as_str).map(str::trim).unwrap_or("");
                     let id = block.get("id").and_then(Value::as_str).unwrap_or("");
-                    if is_agent && !name.is_empty() && !id.is_empty() && !self.names.contains_key(id) {
+                    if is_agent && !id.is_empty() && !self.names.contains_key(id) {
                         self.names.insert(id.to_string(), name.to_string());
                         // task_started may have arrived first; bind it now.
                         let bound: Vec<String> = self.task_tool.iter().filter(|(_, tool)| tool.as_str() == id)
@@ -196,9 +196,11 @@ impl TaskBook {
             (Some("system"), Some("task_started")) => {
                 let task = frame.get("task_id").and_then(Value::as_str).unwrap_or("");
                 let tool = frame.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
-                if !task.is_empty() && !tool.is_empty() {
-                    self.task_tool.insert(task.to_string(), tool.to_string());
-                    if self.names.contains_key(tool) {
+                if !task.is_empty() {
+                    if !tool.is_empty() {
+                        self.task_tool.insert(task.to_string(), tool.to_string());
+                    }
+                    if frame.get("task_type").and_then(Value::as_str) == Some("local_agent") || self.names.contains_key(tool) {
                         changed.extend(self.bind(task, tool));
                     }
                 }
@@ -221,10 +223,16 @@ impl TaskBook {
     }
 
     fn bind(&mut self, task: &str, tool: &str) -> Option<AgentTask> {
-        if self.agents.iter().any(|a| a.task_id == task) {
+        if let Some(row) = self.agents.iter_mut().find(|a| a.task_id == task) {
+            // The assistant tool frame can arrive after task_started.
+            if row.name.is_empty() {
+                row.name = self.names.get(tool).cloned().unwrap_or_default();
+                row.tool_use_id = tool.to_string();
+                if !row.name.is_empty() { return Some(row.clone()); }
+            }
             return None;
         }
-        let name = self.names.get(tool)?.clone();
+        let name = self.names.get(tool).cloned().unwrap_or_default();
         let status = self.early_status.remove(task).unwrap_or(TaskStatus::Running);
         let row = AgentTask { name, task_id: task.to_string(), tool_use_id: tool.to_string(), status };
         self.agents.push(row.clone());
@@ -272,7 +280,7 @@ impl TaskBook {
     /// Every named agent, latest row per name, in start order.
     pub fn agents(&self) -> Vec<AgentTask> {
         let mut seen = HashSet::new();
-        let mut out: Vec<AgentTask> = self.agents.iter().rev().filter(|a| seen.insert(a.name.clone())).cloned().collect();
+        let mut out: Vec<AgentTask> = self.agents.iter().rev().filter(|a| !a.name.is_empty() && seen.insert(a.name.clone())).cloned().collect();
         out.reverse();
         out
     }
@@ -280,6 +288,27 @@ impl TaskBook {
     /// Names whose latest row is still running.
     pub fn running(&self) -> Vec<String> {
         self.agents().into_iter().filter(|a| a.status.is_running()).map(|a| a.name).collect()
+    }
+
+    /// All running native workers, including unnamed workers and tasks without a tool id.
+    pub fn running_tasks(&self) -> Vec<AgentTask> {
+        self.agents.iter().filter(|a| a.status.is_running()).cloned().collect()
+    }
+
+    /// Project native task facts into the existing desktop worker payload.
+    pub fn worker_status(&self) -> crate::worker_status::WorkerStatusView {
+        crate::worker_status::WorkerStatusView {
+            active: self.agents.iter().filter(|a| a.status.is_running()).count(),
+            items: self.agents.iter().map(|task| crate::worker_status::WorkerItem {
+                label: if task.name.is_empty() {task.task_id.clone()} else {task.name.clone()},
+                state: match task.status {
+                    TaskStatus::Running=>"active", TaskStatus::Completed=>"done",
+                    other=>other.as_str(),
+                }.into(),
+                agent_id: Some(task.task_id.clone()),
+            }).collect(),
+            ..Default::default()
+        }
     }
 }
 

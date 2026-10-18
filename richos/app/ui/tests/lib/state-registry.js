@@ -194,10 +194,7 @@ module.exports = [
   // one's control (or its deliberate absence) on the rendered card.
   // -----------------------------------------------------------------------------------
   {
-    s:
-      "I couldn't start that, because I'm not connected to your Claude account right " +
-      "now. Either nobody has signed in on this Mac yet, or the sign-in ran out. You can " +
-      "connect it in Settings, under Claude accounts, and then send this to me again.",
+    s: "RichOS couldn't send this to Rich because no Claude account is signed in on this Mac, or the sign-in has expired. Open Settings, choose Claude accounts and sign in, then send your message again.",
     c: "ACTIONABLE",
     control: "#set-btn",
     fixture: null,
@@ -210,13 +207,9 @@ module.exports = [
       "this card can appear in, and the sentence itself names the route in words. It was TWO sentences briefly, the second returned by a `route()` method — deleted because under app/crates this registry can only see literals inside a function called `ceo_message`, so a route authored anywhere else would reach his screen while being invisible to the one inventory that asks whether he can act on what he is told.",
   },
   {
-    s:
-      "I couldn't start that. There is an account credential set up on this Mac and " +
-      "Anthropic turned it down, so the request never left the machine. This one needs " +
-      "whoever set RichOS up. It isn't something you can fix from here, and asking me " +
-      "again won't change it.",
+    s: "RichOS couldn't send this to Rich because the Claude key or sign-in token set up on this Mac was refused. Sending again won't help until that key or token is replaced.",
     c: "NEEDS-SOMEONE-ELSE",
-    party: true,
+    explainedBy: "The notice names the key or program that must be replaced; this card cannot perform that installation.",
     fixture: null,
     why:
       "`InterruptionCause::CredentialRejected`, and a DIFFERENT class from the sign-in row " +
@@ -228,13 +221,9 @@ module.exports = [
       "honest shape for a state he does not own.",
   },
   {
-    s:
-      "I couldn't start that. The copy of Claude Code RichOS tried to run isn't on this Mac " +
-      "where I expected it, so there was nothing here to think with. This one needs whoever " +
-      "set RichOS up. It isn't something you can fix from here, and asking me again won't " +
-      "change it.",
+    s: "RichOS couldn't send this to Rich because Claude Code, which Rich runs on, could not be found on this Mac. Sending again won't help until Claude Code is installed again.",
     c: "NEEDS-SOMEONE-ELSE",
-    party: true,
+    explainedBy: "The notice names the key or program that must be replaced; this card cannot perform that installation.",
     fixture: null,
     why:
       "`InterruptionCause::ProviderMissing` — the 2026-09-17 candidate-walk defect. " +
@@ -247,7 +236,7 @@ module.exports = [
       "or pointing at Claude Code) is whoever set RichOS up's to make, not his.",
   },
   {
-    s: "Stopped, as you asked. Nothing is running, and nothing of yours was lost.",
+    s: "Stopped, as you asked.",
     c: "INFORMATIONAL",
     fixture: null,
     why:
@@ -256,9 +245,7 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
-    s:
-      "I lost my connection to the part of me that thinks, partway through. That kind of " +
-      "thing usually clears on its own, so asking again is worth a try.",
+    s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -269,10 +256,7 @@ module.exports = [
       "no button' could just mean the card stopped drawing one.",
   },
   {
-    s:
-      "That stopped before I finished, and I can't tell you why: I don't recognize what " +
-      "came back. Asking again is reasonable; if it stops the same way, it needs whoever " +
-      "set RichOS up.",
+    s: "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
@@ -327,13 +311,6 @@ module.exports = [
     control: "#stop",
     fixture: "working-turn",
     why: "Only reachable with a live turn, which is exactly when syncComposerMode shows Stop.",
-  },
-  {
-    s: "I couldn't take that down while I was working. It's back in the box below, nothing lost.",
-    c: "ACTIONABLE",
-    control: "#send",
-    fixture: "working-turn",
-    why: "§9.2 steering refused. The words are restored; Send is what sends them again.",
   },
   {
     s: "I couldn't start that thread just now. Your words are still in the box below. Press Send to try again.",
@@ -468,9 +445,8 @@ module.exports = [
   // NEEDS SOMEONE ELSE
   // -------------------------------------------------------------------------------------
   {
-    s: "I'm not connected to my thinking right now, so I can't take that on. Quit RichOS and open it again. That clears it most of the time. If it keeps happening, whoever set RichOS up has to sign me back in; that part isn't yours to fix.",
-    c: "NEEDS-SOMEONE-ELSE",
-    party: true,
+    s: "RichOS couldn't reach Claude Code, which Rich runs on. Quit RichOS and open it again, then send your message again.",
+    c: "ACTIONABLE",
     control: "#send",
     fixture: "not-connected",
     why:
@@ -903,7 +879,7 @@ module.exports = [
   { s: "+ New thread", c: "CONTROL", why: "#rail-new-thread." },
   { s: "Start a new thread instead", c: "CONTROL", why: "#unbound-new-thread — §21's way out." },
   {
-    s: "Put it back in the box",
+    s: "Restore my message",
     c: "CONTROL",
     why:
       "`timeline.js`'s RETRY_LABEL — the one control on both intervention cards. It read " +
@@ -2550,39 +2526,6 @@ module.exports = [
   // The fourth arm, `Failed`, mints no literal of its own — it returns
   // `UpstreamFault::ceo_message()`, which is already classified above.
   // -------------------------------------------------------------------------------------
-  {
-    s:
-      "Claude answered a request of {probe_chars} characters just now, which is the size " +
-      "RichOS actually sends. It is working.",
-    c: "UNREACHABLE",
-    why:
-      "`ReachabilityVerdict::Reachable`. It names the SIZE rather than saying 'online', " +
-      "because on 2026-09-03 a three-character probe succeeded while every large brief died " +
-      "on a 529 — so 'it is up' is not a fact and 'it is up for a request this big' is. No " +
-      "shipped UI path reaches it: the only caller is the `reachability_probe` example.",
-  },
-  {
-    s:
-      "That check sent {probe_chars} characters where RichOS's own work runs to " +
-      "{floor_chars}, so it proves nothing about whether real work would get through. A " +
-      "small request can succeed while every large one fails.",
-    c: "UNREACHABLE",
-    why:
-      "`ReachabilityVerdict::Unproven`, and the sentence the whole module exists for. It " +
-      "says neither 'healthy' nor 'down' — it says the check did not run at the size that " +
-      "matters, which is the true answer a cheap ping would have replaced with a green " +
-      "tick. Same reachability status as the row above: example-only today.",
-  },
-  {
-    s:
-      "RichOS has not sent Claude enough work yet to know what size to test at, so there " +
-      "is nothing honest to report about whether it is reachable.",
-    c: "UNREACHABLE",
-    why:
-      "`ReachabilityVerdict::Unmeasured` — a fresh install with no measured request sizes. " +
-      "It refuses to probe at all rather than pick a number, because a probe with no scale " +
-      "would spend the customer's own Claude quota to learn nothing. Example-only today.",
-  },
 
   // =======================================================================================
   // THE SIX FILES THE INVENTORY COULD NOT SEE UNTIL 2026-09-05

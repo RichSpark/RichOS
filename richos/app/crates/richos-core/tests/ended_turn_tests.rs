@@ -152,9 +152,7 @@ impl Cognition for FailingTurn {
     fn session_id(&self) -> &str {
         "failing-turn"
     }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         Err(CognitionError::Protocol("the provider ended the turn".into()))
     }

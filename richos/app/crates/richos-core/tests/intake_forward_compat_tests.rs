@@ -153,6 +153,7 @@ fn the_known_tag_table_matches_the_record_type_exactly() {
         let tag = tag_of(r);
         // The tag the exhaustive match names is the tag serde actually writes.
         let written = serde_json::to_value(r).unwrap();
+        assert_eq!(serde_json::from_value::<IntakeRecord>(written.clone()).unwrap(), *r);
         assert_eq!(written.get("record").unwrap().as_str().unwrap(), tag);
         assert!(KNOWN_INTAKE_TAGS.contains(&tag), "{tag} is missing from KNOWN_INTAKE_TAGS");
         seen.push(tag.to_string());

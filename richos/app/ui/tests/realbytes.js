@@ -32,8 +32,8 @@ const { loadPlaywright, openFixture, shot, createRun, skipSuite, assert, assertE
 
 const TAURI_DIR = path.resolve(UI_DIR, "..", "src-tauri");
 
-function wirePayload() {
-  const r = spawnSync("cargo", ["run", "--quiet", "--example", "timeline_payload", "--", "--json"], {
+function wirePayload(example = "timeline_payload") {
+  const r = spawnSync("cargo", ["run", "--quiet", "--example", example, "--", "--json"], {
     cwd: TAURI_DIR,
     encoding: "utf8",
     env: Object.assign({}, process.env, { PATH: process.env.PATH + ":" + process.env.HOME + "/.cargo/bin" }),
@@ -75,6 +75,15 @@ async function main() {
     return `${wire.payload.items.length} item(s)`;
   });
   if (!wire.ok) return run.report();
+
+  await run.check("the backend emits retained machinery through its real command", async () => {
+    const machinery = wirePayload("machinery_payload");
+    assert(machinery.ok, machinery.why);
+    assertEqual(machinery.payload.state, "recorded", "recorded evidence must remain readable");
+    assert(machinery.payload.rowCount > 0, "no recorded machinery reached the command");
+    assert(machinery.payload.timeline.items.some((item) => item.kind === "activity"), "tool activity disappeared");
+    return `${machinery.payload.rowCount} recorded machinery row(s)`;
+  });
 
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();

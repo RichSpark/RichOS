@@ -336,6 +336,8 @@ async function main() {
     assertEqual(r.tone, "ceo-stopped", "its own tone, not the crash tone");
     assert(r.colour !== "rgb(138, 73, 68)", `the label is painted --danger: ${r.colour}`);
     assertEqual(r.failureCards, 0, "no failure card under a stop");
+    assertEqual(await fixture.getByRole("button", { name: "Restore my message", exact: true }).count(), 1,
+      "a saved stopped snapshot with partial prose must remain restorable");
     return `colour=${r.colour}  failure cards=${r.failureCards}`;
   });
 
@@ -461,14 +463,14 @@ async function main() {
     return "no stop_turn from any keystroke";
   });
 
-  await run.check("§9.2 Enter during work steers — it does not open a second send path", async () => {
+  await run.check("§9.2 Enter during work submits the original input through the ordinary send path", async () => {
     await page.evaluate(() => {
       window.__calls = [];
-      window.__stub.steer_message = { intakeId: 7, threadId: "t", steeringTurnId: "turn_live_1", at: Date.now() };
+      window.__stub.send_message = {};
     });
     await page.fill("#input", "also check the invoice");
     await page.press("#input", "Enter");
-    await page.waitForFunction("window.__calls.some(c => c.cmd === 'steer_message')");
+    await page.waitForFunction("window.__calls.some(c => c.cmd === 'send_message')");
     // The bubble is added to the model synchronously and painted on the next frame
     // (`scheduleRender`), so this waits for the paint rather than racing it.
     await page.waitForFunction(
@@ -476,22 +478,22 @@ async function main() {
     );
     const r = await page.evaluate(() => ({
       cmds: window.__calls.map((c) => c.cmd),
-      text: (window.__calls.find((c) => c.cmd === "steer_message") || {}).args.text,
+      text: (window.__calls.find((c) => c.cmd === "send_message") || {}).args.text,
       bubbles: Array.from(document.querySelectorAll(".tl-user-text")).map((n) => n.textContent),
       composer: document.getElementById("input").value,
     }));
-    assert(r.cmds.includes("steer_message"), `expected steer_message, saw ${r.cmds}`);
-    assert(!r.cmds.includes("send_message"), "a steering message must not go down the send path");
+    assert(r.cmds.includes("send_message"), `expected send_message, saw ${r.cmds}`);
+    assert(!r.cmds.includes("steer_message"), "a follow-up must not use a separate input lane");
     assertEqual(r.text, "also check the invoice", "the words reach the intake verbatim");
     assert(r.bubbles.includes("also check the invoice"), "§9.2: it renders as a CEO bubble immediately");
     assertEqual(r.composer, "", "the composer clears once the words are accepted");
-    return `steer_message("${r.text}") — bubble up, composer clear`;
+    return `send_message("${r.text}") through the same input lane`; 
   });
 
   await run.check("§9.2 words the intake refuses are given back, never swallowed", async () => {
     await page.evaluate(() => {
       window.__calls = [];
-      window.__stub.steer_message = "__REJECT__";
+      window.__stub.send_message = "__REJECT__";
     });
     await page.fill("#input", "this one gets refused");
     await page.press("#input", "Enter");
@@ -508,8 +510,7 @@ async function main() {
     );
     assert(notice.includes("back in the box"), `expected a Rich-voiced explanation, got: ${notice}`);
     await page.evaluate(() => {
-      delete window.__stub.steer_message;
-      window.__stub.steer_message = { intakeId: 8, threadId: "t", steeringTurnId: "turn_live_1", at: Date.now() };
+      delete window.__stub.send_message;
     });
     await page.fill("#input", "");
     return "the sentence is returned to the composer with a calm explanation, no stack trace";
@@ -529,11 +530,15 @@ async function main() {
     );
     const r = await page.evaluate(() => ({
       cmds: window.__calls.map((c) => c.cmd),
+      stop: window.__calls.find((c) => c.cmd === "stop_turn"),
+      thread: window.__RICHOS_TIMELINE__().threadId,
       labels: Array.from(document.querySelectorAll(".tl-duration-label")).map((n) => n.textContent),
       mode: document.getElementById("composer-row").dataset.mode,
       inputDisabled: document.getElementById("input").disabled,
     }));
     assert(r.cmds.includes("stop_turn"), `expected stop_turn, saw ${r.cmds}`);
+    assertEqual(r.stop.args.expectedThreadId, r.thread, "Stop identifies the displayed conversation");
+    assert(!Object.hasOwn(r.stop.args, "expectedTurnId"), "the UI must not guess the backend's folded-input owner");
     // §11: `stopping` keeps the timer RUNNING, so the label carries a duration. It belongs
     // to the LIVE turn, which is the last row in a thread that already has history.
     const stopping = r.labels.filter((l) => /^Stopping/.test(l));
@@ -724,6 +729,36 @@ async function main() {
       return `${r.w}x${r.h} inside a ${r.composerWidth}px composer — ${path.basename(s.file)} (${s.bytes}B${painted})`;
     });
   }
+
+  await run.check("Stop follows the backend owner before and after native follow-up admission", async () => {
+    for (const owner of ["turn_live_1", "folded_followup"]) {
+      const folded = await openApp(browser);
+      try {
+        await startTurn(folded);
+        await folded.evaluate((turnId) => {
+          const model = window.__RICHOS_TIMELINE__();
+          const base = { entityId: model.entityId, threadId: model.threadId, bindingRevision: 1,
+            turnId: "folded_followup", at: Date.now() };
+          window.__emit("rich://turn-status", { ...base, status: "queued", startedAt: null });
+          window.__emit("rich://turn-status", { ...base, status: "working", startedAt: Date.now() });
+          window.__calls = [];
+          window.__stub.stop_turn = { stopped: true, turnId, requestedAt: Date.now(), reachedLease: true };
+        }, owner);
+        await folded.click("#stop");
+        const result = await folded.evaluate(() => {
+          const model = window.__RICHOS_TIMELINE__();
+          return { call: window.__calls.find((c) => c.cmd === "stop_turn"), thread: model.threadId,
+            first: model.turns.get("turn_live_1").status, followup: model.turns.get("folded_followup").status };
+        });
+        assertEqual(result.call.args.expectedThreadId, result.thread, "Stop retains the displayed conversation");
+        assert(!Object.hasOwn(result.call.args, "expectedTurnId"), "UI rows must not guess native admission");
+        assertEqual(result.first, owner === "turn_live_1" ? "stopping" : "working", "first input status");
+        assertEqual(result.followup, owner === "folded_followup" ? "stopping" : "working", "follow-up status");
+        assertEqual(folded.__errors, [], "folded page errors");
+      } finally { await folded.close(); }
+    }
+    return "one conversation witness; only the backend-reported owner is marked Stopping";
+  });
 
   await run.check("no page errors anywhere in the shell run", async () => {
     assertEqual(page.__errors, [], "console/page errors");

@@ -1,16 +1,14 @@
-//! The durable conversation + action LEDGER — the spine's backbone.
+//! Durable conversation input, observed output and user controls.
 //!
-//! Event-sourced, append-only JSONL (the same durable-substrate philosophy the
-//! engine uses for `task-events.jsonl` / `idle-events.jsonl`). Threads are VIEWS
-//! projected over this one shared log — never siloed stores — so "the durable Rich
-//! is the app" holds: identity + history outlive any single (rotating) Claude session.
+//! This append-only log preserves receipts before native delivery and supplies
+//! the conversation UI. It does not infer job outcomes or reconstruct session context.
 //!
 //! Three invariants this module exists to guarantee:
 //!   1. CRASH-SAFETY (persist-before-send): a CEO prompt is journaled `received`
 //!      and flushed to disk BEFORE it is ever handed to a compute session. A crash
 //!      the instant after the CEO hits send can never eat the message.
 //!   2. ANTI-FALSE-ATTRIBUTION: the ACTION ledger — recorded as actions happen,
-//!      outside the (rotating) transcript — is the SOLE authority for "did Rich do X".
+//!      alongside native transcripts, preserving the operation and its source evidence.
 //!   3. ENTITY SCOPE (ECS §3.2–3.4, UX brief §22/§25 Integrity): every thread has
 //!      exactly one home entity, immutable after creation; every turn carries that
 //!      entity; and **no event from one entity may ever render in another entity's
@@ -99,17 +97,7 @@
 //! | root | who WRITES it | who READS it here | verdict against 18-20 |
 //! |---|---|---|---|
 //! | `RichOS/ecs` | the ENGINE's Python, via `bin/ecs --state-root` (`ecs.rs::EcsBridge::request`) | **nobody in this app** | out of scope by construction. This crate never opens a path inside it: it hands the directory to a subprocess and reads that subprocess's stdout. Point 18 needs a writer and there is none here; points 19-20 need a reader and there is none either. Its shape is versioned by the engine's own `ecs/migrations/`. |
-//! | `engine-state/evidence/<session>/callbacks.jsonl` | the engine's Python callback hook, under an exclusive `flock` | `app_workers::status` — read-only, under a SHARED `flock` | **already satisfies all three, written by someone else.** Every row carries `"schema": 1` — point 18's field, under another name, on a per-record basis — and the reader REFUSES the whole view on any row whose schema is not 1. |
-//!
-//! **That reader fails CLOSED, and it is the one place in this crate where that is right.**
-//! Every other store here degrades: it drops the record it cannot read and returns the rest.
-//! `app_workers::status` returns `Unattributed::AppEvidenceUnavailable` for the whole view
-//! instead, because its answer feeds the update gate — the question is *"is it safe to
-//! replace the app right now"*, and a partial list of running workers answers "yes" to that
-//! question while being wrong. A short list is the failure mode; refusing to produce one is
-//! the fix.
-//!
-//! **Point 18 is therefore not applied to either**, and the rule is the same one that
+//! **Point 18 is therefore not applied to the engine-owned ECS root**, and the rule is the same one that
 //! selected the three stores that ARE stamped: this build stamps what this build writes. See
 //! `docs/architecture/data-migration.md` for the stores still to be stamped and why they are
 //! not urgent.
@@ -355,8 +343,10 @@ pub enum Event {
         /// would create a SECOND turn with the same text, and this is what lets the drain
         /// recognize its own earlier work and skip it.
         ///
-        /// `#[serde(default)]` ⇒ `None` for every turn written before steering existed,
-        /// and for every ordinary typed message, which never passes through the intake.
+        /// Direct desktop inputs reserve an ID from the same intake counter and save it
+        /// in this existing ledger write, without an extra intake row or fsync. Stop uses
+        /// this common order for typed, spoken and pressed inputs. Account continuations
+        /// retain their original ID. `None` covers older records and detached controls.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         intake_id: Option<u64>,
         /// **WAS RICH'S OWN VOICE AUDIBLE IN THE ROOM WHILE THIS WAS BEING RECORDED?**
@@ -655,9 +645,8 @@ pub struct Turn {
     /// the LAG between "he asked" and "it let go" stays measurable after a restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_requested_at: Option<u64>,
-    /// The intake-log record this turn was drained from (UX §9.2), if any. See
-    /// `Event::PromptReceived::intake_id` — it is a de-duplication key, not a display
-    /// field, and nothing renders it.
+    /// Shared input order, also the intake drain's de-duplication key (UX §9.2).
+    /// Direct desktop inputs may have no intake row. See `Event::PromptReceived::intake_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intake_id: Option<u64>,
     /// Set when this turn died to the UPSTREAM MODEL API (row 3.30). Carries the
@@ -1283,7 +1272,7 @@ impl Ledger {
                         turn_id: by_turn_id.clone(), thread_id: original.thread_id,
                         text: original.user_text, source: original.source, at,
                         entity_id: original.entity_id, binding_revision: original.binding_revision,
-                        intake_id: None, rich_audible: original.rich_audible,
+                        intake_id: original.intake_id, rich_audible: original.rich_audible,
                         channel: original.channel, client_id: None,
                         voice_note: original.voice_note, pressed: original.pressed,
                     });
@@ -1806,6 +1795,13 @@ impl Ledger {
         self.record_prompt_received_with(binding, text, source, Some(intake_id), None, None, None)
     }
 
+    /// Preserve desktop capture/button provenance and the shared input order in one write.
+    pub(crate) fn record_prompt_received_desktop(&mut self, binding: &ThreadBinding, text: &str,
+        source: Source, intake_id: Option<u64>, rich_audible: Option<bool>, pressed: bool,
+    ) -> Result<String, LedgerError> {
+        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, None, None, false, pressed)
+    }
+
     /// **The same record, with the mouth his words came through** (operator back-end spec r3
     /// (s)). Called only by a spine told to keep it
     /// ([`crate::spine::Spine::keep_intake_channel`]), so every product install keeps writing
@@ -2112,69 +2108,15 @@ impl Ledger {
         self.append(Event::ActionUpdated { action_id: action_id.to_string(), status, at: now_millis() }, true)
     }
 
-    pub fn record_rotation(&mut self, from: &str, to: &str, reason: &str) -> Result<(), LedgerError> {
-        self.append(
-            Event::SessionRotated { from_session: from.to_string(), to_session: to.to_string(), reason: reason.to_string(), at: now_millis() },
-            true,
-        )
-    }
 
-    /// Raise a proactive message (the attention seam's persistence half — §9 / UX §5).
-    /// Durable + fsync'd: once Rich has "said" something, whether or not it renders
-    /// (Silent tier never does), it must survive a crash the instant after. Returns the
-    /// new turn id.
-    pub fn record_proactive_message(
-        &mut self,
-        binding: &ThreadBinding,
-        tier: AttentionTier,
-        text: &str,
-    ) -> Result<String, LedgerError> {
-        self.record_proactive_message_as(binding, tier, text, new_id("turn"))
-    }
 
-    /// A caller with a durable delivery identity can retry without creating another message.
-    pub(crate) fn record_proactive_message_as(
-        &mut self, binding: &ThreadBinding, tier: AttentionTier, text: &str, turn_id: String,
-    ) -> Result<String, LedgerError> {
-        // Rich speaking unprompted is still a scoped write: an unbound or mis-scoped
-        // thread must not receive one either.
-        self.verify_binding(binding)?;
-        if self.turn(&turn_id).is_some() { return Ok(turn_id); }
-        self.append(
-            Event::ProactiveMessage {
-                turn_id: turn_id.clone(),
-                thread_id: binding.thread_id().to_string(),
-                tier,
-                text: text.to_string(),
-                at: now_millis(),
-                entity_id: Some(binding.entity_id().clone()),
-                binding_revision: binding.binding_revision(),
-            },
-            true,
-        )?;
-        Ok(turn_id)
-    }
 
-    /// Record/replace the self-authored handoff summary for a thread (continuity §2.4,
-    /// clean-rotation path). Not crash-critical on its own (the always-on structured
-    /// digest in `reprime.rs` is the crash-safe floor) so no fsync.
-    pub fn record_handoff_summary(&mut self, thread_id: &str, summary: &str) -> Result<(), LedgerError> {
-        self.append(
-            Event::HandoffSummaryUpdated {
-                thread_id: thread_id.to_string(),
-                summary: summary.to_string(),
-                at: now_millis(),
-            },
-            false,
-        )
-    }
 
-    /// The latest self-authored handoff summary for a thread, if a clean rotation has
-    /// ever produced one (continuity §2.4). `None` before the first clean rotation —
-    /// the deterministic structured digest in `reprime.rs` covers that gap.
-    pub fn handoff_summary(&self, thread_id: &str) -> Option<&str> {
-        self.handoff_summaries.get(thread_id).map(|s| s.as_str())
-    }
+
+
+
+
+
 
     /// Persist both sides of a continuation in one fsynced event. A crash cannot
     /// leave a second input without its supersession, or retire the only saved input.
@@ -2188,15 +2130,7 @@ impl Ledger {
         Ok(by_turn_id)
     }
 
-    /// Mark `turn_id` as superseded by `by_turn_id` (mid-turn-crash replay, §5.3). Not
-    /// crash-critical (the interrupted turn's own durable record is already fsync'd);
-    /// this is bookkeeping for the CLEAN-OUTPUT render, so no fsync needed.
-    pub fn mark_turn_superseded(&mut self, turn_id: &str, by_turn_id: &str) -> Result<(), LedgerError> {
-        self.append(
-            Event::TurnSuperseded { turn_id: turn_id.to_string(), by_turn_id: by_turn_id.to_string(), at: now_millis() },
-            false,
-        )
-    }
+
 
     // ---- read / projection API --------------------------------------------
 
@@ -2375,6 +2309,50 @@ fn truncate_detail(detail: &str) -> String {
     out
 }
 
+impl Ledger {
+    pub fn record_proactive_message(
+        &mut self,
+        binding: &ThreadBinding,
+        tier: AttentionTier,
+        text: &str,
+    ) -> Result<String, LedgerError> {
+        self.record_proactive_message_as(binding, tier, text, new_id("turn"))
+    }
+
+    pub(crate) fn record_proactive_message_as(
+        &mut self, binding: &ThreadBinding, tier: AttentionTier, text: &str, turn_id: String,
+    ) -> Result<String, LedgerError> {
+        // Rich speaking unprompted is still a scoped write: an unbound or mis-scoped
+        // thread must not receive one either.
+        self.verify_binding(binding)?;
+        if self.turn(&turn_id).is_some() { return Ok(turn_id); }
+        self.append(
+            Event::ProactiveMessage {
+                turn_id: turn_id.clone(),
+                thread_id: binding.thread_id().to_string(),
+                tier,
+                text: text.to_string(),
+                at: now_millis(),
+                entity_id: Some(binding.entity_id().clone()),
+                binding_revision: binding.binding_revision(),
+            },
+            true,
+        )?;
+        Ok(turn_id)
+    }
+
+}
+
+impl Ledger {
+    pub fn mark_turn_superseded(&mut self, turn_id: &str, by_turn_id: &str) -> Result<(), LedgerError> {
+        self.append(
+            Event::TurnSuperseded { turn_id: turn_id.to_string(), by_turn_id: by_turn_id.to_string(), at: now_millis() },
+            false,
+        )
+    }
+
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2389,7 +2367,7 @@ mod tests {
     fn a_reserved_thread_id_writes_nothing_until_it_is_spent_and_is_spent_only_once() {
         let path = std::env::temp_dir().join(crate::util::new_id("ledger-reserved"));
         let entity = EntityId::parse("acme").unwrap();
-        let mut ledger = Ledger::open(&path).unwrap();
+        let ledger = Ledger::open(&path).unwrap();
 
         let reserved = Ledger::reserve_thread_id();
         assert!(reserved.starts_with("thr_"));
@@ -2459,7 +2437,7 @@ mod tests {
         let binding = ledger.thread_binding(&thread).unwrap();
         let turn = ledger.record_prompt_received(&binding, "after recovery", Source::Text).unwrap();
         drop(ledger);
-        let ledger = Ledger::open(&path).unwrap();
+        let mut ledger = Ledger::open(&path).unwrap();
         assert!(ledger.turn(&turn).is_some());
         assert_eq!(ledger.skipped_records().len(), 1);
         assert!(std::fs::read_to_string(&path).unwrap().contains("interrupted\n"));

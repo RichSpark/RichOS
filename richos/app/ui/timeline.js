@@ -2863,7 +2863,7 @@
   /// one sentence in this file that was already accurate about it — the unknown card's
   /// *"Your message is safe: I'll put it back in the box for you."* Declared once, used by
   /// both cards, because the CEO's job is identical in each.
-  const RETRY_LABEL = "Put it back in the box";
+  const RETRY_LABEL = "Restore my message";
 
   /// §5.5 — a system intervention. Exactly ONE is reachable in this build.
   ///
@@ -2935,7 +2935,7 @@
       //
       // The candidate-.2 walk, §4 defect #8: the not-signed-in card tells him to *"send this
       // to me again"*, the composer is empty, and — unlike the `[Errno 2]` card beside it —
-      // the card offered no **Put it back in the box**. The one thing it asked for was the
+      // the card offered no **Restore my message**. The one thing it asked for was the
       // one thing it did not give him. He retypes, or he loses the sentence.
       //
       // `offersRetry` is `InterruptionCause::offers_retry`, and it answers *"is asking again
@@ -3144,6 +3144,9 @@
 
       section.appendChild(lane);
 
+      if (row.tone === "ceo-stopped" && turn.user && turn.user.text) {
+        section.appendChild(retryControl(turn, opts));
+      }
       if (row.tone === "stopped") section.appendChild(renderFailureCard(turn, opts));
       if (row.tone === "unknown") section.appendChild(renderUnknownCard(turn, opts));
     }

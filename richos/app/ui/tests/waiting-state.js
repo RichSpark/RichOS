@@ -586,20 +586,22 @@ async function main() {
     assertEqual(await band(page), null, "the band came back on a later tick");
     assertEqual(await timers(page), [], "a timer came back on a later tick");
 
-    // The turn is still running for everything else: a message he sends now steers it, as it
-    // always has, and while it waits on that turn the turn shows as working again.
+    // A follow-up goes straight to the same session. Until native admission it is a
+    // pending send, then its own queued/working events own the waiting state.
     const placeholder = await page.evaluate(() => document.getElementById("input").placeholder);
     assert(/steer/.test(placeholder), "the composer must still steer the running turn; placeholder " + JSON.stringify(placeholder));
-    await page.evaluate(() => {
-      const bridge = window.RichBridge;
-      const invoke = bridge.invoke;
-      bridge.invoke = (cmd, args) => (cmd === "steer_message" ? Promise.resolve(null) : invoke(cmd, args));
-    });
     await page.fill("#input", "Thanks.");
     await page.press("#input", "Enter");
     await page.waitForFunction(() => !!document.getElementById("turn-wait"), null, { timeout: 30000 }).catch(() => {});
     const back = await band(page);
-    assert(back && back.head === "Rich is working", "a message sent meanwhile waits on the turn, shown as working: " + JSON.stringify(back));
+    assert(back && back.head === "Sending your message", "unadmitted input must not claim model work: " + JSON.stringify(back));
+    assertEqual(back.detail, "Waiting for Rich to accept it");
+    await page.evaluate(f => window.__emit("rich://turn-status", {
+      ...f, turnId: "t_followup", status: "queued", startedAt: null, activeDurationMs: null,
+      visibility: "ceo", at: Date.now(),
+    }), fence);
+    await goWorking(page, fence, "t_followup");
+    assertEqual((await band(page)).head, "Rich is working", "the admitted follow-up owns the band");
 
     // And the turn's own end is reported as it always was, with its measured duration.
     await page.evaluate((f) => {
@@ -610,8 +612,17 @@ async function main() {
     await page
       .waitForFunction(() => [...document.querySelectorAll(".tl-duration-label")].some((n) => n.textContent === "Worked for 30s"), null, { timeout: 30000 })
       .catch(() => {});
-    assertEqual(await band(page), null, "the completed turn leaves no band");
-    assertEqual(await timers(page), ["Worked for 30s"], "the turn's measured end");
+    assertEqual((await band(page)).head, "Rich is working", "the earlier turn cannot clear its follow-up's band");
+    assert((await timers(page)).includes("Worked for 30s"), "the earlier turn's measured end");
+    await advance(page, 1000);
+    await page.evaluate(f => window.__emit("rich://turn-status", {
+      ...f, turnId: "t_followup", status: "completed", startedAt: Date.now() - 1000,
+      activeDurationMs: 1000, visibility: "ceo", at: Date.now(),
+    }), fence);
+    await page.waitForFunction(() => !document.getElementById("turn-wait"));
+    await page.waitForFunction(() => [...document.querySelectorAll(".tl-duration-label")].some(n => n.textContent === "Worked for 1s"));
+    assertEqual(await band(page), null, "both completed inputs leave no band");
+    assertEqual(await timers(page), ["Worked for 30s", "Worked for 1s"], "each input retains its measured end");
     assertEqual(page.__errors, [], "page errors");
     await page.close();
   });

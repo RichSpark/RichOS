@@ -265,9 +265,7 @@ impl Cognition for HeldUntilReleased {
     fn session_id(&self) -> &str {
         "sess-held"
     }
-    fn reprime(&mut self, _p: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.turns += 1;
         on_item(TurnItem::Text { seq: 0, text: "working on it " });
@@ -283,46 +281,44 @@ impl Cognition for HeldUntilReleased {
 }
 
 #[test]
-fn the_spine_lock_is_genuinely_held_for_the_whole_turn_and_the_stop_does_not_wait_for_it() {
-    // A turn a whole hang guard long (STOPPABLE_TURN_CHUNKS x 20 ms), which the stop needs
-    // 20 ms of. If the stop were routed through the spine lock this test would wait out the
-    // turn and it would complete normally — which is exactly what a decorative stop button
-    // looks like.
-    let (spine, control, live, _thread) = running_spine("lock", STOPPABLE_TURN_CHUNKS);
-    let runner = {
-        let spine = Arc::clone(&spine);
-        std::thread::spawn(move || {
-            spine.lock().unwrap().submit_prompt("go", Source::Text).unwrap()
-        })
+fn a_waiting_native_reply_leaves_the_spine_available_and_stop_preserves_partial_output() {
+    struct Signal(Mutex<std::sync::mpsc::Sender<()>>);
+    impl TurnCancel for Signal {
+        fn cancel(&self)->bool {self.0.lock().unwrap().send(()).is_ok()}
+    }
+    struct Held {stop:std::sync::mpsc::Receiver<()>,ready:std::sync::mpsc::Sender<()>,cancel:Arc<Signal>}
+    impl Cognition for Held {
+        fn session_id(&self)->&str {"held-native-reply"}
+        fn cancel_handle(&self)->Option<Arc<dyn TurnCancel>> {Some(self.cancel.clone())}
+        fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {unreachable!()}
+        fn enqueue_prompt(&mut self,_:&str,started:Box<dyn FnOnce()->Result<(),String>+Send>)->Result<richos_core::cognition::PendingReply,CognitionError> {
+            started().map_err(CognitionError::Protocol)?;
+            let stop=std::mem::replace(&mut self.stop,std::sync::mpsc::channel().1);
+            let ready=self.ready.clone();
+            Ok(richos_core::cognition::PendingReply::new(move |on| {
+                on(TurnItem::Text {seq:0,text:"chunk 0 "});
+                ready.send(()).unwrap();
+                stop.recv_timeout(HANG_GUARD).expect("hang guard: Stop never reached the reply");
+                Ok(richos_core::native::STOP_REASON_CANCELLED.into())
+            }))
+        }
+    }
+    let (tx,rx)=std::sync::mpsc::channel();
+    let (entered,ready)=std::sync::mpsc::channel();
+    let (spine,control,_live,_thread)=spine_with_lease("lock",Box::new(Held {stop:rx,ready:entered,cancel:Arc::new(Signal(Mutex::new(tx)))}));
+    let turn_id={
+        let mut state=spine.lock().unwrap();state.detach_conversation_io();
+        state.submit_prompt("go",Source::Text).unwrap()
     };
-
-    // Wait until the turn is genuinely running — observed through the control's mirror,
-    // never through a sleep-and-hope.
-    let began = std::time::Instant::now();
-    // Active now includes preparation. Wait for actual output in this test of
-    // preserving partial output; preparation-only Stop has its own regressions.
-    while !live.events.lock().unwrap().iter().any(|(name, _)| name == "rich://message-delta") {
-        assert!(began.elapsed() < HANG_GUARD, "the turn never produced output");
-        std::thread::sleep(Duration::from_millis(2));
-    }
-
-    // THE PROOF. The turn owns the lock; nothing that needs it could stop anything.
-    assert!(spine.try_lock().is_err(), "the spine lock was free mid-turn — this test no longer proves anything");
-
-    let outcome = control.request_stop().unwrap();
-    match outcome {
-        StopOutcome::Requested { reached_lease, .. } => assert!(reached_lease, "the cancel reached the lease"),
-        other => panic!("expected Requested, got {other:?}"),
-    }
-
-    let turn_id = runner.join().unwrap();
-    let guard = spine.lock().unwrap();
-    let turn = guard.ledger().turn(&turn_id).unwrap();
-    assert_eq!(turn.state, TurnState::Stopped, "the turn must record that the CEO ended it");
-    // It really was cut short: STOPPABLE_TURN_CHUNKS were scripted, fewer arrived.
-    let delivered = turn.assistant_text.split_whitespace().filter(|w| *w == "chunk").count();
-    assert!(delivered > 0, "partial output must be preserved (§9.3 step 4), got none");
-    assert!(delivered < STOPPABLE_TURN_CHUNKS, "the turn ran to completion — nothing was actually stopped");
+    let driving=spine.clone();
+    let runner=std::thread::spawn(move ||richos_core::spine::drive_shared_turns(&driving));
+    ready.recv_timeout(HANG_GUARD).expect("hang guard: the native reply never produced output");
+    assert!(spine.try_lock().is_ok(),"a reply wait held the conversation state");
+    assert!(matches!(control.request_stop().unwrap(),StopOutcome::Requested {reached_lease:true,..}));
+    runner.join().unwrap().unwrap();
+    let state=spine.lock().unwrap();let turn=state.ledger().turn(&turn_id).unwrap();
+    assert_eq!(turn.state,TurnState::Stopped);
+    assert_eq!(turn.assistant_text,"chunk 0 ","partial output must be preserved");
 }
 
 #[test]
@@ -384,6 +380,9 @@ fn steering_written_while_rich_works_is_durable_immediately_and_delivered_at_the
 fn a_stop_also_stops_the_work_the_ceo_had_queued_behind_it() {
     // A stop that immediately starts the next queued turn is not a stop.
     let (spine, control, _live, thread) = running_spine("queued", STOPPABLE_TURN_CHUNKS);
+    let factory=MockLeaseFactory::new(vec!["After Stop reply"]);
+    let prompts=factory.spawned_prompts.clone();
+    spine.lock().unwrap().set_lease_factory(Box::new(factory));
     let runner = {
         let spine = Arc::clone(&spine);
         std::thread::spawn(move || spine.lock().unwrap().submit_prompt("first", Source::Text).unwrap())
@@ -393,7 +392,9 @@ fn a_stop_also_stops_the_work_the_ceo_had_queued_behind_it() {
     }
     control.steer("and then this").unwrap();
     control.request_stop().unwrap();
+    control.submit_from_desk(&thread,Some(femcboost()),"new input after Stop").unwrap();
     runner.join().unwrap();
+    spine.lock().unwrap().poll_intake().unwrap();
 
     let guard = spine.lock().unwrap();
     let turns = ceo_turns(guard.ledger(), &thread);
@@ -402,6 +403,11 @@ fn a_stop_also_stops_the_work_the_ceo_had_queued_behind_it() {
     let texts: Vec<&str> = turns.iter().map(|t| t.user_text.as_str()).collect();
     assert!(texts.contains(&"and then this"), "the CEO's words must survive a stop: {texts:?}");
     for t in &turns {
+        if t.user_text=="new input after Stop" {
+            assert_eq!(t.state,TurnState::Completed,"Stop must not swallow later input");
+            assert_eq!(t.assistant_text,"After Stop reply");
+            continue;
+        }
         assert!(
             matches!(t.state, TurnState::Stopped),
             "turn {:?} should be stopped, is {:?}",
@@ -409,6 +415,7 @@ fn a_stop_also_stops_the_work_the_ceo_had_queued_behind_it() {
             t.state
         );
     }
+    assert_eq!(*prompts.lock().unwrap()[0].lock().unwrap(),["new input after Stop"],"only post-Stop input may reach the resumed provider");
 }
 
 /// A lease that dies the instant it is cancelled — "the CEO pressed stop and the child
@@ -429,9 +436,7 @@ impl Cognition for DiesOnCancel {
     fn session_id(&self) -> &str {
         "sess-dies"
     }
-    fn reprime(&mut self, _t: &str, _on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         on_item(TurnItem::Text { seq: 0, text: "starting" });
         while !self.flag.load(Ordering::SeqCst) {
@@ -563,8 +568,8 @@ fn a_crash_between_the_ledger_write_and_the_drain_marker_files_the_message_once_
     let control = TurnControl::open(&intake_path).unwrap().for_thread(&thread);
     assert_eq!(control.pending_intake().len(), 1, "the record is still undrained, as it must be");
     spine.set_turn_control(control.clone());
-    spine.attach_lease(Box::new(richos_core::cognition::MockCognition::new("sess-after", vec!["on it"])));
     spine.switch_thread(&thread).unwrap();
+    spine.attach_lease(Box::new(richos_core::cognition::MockCognition::new("sess-after", vec!["on it"])));
     spine.reconcile_intake().unwrap();
 
     let turns = ceo_turns(spine.ledger(), &thread);
@@ -631,9 +636,7 @@ impl Cognition for FinishesDespiteTheStop {
     fn session_id(&self) -> &str {
         "sess-finishes-anyway"
     }
-    fn reprime(&mut self, _p: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         on_item(TurnItem::Text { seq: 0, text: "Here is the complete answer you asked for." });
         self.running.store(true, Ordering::SeqCst);

@@ -1385,6 +1385,10 @@ def worker_context(scope, payload):
     """Host context and direct file boundaries derived from an observed Agent ID."""
     aid = payload.get("agent_id")
     if not aid:
+        if scope.get("background_work_allowed") is True and payload.get("tool_name") == "Bash":
+            # Native task Stop requires Stu's own Bash to be backgrounded.
+            return {"hookSpecificOutput":{"hookEventName":"PreToolUse",
+                "updatedInput":{**payload.get("tool_input", {}), "run_in_background":True}}}
         return None
     with locked(scope) as root:
         matches=[]

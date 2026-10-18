@@ -191,34 +191,22 @@ impl InterruptionCause {
             // which took the place of the old account row in Settings and holds the first
             // account's sign-in. The sentence names the row that exists.
             InterruptionCause::NotSignedIn => {
-                "I couldn't start that, because I'm not connected to your Claude account \
-                 right now. Either nobody has signed in on this Mac yet, or the sign-in ran \
-                 out. You can connect it in Settings, under Claude accounts, and then \
-                 send this to me again."
+                "RichOS couldn't send this to Rich because no Claude account is signed in on this Mac, or the sign-in has expired. Open Settings, choose Claude accounts and sign in, then send your message again."
             }
             InterruptionCause::CredentialRejected => {
-                "I couldn't start that. There is an account credential set up on this Mac and \
-                 Anthropic turned it down, so the request never left the machine. This one \
-                 needs whoever set RichOS up. It isn't something you can fix from here, and \
-                 asking me again won't change it."
+                "RichOS couldn't send this to Rich because the Claude key or sign-in token set up on this Mac was refused. Sending again won't help until that key or token is replaced."
             }
             InterruptionCause::ProviderMissing => {
-                "I couldn't start that. The copy of Claude Code RichOS tried to run isn't on \
-                 this Mac where I expected it, so there was nothing here to think with. This \
-                 one needs whoever set RichOS up. It isn't something you can fix from here, \
-                 and asking me again won't change it."
+                "RichOS couldn't send this to Rich because Claude Code, which Rich runs on, could not be found on this Mac. Sending again won't help until Claude Code is installed again."
             }
             InterruptionCause::StoppedByCeo => {
-                "Stopped, as you asked. Nothing is running, and nothing of yours was lost."
+                "Stopped, as you asked."
             }
             InterruptionCause::Transient => {
-                "I lost my connection to the part of me that thinks, partway through. That \
-                 kind of thing usually clears on its own, so asking again is worth a try."
+                "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. This usually fixes itself. Press Restore my message, then send it again."
             }
             InterruptionCause::Unknown => {
-                "That stopped before I finished, and I can't tell you why: I don't recognize \
-                 what came back. Asking again is reasonable; if it stops the same way, it \
-                 needs whoever set RichOS up."
+                "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again."
             }
         }
     }
@@ -317,7 +305,7 @@ impl InterruptionRecord {
         let loss_message = if rich_wrote_something {
             Some(loss.ceo_message())
         } else if loss.prompt_is_durable {
-            Some("Your message is saved. I hadn't written any of my answer yet.".to_string())
+            Some("Your message is saved. Rich hadn't written any of his answer yet.".to_string())
         } else {
             None
         };

@@ -2135,21 +2135,6 @@ async function send(explicitText, opts) {
     window.RichAttachments.note(window.RichAttachments.STILL_ADDING);
     return;
   }
-  // §9.2: "The composer remains enabled. This is essential. Long work should not trap the
-  // CEO in a passive state." Until this slice the line here read `if (anyLiveTurn()) return;`
-  // — an honest refusal, because the spine's mutex is held for the whole turn and there was
-  // nowhere durable to put the words. There is now (`steering.rs`), so they go there.
-  // Entity drafts retain the previous timeline until first send. Only steer from its conversation.
-  // A pressed button's words are never a steering line: they would be drawn as his. They
-  // wait for the turn in front of them like any other prompt.
-  if (mainView === "conversation" && anyLiveTurn() && !pressed) {
-    if (files) {
-      const folded = await foldAttachments(text, activeThreadId, files);
-      if (folded === null) return;
-      text = folded;
-    }
-    return steer(text, preserveDraft);
-  }
   // §21 "Entity binding failure": BLOCK SEND and state why. Never quietly file the CEO's
   // words somewhere Rich guessed.
   if (sendBlockedReason) {
@@ -2466,35 +2451,6 @@ async function send(explicitText, opts) {
 /// So the UI never implies the message landed mid-thought. The bubble goes up with the
 /// §9.2 cue and nothing else is claimed: no "Rich is reading this", no re-ordering of the
 /// running turn's rows.
-async function steer(text, preserveDraft) {
-  // A message he sends while an answered turn finishes out of sight (finding 21) waits for that
-  // turn, as it always has, so the turn shows as working again, as it did before.
-  for (const [turnId, t] of timelineModel.turns) {
-    if (!t.live || !t.answered) continue;
-    t.answered = false;
-    syncWaitBand({ turnId, status: t.status, startedAt: t.startedAt });
-  }
-  if (!preserveDraft) inputEl.value = "";
-  autoGrow();
-  window.RichTimeline.addPendingUserMessage(timelineModel, text, Date.now());
-  followBottom = true;
-  scheduleRender();
-  try {
-    await Bridge.invoke("steer_message", { text });
-  } catch (e) {
-    // The words are NEVER swallowed. If the intake refused them they go back in the
-    // composer, where the CEO can see them and decide.
-    window.RichTimeline.addLocalNotice(
-      timelineModel,
-      "I couldn't take that down while I was working. It's back in the box below, nothing lost.",
-      Date.now()
-    );
-    inputEl.value = text;
-    autoGrow();
-    scheduleRender();
-  }
-}
-
 /// §9.3 — stop.
 ///
 /// The command persists the request and then interrupts, in that order, and does not answer
@@ -2511,10 +2467,9 @@ async function stopTurn() {
   const stoppedOpening = openingThread;
   const stoppedModel = stoppedOpening ? stoppedOpening.previousModel : timelineModel;
   try {
-    const live = [...stoppedModel.turns.entries()].filter(([, turn]) => turn.live);
-    const target = live.find(([, turn]) => turn.status !== "queued") || live[0];
-    if (!target) return;
-    const report = await Bridge.invoke("stop_turn", { expectedTurnId: target[0] });
+    if (!stoppedModel.threadId) return;
+    // The backend owns native admission, including folded inputs. Rows do not select it.
+    const report = await Bridge.invoke("stop_turn", { expectedThreadId: stoppedModel.threadId });
     if (!report || !report.stopped) return;
     if (openingThread === stoppedOpening && stoppedOpening) openingThread.stopError = null;
     if (window.RichTimeline.markStopping(stoppedModel, report.turnId)) scheduleRender();

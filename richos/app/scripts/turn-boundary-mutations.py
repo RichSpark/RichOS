@@ -47,7 +47,7 @@ SPINE = f"{APP}/crates/richos-core/src/spine.rs"
 MAIN = f"{APP}/src-tauri/src/main.rs"
 BRIDGE = f"{APP}/src-tauri/src/phone/bridge.rs"
 
-PUSH = """        if !self.ended_turns.iter().any(|known| known.thread_id() == binding.thread_id()) {
+PUSH = """        if !self.thread_is_running(thread_id) && !self.ended_turns.iter().any(|known|known.thread_id()==thread_id) {
             self.ended_turns.push(binding.clone());
         }
 """

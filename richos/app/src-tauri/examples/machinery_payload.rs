@@ -61,9 +61,7 @@ impl Cognition for ScriptedLease {
     fn session_id(&self) -> &str {
         &self.session
     }
-    fn reprime(&mut self, _p: &str, _on: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         let mut seq: u64 = 0;
         for step in &self.script {
@@ -180,6 +178,9 @@ fn main() {
 
     let ledger = Ledger::open(dir.join("ledger.jsonl")).expect("open ledger");
     let mut spine = Spine::new(ledger);
+    spine.set_entity_registry(richos_core::entity::EntityRegistry::new(vec![
+        richos_core::entity::Entity::new("richos","RichOS",&["/fixture/richos"]).unwrap(),
+    ]).unwrap());
     spine.set_machinery_journal(MachineryJournal::new(dir.join("machinery")));
     let entity = EntityId::parse("richos").expect("entity");
 

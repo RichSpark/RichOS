@@ -73,7 +73,7 @@ fn an_io_failure_is_transient_and_says_asking_again_is_worth_a_try() {
     let cause = classify("cognition io: broken pipe");
     assert_eq!(cause, InterruptionCause::Transient);
     assert!(cause.offers_retry(), "the one arm where a retry control belongs");
-    assert!(cause.ceo_message().contains("asking again"), "{}", cause.ceo_message());
+    assert!(cause.ceo_message().contains("send it again"), "{}", cause.ceo_message());
 }
 
 /// **THE 2026-09-17 CANDIDATE-WALK DEFECT, AS A VALUE.** `provider-supervisor.py`'s own
@@ -158,7 +158,7 @@ fn nothing_written_means_no_claim_about_a_saved_answer_is_made() {
 
     assert_eq!(
         record.loss_message.as_deref(),
-        Some("Your message is saved. I hadn't written any of my answer yet."),
+        Some("Your message is saved. Rich hadn't written any of his answer yet."),
         "the only true thing to say here is about HIS words"
     );
     let whole = format!("{} {:?}", record.ceo_message, record.loss_message);

@@ -74,9 +74,7 @@ impl Cognition for ScriptedLease {
         &self.session_id
     }
 
-    fn reprime(&mut self, _priming: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
+
 
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         let mut seq = 0u64;
@@ -135,14 +133,13 @@ fn interleaved_script() -> Vec<Step> {
 }
 
 /// A spine wired with a journal, an interleaving lease and a live recorder.
-fn spine_with(script: Vec<Step>, ledger_path: &std::path::Path, journal_root: &std::path::Path) -> (Spine, Live) {
+fn spine_with(script: Vec<Step>, ledger_path: &std::path::Path, journal_root: &std::path::Path) -> (Spine, Live, ScriptedLease) {
     let mut spine = support::spine(Ledger::open(ledger_path).unwrap());
     spine.set_machinery_journal(MachineryJournal::new(journal_root));
     let live = Live::default();
     spine.set_observer(Box::new(live.clone()));
     spine.set_machinery_observer(Box::new(live.clone()));
-    spine.attach_lease(Box::new(ScriptedLease { session_id: "sess-1".into(), script }));
-    (spine, live)
+    (spine, live, ScriptedLease { session_id: "sess-1".into(), script })
 }
 
 // ---------------------------------------------------------------------------
@@ -326,8 +323,9 @@ fn no_machinery_from_one_entity_renders_in_another_entitys_thread() {
 fn text_machinery_and_timeline_records_share_one_dense_per_turn_sequence() {
     let path = tmp("g1", ".jsonl");
     let journal_root = tmp("g1-journal", "");
-    let (mut spine, live) = spine_with(interleaved_script(), &path, &journal_root);
+    let (mut spine, live, lease) = spine_with(interleaved_script(), &path, &journal_root);
     let thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(lease));
     let turn_id = spine.submit_prompt("how is the release", Source::Text).unwrap();
 
     // (1) THE COUNTER ITSELF IS DENSE AND UNIQUE. Four items left the lease and the two
@@ -432,8 +430,9 @@ fn a_timeline_survives_a_cold_reopen_neither_losing_nor_inventing_anything() {
     let journal_root = tmp("restart-journal", "");
     let (before, thread);
     {
-        let (mut spine, _live) = spine_with(interleaved_script(), &path, &journal_root);
+        let (mut spine, _live, lease) = spine_with(interleaved_script(), &path, &journal_root);
         thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
+        spine.attach_lease(Box::new(lease));
         spine.submit_prompt("how is the release", Source::Text).unwrap();
         before = spine.timeline(&thread).unwrap();
     }
@@ -503,8 +502,17 @@ fn a_ceo_view_carries_no_internal_item_and_no_raw_command() {
         Step::Frame(json!({"type":"assistant","message":{"role":"assistant","content":[
             {"type":"thinking","thinking":"maybe I should check the key","signature":"sig"}]}})),
     ];
-    let (mut spine, _live) = spine_with(script, &path, &journal_root);
-    let thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
+    // Preserve a real historical internal row without asking the model a hidden question.
+    let mut kept=Ledger::open(&path).unwrap();
+    let thread=kept.create_thread("Avelor release",&femcboost()).unwrap();
+    let binding=kept.thread_binding(&thread).unwrap();
+    let internal=kept.record_prompt_received(&binding,"[historical internal]",Source::Internal).unwrap();
+    kept.mark_turn_started(&internal,"historical-native").unwrap();
+    kept.complete_turn(&internal,"end_turn").unwrap();
+    drop(kept);
+    let (mut spine, _live, lease) = spine_with(script, &path, &journal_root);
+    spine.switch_thread(&thread).unwrap();
+    spine.attach_lease(Box::new(lease));
     spine.submit_prompt("check the deploy", Source::Text).unwrap();
 
     let timeline = spine.timeline(&thread).unwrap();
@@ -513,7 +521,7 @@ fn a_ceo_view_carries_no_internal_item_and_no_raw_command() {
     // the assertions below are about a gate that has something to stop.
     assert!(audit.contains("cat /Users/alex/.ssh/config"), "the exact command IS retained (technical mode needs it)");
     assert!(audit.contains("maybe I should check the key"), "the reasoning text IS retained");
-    assert!(audit.contains("[re-prime]"), "the re-prime turn IS retained");
+    assert!(audit.contains("[historical internal]"), "the historical internal turn IS retained");
 
     // THE CEO VIEW: nothing internal, and the technical detail is GONE — not flagged,
     // removed. A renderer cannot show a command it was never handed.
@@ -522,7 +530,7 @@ fn a_ceo_view_carries_no_internal_item_and_no_raw_command() {
     assert!(!payload.contains("cat /Users/alex/.ssh/config"), "raw command leaked into the CEO payload:\n{payload}");
     assert!(!payload.contains("Host prod"), "raw output leaked into the CEO payload");
     assert!(!payload.contains("maybe I should check the key"), "model reasoning leaked into the CEO payload");
-    assert!(!payload.contains("[re-prime]"), "re-prime traffic leaked into the CEO payload");
+    assert!(!payload.contains("[historical internal]"), "historical internal traffic leaked into the CEO payload");
     for item in ceo.items() {
         assert_eq!(item.visibility(), Visibility::Ceo, "a CEO view contains only CEO items: {item:?}");
         if let TimelineItem::Activity { detail, summary, .. } = item {
@@ -562,8 +570,9 @@ fn between_turn_machinery_has_no_render_path_and_is_not_a_violation() {
     // test reads the same as it did. See `between_turn_thread_tests.rs` for the other half.
     let path = tmp("unturned", ".jsonl");
     let journal_root = tmp("unturned-journal", "");
-    let (mut spine, _live) = spine_with(interleaved_script(), &path, &journal_root);
+    let (mut spine, _live, lease) = spine_with(interleaved_script(), &path, &journal_root);
     let thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(lease));
     spine.submit_prompt("how is the release", Source::Text).unwrap();
 
     let journal = MachineryJournal::new(&journal_root);
@@ -608,8 +617,9 @@ fn a_delegated_task_never_becomes_a_worker_and_a_status_less_call_never_becomes_
         Step::Frame(json!({"type":"assistant","message":{"role":"assistant","content":[
             {"type":"tool_use","id":"toolu_Q","name":"Read","input":{"file_path":"/tmp/x"}}]}})),
     ];
-    let (mut spine, _live) = spine_with(script, &path, &journal_root);
+    let (mut spine, _live, lease) = spine_with(script, &path, &journal_root);
     let thread = spine.create_thread("Avelor release", &femcboost()).unwrap();
+    spine.attach_lease(Box::new(lease));
     spine.submit_prompt("delegate the audit", Source::Text).unwrap();
 
     let timeline = spine.timeline(&thread).unwrap();

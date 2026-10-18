@@ -439,6 +439,7 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
         );
     }
 
+
     /// **§2.4a — the settle-while-closed end state.** The last registered assignment has
     /// ended and no window is open, so the app quits itself.
     ///
@@ -1619,7 +1620,7 @@ fn send_message(
     // A configured factory connects inside the tracked turn. This covers first launch,
     // a later sign-in and replacement of a session retired by Stop.
     if !spine.has_lease() && !spine.has_lease_factory() {
-        return Err(refused_send("no compute lease and no factory", LEASE_UNAVAILABLE_MESSAGE.into()));
+        return Err(refused_send("no compute lease and no factory", LEASE_UNAVAILABLE_MESSAGE.to_string()));
     }
     // **AND IT IS NOT ASKED OF THE ROAD THAT DOES NOT NEED IT.** This gate is about
     // `submit_prompt_to` below, which submits to whatever is active after it activates.
@@ -1797,9 +1798,7 @@ fn refused_send(why: &str, ceo_sentence: String) -> String {
 /// preview's `_notConnected` switch. The affordance suite asserts the two are identical, so
 /// they cannot drift silently.
 const LEASE_UNAVAILABLE_MESSAGE: &str =
-    "I'm not connected to my thinking right now, so I can't take that on. Quit RichOS and \
-     open it again. That clears it most of the time. If it keeps happening, whoever set \
-     RichOS up has to sign me back in; that part isn't yours to fix.";
+    "RichOS couldn't reach Claude Code, which Rich runs on. Quit RichOS and open it again, then send your message again.";
 
 /// What the CEO is told when there is no corpus this install could write a correction to.
 ///
@@ -4096,17 +4095,18 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
 
 /// **Both rows at once, as Preferences closes** (the CEO's addendum to §119: *"Closing the
 /// preferences panel IS the confirmation that the settings chosen there now need to be saved
-/// and implemented."*). Saved here; implemented at the next boundary of each lease — the next
-/// reply for Rich (`spine.rs`, `MODEL_CHANGED`), the next job for the team
-/// (`work_host.rs`, `renew_if_model_changed`) — because a lease is never swapped mid-turn.
-/// An unknown name refuses both and writes neither, and the two rows are one write
-/// (`ConfigStore::set_lease_models`), so a failure never leaves one row saved alone.
+/// and implemented."*). Save both choices together, then apply native set_model controls
+/// to the existing Rich and Stu sessions. Each control returns the provider's confirmation.
+/// An unknown name refuses both choices before either is written.
 #[richos_command::command]
 fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result<(), String> {
     use richos_core::config::{LeaseModels, ModelChoice};
     let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
     let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
-    state.config.lock().unwrap().set_lease_models(LeaseModels { rich, stu }).map_err(|e| e.to_string())
+    state.config.lock().unwrap().set_lease_models(LeaseModels { rich, stu }).map_err(|e| e.to_string())?;
+    let rich_result=state.control.set_model(rich);
+    let stu_result=state.work.set_model(stu);
+    rich_result.and(stu_result)
 }
 
 /// UX §3.2 / architecture P3.2: the optional AI-worker drill-down.
@@ -4125,8 +4125,8 @@ fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result
 #[richos_command::command]
 fn get_worker_status(state: State<AppState>, thread_id: Option<String>) -> WorkerStatusView {
     let thread=thread_id.or_else(||state.reader.snapshot().active_thread().map(str::to_string));
-    let session=thread.and_then(|thread|state.control.for_thread(&thread).lease_session());
-    richos_core::app_workers::status(&state.data_dir.join("engine-state"),session.as_deref())
+    thread.map(|thread|state.control.for_thread(&thread).worker_status()).unwrap_or_else(||
+        WorkerStatusView::unattributed(richos_core::worker_status::Unattributed::NoSession))
 }
 
 /// Saved work belongs to the requested ledger thread. Do not wait on a running
@@ -4211,7 +4211,7 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
 fn take_work_notices(
     state: State<AppState>,
     thread_id: String,
-) -> Result<Vec<richos_core::assignment::PendingNotice>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     assignment_scope(&state, &thread_id)?;
     Ok(Vec::new())
 }
@@ -4260,10 +4260,7 @@ fn assignment_scope(state: &State<AppState>, thread_id: &str) -> Result<EntityId
     Ok(spine.ledger().thread_binding(thread_id).map_err(|e| e.to_string())?.entity_id().clone())
 }
 
-/// The proactive-attention SEAM (architecture §2.3/§4.2, UX §5): persistence + the live
-/// UI event. Judgment of WHEN to raise one is explicitly NOT here — no timer/log-watcher
-/// trigger is wired yet (a later leg); this command is the seam a future trigger (or, for
-/// now, a manual/test caller) calls once it has already decided to speak.
+
 #[richos_command::command]
 fn raise_proactive_message(
     state: State<AppState>,
@@ -4277,6 +4274,7 @@ fn raise_proactive_message(
         .raise_proactive(thread_id.as_deref(), parsed_tier, &text)
         .map_err(|e| e.to_string())
 }
+
 // =====================================================================================
 // VOICE MODE — appended block (2026-08-24)
 //
@@ -4696,7 +4694,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                 let _ = submit_app.emit(
                     richos_voice::event::EVENT_VOICE_ERROR,
                     serde_json::json!({
-                        "message": LEASE_UNAVAILABLE_MESSAGE,
+                        "message": LEASE_UNAVAILABLE_MESSAGE.to_string(),
                         "at": richos_voice::controller::now_millis(),
                     }),
                 );
@@ -5895,12 +5893,6 @@ fn dictation_offer_shown(state: State<AppState>) -> Result<(), String> {
     })
 }
 
-/// **Dictation was just set up, or its key changed: the "Dictation feature" conversation** (the
-/// CEO, 2026-10-13, onboarding5.png). Opened once, under the company he is in, with Rich's message
-/// naming the key he picked, read from the dictation settings file now; when he picks another key
-/// later, that message is replaced so it names the new one and Rich is primed with one dated fact
-/// naming both keys (`create` false: a key change, which never opens it). The answer is the conversation's id
-/// when it was opened or its message replaced, `None` when nothing changed.
 #[richos_command::command]
 fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Option<String>, String> {
     let key = dictation_offer::view(&state.data_dir, true).key;
@@ -5928,6 +5920,8 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
     })?;
     Ok(Some(thread))
 }
+
+
 
 /// **THE CEO PRESSES "Set it up".** Install what is missing, reporting each step on
 /// `richos://setup`, and re-point this session at what was installed.
@@ -7068,7 +7062,6 @@ mod lease_gate_tests {
     //! a deliberately detached workspace and nothing runs `cargo test` inside it. Run it with
     //! `cargo test --manifest-path app/src-tauri/Cargo.toml`.
 
-    use super::LEASE_UNAVAILABLE_MESSAGE;
 
     const SOURCE: &str = include_str!("main.rs");
 
@@ -7107,7 +7100,7 @@ mod lease_gate_tests {
         assert!(setup.contains("resolve_claude_bin()") && setup.contains("state.claude_bin.lock()"),
             "setup must refresh the factory with the newly installed executable");
         // And the sentence they refuse with is still the one the CEO was written for.
-        assert!(LEASE_UNAVAILABLE_MESSAGE.starts_with("I'm not connected to my thinking"));
+        assert!(crate::LEASE_UNAVAILABLE_MESSAGE.starts_with("RichOS couldn't reach Claude Code"));
     }
 
     /// INVARIANT: **the first-run arm is never conjoined with `has_lease_factory()`.**
@@ -8052,9 +8045,12 @@ struct StopReport {
 /// §9.3: persist a stop request, then interrupt the active turn. In that order, enforced
 /// in `steering.rs` rather than here.
 #[richos_command::command]
-fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>) -> Result<StopReport, String> {
+fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>, expected_thread_id: Option<String>) -> Result<StopReport, String> {
     let view=state.reader.snapshot();
     let thread=view.active_thread();
+    if expected_thread_id.as_deref().is_some_and(|expected|thread!=Some(expected)) {
+        return Ok(StopReport {stopped:false,turn_id:None,requested_at:None,reached_lease:false});
+    }
     let control=thread.map(|thread|state.control.for_thread(thread));
     let team_key=state.operator.as_ref().and_then(|_| {
         let binding=view.active_binding()?;
@@ -8199,7 +8195,7 @@ fn desk(state: &State<AppState>) -> Result<SharedCorrectionDesk, String> {
     let held = state.correction.lock().unwrap().clone();
     held.ok_or_else(|| {
         let status = state.memory.lock().unwrap().clone();
-        let mut msg = String::from(LORO_DESK_ABSENT_MESSAGE);
+        let mut msg=String::from(LORO_DESK_ABSENT_MESSAGE);
         if !status.tried.is_empty() {
             msg.push_str("\n\nLooked for it in:");
             for t in &status.tried {

@@ -47,147 +47,11 @@ fn fixture() -> (Spine, ConversationControl, Events, std::path::PathBuf) {
     spine.set_live_observer(Box::new(events.clone()));
     (spine, control, events, root)
 }
-struct FailedPrime;
-impl Cognition for FailedPrime {
-    fn session_id(&self) -> &str {
-        "failed-prime"
-    }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Err(CognitionError::Io("first prime disconnected".into()))
-    }
-    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        panic!("user prompt must not follow failed priming")
-    }
-}
-#[test]
-fn prime_failure_terminalizes_the_accepted_turn_and_survives_reload() {
-    let (mut spine, control, events, root) = fixture();
-    spine.attach_lease(Box::new(FailedPrime));
-    assert!(spine
-        .submit_prompt("start the interview", Source::Text)
-        .is_err());
-    let turn = spine
-        .ledger()
-        .turns()
-        .iter()
-        .find(|t| t.source == Source::Text)
-        .unwrap();
-    assert_eq!(turn.state,TurnState::Interrupted);
-    assert!(turn.ended_at.is_some());
-    assert_eq!(events.statuses(), vec!["queued", "working", "failed"]);
-    assert!(control.active_turn().is_none());
-    assert!(!spine.is_turn_in_progress());
-    let id = turn.id.clone();
-    drop(spine);
-    assert_eq!(
-        Ledger::open(root.join("ledger.jsonl"))
-            .unwrap()
-            .turn(&id)
-            .unwrap()
-            .state,
-        TurnState::Interrupted
-    );
-}
 struct NotifyCancel(Mutex<mpsc::Sender<()>>);
 impl TurnCancel for NotifyCancel {
     fn cancel(&self) -> bool {
         self.0.lock().unwrap().send(()).is_ok()
     }
-}
-struct WaitingPrime {
-    entered: mpsc::Sender<()>,
-    cancelled: mpsc::Receiver<()>,
-    handle: Arc<NotifyCancel>,
-    natural_finish: bool,
-}
-impl Cognition for WaitingPrime {
-    fn session_id(&self) -> &str {
-        "waiting-prime"
-    }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.entered.send(()).unwrap();
-        self.cancelled.recv_timeout(Duration::from_secs(5)).unwrap();
-        if self.natural_finish {
-            Ok(())
-        } else {
-            Err(CognitionError::PrimingStopped("cancelled".into()))
-        }
-    }
-    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        panic!("Stop during preparation must prevent user-prompt delivery")
-    }
-    fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> {
-        Some(self.handle.clone())
-    }
-}
-fn stop_prime(natural_finish: bool) {
-    let (mut spine, control, events, _) = fixture();
-    let (tx, rx) = mpsc::channel();
-    let (cx, cr) = mpsc::channel();
-    spine.attach_lease(Box::new(WaitingPrime {
-        entered: tx,
-        cancelled: cr,
-        handle: Arc::new(NotifyCancel(Mutex::new(cx))),
-        natural_finish,
-    }));
-    let worker = std::thread::spawn(move || {
-        let id = spine.submit_prompt("start", Source::Text).unwrap();
-        (spine, id)
-    });
-    rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(events.statuses(), vec!["queued", "working"]);
-    assert!(matches!(
-        control.request_stop().unwrap(),
-        StopOutcome::Requested {
-            reached_lease: true,
-            ..
-        }
-    ));
-    let (spine, id) = worker.join().unwrap();
-    assert_eq!(spine.ledger().turn(&id).unwrap().state, TurnState::Stopped);
-    assert_eq!(events.statuses(), vec!["queued", "working", "stopped"]);
-    assert!(control.active_turn().is_none());
-}
-#[test]
-fn first_prime_is_cancellable() {
-    stop_prime(false)
-}
-#[test]
-fn stop_landing_as_internal_prime_completes_still_prevents_the_user_prompt() {
-    stop_prime(true)
-}
-#[test]
-fn recovery_factory_failure_always_resolves_recovering() {
-    let (mut spine, control, events, _) = fixture();
-    spine.attach_lease(Box::new(FailedPrime));
-    let factory = MockLeaseFactory::new(vec!["unused"]);
-    factory.fail_next_spawn();
-    spine.set_lease_factory(Box::new(factory));
-    assert!(spine.submit_prompt("retry", Source::Text).is_err());
-    assert_eq!(events.statuses().last().unwrap(), "failed");
-    assert!(spine
-        .ledger()
-        .pending_turns()
-        .iter()
-        .all(|t| t.source == Source::Internal));
-    assert!(control.active_turn().is_none());
-}
-#[test]
-fn prime_failure_has_one_bounded_recovery_and_one_visible_exchange() {
-    let (mut spine, _, events, _) = fixture();
-    spine.attach_lease(Box::new(FailedPrime));
-    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["ready"])));
-    spine.submit_prompt("start", Source::Text).unwrap();
-    assert_eq!(events.statuses().last().unwrap(), "completed");
-    assert_eq!(
-        spine
-            .ledger()
-            .turns()
-            .iter()
-            .filter(|t| t.source == Source::Text && t.superseded_by.is_none())
-            .count(),
-        1
-    );
 }
 #[test]
 fn restart_continues_saved_requests_and_preserves_uncertain_attempt_timing() {
@@ -207,7 +71,7 @@ fn restart_continues_saved_requests_and_preserves_uncertain_attempt_timing() {
     restored.set_turn_control(TurnControl::open(root.join("intake.jsonl")).unwrap());
     let mock = MockCognition::new("new", vec![]);
     let prompts = mock.prompts.clone();
-    let contexts = mock.recovery_contexts.clone();
+    restored.switch_thread(binding.thread_id()).unwrap();
     restored.attach_lease(Box::new(mock));
     restored.reconcile_intake().unwrap();
     for id in [first.clone(), second.clone()] {
@@ -219,13 +83,8 @@ fn restart_continues_saved_requests_and_preserves_uncertain_attempt_timing() {
         let reloaded = Ledger::open(root.join("ledger.jsonl")).unwrap();
         assert_eq!(reloaded.turn(&id).unwrap().active_ms(), None);
     }
-    assert_eq!(*prompts.lock().unwrap(),vec!["not started", "may have side effects"]);
-    let prior: serde_json::Value = serde_json::from_str(&contexts.lock().unwrap()[0]).unwrap();
-    assert_eq!(prior["previous_delivery_attempt"]["turn_id"], second);
-    assert_eq!(prior["previous_delivery_attempt"]["session_id"], "old");
-    assert_eq!(prior["previous_delivery_attempt"]["delivery_outcome"], "unknown");
-    let successor = restored.ledger().turn(&second).unwrap().superseded_by.as_ref().unwrap();
-    assert_eq!(restored.ledger().turn(successor).unwrap().state, TurnState::Completed);
+    assert_eq!(*prompts.lock().unwrap(),vec!["not started"]);
+    assert!(restored.ledger().turn(&second).unwrap().superseded_by.is_none(), "restart repeated uncertain side effects");
     assert_eq!(restored.messages(binding.thread_id()).unwrap().iter().filter(|m| m.role == "user").count(), 2);
 }
 struct WaitingFactory {
@@ -267,261 +126,46 @@ fn stop_during_initial_launch_is_terminal_and_never_retried() {
     assert_eq!(events.statuses().last().unwrap(), "stopped");
 }
 
-struct UnacknowledgedPrime {
-    control: ConversationControl,
-    dropped: Arc<std::sync::atomic::AtomicBool>,
-}
-impl Drop for UnacknowledgedPrime {
-    fn drop(&mut self) {
-        self.dropped
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-impl Cognition for UnacknowledgedPrime {
-    fn session_id(&self) -> &str {
-        "deaf-prime"
-    }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.control.request_stop().unwrap();
-        Err(CognitionError::PrimingStopped(
-            "cancel_unacknowledged".into(),
-        ))
-    }
-    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        panic!("a deaf prime must never receive a user prompt or a handoff request")
-    }
-}
-#[test]
-fn an_unacknowledged_priming_stop_retires_the_child_before_the_next_request() {
-    let (mut spine, control, _, _) = fixture();
-    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spine.attach_lease(Box::new(UnacknowledgedPrime {
-        control,
-        dropped: dropped.clone(),
-    }));
-    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["new answer"])));
-    let stopped = spine.submit_prompt("stop this", Source::Text).unwrap();
-    assert_eq!(
-        spine.ledger().turn(&stopped).unwrap().state,
-        TurnState::Stopped
-    );
-    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
-    assert!(!spine.has_lease());
-    let next = spine.submit_prompt("a new request", Source::Text).unwrap();
-    assert_eq!(
-        spine.ledger().turn(&next).unwrap().assistant_text,
-        "new answer"
-    );
-    assert_eq!(
-        spine.ledger().turn(&next).unwrap().state,
-        TurnState::Completed
-    );
-}
-
-struct OneShotFactory(Mutex<Option<Box<dyn Cognition>>>);
-impl LeaseFactory for OneShotFactory {
-    fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
-        self.0
-            .lock()
-            .unwrap()
-            .take()
-            .ok_or_else(|| CognitionError::Io("no second automatic attempt".into()))
-    }
-}
-#[test]
-fn deferred_rotation_sends_stop_to_the_successor_while_it_primes() {
-    let (mut spine, control, events, _) = fixture();
-    spine.attach_lease(Box::new(MockCognition::new(
-        "outgoing",
-        vec!["answer", "summary"],
-    )));
-    spine.submit_prompt("first", Source::Text).unwrap();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (cancel_tx, cancel_rx) = mpsc::channel();
-    let successor = WaitingPrime {
-        entered: entered_tx,
-        cancelled: cancel_rx,
-        handle: Arc::new(NotifyCancel(Mutex::new(cancel_tx))),
-        natural_finish: false,
-    };
-    spine.set_lease_factory(Box::new(OneShotFactory(Mutex::new(Some(Box::new(
-        successor,
-    ))))));
-    spine.request_rotation("test").unwrap();
-    assert_eq!(spine.rotation_count(), 0);
-    let worker = std::thread::spawn(move || {
-        let id = spine.submit_prompt("second", Source::Text).unwrap();
-        (spine, id)
-    });
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(events.statuses().last().unwrap(), "working");
-    assert!(matches!(
-        control.request_stop().unwrap(),
-        StopOutcome::Requested {
-            reached_lease: true,
-            ..
-        }
-    ));
-    let (spine, id) = worker.join().unwrap();
-    assert_eq!(spine.ledger().turn(&id).unwrap().state, TurnState::Stopped);
-    assert_eq!(events.statuses().last().unwrap(), "stopped");
-}
-struct WaitingHandoff {
-    entered: mpsc::Sender<()>,
-    cancelled: mpsc::Receiver<()>,
-    handle: Arc<NotifyCancel>,
-    calls: usize,
-}
-impl Cognition for WaitingHandoff {
-    fn session_id(&self) -> &str {
-        "outgoing-handoff"
-    }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        Ok(())
-    }
-    fn prompt(
-        &mut self,
-        text: &str,
-        _: &mut dyn FnMut(TurnItem),
-    ) -> Result<String, CognitionError> {
-        self.calls += 1;
-        if self.calls == 1 {
-            return Ok("end_turn".into());
-        }
-        let event: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(event["event"], "session_handoff_requested");
-        self.entered.send(()).unwrap();
-        self.cancelled.recv_timeout(Duration::from_secs(5)).unwrap();
-        Ok("cancelled".into())
-    }
-    fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> {
-        Some(self.handle.clone())
-    }
-}
-#[test]
-fn deferred_rotation_handoff_is_cancellable_without_spawning_a_successor() {
-    let (mut spine, control, events, _) = fixture();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (cancel_tx, cancel_rx) = mpsc::channel();
-    spine.attach_lease(Box::new(WaitingHandoff {
-        entered: entered_tx,
-        cancelled: cancel_rx,
-        handle: Arc::new(NotifyCancel(Mutex::new(cancel_tx))),
-        calls: 0,
-    }));
-    let factory = MockLeaseFactory::new(vec!["must never run"]);
-    let spawned = factory.spawned.clone();
-    spine.set_lease_factory(Box::new(factory));
-    spine.submit_prompt("first", Source::Text).unwrap();
-    spine.request_rotation("test").unwrap();
-    assert!(
-        entered_rx.try_recv().is_err(),
-        "nothing starts after the completed request"
-    );
-    let worker = std::thread::spawn(move || {
-        let id = spine.submit_prompt("next", Source::Text).unwrap();
-        (spine, id)
-    });
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(events.statuses().last().unwrap(), "working");
-    control.request_stop().unwrap();
-    let (spine, id) = worker.join().unwrap();
-    assert_eq!(spine.ledger().turn(&id).unwrap().state, TurnState::Stopped);
-    assert!(spawned.lock().unwrap().is_empty());
-}
-#[test]
-fn deferred_rotation_never_files_the_outgoing_company_summary_under_the_new_company() {
-    let (mut spine, _, _, _) = fixture();
-    let company_a_thread = spine.active_binding().unwrap().thread_id().to_string();
-    spine.attach_lease(Box::new(MockCognition::new(
-        "company-a",
-        vec!["A reply", "A-ONLY-SECRET-8842"],
-    )));
-    let factory = MockLeaseFactory::new(vec!["B reply"]);
-    let primed = factory.spawned.clone();
-    spine.set_lease_factory(Box::new(factory));
-    spine.submit_prompt("first", Source::Text).unwrap();
-    spine.request_rotation("watermark").unwrap();
-    let company_b_thread = spine
-        .create_thread("Company B", &EntityId::parse("deeply").unwrap())
-        .unwrap();
-    spine.switch_thread(&company_b_thread).unwrap();
-    let id = spine.submit_prompt("hello B", Source::Text).unwrap();
-    assert_eq!(
-        spine.ledger().handoff_summary(&company_a_thread),
-        Some("A-ONLY-SECRET-8842")
-    );
-    assert_eq!(spine.ledger().handoff_summary(&company_b_thread), None);
-    assert!(!primed.lock().unwrap()[0].lock().unwrap()[0].contains("A-ONLY-SECRET-8842"));
-    assert_eq!(
-        spine.ledger().turn(&id).unwrap().session_id.as_deref(),
-        spine.lease_session_id()
-    );
-}
-
-struct SteerThenFailPrime {
-    control: ConversationControl,
-    first: bool,
-}
-impl Cognition for SteerThenFailPrime {
-    fn session_id(&self) -> &str {
-        "steer-prime"
-    }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        if std::mem::take(&mut self.first) {
-            self.control.steer("the queued request").unwrap();
-            Err(CognitionError::Io("preparation failed".into()))
-        } else {
-            Ok(())
-        }
-    }
-    fn prompt(
-        &mut self,
-        text: &str,
-        on_item: &mut dyn FnMut(TurnItem),
-    ) -> Result<String, CognitionError> {
-        on_item(TurnItem::Text { seq: 0, text });
-        Ok("end_turn".into())
-    }
-}
-#[test]
-fn a_failed_preparation_does_not_strand_durable_steering_behind_it() {
-    let (mut spine, control, _, _) = fixture();
-    spine.attach_lease(Box::new(SteerThenFailPrime {
-        control,
-        first: true,
-    }));
-    assert!(spine.submit_prompt("first request", Source::Text).is_err());
-    let turns: Vec<_> = spine
-        .ledger()
-        .turns()
-        .iter()
-        .filter(|t| t.source == Source::Text)
-        .collect();
-    assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0].state, TurnState::Interrupted);
-    assert_eq!(turns[1].state, TurnState::Completed);
-    assert_eq!(turns[1].assistant_text, "the queued request");
-    assert_eq!(spine.queue_depth(), 0);
-}
-
 struct GatedReply {
     entered: mpsc::Sender<()>,
     release: mpsc::Receiver<()>,
     first: bool,
+    finished: Arc<(Mutex<bool>,std::sync::Condvar)>,
 }
 impl Cognition for GatedReply {
     fn session_id(&self) -> &str { "gated-visible-reply" }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
-    fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        if std::mem::take(&mut self.first) {
-            self.entered.send(()).unwrap();
-            // Only a hang guard: channel entry and successful try_lock prove availability.
-            self.release.recv_timeout(Duration::from_secs(30)).unwrap();
-        }
-        on_item(TurnItem::Text { seq: 0, text });
-        Ok("end_turn".into())
+
+    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String,CognitionError> {
+        panic!("this fixture submits before waiting, as NativeCognition does")
     }
+    fn enqueue_prompt(&mut self, text: &str, started: Box<dyn FnOnce() -> Result<(),String> + Send>) -> Result<richos_core::cognition::PendingReply,CognitionError> {
+        let text=text.to_string();
+        let finished=self.finished.clone();
+        if std::mem::take(&mut self.first) {
+            started().map_err(CognitionError::Protocol)?;
+            self.entered.send(()).unwrap();
+            let release=std::mem::replace(&mut self.release,mpsc::channel().1);
+            Ok(richos_core::cognition::PendingReply::new(move |on| {
+                // Hang guard: a positive channel release controls this reply.
+                release.recv_timeout(Duration::from_secs(30)).unwrap();
+                *finished.0.lock().unwrap()=true;
+                finished.1.notify_all();
+                on(TurnItem::Text{seq:0,text:&text});
+                Ok("end_turn".into())
+            }))
+        } else {
+            Ok(richos_core::cognition::PendingReply::new(move |on| {
+                // Native admission waits for the previous native result, even when stdin is already written.
+                let (done, timeout)=finished.1.wait_timeout_while(finished.0.lock().unwrap(),Duration::from_secs(30),|done|!*done).unwrap();
+                assert!(*done && !timeout.timed_out(),"hang guard: previous native answer never finished");
+                drop(done);
+                started().map_err(CognitionError::Protocol)?;
+                on(TurnItem::Text{seq:0,text:&text});
+                Ok("end_turn".into())
+            }))
+        }
+    }
+
 }
 
 #[derive(Clone,Default)]
@@ -541,7 +185,7 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
     let second_thread=spine.create_thread("Other conversation", &EntityId::parse("femcboost").unwrap()).unwrap();
     let (entered, ready)=mpsc::channel();
     let (release, gated)=mpsc::channel();
-    spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true}));
+    spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true,finished:Arc::new((Mutex::new(false),std::sync::Condvar::new()))}));
     spine.detach_conversation_io();
     let completed=CompletedReplies::default();
     spine.set_observer(Box::new(completed.clone()));
@@ -560,14 +204,19 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
         let second=available.ledger().turns().iter().find(|turn|turn.user_text=="second request").unwrap().id.clone();
         assert_eq!(available.active_thread(),Some(second_thread.as_str()));
         assert_eq!(control.active_turn().unwrap().turn_id,first);
-        assert_eq!(available.ledger().turn(&second).unwrap().state,TurnState::Received);
+        assert_eq!(available.ledger().turn(&second).unwrap().state,TurnState::InFlight);
         second
     };
     release.send(()).unwrap();
     worker.join().unwrap().unwrap();
     let finished=shared.lock().unwrap();
     assert!(control.active_turn().is_none());
-    assert_eq!(*completed.0.lock().unwrap(),vec![(first_thread.clone(),first.clone()),(first_thread.clone(),second.clone())],
+    let mut actual=completed.0.lock().unwrap().clone();
+    let mut expected=vec![(first_thread.clone(),first.clone()),(first_thread.clone(),second.clone())];
+    // Independent reply owners can commit their receipts in either order.
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual,expected,
         "the ordinary completion observer must see both the original reply and its queued reply");
     for (id,thread,text) in [(first,first_thread.clone(),"first request"),(second,first_thread.clone(),"second request")] {
         let turn=finished.ledger().turn(&id).unwrap();
@@ -579,14 +228,24 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
 
 #[test]
 fn another_conversation_completes_before_the_first_reply_is_released() {
+    struct Completed(mpsc::Sender<String>);
+    impl richos_core::stream::TurnObserver for Completed {
+        fn on_event(&self,event:&richos_core::stream::StreamEvent) {
+            if let richos_core::stream::StreamEvent::TurnCompleted {thread_id,..}=event {
+                self.0.send(thread_id.clone()).unwrap();
+            }
+        }
+    }
     let (mut spine, control, _, _) = fixture();
     let a=spine.active_thread().unwrap().to_string();
     let b=spine.create_thread("Independent conversation", &EntityId::parse("femcboost").unwrap()).unwrap();
     let (entered, ready)=mpsc::channel();
     let (release, gated)=mpsc::channel();
-    spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true}));
+    spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true,finished:Arc::new((Mutex::new(false),std::sync::Condvar::new()))}));
     spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["B answered"])));
     spine.detach_conversation_io();
+    let (completed, completion)=mpsc::channel();
+    spine.set_observer(Box::new(Completed(completed)));
     let first=spine.submit_prompt_to(&a,"A is busy",Source::Text).unwrap();
     let shared=Arc::new(Mutex::new(spine));
     let driving=shared.clone();
@@ -599,11 +258,14 @@ fn another_conversation_completes_before_the_first_reply_is_released() {
         state.ledger().thread_turns(&b).unwrap().iter().find(|t| t.source==Source::Text).map(|t|t.id.clone())
     };
     richos_core::spine::drive_shared_turns(&shared).unwrap();
+    // Either driver may own B. Wait for B's actual completion while A remains held.
+    let completed=completion.recv_timeout(Duration::from_secs(30));
     let b_finished=second.as_ref().is_some_and(|id|shared.lock().unwrap().ledger().turn(id).unwrap().state==TurnState::Completed);
     let a_still_working=shared.lock().unwrap().ledger().turn(&first).unwrap().state==TurnState::InFlight;
     // Release the owned reply before assertions, including on the expected red.
     release.send(()).unwrap();
     worker.join().unwrap().unwrap();
+    assert_eq!(completed.unwrap(),b,"hang guard: independent conversation never completed");
     assert!(b_finished,"conversation B waited for A's reply instead of running its own session");
     assert!(a_still_working,"B's completion changed A's lifecycle");
     let state=shared.lock().unwrap();
@@ -624,7 +286,7 @@ struct CancellableConversation {
 }
 impl Cognition for CancellableConversation {
     fn session_id(&self)->&str {"conversation-b"}
-    fn reprime(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<(),CognitionError> {Ok(())}
+
     fn cancel_handle(&self)->Option<Arc<dyn TurnCancel>> {Some(self.cancel.clone())}
     fn prompt(&mut self,_:&str,on_item:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
         on_item(TurnItem::Text{seq:0,text:"B partial"});
@@ -641,7 +303,7 @@ fn stopping_one_of_two_live_conversations_keeps_the_other_and_its_queued_request
     let b=spine.create_thread("B",&EntityId::parse("femcboost").unwrap()).unwrap();
     let (entered,ready)=mpsc::channel();
     let (release,gated)=mpsc::channel();
-    spine.attach_lease(Box::new(GatedReply{entered,release:gated,first:true}));
+    spine.attach_lease(Box::new(GatedReply{entered,release:gated,first:true,finished:Arc::new((Mutex::new(false),std::sync::Condvar::new()))}));
     let (b_entered,b_ready)=mpsc::channel();
     let (stop,stopped)=mpsc::channel();
     spine.set_lease_factory(Box::new(OneConversationFactory(Mutex::new(Some(Box::new(CancellableConversation{
@@ -664,17 +326,14 @@ fn stopping_one_of_two_live_conversations_keeps_the_other_and_its_queued_request
     b_ready.recv_timeout(Duration::from_secs(30)).unwrap();
     assert!(control.for_thread(&a).active_turn().is_some());
     assert!(matches!(control.for_thread(&b).request_stop_for(&second).unwrap(),StopOutcome::Requested{reached_lease:true,..}));
-    b_worker.join().unwrap().unwrap();
-    let (a_state,queued_state,b_state)={
-        let state=shared.lock().unwrap();
-        (state.ledger().turn(&first).unwrap().state,state.ledger().turn(&queued).unwrap().state,state.ledger().turn(&second).unwrap().state)
-    };
+    assert_eq!(control.for_thread(&a).active_turn().unwrap().turn_id,first,"B Stop changed A's active input");
+    assert_eq!(shared.lock().unwrap().ledger().turn(&first).unwrap().state,TurnState::InFlight);
     release.send(()).unwrap();
     a_worker.join().unwrap().unwrap();
-    assert_eq!(a_state,TurnState::InFlight);
-    assert_eq!(queued_state,TurnState::Received);
-    assert_eq!(b_state,TurnState::Stopped);
+    b_worker.join().unwrap().unwrap();
     let state=shared.lock().unwrap();
+    assert_eq!(state.ledger().turn(&first).unwrap().state,TurnState::Completed);
+    assert_eq!(state.ledger().turn(&second).unwrap().state,TurnState::Stopped);
     assert_eq!(state.ledger().turn(&queued).unwrap().state,TurnState::Completed);
     assert_eq!(state.ledger().turn(&queued).unwrap().assistant_text,"A next");
     assert!(!control.has_active_turns());
@@ -710,97 +369,10 @@ fn quitting_records_every_active_stop_and_restart_replays_neither_conversation()
     assert_eq!(states,[TurnState::Stopped,TurnState::Stopped]);
     assert_eq!(replayed,0,"a request the user stopped on Quit was replayed after restart");
 }
-struct GatedPreparation {
-    entered: mpsc::Sender<()>,
-    release: mpsc::Receiver<()>,
-}
-impl Cognition for GatedPreparation {
-    fn session_id(&self) -> &str {
-        "cold-A"
-    }
-    fn requires_thread_isolation(&self) -> bool {
-        true
-    }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        self.entered.send(()).unwrap();
-        // Hang guard only. The channel and the held gate establish ordering.
-        self.release.recv_timeout(Duration::from_secs(60)).unwrap();
-        Ok(())
-    }
-    fn prompt(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        on(TurnItem::Text {
-            seq: 0,
-            text: "A answered",
-        });
-        Ok("end_turn".into())
-    }
-}
-#[test]
-fn another_conversation_finishes_while_cold_preparation_remains_blocked() {
-    let (mut spine, _, _, _) = fixture();
-    let a = spine.active_thread().unwrap().to_string();
-    let b = spine
-        .create_thread("Independent cold B", &EntityId::parse("femcboost").unwrap())
-        .unwrap();
-    let (entered, ready) = mpsc::channel();
-    let (release, gated) = mpsc::channel();
-    spine.attach_lease(Box::new(GatedPreparation {
-        entered,
-        release: gated,
-    }));
-    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["B answered"])));
-    spine.detach_conversation_io();
-    let shared = Arc::new(Mutex::new(spine));
-    let driving = shared.clone();
-    let (finished, a_finished) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        driving
-            .lock()
-            .unwrap()
-            .submit_prompt_to(&a, "A question", Source::Text)
-            .unwrap();
-        let result = richos_core::spine::drive_shared_turns(&driving);
-        finished.send(()).unwrap();
-        result
-    });
-    ready.recv_timeout(Duration::from_secs(60)).unwrap();
-    let (available, b_turn) = match shared.try_lock() {
-        Ok(mut state) => (
-            true,
-            Some(
-                state
-                    .submit_prompt_to(&b, "B question", Source::Text)
-                    .unwrap(),
-            ),
-        ),
-        Err(std::sync::TryLockError::WouldBlock) => (false, None),
-        Err(error) => panic!("shared state poisoned: {error}"),
-    };
-    let b_finished = if let Some(id) = b_turn {
-        richos_core::spine::drive_shared_turns(&shared).unwrap();
-        let state = shared.lock().unwrap();
-        let turn = state.ledger().turn(&id).unwrap();
-        turn.state == TurnState::Completed && turn.assistant_text == "B answered"
-    } else {
-        false
-    };
-    let a_still_blocked = matches!(a_finished.try_recv(), Err(mpsc::TryRecvError::Empty));
-    release.send(()).unwrap();
-    worker.join().unwrap().unwrap();
-    assert!(
-        available,
-        "cold provider preparation held the shared conversation lock"
-    );
-    assert!(b_finished, "B waited for A's preparation");
-    assert!(a_still_blocked, "A was released before B completed");
-}
-
 #[derive(Clone, Copy, Debug)]
 enum PreparationGate {
     Spawn,
     Scope,
-    Handoff,
-    Warmup,
 }
 struct GateConnection {
     stage: PreparationGate,
@@ -823,12 +395,7 @@ impl Cognition for GateConnection {
     fn requires_thread_isolation(&self) -> bool {
         true
     }
-    fn reprime(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
-        if matches!(self.stage, PreparationGate::Warmup) {
-            self.hold()
-        }
-        Ok(())
-    }
+
     fn prepare_work_turn(
         &mut self,
         _: &richos_core::entity::ThreadBinding,
@@ -842,20 +409,6 @@ impl Cognition for GateConnection {
             self.hold()
         }
         Ok(())
-    }
-    fn prompt_context_only(
-        &mut self,
-        _: &str,
-        on: &mut dyn FnMut(TurnItem),
-    ) -> Result<String, CognitionError> {
-        if matches!(self.stage, PreparationGate::Handoff) {
-            self.hold()
-        }
-        on(TurnItem::Text {
-            seq: 0,
-            text: "A summary",
-        });
-        Ok("end_turn".into())
     }
     fn prompt(&mut self, _: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         on(TurnItem::Text {
@@ -891,12 +444,10 @@ impl LeaseFactory for GateFactory {
     }
 }
 #[test]
-fn spawn_work_scope_rotation_and_warmup_never_hold_another_conversation() {
+fn spawn_and_scope_preparation_never_hold_another_conversation() {
     for stage in [
         PreparationGate::Spawn,
         PreparationGate::Scope,
-        PreparationGate::Handoff,
-        PreparationGate::Warmup,
     ] {
         let (mut spine, _, _, _) = fixture();
         let a = spine.active_thread().unwrap().to_string();
@@ -918,30 +469,19 @@ fn spawn_work_scope_rotation_and_warmup_never_hold_another_conversation() {
         } else {
             spine.attach_lease(Box::new(connection));
             spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["B answered"])));
-            if matches!(stage, PreparationGate::Handoff) {
-                spine.submit_prompt_to(&a, "First A", Source::Text).unwrap();
-                spine.request_rotation("test").unwrap();
-            }
+
         }
         spine.detach_conversation_io();
         let shared = Arc::new(Mutex::new(spine));
         let driving = shared.clone();
         let (finished, a_finished) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            if matches!(stage, PreparationGate::Warmup) {
-                let verdict = richos_core::spine::prime_front_desk_without_the_spine(&driving, &a);
-                assert!(matches!(
-                    verdict,
-                    richos_core::spine::FrontDeskReady::Ready { .. }
-                ));
-            } else {
                 driving
                     .lock()
                     .unwrap()
                     .submit_prompt_to(&a, "Next A", Source::Text)
                     .unwrap();
                 richos_core::spine::drive_shared_turns(&driving).unwrap();
-            }
             finished.send(()).unwrap();
         });
         ready.recv_timeout(Duration::from_secs(60)).unwrap();

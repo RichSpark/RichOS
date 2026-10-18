@@ -131,7 +131,8 @@ test('actual mobile client pairs, signs, receives and resumes against the produc
   await client.dispatch({ type: 'compose', text: message });
   await client.dispatch({ type: 'send' });
   const reply = () => client.state().messages.find(row => row.role === 'rich' && row.text === 'ack: ' + message && row.complete);
-  await wait(reply);
+  // The streamed reply may beat the HTTP receipt. Require both positive facts.
+  await wait(() => reply() && client.state().outbox.length === 0);
   assert.equal(client.state().outbox.length, 0);
   const sent = requests.find(row => row.url.endsWith('/api/messages') && row.headers.Authorization);
   assert(sent);

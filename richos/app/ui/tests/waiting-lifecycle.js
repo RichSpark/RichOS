@@ -38,7 +38,7 @@ async function main() {
             window.RichBridge.invoke = (cmd, args) => {
               if (cmd === "switch_thread") return new Promise(() => {});
               if (cmd === "stop_turn") {
-                window.__stopTargets.push(args.expectedTurnId);
+                window.__stopTargets.push(args.expectedThreadId);
                 return window.__allowStop
                   ? Promise.resolve({ stopped: true, turnId: "returning_work", reachedLease: true })
                   : Promise.reject("temporary disk error");
@@ -56,7 +56,7 @@ async function main() {
           await page.evaluate(() => { window.__allowStop = true; });
           await page.click("#stop");
           assertEqual((await band(page)).detail, "Stopping work in this conversation");
-          assertEqual(await page.evaluate(() => window.__stopTargets.join(",")), "returning_work,returning_work");
+          assertEqual(await page.evaluate(() => window.__stopTargets), [fence.threadId, fence.threadId]);
           assert(await page.isDisabled("#stop"));
           await page.evaluate(fence => window.__emit("rich://turn-status", {
             ...fence, turnId: "returning_work", status: "stopped", at: Date.now(), visibility: "ceo",
@@ -105,7 +105,7 @@ async function main() {
         assertEqual(submitted[0].args.text, "New company's draft");
         await page.click("#stop");
         assertEqual((await band(page)).detail, "I couldn't stop the previous conversation. Press Stop again.");
-        assertEqual(await page.evaluate(() => window.__openingCalls.find(c => c.cmd === "stop_turn").args.expectedTurnId), "opening_previous");
+        assertEqual(await page.evaluate(() => window.__openingCalls.find(c => c.cmd === "stop_turn").args.expectedThreadId), fence.threadId);
         assert(!(await page.isDisabled("#stop")), "failed Stop is actionable while navigation waits");
         await page.evaluate(() => {
           const original = window.RichBridge.invoke.bind(window.RichBridge);
@@ -187,6 +187,48 @@ async function main() {
       await page.close();
     });
 
+    await run.check("a queued message stopped with its provider is restorable without being sent", async () => {
+      const page = await openApp(browser);
+      await page.evaluate(() => {
+        const original = window.RichBridge.invoke.bind(window.RichBridge);
+        window.__sendCount = 0;
+        window.RichBridge.invoke = (cmd, args) => {
+          if (cmd === "send_message") window.__sendCount++;
+          return original(cmd, args);
+        };
+      });
+      const fence = await startTurn(page, "stop_first");
+      await goWorking(page, fence, "stop_first");
+      const words = "Keep these exact words: café\nand the second line.";
+      await page.fill("#input", words); await page.press("#input", "Enter");
+      await page.evaluate(f => {
+        window.__emit("rich://turn-status", { ...f, turnId: "stop_queued", status: "queued", startedAt: null,
+          at: Date.now(), visibility: "ceo" });
+        window.__emit("rich://message-completed", { ...f, turnId: "stop_first", messageId: "stop_first:text:0",
+          text: "I will check that invoice.", phase: "unknown", at: Date.now(), visibility: "ceo" });
+        for (const turnId of ["stop_first", "stop_queued"]) {
+          window.__emit("rich://turn-status", { ...f, turnId, status: "stopped", at: Date.now(), visibility: "ceo" });
+        }
+      }, fence);
+      await tick(page);
+      const queued = page.locator('.tl-turn[data-turn-id="stop_queued"]');
+      assertEqual(await queued.locator('.tl-duration').getAttribute("data-tone"), "ceo-stopped");
+      assertEqual(await queued.locator('.tl-intervention').count(), 0, "Stop is not a failure");
+      assertEqual(await page.inputValue("#input"), "");
+      assertEqual(await page.evaluate(() => window.__sendCount), 2);
+      await queued.getByRole("button", { name: "Restore my message", exact: true }).click();
+      assertEqual(await page.inputValue("#input"), words, "restoring preserves the complete saved text");
+      assertEqual(await page.evaluate(() => window.__sendCount), 2, "restoring must not execute the message");
+      const partial = page.locator('.tl-turn[data-turn-id="stop_first"]');
+      assert((await partial.innerText()).includes("I will check that invoice."), "partial prose stays visible");
+      await page.fill("#input", "");
+      await partial.getByRole("button", { name: "Restore my message", exact: true }).click();
+      assertEqual(await page.inputValue("#input"), "Draft the Q4 board memo from the numbers in the folder.");
+      assertEqual(await page.evaluate(() => window.__sendCount), 2, "partial output must not hide restore or trigger a send");
+      assertEqual(page.__errors.length, 0, page.__errors.join("\n"));
+      await page.close();
+    });
+
     await run.check("a rejected accepted send ends its waiting state even when the terminal event is missing", async () => {
       const page = await openApp(browser);
       await controllableSend(page);
@@ -198,7 +240,7 @@ async function main() {
       assert(await page.isHidden("#stop"), "no misleading Stop after failure");
       const text = await page.locator("#messages").innerText();
       assert(text.includes("Draft the Q4 board memo"), "accepted user words survive");
-      assert(text.includes("Put it back in the box"), "the failure has an actionable control");
+      assert(text.includes("Restore my message"), "the failure has an actionable control");
       assert(!text.includes("cognition io"), "raw machinery is not a user explanation");
       await page.close();
     });
@@ -217,7 +259,7 @@ async function main() {
       assertEqual(await band(page), null);
       assertEqual(await page.inputValue("#input"), "", "accepted text is not duplicated into a resend draft");
       assert(!(await page.locator("#messages").innerText()).includes("broken pipe"));
-      assertEqual(await page.getByRole("button", { name: "Put it back in the box", exact: true }).count(), 1);
+      assertEqual(await page.getByRole("button", { name: "Restore my message", exact: true }).count(), 1);
       await page.close();
     });
 

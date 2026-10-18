@@ -468,7 +468,7 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
         let check = bug::checked_for(post, ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &input), &screen, looked, &bugs.version, &scrubber, last);
         let write_up = bugs.outbox(post).keep_unless_checked(&answer, &screen, check, now_ms()).map_err(|e| {
             eprintln!("[richos] bug report: the report could not be kept on this Mac ({e})");
-            "I couldn't check the report or save it on this Mac, so nothing was written up or sent. Tell me again and I'll try once more.".to_string()
+        "RichOS couldn't save the report on this Mac, so nothing was sent. Try sending the report again.".to_string()
         })?;
         let mut answer = serde_json::to_value(&write_up).map_err(|e| e.to_string())?;
         if let bug::WriteUp::Checked(checked) = &write_up {
@@ -491,7 +491,7 @@ pub async fn bug_report_take_unchecked(app: AppHandle, id: String, post: Option<
     off_the_ipc_threads(move || {
         bugs.outbox(post.unwrap_or_default()).take_unchecked(&id).map_err(|e| {
             eprintln!("[richos] bug report {id}: could not be taken off this Mac ({e})");
-            "I couldn't take the report off this Mac, so it's still saved here. Press Cancel report to try again.".to_string()
+            "RichOS couldn't take the report off this Mac, so it's still saved here. Press Cancel report to try again.".to_string()
         })
     })
     .await
@@ -525,7 +525,7 @@ pub async fn bug_report_change(
             .and_then(|c| if headings.contains(&c.section) { Ok(c) } else { Err(format!("no section {:?}", c.section)) })
             .map_err(|why| {
                 eprintln!("[richos] bug report: Rich could not check the change ({why}); nothing was added");
-                "I couldn't check that change just now, so nothing was added.".to_string()
+                "RichOS couldn't check that change just now, so nothing was added. Submit the change again.".to_string()
             })?;
         // The scanner goes over his words now; Rich gets the last word on the changed card at Send
         // (`bug::at_send`), so nothing after him changes a word that is sent (CEO §115).
@@ -569,7 +569,7 @@ fn deliver(bugs: &BugReports, post: bug::Post, attempt: impl FnOnce(&bug::Outbox
     let _one_at_a_time = one_at_a_time(bugs);
     attempt(bugs.outbox(post)).map_err(|e| {
         eprintln!("[richos] bug report: the report could not be kept on this Mac ({e})");
-        "I couldn't save the report on this Mac, so nothing was sent.".to_string()
+        "RichOS couldn't save the report on this Mac, so nothing was sent. Try sending the report again.".to_string()
     })
 }
 
@@ -613,7 +613,7 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
                 let private = check.map(|c| c.private().to_vec()).unwrap_or_default();
                 let kept = bugs.outbox(post).keep_edited(bug::Edited { sheet, private }, &screen, &why, now_ms()).map_err(|e| {
                     eprintln!("[richos] bug report: the changed report could not be kept on this Mac ({e})");
-                    "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.".to_string()
+                    "RichOS couldn't save the report on this Mac, so nothing was sent. Try sending the report again.".to_string()
                 })?;
                 serde_json::to_value(kept).map_err(|e| e.to_string())
             }
@@ -645,7 +645,7 @@ pub async fn bug_report_cancel(app: AppHandle, id: String, post: Option<bug::Pos
         let _one_at_a_time = one_at_a_time(&bugs);
         bugs.outbox(post.unwrap_or_default()).withdraw(&id).map_err(|e| {
             eprintln!("[richos] bug report {id}: could not be taken off this Mac ({e}); it still waits");
-            "I couldn't take the report off this Mac, so it's still waiting to send.".to_string()
+            "RichOS couldn't cancel the report, so it's still waiting to send. Press Cancel report to try again.".to_string()
         })
     })
     .await

@@ -42,13 +42,14 @@ for line in sys.stdin:
                    'mcp__richos_assignments__record','mcp__richos_status__background_work']})
     content = request.get('message', {}).get('content', '')
     prompt = content[-1]['text'] if isinstance(content, list) else content
-    try:
-        context = json.loads(prompt)
-    except (TypeError, ValueError):
-        context = None
-    if isinstance(context, dict) and context.get('event') == 'context_restored':
-        emit({'type':'result','stop_reason':'end_turn','subtype':'success'})
-        continue
+    # Native preparation and grants run at submission, before the provider starts work.
+    hook_id = request['uuid']
+    emit({'type':'control_request','request_id':hook_id,'request':{'subtype':'hook_callback',
+          'callback_id':'richos-input-context','input':{'hook_event_name':'UserPromptSubmit','prompt':prompt}}})
+    response = json.loads(next(sys.stdin))['response']
+    assert response['request_id'] == hook_id, response
+    assert response['response'].get('decision') != 'block', response
+    emit({'type':'command_lifecycle','command_uuid':hook_id,'state':'started'})
     if 'Classify as answer only' in prompt:
         rows = [{'index':i,'kind':'answer' if i < 20 else 'unrelated','option_ids':[]} for i in range(40)]
         if os.environ.get('QUESTION_BAD_CLASSIFICATION'): rows[0]['kind'] = 'unrelated'

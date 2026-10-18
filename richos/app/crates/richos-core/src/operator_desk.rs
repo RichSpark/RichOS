@@ -42,7 +42,7 @@ use crate::ledger::Source;
 use crate::operator_declaration::{Declaration, Gate};
 use crate::operator_host::{AnswerOutcome, ConversationKey, ConversationRead, Lane, LeadLauncher, OperatorDelivery,
                            OperatorEngine, OperatorHost, Origin, Relayed, Say, SayQuestions, Settle, StopResult,
-                           TeamReading, LEAD_IDLE};
+                           TeamReading};
 use crate::operator_lead::Quit;
 use crate::operator_runtime::{DurableDelivery, NoticePush, OperatorNotice};
 use std::collections::{HashSet, VecDeque};
@@ -56,26 +56,25 @@ pub const HANDED_OVER: &str = "Your team has it.";
 pub const TITLE_LABEL: &str = "Title (the front desk's label for the job, not his words):";
 /// (s) rule 4 as it applies to an assignment: its turn's mouth was never recorded.
 pub const NO_ORIGIN_WORK: &str =
-    "I can't tell where this was asked from, so I didn't hand it to your team. Ask me again at your desk.";
+    "RichOS couldn't tell whether this came from your Mac or your phone, so it didn't hand it to your team. Ask Rich again at your Mac.";
 /// The turn the register names is not in the ledger, or its words are not the ones the
 /// register attested.
-pub const UNVERIFIED: &str = "I couldn't confirm your original words, so I didn't hand this to your team. Ask me again.";
+pub const UNVERIFIED: &str = "RichOS couldn't confirm your original words, so RichOS didn't hand this to your team. Ask Rich again.";
 /// The declaration on disk is no longer the one this launch opened his team with.
-pub const CHANGED_SINCE_LAUNCH: &str = "Your team's settings changed after RichOS started, so I didn't hand this to \
-                                         your team. Quit RichOS and open it again, then ask me again.";
+pub const CHANGED_SINCE_LAUNCH: &str = "Your team's settings changed after RichOS started, so RichOS didn't hand this to \
+                                         your team. Quit RichOS and open it again, then ask Rich again.";
 /// The declaration is gone since launch.
-pub const OFF_SINCE_LAUNCH: &str = "Your team was switched off after RichOS started, so I didn't hand this to your \
-                                     team. Quit RichOS and open it again, then ask me again.";
+pub const OFF_SINCE_LAUNCH: &str = "Your team was switched off after RichOS started, so RichOS didn't hand this to your \
+                                     team. Quit RichOS and open it again, then ask Rich again.";
 /// Quit has begun.
-pub const CLOSING: &str = "RichOS is closing, so I didn't hand this to your team.";
+pub const CLOSING: &str = "RichOS is closing, so RichOS didn't hand this to your team. Open RichOS again, then ask Rich again.";
 /// The per-assignment Stop found no agent on that assignment.
 pub const NOTHING_ON_IT: &str = "None of your team's agents is working on this one. To stop what your team is \
                                   doing in this conversation, press Stop there.";
 /// What the engine records as his words for a Stop pressed on an assignment, where there are
 /// no spoken words to carry (`stop.sh --ceo-word`, `workspaces.sh stop --why`).
 pub const STOP_CONTROL_WORDS: &str = "Stop, pressed on this assignment in RichOS";
-/// How often the idle timer looks. A lead is retired after [`LEAD_IDLE`]; a minute's lag on a
-/// thirty-minute period is the cost of not waking more often.
+/// How often the existing monitor checks for an idle lead whose rules changed.
 pub const RETIRE_EVERY: Duration = Duration::from_secs(60);
 /// How long quit waits for a hand-over already under way (a lead mid-start) before it ends
 /// every lead, so a lead that finishes starting after quit began is still ended by it.
@@ -542,15 +541,15 @@ impl OperatorDesk {
     }
 
     /// (q) item 4, once: retire every idle lead. Spends nothing while no lead runs.
-    pub fn retire_idle_now(&self, idle_after: Duration) -> Vec<ConversationKey> {
+    pub fn retire_idle_now(&self) -> Vec<ConversationKey> {
         if self.host.running_leads() == 0 {
             return Vec::new();
         }
-        self.host.retire_idle(idle_after)
+        self.host.retire_idle()
     }
 
-    /// Start the idle timer: every `every`, retire the leads idle for `idle_after`, until quit.
-    pub fn start_retirement(self: &Arc<Self>, every: Duration, idle_after: Duration) {
+    /// Check for stale idle leads every `every`, until quit.
+    pub fn start_retirement(self: &Arc<Self>, every: Duration) {
         let inbox = self.inbox.clone();
         let desk = Arc::downgrade(self);
         let spawned = std::thread::Builder::new().name("richos-operator-idle".into()).spawn(move || loop {
@@ -565,7 +564,7 @@ impl OperatorDesk {
                 }
             }
             let Some(desk) = desk.upgrade() else { return };
-            let retired = desk.retire_idle_now(idle_after);
+            let retired = desk.retire_idle_now();
             if !retired.is_empty() {
                 desk.host.log(&format!("idle timer retired {} lead(s)", retired.len()));
             }
@@ -586,9 +585,9 @@ impl OperatorDesk {
         }
     }
 
-    /// Start the idle timer at the spec's period ((q) item 4: [`LEAD_IDLE`]).
+    /// Start the existing monitor for idle leads whose rules changed.
     pub fn start_default_retirement(self: &Arc<Self>) {
-        self.start_retirement(RETIRE_EVERY, LEAD_IDLE);
+        self.start_retirement(RETIRE_EVERY);
     }
 
     /// **The quit path** ((q) item 2, e item 3): nothing more is taken, a hand-over under way
@@ -1228,7 +1227,7 @@ mod tests {
         let first = d.launcher.leads.lock().unwrap()[0].2.clone();
         *first.exited.lock().unwrap() = true;
         d.desk.host.handle(&key_of(&a), crate::operator_lead::LeadEvent::Ended);
-        d.desk.start_retirement(Duration::from_millis(20), LEAD_IDLE);
+        d.desk.start_retirement(Duration::from_millis(20));
         let began = Instant::now();
         while answers_sent(&d).len() < 2 && began.elapsed() < Duration::from_secs(10) {
             std::thread::sleep(Duration::from_millis(10));
@@ -1310,7 +1309,7 @@ mod tests {
     fn the_idle_timer_retires_a_lead_with_nothing_running_and_spends_nothing_with_no_lead() {
         let d = desk();
         // No lead: the timer asks his engine nothing, not even the lease status.
-        assert!(d.desk.retire_idle_now(Duration::ZERO).is_empty());
+        assert!(d.desk.retire_idle_now().is_empty());
         assert!(d.engine.asked.lock().unwrap().is_empty());
         assert_eq!(*d.engine.lease_reads.lock().unwrap(), 0, "no script runs while no lead runs");
         let a = assignment(&d, "t-1", "go", Source::Text, Some("desk"));
@@ -1322,7 +1321,8 @@ mod tests {
             started_by: vec!["u-1".into()], text: None, is_error: false, subtype: "success".into() }));
         let paths = ConversationPaths::under(&d.root.join("operator"), &key_of(&a));
         std::fs::write(&paths.reap_state, r#"{"outside_provider_group": []}"#).unwrap();
-        d.desk.start_retirement(Duration::from_millis(20), Duration::ZERO);
+        std::fs::write(d.desk.declaration.entity_root.join("CLAUDE.md"), "updated rules\n").unwrap();
+        d.desk.start_retirement(Duration::from_millis(20));
         let began = Instant::now();
         while *lead.quits.lock().unwrap() == 0 && began.elapsed() < Duration::from_secs(10) {
             std::thread::sleep(Duration::from_millis(10));
