@@ -4,18 +4,35 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 struct HeldTurn {
-    entered: mpsc::Sender<()>,
     release: mpsc::Receiver<()>,
+}
+
+// A provider callback only queues text. The published chunk proves it was written.
+struct PublishedText(mpsc::Sender<()>);
+impl TurnObserver for PublishedText {
+    fn on_event(&self, event: &StreamEvent) {
+        if matches!(event, StreamEvent::Chunk { .. }) {
+            self.0.send(()).unwrap();
+        }
+    }
 }
 
 impl Cognition for HeldTurn {
     fn session_id(&self) -> &str { "read-test" }
 
-    fn prompt(&mut self, _: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        on_item(TurnItem::Text { seq: 1, text: "First words" });
-        self.entered.send(()).unwrap();
-        self.release.recv().unwrap();
-        Ok("First words".into())
+    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        unreachable!("this fixture streams through the native pending-reply interface")
+    }
+
+    fn enqueue_prompt(&mut self, _: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>)
+        -> Result<richos_core::cognition::PendingReply, CognitionError> {
+        started().map_err(CognitionError::Protocol)?;
+        let release = std::mem::replace(&mut self.release, mpsc::channel().1);
+        Ok(richos_core::cognition::PendingReply::new(move |on_item| {
+            on_item(TurnItem::Text { seq: 1, text: "First words" });
+            release.recv().unwrap();
+            Ok("end_turn".into())
+        }))
     }
 }
 
@@ -30,14 +47,15 @@ fn window_reads_finish_before_an_unfinished_turn_releases() {
         Entity::new("alpha", "Alpha", &["/fixture/alpha"]).unwrap(),
     ]).unwrap());
     let thread = spine.create_thread("A conversation", &EntityId::parse("alpha").unwrap()).unwrap();
-    let (entered_tx, entered_rx) = mpsc::channel();
+    let (written_tx, written_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    spine.attach_lease(Box::new(HeldTurn { entered: entered_tx, release: release_rx }));
+    spine.set_observer(Box::new(PublishedText(written_tx)));
+    spine.attach_lease(Box::new(HeldTurn { release: release_rx }));
     let reader = spine.reader();
     let spine = Arc::new(Mutex::new(spine));
     let writer = spine.clone();
     let turn = std::thread::spawn(move || writer.lock().unwrap().submit_prompt("Hold the turn", Source::Text));
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let written = written_rx.recv_timeout(Duration::from_secs(5));
     let (read_tx, read_rx) = mpsc::channel();
     let read = std::thread::spawn(move || {
         let view = reader.snapshot();
@@ -53,6 +71,7 @@ fn window_reads_finish_before_an_unfinished_turn_releases() {
     turn.join().unwrap().unwrap();
     read.join().unwrap();
     std::fs::remove_file(path).unwrap();
+    written.expect("the lease never published its first text");
     let (pending, has_text, _) = result.expect("window reads waited for the unfinished turn");
     assert!(pending, "the read must see an unfinished turn");
     assert!(has_text, "already written reply text must be available during the turn");

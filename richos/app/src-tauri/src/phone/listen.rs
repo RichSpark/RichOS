@@ -3694,6 +3694,9 @@ mod tests {
     #[test]
     fn a_held_ask_hears_they_do_not_match_on_the_mac_before_the_channel_closes() {
         let wire = hold_wire("reject");
+        #[cfg(unix)]
+        assert_eq!(listening_fds_in_this_process(wire.port).map(|fds| fds.len()), Ok(1),
+            "the descriptor scan must see this listener before Stop");
         std::thread::scope(|scope| {
             let sent = std::time::Instant::now();
             let asked = scope.spawn(|| wire.they_match(Some("wait=14")));
@@ -3717,7 +3720,9 @@ mod tests {
             assert!(stopped_since_sent < HOLD_LIMIT, "the teardown returned {stopped_since_sent:?} after the ask was sent: it sat out the held ask");
             eprintln!("[test] the channel stopped {} ms after They do not match, with the answer delivered", stopped_after.as_millis());
         });
-        assert!(std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, wire.port)).is_err(), "the port is still open");
+        // Use the existing descriptor check and child-start bound, as the other Stop tests do.
+        port_released_by_stop(wire.port, || bind_listener(SocketAddr::from((Ipv4Addr::LOCALHOST, wire.port))))
+            .expect("the port was still held after Stop");
     }
 
     /// A thread with nothing in it, so a stream's `hello` can be built.
