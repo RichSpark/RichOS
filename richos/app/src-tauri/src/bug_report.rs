@@ -370,13 +370,11 @@ fn private_terms(state: &crate::AppState) -> Vec<bug::PrivateTerm> {
             terms.push(PrivateTerm::new(name, Kind::ConversationName));
         }
     }
-    if let Ok(registry) = state.registry.lock() {
-        for entity in registry.entities() {
-            terms.push(PrivateTerm::new(&entity.display_name, Kind::CompanyName));
-            for repo in &entity.connected_repositories {
-                if let Some(name) = repo.file_name().and_then(|n| n.to_str()) {
-                    terms.push(PrivateTerm::new(name, Kind::FolderName));
-                }
+    for entity in state.reader.snapshot().entity_registry().entities() {
+        terms.push(PrivateTerm::new(&entity.display_name, Kind::CompanyName));
+        for repo in &entity.connected_repositories {
+            if let Some(name) = repo.file_name().and_then(|n| n.to_str()) {
+                terms.push(PrivateTerm::new(name, Kind::FolderName));
             }
         }
     }
