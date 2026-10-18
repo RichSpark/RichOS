@@ -2379,10 +2379,19 @@ impl Spine {
             } else {
                 self.finish_completed_turn_the_stop_missed(turn_id, binding, &claim, lease_reported.unwrap())?;
             }
-            // Product Stop terminates the provider even if its final answer won the race.
-            // Only the next explicit input reconnects through the normal history resume.
-            self.resident.remove(thread_id);
-            control.set_cancel(None);control.set_lease_session(None);
+            // This reply cannot retire a connection another delivery still owns, including
+            // an input being prepared before it reaches native stdin. Release our reference
+            // and let Arc prove exclusive ownership, without waiting on provider I/O.
+            let same_connection=self.resident.get(thread_id)
+                .is_some_and(|desk|std::sync::Arc::ptr_eq(&desk.lease,&delivery.lease));
+            drop(delivery.lease);
+            let unused=same_connection && self.resident.get_mut(thread_id)
+                .and_then(|desk|std::sync::Arc::get_mut(&mut desk.lease))
+                .is_some_and(|slot|slot.get_mut().unwrap().as_ref().is_none_or(|lease|!lease.has_pending_input()));
+            if unused {
+                self.resident.remove(thread_id);
+                control.set_cancel(None);control.set_lease_session(None);
+            }
             return Ok(());
         }
 

@@ -180,17 +180,6 @@ const BRIDGE_OVERRIDES = () => {
       v.invoke = function (cmd, args) {
         if (Object.prototype.hasOwnProperty.call(window.__overrides, cmd)) {
           const o = window.__overrides[cmd];
-          // `echoTurnId` is this suite's own addition to the pattern, and it is what reaches
-          // the `stopping` state. `main.js`'s `stopTurn()` sets that state from `stop_turn`'s
-          // RETURN and not optimistically — *"setting `stopping` from its RETURN is a
-          // statement of durable fact"* — and `mock.js` does not implement `stop_turn` at all,
-          // so the shipped mock answers `undefined`, `stopTurn` returns at `if (!report ||
-          // !report.stopped)`, and the composer never leaves `working`. The command is called
-          // with `{ expectedTurnId }`, so the durable answer it is waiting for can be built
-          // from its own argument rather than from a turn id this suite would have to guess.
-          if (o && o.echoTurnId) {
-            return Promise.resolve({ stopped: true, turnId: args && args.expectedTurnId, reachedLease: true });
-          }
           return o && o.reject ? Promise.reject(o.value) : Promise.resolve(o ? o.value : undefined);
         }
         return origInvoke(cmd, args);
@@ -449,7 +438,12 @@ const STATES = {
   async stopping(page) {
     await STATES["working-stop-and-send"](page);
     await page.evaluate(() => {
-      window.__overrides.stop_turn = { echoTurnId: true };
+      // The backend returns its active input; the UI sends only the conversation ID.
+      const live = [...window.__RICHOS_TIMELINE__().turns.entries()].filter(([, turn]) => turn.live);
+      if (live.length !== 1) throw new Error("the geometry fixture needs exactly one live input");
+      const [turnId] = live[0];
+      if (typeof turnId !== "string") throw new Error("the geometry fixture needs its backend turn ID");
+      window.__overrides.stop_turn = { value: { stopped: true, turnId, reachedLease: true } };
     });
     await page.click("#stop");
     await page.waitForSelector('#composer-row[data-mode="stopping"]');

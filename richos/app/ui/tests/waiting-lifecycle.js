@@ -38,7 +38,7 @@ async function main() {
             window.RichBridge.invoke = (cmd, args) => {
               if (cmd === "switch_thread") return new Promise(() => {});
               if (cmd === "stop_turn") {
-                window.__stopTargets.push(args.expectedTurnId);
+                window.__stopTargets.push(args.expectedThreadId);
                 return window.__allowStop
                   ? Promise.resolve({ stopped: true, turnId: "returning_work", reachedLease: true })
                   : Promise.reject("temporary disk error");
@@ -56,7 +56,7 @@ async function main() {
           await page.evaluate(() => { window.__allowStop = true; });
           await page.click("#stop");
           assertEqual((await band(page)).detail, "Stopping work in this conversation");
-          assertEqual(await page.evaluate(() => window.__stopTargets.join(",")), "returning_work,returning_work");
+          assertEqual(await page.evaluate(() => window.__stopTargets), [fence.threadId, fence.threadId]);
           assert(await page.isDisabled("#stop"));
           await page.evaluate(fence => window.__emit("rich://turn-status", {
             ...fence, turnId: "returning_work", status: "stopped", at: Date.now(), visibility: "ceo",
@@ -105,7 +105,7 @@ async function main() {
         assertEqual(submitted[0].args.text, "New company's draft");
         await page.click("#stop");
         assertEqual((await band(page)).detail, "I couldn't stop the previous conversation. Press Stop again.");
-        assertEqual(await page.evaluate(() => window.__openingCalls.find(c => c.cmd === "stop_turn").args.expectedTurnId), "opening_previous");
+        assertEqual(await page.evaluate(() => window.__openingCalls.find(c => c.cmd === "stop_turn").args.expectedThreadId), fence.threadId);
         assert(!(await page.isDisabled("#stop")), "failed Stop is actionable while navigation waits");
         await page.evaluate(() => {
           const original = window.RichBridge.invoke.bind(window.RichBridge);
