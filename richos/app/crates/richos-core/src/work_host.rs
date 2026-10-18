@@ -11,6 +11,10 @@ use std::sync::{Arc, Condvar, Mutex};
 pub trait WorkNotifier: Send + Sync {
     fn raised(&self, thread_id: &str, notice: &PendingNotice);
     fn nothing_left_to_do(&self) {}
+    /// Stu's work met an overload and waits out the CEO's schedule: `sentence` is
+    /// `RetryBudget::ceo_message`, the same "RichOS will try again in N minutes" line his
+    /// conversation shows for Rich, for the conversation `thread_id`.
+    fn overload_retry(&self, _thread_id: &str, _sentence: &str) {}
 }
 pub trait OperatorIntake: Send + Sync {
     fn take(&self, record: Assignment);
@@ -100,7 +104,7 @@ impl WorkHost {
         *self.retry_clock.lock().unwrap() = clock;
     }
 
-    fn overload_wait(&self, backend: &Backend, result: &Result<String, String>) -> Option<std::time::Duration> {
+    fn overload_wait(&self, backend: &Backend, binding: &ThreadBinding, result: &Result<String, String>) -> Option<std::time::Duration> {
         let overloaded = result.as_ref().err()
             .and_then(|error| crate::upstream::UpstreamFailure::classify_lines(error))
             .is_some_and(|failure| failure.fault == crate::upstream::UpstreamFault::Overloaded);
@@ -109,9 +113,13 @@ impl WorkHost {
             if result.is_ok() { inner.overload.succeeded(); }
             return None;
         }
-        if inner.overload.charge(crate::upstream::UpstreamFault::Overloaded) {
-            inner.overload.wait_before_retry()
-        } else { None }
+        if !inner.overload.charge(crate::upstream::UpstreamFault::Overloaded) { return None; }
+        let wait = inner.overload.wait_before_retry();
+        let said = inner.overload.ceo_message();
+        drop(inner);
+        // The wait is shown as Rich's is: RichOS's own retry sentence, never Stu's words.
+        if let Some(said) = said { self.notifier.overload_retry(binding.thread_id(), &said); }
+        wait
     }
 
     fn retry_stopped(&self, backend: &Backend, binding: &ThreadBinding,
@@ -144,7 +152,7 @@ impl WorkHost {
             };
             if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
             if outcome.report_failure {
-                if let Some(wait) = host.overload_wait(&backend, &outcome.result) {
+                if let Some(wait) = host.overload_wait(&backend, &binding, &outcome.result) {
                     // The native reader must keep reading while the existing retry clock waits.
                     let retry_host = Arc::downgrade(&host);
                     let retry_backend = Arc::downgrade(&backend);
@@ -471,7 +479,7 @@ impl WorkHost {
                     sent = Err(CognitionError::Protocol(failure.raw));
                 }
                 let observed = sent.as_ref().map(Clone::clone).map_err(ToString::to_string);
-                let Some(wait) = self.overload_wait(backend, &observed) else { break sent };
+                let Some(wait) = self.overload_wait(backend, binding, &observed) else { break sent };
                 let clock = self.retry_clock.lock().unwrap().clone();
                 if !clock.wait(wait, &||self.retry_stopped(backend, binding, message, &session)) { break sent; }
             };
@@ -1295,6 +1303,16 @@ mod tests {
         commands: Arc<Mutex<Option<crate::lease_commands::CommandReading>>>,
         team: Arc<Mutex<TeamScript>>,
         start_gate: Arc<StartGate>,
+        notices: Arc<RecordingNotifier>,
+    }
+    /// The overload lines the host shows, in order, with the conversation each was for.
+    #[derive(Default)]
+    struct RecordingNotifier(Mutex<Vec<(String, String)>>);
+    impl WorkNotifier for RecordingNotifier {
+        fn raised(&self, _: &str, _: &PendingNotice) {}
+        fn overload_retry(&self, thread_id: &str, sentence: &str) {
+            self.0.lock().unwrap().push((thread_id.to_string(), sentence.to_string()));
+        }
     }
     fn harness(_: u64) -> Harness {
         let root = std::env::temp_dir().join(format!("richos-peer-host-{}", uuid::Uuid::new_v4()));
@@ -1320,10 +1338,11 @@ mod tests {
             team: team.clone(),
             gate: start_gate.clone(),
         };
+        let notices = Arc::new(RecordingNotifier::default());
         let host = WorkHost::new(
             &state,
             Box::new(factory),
-            Arc::new(SilentNotifier),
+            notices.clone(),
 
         );
         host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
@@ -1339,6 +1358,7 @@ mod tests {
             commands,
             team,
             start_gate,
+            notices,
         }
     }
     fn every_worker_observed_ending(h: &Harness) {
@@ -1574,6 +1594,14 @@ mod tests {
         assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
         assert_eq!(*clock.0.lock().unwrap(), crate::upstream::OVERLOAD_RETRY_WAITS);
         assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none(), "recovered failure was announced as terminal");
+        // Each wait is shown in his conversation as RichOS's own retry line, as Rich's is.
+        let shown = h.notices.0.lock().unwrap().clone();
+        let expected: Vec<(String, String)> = [1, 2, 5, 10, 20, 40, 80].iter().enumerate().map(|(k, minutes)| {
+            let when = if *minutes == 1 { "1 minute".to_string() } else { format!("{minutes} minutes") };
+            ("thread-one".to_string(), format!("{} RichOS will try again in {when}, in the same conversation, so nothing is \
+                lost. This is retry {} of 7.", crate::upstream::UpstreamFault::Overloaded.ceo_message(), k + 1))
+        }).collect();
+        assert_eq!(shown, expected, "Stu's overload waits were not shown as RichOS's retry line");
         h.team.lock().unwrap().turn_results.extend(["pre_model_529", "end_turn"]);
         crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Independent later request"})).unwrap();
         h.host.wake_messages(&h.binding);

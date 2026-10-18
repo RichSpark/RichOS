@@ -439,6 +439,20 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
         );
     }
 
+    /// Stu's overload wait reaches his conversation the way the app's quota notices do, as the
+    /// app's own line (`Spine::raise_proactive`), on its own thread so the work host never waits
+    /// for a turn that holds the spine.
+    fn overload_retry(&self, thread_id: &str, sentence: &str) {
+        let (app, thread, sentence) = (self.app.clone(), thread_id.to_string(), sentence.to_string());
+        std::thread::spawn(move || {
+            let Some(state) = app.try_state::<AppState>() else { return };
+            let shown = take_the_spine(&state.spine).raise_proactive(Some(&thread), AttentionTier::Digest, &sentence);
+            if let Err(error) = shown {
+                eprintln!("[richos] the back end's overload wait could not be shown ({error})");
+            }
+        });
+    }
+
 
     /// **§2.4a — the settle-while-closed end state.** The last registered assignment has
     /// ended and no window is open, so the app quits itself.

@@ -747,7 +747,30 @@ enum TurnSink {
     Input {
         completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
         limit: Option<Option<u64>>,
+        /// An overload Claude Code reported only as a message in this turn
+        /// ([`overloaded_api_error_message`]), so a turn that still ends `end_turn` reaches
+        /// Stu's overload schedule instead of passing the vendor's line off as his reply.
+        overload: Option<String>,
     },
+}
+
+/// **An overload Claude Code reported as a MESSAGE, not as a failed result.**
+///
+/// When its own retries give up, Claude Code wraps the API error in an assistant message and
+/// marks that frame with a top-level `error` field (2.1.302's stream mapping sets `error` on
+/// every assistant frame it emits and leaves it out of ordinary ones; the kind it computes for
+/// a 529 is `overloaded`). Requiring that field means prose that merely quotes an
+/// `API Error:` line is never taken for one. Which fault it is stays
+/// [`crate::upstream::UpstreamFailure`]'s decision alone, on the message's own words.
+pub(crate) fn overloaded_api_error_message(frame: &Value) -> Option<crate::upstream::UpstreamFailure> {
+    if frame.get("type").and_then(Value::as_str) != Some("assistant") || frame.get("error").is_none_or(Value::is_null) {
+        return None;
+    }
+    let text: Vec<&str> = frame.pointer("/message/content").and_then(Value::as_array).into_iter().flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str)).collect();
+    crate::upstream::UpstreamFailure::classify_lines(&text.join("\n"))
+        .filter(|failure| failure.fault == crate::upstream::UpstreamFault::Overloaded)
 }
 
 
@@ -855,9 +878,10 @@ impl PendingTurn {
     fn send(&mut self, chunk: ChunkMsg, frame: &Value) -> bool {
         match &mut self.sink {
             TurnSink::Prompt(sink) => sink.send(chunk).is_ok(),
-            TurnSink::Input { limit, .. } => {
+            TurnSink::Input { limit, overload, .. } => {
                 if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
                     if let Some(reset) = usage_limit_signal(frame) { *limit = Some(reset); }
+                    if let Some(failure) = overloaded_api_error_message(frame) { *overload = Some(failure.raw); }
                 }
                 false
             }
@@ -878,10 +902,17 @@ impl PendingTurn {
         }
         match self.sink {
             TurnSink::Prompt(sink) => { let _ = sink.send(ChunkMsg::Done(frame)); }
-            TurnSink::Input { completed, limit } => {
+            TurnSink::Input { completed, limit, overload } => {
                 let result = if let Some(reset) = limit {
                     Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &frame.to_string())))
-                } else { native_result(&frame) };
+                } else {
+                    // A turn that ended normally after Claude Code said it was overloaded is that
+                    // overload, the shape the synchronous path already reads from the turn's text.
+                    native_result(&frame).and_then(|reason| match overload {
+                        Some(raw) if reason == "end_turn" => Err(NativeError::Protocol(raw)),
+                        _ => Ok(reason),
+                    })
+                };
                 completed(crate::steering::InputOutcome {
                     result: result.map_err(|error| error.to_string()), report_failure,
                 });
@@ -3096,7 +3127,7 @@ impl TurnCancel for NativeCancelHandle {
             let mut current = self.current_prompt.lock().unwrap();
             if current.iter().any(|pending| pending.command_uuid == id) { return Ok(true); }
             current.push(PendingTurn {
-                sink: TurnSink::Input { completed, limit: None }, command_uuid: id.to_string(),
+                sink: TurnSink::Input { completed, limit: None, overload: None }, command_uuid: id.to_string(),
                 prompt_text: text.to_string(), hook_request_id: None,
                 prepare: None,
                 complete: None,
@@ -8333,6 +8364,93 @@ while True:read()
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"Quit produced an unwanted reply");
         let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
         assert_eq!(sent.lines().count(),1+usize::from(queued),"worker results caused a new app send");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// The retry clock with no elapsed time: it writes down each wait it was asked for.
+#[derive(Default)]
+struct NoWait(Mutex<Vec<Duration>>);
+impl crate::upstream::RetryClock for NoWait {
+    fn wait(&self, wait: Duration, stop: &dyn Fn() -> bool) -> bool {
+        self.0.lock().unwrap().push(wait);
+        !stop()
+    }
+}
+
+/// Follow-up 10 (2026-10-18): a live input whose turn carries Claude Code's overload message and
+/// still ends `end_turn` is that overload. It waits the schedule's first minute and is sent
+/// again on the same session, and Rich gets no failure. Prose that only quotes the line, on a
+/// frame Claude Code did not mark as an API error, stays Stu's reply.
+#[test]
+fn a_live_overload_reported_only_as_a_message_waits_and_is_sent_again_on_the_same_session() {
+    for marked in [true, false] {
+        let root = std::env::temp_dir().join(format!("richos-live-overload-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("provider");
+        std::fs::write(&script, r#"#!/usr/bin/python3
+import json,pathlib,sys
+marked=json.loads(pathlib.Path('config.json').read_text())['marked']
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started')
+send({'type':'assistant','message':{'content':[{'type':'text','text':'ORIGINAL-STARTED'}]}})
+live=read();phase(live,'queued')
+send({'type':'result','stop_reason':'end_turn'})
+phase(live,'started')
+said={'type':'assistant','parent_tool_use_id':None,'message':{'content':[{'type':'text','text':'API Error: 529 Overloaded.'}]}}
+if marked:said['error']='overloaded'
+send(said)
+send({'type':'result','subtype':'success','is_error':False,'stop_reason':'end_turn'})
+while True:
+ v=read()
+ if v.get('type')=='user':
+  phase(v,'started');send({'type':'result','stop_reason':'end_turn'})
+"#).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("config.json"), json!({"marked":marked}).to_string()).unwrap();
+        let skills = crate::skills::ensure_rendered(&root.join("skills"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let thread = ledger.create_thread("Live overload", &EntityId::parse("company").unwrap()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let scope = StatusToolScope {version:1,state_root:root.join("state"),entity_id:"company".into(),thread_id:thread};
+        let status = root.join("rich.json");
+        crate::session_tools::bind(&status,&scope,"rich-session","rich",None).unwrap();
+        let (began,started) = channel();
+        let (done,completed) = channel();
+        let host = WorkHost::new(&scope.state_root,Box::new(Factory {
+            root:root.clone(),skills,started:began,completed:done,scheduled:Arc::new(AtomicU64::new(0)),observed:None,
+        }),Arc::new(SilentNotifier));
+        let clock = Arc::new(NoWait::default());
+        host.set_retry_clock(clock.clone());
+        crate::session_tools::send(&status,&scope,json!({"text":"Original input"})).unwrap();
+        host.wake_messages(&binding);
+        // load-bound: hang guard only; native output proves the original turn entered.
+        started.recv_timeout(Duration::from_secs(10)).expect("original turn absent");
+        crate::session_tools::send(&status,&scope,json!({"text":"Live correction"})).unwrap();
+        host.wake_messages(&binding);
+        for _ in 0..(2+usize::from(marked)) {
+            // load-bound: hang guard only; each native outcome, not elapsed time, is the verdict.
+            completed.recv_timeout(Duration::from_secs(10)).expect("a native result did not complete");
+        }
+        assert!(host.wait_for_completed(1,Duration::from_secs(10)));
+        host.shutdown();
+        let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+        assert_eq!(sent.lines().filter(|line| line.contains("Live correction")).count(), 1+usize::from(marked),
+            "marked={marked}: the overload message was {} as Stu's reply: {sent}", if marked {"accepted"} else {"not accepted"});
+        assert_eq!(*clock.0.lock().unwrap(), if marked {vec![crate::upstream::OVERLOAD_RETRY_WAITS[0]]} else {vec![]});
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(), "marked={marked}: a recovered overload reached Rich as a failure");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(), "marked={marked}: the live input stayed unfinished");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
