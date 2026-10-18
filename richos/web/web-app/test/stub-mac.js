@@ -465,17 +465,28 @@ function createStubMac(options) {
 						state.answers.push(body);
 						const held = state.ledger.find((r) => r.kind === 'question' && r.question && r.question.id === body.question_id);
 						const q = held && held.question;
-						const ids = Array.isArray(body.option_ids) ? body.option_ids : [];
-						if (!q || body.thread_id !== held.thread_id || q.state !== 'open'
+						const ids = [...new Set(Array.isArray(body.option_ids) ? body.option_ids : [])].sort();
+						const text = (body.text || '').trim();
+						// As `questions.rs` `answer`: an open question, or an answered one he is
+						// changing at the revision he saw; the same answer again is `already_answered`
+						// with the question unchanged and nothing published.
+						const same = q && q.answer && JSON.stringify(q.answer.option_ids) === JSON.stringify(ids) && q.answer.text === text;
+						const editable = q && q.state === 'answered' && !q.delivered && body.expected_revision === q.revision;
+						if (!q || body.thread_id !== held.thread_id || !(same || q.state === 'open' || editable)
 							|| !ids.every((id) => q.options.some((o) => o.id === id)) || (!q.multiple && ids.length > 1)
-							|| (!ids.length && !(body.text || '').trim())) {
+							|| (!ids.length && !text)) {
 							send(res, 422, { retry: false, reason: 'Choose only this question\'s available options.' },
+								{ 'X-RichOS-Challenge': newChallenge(who.deviceId) });
+							return;
+						}
+						if (same) {
+							send(res, 200, { outcome: 'already_answered', question: q, message_id: body.client_id, thread_id: held.thread_id, cursor: held.cursor },
 								{ 'X-RichOS-Challenge': newChallenge(who.deviceId) });
 							return;
 						}
 						held.question = Object.assign({}, q, {
 							state: 'answered', revision: q.revision + 1,
-							answer: { option_ids: ids, text: body.text || '', method: 'phone_tap', surface: 'phone' }
+							answer: { option_ids: ids, text, method: 'phone_tap', surface: 'phone' }
 						});
 						broadcast('message', held);
 						send(res, 200, { outcome: 'accepted', question: held.question, message_id: body.client_id, thread_id: held.thread_id, cursor: held.cursor },

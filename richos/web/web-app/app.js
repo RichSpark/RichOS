@@ -925,12 +925,15 @@ function questionCard(row) {
 			});
 			draft.busy = false;
 			if (result.outcome === 'conversation_deleted') { draft.note = 'This conversation was deleted. Your answer was not sent.'; draw(); return; }
-			draft.note = '';
+			draft.note = ''; draft.editing = false;
 			if (result.question) {
 				const updated = Object.assign({}, row, { question: result.question });
 				thread.merge(updated);
 				messageCache.put(updated).catch(() => {});
 			}
+			// The same answer again is `already_answered` with the question unchanged, so no new
+			// card is built for it: this one redraws as answered.
+			if (!result.question || result.question.revision === q.revision) draw();
 			scheduleRender();
 		} catch (err) {
 			draft.busy = false;
@@ -968,10 +971,13 @@ function questionCard(row) {
 			return;
 		}
 		if (draft.editing) controls.appendChild(el('p', 'ask-line', 'Change your answer before Rich receives it.'));
+		// A multiple-choice card has ONE Send answer: the chosen options and anything typed in
+		// Other answer go together.
+		const typed = () => (draft.other ? draft.text.trim() : '');
 		const send = el('button', 'hear', 'Send answer');
 		send.type = 'button';
-		send.disabled = draft.busy || !draft.selected.size;
-		send.addEventListener('click', () => submit([...draft.selected], ''));
+		send.disabled = draft.busy || !(draft.selected.size || typed());
+		send.addEventListener('click', () => submit([...draft.selected], typed()));
 		q.options.forEach((option) => {
 			const button = el('button', 'ask-option');
 			button.type = 'button';
@@ -990,7 +996,6 @@ function questionCard(row) {
 			}
 			controls.appendChild(button);
 		});
-		if (q.multiple) controls.appendChild(send);
 		if (q.free_answer) {
 			const other = el('button', 'ask-link', 'Other answer');
 			other.type = 'button';
@@ -1004,11 +1009,16 @@ function questionCard(row) {
 				input.placeholder = 'Your answer';
 				input.maxLength = 16384;
 				input.value = draft.text;
-				input.addEventListener('input', () => { draft.text = input.value; custom.disabled = draft.busy || !input.value.trim(); });
 				const custom = el('button', 'hear', 'Send answer');
 				custom.type = 'submit';
 				custom.disabled = draft.busy || !draft.text.trim();
-				form.append(input, custom);
+				input.addEventListener('input', () => {
+					draft.text = input.value;
+					custom.disabled = draft.busy || !input.value.trim();
+					send.disabled = draft.busy || !(draft.selected.size || typed());
+				});
+				form.appendChild(input);
+				if (!q.multiple) form.appendChild(custom);
 				form.addEventListener('submit', (event) => {
 					event.preventDefault();
 					if (input.value.trim()) submit(q.multiple ? [...draft.selected] : [], input.value.trim());
@@ -1016,6 +1026,7 @@ function questionCard(row) {
 				controls.appendChild(form);
 			}
 		}
+		if (q.multiple) controls.appendChild(send);
 	}
 
 	draw();
