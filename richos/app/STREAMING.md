@@ -354,16 +354,20 @@ attribution to the CEO — safe to render. A crash or a rotation still produces
 `work_duration state: "interrupted"` on a reload, and **which one it was is still not
 recorded**; the only thing that state can now say for certain is that it was not the CEO.
 
-The renderer sends `stop_turn({ expectedTurnId })` for the turn it displays. The backend
-checks that identity atomically before writing a stop claim or interrupting a lease. An
-obsolete request returns `stopped: false` and cannot stop a successor turn. The optional
-unscoped form remains available to explicit global callers.
+The renderer sends `stop_turn({ expectedThreadId })` for the conversation it displays.
+The backend rejects a different active conversation, then its existing control atomically
+stops the current input owner. The renderer does not guess that owner from live rows:
+Claude Code can fold a follow-up into the running answer. The returned `turnId` identifies
+the row marked Stopping. Explicit callers may still supply `expectedTurnId`; that guard
+rejects an obsolete input identity. A terminated provider is retired even if its completed
+answer beat Stop. The next explicit input uses the normal native history resume; Stop
+never opens a replacement or replays a request by itself.
 
 **`stopping` is a UI-LOCAL state and is deliberately not on the wire.** The `stop_turn`
 command does not answer until the request is durable, so the renderer setting `stopping`
-from that return is a statement of recorded fact rather than an optimistic guess. Emitting
-it as an event would need the spine, and the spine's mutex is held by the very turn being
-stopped — which is the whole reason `steering.rs` exists.
+from that return is a statement of recorded fact rather than an optimistic guess. The
+control persists Stop without taking the conversation spine. Native reply waits also run
+outside that lock. The actual terminal result determines Stopped versus Completed.
 
 **`waiting_for_user` (§9.4) STILL HAS NO SIGNAL, and slice 6 did not invent one.** §22 lists
 worker waiting state under "must not be faked", `worker_status.rs` refuses to infer it, and

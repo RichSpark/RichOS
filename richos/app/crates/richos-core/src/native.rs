@@ -3791,6 +3791,7 @@ impl Drop for NativeCognition {
 }
 
 impl Cognition for NativeCognition {
+    fn is_closed(&self)->bool {self.client.reader_closed.load(Ordering::SeqCst)}
     fn set_app_messages(&mut self,messages:Vec<(String,String)>) {self.app_messages=messages;}
     fn set_conversation_context(&mut self,context:&str) {self.routing_context=context.to_string();}
     fn set_company_context(&mut self,context:Option<&str>)->Result<bool,CognitionError> {
@@ -7963,15 +7964,24 @@ impl Cognition for Lease {
     fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> {
         Some(Arc::new(LiveInput { inner: self.client.cancel_handle(), completed: self.completed.clone() }))
     }
-    fn prompt(&mut self, input: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
-        self.scheduled.fetch_add(1, Ordering::SeqCst);
-        let result = self.client.prompt(input, &mut |item| {
-            let original = matches!(&item, TurnItem::Text { text, .. } if text.contains("ORIGINAL-STARTED"));
-            on(item);
-            if original { let _ = self.started.send(()); }
-        });
-        let _ = self.completed.send(());
-        Ok(result?)
+    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        panic!("native submission and reply waiting are separate")
+    }
+    fn is_closed(&self)->bool {self.client.reader_closed.load(Ordering::SeqCst)}
+    fn enqueue_prompt(&mut self,input:&str,started:Box<dyn FnOnce()->Result<(),String>+Send>)->Result<crate::cognition::PendingReply,CognitionError> {
+        started().map_err(CognitionError::Protocol)?;
+        self.scheduled.fetch_add(1,Ordering::SeqCst);
+        let reply=self.client.enqueue_prompt(input,None)?;
+        let entered=self.started.clone();let completed=self.completed.clone();
+        Ok(crate::cognition::PendingReply::new(move |on| {
+            let result=reply.wait(&mut |item| {
+                let original=matches!(&item,TurnItem::Text {text,..} if text.contains("ORIGINAL-STARTED"));
+                on(item);
+                if original {let _=entered.send(());}
+            });
+            let _=completed.send(());
+            result.map_err(CognitionError::from)
+        }))
     }
 }
 

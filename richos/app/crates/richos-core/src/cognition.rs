@@ -236,6 +236,8 @@ pub(crate) fn account_resume_blocked(lease:&dyn Cognition)->bool {
 
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
+    /// Positive provider EOF, never inferred from silence or an API error.
+    fn is_closed(&self)->bool {false}
     /// A stable identifier for the backing session (for the ledger's rotation record).
     fn session_id(&self) -> &str;
 

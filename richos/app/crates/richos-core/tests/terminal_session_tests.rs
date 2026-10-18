@@ -210,3 +210,89 @@ fn adopted_and_cold_sessions_both_register_stop_and_live_model_controls() {
         drop(spine);std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn an_explicit_message_after_stop_reopens_instead_of_reusing_the_terminated_provider() {
+    use richos_core::steering::{ConversationControl,TurnCancel,TurnControl};
+    use std::sync::atomic::AtomicBool;
+    struct Killed(AtomicBool);
+    impl TurnCancel for Killed {
+        fn cancel(&self)->bool {self.0.store(true,Ordering::SeqCst);true}
+    }
+    struct Stopped {control:ConversationControl,killed:Arc<Killed>,reason:Option<&'static str>,calls:Arc<AtomicUsize>}
+    impl Cognition for Stopped {
+        fn session_id(&self)->&str {"saved-native-session"}
+        fn cancel_handle(&self)->Option<Arc<dyn TurnCancel>> {Some(self.killed.clone())}
+        fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
+            panic!("this fixture submits before waiting, as the native provider does")
+        }
+        fn enqueue_prompt(&mut self,_:&str,started:Box<dyn FnOnce()->Result<(),String>+Send>)->Result<richos_core::cognition::PendingReply,CognitionError> {
+            self.calls.fetch_add(1,Ordering::SeqCst);
+            if self.killed.0.load(Ordering::SeqCst) {return Err(CognitionError::Io("provider closed".into()))}
+            started().map_err(CognitionError::Protocol)?;
+            let control=self.control.clone();let reason=self.reason;
+            Ok(richos_core::cognition::PendingReply::new(move |_| {
+                control.request_stop().unwrap();
+                reason.map(|reason|Ok(reason.into())).unwrap_or_else(||Err(CognitionError::Io("provider EOF".into())))
+            }))
+        }
+    }
+    for reason in [None,Some(richos_core::native::STOP_REASON_CANCELLED),Some(richos_core::native::STOP_REASON_CANCEL_UNACKNOWLEDGED),Some("end_turn")] {
+        let (root,mut spine,company)=fixture();
+        let controls=TurnControl::open(root.join("intake.jsonl")).unwrap();
+        spine.set_turn_control(controls.clone());
+        let thread=spine.create_thread("Conversation",&company).unwrap();
+        let factory=MockLeaseFactory::new(vec!["Explicit next reply"]);
+        let opened=factory.spawned.clone();
+        let prompts=factory.spawned_prompts.clone();
+        spine.set_lease_factory(Box::new(factory));
+        let calls=Arc::new(AtomicUsize::new(0));
+        spine.attach_lease(Box::new(Stopped {control:controls.for_thread(&thread),killed:Arc::new(Killed(AtomicBool::new(false))),reason,calls:calls.clone()}));
+        spine.submit_prompt("Stop this",Source::Text).unwrap();
+        assert!(opened.lock().unwrap().is_empty(),"Stop must not reopen or replay by itself");
+        spine.submit_prompt("This is my next explicit message",Source::Text).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst),1,"a terminated provider was reused for {reason:?}");
+        assert_eq!(opened.lock().unwrap().len(),1);
+        assert_eq!(*prompts.lock().unwrap()[0].lock().unwrap(),["This is my next explicit message"]);
+        let turns=spine.ledger().thread_turns(&thread).unwrap();
+        assert_eq!(turns.len(),2);
+        assert_eq!(turns[0].state,if reason==Some("end_turn") {richos_core::ledger::TurnState::Completed} else {richos_core::ledger::TurnState::Stopped});
+        assert_eq!(turns[1].assistant_text,"Explicit next reply");
+        drop(spine);std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_eof_reopens_only_when_the_user_sends_another_message() {
+    use richos_core::native::NativeCognition;
+    use std::os::unix::fs::PermissionsExt;
+    let (root,mut spine,company)=fixture();
+    let thread=spine.create_thread("Conversation",&company).unwrap();
+    let script=root.join("eof-provider.py");
+    std::fs::write(&script,r#"#!/usr/bin/env python3
+import json,sys
+for line in sys.stdin:
+ value=json.loads(line)
+ if value['type']=='control_request':
+  print(json.dumps({'type':'control_response','response':{'subtype':'success','request_id':value['request_id'],'response':{}}}),flush=True)
+ elif value['type']=='user':
+  sys.exit(0)
+"#).unwrap();
+    std::fs::set_permissions(&script,std::fs::Permissions::from_mode(0o755)).unwrap();
+    let doctrine=root.join("rich.md");std::fs::write(&doctrine,"Fixture").unwrap();
+    let skills=richos_core::skills::ensure_rendered(&root.join("skills"),
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+    let native=NativeCognition::start(&script,&root,&doctrine,&skills).unwrap();
+    let factory=MockLeaseFactory::new(vec!["Explicit next reply"]);
+    let opened=factory.spawned.clone();let prompts=factory.spawned_prompts.clone();
+    spine.set_lease_factory(Box::new(factory));spine.attach_lease(Box::new(native));
+    assert!(spine.submit_prompt("The provider exits during this input",Source::Text).is_err());
+    assert!(opened.lock().unwrap().is_empty(),"EOF must not trigger automatic replay");
+    spine.submit_prompt("This is another explicit input",Source::Text).unwrap();
+    assert_eq!(opened.lock().unwrap().len(),1);
+    assert_eq!(*prompts.lock().unwrap()[0].lock().unwrap(),["This is another explicit input"]);
+    let turns=spine.ledger().thread_turns(&thread).unwrap();
+    assert_eq!(turns.len(),2);assert_eq!(turns[1].assistant_text,"Explicit next reply");
+    drop(spine);std::fs::remove_dir_all(root).unwrap();
+}

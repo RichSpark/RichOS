@@ -655,6 +655,7 @@ impl WorkHost {
         binding: &ThreadBinding,
     ) -> Result<(), String> {
         let mut lease = backend.lease.lock().unwrap();
+        if lease.as_ref().is_some_and(|lease|lease.is_closed()) {drop(lease.take());}
         if lease.is_some() {
             return Ok(());
         }
@@ -1369,6 +1370,27 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "{what}");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn a_closed_stu_provider_reopens_at_the_next_normal_input_boundary() {
+        struct Closed;
+        impl Cognition for Closed {
+            fn session_id(&self)->&str {"ended-stu-session"}
+            fn is_closed(&self)->bool {true}
+            fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
+                panic!("a closed provider cannot accept input")
+            }
+        }
+        let h=harness(0);
+        let backend=h.host.backend_for(h.binding.thread_id()).unwrap();
+        *backend.lease.lock().unwrap()=Some(Box::new(Closed));
+        assert_eq!(h.spawns.load(Ordering::SeqCst),0);
+        h.host.ensure_lease(&backend,&h.binding).unwrap();
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"an idle EOF left Stu on a closed provider");
+        h.host.ensure_lease(&backend,&h.binding).unwrap();
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"a healthy connection was replaced");
+        h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]

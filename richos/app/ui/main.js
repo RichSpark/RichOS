@@ -2467,10 +2467,9 @@ async function stopTurn() {
   const stoppedOpening = openingThread;
   const stoppedModel = stoppedOpening ? stoppedOpening.previousModel : timelineModel;
   try {
-    const live = [...stoppedModel.turns.entries()].filter(([, turn]) => turn.live);
-    const target = live.find(([, turn]) => turn.status !== "queued") || live[0];
-    if (!target) return;
-    const report = await Bridge.invoke("stop_turn", { expectedTurnId: target[0] });
+    if (!stoppedModel.threadId) return;
+    // The backend owns native admission, including folded inputs. Rows do not select it.
+    const report = await Bridge.invoke("stop_turn", { expectedThreadId: stoppedModel.threadId });
     if (!report || !report.stopped) return;
     if (openingThread === stoppedOpening && stoppedOpening) openingThread.stopError = null;
     if (window.RichTimeline.markStopping(stoppedModel, report.turnId)) scheduleRender();

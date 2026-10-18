@@ -287,8 +287,10 @@ fn retain_preparation_item(
 
 
 fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot:&std::sync::Arc<std::sync::Mutex<Option<Box<dyn Cognition>>>>)->Result<bool,SpineError> {
-    if plan.control.stop_claim().is_some() {return Ok(false)}
+    if plan.control.stop_claim().is_some_and(|claim|
+        plan.control.active_turn().is_some_and(|turn|turn.turn_id==claim.turn_id)) {return Ok(false)}
     let mut slot=slot.lock().unwrap();
+    if slot.as_ref().is_some_and(|lease|lease.is_closed()) {drop(slot.take());}
     if let Some(lease)=slot.as_ref() {
         let account_changed=plan.factory.as_ref().and_then(|factory|factory.quota())
             .zip(lease.account()).is_some_and(|(quota,account)|quota.before_turn(account,lease.streamed_usage())!=account);
@@ -367,7 +369,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     }))?);
         Ok(())
     });
-    delivery.stopped_before_prompt = plan.control.stop_claim_for(&delivery.turn_id).is_some();
+    delivery.stopped_before_prompt = delivery.response.is_none() && plan.control.stop_claim_for(&delivery.turn_id).is_some();
     delivery.preparation_stop = match &prepared {
         Err(SpineError::Cognition(CognitionError::PrimingStopped(reason))) => Some(reason.clone()),
         _ => None,
@@ -2061,6 +2063,13 @@ impl Spine {
     /// from the recovery path itself so a lease that dies immediately on every respawn
     /// surfaces honestly after one attempt rather than looping forever.
     fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
+        if let Some(claim)=self.control.for_thread(binding.thread_id()).stop_claim().filter(|claim|
+            self.ledger.turn(turn_id).and_then(|turn|turn.intake_id).is_none_or(|id|id<claim.intake_id)) {
+            // Preserve the existing durable Stop cut without submitting pre-Stop input.
+            self.ledger.stop_turn(turn_id,claim.requested_at)?;
+            self.emit_live(self.turn_status_event(binding,turn_id,TurnStatus::Stopped,None));
+            return Ok(());
+        }
         let delivery=self.prepare_delivery(turn_id,binding,text,allow_recovery)?;
         self.dispatch_delivery(delivery)
     }
@@ -2362,10 +2371,14 @@ impl Spine {
                     && r != crate::native::STOP_REASON_CANCEL_UNACKNOWLEDGED
             );
             if stop_ended_the_turn {
-                self.finish_stopped_turn(turn_id, binding, &claim, lease_reported)?;
+                self.finish_stopped_turn(turn_id, binding, &claim)?;
             } else {
                 self.finish_completed_turn_the_stop_missed(turn_id, binding, &claim, lease_reported.unwrap())?;
             }
+            // Product Stop terminates the provider even if its final answer won the race.
+            // Only the next explicit input reconnects through the normal history resume.
+            self.resident.remove(thread_id);
+            control.set_cancel(None);control.set_lease_session(None);
             return Ok(());
         }
 
@@ -2576,7 +2589,6 @@ impl Spine {
         turn_id: &str,
         binding: &ThreadBinding,
         claim: &StopClaim,
-        lease_stop_reason: Option<&str>,
     ) -> Result<(), SpineError> {
         let thread_id = binding.thread_id().to_string();
         self.ledger.stop_turn(turn_id, claim.requested_at)?;
@@ -2589,16 +2601,6 @@ impl Spine {
         self.emit_live(self.turn_status_event(binding, turn_id, TurnStatus::Stopped, None));
         self.emit_live(self.thread_summary_event(binding, turn_id, ThreadStatus::Idle));
 
-        // A lease that never acknowledged `session/cancel` is no longer KNOWN to be idle —
-        // it may still be working, and whatever it says next would land on the next turn.
-        // Retire it directly. Asking that same child for a rotation handoff would wait
-        // on a process already known to ignore cancellation. The next request reconnects.
-        if lease_stop_reason == Some(crate::native::STOP_REASON_CANCEL_UNACKNOWLEDGED) {
-            // Never ask an unresponsive child for a handoff before retiring it.
-            self.resident.remove(binding.thread_id());
-            let control=self.control.for_thread(binding.thread_id());
-            control.set_cancel(None);control.set_lease_session(None);
-        }
         Ok(())
     }
 
