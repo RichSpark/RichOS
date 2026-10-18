@@ -1074,6 +1074,9 @@ impl Spine {
 
     fn install_the_spare(&mut self,plan:SparePlan,lease:Box<dyn Cognition>)->SpareReady {
         self.spare_in_flight=false;
+        // A waiting spare is already live and receives the same Settings control.
+        plan.control.set_cancel(lease.cancel_handle());
+        plan.control.set_lease_session(Some(lease.session_id().to_string()));
         self.spare=Some(SpareFrontDesk{lease,entity:plan.entity,reserved_thread:plan.reserved});
         SpareReady::Ready{millis:plan.started.elapsed().as_millis() as u64}
     }
@@ -1094,7 +1097,11 @@ impl Spine {
     /// moved to a different company — at which point the spare was primed with the wrong
     /// company's material and could not have been adopted anyway.
     fn discard_spare(&mut self) {
-        self.spare = None;
+        if let Some(spare)=self.spare.take() {
+            let control=self.control.for_thread(&spare.reserved_thread);
+            control.set_cancel(None);
+            control.set_lease_session(None);
+        }
     }
 
     /// Is a PRIMED spare standing ready for this entity? **Test scaffolding and the shell's

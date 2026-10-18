@@ -182,18 +182,31 @@ fn adopted_and_cold_sessions_both_register_stop_and_live_model_controls() {
     }
     for adopt in [false,true] {
         let (root,mut spine,company)=fixture();
-        spine.set_turn_control(TurnControl::open(root.join("intake.jsonl")).unwrap());
+        let controls=TurnControl::open(root.join("intake.jsonl")).unwrap();
+        spine.set_turn_control(controls.clone());
         let signal=Arc::new(Signal {models:AtomicUsize::new(0),stops:AtomicUsize::new(0)});
         spine.set_lease_factory(Box::new(Factory(signal.clone())));
-        if adopt {spine.ready_a_spare_front_desk(&company);}
+        if adopt {
+            spine.ready_a_spare_front_desk(&company);
+            controls.set_model(ModelChoice::Fable).unwrap();
+            assert_eq!(signal.models.load(Ordering::SeqCst),1,"Settings missed the waiting spare");
+        }
         let thread=spine.create_thread("Conversation",&company).unwrap();
         spine.prime_front_desk(&thread);
         let control=spine.turn_control();
         assert_eq!(control.lease_session().as_deref(),Some("controlled-session"),"adopted={adopt}");
         assert!(control.set_model(ModelChoice::Fable).unwrap(),"adopted={adopt}");
-        assert_eq!(signal.models.load(Ordering::SeqCst),1);
+        assert_eq!(signal.models.load(Ordering::SeqCst),if adopt {2}else{1});
         drop(spine.submit_prompt("Stop this request",Source::Text));
         assert!(signal.stops.load(Ordering::SeqCst)>0,"Stop missed adopted={adopt}");
+        spine.ready_a_spare_front_desk(&company);
+        let reserved=spine.spare_front_desk_reserved_thread().unwrap().to_string();
+        assert!(controls.for_thread(&reserved).lease_session().is_some());
+        spine.replace_app_message(&thread,None,"New app setting.","Changed the setting.").unwrap();
+        assert!(controls.for_thread(&reserved).lease_session().is_none(),"discarded spare retained a live control");
+        let before=signal.models.load(Ordering::SeqCst);
+        controls.set_model(ModelChoice::Opus).unwrap();
+        assert_eq!(signal.models.load(Ordering::SeqCst),before,"discarded sessions received model controls");
         drop(spine);std::fs::remove_dir_all(root).unwrap();
     }
 }

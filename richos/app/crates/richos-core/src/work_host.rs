@@ -724,7 +724,9 @@ impl WorkHost {
         let lease=backend.lease.lock().unwrap();
         let Some(lease)=lease.as_ref() else {return false};
         let Some(account)=lease.account() else {return false};
-        quota.before_turn(account,lease.streamed_usage())!=account
+        if quota.before_turn(account,lease.streamed_usage())==account {return false}
+        !matches!(lease.running_commands(),Some(
+            crate::lease_commands::CommandReading::Running(_)|crate::lease_commands::CommandReading::Unreadable))
     }
 
     pub fn rotations(&self, thread: &str) -> (u64, Option<String>) {
@@ -1369,6 +1371,47 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "{what}");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn account_resume_preserves_background_commands_and_waits_for_the_input_boundary() {
+        use crate::lease_commands::CommandReading;
+        struct Busy {
+            dropped:Arc<std::sync::atomic::AtomicBool>,
+            commands:Arc<Mutex<CommandReading>>,
+            pending:Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl Cognition for Busy {
+            fn session_id(&self)->&str {"old-account-session"}
+            fn account(&self)->Option<&str> {Some(crate::claude_accounts::ACCOUNT_ONE)}
+            fn has_pending_input(&self)->bool {self.pending.load(Ordering::SeqCst)}
+            fn running_commands(&self)->Option<CommandReading> {Some(*self.commands.lock().unwrap())}
+            fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {Ok("end_turn".into())}
+        }
+        impl Drop for Busy {fn drop(&mut self){self.dropped.store(true,Ordering::SeqCst);}}
+        let h=harness(0);
+        let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
+        let next=quota.accounts.add("Other").unwrap();quota.accounts.use_first(&next.id).unwrap();
+        h.host.set_quota(quota);
+        let backend=h.host.backend_for(h.binding.thread_id()).unwrap();
+        let dropped=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let commands=Arc::new(Mutex::new(CommandReading::Running(1)));
+        let pending=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *backend.lease.lock().unwrap()=Some(Box::new(Busy {dropped:dropped.clone(),commands:commands.clone(),pending:pending.clone()}));
+        for reading in [CommandReading::Running(1),CommandReading::Unreadable] {
+            *commands.lock().unwrap()=reading;
+            h.host.renew_if_account_changed(&backend,&h.binding);
+            assert!(!dropped.load(Ordering::SeqCst),"resume killed a possibly running command");
+            assert_eq!(h.spawns.load(Ordering::SeqCst),0);
+        }
+        *commands.lock().unwrap()=CommandReading::Clear;pending.store(true,Ordering::SeqCst);
+        h.host.renew_if_account_changed(&backend,&h.binding);
+        assert!(!dropped.load(Ordering::SeqCst));
+        pending.store(false,Ordering::SeqCst);
+        h.host.renew_if_account_changed(&backend,&h.binding);
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(h.spawns.load(Ordering::SeqCst),1,"clear commands and finished input should use the common opener");
+        h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]
