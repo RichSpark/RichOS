@@ -238,19 +238,19 @@ fn an_api_error_delivered_as_a_client_error_classifies_the_same_way() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// INVARIANT: the loss statement reaches the CEO AT the failure, and it names what is on
-/// disk and what is not.
+/// INVARIANT: the current retry notice reaches the CEO at failure. The durable loss
+/// statement still records what is on disk without counting the vendor's error text.
 ///
 /// The character count is the load-bearing assertion: it counts the real preamble and
 /// EXCLUDES the vendor's error line, because telling him "169 characters of the answer are
 /// saved" when all 169 are the error message is a true number about the wrong thing.
 #[test]
-fn the_loss_statement_is_emitted_at_the_failure_and_excludes_the_error_message_itself() {
+fn the_retry_notice_is_live_and_durable_loss_counts_exclude_the_error_message() {
     let (path, ledger) = tmp_ledger("loss-live");
     let mut spine = spine(ledger);
     let obs = RecordingObserver::default();
     spine.set_observer(Box::new(obs.clone()));
-    let _thread = spine.create_thread("General", &femcboost()).unwrap();
+    let thread = spine.create_thread("General", &femcboost()).unwrap();
     let preamble = "Here is what I found so far. ";
     spine.attach_lease(Box::new(ApiErrorAsTextCognition {
         session_id: "sess-1".into(),
@@ -268,13 +268,17 @@ fn the_loss_statement_is_emitted_at_the_failure_and_excludes_the_error_message_i
     );
     let m = &errors[0];
     assert!(m.contains("Anthropic's servers are at capacity"), "what happened: {m}");
-    assert!(m.contains("what you asked for is saved"), "what survived: {m}");
+    assert!(m.contains("retry 1 of 7") && m.contains("in the same conversation"), "the scheduled native-session retry: {m}");
+    let first = spine.ledger().thread_turns(&thread).unwrap().into_iter()
+        .find(|turn| turn.source == Source::Text).unwrap();
+    let loss = &first.upstream_failure.as_ref().unwrap().loss_message;
+    assert!(loss.contains("what you asked for is saved"), "what survived: {loss}");
     assert!(
-        m.contains(&format!("the {} characters", preamble.chars().count())),
-        "the measured count is the PREAMBLE ({} chars), not the error line: {m}",
+        loss.contains(&format!("the {} characters", preamble.chars().count())),
+        "the measured count is the PREAMBLE ({} chars), not the error line: {loss}",
         preamble.chars().count()
     );
-    assert!(m.contains("Not on disk:"), "what did not survive: {m}");
+    assert!(loss.contains("Not on disk:"), "what did not survive: {loss}");
     assert!(
         !m.contains("API Error: 529"),
         "the vendor's raw line is kept in the ledger, not read out to him here: {m}"

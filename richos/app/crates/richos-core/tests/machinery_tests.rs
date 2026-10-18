@@ -99,12 +99,11 @@ enum Item {
 struct ReplayCognition {
     session_id: String,
     script: Vec<Item>,
-    reprime_machinery: bool,
 }
 
 impl ReplayCognition {
     fn new(session_id: &str, script: Vec<Item>) -> Self {
-        ReplayCognition { session_id: session_id.into(), script, reprime_machinery: false }
+        ReplayCognition { session_id: session_id.into(), script }
     }
     fn replay(&self, items: &[Item], on_item: &mut dyn FnMut(TurnItem)) {
         let mut seq = 0u64;
@@ -171,6 +170,7 @@ fn spine_with_journal(dir: &std::path::Path) -> (Spine, MachineryJournal) {
     let ledger = Ledger::open(dir.join("conversation-ledger.jsonl")).unwrap();
     let mut spine = support::spine(ledger);
     spine.set_machinery_journal(MachineryJournal::new(dir.join("machinery")));
+    spine.ensure_active_thread_in(&femcboost()).unwrap();
     spine.attach_lease(Box::new(ReplayCognition::new("sess-1", recorded_turn())));
     (spine, MachineryJournal::new(dir.join("machinery")))
 }
@@ -305,8 +305,8 @@ fn the_calm_conversation_is_byte_identical_whether_or_not_machinery_flows() {
     let without_dir = tmp_dir("calm-without");
     let ledger = Ledger::open(without_dir.join("conversation-ledger.jsonl")).unwrap();
     let mut b = support::spine(ledger);
-    b.attach_lease(Box::new(ReplayCognition::new("sess-1", recorded_turn())));
     let tb = b.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+    b.attach_lease(Box::new(ReplayCognition::new("sess-1", recorded_turn())));
     b.submit_prompt("what version is the engine?", Source::Text).unwrap();
 
     let ma: Vec<(String, String)> = a.messages(&ta).unwrap().into_iter().map(|m| (m.role, m.text)).collect();
@@ -359,28 +359,22 @@ fn machinery_never_reaches_the_stream_event_family() {
 }
 
 #[test]
-fn reprime_machinery_is_retained_internal_and_never_projected() {
-    // §1.5: re-prime machinery is recorded, `internal: true`, `turnId: None`, and NEVER in
-    // a thread render — the standing order that Rich never reveals session rotation.
-    let dir = tmp_dir("reprime");
-    let ledger = Ledger::open(dir.join("conversation-ledger.jsonl")).unwrap();
-    let mut spine = support::spine(ledger);
-    spine.set_machinery_journal(MachineryJournal::new(dir.join("machinery")));
-    let mut lease = ReplayCognition::new("sess-1", recorded_turn());
-    lease.reprime_machinery = true;
-    spine.attach_lease(Box::new(lease));
-    let thread = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
-    spine.submit_prompt("go", Source::Text).unwrap();
-
-    let journal = MachineryJournal::new(dir.join("machinery"));
-    let internal: Vec<_> = journal.read_thread(&thread).into_iter().filter(|r| r.internal).collect();
-    assert_eq!(internal.len(), 1, "retained for debugging");
-    assert_eq!(internal[0].title, "Read reprime payload");
-    assert_eq!(internal[0].turn_id, None, "attached to the thread, not to a turn (G4)");
-
-    let rendered = journal.project_thread(&thread);
-    assert!(!rendered.iter().any(|r| r.internal), "and never rendered");
-    assert!(!rendered.iter().any(|r| r.title == "Read reprime payload"));
+fn internal_journal_records_are_retained_and_never_projected() {
+    // Historical internal traffic stays inspectable without a hidden reconstruction turn.
+    let dir=tmp_dir("internal-history");
+    let (mut spine,journal)=spine_with_journal(&dir);
+    let thread=spine.active_thread().unwrap().to_string();
+    let frame=json!({"type":"assistant","message":{"content":[
+        {"type":"tool_use","id":"internal-read","name":"Read","input":{"file_path":"/fixture/internal"}}]}});
+    let record=MachineryRecord::from_native_event(&frame,"sess-1",0).pop().unwrap().stamp(&thread,None,true);
+    journal.append(&record).unwrap();
+    let internal:Vec<_>=journal.read_thread(&thread).into_iter().filter(|r|r.internal).collect();
+    assert_eq!(internal.len(),1,"internal traffic is retained for inspection");
+    assert!(internal[0].turn_id.is_none(),"internal traffic is not an invented user turn");
+    assert!(journal.project_thread(&thread).is_empty(),"internal traffic must not render");
+    spine.submit_prompt("go",Source::Text).unwrap();
+    assert!(!journal.project_thread(&thread).is_empty(),"visible traffic still renders");
+    assert!(!journal.project_thread(&thread).iter().any(|record|record.internal));
 }
 
 #[test]
@@ -407,8 +401,8 @@ fn a_journal_write_failure_never_fails_the_turn() {
     let ledger = Ledger::open(dir.join("conversation-ledger.jsonl")).unwrap();
     let mut spine = support::spine(ledger);
     spine.set_machinery_journal(MachineryJournal::new(&blocked));
-    spine.attach_lease(Box::new(ReplayCognition::new("sess-1", recorded_turn())));
     let thread = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+    spine.attach_lease(Box::new(ReplayCognition::new("sess-1", recorded_turn())));
 
     let turn = spine.submit_prompt("go", Source::Text).expect("the turn must still succeed");
     assert_eq!(spine.ledger().turn(&turn).unwrap().assistant_text, "Let me check. It says 1.0.0.");
@@ -426,8 +420,8 @@ fn a_spine_with_no_journal_still_routes_and_completes_the_turn() {
     assert!(!spine.has_machinery_journal());
     let mach = RecordingMachineryObserver::default();
     spine.set_machinery_observer(Box::new(mach.clone()));
-    spine.attach_lease(Box::new(ReplayCognition::new("sess-1", recorded_turn())));
     let thread = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+    spine.attach_lease(Box::new(ReplayCognition::new("sess-1", recorded_turn())));
     spine.submit_prompt("go", Source::Text).unwrap();
     assert_eq!(spine.messages(&thread).unwrap().len(), 2);
     assert_eq!(mach.records.lock().unwrap().len(), 6, "routed and emitted, just not retained");
@@ -584,8 +578,8 @@ fn a_turns_written_files_reach_the_output_record_with_whoever_wrote_them() {
     spine.set_machinery_journal(MachineryJournal::new(dir.join("machinery")));
     let store = OutputStore::for_data_dir(&dir);
     spine.set_output_store(store.clone(), Some(evidence));
-    spine.attach_lease(Box::new(HookedCognition { inner: ReplayCognition::new("sess-1", script), during }));
     let thread = spine.ensure_active_thread_in(&femcboost()).unwrap().thread_id().to_string();
+    spine.attach_lease(Box::new(HookedCognition { inner: ReplayCognition::new("sess-1", script), during }));
     let turn = spine.submit_prompt("write the brief and have the numbers counted", Source::Text).unwrap();
 
     let list = store.project(&thread).unwrap();

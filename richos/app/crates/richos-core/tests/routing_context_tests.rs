@@ -19,8 +19,8 @@ fn classification_gets_the_scoped_visible_dialogue_including_actual_replies() {
     }
     let mock=MockCognition::new("current-native",vec!["I will carry that through."]);
     let contexts=mock.conversation_contexts.clone();
-    let mut spine=support::spine(ledger);spine.attach_lease(Box::new(mock));
-    spine.switch_thread(&thread).unwrap();spine.submit_prompt("Go ahead",Source::Text).unwrap();
+    let mut spine=support::spine(ledger);spine.switch_thread(&thread).unwrap();
+    spine.attach_lease(Box::new(mock));spine.submit_prompt("Go ahead",Source::Text).unwrap();
     let contexts=contexts.lock().unwrap();let context=contexts.last().unwrap();
     assert!(context.contains("Compare the proposals"));assert!(context.contains("Proposal B needs vendor checks."));
     assert!(!context.contains("PRIVATE"));assert!(!context.contains("Go ahead"),"the unchanged original request is supplied separately");

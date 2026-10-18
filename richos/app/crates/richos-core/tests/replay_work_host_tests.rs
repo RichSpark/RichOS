@@ -234,7 +234,7 @@ fn frames_before_user_send(capture:&str,user_send:usize)->usize {
     frames
 }
 fn check_saved_report(r:&Replay,id:&str) {
-    assert_eq!(r.row(id).state,richos_core::assignment::AssignmentState::Running,"a native turn or task notification inferred job completion");
+    assert_eq!(r.row(id).state,richos_core::assignment::AssignmentState::Registered,"a native turn or task notification inferred execution state without Stu's report");
     assert!(r.told_about(id).is_empty(),"the host manufactured a reply on Stu's behalf");
     assert!(r.events("divergence").is_empty(),"the host injected input absent from the user's handoff: {:?}",r.events("divergence"));
 }

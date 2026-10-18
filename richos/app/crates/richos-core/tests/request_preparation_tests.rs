@@ -71,7 +71,6 @@ fn restart_continues_saved_requests_and_preserves_uncertain_attempt_timing() {
     restored.set_turn_control(TurnControl::open(root.join("intake.jsonl")).unwrap());
     let mock = MockCognition::new("new", vec![]);
     let prompts = mock.prompts.clone();
-    let contexts = mock.recovery_contexts.clone();
     restored.switch_thread(binding.thread_id()).unwrap();
     restored.attach_lease(Box::new(mock));
     restored.reconcile_intake().unwrap();
@@ -85,7 +84,6 @@ fn restart_continues_saved_requests_and_preserves_uncertain_attempt_timing() {
         assert_eq!(reloaded.turn(&id).unwrap().active_ms(), None);
     }
     assert_eq!(*prompts.lock().unwrap(),vec!["not started"]);
-    assert!(contexts.lock().unwrap().is_empty(), "restart reconstructed a hidden context prompt");
     assert!(restored.ledger().turn(&second).unwrap().superseded_by.is_none(), "restart repeated uncertain side effects");
     assert_eq!(restored.messages(binding.thread_id()).unwrap().iter().filter(|m| m.role == "user").count(), 2);
 }

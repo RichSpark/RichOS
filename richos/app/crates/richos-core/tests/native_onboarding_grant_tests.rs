@@ -22,50 +22,45 @@ impl Fixture {
             std::env::temp_dir().join(format!("richos grant fixture {}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("agent.sh");
-        std::fs::write(&script, r#"#!/bin/sh
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = '--mcp-config' ]; then
-    shift
-    scope=$(printf '%s' "$1" | sed -n 's/.*"args":\["--onboarding-mcp","\([^"]*\)"\].*/\1/p')
-  fi
-  shift
-done
-[ -n "$scope" ] || exit 22
-printf '%s' "$scope" > scope-path
-printf '%s' "$$" > child-pid
-while IFS= read -r line; do
-  case "$line" in
-    *'"subtype":"initialize"'*)
-      printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
-      ;;
-    *'"subtype":"interrupt"'*)
-      printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}'
-      ;;
-    *'"type":"user"'*)
-      case "$(cat "$scope" 2>/dev/null)" in
-        *'"actions_allowed":true'*) printf 'granted\n' >> observations ;;
-        *'"actions_allowed":false'*) printf 'denied\n' >> observations ;;
-        *) printf 'invalid\n' >> observations ;;
-      esac
-      printf '%s\n' '{"type":"system","subtype":"init","tools":["mcp__richos_onboarding__save_company_notes","mcp__richos_onboarding__decline_onboarding"],"plugins":[{"name":"rich-skills"}]}'
-      case "$(cat mode 2>/dev/null)" in
-        hold)
-          printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_hold"}}}'
-          printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ready to stop"}}}'
-          ;;
-        error)
-          printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["fixture failure"]}'
-          ;;
-        exit) exit 0 ;;
-        corrupt)
-          printf 'broken scope' > "$scope"
-          printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
-          ;;
-        *) printf '%s\n' '{"type":"result","stop_reason":"end_turn"}' ;;
-      esac
-      ;;
-  esac
-done
+        std::fs::write(&script, r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+scope = pathlib.Path(json.loads(sys.argv[sys.argv.index("--mcp-config") + 1])["mcpServers"]["richos_onboarding"]["args"][1])
+pathlib.Path("scope-path").write_text(str(scope))
+pathlib.Path("child-pid").write_text(str(os.getpid()))
+def send(frame): print(json.dumps(frame), flush=True)
+def read(): return json.loads(sys.stdin.readline())
+for index, line in enumerate(sys.stdin):
+    frame = json.loads(line)
+    request = frame.get("request", {})
+    if request.get("subtype") == "initialize":
+        send({"type":"control_response","response":{"subtype":"success","request_id":frame["request_id"],"response":{}}})
+    elif request.get("subtype") == "interrupt":
+        send({"type":"result","subtype":"error_during_execution","is_error":True,"terminal_reason":"aborted_streaming"})
+    elif frame["type"] == "user":
+        send({"type":"command_lifecycle","command_uuid":frame["uuid"],"state":"started"})
+        send({"type":"control_request","request_id":str(index),"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt":frame["message"]["content"][0]["text"]}}})
+        hook = read()["response"]["response"]
+        if hook.get("decision") == "block":
+            send({"type":"result","subtype":"success","num_turns":0,"result":"UserPromptSubmit operation blocked by hook"})
+            continue
+        try:
+            allowed = json.loads(scope.read_text())["actions_allowed"]
+            observation = "granted" if allowed else "denied"
+        except (OSError, ValueError):
+            observation = "invalid"
+        with open("observations", "a") as out: out.write(observation + "\n")
+        send({"type":"system","subtype":"init","tools":["mcp__richos_onboarding__save_company_notes","mcp__richos_onboarding__decline_onboarding"],"plugins":[{"name":"rich-skills"}]})
+        mode = pathlib.Path("mode").read_text() if pathlib.Path("mode").exists() else "ok"
+        if mode == "hold":
+            send({"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_hold"}}})
+            send({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ready to stop"}}})
+        elif mode == "error":
+            send({"type":"result","subtype":"error_during_execution","is_error":True,"errors":["fixture failure"]})
+        elif mode == "exit":
+            sys.exit(0)
+        else:
+            if mode == "corrupt": scope.write_text("broken scope")
+            send({"type":"result","stop_reason":"end_turn"})
 "#).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -94,6 +89,7 @@ done
     }
 
     fn allowed(&self) -> bool {
+        if !self.scope.exists() { return false; }
         let scope: Value = serde_json::from_slice(&std::fs::read(&self.scope).unwrap()).unwrap();
         scope["actions_allowed"].as_bool().unwrap()
     }
@@ -181,26 +177,23 @@ fn onboarding_grant_is_revoked_when_stop_ends_the_visible_prompt() {
 }
 
 #[test]
-fn missing_or_invalid_scope_refuses_delivery_before_any_user_frame() {
+fn missing_or_invalid_scope_refuses_model_execution() {
     let mut f = Fixture::new();
     assert!(!f.scope.exists());
     assert!(f.lease.prompt("no company scope", &mut |_| {}).is_err());
     assert!(f.observations().is_empty());
-    f.bind();
-    std::fs::write(&f.scope, "malformed").unwrap();
-    assert!(f
-        .lease
-        .prompt("invalid company scope", &mut |_| {})
-        .is_err());
-    assert!(f.observations().is_empty());
-    assert_eq!(std::fs::read_to_string(&f.scope).unwrap(), "malformed");
-    f.bind();
-    assert_eq!(
-        f.lease.prompt("repaired scope", &mut |_| {}).unwrap(),
-        "end_turn"
-    );
-    assert_eq!(f.observations(), ["granted"]);
     assert!(!f.allowed());
+
+    // A retained scope can become invalid between inputs. With no fresh binding,
+    // the hook must refuse it before model execution and retire the unsafe child.
+    let mut f = Fixture::new();
+    f.bind();
+    f.lease.prompt("valid scope", &mut |_| {}).unwrap();
+    assert_eq!(f.observations(), ["granted"]);
+    std::fs::write(&f.scope, "malformed").unwrap();
+    assert!(f.lease.prompt("invalid company scope", &mut |_| {}).is_err());
+    assert_eq!(f.observations(), ["granted"], "the refused input never ran");
+    assert!(!f.scope.exists(), "an invalid grant must not survive refusal");
 }
 
 #[test]
@@ -217,16 +210,18 @@ fn failed_revocation_kills_the_child_and_refuses_further_delivery() {
         !f.scope.exists(),
         "invalid grant must be removed after failed revocation"
     );
-    let pid = std::fs::read_to_string(f.dir.join("child-pid")).unwrap();
-    assert!(
-        !std::process::Command::new("/bin/kill")
-            .args(["-0", &pid])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success(),
-        "the child with an unrevokeable grant is still alive"
-    );
+    let pid: libc::id_t = std::fs::read_to_string(f.dir.join("child-pid")).unwrap().parse().unwrap();
+    // kill(-0) also succeeds for an exited, unreaped child. Leave reaping to its owner.
+    // load-bound: hang guard for positive child-exit evidence, never a speed verdict.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe { libc::waitid(libc::P_PID, pid, &mut status, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT) };
+        assert_eq!(result, 0, "could not observe the owned child's exit");
+        if unsafe { status.si_pid() } != 0 { break; }
+        assert!(std::time::Instant::now() < deadline, "the child with an unrevokeable grant is still alive");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     f.bind();
     f.mode("ok");
     assert!(f
@@ -238,16 +233,14 @@ fn failed_revocation_kills_the_child_and_refuses_further_delivery() {
 }
 
 #[test]
-fn a_stop_latched_before_delivery_leaves_no_grant_or_user_frame() {
+fn a_stop_latched_before_admission_leaves_no_grant_or_model_execution() {
     let mut f = Fixture::new();
     f.bind();
     let cancel = f.lease.cancel_handle().unwrap();
     cancel.begin_operation();
     assert!(cancel.cancel());
-    assert_eq!(
-        f.lease.prompt("already stopped", &mut |_| {}).unwrap(),
-        STOP_REASON_CANCELLED
-    );
+    let error = f.lease.prompt("already stopped", &mut |_| {}).unwrap_err();
+    assert!(error.to_string().contains(STOP_REASON_CANCELLED));
     assert!(f.observations().is_empty());
     assert!(!f.allowed());
     cancel.end_operation();

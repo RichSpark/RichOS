@@ -401,8 +401,8 @@ pub trait Cognition: Send {
     }
 }
 
-/// A scripted Cognition for tests. Records every call so tests can assert that
-/// re-prime happened and that the right prompts were delivered in the right order.
+/// A scripted Cognition for tests. Records submitted inputs and their scopes
+/// so tests can verify ownership and delivery order.
 pub struct MockCognition {
     session_id: String,
     /// Canned replies, consumed FIFO. If exhausted, echoes a default.
@@ -410,7 +410,6 @@ pub struct MockCognition {
     /// Shared handles so tests can inspect calls after the mock is boxed into the Spine.
     pub reprimes: Arc<Mutex<Vec<String>>>,
     pub prompts: Arc<Mutex<Vec<String>>>,
-    pub recovery_contexts: Arc<Mutex<Vec<String>>>,
     pub request_origins: Arc<Mutex<Vec<(String,String)>>>,
     pub conversation_contexts: Arc<Mutex<Vec<String>>>,
     pub company_contexts: Arc<Mutex<Vec<String>>>,
@@ -433,7 +432,6 @@ impl MockCognition {
             replies: Arc::new(Mutex::new(replies.into_iter().map(|s| s.to_string()).collect())),
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
-            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
             company_contexts: Arc::new(Mutex::new(Vec::new())),
@@ -452,7 +450,6 @@ impl MockCognition {
             replies,
             reprimes: Arc::new(Mutex::new(Vec::new())),
             prompts: Arc::new(Mutex::new(Vec::new())),
-            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             request_origins: Arc::new(Mutex::new(Vec::new())),
             conversation_contexts: Arc::new(Mutex::new(Vec::new())),
             company_contexts: Arc::new(Mutex::new(Vec::new())),
@@ -641,7 +638,6 @@ pub struct CancellableMockCognition {
     cancel: Arc<CancelFlag>,
     /// Every prompt this lease was handed, for ordering assertions.
     pub prompts: Arc<Mutex<Vec<String>>>,
-    pub recovery_contexts: Arc<Mutex<Vec<String>>>,
     /// How many chunks were actually delivered before the cancel landed.
     pub delivered: Arc<Mutex<usize>>,
 }
@@ -673,7 +669,6 @@ impl CancellableMockCognition {
             step,
             cancel: Arc::new(CancelFlag { flag: AtomicBool::new(false), requested: AtomicBool::new(false) }),
             prompts: Arc::new(Mutex::new(Vec::new())),
-            recovery_contexts: Arc::new(Mutex::new(Vec::new())),
             delivered: Arc::new(Mutex::new(0)),
         }
     }

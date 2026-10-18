@@ -329,7 +329,7 @@ fn failed_turn_emits_turn_error_and_persists_partial() {
                 "machinery reached the CEO-facing wire: {reason}"
             );
             assert!(
-                reason.contains("asking again is worth a try"),
+                reason.contains("Press Restore my message, then send it again."),
                 "a lost connection is the one class where a retry is honest: {reason}"
             );
             assert!(

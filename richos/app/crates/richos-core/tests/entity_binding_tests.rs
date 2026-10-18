@@ -16,7 +16,7 @@
 //! asserts the guarded view refuses it. Delete either clause of the guard in
 //! `Ledger::thread_turns` and this test fails.
 
-use richos_core::cognition::MockCognition;
+use richos_core::cognition::MockLeaseFactory;
 use richos_core::entity::{EntityId, ThreadEntity};
 use richos_core::ledger::{Ledger, LedgerError, Source};
 use richos_core::spine::SpineError;
@@ -305,11 +305,14 @@ fn a_turn_with_no_resolvable_entity_is_refused_loudly_and_never_defaults() {
     }
 
     let mut fresh = support::spine(Ledger::open(&path).unwrap());
-    fresh.attach_lease(Box::new(MockCognition::new("s2", vec!["ok"])));
+    let factory=MockLeaseFactory::new(vec!["ok"]);
+    let opened=factory.spawned.clone();
+    fresh.set_lease_factory(Box::new(factory));
     assert!(fresh.active_binding().is_none(), "a cold start has no active context");
     let err = fresh.submit_prompt("which company is this about?", Source::Text).unwrap_err();
     assert!(matches!(err, SpineError::NoActiveThread), "got {err:?}");
     assert!(err.to_string().contains("will not guess"), "the refusal explains itself: {err}");
+    assert!(opened.lock().unwrap().is_empty(),"an unscoped input must not open a session");
     assert_eq!(
         fresh.ledger().turns().len(),
         0,
@@ -422,7 +425,7 @@ fn bindings_survive_restart_with_state_neither_lost_nor_invented() {
     let (fem, dee, fem_rev, dee_rev);
     {
         let mut spine = support::spine(Ledger::open(&path).unwrap());
-        spine.attach_lease(Box::new(MockCognition::new("s1", vec!["release is on track", "note drafted"])));
+        spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["release is on track", "note drafted"])));
         fem = spine.create_thread("Avelor release", &femcboost()).unwrap();
         dee = spine.create_thread("Partner book", &deeply()).unwrap();
 

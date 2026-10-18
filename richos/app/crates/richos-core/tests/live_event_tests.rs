@@ -16,7 +16,7 @@
 //!   4. **The gate holds**: model reasoning and internal machinery never reach the
 //!      webview on this family.
 
-use richos_core::cognition::{Cognition, CognitionError, MockCognition, TurnItem};
+use richos_core::cognition::{Cognition, CognitionError, MockCognition, MockLeaseFactory, PendingReply, TurnItem};
 use richos_core::entity::EntityId;
 use richos_core::ledger::{Ledger, Source};
 use richos_core::live::{LiveEvent, LiveObserver};
@@ -153,6 +153,18 @@ impl Cognition for ScriptedLease {
         &self.session_id
     }
 
+    fn enqueue_prompt(&mut self, text: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>) -> Result<PendingReply, CognitionError> {
+        started().map_err(CognitionError::Protocol)?;
+        let mut reply = Self {
+            session_id: self.session_id.clone(),
+            script: std::mem::take(&mut self.script),
+            die_with: self.die_with.take(),
+        };
+        let text = text.to_string();
+        // Replay effects between delivered records, as the live provider does.
+        // The synchronous adapter would run every effect before delivering any record.
+        Ok(PendingReply::new(move |on_item| reply.prompt(&text, on_item)))
+    }
 
 
     fn prompt(&mut self, _text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
@@ -767,8 +779,7 @@ fn no_event_ever_carries_one_entitys_content_under_another_entitys_fence() {
 
     let live = RecordingLive::default();
     spine.set_live_observer(Box::new(live.clone()));
-    spine.attach_lease(Box::new(MockCognition::new(
-        "sess-1",
+    spine.set_lease_factory(Box::new(MockLeaseFactory::new(
         vec!["FEMCBOOST-ONLY: the coach roster is 40.", "DEEPLY-ONLY: the price is 90."],
     )));
 
