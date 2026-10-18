@@ -734,6 +734,47 @@ class DesktopWork(unittest.TestCase):
         done = self.call("complete", {"obligation_id":"fixture-task", "worker_ids":[pair["worker_id"]]})
         self.assertTrue(done["obligation_closed"])
 
+    def test_resumed_session_retires_disposed_execution_before_completing_replacement(self):
+        worker=self.call("prepare",self.args)
+        event={"session_id":self.session,"tool_use_id":"pre-update-call","tool_input":worker["agent_payload"]}
+        self.app.dispatch_intent(self.scope,event)
+        self.app.W.register_spawn(event,str(self.coord))
+        self.app.W.bind_agent(self.session,event["tool_use_id"],"pre-update-agent",str(self.coord))
+        key=self.app.W.named_key(self.session,worker["name"])
+        target=Path(self.app.target_workspace(self.app.read_record(self.app.folder(self.scope),worker["id"]))["path"])
+        self.app.W.record_session_end(self.session,"fixture app update")
+        self.assertTrue(self.app.W.land(key,"fixture-cleanup",auto=True)["landed"])
+        self.assertFalse(target.exists())
+        self.assertFalse(Path(self.app.W.agent_path(key)).exists())
+        self.assertTrue(Path(self.app.W.done_path(key)).exists())
+        self.assertIsNone(self.app.W.load_agent(key).get("end"))
+        self.app.W.record_session_start(self.session,str(self.coord),source="resume")
+        self.assertEqual(self.app.W.session_state(self.session)[0],"running")
+        record=self.call("inspect")["records"][0]
+        self.assertEqual(record["status"],"interrupted","resuming Stu resurrected a canonically retired worker")
+        work=self.app.ecs(self.scope,{"protocol":1,"command":"inspect","binding":self.scope["binding"],
+            "query":{"section":"work","include_closed":True}})["records"]
+        self.assertEqual(work[0]["status"],"cancelled")
+        pair=self.reviewed_pair("after-app-update")
+        self.assertTrue(self.call("integrate",pair)["work_integrated"])
+        done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[pair["worker_id"]]})
+        self.assertTrue(done["obligation_closed"])
+
+    def test_cleanup_intent_does_not_retire_an_unresolved_execution(self):
+        worker=self.call("prepare",self.args)
+        event={"session_id":self.session,"tool_use_id":"still-unresolved","tool_input":worker["agent_payload"]}
+        self.app.dispatch_intent(self.scope,event)
+        self.app.W.register_spawn(event,str(self.coord))
+        key=self.app.W.named_key(self.session,worker["name"])
+        with self.app.W.Lock():
+            canonical=self.app.W.load_agent(key)
+            canonical["disposition"]={"kind":"landed","auto":True}
+            self.app.W.save_agent(canonical)
+        with self.assertRaisesRegex(ValueError,"unresolved execution"):
+            self.app.completion_evidence(self.scope,"fixture-task",[])
+        self.assertTrue(Path(self.app.W.agent_path(key)).exists())
+        self.assertFalse(Path(self.app.W.done_path(key)).exists())
+
     def test_v2_01_a_dispatched_worker_is_still_interrupted_by_its_session_ending(self):
         """The twin: a receipt with dispatch evidence keeps the interruption."""
         prepared = self.call("prepare", self.args)
