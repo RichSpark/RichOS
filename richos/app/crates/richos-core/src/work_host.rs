@@ -33,23 +33,28 @@ impl InputReceipt {
     fn input_id(&self)->String {match self {Self::Peer(through)=>format!("peer:{through}"),Self::Answer(id)=>format!("answer:{id}")}}
 }
 
+/// A wait of the workers' overload clock on one Stu session: the retry it is and how long it
+/// is, and the `worker_overload` fact for each worker it will restart.
+struct WorkerWait {
+    session: String,
+    retry: u32,
+    wait: std::time::Duration,
+    facts: Vec<serde_json::Value>,
+}
+
 #[derive(Default)]
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
     overload: crate::upstream::RetryBudget,
-    /// The same schedule for the overloads Claude Code reports for Stu's WORKERS (follow-up 11),
-    /// counted apart from his own so a turn of his that succeeds does not restart theirs, and
-    /// one per worker: an overload hits every running worker at once, so a shared count would
-    /// let one worker's answer restart another's waits and several workers use up each other's
-    /// retries. Keyed by [`Inner::worker_keys`], so a restarted worker keeps its place.
-    workers: std::collections::HashMap<String, crate::upstream::RetryBudget>,
-    /// Each worker run's schedule key, by the tool call that started it: its job, duty,
-    /// repositories, description and own line (the worker a reviewer reviews, the first run a
-    /// continuation continues) from the dispatch receipt
-    /// ([`crate::work_status::worker_identity`]), read once per run. Workers of different jobs,
-    /// and one job's independent workers, never share one however alike their descriptions; a
-    /// worker Stu restarts is the same worker. A run no receipt names is its tool call.
-    worker_keys: std::collections::HashMap<String, String>,
+    /// ONE overload clock for all of Stu's WORKERS (follow-up 11), counted apart from his own
+    /// so a turn of his that succeeds does not restart theirs. An overload is Anthropic's
+    /// servers being overloaded and hits every running worker at once, so it is one schedule,
+    /// as Rich's and Stu's own are: the overloads that arrive during a wait join it
+    /// ([`Inner::worker_wait`]), the next one after it moves one step, a success resets it.
+    workers: crate::upstream::RetryBudget,
+    /// The wait the workers' clock is running, and every worker the overload stopped, each told
+    /// to Stu when it ends.
+    worker_wait: Option<WorkerWait>,
     /// The description each worker run was started under, by the tool call that started it
     /// (Claude Code's `task_started`), told to Stu as the worker's task.
     worker_names: std::collections::HashMap<String, String>,
@@ -212,8 +217,9 @@ impl WorkHost {
     /// 2026-10-07: 1, 2, 5, 10, 20, 40 and 80 minutes). A worker belongs to Claude Code, which
     /// cannot be set to those waits, so this host waits, on the same budget, clock and Stop
     /// checks as Stu's own retry above, and then tells Stu, who restarts the worker (stu.md).
-    /// Any other answer a worker gets from the API starts the schedule again. Each worker has
-    /// its own schedule ([`Inner::workers`]).
+    /// All workers share ONE clock ([`Inner::workers`]): an overload during a running wait joins
+    /// it, and when it ends Stu gets one `worker_overload` message per worker it stopped. Any
+    /// other answer a worker gets from the API starts the schedule again.
     fn observe_worker(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
         frame: &serde_json::Value) {
         if frame["type"] == "system" && frame["subtype"] == "task_started" && frame["task_type"] == "local_agent" {
@@ -223,54 +229,76 @@ impl WorkHost {
             return;
         }
         if frame["type"] != "assistant" { return; }
-        let call = frame["parent_tool_use_id"].as_str().unwrap_or_default();
-        let known = backend.inner.lock().unwrap().worker_keys.get(call).cloned();
-        let worker = known.unwrap_or_else(|| {
-            // Once per run, off the lock: the receipt was stamped before the Agent call ran.
-            let key = crate::work_status::worker_identity(&self.state, &binding.entity_id().to_string(),
-                binding.thread_id(), call).unwrap_or_else(|| call.to_string());
-            backend.inner.lock().unwrap().worker_keys.insert(call.to_string(), key.clone());
-            key
-        });
+        let call = &frame["parent_tool_use_id"];
         let mut inner = backend.inner.lock().unwrap();
-        let name = inner.worker_names.get(call).cloned();
         let Some(failure) = crate::native::overloaded_api_error_message(frame) else {
-            if frame.get("error").is_none_or(serde_json::Value::is_null) { inner.workers.remove(&worker); }
+            if frame.get("error").is_none_or(serde_json::Value::is_null) { inner.workers.succeeded(); }
             return;
         };
-        let (wait, spent) = {
-            let budget = inner.workers.entry(worker).or_default();
-            let granted = budget.charge(crate::upstream::UpstreamFault::Overloaded);
-            (granted.then(|| budget.wait_before_retry()).flatten(), budget.retries_spent())
-        };
-        drop(inner);
-        let task = name.map(serde_json::Value::from).or_else(|| frame.get("task_description").cloned());
-        let fact = serde_json::json!({"event":"worker_overload",
-            "worker":{"tool_use_id":frame["parent_tool_use_id"],"agent_id":frame.get("agent_id"),"task":task},
-            "error":failure.raw,"retry":wait.map(|_|spent),"retries_left":if wait.is_some() {crate::upstream::MAX_OVERLOAD_RETRIES-spent} else {0},
-            "waited_minutes":wait.map(|wait|wait.as_secs()/60),
+        let task = call.as_str().and_then(|call| inner.worker_names.get(call).cloned()).map(serde_json::Value::from)
+            .or_else(|| frame.get("task_description").cloned());
+        let fact = |wait: Option<(u32, std::time::Duration)>| serde_json::json!({"event":"worker_overload",
+            "worker":{"tool_use_id":call,"agent_id":frame.get("agent_id"),"task":task},
+            "error":failure.raw,"retry":wait.map(|(retry, _)| retry),
+            "retries_left":wait.map_or(0, |(retry, _)| crate::upstream::MAX_OVERLOAD_RETRIES - retry),
+            "waited_minutes":wait.map(|(_, wait)| wait.as_secs() / 60),
             // The end is the overload granted no retry, never the seventh, whose retry still runs.
             "retries_used_up":wait.is_none()});
-        if let Err(error) = self.tell_stu_after(backend, binding, session, wait, fact) {
+        if let Some(running) = inner.worker_wait.as_mut().filter(|running| running.session == session) {
+            // The same overload, stopping another worker: it joins the wait, the step stays.
+            if !running.facts.iter().any(|told| &told["worker"]["tool_use_id"] == call) {
+                let joined = fact(Some((running.retry, running.wait)));
+                running.facts.push(joined);
+            }
+            return;
+        }
+        let granted = inner.workers.charge(crate::upstream::UpstreamFault::Overloaded);
+        let wait = granted.then(|| inner.workers.wait_before_retry()).flatten();
+        let retry = inner.workers.retries_spent();
+        let told = fact(wait.map(|wait| (retry, wait)));
+        let started = match wait {
+            Some(wait) => {
+                inner.worker_wait = Some(WorkerWait {session: session.to_string(), retry, wait, facts: vec![told]});
+                drop(inner);
+                let ours = session.to_string();
+                // Every worker it stopped, taken when the wait ends; nobody when it was cut short.
+                self.tell_stu_after(backend, binding, session, Some(wait), move |backend, elapsed| {
+                    let taken = backend.inner.lock().unwrap().worker_wait.take_if(|running| running.session == ours);
+                    taken.filter(|_| elapsed).map_or_else(Vec::new, |running| running.facts)
+                })
+            }
+            None => {
+                drop(inner);
+                self.tell_stu_after(backend, binding, session, None, move |_, _| vec![told])
+            }
+        };
+        if let Err(error) = started {
+            backend.inner.lock().unwrap().worker_wait.take_if(|running| running.session == session);
             eprintln!("[richos] a worker's overload wait could not start: {error}");
         }
     }
 
     /// Off the native reader: wait `wait` on the retry clock unless the session ends first, then
-    /// put `fact` in Stu's own inbox and wake him on the same session.
+    /// put the facts `told` hands back in Stu's own inbox, one message each, and wake him on the
+    /// same session. `told` is asked once either way, with whether the wait elapsed.
     fn tell_stu_after(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
-        wait: Option<std::time::Duration>, fact: serde_json::Value) -> std::io::Result<()> {
+        wait: Option<std::time::Duration>,
+        told: impl FnOnce(&Backend, bool) -> Vec<serde_json::Value> + Send + 'static) -> std::io::Result<()> {
         let (host, receiving, binding, session) = (Arc::downgrade(self), Arc::downgrade(backend), binding.clone(), session.to_string());
         std::thread::Builder::new().name("richos-overload-retry".into()).spawn(move || {
             let (Some(host), Some(backend)) = (host.upgrade(), receiving.upgrade()) else { return };
-            if let Some(wait) = wait {
+            let elapsed = wait.is_none_or(|wait| {
                 let ended = || { let inner = backend.inner.lock().unwrap(); inner.closing || inner.lease_session.as_deref() != Some(session.as_str()) };
                 let clock = host.retry_clock.lock().unwrap().clone();
-                if !clock.wait(wait, &ended) { return; }
-            }
-            if let Err(error) = crate::session_tools::observe_overload_retry(&host.message_scope(&binding), &fact) {
-                eprintln!("[richos] an overload could not be passed to Stu: {error}");
-                return;
+                clock.wait(wait, &ended)
+            });
+            let facts = told(&backend, elapsed);
+            if facts.is_empty() { return; }
+            for fact in &facts {
+                if let Err(error) = crate::session_tools::observe_overload_retry(&host.message_scope(&binding), fact) {
+                    eprintln!("[richos] an overload could not be passed to Stu: {error}");
+                    return;
+                }
             }
             host.wake_messages(&binding);
         }).map(|_| ())
@@ -285,7 +313,7 @@ impl WorkHost {
         result: &Result<String, String>) {
         if let Some(wait) = self.overload_wait(backend, binding, result) {
             let fact = serde_json::json!({"event":"turn_overload","error":result.as_ref().err(),"waited_minutes":wait.as_secs()/60});
-            match self.tell_stu_after(backend, binding, session, Some(wait), fact) {
+            match self.tell_stu_after(backend, binding, session, Some(wait), move |_, elapsed| if elapsed { vec![fact] } else { vec![] }) {
                 Ok(()) => return,
                 Err(error) => eprintln!("[richos] an automatic turn's overload wait could not start: {error}"),
             }
@@ -760,7 +788,7 @@ impl WorkHost {
                     if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
                     continue;
                 }
-                // A worker's start names it, so its overload schedule survives Stu restarting it.
+                // A worker's start names its task, told to Stu with its overload.
                 if frame["type"] == "system" && frame["subtype"] == "task_started" {
                     if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
                     continue;
@@ -1741,9 +1769,110 @@ mod tests {
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
-    /// Follow-up 11: a worker's overloads, one after another, wait 1, 2, 5, 10, 20, 40 and
-    /// 80 minutes and Stu is told after each wait; the eighth is told at once, with no retries
-    /// left. A frame Claude Code did not mark as an API error is the worker's own words.
+    /// The `worker_overload` (and `turn_overload`) facts Stu has been sent, in order.
+    fn overload_notices(h: &Harness) -> Vec<serde_json::Value> {
+        h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
+            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
+            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
+        }).collect()
+    }
+
+    fn worker_overloaded(call: &str) -> serde_json::Value {
+        serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"overloaded",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}})
+    }
+
+    /// A retry clock that holds each wait open until the test ends it, so an overload can arrive
+    /// DURING a wait. It writes down each wait it was asked for.
+    #[derive(Default)]
+    struct HeldRetryClock { waits: Mutex<Vec<std::time::Duration>>, ended: Mutex<usize>, turn: Condvar }
+    impl HeldRetryClock {
+        fn waits(&self) -> Vec<std::time::Duration> { self.waits.lock().unwrap().clone() }
+        fn end_one(&self) { *self.ended.lock().unwrap() += 1; self.turn.notify_all(); }
+    }
+    impl crate::upstream::RetryClock for HeldRetryClock {
+        fn wait(&self, wait: std::time::Duration, stop: &dyn Fn() -> bool) -> bool {
+            let mine = { let mut waits = self.waits.lock().unwrap(); waits.push(wait); waits.len() };
+            let mut ended = self.ended.lock().unwrap();
+            while *ended < mine {
+                if stop() { return false; }
+                ended = self.turn.wait_timeout(ended, std::time::Duration::from_millis(10)).unwrap().0;
+            }
+            !stop()
+        }
+    }
+
+    /// Follow-up 11, ONE clock: an overload hits every running worker at once. Eight workers
+    /// overloaded together wait one 1-minute wait and each gets the restart message when it
+    /// ends; a ninth overload during that wait joins it, and a worker reported twice is told
+    /// once. The next overload after the wait moves one step, to 2 minutes.
+    #[test]
+    fn eight_workers_overloaded_together_wait_one_minute_and_all_are_told_to_restart() {
+        let h = harness(0);
+        let clock = Arc::new(HeldRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
+        let minute = std::time::Duration::from_secs(60);
+        for n in 1..=8 { observe(worker_overloaded(&format!("W{n}"))); }
+        until("the workers' overload did not start a wait", || clock.waits().len() == 1);
+        observe(worker_overloaded("W9"));
+        observe(worker_overloaded("W1"));
+        assert_eq!(clock.waits(), [minute], "an overload during the wait started a wait of its own");
+        assert!(overload_notices(&h).is_empty(), "Stu was told before the wait ended");
+        clock.end_one();
+        until("Stu was not told to restart every stopped worker", || overload_notices(&h).len() == 9);
+        let mut told: Vec<_> = overload_notices(&h).iter().map(|fact| (fact["worker"]["tool_use_id"].as_str().unwrap_or("").to_string(),
+            fact["event"].as_str().map(str::to_string), fact["retry"].as_u64(), fact["waited_minutes"].as_u64(), fact["retries_used_up"].as_bool())).collect();
+        told.sort();
+        let expected: Vec<_> = (1..=9).map(|n| (format!("W{n}"), Some("worker_overload".to_string()), Some(1), Some(1), Some(false))).collect();
+        assert_eq!(told, expected, "the stopped workers did not all wait the one 1-minute wait");
+        observe(worker_overloaded("W1"));
+        until("the next overload did not start a wait", || clock.waits().len() == 2);
+        assert_eq!(clock.waits(), [minute, 2 * minute], "the next overload after the wait did not move one step");
+        clock.end_one();
+        until("Stu was not told after the second wait", || overload_notices(&h).len() == 10);
+        let last = overload_notices(&h).pop().unwrap();
+        assert_eq!((&last["worker"]["tool_use_id"], &last["retry"], &last["waited_minutes"]),
+            (&serde_json::json!("W1"), &serde_json::json!(2), &serde_json::json!(2)), "{last}");
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Follow-up 11, ONE clock: any worker's ordinary answer from the API resets it, so the next
+    /// overload, whichever worker it stops, waits the first minute again.
+    #[test]
+    fn a_workers_success_resets_the_workers_overload_clock_to_one_minute() {
+        let h = harness(0);
+        let clock = Arc::new(RecordedRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
+        observe(worker_overloaded("A"));
+        until("Stu was not told after the first wait", || overload_notices(&h).len() == 1);
+        observe(worker_overloaded("B"));
+        until("Stu was not told after the second wait", || overload_notices(&h).len() == 2);
+        observe(serde_json::json!({"type":"assistant","parent_tool_use_id":"C",
+            "message":{"content":[{"type":"text","text":"Reading the files again."}]}}));
+        observe(worker_overloaded("A"));
+        until("Stu was not told after the third wait", || overload_notices(&h).len() == 3);
+        let minute = std::time::Duration::from_secs(60);
+        assert_eq!(*clock.0.lock().unwrap(), [minute, 2 * minute, minute], "a worker's success did not reset the clock");
+        let told: Vec<_> = overload_notices(&h).iter().map(|fact| (fact["worker"]["tool_use_id"].clone(), fact["retry"].clone())).collect();
+        assert_eq!(told, [(serde_json::json!("A"), serde_json::json!(1)), (serde_json::json!("B"), serde_json::json!(2)),
+            (serde_json::json!("A"), serde_json::json!(1))]);
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Follow-up 11: overloads one after another, whichever worker each stops (Stu restarts a
+    /// worker as a new run), wait 1, 2, 5, 10, 20, 40 and 80 minutes and Stu is told after each
+    /// wait; the eighth is told at once, with no retries left. A frame Claude Code did not mark
+    /// as an API error is the worker's own words.
     #[test]
     fn a_workers_eighth_overload_in_a_row_tells_stu_its_retries_are_used_up() {
         let h = harness(0);
@@ -1751,26 +1880,19 @@ mod tests {
         h.host.set_retry_clock(clock.clone());
         let backend = Backend::new();
         backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
-        let overloaded = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call","error":"overloaded",
-            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
-        let quoted = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call",
+        let quoted = serde_json::json!({"type":"assistant","parent_tool_use_id":"run-1",
             "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
         h.host.observe_worker(&backend, &h.binding, "stu-session", &quoted);
-        for _ in 0..8 { h.host.observe_worker(&backend, &h.binding, "stu-session", &overloaded); }
-        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
-            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
-            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
-        }).collect::<Vec<_>>();
-        until("Stu was not told about each of his worker's overloads", || notices().len() == 8);
-        let mut told: Vec<_> = notices().iter().map(|fact| (fact["retry"].as_u64(), fact["retries_left"].clone(), fact["waited_minutes"].as_u64())).collect();
-        told.sort_by_key(|(retry, ..)| retry.unwrap_or(u64::MAX));
+        for n in 1..=8 {
+            h.host.observe_worker(&backend, &h.binding, "stu-session", &worker_overloaded(&format!("run-{n}")));
+            until("Stu was not told about his worker's overload", || overload_notices(&h).len() == n);
+        }
+        let told: Vec<_> = overload_notices(&h).iter().map(|fact| (fact["retry"].as_u64(), fact["retries_left"].clone(), fact["waited_minutes"].as_u64())).collect();
         let mut expected: Vec<_> = [1, 2, 5, 10, 20, 40, 80].iter().enumerate()
             .map(|(k, minutes)| (Some(k as u64 + 1), serde_json::json!(6 - k), Some(*minutes as u64))).collect();
         expected.push((None, serde_json::json!(0), None));
         assert_eq!(told, expected);
-        let mut waited = clock.0.lock().unwrap().clone();
-        waited.sort();
-        assert_eq!(waited, crate::upstream::OVERLOAD_RETRY_WAITS, "the quoted line was taken for an overload, or a wait was skipped");
+        assert_eq!(*clock.0.lock().unwrap(), crate::upstream::OVERLOAD_RETRY_WAITS, "the quoted line was taken for an overload, or a wait was skipped");
         backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
@@ -1785,15 +1907,11 @@ mod tests {
         h.host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
         let backend = Backend::new();
         backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
-        let overloaded = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call","error":"overloaded",
-            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
-        for _ in 0..8 { h.host.observe_worker(&backend, &h.binding, "stu-session", &overloaded); }
-        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
-            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
-            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
-        }).collect::<Vec<_>>();
-        until("Stu was not told about each of his worker's overloads", || notices().len() == 8);
-        let told = notices();
+        for n in 1..=8 {
+            h.host.observe_worker(&backend, &h.binding, "stu-session", &worker_overloaded("worker-call"));
+            until("Stu was not told about his worker's overload", || overload_notices(&h).len() == n);
+        }
+        let told = overload_notices(&h);
         let seventh = told.iter().find(|fact| fact["retry"] == 7).expect("no seventh retry");
         assert_eq!((&seventh["waited_minutes"], &seventh["retries_used_up"]), (&serde_json::json!(80), &serde_json::json!(false)),
             "the granted seventh retry was marked as the end: {seventh}");
@@ -1802,178 +1920,6 @@ mod tests {
         let stu = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app/agents/stu.md")).unwrap();
         assert!(stu.contains("`retries_used_up`") && !stu.contains("with no retries left means"),
             "stu.md does not report the failure on the fact the host sets only when no retry is granted");
-        backend.inner.lock().unwrap().closing = true;
-        h.host.shutdown();
-        std::fs::remove_dir_all(h.root).unwrap();
-    }
-
-    /// Review rv-20261018T200657Z-585c24df-f9d6, finding 1: an overload hits every running
-    /// worker at once, so each worker has its own schedule. One worker's ordinary answer does
-    /// not restart another's waits, eight workers overloaded together each wait the first
-    /// minute, and a worker Stu restarts under the same description keeps its place.
-    #[test]
-    fn each_worker_keeps_its_own_overload_schedule_across_a_restart() {
-        let h = harness(0);
-        let clock = Arc::new(RecordedRetryClock::default());
-        h.host.set_retry_clock(clock.clone());
-        let backend = Backend::new();
-        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
-        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
-        let overloaded = |call: &str| serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"overloaded",
-            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
-        let answered = |call: &str| serde_json::json!({"type":"assistant","parent_tool_use_id":call,
-            "message":{"content":[{"type":"text","text":"Reading the files again."}]}});
-        // Claude Code 2.1.302's task_started names the tool call that started the run and its description.
-        let started = |call: &str| serde_json::json!({"type":"system","subtype":"task_started","task_id":format!("agent-{call}"),
-            "tool_use_id":call,"description":"Fix the login page","task_type":"local_agent"});
-        observe(overloaded("A"));
-        observe(answered("B"));
-        observe(overloaded("A"));
-        for n in 1..=8 { observe(overloaded(&format!("W{n}"))); }
-        // Stu restarts the worker for the same job under the same description: a new receipt
-        // that continues the first (stu.md: preserve its request and repository workspace).
-        dispatched(&h, "first-run", "obligation-7", "worker", "/repos/app", "Fix the login page", serde_json::json!({}));
-        dispatched(&h, "restarted-run", "obligation-7", "worker", "/repos/app", "Fix the login page",
-            serde_json::json!({"continue_of":"receipt-first-run"}));
-        observe(started("first-run"));
-        observe(overloaded("first-run"));
-        observe(started("restarted-run"));
-        observe(overloaded("restarted-run"));
-        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
-            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
-            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
-        }).collect::<Vec<_>>();
-        until("Stu was not told about each worker's overload", || notices().len() == 12);
-        let mut told: Vec<_> = notices().iter().map(|fact| (fact["worker"]["tool_use_id"].as_str().unwrap_or("").to_string(),
-            fact["retry"].as_u64(), fact["waited_minutes"].as_u64())).collect();
-        told.sort();
-        let mut expected = vec![("A".to_string(), Some(1), Some(1)), ("A".into(), Some(2), Some(2)),
-            ("first-run".into(), Some(1), Some(1)), ("restarted-run".into(), Some(2), Some(2))];
-        expected.extend((1..=8).map(|n| (format!("W{n}"), Some(1), Some(1))));
-        expected.sort();
-        assert_eq!(told, expected, "the workers' schedules were not each their own");
-        backend.inner.lock().unwrap().closing = true;
-        h.host.shutdown();
-        std::fs::remove_dir_all(h.root).unwrap();
-    }
-
-    /// The dispatch receipt `engine/mega-lander/app.py` writes for a worker run, with the native
-    /// tool call its Agent call was given (`status="dispatching", tool_use_id=...`), stored as
-    /// receipt `receipt-<call>`. `link` is the
-    /// request's `review_of` (the worker receipt a reviewer reviews) or `continue_of` (the worker
-    /// receipt a restart continues); the engine's request carries both, null when unused.
-    fn dispatched(h: &Harness, call: &str, obligation: &str, role: &str, repo: &str, title: &str, link: serde_json::Value) {
-        use sha2::Digest;
-        let root = h.state.join("work-receipts").join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]")));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut request = serde_json::json!({"obligation_id":obligation,"role":role,"repo":repo,"repos":[repo],"title":title,
-            "review_of":null,"continue_of":null});
-        request.as_object_mut().unwrap().extend(link.as_object().cloned().unwrap_or_default());
-        let id = format!("receipt-{call}");
-        std::fs::write(root.join(format!("{id}.json")), serde_json::json!({"schema":1,"id":id,
-            "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"stu-session"},
-            "request":request,"status":"running","tool_use_id":call}).to_string()).unwrap();
-    }
-
-    /// Review rv-20261018T205042Z-e82b04f5-720c: independent workers in different jobs are
-    /// normally started under the same short description ("Review changes"), so a schedule
-    /// keyed by the description alone was shared again. Eight such workers overloaded together
-    /// each wait the first minute, and one's ordinary answer does not restart another's waits.
-    #[test]
-    fn workers_of_different_jobs_under_one_description_keep_their_own_overload_schedules() {
-        let h = harness(0);
-        h.host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
-        let backend = Backend::new();
-        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
-        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
-        let overloaded = |call: &str| serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"overloaded",
-            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
-        let started = |call: &str| serde_json::json!({"type":"system","subtype":"task_started","task_id":format!("agent-{call}"),
-            "tool_use_id":call,"description":"Review changes","task_type":"local_agent"});
-        for n in 1..=8 {
-            let call = format!("review-{n}");
-            dispatched(&h, &call, &format!("job-{n}"), "reviewer", &format!("/repos/r{n}"), "Review changes",
-                serde_json::json!({"review_of":format!("worker-{n}")}));
-            observe(started(&call));
-            observe(overloaded(&call));
-        }
-        dispatched(&h, "A", "job-a", "reviewer", "/repos/a", "Review changes", serde_json::json!({"review_of":"worker-a"}));
-        dispatched(&h, "B", "job-b", "reviewer", "/repos/b", "Review changes", serde_json::json!({"review_of":"worker-b"}));
-        observe(started("A"));
-        observe(started("B"));
-        observe(overloaded("A"));
-        observe(serde_json::json!({"type":"assistant","parent_tool_use_id":"B",
-            "message":{"content":[{"type":"text","text":"Review complete."}]}}));
-        observe(overloaded("A"));
-        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
-            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
-            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
-        }).collect::<Vec<_>>();
-        until("Stu was not told about each worker's overload", || notices().len() == 10);
-        let mut told: Vec<_> = notices().iter().map(|fact| (fact["worker"]["tool_use_id"].as_str().unwrap_or("").to_string(),
-            fact["waited_minutes"].as_u64(), fact["retries_used_up"].as_bool())).collect();
-        told.sort();
-        let mut expected = vec![("A".to_string(), Some(1), Some(false)), ("A".into(), Some(2), Some(false))];
-        expected.extend((1..=8).map(|n| (format!("review-{n}"), Some(1), Some(false))));
-        expected.sort();
-        assert_eq!(told, expected, "workers of different jobs under one description shared a schedule");
-        backend.inner.lock().unwrap().closing = true;
-        h.host.shutdown();
-        std::fs::remove_dir_all(h.root).unwrap();
-    }
-
-    /// Review rv-20261018T211712Z-0de324ec-0b89: independent reviewers of different
-    /// implementation workers in ONE job share its obligation, duty, repository and description
-    /// ("Review changes"), which the engine allows (`mega-lander/app.py`, "An assignment may have
-    /// several independent workers, reviewers or consults"). What tells them apart is the worker
-    /// each reviews (`review_of`). Eight overloaded together each wait the first minute, one's
-    /// ordinary answer does not restart another's waits, and a reviewer Stu restarts for the same
-    /// worker keeps its place.
-    #[test]
-    fn independent_reviewers_in_one_job_keep_their_own_overload_schedules() {
-        let h = harness(0);
-        h.host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
-        let backend = Backend::new();
-        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
-        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
-        // Claude Code 2.1.302's end of repeated overloads, as the reviewer captured it.
-        let overloaded = |call: &str| serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"server_error",
-            "message":{"content":[{"type":"text","text":"API Error: Repeated 529 Overloaded errors. The API is at capacity."}]}});
-        let started = |call: &str| serde_json::json!({"type":"system","subtype":"task_started","task_id":format!("agent-{call}"),
-            "tool_use_id":call,"description":"Review changes","task_type":"local_agent"});
-        let review = |call: &str, of: &str| dispatched(&h, call, "one-job", "reviewer", "/repos/app", "Review changes",
-            serde_json::json!({"review_of":of}));
-        for n in 1..=8 {
-            let call = format!("review-{n}");
-            review(&call, &format!("implementation-{n}"));
-            observe(started(&call));
-            observe(overloaded(&call));
-        }
-        review("A", "implementation-a");
-        review("B", "implementation-b");
-        observe(started("A"));
-        observe(started("B"));
-        observe(overloaded("A"));
-        observe(serde_json::json!({"type":"assistant","parent_tool_use_id":"B",
-            "message":{"content":[{"type":"text","text":"Review complete."}]}}));
-        observe(overloaded("A"));
-        // Stu restarts A's review of the same worker: a new receipt and tool call.
-        review("A-restarted", "implementation-a");
-        observe(started("A-restarted"));
-        observe(overloaded("A-restarted"));
-        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
-            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
-            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
-        }).collect::<Vec<_>>();
-        until("Stu was not told about each reviewer's overload", || notices().len() == 11);
-        let mut told: Vec<_> = notices().iter().map(|fact| (fact["worker"]["tool_use_id"].as_str().unwrap_or("").to_string(),
-            fact["waited_minutes"].as_u64(), fact["retries_used_up"].as_bool())).collect();
-        told.sort();
-        let mut expected = vec![("A".to_string(), Some(1), Some(false)), ("A".into(), Some(2), Some(false)),
-            ("A-restarted".into(), Some(5), Some(false))];
-        expected.extend((1..=8).map(|n| (format!("review-{n}"), Some(1), Some(false))));
-        expected.sort();
-        assert_eq!(told, expected, "independent reviewers in one job shared a schedule");
         backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();

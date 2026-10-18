@@ -2594,7 +2594,7 @@ impl NativeClient {
         }
 
         // A worker's start reaches the between-turn sink too when a turn took it: it names the
-        // worker whose overload schedule Stu's host keeps (`work_host.rs` observe_worker).
+        // task Stu's host tells him with the worker's overload (`work_host.rs` observe_worker).
         if Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg)
             && ty == "system" && msg.get("subtype").and_then(Value::as_str) == Some("task_started") {
             between.lock().unwrap().copy_to_sink(msg);
