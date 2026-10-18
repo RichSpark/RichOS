@@ -37,6 +37,9 @@ impl InputReceipt {
 struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
     overload: crate::upstream::RetryBudget,
+    /// The same schedule for the overloads Claude Code reports for Stu's WORKERS (follow-up 11),
+    /// counted apart from his own so a turn of his that succeeds does not restart theirs.
+    workers: crate::upstream::RetryBudget,
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
@@ -190,6 +193,45 @@ impl WorkHost {
             }
             backend.wake.notify_all();
         })
+    }
+
+    /// **A worker stopped by an overload gets the CEO's waits too** (follow-up 11; his order of
+    /// 2026-10-07: 1, 2, 5, 10, 20, 40 and 80 minutes). A worker belongs to Claude Code, which
+    /// cannot be set to those waits, so this host waits, on the same budget, clock and Stop
+    /// checks as Stu's own retry above, and then tells Stu, who restarts the worker (stu.md).
+    /// Any other answer a worker gets from the API starts the schedule again.
+    fn observe_worker(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
+        frame: &serde_json::Value) {
+        if frame["type"] != "assistant" { return; }
+        let Some(failure) = crate::native::overloaded_api_error_message(frame) else {
+            if frame.get("error").is_none_or(serde_json::Value::is_null) { backend.inner.lock().unwrap().workers.succeeded(); }
+            return;
+        };
+        let (wait, spent) = {
+            let mut inner = backend.inner.lock().unwrap();
+            let granted = inner.workers.charge(crate::upstream::UpstreamFault::Overloaded);
+            (granted.then(|| inner.workers.wait_before_retry()).flatten(), inner.workers.retries_spent())
+        };
+        let fact = serde_json::json!({"event":"worker_overload",
+            "worker":{"tool_use_id":frame["parent_tool_use_id"],"agent_id":frame.get("agent_id"),"task":frame.get("task_description")},
+            "error":failure.raw,"retry":wait.map(|_|spent),"retries_left":if wait.is_some() {crate::upstream::MAX_OVERLOAD_RETRIES-spent} else {0},
+            "waited_minutes":wait.map(|wait|wait.as_secs()/60)});
+        // Off the native reader: the wait, and the delivery to the same session, happen here.
+        let (host, receiving, binding, session) = (Arc::downgrade(self), Arc::downgrade(backend), binding.clone(), session.to_string());
+        let told = std::thread::Builder::new().name("richos-worker-overload".into()).spawn(move || {
+            let (Some(host), Some(backend)) = (host.upgrade(), receiving.upgrade()) else { return };
+            if let Some(wait) = wait {
+                let ended = || { let inner = backend.inner.lock().unwrap(); inner.closing || inner.lease_session.as_deref() != Some(session.as_str()) };
+                let clock = host.retry_clock.lock().unwrap().clone();
+                if !clock.wait(wait, &ended) { return; }
+            }
+            if let Err(error) = crate::session_tools::observe_worker_overload(&host.message_scope(&binding), &fact) {
+                eprintln!("[richos] a worker's overload could not be passed to Stu: {error}");
+                return;
+            }
+            host.wake_messages(&binding);
+        });
+        if let Err(error) = told { eprintln!("[richos] a worker's overload wait could not start: {error}"); }
     }
 
     fn project_output(&self, binding: &ThreadBinding, session: &str) {
@@ -641,14 +683,19 @@ impl WorkHost {
         }))
     }
 
-    fn observe_lease(self: &Arc<Self>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
+    fn observe_lease(self: &Arc<Self>, backend: &Arc<Backend>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
         let host = Arc::downgrade(self);
+        let receiving = Arc::downgrade(backend);
         let binding = binding.clone();
         let session = lease.session_id().to_string();
         lease.set_between_turn_sink(Arc::new(move |records| {
             let Some(host) = host.upgrade() else { return };
             for frame in records {
-                if frame["type"] != "result" || frame.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) { continue }
+                if frame.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) {
+                    if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
+                    continue;
+                }
+                if frame["type"] != "result" { continue }
                 let result = crate::native::native_result(&frame).map_err(|error| error.to_string());
                 if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
                     eprintln!("[richos] native turn status: {error}");
@@ -673,7 +720,7 @@ impl WorkHost {
             (factory.team_digest(), factory.spawn_work(binding))
         };
         let mut opened = opened.map_err(|e| e.to_string())?;
-        self.observe_lease(opened.as_mut(), binding);
+        self.observe_lease(backend, opened.as_mut(), binding);
         // A provider opened after shutdown started is never installed.
         let closing = {
             let mut inner = backend.inner.lock().unwrap();
@@ -1608,6 +1655,41 @@ mod tests {
         assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(30)));
         assert_eq!(clock.0.lock().unwrap().as_slice(), [crate::upstream::OVERLOAD_RETRY_WAITS.as_slice(), &[std::time::Duration::from_secs(60)]].concat());
         assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Follow-up 11: a worker's overloads, one after another, wait 1, 2, 5, 10, 20, 40 and
+    /// 80 minutes and Stu is told after each wait; the eighth is told at once, with no retries
+    /// left. A frame Claude Code did not mark as an API error is the worker's own words.
+    #[test]
+    fn a_workers_eighth_overload_in_a_row_tells_stu_its_retries_are_used_up() {
+        let h = harness(0);
+        let clock = Arc::new(RecordedRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let overloaded = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call","error":"overloaded",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
+        let quoted = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
+        h.host.observe_worker(&backend, &h.binding, "stu-session", &quoted);
+        for _ in 0..8 { h.host.observe_worker(&backend, &h.binding, "stu-session", &overloaded); }
+        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
+            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
+            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
+        }).collect::<Vec<_>>();
+        until("Stu was not told about each of his worker's overloads", || notices().len() == 8);
+        let mut told: Vec<_> = notices().iter().map(|fact| (fact["retry"].as_u64(), fact["retries_left"].clone(), fact["waited_minutes"].as_u64())).collect();
+        told.sort_by_key(|(retry, ..)| retry.unwrap_or(u64::MAX));
+        let mut expected: Vec<_> = [1, 2, 5, 10, 20, 40, 80].iter().enumerate()
+            .map(|(k, minutes)| (Some(k as u64 + 1), serde_json::json!(6 - k), Some(*minutes as u64))).collect();
+        expected.push((None, serde_json::json!(0), None));
+        assert_eq!(told, expected);
+        let mut waited = clock.0.lock().unwrap().clone();
+        waited.sort();
+        assert_eq!(waited, crate::upstream::OVERLOAD_RETRY_WAITS, "the quoted line was taken for an overload, or a wait was skipped");
+        backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
     }
