@@ -183,6 +183,25 @@ struct Later {
     landed_with_later: std::collections::HashSet<String>,
     /// Workers that a later worker continues.
     continued: std::collections::HashSet<String>,
+    /// Every worker shown, by the job and repository it worked on (`request.obligation_id`,
+    /// `request.repo`): the other attempts at the same work.
+    attempts: std::collections::HashMap<(String, String), Vec<String>>,
+}
+
+impl Later {
+    /// **Second review of `0e974e68b`, P3 (follow-up 7 after nightly 65)**: "This attempt ended
+    /// without a result" was shown the same way whether or not another attempt replaced it or
+    /// the work was done. The engine records no "replaces" link between a retired attempt and a
+    /// fresh one (nightly 65's retry started with no `continue_of`), so what a row can say is
+    /// what the other attempts at the same job and repository did: one of them landed, or one
+    /// is shown here, or there is none.
+    fn other_attempts(&self, row: &Value) -> (bool, bool) {
+        let key = (row["request"]["obligation_id"].as_str().unwrap_or("").to_string(),
+                   row["request"]["repo"].as_str().unwrap_or("").to_string());
+        let me = row["id"].as_str();
+        let others: Vec<&String> = self.attempts.get(&key).into_iter().flatten().filter(|id| Some(id.as_str()) != me).collect();
+        (others.iter().any(|id| self.landed.contains(*id) || self.landed_with_later.contains(*id)), !others.is_empty())
+    }
 }
 
 impl Later {
@@ -193,6 +212,9 @@ impl Later {
         let mut later = Later::default();
         for row in rows.iter().copied().filter(|row| worker(row)) {
             let Some(id) = row["id"].as_str() else { continue };
+            if let (Some(job), Some(repo)) = (row["request"]["obligation_id"].as_str(), row["request"]["repo"].as_str()) {
+                later.attempts.entry((job.to_string(), repo.to_string())).or_default().push(id.to_string());
+            }
             if let Some(previous) = row["continuation"]["worker_id"].as_str() {
                 later.continued.insert(previous.to_string());
             }
@@ -256,7 +278,11 @@ fn describe(row: &Value, later: &Later, workspaces: &Path, bytes_read: &mut u64)
         // has ended and a later one starts from where it stopped.
         ("continued", "This step ended. A later step carries on from where it stopped.")
     } else if retired_execution(workspaces, row, bytes_read)? {
-        ("retired", "This attempt ended without a result. Any later attempts are shown separately.")
+        match later.other_attempts(row) {
+            (true, _) => ("retired-other-added", "This attempt ended without a result. Another attempt did this work, and it was added to your project."),
+            (false, true) => ("retired-other-shown", "This attempt ended without a result. Another attempt at this is shown separately."),
+            (false, false) => ("retired", "This attempt ended without a result."),
+        }
     } else if row["status"] == "run-ended" && row["review_observation"]["valid"] == true
         && matches!(verdict, Some("passed" | "changes-requested"))
     {
@@ -575,6 +601,45 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         old["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
         write(&root, &[old]);
         assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "integrated");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **Follow-up 7 after nightly 65** (second review of `0e974e68b`, P3): the "This attempt
+    /// ended without a result" row read the same whether or not another attempt replaced it or
+    /// the work was done. In Ray's run U the first guide attempt was retired, a fresh retry
+    /// (no `continue_of`) was written, corrected and landed, and the retired row still pointed
+    /// at "any later attempts". It now says what the other attempts at the same job did; an
+    /// attempt at ANOTHER job, landed or not, says nothing about this one.
+    #[test] fn a_retired_attempt_says_what_the_other_attempts_at_its_job_did() {
+        let root = temp();
+        let mut old = receipt("old", "job", "worker");
+        old["status"] = "interrupted".into();
+        old["workspace_ref"] = "session--old".into();
+        old["agent_id"] = "agent-old".into();
+        let receipts = write(&root, &[old]);
+        let workspace = root.join("workspaces").join(receipts.file_name().unwrap());
+        std::fs::create_dir_all(workspace.join("done")).unwrap();
+        std::fs::write(workspace.join("done/session--old.json"), serde_json::to_vec(&serde_json::json!(
+            {"key":"session--old","agent_id":"agent-old","end":null,"disposition":{"kind":"landed"}})).unwrap()).unwrap();
+        let old_row = |root: &std::path::Path| read(root, "depot", "thread").unwrap().items.into_iter()
+            .find(|i| i.state.starts_with("retired")).map(|i| (i.state, i.detail)).expect("the retired attempt is not shown");
+        assert_eq!(old_row(&root), ("retired".into(), "This attempt ended without a result.".into()));
+        // Another job's land is not this job's.
+        let mut elsewhere = receipt("elsewhere", "another-job", "worker");
+        elsewhere["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
+        write(&root, &[elsewhere]);
+        assert_eq!(old_row(&root).0, "retired", "another job's land was read as this one's");
+        // A fresh attempt at the same job, still finishing.
+        let mut retry = receipt("retry", "job", "worker");
+        write(&root, &[retry.clone()]);
+        assert_eq!(old_row(&root).0, "retired-other-shown");
+        // That attempt landed: the retired row says the work was done.
+        retry["status"] = "integrated".into();
+        retry["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
+        write(&root, &[retry]);
+        let (state, detail) = old_row(&root);
+        assert_eq!(state, "retired-other-added");
+        assert!(!detail.contains("later attempts are shown"), "{detail}");
         std::fs::remove_dir_all(root).unwrap();
     }
 
