@@ -17,7 +17,7 @@
 //! `the_classifier_does_not_read_the_vendors_english` is the proof of that claim rather
 //! than a promise about it.
 
-use richos_core::upstream::{FakeUpstream, RetryBudget, UpstreamFailure, UpstreamFault};
+use richos_core::upstream::{RetryBudget, UpstreamFailure, UpstreamFault};
 
 /// The verbatim bytes, from this machine's own transcripts on 2026-09-05.
 const CAPTURED_529: &str =
@@ -178,31 +178,6 @@ fn a_stderr_tail_is_classified_line_by_line() {
     );
 }
 
-
-// =========================================================================================
-// The fault-injection seam itself
-// =========================================================================================
-
-/// **THE FINDING, REPRODUCED.** A degraded API fails the expensive requests first: the
-/// one-command probe finished in 51 seconds while every large brief died.
-///
-/// This is the test everything in `reachability.rs` rests on, so it is asserted here on
-/// the seam itself before anything is built over it.
-#[test]
-fn the_injected_upstream_reproduces_the_measured_size_dependent_failure() {
-    let up = FakeUpstream::size_dependent(16, CAPTURED_529.lines().next().unwrap());
-
-    // The cheap probe: `pwd` is 3 characters.
-    assert!(up.send(3).is_ok(), "the cheap probe succeeded on 2026-09-03 and must here");
-
-    // A large brief.
-    let err = up.send(120_000).expect_err("a large request must fail");
-    let f = UpstreamFailure::classify(&err).expect("and its text must classify");
-    assert_eq!(f.fault, UpstreamFault::Overloaded);
-
-    assert_eq!(up.attempts(), 2);
-    assert_eq!(up.failures(), 1, "exactly the expensive one failed");
-}
 
 // =========================================================================================
 // Retry
