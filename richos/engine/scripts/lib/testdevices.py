@@ -113,14 +113,15 @@ def _timeout(maximum):
 
 
 @contextlib.contextmanager
-def registry_lock():
+def registry_lock(wait_seconds=None):
     """Registration and collection cannot replace ownership under a deletion."""
     if _LOCKED.get():
         yield
         return
     os.makedirs(registry_dir(), exist_ok=True)
     with open(os.path.join(registry_dir(), ".lock"), "a") as handle:
-        lock_deadline = time.monotonic() + REGISTRY_LOCK_SECONDS
+        wait_seconds = REGISTRY_LOCK_SECONDS if wait_seconds is None else wait_seconds
+        lock_deadline = time.monotonic() + wait_seconds
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -128,7 +129,7 @@ def registry_lock():
             except BlockingIOError:
                 if time.monotonic() >= lock_deadline:
                     raise RegistryBusy("test-device registry lock stayed busy for %g seconds"
-                                       % REGISTRY_LOCK_SECONDS)
+                                       % wait_seconds)
                 time.sleep(min(0.05, _timeout(5)))
         token = _LOCKED.set(True)
         try:
@@ -1136,9 +1137,10 @@ def cleanup_run_simulators(run_id, budget=15):
     CoreSimulator is a daemon: killing a process tree cannot stop its devices.
     Never infer ownership from names or delete another run's registered device.
     The regular collector/watchdog remains the fallback after runner SIGKILL.
+    Lock admission uses the command wait; budget bounds cleanup after acquisition.
     """
     errors = []
-    token = _DEADLINE.set(time.time() + budget)
+    token = None
     try:
         # Owned processes have already ended. An absent registry cannot contain
         # this run's device, so cleanup must not create state for an empty run.
@@ -1147,7 +1149,8 @@ def cleanup_run_simulators(run_id, budget=15):
             os.stat(registry_dir())
         except FileNotFoundError:
             return []
-        with registry_lock():
+        with registry_lock(CLI_REGISTRY_LOCK_SECONDS):
+            token = _DEADLINE.set(time.time() + budget)
             regs = [r for r in records() if r["kind"] == "ios-simulator" and any(
                 o.get("verification_run") == run_id for o in r.get("owners", [r.get("owner", {})]))]
             inventories = {}
@@ -1175,7 +1178,8 @@ def cleanup_run_simulators(run_id, budget=15):
     except Exception as exc:
         errors.append("run simulator cleanup failed: " + str(exc))
     finally:
-        _DEADLINE.reset(token)
+        if token is not None:
+            _DEADLINE.reset(token)
     if errors:
         record_collector_failure("; ".join(errors))
     return errors
