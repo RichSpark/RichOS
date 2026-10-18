@@ -206,6 +206,25 @@ PY
 
 export APPINST_LIB="$SCRIPT_DIR"
 
+# NO TEST ASKS SYSTEM EVENTS TO QUIT AN APP (2026-10-18). A1 and A3 run the real
+# quit_instance on a fake app, and its first step is an `osascript` that tells System
+# Events to quit the pid. On a host with a shield that call is blocked and logged as an
+# attack on the person's session. So `osascript` here is a stand-in that records the call
+# and fails, which sends the module on to SIGTERM exactly as a non-scriptable app does.
+# A9 still checks what the module would run, by intercepting subprocess.run.
+OSA_BIN="$SANDBOX/osascript-bin"
+OSA_LOG="$SANDBOX/osascript-calls.log"
+mkdir -p "$OSA_BIN"
+: >"$OSA_LOG"
+export OSA_LOG
+cat >"$OSA_BIN/osascript" <<'OSAEOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$OSA_LOG"
+exit 1
+OSAEOF
+chmod +x "$OSA_BIN/osascript"
+export PATH="$OSA_BIN:$PATH"
+
 verdict_of() { python3 -c "import json,sys;print(json.load(sys.stdin)['verdict'])"; }
 
 SCRATCH_HOME="$SANDBOX/scratch-home"
@@ -505,6 +524,12 @@ else:
     print("OK" if not bad else "; ".join(bad))
 PY
 )"
+# A1 and A3 each quit a fake app for real: both quit requests are in the stand-in's log.
+if [ "$(grep -c 'unix id is' "$OSA_LOG")" -ge 2 ] && [ "$(command -v osascript)" = "$OSA_BIN/osascript" ]; then
+    ok "A1b the quits of A1 and A3 went to the suite's osascript stand-in, never to System Events"
+else
+    bad "A1b the real quits did not go through the osascript stand-in (calls: $(wc -l <"$OSA_LOG" | tr -d ' '))"
+fi
 if [ "$A9" = "OK" ]; then
     ok "A9 the osascript it actually runs addresses the unix id, never a name or id"
 else
