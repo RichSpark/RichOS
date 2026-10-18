@@ -427,6 +427,32 @@ async function runEngine(playwright, engine) {
 		mac.state.threads = [{ id: mac.threadId, title: 'Rich' }];
 		await page.evaluate(() => window.__richosPhone.connectStream());
 
+		// --- a question card: one tap on an answer answers it, as a click does on the Mac ---
+		// Ray, nightlies 63 and 64: the phone page showed the question as plain text with no option
+		// to press, so clicking "Casual" did nothing (follow-ups-after-nightly65.md item 5).
+		mac.ask({ id: 'q-tone', text: 'Should the welcome email sound formal or casual?', options: [
+			{ id: 'opt-formal', label: 'Formal', description: 'Polished, professional tone.' },
+			{ id: 'opt-casual', label: 'Casual', description: 'Warm, friendly, conversational tone.' }] });
+		const casual = page.locator('[data-message-id="q-tone"] button', { hasText: 'Casual' });
+		let cardShown = true;
+		try { await casual.waitFor({ state: 'visible', timeout: 10000 }); } catch { cardShown = false; }
+		check('a question from Rich arrives as a card with its answers as buttons', cardShown,
+			await page.evaluate(() => document.querySelector('[data-message-id="q-tone"]')?.innerText || 'no row'));
+		if (cardShown) {
+			await shoot(page, `${engine}-question-open`);
+			await casual.click();
+			try { await page.waitForFunction(() => /You answered: Casual/.test(document.querySelector('[data-message-id="q-tone"]')?.innerText || ''), null, { timeout: 10000 }); } catch { /* the check says it */ }
+			const sent = mac.state.answers;
+			check('tapping "Casual" sends that answer to the Mac, once',
+				sent.length === 1 && sent[0].kind === 'answer' && sent[0].question_id === 'q-tone'
+					&& sent[0].thread_id === mac.threadId && JSON.stringify(sent[0].option_ids) === '["opt-casual"]',
+				JSON.stringify(sent));
+			const after = await page.evaluate(() => document.querySelector('[data-message-id="q-tone"]')?.innerText || '');
+			check('and the card then says what he answered, with no answer left to press',
+				/You answered: Casual/.test(after) && !(await casual.count()), after);
+			await shoot(page, `${engine}-question-answered`);
+		}
+
 		// --- the shell is kept, so the app OPENS where his Mac does not resolve ---
 		const worker = await page.evaluate(async () => {
 			if (!('serviceWorker' in navigator)) return { supported: false };

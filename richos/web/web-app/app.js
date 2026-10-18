@@ -723,8 +723,14 @@ function render(forceBottom) {
 	let lastDelivered = -1;
 	rows.forEach((row, i) => { if (!row.pending && row.role === 'ceo') lastDelivered = i; });
 
-	list.textContent = '';
-	rows.forEach((row, i) => list.appendChild(renderRow(row, i === lastDelivered)));
+	// A question card he is typing an answer into is the SAME node across renders (see
+	// `questionCard`), and it is never taken out of the list: a node leaving the document loses
+	// focus, which on a phone closes the keyboard mid-word every time a reply streams in.
+	const nodes = rows.map((row, i) => renderRow(row, i === lastDelivered));
+	const keep = new Set(nodes);
+	[...list.children].forEach((child) => { if (!keep.has(child)) child.remove(); });
+	let at = list.firstChild;
+	nodes.forEach((node) => { if (node === at) at = at.nextSibling; else list.insertBefore(node, at); });
 
 	const older = $('older');
 	if (thread.atTheBeginning() && rows.length) {
@@ -779,6 +785,7 @@ function render(forceBottom) {
 }
 
 function renderRow(row, isLastDelivered) {
+	if (row.kind === 'question' && row.question && api && api.offers('questions')) return questionCard(row);
 	const li = document.createElement('li');
 	const mine = row.role === 'ceo' || row.pending;
 	li.className = `msg ${mine ? 'msg-mine' : 'msg-rich'}`;
@@ -860,6 +867,159 @@ function renderRow(row, isLastDelivered) {
 		li.appendChild(hear);
 	}
 
+	return li;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A question card — his answers as buttons, one tap answers, as a click does on the Mac
+// ---------------------------------------------------------------------------------------------
+//
+// Ray, nightlies 63 and 64: this page showed a question as its plain text, so clicking "Casual"
+// did nothing. The Mac's card (`app/ui/questions.js`) and the native apps' (`QuestionCard.kt`) are
+// the design, in the same words. What the phone shows after an answer is what the Mac says the
+// question now is: the answer's reply, and then the Mac's own changed row on the stream.
+//
+// One node per question, kept while the question is unchanged, so a choice he is making or an
+// answer he is typing survives every render a streaming reply causes.
+const questionCards = new Map();
+
+function questionCard(row) {
+	const q = row.question;
+	const key = JSON.stringify([row.text, row.created_at, q]);
+	const held = questionCards.get(q.id);
+	if (held && held.key === key) return held.li;
+	const draft = held ? held.draft : { selected: new Set(), other: false, text: '', editing: false, busy: false, note: '' };
+	if (held && held.revision !== q.revision) { draft.editing = false; draft.selected.clear(); draft.other = false; draft.text = ''; }
+
+	const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+	const li = el('li', 'msg msg-rich msg-question');
+	li.dataset.messageId = row.id;
+	li.dataset.questionState = q.state;
+	if (q.set_count > 1) li.appendChild(el('p', 'ask-aside', `Question ${q.set_index} of ${q.set_count}`));
+	if (q.asker === 'Your team') li.appendChild(el('p', 'ask-aside', 'Your team, through Rich'));
+	li.appendChild(el('p', 'msg-text', q.text));
+	const controls = el('div', 'ask-controls');
+	const status = el('p', 'ask-status');
+	status.setAttribute('role', 'status');
+	li.append(controls, status);
+	const meta = el('p', 'msg-meta');
+	meta.appendChild(el('span', null, timeOf(row)));
+	li.appendChild(meta);
+	if (row.id && (row.has_audio || api.offers('audio'))) {
+		const hear = el('button', 'hear', 'Hear it');
+		hear.type = 'button';
+		hear.addEventListener('click', () => hearIt(row.id, hear));
+		li.appendChild(hear);
+	}
+
+	const labels = (answer) => q.options.filter((o) => answer.option_ids.includes(o.id)).map((o) => o.label)
+		.concat(answer.text ? [answer.text] : []).join('; ');
+
+	async function submit(optionIds, text) {
+		if (draft.busy) return;
+		draft.busy = true; draft.note = 'Saving your answer…'; draw();
+		try {
+			const result = await api.answerQuestion({
+				clientId: newClientId(), threadId: row.thread_id || currentThreadId, questionId: q.id,
+				optionIds, text, expectedRevision: draft.editing ? q.revision : undefined
+			});
+			draft.busy = false;
+			if (result.outcome === 'conversation_deleted') { draft.note = 'This conversation was deleted. Your answer was not sent.'; draw(); return; }
+			draft.note = '';
+			if (result.question) {
+				const updated = Object.assign({}, row, { question: result.question });
+				thread.merge(updated);
+				messageCache.put(updated).catch(() => {});
+			}
+			scheduleRender();
+		} catch (err) {
+			draft.busy = false;
+			draft.note = err && err.reason === 'refused' && err.aboutThisMessage
+				? err.message
+				: 'Your answer did not reach your Mac. Tap it again when your Mac is reachable.';
+			draw();
+			if (err && err.reason === 'revoked') handleApiError(err);
+		}
+	}
+
+	function draw() {
+		controls.textContent = '';
+		status.textContent = draft.note;
+		status.hidden = !draft.note;
+		if (q.state === 'withdrawn') {
+			controls.appendChild(el('p', 'ask-line', `Rich no longer needs this: ${q.withdrawal_reason || 'The work has ended'}`));
+			return;
+		}
+		if (q.state === 'answered' && q.answer && !draft.editing) {
+			controls.appendChild(el('p', 'ask-answer', `You answered: ${labels(q.answer)}`));
+			controls.appendChild(el('p', 'ask-line', q.delivered ? 'Rich has your answer'
+				: q.ended_before_taken ? 'This job stopped before Rich got your answer.'
+					: q.remaining > 0 ? 'Waiting for the remaining answers'
+						: q.waiting_for_turn ? 'It reaches Rich when his current reply ends' : 'On its way to Rich'));
+			if (!q.delivered && !q.handoff_started) {
+				const change = el('button', 'hear', 'Change answer');
+				change.type = 'button';
+				change.addEventListener('click', () => {
+					draft.editing = true; draft.selected = new Set(q.answer.option_ids); draft.text = q.answer.text || '';
+					draft.other = Boolean(draft.text); draw();
+				});
+				controls.appendChild(change);
+			}
+			return;
+		}
+		if (draft.editing) controls.appendChild(el('p', 'ask-line', 'Change your answer before Rich receives it.'));
+		const send = el('button', 'hear', 'Send answer');
+		send.type = 'button';
+		send.disabled = draft.busy || !draft.selected.size;
+		send.addEventListener('click', () => submit([...draft.selected], ''));
+		q.options.forEach((option) => {
+			const button = el('button', 'ask-option');
+			button.type = 'button';
+			button.disabled = draft.busy;
+			button.appendChild(el('span', 'ask-label', option.label));
+			if (option.description) button.appendChild(el('span', 'ask-desc', option.description));
+			if (q.recommended === option.id) button.appendChild(el('span', 'ask-rec', q.asker === 'Your team' ? 'Your team recommends' : 'Rich recommends'));
+			if (q.multiple) {
+				button.setAttribute('aria-pressed', String(draft.selected.has(option.id)));
+				button.addEventListener('click', () => {
+					if (draft.selected.has(option.id)) draft.selected.delete(option.id); else draft.selected.add(option.id);
+					draw();
+				});
+			} else {
+				button.addEventListener('click', () => submit([option.id], ''));
+			}
+			controls.appendChild(button);
+		});
+		if (q.multiple) controls.appendChild(send);
+		if (q.free_answer) {
+			const other = el('button', 'ask-link', 'Other answer');
+			other.type = 'button';
+			other.setAttribute('aria-expanded', String(draft.other));
+			other.addEventListener('click', () => { draft.other = !draft.other; draw(); if (draft.other) controls.querySelector('textarea').focus(); });
+			controls.appendChild(other);
+			if (draft.other) {
+				const form = el('form', 'ask-other');
+				const input = el('textarea');
+				input.setAttribute('aria-label', 'Other answer');
+				input.placeholder = 'Your answer';
+				input.maxLength = 16384;
+				input.value = draft.text;
+				input.addEventListener('input', () => { draft.text = input.value; custom.disabled = draft.busy || !input.value.trim(); });
+				const custom = el('button', 'hear', 'Send answer');
+				custom.type = 'submit';
+				custom.disabled = draft.busy || !draft.text.trim();
+				form.append(input, custom);
+				form.addEventListener('submit', (event) => {
+					event.preventDefault();
+					if (input.value.trim()) submit(q.multiple ? [...draft.selected] : [], input.value.trim());
+				});
+				controls.appendChild(form);
+			}
+		}
+	}
+
+	draw();
+	questionCards.set(q.id, { key, li, draft, revision: q.revision });
 	return li;
 }
 

@@ -486,6 +486,23 @@
 				});
 			},
 
+			/// AN ANSWER TO A QUESTION CARD — `routes.rs` `messages`, `kind: "answer"`, offered when the
+			/// Mac names `questions`. The Mac answers with `{outcome, question}`, the question as it
+			/// now stands. `expected_revision` only when he changes an answer he already gave, as
+			/// the Mac's own card does (`app/ui/questions.js` `submit`).
+			async answerQuestion(answer) {
+				const body = {
+					kind: 'answer',
+					client_id: answer.clientId,
+					thread_id: answer.threadId,
+					question_id: answer.questionId,
+					option_ids: answer.optionIds,
+					text: answer.text || ''
+				};
+				if (Number.isSafeInteger(answer.expectedRevision)) body.expected_revision = answer.expectedRevision;
+				return json('POST', '/api/messages', body);
+			},
+
 			// The WAV goes as bytes, not base64: a 20-second note is about 640 KB (plan §3.3) and
 			// base64 would make it 850 KB to say the same thing. `codec` is explicit and always
 			// sent, so native can send `opus` later against this same contract.
