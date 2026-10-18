@@ -287,8 +287,6 @@ fn retain_preparation_item(
 
 
 fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot:&std::sync::Arc<std::sync::Mutex<Option<Box<dyn Cognition>>>>)->Result<bool,SpineError> {
-    if plan.control.stop_claim().is_some_and(|claim|
-        plan.control.active_turn().is_some_and(|turn|turn.turn_id==claim.turn_id)) {return Ok(false)}
     let mut slot=slot.lock().unwrap();
     if slot.as_ref().is_some_and(|lease|lease.is_closed()) {drop(slot.take());}
     if let Some(lease)=slot.as_ref() {
@@ -322,13 +320,16 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     let Some(plan) = delivery.connection.as_ref() else {
         return;
     };
+    let intake_id = state.state(|s| s.ledger.turn(&delivery.turn_id).and_then(|turn| turn.intake_id));
+    let stopped = || plan.control.stop_claim().is_some_and(|claim| claim.covers(&delivery.turn_id, intake_id));
+    if stopped() { delivery.stopped_before_prompt = true; return; }
     if let Some((wait, clock)) = delivery.retry_wait.take() {
         clock.wait(wait, &|| {
             plan.control.stop_claim_for(&delivery.turn_id).is_some()
         });
     }
     let prepared=prepare_connection(state,plan,&delivery.lease).and_then(|_| {
-        if plan.control.stop_claim_for(&delivery.turn_id).is_some(){return Ok(())}
+        if stopped() {return Ok(())}
         let (original,source,conversation,channel,app_messages)=state.state(|s| {
             let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
             while let Some(previous)=s.ledger.turns().iter().find(|t|t.superseded_by.as_deref()==Some(successor)&&t.thread_id==plan.binding.thread_id()&&seen.insert(t.id.clone())) {
@@ -363,13 +364,13 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
         entity_id: Some(delivery.binding.entity_id().clone()), started_at: None };
     delivery.account=lease.account().map(str::to_string);
     delivery.response = Some(lease.enqueue_prompt(&delivery.text, Box::new(move || {
-        if control.stop_claim_for(&turn.turn_id).is_some() { return Err(crate::native::STOP_REASON_CANCELLED.into()); }
+        if control.stop_claim().is_some_and(|claim| claim.covers(&turn.turn_id, intake_id)) { return Err(crate::native::STOP_REASON_CANCELLED.into()); }
         control.begin_turn(turn);
         Ok(())
     }))?);
         Ok(())
     });
-    delivery.stopped_before_prompt = delivery.response.is_none() && plan.control.stop_claim_for(&delivery.turn_id).is_some();
+    delivery.stopped_before_prompt = delivery.response.is_none() && stopped();
     delivery.preparation_stop = match &prepared {
         Err(SpineError::Cognition(CognitionError::PrimingStopped(reason))) => Some(reason.clone()),
         _ => None,
@@ -2064,7 +2065,7 @@ impl Spine {
     /// surfaces honestly after one attempt rather than looping forever.
     fn deliver(&mut self,turn_id:&str,binding:&ThreadBinding,text:&str,allow_recovery:bool)->Result<(),SpineError> {
         if let Some(claim)=self.control.for_thread(binding.thread_id()).stop_claim().filter(|claim|
-            self.ledger.turn(turn_id).and_then(|turn|turn.intake_id).is_none_or(|id|id<claim.intake_id)) {
+            claim.covers(turn_id, self.ledger.turn(turn_id).and_then(|turn|turn.intake_id))) {
             // Preserve the existing durable Stop cut without submitting pre-Stop input.
             self.ledger.stop_turn(turn_id,claim.requested_at)?;
             self.emit_live(self.turn_status_event(binding,turn_id,TurnStatus::Stopped,None));
@@ -2284,10 +2285,10 @@ impl Spine {
         // that unblocked the drain loop, so the reader thread has often not read them yet —
         // which is why this is one of several pump points and not the only one.
         self.pump_between_turn_stamped(binding, false);
-        // THE CEO'S STOP, read once, here. `stop_claim_for` returns a claim only if it
-        // names THIS turn id — a stop is a statement about one turn and must never fall
-        // through onto whatever runs next.
-        let stop_claim = control.stop_claim_for(turn_id);
+        // The same durable Stop also covers inputs already submitted to this provider.
+        // Its teardown is intentional, including for inputs Claude had not started yet.
+        let stop_claim = control.stop_claim().filter(|claim|
+            claim.covers(turn_id, self.ledger.turn(turn_id).and_then(|turn| turn.intake_id)));
         // The mirror is cleared whatever happens below, including on the error paths: a
         // stale "still running" would make the next stop request name a dead turn.
         control.end_turn(turn_id);
@@ -2379,19 +2380,8 @@ impl Spine {
             } else {
                 self.finish_completed_turn_the_stop_missed(turn_id, binding, &claim, lease_reported.unwrap())?;
             }
-            // This reply cannot retire a connection another delivery still owns, including
-            // an input being prepared before it reaches native stdin. Release our reference
-            // and let Arc prove exclusive ownership, without waiting on provider I/O.
-            let same_connection=self.resident.get(thread_id)
-                .is_some_and(|desk|std::sync::Arc::ptr_eq(&desk.lease,&delivery.lease));
-            drop(delivery.lease);
-            let unused=same_connection && self.resident.get_mut(thread_id)
-                .and_then(|desk|std::sync::Arc::get_mut(&mut desk.lease))
-                .is_some_and(|slot|slot.get_mut().unwrap().as_ref().is_none_or(|lease|!lease.has_pending_input()));
-            if unused {
-                self.resident.remove(thread_id);
-                control.set_cancel(None);control.set_lease_session(None);
-            }
+            // Native marks a stopped production connection closed. The normal opener
+            // reaps and resumes it on the next explicit input without clearing newer handles.
             return Ok(());
         }
 
@@ -2674,6 +2664,8 @@ impl Spine {
     fn settle_stop_claim(&mut self, binding: &ThreadBinding) -> Result<(), SpineError> {
         let control=self.control.for_thread(binding.thread_id());
         let Some(claim)=control.stop_claim() else {return Ok(())};
+        if self.ledger.pending_turns().iter().any(|turn| turn.thread_id == binding.thread_id()
+            && claim.covers(&turn.id, turn.intake_id)) { return Ok(()); }
         if control.active_turn().is_none() {
             self.emit_live(self.thread_summary_event(binding, &claim.turn_id, ThreadStatus::Idle));
         }
@@ -2794,7 +2786,10 @@ impl Spine {
                     if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }
                 IntakeRecord::Stop { id, turn_id, at } => {
-                    if self.control.has_active_turn_id(&turn_id) {
+                    let thread = self.ledger.turn(&turn_id).map(|turn| turn.thread_id.clone());
+                    let claim = StopClaim { turn_id: turn_id.clone(), intake_id: id, requested_at: at };
+                    if self.control.has_active_turn_id(&turn_id) || self.ledger.pending_turns().iter()
+                        .any(|turn| Some(&turn.thread_id) == thread.as_ref() && claim.covers(&turn.id, turn.intake_id)) {
                         deferred_stop=true;
                         continue;
                     }
@@ -2904,8 +2899,17 @@ impl Spine {
             .filter(|turn| turn.source != Source::Internal)
             .map(|turn| turn.id.clone()).collect();
         for record in self.control.pending_intake() {
-            if let IntakeRecord::Stop { turn_id, at, .. } = record {
+            if let IntakeRecord::Stop { id, turn_id, at } = record {
+                let claim = StopClaim { turn_id: turn_id.clone(), intake_id: id, requested_at: at };
+                let thread = self.ledger.turn(&turn_id).map(|turn| turn.thread_id.clone());
+                if let Some(thread) = &thread {
+                    self.control.for_thread(thread).restore_stop_claim(claim.clone());
+                }
+                let affected: Vec<_> = self.ledger.pending_turns().iter()
+                    .filter(|turn| Some(&turn.thread_id) == thread.as_ref() && claim.covers(&turn.id, turn.intake_id))
+                    .map(|turn| turn.id.clone()).collect();
                 self.ledger.stop_turn_after_restart(&turn_id, at)?;
+                for id in affected { self.ledger.stop_turn_after_restart(&id, at)?; }
             }
         }
         for id in interrupted {

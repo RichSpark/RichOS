@@ -679,6 +679,8 @@ impl CancellableMockCognition {
 }
 
 impl Cognition for CancellableMockCognition {
+    // Match desktop Native: Stop closes the provider; the ordinary opener resumes it.
+    fn is_closed(&self) -> bool { self.cancel.requested.load(Ordering::SeqCst) }
 
 
     fn session_id(&self) -> &str {

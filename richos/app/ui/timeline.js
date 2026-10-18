@@ -3144,6 +3144,10 @@
 
       section.appendChild(lane);
 
+      if (row.tone === "ceo-stopped" && turn.user && turn.user.text &&
+          !turn.stream.some(item => isProse(item) && item.text)) {
+        section.appendChild(retryControl(turn, opts));
+      }
       if (row.tone === "stopped") section.appendChild(renderFailureCard(turn, opts));
       if (row.tone === "unknown") section.appendChild(renderUnknownCard(turn, opts));
     }

@@ -187,6 +187,40 @@ async function main() {
       await page.close();
     });
 
+    await run.check("a queued message stopped with its provider is restorable without being sent", async () => {
+      const page = await openApp(browser);
+      await page.evaluate(() => {
+        const original = window.RichBridge.invoke.bind(window.RichBridge);
+        window.__sendCount = 0;
+        window.RichBridge.invoke = (cmd, args) => {
+          if (cmd === "send_message") window.__sendCount++;
+          return original(cmd, args);
+        };
+      });
+      const fence = await startTurn(page, "stop_first");
+      await goWorking(page, fence, "stop_first");
+      const words = "Keep these exact words: café\nand the second line.";
+      await page.fill("#input", words); await page.press("#input", "Enter");
+      await page.evaluate(f => {
+        window.__emit("rich://turn-status", { ...f, turnId: "stop_queued", status: "queued", startedAt: null,
+          at: Date.now(), visibility: "ceo" });
+        for (const turnId of ["stop_first", "stop_queued"]) {
+          window.__emit("rich://turn-status", { ...f, turnId, status: "stopped", at: Date.now(), visibility: "ceo" });
+        }
+      }, fence);
+      await tick(page);
+      const queued = page.locator('.tl-turn[data-turn-id="stop_queued"]');
+      assertEqual(await queued.locator('.tl-duration').getAttribute("data-tone"), "ceo-stopped");
+      assertEqual(await queued.locator('.tl-intervention').count(), 0, "Stop is not a failure");
+      assertEqual(await page.inputValue("#input"), "");
+      assertEqual(await page.evaluate(() => window.__sendCount), 2);
+      await queued.getByRole("button", { name: "Restore my message", exact: true }).click();
+      assertEqual(await page.inputValue("#input"), words, "restoring preserves the complete saved text");
+      assertEqual(await page.evaluate(() => window.__sendCount), 2, "restoring must not execute the message");
+      assertEqual(page.__errors.length, 0, page.__errors.join("\n"));
+      await page.close();
+    });
+
     await run.check("a rejected accepted send ends its waiting state even when the terminal event is missing", async () => {
       const page = await openApp(browser);
       await controllableSend(page);

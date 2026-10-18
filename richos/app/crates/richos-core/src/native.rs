@@ -3119,6 +3119,9 @@ impl TurnCancel for NativeCancelHandle {
     fn cancel(&self) -> bool {
         let mut operation = self.operation_cancel.lock().unwrap();
         if operation.active { operation.requested = true; }
+        // Production Stop ends this provider to settle its workers. Reject new input now,
+        // before the asynchronous EOF, so the ordinary opener reaps and resumes it once.
+        if self.settle_workers_on_stop { self.reader_closed.store(true, Ordering::SeqCst); }
         // Revoke before interrupting, while holding the same lock as grant activation.
         // Missing scopes are normal before the initial company/thread binding.
         for grant in &self.action_grants {

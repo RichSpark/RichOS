@@ -844,6 +844,14 @@ pub struct StopClaim {
     pub requested_at: u64,
 }
 
+impl StopClaim {
+    /// Stop covers its named turn and inputs accepted before its durable intake record.
+    /// A later explicit submission is a new request, including after a provider closes.
+    pub(crate) fn covers(&self, turn_id: &str, intake_id: Option<u64>) -> bool {
+        self.turn_id == turn_id || intake_id.is_some_and(|id| id < self.intake_id)
+    }
+}
+
 /// What actually happened when the CEO pressed stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopOutcome {
@@ -1326,6 +1334,11 @@ impl ConversationControl {
 
     pub fn stop_claim(&self)->Option<StopClaim> {
         self.shared.inner.conversations.lock().unwrap().get(self.key()).and_then(|state|state.stop.clone())
+    }
+
+    pub(crate) fn restore_stop_claim(&self, claim: StopClaim) {
+        self.shared.inner.conversations.lock().unwrap().entry(self.key().to_string())
+            .or_default().stop = Some(claim);
     }
 
     pub fn clear_stop_claim(&self) {

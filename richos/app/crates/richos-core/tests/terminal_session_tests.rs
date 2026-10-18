@@ -222,6 +222,7 @@ fn an_explicit_message_after_stop_reopens_instead_of_reusing_the_terminated_prov
     struct Stopped {control:ConversationControl,killed:Arc<Killed>,reason:Option<&'static str>,calls:Arc<AtomicUsize>}
     impl Cognition for Stopped {
         fn session_id(&self)->&str {"saved-native-session"}
+        fn is_closed(&self)->bool {self.killed.0.load(Ordering::SeqCst)}
         fn cancel_handle(&self)->Option<Arc<dyn TurnCancel>> {Some(self.killed.clone())}
         fn prompt(&mut self,_:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
             panic!("this fixture submits before waiting, as the native provider does")
@@ -300,129 +301,202 @@ for line in sys.stdin:
 
 #[cfg(unix)]
 #[test]
-fn stopping_one_input_keeps_the_next_inputs_native_stop_handle() {
-    use richos_core::{native::NativeCognition, spine::drive_shared_turns, steering::{StopOutcome, TurnControl}};
-    use std::{os::unix::fs::PermissionsExt, sync::Mutex, time::{Duration, Instant}};
+fn production_stop_saves_queued_input_and_reaps_workers_before_one_resume() {
+    use richos_core::{cognition::LeaseFactory, engine_profile::EngineProfile, native::NativeCognition,
+        runtime::EngineRuntime, spine::drive_shared_turns, steering::{ConversationControl, StopOutcome, TurnControl}};
+    use std::{os::unix::fs::PermissionsExt, path::PathBuf, sync::Mutex, time::{Duration, Instant}};
     fn until(what: &str, ready: impl Fn() -> bool) {
-        // load-bound: hang guard only; each verdict requires a positive lifecycle or ledger fact.
-        let deadline = Instant::now() + Duration::from_secs(20);
+        // load-bound: hang guard; correctness requires a positive lifecycle, ledger or process fact.
+        let deadline = Instant::now() + Duration::from_secs(30);
         while !ready() {
             assert!(Instant::now() < deadline, "{what}");
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+    struct DesktopFactory {
+        profile: EngineProfile, bridge: richos_core::ecs::EcsBridge,
+        script: PathBuf, skills: PathBuf, opened: Arc<AtomicUsize>,
+    }
+    impl LeaseFactory for DesktopFactory {
+        fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
+            Err(CognitionError::Protocol("this fixture requires a conversation binding".into()))
+        }
+        fn spawn_scoped(&self, binding: &richos_core::entity::ThreadBinding, control: &ConversationControl)
+            -> Result<Box<dyn Cognition>, CognitionError> {
+            let mut profile = self.profile.clone();
+            profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
+            let native = NativeCognition::start_with_engine(&self.script, &self.skills.join("agents/rich.md"),
+                &self.skills, &self.script, self.bridge.clone(), profile, Some(control))?;
+            self.opened.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(native))
+        }
+    }
     let (root, mut spine, company) = fixture();
     let thread = spine.create_thread("Conversation", &company).unwrap();
+    spine.set_central_root(root.join("companies"));
+    spine.set_onboarding_record(root.join("onboarding.json"));
     let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
     spine.set_turn_control(controls.clone());
-    let factory = MockLeaseFactory::new(vec!["Explicit next reply"]);
-    let opened = factory.spawned.clone();
-    spine.set_lease_factory(Box::new(factory));
-    let script = root.join("stop-provider.py");
+    let engine = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
+    let runtime = if let Some(path) = std::env::var_os("RICHOS_RUNTIME_DIR") {
+        EngineRuntime::load(&engine, Some(std::path::Path::new(&path))).unwrap()
+    } else {
+        // Source-test toolchain only. Node is not invoked by this controlled provider.
+        let python = std::process::Command::new("python3").args(["-c", "import sys;print(sys.executable)"]).output().unwrap();
+        EngineRuntime { root: root.join("runtime"), python: String::from_utf8(python.stdout).unwrap().trim().into(),
+            git: "/usr/bin/git".into(), node: "/usr/bin/true".into(), versions: Default::default() }
+    };
+    let profile = EngineProfile::prepare_with_settings(&engine, &root.join("data"), runtime, Default::default()).unwrap();
+    let bridge = richos_core::ecs::EcsBridge::new(&profile.runtime.python, &engine, &profile.state).unwrap();
+    let skills = richos_core::skills::ensure_rendered(&root.join("skills"), &engine.join("app")).unwrap();
+    let script = root.join("production-provider.py");
     std::fs::write(&script, r#"#!/usr/bin/env python3
-import json,sys,select,os
+import json,os,pathlib,select,subprocess,sys
+root=pathlib.Path(__file__).resolve().parent
+os.chdir(root)
+def send(v): print(json.dumps(v),flush=True)
+if "--no-session-persistence" in sys.argv:
+    for line in sys.stdin:
+        send({"type":"assistant","message":{"model":"claude-haiku-5-5","content":[{"type":"text","text":"rich_handles_message"}]}})
+        send({"type":"result","is_error":False,"result":"rich_handles_message"})
+    sys.exit(0)
 buffer=b""
 log=open("provider.log","a")
-def send(v): print(json.dumps(v),flush=True)
-def read(wait=20):
+def read():
     global buffer
     while b"\n" not in buffer:
-        r,_,_=select.select([sys.stdin],[],[],wait)
-        if not r: return None
-        c=os.read(sys.stdin.fileno(),4096)
-        if not c: return None
-        buffer+=c
+        ready,_,_=select.select([sys.stdin],[],[],20)
+        if not ready: raise RuntimeError("native input hang guard")
+        chunk=os.read(sys.stdin.fileno(),4096)
+        if not chunk: raise EOFError("native input closed")
+        buffer+=chunk
     line,buffer=buffer.split(b"\n",1)
-    v=json.loads(line); log.write(json.dumps(v)+"\n"); log.flush(); return v
-def read_type(t,sub=None,wait=20):
+    value=json.loads(line);log.write(json.dumps(value)+"\n");log.flush();return value
+def wanted(kind):
     while True:
-        v=read(wait)
-        if v is None: return None
-        if v.get("type")==t and (sub is None or v.get("request",{}).get("subtype")==sub): return v
-def text(u): return u["message"]["content"][0]["text"]
-def hook(u,rid):
-    send({"type":"control_request","request_id":rid,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt_id":"native-"+rid,"prompt":text(u)}}})
-    while True:
-        v=read()
-        if v and v.get("type")=="control_response" and v["response"]["request_id"]==rid: return
-init=read(); send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
-first=read_type("user")
-send({"type":"command_lifecycle","command_uuid":first["uuid"],"state":"started"})
-hook(first,"hook-1")
+        value=read()
+        if value["type"]==kind:return value
+def start(value):
+    send({"type":"command_lifecycle","command_uuid":value["uuid"],"state":"started"})
+    send({"type":"control_request","request_id":value["uuid"],"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt":value["message"]["content"][0]["text"]}}})
+    return wanted("control_response")["response"]["response"]
+resumed="--resume" in sys.argv
+session=pathlib.Path(sys.argv[sys.argv.index("--resume")+1]).stem if resumed else sys.argv[sys.argv.index("--session-id")+1]
+config=json.loads(sys.argv[sys.argv.index("--mcp-config")+1])
+state=pathlib.Path(config["mcpServers"]["richos_onboarding"]["args"][1]).parent.parent
+transcript=root/(session+".jsonl");transcript.touch(exist_ok=True)
+evidence=state/"evidence"/session;evidence.mkdir(parents=True,exist_ok=True)
+(evidence/"callbacks.jsonl").write_text(json.dumps({"callback":{"transcript_path":str(transcript)}})+"\n")
+log.write(json.dumps({"event":"provider-start","session":session,"resumed":resumed})+"\n");log.flush()
+init=read();send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
+first=wanted("user");hook=start(first)
+assert hook.get("decision")!="block",hook
+if resumed:
+    send({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Explicit next reply"}]}})
+    send({"type":"result","stop_reason":"end_turn"})
+    while True:read()
+worker=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+(root/"worker-pid").write_text(str(worker.pid))
 send({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Working on one. "}]}})
-second=read_type("user")
+second=wanted("user")
 send({"type":"command_lifecycle","command_uuid":second["uuid"],"state":"queued"})
-open("second-queued","w").close()
-stop=read_type("control_request","interrupt")
-send({"type":"control_response","response":{"subtype":"success","request_id":stop["request_id"],"response":{}}})
-send({"type":"result","subtype":"success","is_error":False,"stop_reason":"NATIVE_CANCELLED"})
-send({"type":"command_lifecycle","command_uuid":first["uuid"],"state":"NATIVE_CANCELLED"})
-send({"type":"command_lifecycle","command_uuid":second["uuid"],"state":"started"})
-hook(second,"hook-2")
-send({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Working on two. "}]}})
-stop2=read_type("control_request","interrupt")
-assert stop2 is not None, "second input never received its interrupt"
-log.write("SECOND INTERRUPT RECEIVED\n"); log.flush()
-send({"type":"control_response","response":{"subtype":"success","request_id":stop2["request_id"],"response":{}}})
-send({"type":"result","subtype":"success","is_error":False,"stop_reason":"NATIVE_CANCELLED"})
-send({"type":"command_lifecycle","command_uuid":second["uuid"],"state":"completed"})
-read(3)
-"#.replace("NATIVE_CANCELLED", richos_core::native::STOP_REASON_CANCELLED)).unwrap();
+(root/"second-queued").touch()
+# The production supervisor must reap this provider and its separate worker group.
+# No fake interrupt acknowledgement or child cleanup stands in for that teardown.
+while True:read()
+"#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let doctrine = root.join("rich.md"); std::fs::write(&doctrine, "Fixture").unwrap();
-    let skills = richos_core::skills::ensure_rendered(&root.join("skills"),
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
-    let native = NativeCognition::start(&script, &root, &doctrine, &skills).unwrap();
-    let session = native.session_id().to_string();
-    let cleanup_cancel = native.cancel_handle().unwrap();
-    spine.attach_lease(Box::new(native));
+    let opened = Arc::new(AtomicUsize::new(0));
+    spine.set_lease_factory(Box::new(DesktopFactory { profile: profile.clone(), bridge, script, skills, opened: opened.clone() }));
     spine.detach_conversation_io();
     let shared = Arc::new(Mutex::new(spine));
-    let control = controls.for_thread(&thread);
-    let first = {
-        let shared = shared.clone(); let thread = thread.clone();
-        std::thread::spawn(move || {
-            let id = shared.lock().unwrap().submit_prompt_to(&thread, "First message", Source::Text).unwrap();
-            (id, drive_shared_turns(&shared))
-        })
-    };
-    until("first input never streamed", || shared.lock().unwrap().ledger().thread_turns(&thread).unwrap().iter().any(|t| !t.assistant_text.is_empty()));
-    let first_id = control.active_turn().unwrap().turn_id;
-    let second = {
-        let shared = shared.clone(); let thread = thread.clone();
-        std::thread::spawn(move || {
-            let id = shared.lock().unwrap().submit_prompt_to(&thread, "Second message", Source::Text).unwrap();
-            (id, drive_shared_turns(&shared))
-        })
-    };
-    until("second input never reached the same provider", || root.join("second-queued").exists());
-    let stop_first = control.request_stop().unwrap();
-    assert!(matches!(&stop_first, StopOutcome::Requested {turn_id, reached_lease: true, ..} if turn_id == &first_id));
-    until("first input never stopped while the second began", || {
-        let spine = shared.lock().unwrap();
-        spine.ledger().turn(&first_id).unwrap().state == richos_core::ledger::TurnState::Stopped
-            && control.active_turn().is_some_and(|t| t.turn_id != first_id)
-            && spine.ledger().thread_turns(&thread).unwrap().iter().any(|t| t.id != first_id && !t.assistant_text.is_empty())
+    let run = |shared: Arc<Mutex<Spine>>| std::thread::spawn(move || {
+        shared.lock().unwrap().poll_intake().unwrap(); drive_shared_turns(&shared)
     });
-    let retained_session = shared.lock().unwrap().lease_session_id();
-    let stop_second = control.request_stop().unwrap();
-    let reached = matches!(&stop_second, StopOutcome::Requested {reached_lease: true, ..});
-    // Clean up the real child even on the failing baseline, without hiding the missed UI Stop.
-    if !reached { cleanup_cancel.cancel(); }
-    let (_, first_result) = first.join().unwrap();
-    let (second_id, second_result) = second.join().unwrap();
-    assert!(first_result.is_ok() && second_result.is_ok());
-    assert!(reached, "Stop lost the second input's provider handle: {stop_second:?}");
-    assert_eq!(retained_session.as_deref(), Some(session.as_str()));
-    assert!(std::fs::read_to_string(root.join("provider.log")).unwrap().contains("SECOND INTERRUPT RECEIVED"));
+    let first = controls.submit_from_desk(&thread, Some(company.clone()), "First message").unwrap();
+    let first_driver = run(shared.clone());
+    until("production provider never streamed", || shared.lock().unwrap().ledger().turn_for_intake(first.id()).is_some_and(|t|!t.assistant_text.is_empty()));
+    let control = controls.for_thread(&thread);
+    let session = control.lease_session().unwrap();
+    let second = controls.submit_from_desk(&thread, Some(company.clone()), "Second message").unwrap();
+    let second_driver = run(shared.clone());
+    until("second input never reached the same production provider", || root.join("second-queued").exists());
+    let command_state = richos_core::lease_commands::state_path(&profile.state, &session);
+    until("supervisor never observed its separate worker group", || matches!(richos_core::lease_commands::read(&command_state), richos_core::lease_commands::CommandReading::Running(n) if n>0));
+    assert!(matches!(control.request_stop().unwrap(), StopOutcome::Requested {reached_lease:true,..}));
+    first_driver.join().unwrap().unwrap(); second_driver.join().unwrap().unwrap();
+    let worker: libc::pid_t = std::fs::read_to_string(root.join("worker-pid")).unwrap().parse().unwrap();
+    until("production Stop left its worker alive", || unsafe { libc::kill(worker,0) } != 0);
     {
         let spine = shared.lock().unwrap();
-        assert_eq!(spine.ledger().turn(&second_id).unwrap().state, richos_core::ledger::TurnState::Stopped);
-        assert!(opened.lock().unwrap().is_empty(), "a concurrent input opened a duplicate session");
+        let a=spine.ledger().turn_for_intake(first.id()).unwrap();
+        let b=spine.ledger().turn_for_intake(second.id()).unwrap();
+        assert_eq!(a.state, richos_core::ledger::TurnState::Stopped);
+        assert_eq!(b.state, richos_core::ledger::TurnState::Stopped, "intentional provider teardown must not report queued input as a failure");
+        assert_eq!(b.user_text, "Second message"); assert!(b.assistant_text.is_empty());
+        assert_eq!(opened.load(Ordering::SeqCst),1);
     }
-    let next = shared.lock().unwrap().submit_prompt_to(&thread, "Explicit next message", Source::Text).unwrap();
-    drive_shared_turns(&shared).unwrap();
-    assert_eq!(opened.lock().unwrap().len(), 1, "the idle stopped session must reopen exactly once");
-    assert_eq!(shared.lock().unwrap().ledger().turn(&next).unwrap().assistant_text, "Explicit next reply");
+    let next=controls.submit_from_desk(&thread,Some(company),"Explicit next message").unwrap();
+    shared.lock().unwrap().poll_intake().unwrap(); drive_shared_turns(&shared).unwrap();
+    assert_eq!(opened.load(Ordering::SeqCst),2,"one explicit input must reopen exactly once");
+    assert_eq!(control.lease_session().as_deref(),Some(session.as_str()),"resume must retain native history identity");
+    assert_eq!(shared.lock().unwrap().ledger().turn_for_intake(next.id()).unwrap().assistant_text,"Explicit next reply");
+    let frames: Vec<serde_json::Value> = std::fs::read_to_string(root.join("provider.log")).unwrap().lines().map(|l|serde_json::from_str(l).unwrap()).collect();
+    let sent: Vec<_> = frames.iter().filter(|f|f["type"]=="user").map(|f|f["message"]["content"][0]["text"].as_str().unwrap()).collect();
+    assert_eq!(sent,["First message","Second message","Explicit next message"]);
+    assert_eq!(frames.iter().filter(|f|f["event"]=="provider-start").count(),2);
     drop(shared); std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn restart_applies_the_durable_stop_cut_without_stopping_other_or_later_inputs() {
+    use richos_core::{ledger::TurnState, steering::{ActiveTurn, TurnControl}};
+    // Cover B before ledger admission, received and already submitted when Stop was saved.
+    for phase in 0..3 {
+        let (root, spine, company) = fixture();
+        drop(spine);
+        let path = root.join("conversation.jsonl");
+        let intake = root.join("intake.jsonl");
+        let mut ledger = Ledger::open(&path).unwrap();
+        let thread = ledger.create_thread("Stopped conversation", &company).unwrap();
+        let other = ledger.create_thread("Independent conversation", &company).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let other_binding = ledger.thread_binding(&other).unwrap();
+        let controls = TurnControl::open(&intake).unwrap();
+        let a = controls.submit_from_desk(&thread, Some(company.clone()), "A running").unwrap();
+        let a_turn = ledger.record_prompt_received_from_intake(&binding, "A running", Source::Text, a.id()).unwrap();
+        ledger.mark_turn_started(&a_turn, "saved-native-session").unwrap();
+        let b = controls.submit_from_desk(&thread, Some(company.clone()), "B saved before Stop").unwrap();
+        if phase > 0 {
+            let b_turn = ledger.record_prompt_received_from_intake(&binding, "B saved before Stop", Source::Text, b.id()).unwrap();
+            if phase == 2 { ledger.mark_turn_started(&b_turn, "saved-native-session").unwrap(); }
+        }
+        let independent = controls.submit_from_desk(&other, Some(company.clone()), "Other conversation").unwrap();
+        ledger.record_prompt_received_from_intake(&other_binding, "Other conversation", Source::Text, independent.id()).unwrap();
+        controls.for_thread(&thread).begin_turn(ActiveTurn { turn_id: a_turn.clone(), thread_id: thread.clone(),
+            entity_id: Some(company.clone()), started_at: Some(1) });
+        controls.for_thread(&thread).request_stop().unwrap();
+        let next = controls.submit_from_desk(&thread, Some(company.clone()), "Explicit input after Stop").unwrap();
+        drop(ledger); drop(controls); // Crash before either terminal settlement or drain marker.
+        let mut restored = Spine::new(Ledger::open(&path).unwrap());
+        restored.set_entity_registry(EntityRegistry::new(vec![Entity::new("example", "Example", &["/fixture/example"]).unwrap()]).unwrap());
+        let factory = MockLeaseFactory::new(vec!["Reply"]);
+        let prompts = factory.spawned_prompts.clone();
+        restored.set_lease_factory(Box::new(factory));
+        let controls = TurnControl::open(&intake).unwrap();
+        restored.set_turn_control(controls.clone());
+        restored.reconcile_intake().unwrap(); restored.reconcile_intake().unwrap();
+        for id in [a.id(), b.id()] {
+            let turn = restored.ledger().turn_for_intake(id).unwrap();
+            assert_eq!(turn.state, TurnState::Stopped, "phase {phase}, input {id}");
+            assert!(turn.assistant_text.is_empty());
+        }
+        for id in [independent.id(), next.id()] {
+            assert_eq!(restored.ledger().turn_for_intake(id).unwrap().state, TurnState::Completed);
+        }
+        let sent: Vec<_> = prompts.lock().unwrap().iter().flat_map(|p|p.lock().unwrap().clone()).collect();
+        assert_eq!(sent, ["Other conversation", "Explicit input after Stop"]);
+        assert!(controls.pending_intake().is_empty());
+        drop(restored); std::fs::remove_dir_all(root).unwrap();
+    }
 }
