@@ -2291,6 +2291,10 @@ impl Spine {
         // The mirror is cleared whatever happens below, including on the error paths: a
         // stale "still running" would make the next stop request name a dead turn.
         control.end_turn(turn_id);
+        // Every entrance reports completion here, including direct intake and failures.
+        if !self.thread_is_running(thread_id) && !self.ended_turns.iter().any(|known|known.thread_id()==thread_id) {
+            self.ended_turns.push(binding.clone());
+        }
 
         // Close whatever run of prose was still open, whatever the outcome: the partial
         // text is already durable, so finalizing it is a statement about the ledger rather
@@ -2864,8 +2868,8 @@ impl Spine {
     /// from the phone sat `Registered` until he next typed. Worse, one call here can run
     /// turns on several conversations — `poll_intake` drains every record on the log, a
     /// turn's boundary drains what arrived during it, the boot reconciliation and the front
-    /// desk's priming drain what was waiting — and only `after_turn_boundary` sees each of
-    /// them end. So each ending is written down there, and every entrance asks here after
+    /// desk's priming drain what was waiting. Every ending is recorded by `finish_delivery`,
+    /// including failures and direct intake delivery, and every entrance asks here after
     /// its call and adopts for all of them, with the spine released first (§0 row 3).
     ///
     /// A turn that FAILED is on the list too: a registration written before the failure is
@@ -2921,11 +2925,6 @@ impl Spine {
     /// `turn_in_progress` is false, so nothing below ever runs mid-turn.
     fn after_turn_boundary(&mut self, binding: &ThreadBinding) -> Result<(), SpineError> {
         if self.thread_is_running(binding.thread_id()) {return Ok(())}
-        // FIRST, before anything below can fail: this turn has ended, whatever it ended in,
-        // so the work it wrote down may now start (`take_ended_turns`, background-work §7.1).
-        if !self.ended_turns.iter().any(|known| known.thread_id() == binding.thread_id()) {
-            self.ended_turns.push(binding.clone());
-        }
         // Keep transient phone provenance through an in-process lease recovery, then
         // release it at the boundary. Product installs still write no channel to the ledger.
         self.input_channels.retain(|id, _| self.ledger.turn(id).is_some_and(|turn|
