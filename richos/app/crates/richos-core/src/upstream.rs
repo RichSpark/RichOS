@@ -265,12 +265,13 @@ impl fmt::Display for UpstreamFailure {
     }
 }
 
-/// `HTTP 529` first (the vendor computes it), then the `API Error: 529` prefix.
+/// `HTTP 529` first (the vendor computes it), then the `API Error: 529` prefix, then Claude
+/// Code's own end to repeated overloads, `API Error: Repeated 529 Overloaded errors.` (2.1.302).
 fn parse_status(raw: &str) -> Option<u16> {
     if let Some(v) = three_digits_after(raw, "HTTP ") {
         return Some(v);
     }
-    three_digits_after(raw, "API Error: ")
+    three_digits_after(raw, "API Error: ").or_else(|| three_digits_after(raw, "API Error: Repeated "))
 }
 
 fn three_digits_after(raw: &str, marker: &str) -> Option<u16> {

@@ -741,7 +741,30 @@ enum TurnSink {
     Input {
         completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
         limit: Option<Option<u64>>,
+        /// An overload Claude Code reported only as a message in this turn
+        /// ([`overloaded_api_error_message`]), so a turn that still ends `end_turn` reaches
+        /// Stu's overload schedule instead of passing the vendor's line off as his reply.
+        overload: Option<String>,
     },
+}
+
+/// **An overload Claude Code reported as a MESSAGE, not as a failed result.**
+///
+/// When its own retries give up, Claude Code wraps the API error in an assistant message and
+/// marks that frame with a top-level `error` field (2.1.302's stream mapping sets `error` on
+/// every assistant frame it emits and leaves it out of ordinary ones; the kind it computes for
+/// a 529 is `overloaded`). Requiring that field means prose that merely quotes an
+/// `API Error:` line is never taken for one. Which fault it is stays
+/// [`crate::upstream::UpstreamFailure`]'s decision alone, on the message's own words.
+pub(crate) fn overloaded_api_error_message(frame: &Value) -> Option<crate::upstream::UpstreamFailure> {
+    if frame.get("type").and_then(Value::as_str) != Some("assistant") || frame.get("error").is_none_or(Value::is_null) {
+        return None;
+    }
+    let text: Vec<&str> = frame.pointer("/message/content").and_then(Value::as_array).into_iter().flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str)).collect();
+    crate::upstream::UpstreamFailure::classify_lines(&text.join("\n"))
+        .filter(|failure| failure.fault == crate::upstream::UpstreamFault::Overloaded)
 }
 
 
@@ -849,9 +872,10 @@ impl PendingTurn {
     fn send(&mut self, chunk: ChunkMsg, frame: &Value) -> bool {
         match &mut self.sink {
             TurnSink::Prompt(sink) => sink.send(chunk).is_ok(),
-            TurnSink::Input { limit, .. } => {
+            TurnSink::Input { limit, overload, .. } => {
                 if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
                     if let Some(reset) = usage_limit_signal(frame) { *limit = Some(reset); }
+                    if let Some(failure) = overloaded_api_error_message(frame) { *overload = Some(failure.raw); }
                 }
                 false
             }
@@ -872,10 +896,17 @@ impl PendingTurn {
         }
         match self.sink {
             TurnSink::Prompt(sink) => { let _ = sink.send(ChunkMsg::Done(frame)); }
-            TurnSink::Input { completed, limit } => {
+            TurnSink::Input { completed, limit, overload } => {
                 let result = if let Some(reset) = limit {
                     Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &frame.to_string())))
-                } else { native_result(&frame) };
+                } else {
+                    // A turn that ended normally after Claude Code said it was overloaded is that
+                    // overload, the shape the synchronous path already reads from the turn's text.
+                    native_result(&frame).and_then(|reason| match overload {
+                        Some(raw) if reason == "end_turn" => Err(NativeError::Protocol(raw)),
+                        _ => Ok(reason),
+                    })
+                };
                 completed(crate::steering::InputOutcome {
                     result: result.map_err(|error| error.to_string()), report_failure,
                 });
@@ -1046,6 +1077,13 @@ impl BetweenTurn {
             self.last_meta.insert(title, identity);
         }
         self.push(BetweenItem::Frame(frame));
+    }
+
+    /// A frame a turn already took, kept for the sink as well, and only when there is one.
+    fn copy_to_sink(&mut self, frame: Value) {
+        if self.sink.is_some() {
+            self.push(BetweenItem::Frame(frame));
+        }
     }
 
     fn push(&mut self, item: BetweenItem) {
@@ -2369,7 +2407,12 @@ impl NativeClient {
         // context watermark or terminal state. In particular, whole-message fallback
         // must not promote worker narration when the lead has no active text stream.
         if msg.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) {
-            Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
+            // A worker's whole message also reaches the between-turn sink when a turn took it:
+            // Stu's host reads his workers' overloads there (`work_host.rs` observe_worker),
+            // whichever turn carried them. A lease with no sink keeps nothing extra.
+            if Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg) && ty == "assistant" {
+                between.lock().unwrap().copy_to_sink(msg);
+            }
             return;
         }
 
@@ -2550,7 +2593,12 @@ impl NativeClient {
             }
         }
 
-        Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
+        // A worker's start reaches the between-turn sink too when a turn took it: it names the
+        // task Stu's host tells him with the worker's overload (`work_host.rs` observe_worker).
+        if Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg)
+            && ty == "system" && msg.get("subtype").and_then(Value::as_str) == Some("task_started") {
+            between.lock().unwrap().copy_to_sink(msg);
+        }
     }
 
     /// ROUTED WHEN THERE IS A TURN, PARKED WHEN THERE IS NOT (§1.5, gap #1).
@@ -2563,7 +2611,7 @@ impl NativeClient {
         current: &Arc<Mutex<Vec<PendingTurn>>>,
         between: &Arc<Mutex<BetweenTurn>>,
         frame: &Value,
-    ) {
+    ) -> bool {
         let mut routed = false;
         let mut inputs=current.lock().unwrap();
         if matches!(chunk,ChunkMsg::Text(_)) {
@@ -2581,6 +2629,7 @@ impl NativeClient {
         if !routed {
             between.lock().unwrap().offer_frame(frame.clone());
         }
+        routed
     }
 
     /// Answer the agent's `control_request`s, AND route them as machinery.
@@ -3090,7 +3139,7 @@ impl TurnCancel for NativeCancelHandle {
             let mut current = self.current_prompt.lock().unwrap();
             if current.iter().any(|pending| pending.command_uuid == id) { return Ok(true); }
             current.push(PendingTurn {
-                sink: TurnSink::Input { completed, limit: None }, command_uuid: id.to_string(),
+                sink: TurnSink::Input { completed, limit: None, overload: None }, command_uuid: id.to_string(),
                 prompt_text: text.to_string(), hook_request_id: None,
                 prepare: None,
                 complete: None,
@@ -8309,6 +8358,264 @@ while True:read()
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"Quit produced an unwanted reply");
         let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
         assert_eq!(sent.lines().count(),1+usize::from(queued),"worker results caused a new app send");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// The retry clock with no elapsed time: it writes down each wait it was asked for.
+#[derive(Default)]
+struct NoWait(Mutex<Vec<Duration>>);
+impl crate::upstream::RetryClock for NoWait {
+    fn wait(&self, wait: Duration, stop: &dyn Fn() -> bool) -> bool {
+        self.0.lock().unwrap().push(wait);
+        !stop()
+    }
+}
+
+/// Follow-up 10 (2026-10-18): a live input whose turn carries Claude Code's overload message and
+/// still ends `end_turn` is that overload. It waits the schedule's first minute and is sent
+/// again on the same session, and Rich gets no failure. Prose that only quotes the line, on a
+/// frame Claude Code did not mark as an API error, stays Stu's reply.
+#[test]
+fn a_live_overload_reported_only_as_a_message_waits_and_is_sent_again_on_the_same_session() {
+    for marked in [true, false] {
+        let root = std::env::temp_dir().join(format!("richos-live-overload-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("provider");
+        std::fs::write(&script, r#"#!/usr/bin/python3
+import json,pathlib,sys
+marked=json.loads(pathlib.Path('config.json').read_text())['marked']
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started')
+send({'type':'assistant','message':{'content':[{'type':'text','text':'ORIGINAL-STARTED'}]}})
+live=read();phase(live,'queued')
+send({'type':'result','stop_reason':'end_turn'})
+phase(live,'started')
+said={'type':'assistant','parent_tool_use_id':None,'message':{'content':[{'type':'text','text':'API Error: 529 Overloaded.'}]}}
+if marked:said['error']='overloaded'
+send(said)
+send({'type':'result','subtype':'success','is_error':False,'stop_reason':'end_turn'})
+while True:
+ v=read()
+ if v.get('type')=='user':
+  phase(v,'started');send({'type':'result','stop_reason':'end_turn'})
+"#).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("config.json"), json!({"marked":marked}).to_string()).unwrap();
+        let skills = crate::skills::ensure_rendered(&root.join("skills"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let thread = ledger.create_thread("Live overload", &EntityId::parse("company").unwrap()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let scope = StatusToolScope {version:1,state_root:root.join("state"),entity_id:"company".into(),thread_id:thread};
+        let status = root.join("rich.json");
+        crate::session_tools::bind(&status,&scope,"rich-session","rich",None).unwrap();
+        let (began,started) = channel();
+        let (done,completed) = channel();
+        let host = WorkHost::new(&scope.state_root,Box::new(Factory {
+            root:root.clone(),skills,started:began,completed:done,scheduled:Arc::new(AtomicU64::new(0)),observed:None,
+        }),Arc::new(SilentNotifier));
+        let clock = Arc::new(NoWait::default());
+        host.set_retry_clock(clock.clone());
+        crate::session_tools::send(&status,&scope,json!({"text":"Original input"})).unwrap();
+        host.wake_messages(&binding);
+        // load-bound: hang guard only; native output proves the original turn entered.
+        started.recv_timeout(Duration::from_secs(10)).expect("original turn absent");
+        crate::session_tools::send(&status,&scope,json!({"text":"Live correction"})).unwrap();
+        host.wake_messages(&binding);
+        for _ in 0..(2+usize::from(marked)) {
+            // load-bound: hang guard only; each native outcome, not elapsed time, is the verdict.
+            completed.recv_timeout(Duration::from_secs(10)).expect("a native result did not complete");
+        }
+        assert!(host.wait_for_completed(1,Duration::from_secs(10)));
+        host.shutdown();
+        let sent = std::fs::read_to_string(root.join("received.jsonl")).unwrap();
+        assert_eq!(sent.lines().filter(|line| line.contains("Live correction")).count(), 1+usize::from(marked),
+            "marked={marked}: the overload message was {} as Stu's reply: {sent}", if marked {"accepted"} else {"not accepted"});
+        assert_eq!(*clock.0.lock().unwrap(), if marked {vec![crate::upstream::OVERLOAD_RETRY_WAITS[0]]} else {vec![]});
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(), "marked={marked}: a recovered overload reached Rich as a failure");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(), "marked={marked}: the live input stayed unfinished");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// The facts of every `worker_overload` notice the provider received, in order.
+fn worker_notices(received: &str) -> Vec<Value> {
+    received.lines().filter_map(|line| {
+        let frame: Value = serde_json::from_str(line).ok()?;
+        let content = &frame["message"]["content"];
+        let text = content.as_str().map(str::to_string).unwrap_or_else(|| content.as_array().into_iter().flatten()
+            .filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join(""));
+        let message: Value = serde_json::from_str(&text).ok()?;
+        (message["from"] == "overload-retry").then(|| serde_json::from_str(message["text"].as_str()?).ok()).flatten()
+    }).collect()
+}
+
+/// Review rv-20261018T205954Z-3590e78c-d3fa: Claude Code 2.1.302 ends repeated overloads with
+/// its own spelling, `API Error: Repeated 529 Overloaded errors.`, on an assistant frame marked
+/// `server_error`. It is an overload, so the worker or turn it ended gets the CEO's waits.
+#[test]
+fn claude_codes_repeated_529_message_is_an_overload() {
+    let text = "API Error: Repeated 529 Overloaded errors. The API is at capacity \u{2014} this is usually temporary. \
+        Try again in a moment. If it persists, check https://status.claude.com.";
+    let frame = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call","error":"server_error",
+        "message":{"content":[{"type":"text","text":text}]}});
+    let failure = overloaded_api_error_message(&frame).expect("Claude Code's repeated-529 message was not taken for an overload");
+    assert_eq!((failure.fault, failure.status, failure.raw.as_str()), (crate::upstream::UpstreamFault::Overloaded, Some(529), text));
+}
+
+/// Follow-up 11 (2026-10-18): a worker stopped by an overload gets the CEO's waits too. The
+/// host waits the schedule's next wait and then tells Stu, through his own inbox, to restart it;
+/// a worker's ordinary answer from the API starts the schedule again. The worker's message
+/// arrives inside one of Stu's turns, so it reaches the host whichever turn carried it.
+#[test]
+fn a_workers_overload_waits_the_ceos_schedule_and_then_stu_is_told_to_restart_it() {
+    let root = std::env::temp_dir().join(format!("richos-worker-overload-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let script = root.join("provider");
+    std::fs::write(&script, r#"#!/usr/bin/python3
+import json,pathlib,sys
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+def worker(content,**marked):send({'type':'assistant','parent_tool_use_id':'worker-call','agent_id':'fixture-worker','task_description':'Fixture worker','message':{'content':content},**marked})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+told=0
+while True:
+ v=read()
+ if v.get('type')!='user':continue
+ phase(v,'started')
+ if 'worker_overload' in json.dumps(v):told+=1
+ if told==2:worker([{'type':'text','text':'Reading the files again.'}])
+ if told<=2:worker([{'type':'text','text':'API Error: 529 Overloaded.'}],error='overloaded')
+ send({'type':'result','stop_reason':'end_turn'})
+"#).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let skills = crate::skills::ensure_rendered(&root.join("skills"),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+    let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+    let thread = ledger.create_thread("Worker overload", &EntityId::parse("company").unwrap()).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    let scope = StatusToolScope {version:1,state_root:root.join("state"),entity_id:"company".into(),thread_id:thread};
+    let status = root.join("rich.json");
+    crate::session_tools::bind(&status,&scope,"rich-session","rich",None).unwrap();
+    let (began,_started) = channel();
+    let (done,completed) = channel();
+    let host = WorkHost::new(&scope.state_root,Box::new(Factory {
+        root:root.clone(),skills,started:began,completed:done,scheduled:Arc::new(AtomicU64::new(0)),observed:None,
+    }),Arc::new(SilentNotifier));
+    let clock = Arc::new(NoWait::default());
+    host.set_retry_clock(clock.clone());
+    crate::session_tools::send(&status,&scope,json!({"text":"Original input"})).unwrap();
+    host.wake_messages(&binding);
+    for _ in 0..4 {
+        // load-bound: hang guard only; each of Stu's turns ending, not elapsed time, is the verdict.
+        completed.recv_timeout(Duration::from_secs(10)).expect("Stu was not told about his worker's overload");
+    }
+    host.shutdown();
+    let told = worker_notices(&std::fs::read_to_string(root.join("received.jsonl")).unwrap());
+    assert_eq!(told.iter().map(|fact| (fact["retry"].clone(), fact["retries_left"].clone(), fact["waited_minutes"].clone())).collect::<Vec<_>>(),
+        [(json!(1),json!(6),json!(1)), (json!(2),json!(5),json!(2)), (json!(1),json!(6),json!(1))], "{told:?}");
+    assert!(told.iter().all(|fact| fact["event"] == "worker_overload" && fact["worker"]["tool_use_id"] == "worker-call"
+        && fact["worker"]["task"] == "Fixture worker" && fact["error"] == "API Error: 529 Overloaded."), "{told:?}");
+    let minute = Duration::from_secs(60);
+    assert_eq!(*clock.0.lock().unwrap(), [minute, 2 * minute, minute], "the worker's waits were not the CEO's schedule");
+    assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(), "a worker's overload reached Rich as Stu's failure");
+    assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Review rv-20261018T200657Z-585c24df-f9d6, finding 3: Claude Code starts turns of Stu's own
+/// (a helper's hand-back, a task notification) with no input of ours parked. One that carries
+/// Claude Code's overload message and still ends `end_turn` waits the schedule's first minute,
+/// and then Stu is woken through his own inbox to carry on; Rich gets no failure. Prose that
+/// only quotes the line, on a frame Claude Code did not mark as an API error, is Stu's reply.
+#[test]
+fn an_automatic_stu_turn_reported_only_as_an_overload_message_waits_and_wakes_him_again() {
+    for marked in [true, false] {
+        let root = std::env::temp_dir().join(format!("richos-automatic-overload-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("provider");
+        std::fs::write(&script, r#"#!/usr/bin/python3
+import json,pathlib,sys
+marked=json.loads(pathlib.Path('config.json').read_text())['marked']
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started')
+send({'type':'result','stop_reason':'end_turn'})
+# Claude Code's own turn after a helper hands back: no input of ours is parked.
+said={'type':'assistant','parent_tool_use_id':None,'message':{'content':[{'type':'text','text':'API Error: 529 Overloaded.'}]}}
+if marked:said['error']='overloaded'
+send(said)
+send({'type':'result','subtype':'success','is_error':False,'stop_reason':'end_turn'})
+while True:
+ v=read()
+ if v.get('type')=='user':
+  phase(v,'started');send({'type':'result','stop_reason':'end_turn'})
+"#).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("config.json"), json!({"marked":marked}).to_string()).unwrap();
+        let skills = crate::skills::ensure_rendered(&root.join("skills"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let thread = ledger.create_thread("Automatic overload", &EntityId::parse("company").unwrap()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let scope = StatusToolScope {version:1,state_root:root.join("state"),entity_id:"company".into(),thread_id:thread};
+        let status = root.join("rich.json");
+        crate::session_tools::bind(&status,&scope,"rich-session","rich",None).unwrap();
+        let (began,_started) = channel();
+        let (done,completed) = channel();
+        let (seen,observed) = channel();
+        let host = WorkHost::new(&scope.state_root,Box::new(Factory {
+            root:root.clone(),skills,started:began,completed:done,scheduled:Arc::new(AtomicU64::new(0)),observed:Some(seen),
+        }),Arc::new(SilentNotifier));
+        let clock = Arc::new(NoWait::default());
+        host.set_retry_clock(clock.clone());
+        crate::session_tools::send(&status,&scope,json!({"text":"Original input"})).unwrap();
+        host.wake_messages(&binding);
+        // load-bound: hang guard only; each native outcome, not elapsed time, is the verdict.
+        completed.recv_timeout(Duration::from_secs(10)).expect("the original input did not complete");
+        // load-bound: hang guard only; the automatic turn's result reaching the host is the verdict.
+        observed.recv_timeout(Duration::from_secs(10)).expect("the automatic turn's result was not observed");
+        if marked {
+            // load-bound: hang guard only; the woken turn's own completion is the verdict.
+            completed.recv_timeout(Duration::from_secs(10)).expect("Stu was not woken after his automatic turn's overload");
+        }
+        assert!(host.wait_for_completed(1,Duration::from_secs(10)));
+        host.shutdown();
+        let told: Vec<Value> = worker_notices(&std::fs::read_to_string(root.join("received.jsonl")).unwrap())
+            .into_iter().filter(|fact| fact["event"] == "turn_overload").collect();
+        assert_eq!(told.iter().map(|fact| (fact["waited_minutes"].clone(), fact["error"].clone())).collect::<Vec<_>>(),
+            if marked {vec![(json!(1), json!("API Error: 529 Overloaded."))]} else {vec![]}, "marked={marked}: {told:?}");
+        assert_eq!(*clock.0.lock().unwrap(), if marked {vec![crate::upstream::OVERLOAD_RETRY_WAITS[0]]} else {vec![]});
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(), "marked={marked}: a recovered overload reached Rich as a failure");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(), "marked={marked}: Stu's wake-up stayed unfinished");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
