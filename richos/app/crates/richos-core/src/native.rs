@@ -2260,7 +2260,8 @@ impl NativeClient {
             && msg.pointer("/request/callback_id").and_then(Value::as_str) == Some("richos-input-context") {
             // An input folded into a running turn has its own hook before `started`.
             // Inputs drained together into a NEW turn are all named `started` first,
-            // then share one hook with their original texts joined by a newline.
+            // then share one hook. Their started UUIDs identify that batch; the
+            // flattened hook text varies with the native content encoding.
             // Claim that native batch once, using the same per-input preparation.
             let request_id=msg.get("request_id").and_then(Value::as_str);
             let text=msg.pointer("/request/input/prompt").and_then(Value::as_str);
@@ -2271,7 +2272,7 @@ impl NativeClient {
                     !inputs.iter().any(|input|input.hook_request_id.as_deref()==Some(id))) {
                     let batch:Vec<_>=inputs.iter().enumerate().filter(|(_,input)|
                         input.phase==TurnPhase::Running && input.hook_request_id.is_none()).map(|(index,_)|index).collect();
-                    if batch.len()>1 && batch.iter().map(|&index|inputs[index].prompt_text.as_str()).collect::<Vec<_>>().join("\n")==text {
+                    if batch.len()>1 {
                         indices=batch;
                     } else if let Some(index)=inputs.iter().position(|input|input.hook_request_id.is_none()&&input.prompt_text==text) {
                         indices.push(index);
@@ -6654,7 +6655,7 @@ for _ in range(2):
     batch.append(command);phase(command,"queued")
 send({"type":"result","stop_reason":"end_turn"})
 for command in batch:phase(command,"started")
-text="\n".join(command["message"]["content"][0]["text"] for command in batch)
+text="\n\n".join(command["message"]["content"][0]["text"] for command in batch)
 context=hook("batch",text)
 # The native batch is running even if the app failed to prepare its inputs.
 send({"type":"assistant","message":{"content":[{"type":"text","text":"BATCH-RUNNING. "}]}})
