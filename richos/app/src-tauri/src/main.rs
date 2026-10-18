@@ -3300,6 +3300,13 @@ fn main() {
                 }
             };
             spine.set_turn_control(control.clone());
+            // A card answer keeps the input order it was accepted with until it reaches the
+            // ledger; never hand that order to a new input after a restart.
+            match richos_core::questions::Store::new(data_dir.join("engine-state")).highest_order() {
+                Ok(Some(order)) => control.advance_input_order(order),
+                Ok(None) => {}
+                Err(e) => eprintln!("[richos] saved answer order unreadable: {e}"),
+            }
 
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
             //

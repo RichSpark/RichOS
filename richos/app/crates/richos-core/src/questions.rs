@@ -113,6 +113,11 @@ pub struct Question {
     pub updated_at: u64,
     #[serde(default)]
     pub shown: Option<Shown>,
+    /// The answer's place in the conversation's input order, taken when the app accepted it
+    /// (`TurnControl::take_input_order`), so a Stop pressed after the click covers it even
+    /// though the answer reaches Rich later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Shown {
@@ -150,6 +155,11 @@ pub struct Delivery {
     pub text: String,
     /// Set when the recipient durably accepts this identity. Retries reuse it.
     pub receipt: Option<String>,
+    /// The input order of the acceptance that made this delivery due (the latest answer of
+    /// its set), carried to the recipient so his Stop is judged against the click, not the
+    /// later delivery. `None` when the answer was accepted without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Operation {
@@ -357,6 +367,7 @@ impl Store {
                         set_index: index + 1,
                         set_count: remaining,
                         withdrawal_reason: None,
+                        order: None,
                         created_at: now(),
                         updated_at: now(),
                         shown: None,
@@ -368,6 +379,17 @@ impl Store {
             Ok(questions)
         })
     }
+    /// The highest input order saved with an answer. A restarted app advances past it, so no
+    /// new input is given the order of an answer that has not reached Rich yet.
+    pub fn highest_order(&self) -> Result<Option<u64>> {
+        self.transaction(false, |d| {
+            Ok(d.questions
+                .iter()
+                .filter_map(|q| q.order)
+                .chain(d.deliveries.iter().filter_map(|v| v.order))
+                .max())
+        })
+    }
     pub fn answer(
         &self,
         entity: &str,
@@ -375,6 +397,19 @@ impl Store {
         request: AnswerRequest,
         method: &str,
         surface: &str,
+    ) -> Result<AnswerResult> {
+        self.answer_in_order(entity, thread, request, method, surface, None)
+    }
+    /// [`Self::answer`], saving `order` (taken from the conversation's input order when he
+    /// clicked) with what this answer makes due, so a Stop pressed after it covers it.
+    pub fn answer_in_order(
+        &self,
+        entity: &str,
+        thread: &str,
+        request: AnswerRequest,
+        method: &str,
+        surface: &str,
+        order: Option<u64>,
     ) -> Result<AnswerResult> {
         if request.client_id.is_empty() || request.client_id.len() > 128 {
             return Err("An answer needs a stable submission id.".into());
@@ -467,6 +502,7 @@ impl Store {
             {
                 q.state = State::Answered;
                 q.answer = Some(incoming);
+                q.order = order;
                 q.revision += 1;
                 q.updated_at = now();
                 outcome = "accepted";
@@ -490,6 +526,7 @@ impl Store {
                     set_id: None,
                     text,
                     receipt: None,
+                    order,
                 });
                 outcome = if q.state == State::Withdrawn {
                     "withdrawn"
@@ -688,10 +725,19 @@ impl Store {
                     .map(|q| q.resolved_text())
                     .collect::<Vec<_>>()
                     .join("\n\n");
+                // The set became due with its latest answer; an answer saved without an
+                // order leaves the recipient to take one, as before.
+                let order = qs
+                    .iter()
+                    .filter(|q| q.state == State::Answered)
+                    .map(|q| q.order)
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(|orders| orders.into_iter().max());
                 let delivery_id = format!("question-set:{set}");
                 if let Some(delivery) = d.deliveries.iter_mut().find(|v| v.id == delivery_id) {
                     if delivery.receipt.is_none() {
                         delivery.text = text;
+                        delivery.order = order;
                     }
                 } else {
                     d.deliveries.push(Delivery {
@@ -703,6 +749,7 @@ impl Store {
                         set_id: Some(set),
                         text,
                         receipt: None,
+                        order,
                     });
                 }
             }

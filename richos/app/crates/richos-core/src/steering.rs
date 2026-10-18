@@ -1095,7 +1095,9 @@ impl TurnControl {
 
     /// Reserve the existing intake order for an input saved directly in the ledger.
     /// Its normal ledger fsync supplies durability, without another write before native stdin.
-    pub(crate) fn take_input_order(&self) -> Option<u64> {
+    /// A question-card answer takes its order here when the app accepts the click, and the
+    /// question store keeps it until the answer reaches the ledger.
+    pub fn take_input_order(&self) -> Option<u64> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut()?;
         let id = log.next_id;
@@ -1103,8 +1105,9 @@ impl TurnControl {
         Some(id)
     }
 
-    /// Direct ledger inputs may have no intake-log row. Never reuse their durable IDs.
-    pub(crate) fn advance_input_order(&self, through: u64) {
+    /// Direct ledger inputs may have no intake-log row. Never reuse their durable IDs,
+    /// including an order the question store saved with an answer not yet delivered.
+    pub fn advance_input_order(&self, through: u64) {
         if let Some(log) = self.inner.intake.lock().unwrap().as_mut() {
             log.next_id = log.next_id.max(through.saturating_add(1));
         }
