@@ -3133,8 +3133,19 @@ impl TurnCancel for NativeCancelHandle {
         // reverse order would let a very fast agent's `result` overtake the wake, and the
         // loop would return `end_turn` for a turn the CEO stopped. Measured: the agent acked
         // the interrupt in 0.9 ms, so this race is real rather than theoretical.
+        let (finished, completion)=channel();
         let (sinks, running): (Vec<_>, bool) = {
-            let inputs = self.current_prompt.lock().unwrap();
+            let mut inputs = self.current_prompt.lock().unwrap();
+            if self.settle_workers_on_stop {
+                if let Some(input)=inputs.iter_mut().find(|pending| !pending.not_yet_ours()) {
+                    let previous=input.complete.take();
+                    input.complete=Some(Box::new(move || {
+                        let result=previous.map_or(Ok(()),|complete|complete());
+                        let _notified=finished.send(());
+                        result
+                    }));
+                }
+            }
             let active = inputs.iter().filter(|pending| !pending.not_yet_ours());
             let running = active.clone().next().is_some();
             let sinks = active.filter_map(|pending| match &pending.sink {
@@ -3155,7 +3166,14 @@ impl TurnCancel for NativeCancelHandle {
         let wrote = NativeClient::write_line(&self.stdin, &request).is_ok();
         let no_waiter = sinks.is_empty();
         let woke = sinks.into_iter().fold(no_waiter, |woke, sink| sink.send(ChunkMsg::Cancel).is_ok() || woke);
-        if self.settle_workers_on_stop { self.process_fence.kill(); }
+        // Native writes the interruption into its own history before the terminal result,
+        // after its interrupt ACK. Let the existing completion/grace boundary finish first.
+        // Completion may need this same lock to revoke scopes, so never wait holding it.
+        drop(operation);
+        if self.settle_workers_on_stop {
+            if wrote {let _completed=completion.recv_timeout(cancel_grace());}
+            self.process_fence.kill();
+        }
         wrote && woke
     }
 
@@ -4032,6 +4050,7 @@ impl Cognition for NativeCognition {
         let question_scope = self.client.reader_state.lock().unwrap().question_scope.clone();
         let grants = self.client.action_grants.clone();
         let operation = self.client.operation_cancel.clone();
+        let closed = self.client.reader_closed.clone();
         let routing = (self.classifier.clone(), self.status_scope.clone(), self.continuity.clone(), self.session_id.clone(), self.routing_context.clone());
         let prepare: NativePreparation = Box::new(move || {
             started()?;
@@ -4048,7 +4067,7 @@ impl Cognition for NativeCognition {
             }
             {
                 let cancel = operation.lock().unwrap();
-                if cancel.active && cancel.requested { return Err(STOP_REASON_CANCELLED.into()); }
+                if closed.load(Ordering::SeqCst) || (cancel.active && cancel.requested) { return Err(STOP_REASON_CANCELLED.into()); }
                 for (index, grant) in grants.iter().enumerate() {
                     if let Err(error) = grant.set(true) {
                         for previous in &grants[..index] {
@@ -6417,6 +6436,55 @@ print(json.dumps({"type":"command_lifecycle","command_uuid":prompt["uuid"],"stat
         })),Some(Box::new(move || {did_complete.fetch_add(1,Ordering::SeqCst);Ok(())}))).unwrap();
         assert_eq!(response.wait(&mut |_|{}).unwrap(),STOP_REASON_CANCELLED);
         assert_eq!(touched.load(Ordering::SeqCst),0, "a non-admitted input touched another input's scopes");
+    }
+
+    #[test]
+    fn production_stop_waits_for_native_interruption_history_before_teardown() {
+        let script=write_script("stop-native-history",r#"
+exec python3 -u -c '
+import json,sys
+from pathlib import Path
+def read(): return json.loads(sys.stdin.readline())
+def send(frame): print(json.dumps(frame),flush=True)
+init=read()
+send({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})
+first=read()
+send({"type":"command_lifecycle","command_uuid":first["uuid"],"state":"started"})
+queued=read()
+send({"type":"command_lifecycle","command_uuid":queued["uuid"],"state":"queued"})
+stop=read()
+assert stop["request"]["subtype"]=="interrupt"
+send({"type":"control_response","response":{"subtype":"success","request_id":stop["request_id"]}})
+send({"type":"assistant","message":{"content":[{"type":"text","text":"interrupt accepted"}]}})
+assert read()["type"]=="fixture-release"
+Path(sys.argv[1]+".history").write_text("[Request interrupted by user]\n")
+send({"type":"result","terminal_reason":"aborted_streaming"})
+sys.stdin.read()
+' "$0"
+"#);
+        let mut client=NativeClient::spawn(&script,fixture_root(),&doctrine_fixture(),&skills_fixture()).unwrap();
+        client.settle_workers_on_stop=true;
+        let first=client.enqueue_prompt("Long answer",None).unwrap();
+        let queued=client.enqueue_prompt("Queued question",None).unwrap();
+        loop {
+            // load-bound: wait for the actual queued frame, with a hang guard only.
+            let chunk=first.rx.recv_timeout(Duration::from_secs(10)).expect("queued frame missing");
+            if matches!(chunk,ChunkMsg::Frame(ref frame) if frame["type"]=="command_lifecycle" && frame["state"]=="queued") {break}
+        }
+        let handle=client.cancel_handle();
+        let stopping=std::thread::spawn(move || handle.cancel());
+        loop {
+            // load-bound: a controlled protocol barrier separates interrupt ACK from native persistence.
+            let chunk=first.rx.recv_timeout(Duration::from_secs(10)).expect("interrupt was killed before its native result");
+            if matches!(chunk,ChunkMsg::Text(ref text) if text=="interrupt accepted") {break}
+            assert!(!matches!(chunk,ChunkMsg::Done(_)),"provider died before recording the native interruption");
+        }
+        NativeClient::write_line(&client.stdin,&json!({"type":"fixture-release"})).unwrap();
+        assert!(stopping.join().unwrap());
+        assert_eq!(first.wait(&mut |_|{}).unwrap(),STOP_REASON_CANCELLED);
+        assert!(std::fs::read_to_string(script.with_extension("history")).unwrap().contains("[Request interrupted by user]"));
+        assert!(matches!(queued.wait(&mut |_|{}),Err(NativeError::Closed)),"pre-Stop queued input ran after interruption");
+        assert!(client.reader_closed.load(Ordering::SeqCst),"next input must use the ordinary resume path");
     }
 
     #[test]
