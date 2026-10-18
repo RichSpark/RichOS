@@ -3304,6 +3304,13 @@ fn main() {
                 }
             };
             spine.set_turn_control(control.clone());
+            // A card answer keeps the input order it was accepted with until it reaches the
+            // ledger; never hand that order to a new input after a restart.
+            match richos_core::questions::Store::new(data_dir.join("engine-state")).highest_order() {
+                Ok(Some(order)) => control.advance_input_order(order),
+                Ok(None) => {}
+                Err(e) => eprintln!("[richos] saved answer order unreadable: {e}"),
+            }
 
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
             //
@@ -8062,13 +8069,12 @@ struct StopReport {
 #[richos_command::command]
 fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>, expected_thread_id: Option<String>) -> Result<StopReport, String> {
     let view=state.reader.snapshot();
-    let thread=view.active_thread();
-    if expected_thread_id.as_deref().is_some_and(|expected|thread!=Some(expected)) {
-        return Ok(StopReport {stopped:false,turn_id:None,requested_at:None,reached_lease:false});
-    }
+    // The conversation the screen named, even when another one is opening (follow-ups after
+    // nightly 65, item 9; review rv-20261018T050016Z-78f97c9d-30c4).
+    let thread=view.stop_conversation(expected_thread_id.as_deref());
     let control=thread.map(|thread|state.control.for_thread(thread));
     let team_key=state.operator.as_ref().and_then(|_| {
-        let binding=view.active_binding()?;
+        let binding=view.ledger().thread_binding(thread?).ok()?;
         Some(richos_core::operator_host::ConversationKey {
             entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string(),
         })

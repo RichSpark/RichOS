@@ -1648,7 +1648,7 @@ mod tests {
                         let answer = crate::questions::Delivery {
                             obligation_id: (kind == "job-answer").then(|| registration(&h).obligation_id),
                             id: "answer-under-test".into(), entity_id: "depot".into(), thread_id: "thread-one".into(),
-                            asker: "stu".into(), set_id: None, text: "Input under test".into(), receipt: None,
+                            asker: "stu".into(), set_id: None, text: "Input under test".into(), receipt: None, order: None,
                         };
                         h.host.queue_question_answer(&h.binding, &answer).unwrap();
                     }
@@ -2460,7 +2460,7 @@ mod tests {
         let (peer,complete_peer)=received.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
         assert!(peer.contains("Correction before any output"));
         let answer=crate::questions::Delivery {obligation_id:None,id:"early-answer".into(),entity_id:"depot".into(),
-            thread_id:"thread-one".into(),asker:"stu".into(),set_id:None,text:"Use Friday".into(),receipt:None};
+            thread_id:"thread-one".into(),asker:"stu".into(),set_id:None,text:"Use Friday".into(),receipt:None,order:None};
         host.queue_question_answer(&h.binding,&answer).unwrap();
         // load-bound: a submitted answer is the verdict; the first result remains impossible until release.
         let (text,complete_answer)=received.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
@@ -2490,6 +2490,7 @@ mod tests {
             set_id: Some("standing-choice".into()),
             text: "Use the existing launch date".into(),
             receipt: None,
+            order: None,
         };
         h.host.queue_question_answer(&h.binding, &answer).unwrap();
         assert!(

@@ -66,12 +66,15 @@ pub fn answer(
             return Err(error.to_string());
         }
     };
-    let mut result = store.answer(
+    // His click takes its place in the conversation's input order now, not when the
+    // delivery worker later reaches the spine, so a Stop he presses after it covers it.
+    let mut result = store.answer_in_order(
         binding.entity_id().as_str(),
         thread,
         request,
         method,
         surface,
+        state.control.take_input_order(),
     )?;
     if let Some(q) = &result.question {
         result.question = store.waiting_for_turn(

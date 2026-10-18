@@ -874,6 +874,9 @@ pub enum StopOutcome {
 struct ConversationState {
     active: Option<ActiveTurn>,
     stop: Option<StopClaim>,
+    /// The last Stop cleared at a boundary. Its cut still covers a card answer accepted
+    /// before it and delivered only after it settled.
+    settled: Option<StopClaim>,
     cancel: Option<Arc<dyn TurnCancel>>,
     lease_session: Option<String>,
 }
@@ -1095,7 +1098,9 @@ impl TurnControl {
 
     /// Reserve the existing intake order for an input saved directly in the ledger.
     /// Its normal ledger fsync supplies durability, without another write before native stdin.
-    pub(crate) fn take_input_order(&self) -> Option<u64> {
+    /// A question-card answer takes its order here when the app accepts the click, and the
+    /// question store keeps it until the answer reaches the ledger.
+    pub fn take_input_order(&self) -> Option<u64> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut()?;
         let id = log.next_id;
@@ -1103,8 +1108,9 @@ impl TurnControl {
         Some(id)
     }
 
-    /// Direct ledger inputs may have no intake-log row. Never reuse their durable IDs.
-    pub(crate) fn advance_input_order(&self, through: u64) {
+    /// Direct ledger inputs may have no intake-log row. Never reuse their durable IDs,
+    /// including an order the question store saved with an answer not yet delivered.
+    pub fn advance_input_order(&self, through: u64) {
         if let Some(log) = self.inner.intake.lock().unwrap().as_mut() {
             log.next_id = log.next_id.max(through.saturating_add(1));
         }
@@ -1359,7 +1365,15 @@ impl ConversationControl {
     }
 
     pub fn clear_stop_claim(&self) {
-        if let Some(state)=self.shared.inner.conversations.lock().unwrap().get_mut(self.key()) {state.stop=None;}
+        if let Some(state)=self.shared.inner.conversations.lock().unwrap().get_mut(self.key()) {
+            if let Some(claim)=state.stop.take() {state.settled=Some(claim);}
+        }
+    }
+
+    /// The cleared Stop whose cut covers an input accepted at `order`, if any.
+    pub fn settled_stop_covering(&self, order: u64) -> Option<StopClaim> {
+        self.shared.inner.conversations.lock().unwrap().get(self.key())
+            .and_then(|state|state.settled.clone()).filter(|claim|order<claim.intake_id)
     }
 }
 
