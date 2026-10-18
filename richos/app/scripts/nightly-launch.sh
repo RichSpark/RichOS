@@ -3,13 +3,35 @@
 # nightly-launch.sh — run a published nightly beside your own copy of RichOS, in its
 #                     own folder, without touching your own copy or its data.
 #
-#   nightly-launch.sh a|b|c <RichOS-<version>-macos-aarch64.zip> [--replace] [--roster <page.md>] [--engine <engine.tar.gz>]
-#   nightly-launch.sh a|b|c --again [--roster <page.md>]
+#   nightly-launch.sh a|b|c <RichOS-<version>-macos-aarch64.zip> [--replace] [--new-user] [--roster <page.md>] [--engine <engine.tar.gz>]
+#   nightly-launch.sh a|b|c --again [--new-user] [--roster <page.md>]
 #   nightly-launch.sh status
 #
 #   a  ~/myrichos-nightly-a   a newborn: empty data, the experience a customer gets
 #   b  ~/myrichos-nightly-b   the same nightly on data carrying the team roster page
 #   c  ~/myrichos-nightly-c   a newborn for a build that is not published yet (with --engine)
+#
+#   Without --new-user the folder opens signed in AS YOU: it links your ~/.claude,
+#   ~/Library/Keychains and ~/.local/bin/claude and copies your ~/.claude.json.
+#
+#   --new-user  the folder starts as a person who has never had Claude Code or Codex on
+#               this Mac. None of those four is linked or copied, so the app finds no
+#               claude and installs it, Claude Code asks you to sign in, and Codex is not
+#               signed in (its login is ~/.codex, and the folder has none). The folder
+#               records it: every later start of that folder (--again, a ZIP, --replace)
+#               stays a new user. A folder already started as you is refused; move it to
+#               the Trash first. Everything else is the same as without it.
+#     What it does NOT give you:
+#       * macOS permissions (microphone, screen recording, automation, and the like) belong
+#         to the app's identity, com.richos.app, so whatever you allowed your own copy is
+#         already allowed here, and macOS does not ask a new user's questions for those;
+#       * apps installed for every account stay found: a Codex inside /Applications/
+#         ChatGPT.app shows as installed and not signed in, as it would for a new user;
+#       * a login keychain. A new account has an empty, unlocked one; this folder has none,
+#         and the launcher does not make one, because that means changing keychain settings
+#         in your own login session. So anything that stores a secret in the keychain
+#         (setting a phone up does, measured in the test VM; Claude Code keeps its sign-in
+#         there) can raise macOS's "Keychain Not Found" window. Answer it with Cancel.
 #
 # =========================================================================================
 # WHY THIS EXISTS
@@ -117,6 +139,11 @@
 # and launchd's PATH has no `claude` on it). The cost is stated plainly: `~/.claude` is
 # his whole Claude configuration and history, shared with the terminal by design.
 #
+# --new-user makes none of the four, because the CEO asked to test "as a brand-new user",
+# who gets a prompt to sign in to Claude Code and to Codex. Codex keeps its login in
+# ~/.codex, which nothing here links, so under the folder's HOME it is signed out either
+# way. The choice is recorded in the folder's nightly-launch.txt (`new_user=1`) and kept by
+# every later start, so the routine command for the next nightly cannot sign the folder in.
 # =========================================================================================
 # WHAT IT REFUSES
 # =========================================================================================
@@ -129,7 +156,9 @@
 #     so this is a path-component test and never a string prefix;
 #   * a second start of a folder whose nightly is already running (two writers, one data);
 #   * CLAUDE_CONFIG_DIR set anywhere the app would inherit it;
-#   * a missing piece of the sign-in, named, rather than a window that says "Not logged in".
+#   * a missing piece of the sign-in, named, rather than a window that says "Not logged in"
+#     (not with --new-user, which uses none of it);
+#   * --new-user on a folder that was already started signed in as you.
 #
 # THE WAYS TO DEFEAT IT, stated so nobody has to find them: opening
 # `~/myrichos-nightly-*/app.noindex/RichOS.app` from Finder, from the Dock, or from the
@@ -152,7 +181,7 @@ PROG="nightly-launch.sh"
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
 die()  { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
-usage() { sed -n '6,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '6,34p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 OPEN_BIN="${RICHOS_NIGHTLY_OPEN:-/usr/bin/open}"
 PS_BIN="${RICHOS_NIGHTLY_PS:-/bin/ps}"
@@ -277,6 +306,9 @@ status_one() {  # <slot>
   else
     say "  NOT made by this launcher: no $MARKER_NAME"
   fi
+  if [ "$(marker_value "$m" new_user)" = "1" ]; then
+    say "  new user: yes (none of your Claude sign-in, claude or keychain is linked; no Codex login)"
+  fi
   v="$(plist_value "$folder/home.noindex/Applications/RichOS.app/Contents/Info.plist" CFBundleShortVersionString)"
   [ -n "$v" ] && say "  updated in place to: $v (the app starts this copy when it is newer)"
   pids="$(folder_app_pids "$folder" | tr '\n' ' ')"
@@ -312,11 +344,12 @@ case "$SLOT" in
   a|b|c) ;;
   *) die "the first word is the folder, a, b or c (or 'status'); got '$SLOT'." ;;
 esac
-ZIP=""; AGAIN=0; REPLACE=0; ROSTER=""; ENGINE=""
+ZIP=""; AGAIN=0; REPLACE=0; ROSTER=""; ENGINE=""; NEW_USER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --again)   AGAIN=1; shift ;;
     --replace) REPLACE=1; shift ;;
+    --new-user) NEW_USER=1; shift ;;
     --roster)  [ $# -ge 2 ] || die "--roster needs a file."; ROSTER="$2"; shift 2 ;;
     --engine)  [ $# -ge 2 ] || die "--engine needs the engine's .tar.gz."; ENGINE="$2"; shift 2 ;;
     -h|--help) usage ;;
@@ -345,6 +378,16 @@ APP="$FOLDER/app.noindex/RichOS.app"
 NHOME="$FOLDER/home.noindex"
 
 # ---------------------------------------------------------------------------------------
+# --new-user: decided at the folder's first start, kept by every later one
+# ---------------------------------------------------------------------------------------
+if [ -f "$MARKER" ] && [ "$(marker_value "$MARKER" new_user)" = "1" ]; then
+  [ "$NEW_USER" -eq 1 ] || say "folder $SLOT is a new user's (recorded at its first start): none of your sign-in is linked."
+  NEW_USER=1
+elif [ "$NEW_USER" -eq 1 ] && [ -f "$MARKER" ] && [ -e "$NHOME" ]; then
+  die "refusing: --new-user needs a folder that was never started signed in as you, and $FOLDER was. Quit it, move it to the Trash, and run again with --new-user."
+fi
+
+# ---------------------------------------------------------------------------------------
 # Refusals that need nothing unpacked
 # ---------------------------------------------------------------------------------------
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
@@ -354,7 +397,7 @@ LAUNCHD_CCD="$("$LAUNCHCTL_BIN" getenv CLAUDE_CONFIG_DIR 2>/dev/null || true)"
 if [ -n "$LAUNCHD_CCD" ]; then
   die "refusing: CLAUDE_CONFIG_DIR is set for every app you open ('launchctl getenv' says '$LAUNCHD_CCD'), and the nightly would inherit it. Remove it with 'launchctl unsetenv CLAUDE_CONFIG_DIR' and run again."
 fi
-for need in ".claude" ".claude.json" "Library/Keychains" ".local/bin/claude"; do
+[ "$NEW_USER" -eq 1 ] || for need in ".claude" ".claude.json" "Library/Keychains" ".local/bin/claude"; do
   if [ ! -e "$REAL_HOME/$need" ]; then
     die "refusing: $REAL_HOME/$need does not exist. The nightly signs in to Claude through your ~/.claude, ~/.claude.json and ~/Library/Keychains, and finds claude at ~/.local/bin/claude; without it the window opens to 'Not logged in' or 'Claude Code missing'."
   fi
@@ -463,6 +506,9 @@ if [ "$UNPACK" -eq 1 ]; then
     warn "this folder updated itself to $UPDATED earlier ($NHOME/Applications/RichOS.app). The app starts that copy instead when it is newer than $ZIP_VERSION."
   fi
 fi
+if [ "$NEW_USER" -eq 1 ] && [ "$(marker_value "$MARKER" new_user)" != "1" ]; then
+  echo "new_user=1" >> "$MARKER" || die "could not record in $MARKER that folder $SLOT is a new user's."
+fi
 VERSION="$(marker_value "$MARKER" version)"
 COMMIT="$(marker_value "$MARKER" commit)"
 
@@ -498,9 +544,9 @@ if [ -f "$ENGINE_DIR/VERSION" ]; then
 fi
 
 # ---------------------------------------------------------------------------------------
-# The folder's home: the three sign-in links, the copy, and claude
+# The folder's home: the three sign-in links, the copy, and claude (none with --new-user)
 # ---------------------------------------------------------------------------------------
-( umask 077; mkdir -p "$NHOME/Library" "$NHOME/.local/bin" ) || die "cannot create $NHOME."
+( umask 077; mkdir -p "$NHOME/Library" ) || die "cannot create $NHOME."
 chmod 700 "$NHOME" 2>/dev/null
 link() {  # <link> <target>
   if [ -L "$1" ]; then
@@ -510,14 +556,17 @@ link() {  # <link> <target>
   [ ! -e "$1" ] || die "refusing: $1 exists and is not the link to '$2'. Something replaced it; move the folder to the Trash and start it again."
   ln -s "$2" "$1" || die "could not link $1 -> $2."
 }
-link "$NHOME/.claude"            "$REAL_HOME/.claude"
-link "$NHOME/Library/Keychains"  "$REAL_HOME/Library/Keychains"
-link "$NHOME/.local/bin/claude"  "$REAL_HOME/.local/bin/claude"
-# Copied on every start, so a change to your sign-in reaches the nightly; whatever the
-# nightly's claude wrote into its copy is disposable.
-( umask 077; cp "$REAL_HOME/.claude.json" "$NHOME/.claude.json.tmp" ) \
-  || die "could not copy $REAL_HOME/.claude.json into $NHOME."
-mv "$NHOME/.claude.json.tmp" "$NHOME/.claude.json" || die "could not put the copy of .claude.json in place in $NHOME."
+if [ "$NEW_USER" -eq 0 ]; then
+  ( umask 077; mkdir -p "$NHOME/.local/bin" ) || die "cannot create $NHOME/.local/bin."
+  link "$NHOME/.claude"            "$REAL_HOME/.claude"
+  link "$NHOME/Library/Keychains"  "$REAL_HOME/Library/Keychains"
+  link "$NHOME/.local/bin/claude"  "$REAL_HOME/.local/bin/claude"
+  # Copied on every start, so a change to your sign-in reaches the nightly; whatever the
+  # nightly's claude wrote into its copy is disposable.
+  ( umask 077; cp "$REAL_HOME/.claude.json" "$NHOME/.claude.json.tmp" ) \
+    || die "could not copy $REAL_HOME/.claude.json into $NHOME."
+  mv "$NHOME/.claude.json.tmp" "$NHOME/.claude.json" || die "could not put the copy of .claude.json in place in $NHOME."
+fi
 
 # ---------------------------------------------------------------------------------------
 # Folder b: a small memory folder carrying the roster page
@@ -605,4 +654,5 @@ say "slot=$SLOT version=$VERSION commit=${COMMIT:-unknown} pid=$PID"
 say "folder=$FOLDER"
 say "home=$NHOME"
 say "log=$LOG"
+[ "$NEW_USER" -eq 0 ] || say "new_user=yes (no Claude sign-in, claude, keychain or Codex login of yours; macOS permissions are shared with your own copy)"
 [ "$ENGINE_ENV" = "RICHOS_ENGINE_DIR=" ] || say "engine=$ENGINE_DIR (updates off; a ZIP started without --engine turns them back on)"
