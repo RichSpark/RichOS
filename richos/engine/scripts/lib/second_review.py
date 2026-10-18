@@ -30,7 +30,10 @@ WHAT IT READS (plan §2.2): RECORDS, NEVER ANYONE'S SUMMARY
     `git archive` into this run's scratch folder (allocated by the wrapper with
     the engine's scratch.sh), with the commit log and the diff beside it. The
     author cannot move what is reviewed, and the reviewer never works in the
-    author's workspace.
+    author's workspace. A recheck judges only what changed since the newest
+    earlier review of a commit this tip was built on (review_since): `git log
+    -p --remerge-diff base..tip ^since`, so main's commits merged in between
+    stay out (follow-up 12, D2, with Sage's F2 and F3). The whole tree is there.
   * WHAT THE AUTHOR CLAIMS: its commit messages, its last report (the last
     text it wrote in its transcript) and any --claims-file.
   * EARLIER REVIEWS OF THE SAME WORK, from the ledger below, so a recheck
@@ -485,6 +488,25 @@ def is_ancestor(repo, older, newer):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
+def review_since(w, repo_id):
+    """(since, its review id): the tip of the newest handover or by-hand verdict in
+    THIS repository whose tip is one of this work's own commits before this one
+    (in base..tip, so never a commit main already holds), or ("", "") when there
+    is none. A recheck reviews only what changed after it (follow-up 12, D2): the
+    range before it already has a verdict, and its open findings carry by id.
+    Chosen by commit ancestry, never by work key (Sage's check, F2)."""
+    p = subprocess.run(["git", "-C", w.repo, "rev-list", "%s..%s" % (w.base, w.tip)],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    own = set(p.stdout.decode("ascii", "replace").split()) if p.returncode == 0 else set()
+    own.discard(w.tip)
+    since = None
+    for r in read_ledger():
+        if r.get("verdict") and r.get("trigger") in ("handover", "manual") and r.get("tip") in own \
+                and same_repo(r, w.repo, repo_id):
+            since = r
+    return (since["tip"], since["id"]) if since else ("", "")
+
+
 def filed_findings(repo, repo_id, tip):
     """(the findings the lander filed as follow-ups whose review was of `tip` or a
     commit it was built on, in THIS repository: [(id, ruling)], every filed id of
@@ -597,12 +619,27 @@ def build_input(w, a, export, earlier):
     os.makedirs(review)
     os.makedirs(os.path.join(export, "fixtures"))
     os.makedirs(os.path.join(export, "build"))
-    log = git(w.repo, "log", "--format=commit %H%nAuthor: %an%nDate: %cI%n%n%B%n", "%s..%s" % (w.base, w.tip))
+    since = getattr(w, "since", "")
+    span = ["%s..%s" % (w.base, w.tip)] + (["^" + since] if since else [])
+    if since:
+        # Only the work's own commits after the last review, each with its patch; a merge from main
+        # shows only how its conflicts were resolved (Sage's check, F3). Falls back to the whole
+        # base..tip when Git cannot make it.
+        with open(os.path.join(review, "diff.patch"), "wb") as f:
+            made = subprocess.run(["git", "-C", w.repo, "log", "-p", "--remerge-diff", "--no-color", "--no-ext-diff",
+                                   "--format=commit %H%n%n%B"] + span, stdout=f, stderr=subprocess.DEVNULL)
+        if made.returncode != 0:
+            w.since = w.since_review = since = ""
+            span = span[:1]
+    if not since:
+        with open(os.path.join(review, "diff.patch"), "wb") as f:
+            subprocess.run(["git", "-C", w.repo, "diff", "--no-color", "--no-ext-diff", w.base, w.tip], stdout=f,
+                           check=False)
+    log = git(w.repo, "log", "--format=commit %H%nAuthor: %an%nDate: %cI%n%n%B%n", *span)
     with open(os.path.join(review, "commits.txt"), "w", encoding="utf-8") as f:
         f.write(log)
-    with open(os.path.join(review, "diff.patch"), "wb") as f:
-        subprocess.run(["git", "-C", w.repo, "diff", "--no-color", "--no-ext-diff", w.base, w.tip], stdout=f, check=False)
-    stat = git(w.repo, "diff", "--stat", "--no-color", w.base, w.tip)
+    stat = (git(w.repo, "log", "--format=%h %s", "--stat", "--remerge-diff", "--no-color", *span) if since
+            else git(w.repo, "diff", "--stat", "--no-color", w.base, w.tip))
     tree = os.path.join(export, "tree")
     mid_job = a.trigger in ("long-job", "quiet")
     duty = ""
@@ -619,13 +656,22 @@ def build_input(w, a, export, earlier):
     parts.append("## The commits you review\n\nTIP: %s\nBASE: %s\nREPOSITORY: %s\nBRANCH: %s\nAUTHOR: %s (model: %s)\n"
                  "TRIGGER: %s\n\n" % (w.tip, w.base, w.repo, w.branch or "(none)", w.author,
                                       w.author_model or "unknown", a.trigger))
+    if since:
+        parts.append("SINCE: %s. Review %s already covered BASE..SINCE, and its open findings are listed below. "
+                     "You judge only what changed after it: the commits in `review/commits.txt` and "
+                     "`review/diff.patch`. The whole tree at the tip is there to read.\n\n"
+                     % (since, getattr(w, "since_review", "") or "(unknown)"))
+        what = ("every commit of this work after SINCE, with its full message",
+                "each of those commits with its patch (a merge from main shows only its conflict resolution)")
+    else:
+        what = ("every commit from base to tip, with its full message", "the full diff from base to tip")
     parts.append("Your working folder is `%s`. In it:\n"
                  "- `tree/`: the whole repository exactly as it is at the tip (a `git archive`; there is no `.git`).\n"
-                 "- `review/commits.txt`: every commit from base to tip, with its full message.\n"
-                 "- `review/diff.patch`: the full diff from base to tip.\n"
+                 "- `review/commits.txt`: %s.\n"
+                 "- `review/diff.patch`: %s.\n"
                  "- `fixtures/`: where any fixture you write goes. Its small files are kept with your verdict.\n"
                  "- `build/`: where build output goes (for example `CARGO_TARGET_DIR=build/target`). Not kept.\n\n"
-                 "The change at a glance:\n\n```\n%s```\n\n" % (export, stat))
+                 "The change at a glance:\n\n```\n%s```\n\n" % (export, what[0], what[1], stat))
     parts.append("## The original words\n\nThese are the request the work answers, verbatim. Judge the work "
                  "against them, not against the author's account of them.\n\n")
     for label, text in w.words:
@@ -634,7 +680,8 @@ def build_input(w, a, export, earlier):
     msgs = log if len(log) <= MAX_INLINE_LOG_BYTES else (
         log[:MAX_INLINE_LOG_BYTES] + "\n[... cut at %d characters; every commit is in review/commits.txt]\n"
         % MAX_INLINE_LOG_BYTES)
-    parts.append(fence("its commit messages, base to tip (also review/commits.txt)", msgs) + "\n")
+    parts.append(fence("its commit messages, %s (also review/commits.txt)" % ("after SINCE" if since else "base to tip"),
+                       msgs) + "\n")
     for label, text in w.claims:
         parts.append(fence(label, text) + "\n")
     if not w.claims:
@@ -1290,6 +1337,7 @@ def _review_owned(a, w):
     filed, filed_ids = filed_findings(w.repo, repo_id, w.tip)
     earlier = [(fid, f) for fid, f in earlier_findings(w.work_key, w.tip, w.repo, repo_id) if fid not in filed_ids]
     w.filed = filed
+    w.since, w.since_review = review_since(w, repo_id)
     started_at = time.time()
     rid = "rv-%s-%s-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(started_at)), w.tip[:8], secrets.token_hex(2))
     record = os.path.join(state_root(), "reviews", rid)
@@ -1366,6 +1414,7 @@ def _review_owned(a, w):
         return finish()
     export_tree(w.repo, w.tip, os.path.join(export, "tree"))
     prompt = build_input(w, a, export, earlier)
+    row["since"], row["since_review"] = w.since, w.since_review
 
     limit = _env_seconds("SECOND_REVIEW_TIMEOUT_SECONDS", a.limit_minutes * 60.0)
     use_codex = w.author != "codex" and a.reviewer in ("auto", "codex")

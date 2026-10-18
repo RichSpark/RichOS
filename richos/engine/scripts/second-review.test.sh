@@ -62,6 +62,9 @@
 #        writes nothing; the lead's ruling writes one deferral and one follow-up
 #        row; the next reviewer of a descendant tip, whatever its work key, is
 #        told it is already filed and never asked to judge it again
+#   C22  a recheck reviews only what changed since the last review of a commit it
+#        was built on: its diff.patch holds since..tip, and a merge from main in
+#        between brings none of main's changes in
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -126,6 +129,9 @@ os.makedirs(d)
 prompt = sys.stdin.read()
 with open(os.path.join(d, "prompt.md"), "w") as f:
     f.write(prompt)
+if os.path.isfile(os.path.join("review", "diff.patch")):
+    with open(os.path.join("review", "diff.patch"), "rb") as src, open(os.path.join(d, "diff.patch"), "wb") as dst:
+        dst.write(src.read())
 kind = "codex" if argv[:1] == ["exec"] else "claude"
 if kind == "codex":
     # What Codex logs at RUST_LOG=codex_exec=info: its session start, with the model and effort it runs
@@ -784,6 +790,38 @@ FAKE_MODE=pass run --repo "$REPO" --tip "$(G rev-parse HEAD)" --base "$BASE" --w
 P="$(cat "$(last_call)/prompt.md" 2>/dev/null)"
 ! has "$P" "## Already filed as follow-ups"
 check "C21 after --reopen the finding is no longer listed as filed" $? "rc=$RC prompt=$(last_call)/prompt.md"
+
+# --- C22 ---------------------------------------------------------------------
+# Follow-up 12, D2 (with Sage's F2 and F3): a recheck reviews only what changed since the last
+# review of a commit it was built on. On 2026-10-18 the review of a one-commit, test-only change
+# (94abf81c0) hunted the whole 98-file branch again.
+G checkout -qb cc/d2-work "$BASE"
+printf 'alpha\n' >"$REPO/a2.txt"
+printf 'one\n' >"$REPO/d2.txt"
+G add -A; G commit -qm "d2: the first slice"
+TIPA="$(G rev-parse HEAD)"
+FAKE_MODE=pass run --repo "$REPO" --tip "$TIPA" --words-file "$SB/codex-words.txt"
+RIDA="$(field "$(last_row)" 'r["id"]')"
+G checkout -q main
+printf 'main change\n' >"$REPO/main.txt"
+G add -A; G commit -qm "main: someone else's work"
+G checkout -q cc/d2-work
+G merge -q --no-edit main
+printf 'two\n' >"$REPO/d2.txt"
+G commit -qam "d2: the fix after the review"
+TIPB="$(G rev-parse HEAD)"
+FAKE_MODE=pass run --repo "$REPO" --tip "$TIPB" --words-file "$SB/codex-words.txt"
+D="$(cat "$(last_call)/diff.patch" 2>/dev/null)"
+P="$(cat "$(last_call)/prompt.md" 2>/dev/null)"
+[ "$RC" -eq 0 ] && has "$D" "+two" && ! has "$D" "+alpha"
+check "C22 the recheck's diff.patch holds only the commits after the last review (since..tip), not the reviewed range" $? \
+    "rc=$RC patch=$(last_call)/diff.patch"
+[ -n "$D" ] && ! has "$D" "main change"
+check "C22 a merge from main between the two reviews brings none of main's changes into the patch" $? "patch=$(last_call)/diff.patch"
+has "$P" "SINCE: $TIPA. Review $RIDA already covered BASE..SINCE" && [ "$(field "$(last_row)" 'r["since"]')" = "$TIPA" ] \
+  && [ "$(field "$(last_row)" 'r["since_review"]')" = "$RIDA" ]
+check "C22 the input and the row name the commit and the review the recheck starts after" $? "row=$(last_row)"
+G checkout -q cc/echo-sonnet-x1
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"
