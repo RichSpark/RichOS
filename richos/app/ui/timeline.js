@@ -2978,9 +2978,9 @@
       if (outage.retryMessage) card.appendChild(elem("p", "tl-intervention-note", outage.retryMessage));
     } else {
       card.appendChild(elem("p", "tl-intervention-body",
-        "I hit a snag mid-thought and had to stop before I finished."));
+        "RichOS did not receive a complete reply."));
       card.appendChild(elem("p", "tl-intervention-note",
-        "Everything I'd already written above is saved."));
+        "Press Restore my message to put your words back in the box."));
     }
     card.appendChild(retryControl(turn, opts));
     return card;
