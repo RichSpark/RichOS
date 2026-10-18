@@ -235,7 +235,9 @@ impl WorkHost {
         let fact = serde_json::json!({"event":"worker_overload",
             "worker":{"tool_use_id":frame["parent_tool_use_id"],"agent_id":frame.get("agent_id"),"task":task},
             "error":failure.raw,"retry":wait.map(|_|spent),"retries_left":if wait.is_some() {crate::upstream::MAX_OVERLOAD_RETRIES-spent} else {0},
-            "waited_minutes":wait.map(|wait|wait.as_secs()/60)});
+            "waited_minutes":wait.map(|wait|wait.as_secs()/60),
+            // The end is the overload granted no retry, never the seventh, whose retry still runs.
+            "retries_used_up":wait.is_none()});
         // Off the native reader: the wait, and the delivery to the same session, happen here.
         let (host, receiving, binding, session) = (Arc::downgrade(self), Arc::downgrade(backend), binding.clone(), session.to_string());
         let told = std::thread::Builder::new().name("richos-worker-overload".into()).spawn(move || {
@@ -1714,6 +1716,37 @@ mod tests {
         let mut waited = clock.0.lock().unwrap().clone();
         waited.sort();
         assert_eq!(waited, crate::upstream::OVERLOAD_RETRY_WAITS, "the quoted line was taken for an overload, or a wait was skipped");
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Review rv-20261018T200657Z-585c24df-f9d6, finding 2: the seventh overload is granted the
+    /// 80-minute wait and its retry still runs. Only the eighth, which is granted none, says the
+    /// retries are used up, and that is what Stu's instruction reports to Rich.
+    #[test]
+    fn the_seventh_worker_retry_runs_and_only_the_eighth_overload_ends_the_schedule() {
+        let h = harness(0);
+        h.host.set_retry_clock(Arc::new(RecordedRetryClock::default()));
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let overloaded = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call","error":"overloaded",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
+        for _ in 0..8 { h.host.observe_worker(&backend, &h.binding, "stu-session", &overloaded); }
+        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
+            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
+            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
+        }).collect::<Vec<_>>();
+        until("Stu was not told about each of his worker's overloads", || notices().len() == 8);
+        let told = notices();
+        let seventh = told.iter().find(|fact| fact["retry"] == 7).expect("no seventh retry");
+        assert_eq!((&seventh["waited_minutes"], &seventh["retries_used_up"]), (&serde_json::json!(80), &serde_json::json!(false)),
+            "the granted seventh retry was marked as the end: {seventh}");
+        let eighth = told.iter().find(|fact| fact["retry"].is_null()).expect("no eighth overload");
+        assert_eq!(eighth["retries_used_up"], true, "the eighth overload, granted no retry, did not end the schedule: {eighth}");
+        let stu = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app/agents/stu.md")).unwrap();
+        assert!(stu.contains("`retries_used_up`") && !stu.contains("with no retries left means"),
+            "stu.md does not report the failure on the fact the host sets only when no retry is granted");
         backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
