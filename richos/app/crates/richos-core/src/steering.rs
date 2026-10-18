@@ -1093,6 +1093,23 @@ impl TurnControl {
         log.channel_message_from(thread_id, entity_id, text, channel, client_id, voice_note)
     }
 
+    /// Reserve the existing intake order for an input saved directly in the ledger.
+    /// Its normal ledger fsync supplies durability, without another write before native stdin.
+    pub(crate) fn take_input_order(&self) -> Option<u64> {
+        let mut guard = self.inner.intake.lock().unwrap();
+        let log = guard.as_mut()?;
+        let id = log.next_id;
+        log.next_id += 1;
+        Some(id)
+    }
+
+    /// Direct ledger inputs may have no intake-log row. Never reuse their durable IDs.
+    pub(crate) fn advance_input_order(&self, through: u64) {
+        if let Some(log) = self.inner.intake.lock().unwrap().as_mut() {
+            log.next_id = log.next_id.max(through.saturating_add(1));
+        }
+    }
+
     /// **The DESK's road in, and it is the same road for the same reason** — the one the
     /// window takes for every typed sentence, not only the ones that land while the front
     /// desk is being primed.

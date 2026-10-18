@@ -1128,6 +1128,9 @@ impl Spine {
 
     pub fn set_turn_control(&mut self,control:impl Into<TurnControl>) {
         self.control=control.into().for_thread("");
+        if let Some(last) = self.ledger.turns().iter().filter_map(|turn| turn.intake_id).max() {
+            self.control.advance_input_order(last);
+        }
         for (thread,resident) in &self.resident {
             let control=self.control.for_thread(thread);
             if let Ok(slot)=resident.lease.try_lock() {
@@ -1718,10 +1721,11 @@ impl Spine {
         pressed: bool,
     ) -> Result<String, SpineError> {
         let binding = self.ensure_active_thread()?;
+        let intake_id = self.control.take_input_order();
         let turn_id = if pressed {
-            self.accept_pressed_prompt(&binding, text)?
+            self.accept_pressed_prompt(&binding, text, intake_id)?
         } else {
-            self.accept_prompt(&binding, text, source, rich_audible, None, DESK_CHANNEL)?
+            self.accept_prompt(&binding, text, source, rich_audible, intake_id, DESK_CHANNEL)?
         };
 
         self.deliver(&turn_id, &binding, text, true)?;
@@ -1745,28 +1749,7 @@ impl Spine {
         if self.keep_intake_channel {
             return Ok(self.ledger.record_prompt_received_via(binding, text, source, intake_id, rich_audible, channel)?);
         }
-        Ok(match (rich_audible, intake_id) {
-            (Some(audible), None) => {
-                self.ledger.record_prompt_received_spoken(binding, text, source, audible)?
-            }
-            (None, Some(id)) => {
-                self.ledger.record_prompt_received_from_intake(binding, text, source, id)?
-            }
-            (None, None) => self.ledger.record_prompt_received(binding, text, source)?,
-            // A SPOKEN prompt off the intake log. Nothing constructs one today — the intake
-            // log's three utterance records are all typed — and rather than invent a ledger
-            // call for a combination no caller has, the durable write keeps the intake id,
-            // because that is the half a crash can duplicate. Named here so the day it has a
-            // caller it is a decision and not a discovery.
-            (Some(audible), Some(id)) => {
-                let turn = self.ledger.record_prompt_received_from_intake(binding, text, source, id)?;
-                eprintln!(
-                    "[richos] a spoken prompt arrived off the intake log (turn {turn}, audible \
-                     {audible}); its audibility is not recorded — no caller builds this today"
-                );
-                turn
-            }
-        })
+        Ok(self.ledger.record_prompt_received_desktop(binding, text, source, intake_id, rich_audible, false)?)
     }
 
     /// **ACCEPTING one CEO utterance: everything that happens between his sentence arriving
@@ -1843,8 +1826,8 @@ impl Spine {
     /// [`Self::accept_prompt`] for words the app sends because he pressed a button: the same
     /// durable write and the same queued status, recorded `pressed`, and none of the three
     /// correction seams, which read only what he said.
-    fn accept_pressed_prompt(&mut self, binding: &ThreadBinding, text: &str) -> Result<String, SpineError> {
-        let turn_id = self.ledger.record_prompt_received_pressed(binding, text, Source::Text)?;
+    fn accept_pressed_prompt(&mut self, binding: &ThreadBinding, text: &str, intake_id: Option<u64>) -> Result<String, SpineError> {
+        let turn_id = self.ledger.record_prompt_received_desktop(binding, text, Source::Text, intake_id, None, true)?;
         self.emit_live(self.turn_status_event(binding, &turn_id, TurnStatus::Queued, None));
         self.emit_live(self.thread_summary_event(binding, &turn_id, ThreadStatus::Queued));
         Ok(turn_id)

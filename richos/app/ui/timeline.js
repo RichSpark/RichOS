@@ -3144,8 +3144,7 @@
 
       section.appendChild(lane);
 
-      if (row.tone === "ceo-stopped" && turn.user && turn.user.text &&
-          !turn.stream.some(item => isProse(item) && item.text)) {
+      if (row.tone === "ceo-stopped" && turn.user && turn.user.text) {
         section.appendChild(retryControl(turn, opts));
       }
       if (row.tone === "stopped") section.appendChild(renderFailureCard(turn, opts));

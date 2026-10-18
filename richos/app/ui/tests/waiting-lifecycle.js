@@ -204,6 +204,8 @@ async function main() {
       await page.evaluate(f => {
         window.__emit("rich://turn-status", { ...f, turnId: "stop_queued", status: "queued", startedAt: null,
           at: Date.now(), visibility: "ceo" });
+        window.__emit("rich://message-completed", { ...f, turnId: "stop_first", messageId: "stop_first:text:0",
+          text: "I will check that invoice.", phase: "unknown", at: Date.now(), visibility: "ceo" });
         for (const turnId of ["stop_first", "stop_queued"]) {
           window.__emit("rich://turn-status", { ...f, turnId, status: "stopped", at: Date.now(), visibility: "ceo" });
         }
@@ -217,6 +219,12 @@ async function main() {
       await queued.getByRole("button", { name: "Restore my message", exact: true }).click();
       assertEqual(await page.inputValue("#input"), words, "restoring preserves the complete saved text");
       assertEqual(await page.evaluate(() => window.__sendCount), 2, "restoring must not execute the message");
+      const partial = page.locator('.tl-turn[data-turn-id="stop_first"]');
+      assert((await partial.innerText()).includes("I will check that invoice."), "partial prose stays visible");
+      await page.fill("#input", "");
+      await partial.getByRole("button", { name: "Restore my message", exact: true }).click();
+      assertEqual(await page.inputValue("#input"), "Draft the Q4 board memo from the numbers in the folder.");
+      assertEqual(await page.evaluate(() => window.__sendCount), 2, "partial output must not hide restore or trigger a send");
       assertEqual(page.__errors.length, 0, page.__errors.join("\n"));
       await page.close();
     });

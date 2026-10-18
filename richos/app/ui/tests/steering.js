@@ -336,6 +336,8 @@ async function main() {
     assertEqual(r.tone, "ceo-stopped", "its own tone, not the crash tone");
     assert(r.colour !== "rgb(138, 73, 68)", `the label is painted --danger: ${r.colour}`);
     assertEqual(r.failureCards, 0, "no failure card under a stop");
+    assertEqual(await fixture.getByRole("button", { name: "Restore my message", exact: true }).count(), 1,
+      "a saved stopped snapshot with partial prose must remain restorable");
     return `colour=${r.colour}  failure cards=${r.failureCards}`;
   });
 

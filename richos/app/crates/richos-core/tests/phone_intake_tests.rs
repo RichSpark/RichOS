@@ -275,9 +275,10 @@ fn a_phone_message_and_a_desktop_message_are_the_same_kind_of_turn() {
     assert_eq!(turns.len(), 2);
     assert_eq!(turns[0].source, turns[1].source, "the channel changed the turn's source");
     assert_eq!(turns[0].thread_id, turns[1].thread_id);
-    // Only the phone turn carries an intake id, because only it came through the log.
-    assert_eq!(turns[0].intake_id, None);
+    // Both entrances use the same durable ordering; neither records a device channel.
+    assert!(turns[0].intake_id.is_some());
     assert!(turns[1].intake_id.is_some());
+    assert!(turns[0].intake_id < turns[1].intake_id);
     let _ = std::fs::remove_file(ledger_path);
 }
 

@@ -343,8 +343,10 @@ pub enum Event {
         /// would create a SECOND turn with the same text, and this is what lets the drain
         /// recognize its own earlier work and skip it.
         ///
-        /// `#[serde(default)]` ⇒ `None` for every turn written before steering existed,
-        /// and for every ordinary typed message, which never passes through the intake.
+        /// Direct desktop inputs reserve an ID from the same intake counter and save it
+        /// in this existing ledger write, without an extra intake row or fsync. Stop uses
+        /// this common order for typed, spoken and pressed inputs. Account continuations
+        /// retain their original ID. `None` covers older records and detached controls.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         intake_id: Option<u64>,
         /// **WAS RICH'S OWN VOICE AUDIBLE IN THE ROOM WHILE THIS WAS BEING RECORDED?**
@@ -643,9 +645,8 @@ pub struct Turn {
     /// the LAG between "he asked" and "it let go" stays measurable after a restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_requested_at: Option<u64>,
-    /// The intake-log record this turn was drained from (UX §9.2), if any. See
-    /// `Event::PromptReceived::intake_id` — it is a de-duplication key, not a display
-    /// field, and nothing renders it.
+    /// Shared input order, also the intake drain's de-duplication key (UX §9.2).
+    /// Direct desktop inputs may have no intake row. See `Event::PromptReceived::intake_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intake_id: Option<u64>,
     /// Set when this turn died to the UPSTREAM MODEL API (row 3.30). Carries the
@@ -1271,7 +1272,7 @@ impl Ledger {
                         turn_id: by_turn_id.clone(), thread_id: original.thread_id,
                         text: original.user_text, source: original.source, at,
                         entity_id: original.entity_id, binding_revision: original.binding_revision,
-                        intake_id: None, rich_audible: original.rich_audible,
+                        intake_id: original.intake_id, rich_audible: original.rich_audible,
                         channel: original.channel, client_id: None,
                         voice_note: original.voice_note, pressed: original.pressed,
                     });
@@ -1792,6 +1793,13 @@ impl Ledger {
         intake_id: u64,
     ) -> Result<String, LedgerError> {
         self.record_prompt_received_with(binding, text, source, Some(intake_id), None, None, None)
+    }
+
+    /// Preserve desktop capture/button provenance and the shared input order in one write.
+    pub(crate) fn record_prompt_received_desktop(&mut self, binding: &ThreadBinding, text: &str,
+        source: Source, intake_id: Option<u64>, rich_audible: Option<bool>, pressed: bool,
+    ) -> Result<String, LedgerError> {
+        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, None, None, false, pressed)
     }
 
     /// **The same record, with the mouth his words came through** (operator back-end spec r3

@@ -401,6 +401,10 @@ send({"type":"assistant","message":{"role":"assistant","content":[{"type":"text"
 second=wanted("user")
 send({"type":"command_lifecycle","command_uuid":second["uuid"],"state":"queued"})
 (root/"second-queued").touch()
+for _ in range(2):
+    following=wanted("user")
+    send({"type":"command_lifecycle","command_uuid":following["uuid"],"state":"queued"})
+(root/"all-inputs-queued").touch()
 # The production supervisor must reap this provider and its separate worker group.
 # No fake interrupt acknowledgement or child cleanup stands in for that teardown.
 while True:read()
@@ -421,10 +425,16 @@ while True:read()
     let second = controls.submit_from_desk(&thread, Some(company.clone()), "Second message").unwrap();
     let second_driver = run(shared.clone());
     until("second input never reached the same production provider", || root.join("second-queued").exists());
+    let spoken = shared.lock().unwrap().submit_prompt_spoken("Spoken follow-up", Source::Jam, true).unwrap();
+    let spoken_driver = run(shared.clone());
+    let pressed = shared.lock().unwrap().submit_pressed_prompt_to(&thread, "Pressed follow-up").unwrap();
+    let pressed_driver = run(shared.clone());
+    until("spoken or pressed input never reached the same provider", || root.join("all-inputs-queued").exists());
     let command_state = richos_core::lease_commands::state_path(&profile.state, &session);
     until("supervisor never observed its separate worker group", || matches!(richos_core::lease_commands::read(&command_state), richos_core::lease_commands::CommandReading::Running(n) if n>0));
     assert!(matches!(control.request_stop().unwrap(), StopOutcome::Requested {reached_lease:true,..}));
-    first_driver.join().unwrap().unwrap(); second_driver.join().unwrap().unwrap();
+    let outcomes = [first_driver.join().unwrap(), second_driver.join().unwrap(),
+        spoken_driver.join().unwrap(), pressed_driver.join().unwrap()];
     let worker: libc::pid_t = std::fs::read_to_string(root.join("worker-pid")).unwrap().parse().unwrap();
     until("production Stop left its worker alive", || unsafe { libc::kill(worker,0) } != 0);
     {
@@ -434,8 +444,19 @@ while True:read()
         assert_eq!(a.state, richos_core::ledger::TurnState::Stopped);
         assert_eq!(b.state, richos_core::ledger::TurnState::Stopped, "intentional provider teardown must not report queued input as a failure");
         assert_eq!(b.user_text, "Second message"); assert!(b.assistant_text.is_empty());
+        for id in [&spoken, &pressed] {
+            let pending = spine.ledger().turn(id).unwrap();
+            assert_eq!(pending.state, richos_core::ledger::TurnState::Stopped,
+                "every accepted desktop input must share the same Stop cut: {}", pending.user_text);
+            assert!(pending.assistant_text.is_empty());
+            assert!(pending.intake_id.is_some(), "desktop input bypassed durable acceptance");
+        }
+        let speech = spine.ledger().turn(&spoken).unwrap();
+        assert_eq!(speech.source, Source::Jam); assert_eq!(speech.rich_audible, Some(true));
+        assert!(spine.ledger().turn(&pressed).unwrap().pressed);
         assert_eq!(opened.load(Ordering::SeqCst),1);
     }
+    for outcome in outcomes { outcome.unwrap(); }
     let next=controls.submit_from_desk(&thread,Some(company),"Explicit next message").unwrap();
     shared.lock().unwrap().poll_intake().unwrap(); drive_shared_turns(&shared).unwrap();
     assert_eq!(opened.load(Ordering::SeqCst),2,"one explicit input must reopen exactly once");
@@ -443,7 +464,7 @@ while True:read()
     assert_eq!(shared.lock().unwrap().ledger().turn_for_intake(next.id()).unwrap().assistant_text,"Explicit next reply");
     let frames: Vec<serde_json::Value> = std::fs::read_to_string(root.join("provider.log")).unwrap().lines().map(|l|serde_json::from_str(l).unwrap()).collect();
     let sent: Vec<_> = frames.iter().filter(|f|f["type"]=="user").map(|f|f["message"]["content"][0]["text"].as_str().unwrap()).collect();
-    assert_eq!(sent,["First message","Second message","Explicit next message"]);
+    assert_eq!(sent,["First message","Second message","Spoken follow-up","Pressed follow-up","Explicit next message"]);
     assert_eq!(frames.iter().filter(|f|f["event"]=="provider-start").count(),2);
     drop(shared); std::fs::remove_dir_all(root).unwrap();
 }
@@ -498,5 +519,102 @@ fn restart_applies_the_durable_stop_cut_without_stopping_other_or_later_inputs()
         assert_eq!(sent, ["Other conversation", "Explicit input after Stop"]);
         assert!(controls.pending_intake().is_empty());
         drop(restored); std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn restart_cannot_reuse_a_direct_ledger_inputs_order() {
+    use richos_core::steering::TurnControl;
+    let (root, mut spine, company) = fixture();
+    let path = root.join("conversation.jsonl");
+    let intake = root.join("intake.jsonl");
+    let thread = spine.create_thread("Conversation", &company).unwrap();
+    let controls = TurnControl::open(&intake).unwrap();
+    spine.set_turn_control(controls.clone());
+    spine.detach_conversation_io();
+    let spoken = spine.submit_prompt_spoken("Spoken request", Source::Jam, true).unwrap();
+    let pressed = spine.submit_pressed_prompt_to(&thread, "Pressed request").unwrap();
+    let first = spine.ledger().turn(&spoken).unwrap().intake_id.unwrap();
+    let last = spine.ledger().turn(&pressed).unwrap().intake_id.unwrap();
+    assert!(last > first);
+    drop(spine); drop(controls);
+    let mut restored = Spine::new(Ledger::open(&path).unwrap());
+    restored.set_entity_registry(EntityRegistry::new(vec![Entity::new("example", "Example", &["/fixture/example"]).unwrap()]).unwrap());
+    restored.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["Reply"])));
+    let controls = TurnControl::open(&intake).unwrap();
+    restored.set_turn_control(controls.clone());
+    assert_eq!(restored.ledger().turn(&spoken).unwrap().rich_audible, Some(true));
+    assert!(restored.ledger().turn(&pressed).unwrap().pressed);
+    let next = controls.submit_from_desk(&thread, Some(company), "New request after restart").unwrap();
+    assert!(next.id() > last, "restart reused an order already saved with a direct ledger input");
+    restored.poll_intake().unwrap();
+    assert_eq!(restored.ledger().turn_for_intake(next.id()).unwrap().user_text, "New request after restart");
+    assert_eq!(restored.ledger().thread_turns(&thread).unwrap().len(), 3);
+    drop(restored); std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_continuation_keeps_its_original_order_when_stop_names_a_follow_up() {
+    use richos_core::{ledger::TurnState, steering::{ActiveTurn, TurnControl}};
+    let (root, mut spine, company) = fixture();
+    let path = root.join("conversation.jsonl");
+    let intake = root.join("intake.jsonl");
+    let thread = spine.create_thread("Conversation", &company).unwrap();
+    drop(spine);
+    let mut ledger = Ledger::open(&path).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    let controls = TurnControl::open(&intake).unwrap();
+    let a = controls.submit_from_desk(&thread, Some(company.clone()), "Original request").unwrap();
+    let a_turn = ledger.record_prompt_received_from_intake(&binding, "Original request", Source::Text, a.id()).unwrap();
+    let continued = ledger.replay_turn(&binding, &a_turn).unwrap();
+    ledger.mark_turn_started(&continued, "native-session").unwrap();
+    let b = controls.submit_from_desk(&thread, Some(company.clone()), "Follow-up").unwrap();
+    let b_turn = ledger.record_prompt_received_from_intake(&binding, "Follow-up", Source::Text, b.id()).unwrap();
+    ledger.mark_turn_started(&b_turn, "native-session").unwrap();
+    controls.for_thread(&thread).begin_turn(ActiveTurn {turn_id:b_turn.clone(), thread_id:thread, entity_id:Some(company), started_at:Some(1)});
+    controls.for_thread(binding.thread_id()).request_stop().unwrap();
+    drop(ledger); drop(controls);
+    let mut restored = Spine::new(Ledger::open(&path).unwrap());
+    restored.set_turn_control(TurnControl::open(&intake).unwrap());
+    restored.reconcile_intake().unwrap();
+    assert_eq!(restored.ledger().turn(&continued).unwrap().state, TurnState::Stopped, "continuation lost the original input order");
+    assert_eq!(restored.ledger().turn(&continued).unwrap().intake_id, Some(a.id()));
+    assert_eq!(restored.ledger().turn(&b_turn).unwrap().state, TurnState::Stopped);
+    drop(restored); std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn restart_stops_saved_direct_speech_and_pressed_inputs() {
+    use richos_core::{ledger::TurnState, steering::{ActiveTurn, TurnControl}};
+    for (source, audible, pressed) in [(Source::Jam, Some(false), false), (Source::Jam, Some(true), false), (Source::Text, None, true)] {
+        for submitted in [false, true] {
+            let (root, mut spine, company) = fixture();
+            let path = root.join("conversation.jsonl");
+            let intake = root.join("intake.jsonl");
+            let thread = spine.create_thread("Conversation", &company).unwrap();
+            let controls = TurnControl::open(&intake).unwrap();
+            spine.set_turn_control(controls.clone());
+            spine.detach_conversation_io();
+            let a = spine.submit_prompt("First request", Source::Text).unwrap();
+            let pending = if pressed {spine.submit_pressed_prompt_to(&thread, "Queued input").unwrap()}
+                else {spine.submit_prompt_spoken("Queued input", source, audible.unwrap()).unwrap()};
+            let order = spine.ledger().turn(&pending).unwrap().intake_id.unwrap();
+            drop(spine);
+            let mut ledger = Ledger::open(&path).unwrap();
+            if submitted {ledger.mark_turn_started(&pending, "native-session").unwrap();}
+            controls.for_thread(&thread).begin_turn(ActiveTurn {turn_id:a.clone(), thread_id:thread.clone(), entity_id:Some(company.clone()), started_at:Some(1)});
+            controls.for_thread(&thread).request_stop().unwrap();
+            drop(ledger); drop(controls);
+            let mut restored = Spine::new(Ledger::open(&path).unwrap());
+            restored.set_turn_control(TurnControl::open(&intake).unwrap());
+            restored.reconcile_intake().unwrap();
+            assert_eq!(restored.ledger().turn(&a).unwrap().state, TurnState::Stopped);
+            let saved = restored.ledger().turn(&pending).unwrap();
+            assert_eq!(saved.state, TurnState::Stopped, "source {source:?}, submitted {submitted}");
+            assert_eq!(saved.intake_id, Some(order));
+            assert_eq!(saved.source, source); assert_eq!(saved.rich_audible, audible); assert_eq!(saved.pressed, pressed);
+            assert_eq!(saved.user_text, "Queued input"); assert!(saved.assistant_text.is_empty());
+            drop(restored); std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }
