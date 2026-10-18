@@ -48,6 +48,7 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
     let identity = serde_json::to_vec(&[entity, thread]).map_err(|e| e.to_string())?;
     let partition = format!("{:x}", Sha256::digest(identity));
     let parent = state.join("work-receipts");
+    let workspaces = state.join("workspaces").join(&partition);
     let root = parent.join(partition);
     if parent.is_symlink() || root.is_symlink() { return Err("Work records have been redirected.".into()); }
     let entries = match std::fs::read_dir(root) {
@@ -83,7 +84,7 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
     // repository, and never a guess at its state. Only a failure about the directory itself
     // (above) still refuses the whole view.
     for path in paths.into_iter().take(100) {
-        let item = read_one(&path, entity, thread, &mut bytes_read).unwrap_or_else(|_reason| Some(WorkItem {
+        let item = read_one(&path, &workspaces, entity, thread, &mut bytes_read).unwrap_or_else(|_reason| Some(WorkItem {
             title: "Work whose details couldn't be read".into(),
             repository: "unknown repository".into(),
             role: "unknown role".into(),
@@ -97,6 +98,33 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
     Ok(summary)
 }
 
+/// The same terminal evidence as the engine's `retired_execution`: active cleanup
+/// intent is insufficient, and a native result or verified integration is preserved.
+/// Read only this conversation's canonical record, never rewrite attempt history.
+fn retired_execution(workspaces: &Path, row: &Value, bytes_read: &mut u64) -> Result<bool, String> {
+    let Some(key) = row["workspace_ref"].as_str() else { return Ok(false) };
+    if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) || matches!(key, "." | "..") {
+        return Err("A saved work reference is invalid.".into());
+    }
+    if [workspaces.parent().unwrap(), workspaces, &workspaces.join("agents"), &workspaces.join("done")].iter().any(|p| p.is_symlink()) {
+        return Err("Work records have been redirected.".into());
+    }
+    if workspaces.join("agents").join(format!("{key}.json")).try_exists().map_err(|e| e.to_string())? { return Ok(false) }
+    let path = workspaces.join("done").join(format!("{key}.json"));
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.to_string()),
+    };
+    if !meta.is_file() || meta.len() > 1024 * 1024 || *bytes_read + meta.len() > 16 * 1024 * 1024 {
+        return Err("A saved work record is too large or redirected.".into());
+    }
+    *bytes_read += meta.len();
+    let canonical: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if canonical["key"] != key { return Err("A saved work reference has a different identity.".into()) }
+    Ok(canonical["end"].is_null() && canonical["disposition"]["kind"] == "landed")
+}
+
 /// One receipt, read into one row of the saved-work view, or the reason it could not be.
 ///
 /// **`None` for a job that never started** (Ray's check of nightly 57, 2026-10-15: an
@@ -104,7 +132,7 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
 /// dispatched" card under Under the hood). No worker ran and nothing was done, so there is
 /// nothing of it to show. Which records those are is the engine's own `never_dispatched`
 /// (`engine/mega-lander/app.py`): `blocked`, with no `tool_use_id` and no `agent_id`.
-fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Result<Option<WorkItem>, String> {
+fn read_one(path: &Path, workspaces: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Result<Option<WorkItem>, String> {
     let size = std::fs::symlink_metadata(path).map_err(|_| "A saved work record could not be read.")?;
     if !size.is_file() || size.len() > 1024 * 1024 || *bytes_read + size.len() > 16 * 1024 * 1024 {
         return Err("A saved work record is too large or redirected.".into());
@@ -143,10 +171,12 @@ fn read_one(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Re
         }
     } else if row["integration"]["verified"] == true {
         if row["integration"]["cleanup_pending"].as_array().is_some_and(|a| a.is_empty()) {
-            ("integrated", "This part was checked and added to your project. The job as a whole may still be going.")
+            ("integrated", "This part was checked and added to your project.")
         } else {
             ("cleanup-pending", "This part was checked and added to your project. Some tidying up is still left.")
         }
+    } else if retired_execution(workspaces, &row, bytes_read)? {
+        ("retired", "This attempt ended without a result. Any later attempts are shown separately.")
     } else {
         // Every status `engine/mega-lander/app.py` writes into a receipt: `preparing`,
         // `prepared`, `dispatching`, `running`, `blocked`, `unknown`, `interrupted`,
@@ -416,6 +446,52 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         assert!(foreign.items[0].title != "Fictional work" && foreign.items[0].repository != "/fictional/project");
         std::fs::write(path.join("receipt.json"),"partial").unwrap();
         assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "unreadable");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test] fn retired_attempts_never_ask_to_resume_finished_work() {
+        let root = temp();
+        let mut old = receipt("old", "job", "worker");
+        old["status"] = "interrupted".into();
+        old["workspace_ref"] = "session--old".into();
+        old["agent_id"] = "agent-old".into();
+        let receipts = write(&root, &[old.clone()]);
+        let workspace = root.join("workspaces").join(receipts.file_name().unwrap());
+        std::fs::create_dir_all(workspace.join("done")).unwrap();
+        let done = workspace.join("done/session--old.json");
+        let canonical = serde_json::json!({"key":"session--old", "agent_id":"agent-old", "end":null,
+            "disposition":{"kind":"landed"}});
+        std::fs::write(&done, serde_json::to_vec(&canonical).unwrap()).unwrap();
+        let summary = read(&root, "depot", "thread").unwrap();
+        assert_eq!(summary.items[0].state, "retired");
+        assert!(!summary.items[0].detail.contains("carry on"));
+        // Active cleanup intent is not retirement. Nor is a native completed result.
+        std::fs::create_dir_all(workspace.join("agents")).unwrap();
+        std::fs::write(workspace.join("agents/session--old.json"), "{}").unwrap();
+        assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "interrupted");
+        std::fs::remove_file(workspace.join("agents/session--old.json")).unwrap();
+        let mut ended = canonical.clone(); ended["end"] = serde_json::json!({"signal":"SubagentStop"});
+        std::fs::write(&done, serde_json::to_vec(&ended).unwrap()).unwrap();
+        assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "interrupted");
+        std::fs::write(&done, "damaged").unwrap();
+        assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "unreadable");
+        std::fs::remove_file(&done).unwrap();
+        assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "interrupted");
+        std::fs::write(&done, serde_json::to_vec(&canonical).unwrap()).unwrap();
+        old["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
+        write(&root, &[old]);
+        assert_eq!(read(&root,"depot","thread").unwrap().items[0].state, "integrated");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test] fn a_verified_land_does_not_speculate_about_the_whole_job() {
+        let root = temp();
+        let mut worker = receipt("replacement", "job", "worker");
+        worker["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
+        write(&root, &[worker]);
+        let summary = read(&root,"depot","thread").unwrap();
+        assert_eq!(summary.items[0].state, "integrated");
+        assert_eq!(summary.items[0].detail, "This part was checked and added to your project.");
         std::fs::remove_dir_all(root).unwrap();
     }
 
