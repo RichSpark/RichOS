@@ -34,8 +34,9 @@
 // THE DOCUMENT EXTENSION (checks 11-14). A Markdown FILE previewed in the Output panel (output
 // side-panel PRD §7, slice S5) is drawn by the same renderer with `{ document: true }`: tables,
 // quotations, rules and fenced code, links drawn as their text. The checks prove it renders, that
-// Rich's answers (no option) are untouched by it, that the escaping guarantee holds inside every
-// block it adds, and that no line it reads costs more than linear time.
+// Rich's answers (no option) draw the same four blocks but keep links as written, that the
+// escaping guarantee holds inside every block, and that no line costs more than linear time.
+// Check 15 is the nightly 64 field report: a STOPPED answer's table drawn like a finished one's.
 //
 // Run: node markdown.js   (or `npm test` for every suite in this directory)
 
@@ -358,13 +359,19 @@ async function main() {
     return "table 2x2 (right-aligned Size), quotation with bold, 1 rule, fenced js block, link and image as their words";
   });
 
-  await run.check("12 Rich's answers are untouched by it: the same text without `document` is the old subset", async () => {
+  // Rich's answers draw the same four BLOCKS (nightly 64, s5: Rich answered with a table and a
+  // quotation, and both read on screen as raw `|` and `>` lines). What stays document-only is
+  // INLINE: a link and a backslash escape in an answer still read as written.
+  await run.check("12 Rich's answers draw the same blocks; links stay as written", async () => {
     const r = await doc(page, DOC);
-    assertEqual([r.tables.length, r.quotes.length, r.rules, r.fences.length], [0, 0, 0, 0], "a table, quote, rule or fence leaked into the chat renderer");
-    assert(r.text.indexOf("| Deal | Size |") !== -1, "a `|` line in an answer reads as written: " + r.text);
-    assert(r.text.indexOf("> quoted firmly") !== -1, "a `>` line in an answer reads as written: " + r.text);
+    assertEqual(r.tables, [[["Deal", "Size"], ["Northwind", "$1.9M"]]], "an answer's table is a table");
+    assertEqual(r.align, ["", "right"], "`---:` right-aligns its column in an answer too");
+    assertEqual(r.quotes, ["quoted firmly"], "an answer's quotation is a quotation");
+    assertEqual([r.rules, r.fences.length], [1, 1], "an answer's rule and fenced code are drawn");
+    assert(r.text.indexOf("| Deal") === -1 && r.text.indexOf("> quoted") === -1, "raw `|`/`>` lines still on screen: " + r.text);
     assert(r.text.indexOf("[the ledger](https://example.com/ledger)") !== -1, "a link in an answer reads as written: " + r.text);
-    return "no table, quote, rule or fence without `document`; the characters read as before";
+    assertEqual([r.anchors, r.images, r.scripts, r.withHandlers], [0, 0, 0, 0], "an answer's blocks made an element that can act");
+    return "table, quotation, rule and fence drawn in an answer; the link still reads as written";
   });
 
   await run.check("13 ESCAPING holds in every block the extension adds", async () => {
@@ -414,6 +421,63 @@ async function main() {
     );
     assert(ms < 1500, "three long lines took " + Math.round(ms) + " ms");
     return "unclosed fence keeps the tail; a lone `|` line is prose; 600,000 characters of worst case in " + Math.round(ms) + " ms";
+  });
+
+  // THE FIELD REPORT (Ray, nightly 64 s5, shots/s01-stopped-03s.jpg): Rich was stopped four
+  // seconds into an answer whose text held a table and a quotation, and the stopped answer read
+  // as raw `| ... |` and `> ...` lines. The same answer is rendered twice through the REAL
+  // snapshot path (`__render`), once stopped by the CEO and once finished, and both must draw a
+  // table with no pipe left on screen, with identical markup.
+  await run.check("15 a STOPPED answer renders its table and quotation the same as a finished one", async () => {
+    const answer = [
+      "Here is a structure for the first call.",
+      "",
+      "| Segment | Time | Purpose |",
+      "|---|---|---|",
+      "| Current situation | 8-10 min | Understand where they are now |",
+      "| Fit and next steps | 5-10 min | Discuss working together |",
+      "",
+      "**Opening and Agenda**",
+      "",
+      '> "Thanks for making the time. Here is what I would suggest for our conver',
+    ].join("\n");
+    const snapshot = (state) => ({
+      entityId: "northwind",
+      threadId: "thr_table",
+      mode: "ceo",
+      bindingRevision: 1,
+      items: [
+        { bindingRevision: 1, createdAt: 1787995711820, entityId: "northwind", id: "turn_tbl:user", kind: "user_message", sequence: null, slot: "opening", source: "text", text: "Give me a structure for a first coaching call.", threadId: "thr_table", turnId: "turn_tbl", visibility: "ceo" },
+        { bindingRevision: 1, createdAt: 1787995711856, entityId: "northwind", id: "turn_tbl:text:0", kind: "rich_message", phase: "unknown", sequence: 0, slot: "stream", text: answer, threadId: "thr_table", turnId: "turn_tbl", visibility: "ceo" },
+        { activeMs: 4000, bindingRevision: 1, createdAt: 1787995711820, endedAt: 1787995715856, entityId: "northwind", id: "turn_tbl:duration", kind: "work_duration", sequence: null, slot: "terminal", startedAt: 1787995711856, state, threadId: "thr_table", turnId: "turn_tbl", visibility: "ceo" },
+      ],
+    });
+    const drawn = async (state) =>
+      page.evaluate((snap) => {
+        window.__render(snap, {});
+        const prose = document.querySelector('[id="prose:turn_tbl:text:0"]');
+        return {
+          label: Array.from(document.querySelectorAll(".tl-duration-label")).map((n) => n.textContent),
+          html: prose.innerHTML,
+          text: prose.innerText,
+          rows: Array.from(prose.querySelectorAll("table tr")).map((tr) => Array.from(tr.children).map((c) => c.textContent)),
+          quotes: prose.querySelectorAll("blockquote").length,
+          strong: prose.querySelectorAll("strong").length,
+        };
+      }, snapshot(state));
+    const stopped = await drawn("stopped");
+    const finished = await drawn("completed");
+    assertEqual(stopped.label, ["You stopped after 4s"], "the fixture is a CEO-stopped turn");
+    assertEqual(
+      stopped.rows,
+      [["Segment", "Time", "Purpose"], ["Current situation", "8-10 min", "Understand where they are now"], ["Fit and next steps", "5-10 min", "Discuss working together"]],
+      "the stopped answer's table must be a table"
+    );
+    assert(stopped.text.indexOf("|") === -1, "raw `|` lines in the stopped answer: " + JSON.stringify(stopped.text));
+    assertEqual([stopped.quotes, stopped.strong], [1, 1], "the cut-off quotation and the bold heading are rendered");
+    assert(stopped.text.indexOf("> ") === -1, "a raw `>` line in the stopped answer: " + JSON.stringify(stopped.text));
+    assertEqual(stopped.html, finished.html, "the stopped answer is drawn differently from the finished one");
+    return "stopped and finished: one 3x3 table, one quotation, no raw `|`; identical markup (" + stopped.html.length + " bytes)";
   });
 
   await run.check("10 no page errors anywhere in this suite", async () => {

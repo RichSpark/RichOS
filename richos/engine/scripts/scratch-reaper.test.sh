@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 #
+# merge-gate: mutation-pass
+# (Declared 2026-10-18. This suite and its 53-mutant harness run as ONE unit and took 2238 s
+# in a land check on a 91% busy host, past the merge gate's 600 s cap. A header line is the one
+# way autocheck.py's mutation_unit lets a unit say "the nightly engine run, not the merge",
+# so the merge names it NOT RUN and nightly-engine.py runs it with every other unit.)
+#
 # scratch-reaper.test.sh — A DELETER IS JUDGED ON WHAT IT LEAVES ALONE.
 #
 # ===========================================================================
@@ -302,6 +308,21 @@ if log:
 os.execv(real, [real] + args)
 PYEOF
     chmod +x "$SANDBOX/scoped-bin/lsof"
+    # NO TEST ASKS SYSTEM EVENTS TO QUIT AN APP (2026-10-18). S20 makes the reaper end a
+    # fake app instance, and appinstances._graceful runs an `osascript` that tells System
+    # Events to quit it. On a host with a shield that call is blocked and logged as an
+    # attack on the person's session. The fake never answers a quit request anyway, so an
+    # `osascript` that records the call and fails sends the reaper on to SIGTERM, the path
+    # S20b verifies.
+    SRT_OSASCRIPT_LOG="$SANDBOX/osascript-calls.log"
+    : >"$SRT_OSASCRIPT_LOG"
+    export SRT_OSASCRIPT_LOG
+    cat >"$SANDBOX/scoped-bin/osascript" <<'OSAEOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SRT_OSASCRIPT_LOG"
+exit 1
+OSAEOF
+    chmod +x "$SANDBOX/scoped-bin/osascript"
     PATH="$SANDBOX/scoped-bin:$PATH"
     export PATH
 
@@ -1411,6 +1432,11 @@ CSRC
             bad "S20b the tree went but the app instance is STILL RUNNING — the"
             bad "     window would still be on his screen (§54 addendum 4)"
             kill -9 "$APP_PID" 2>/dev/null || true
+        fi
+        if grep -q 'unix id is' "${SRT_OSASCRIPT_LOG:-/nonexistent}" 2>/dev/null; then
+            ok "S20e the quit request went to this suite's osascript stand-in, never to System Events"
+        else
+            bad "S20e the reaper's quit of the fake instance did not go through the suite's osascript stand-in"
         fi
         # THE LOG FILE, not stdout. The first version of this assertion grepped
         # --apply's stdout and failed while S20/S20b passed: the quit lines go
