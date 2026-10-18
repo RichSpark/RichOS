@@ -12,7 +12,7 @@
 //!
 //! It answers one question — *"is this failure the upstream model API, and if so which
 //! kind?"* — and it answers `None` rather than guessing. Everything downstream (the retry
-//! budget, the loss statement, the reachability verdict, the voice cut-off line) reads its
+//! budget, the loss statement, the voice cut-off line) reads its
 //! answer; nothing downstream re-derives it.
 //!
 //! ## THE `429` / `529` DISTINCTION IS THE WHOLE POINT OF HAVING AN ENUM
@@ -346,76 +346,6 @@ pub fn split_at_vendor_diagnostic(text: &str) -> (&str, &str) {
         from = at + MARKER.len();
     }
     (text, "")
-}
-
-// =========================================================================================
-// THE FAULT-INJECTION SEAM
-// =========================================================================================
-
-/// **A fake upstream, for tests, that fails the way the real one was MEASURED to fail.**
-///
-/// The row's actionable finding is that the `529` was **size-dependent**: in the same
-/// minutes that four large briefs died on their initial context load, a one-command probe
-/// (`pwd`) finished in 51 seconds. A degraded API fails the expensive requests first.
-///
-/// A test that asserts against a real network is not a test, and a fake that fails
-/// uniformly cannot reproduce the finding at all — under a uniform fake, a cheap health
-/// check and a realistic-size probe give the SAME answer, which is precisely the
-/// distinction this row exists to draw. So the seam models size:
-///
-/// ```text
-///   request size <= fails_above_chars   ->  Ok
-///   request size >  fails_above_chars   ->  Err(the injected fault's own message text)
-/// ```
-///
-/// [`FakeUpstream::uniform`] is the degenerate case for the tests that do not care.
-#[derive(Debug, Clone)]
-pub struct FakeUpstream {
-    /// Requests strictly LARGER than this fail. `0` means every request fails.
-    pub fails_above_chars: usize,
-    /// The message a failing request comes back with. A real captured line, in every test
-    /// that has one.
-    pub failure_text: String,
-    /// How many requests have been made, of any size.
-    attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    /// How many of those failed.
-    failures: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl FakeUpstream {
-    /// Size-dependent — the measured shape. Requests at or below `fails_above_chars`
-    /// succeed; larger ones fail.
-    pub fn size_dependent(fails_above_chars: usize, failure_text: &str) -> FakeUpstream {
-        FakeUpstream {
-            fails_above_chars,
-            failure_text: failure_text.to_string(),
-            attempts: Default::default(),
-            failures: Default::default(),
-        }
-    }
-
-    /// Every request fails, whatever its size.
-    pub fn uniform(failure_text: &str) -> FakeUpstream {
-        FakeUpstream::size_dependent(0, failure_text)
-    }
-
-    /// Send one request of `chars` characters. `Err` carries the vendor's own line.
-    pub fn send(&self, chars: usize) -> Result<(), String> {
-        self.attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if chars > self.fails_above_chars {
-            self.failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            return Err(self.failure_text.clone());
-        }
-        Ok(())
-    }
-
-    pub fn attempts(&self) -> usize {
-        self.attempts.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    pub fn failures(&self) -> usize {
-        self.failures.load(std::sync::atomic::Ordering::SeqCst)
-    }
 }
 
 // =========================================================================================
@@ -804,17 +734,5 @@ mod tests {
         ] {
             assert_eq!(UpstreamFailure::classify(text), None, "{text:?} must not classify");
         }
-    }
-
-    /// INVARIANT: a request at or below the size floor succeeds while a larger one fails —
-    /// the MEASURED shape, without which the reachability finding cannot be reproduced.
-    #[test]
-    fn the_fake_upstream_fails_the_expensive_request_and_passes_the_cheap_one() {
-        let up = FakeUpstream::size_dependent(64, "API Error: 529 Overloaded.");
-        assert!(up.send(3).is_ok(), "a one-command probe must succeed");
-        assert!(up.send(64).is_ok(), "the boundary is inclusive");
-        assert!(up.send(65).is_err(), "one character over the floor must fail");
-        assert_eq!(up.attempts(), 3);
-        assert_eq!(up.failures(), 1);
     }
 }

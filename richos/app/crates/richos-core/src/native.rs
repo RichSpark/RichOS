@@ -219,7 +219,7 @@ pub const PLUGIN_DIR: &str = "--plugin-dir";
 /// [`ReaderState::tool_residency`]: the alarm carried no lease role, and the WORK lease — which
 /// `tool_residency_env` deliberately gives no variable at all — was setting it off.
 ///
-/// **Three defenses, the same three the flags above it get:**
+/// **Two defenses:**
 ///
 /// - it is set unconditionally for [`LeaseRole::Conversation`] by [`tool_residency_env`],
 ///   pinned by `the_conversation_asks_for_resident_tools`;
@@ -229,10 +229,7 @@ pub const PLUGIN_DIR: &str = "--plugin-dir";
 ///   binary that starts deferring for a different reason, shows up as the tool being offered
 ///   again. **It says it about the lease it is actually on** — see
 ///   [`ReaderState::tool_residency`], the field that was missing when the alarm above was
-///   raised against a binary that had done nothing wrong;
-/// - and the number itself is re-measured end to end by
-///   `examples/first_reply_timing_e2e.rs`, which refuses a turn whose first tool call is not
-///   the register.
+///   raised against a binary that had done nothing wrong.
 ///
 /// **Not set on the work lease, deliberately.** Nobody is sitting in front of a work lease's
 /// first token, its inventory is a different size, and one measurement on one lease is not
@@ -275,9 +272,6 @@ pub fn lease_retry_env() -> (&'static str, &'static str) {
 
 /// Native continuity checkpoint tool identity.
 pub const CONTINUITY_CHECKPOINT_TOOL: &str = "mcp__richos_continuity__checkpoint";
-
-/// Native continuity tool namespace.
-pub const CONTINUITY_TOOL_PREFIX: &str = "mcp__richos_continuity__";
 
 /// Is the child deferring its tools, according to the child?
 ///
@@ -4903,24 +4897,6 @@ exec /bin/sleep 1000
             "the front desk has no way to look at what is running");
 
         std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    /// **The two constants that must not drift apart**, because one of them is a rule's whole
-    /// coverage. `first_reply::first_reply_faults` scores an ECS write ahead of his reply by
-    /// [`CONTINUITY_TOOL_PREFIX`]; if the checkpoint ever stopped matching it the rule would go
-    /// quiet rather than red, which is the failure mode this project keeps meeting.
-    #[test]
-    fn the_checkpoint_is_one_of_the_continuity_server_s_tools() {
-        assert!(CONTINUITY_CHECKPOINT_TOOL.starts_with(CONTINUITY_TOOL_PREFIX));
-        // The prefix is the SERVER's name as `mcp_config` registers it, spelled the way the
-        // binary qualifies a tool of it — not a guess at a naming convention.
-        assert_eq!(CONTINUITY_TOOL_PREFIX, "mcp__richos_continuity__");
-        // And it never matches the other app-owned servers, whose calls are allowed before the
-        // reply — the register above all, which is the one call §55 asks to come first.
-        for other in [crate::assignment_tools::QUALIFIED_RECORD_TOOL,
-                      "mcp__richos_status__background_work", "mcp__richos_onboarding__record"] {
-            assert!(!other.starts_with(CONTINUITY_TOOL_PREFIX), "{other}");
-        }
     }
 
     /// **THE FRONT DESK'S WHOLE TOOL INVENTORY, AND THE BACK END'S**, asserted as two

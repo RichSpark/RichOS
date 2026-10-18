@@ -7,7 +7,8 @@
 LEDGER is the app's own `conversation-ledger.jsonl`. It is re-read every --interval seconds
 (default 1) until a turn qualifies:
 
-  - the turn is OPEN: no TurnCompleted / TurnInterrupted / TurnStopped / TurnFailed row for it;
+  - the turn is OPEN: no TurnCompleted / TurnInterrupted / TurnStopped / TurnFailed row for it,
+    and it was not replaced by a retry (a TurnReplayed row; the retry inherits its prompt text);
   - it has streamed at least --min-chars (default 200) characters of AssistantDelta text;
   - and, by the condition given:
       --after-ms AT          it started (its PromptReceived row, any source, internal turns
@@ -51,6 +52,13 @@ def turn_states(rows):
         elif event == 'AssistantDelta':
             t['chars'] += len(str(r.get('text') or ''))
         elif event in CLOSED:
+            t['open'] = False
+        elif event == 'TurnReplayed' and r.get('by_turn_id'):
+            # An overload retry: the app gives the new turn the original's prompt, at this row's
+            # time, and retires the original (ledger.rs, Event::TurnReplayed). No PromptReceived row.
+            retry = turns.setdefault(r['by_turn_id'], {'start': r['at'], 'prompt': '', 'chars': 0, 'open': True})
+            if not retry['prompt']:
+                retry['start'], retry['prompt'] = r['at'], t['prompt']
             t['open'] = False
     return turns
 

@@ -49,6 +49,17 @@ class WaitTurn(unittest.TestCase):
         r = run(LEDGER, '--prompt-contains', 'worker result')
         self.assertEqual((r.returncode, r.stdout.strip()), (0, 'turn-long'))
 
+    def test_prompt_match_survives_a_turn_replayed_retry(self):
+        # An overload retry has no PromptReceived row of its own: it inherits the original's prompt.
+        rows = [row(1000, 'PromptReceived', 'turn-orig', source='user', text='write me a long essay'),
+                row(1100, 'AssistantDelta', 'turn-orig', text='x' * 50),
+                row(2000, 'TurnReplayed', 'turn-orig', by_turn_id='turn-retry'),
+                row(2100, 'AssistantDelta', 'turn-retry', text='y' * 300)]
+        r = run(rows, '--prompt-contains', 'long essay')
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, 'turn-retry'), r.stderr)
+        r = run(rows, '--after-ms', '1500')
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, 'turn-retry'), r.stderr)
+
     def test_too_few_characters_times_out_with_exit_1(self):
         r = run(LEDGER, '--after-ms', '500', '--min-chars', '301')
         self.assertEqual(r.returncode, 1)

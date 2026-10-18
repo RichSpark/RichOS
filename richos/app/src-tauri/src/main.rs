@@ -818,21 +818,11 @@ struct AppState {
     /// read on the `create_thread` and loro paths, and `config` is held by the settings
     /// surface. Lock order everywhere is config, then entity, then spine.
     entity: Mutex<Option<EntityId>>,
-    /// THE COMPANIES THIS INSTALL KNOWS, and the file they came from.
-    ///
-    /// A SECOND COPY of what the spine holds, deliberately. `registered_entity` and
-    /// `choose_entity` have to answer "is this a company I have?" while `send_message` holds
-    /// the spine's mutex for the whole of a turn, and a settings row that froze until Rich
-    /// finished talking is a settings row nobody touches. It used to reach for a compiled-in
-    /// constant for exactly that reason; now that the registry is data, the copy has to be
-    /// kept somewhere that is not behind the turn lock.
-    ///
-    /// Both copies are written together, in `register_entity`, and nothing else writes
-    /// either. Lock order everywhere in this file is config, then registry, then entity,
-    /// then spine.
-    registry: Mutex<EntityRegistry>,
-    /// Where that file is, resolved once at boot and carried — never re-derived, for the
-    /// reason `data_dir` is carried rather than re-asked.
+    /// Where the company list's file is, resolved once at boot and carried — never
+    /// re-derived, for the reason `data_dir` is carried rather than re-asked. The list itself
+    /// has one copy, the spine's (`Spine::entity_registry`). Changes take the idle spine;
+    /// reads take `reader.snapshot()`, which the spine republishes on every change and which
+    /// takes no lock, so reading it never waits for Rich.
     registry_path: PathBuf,
     /// Whether the file was absent, read, or PRESENT AND UNREADABLE. The third is why this
     /// is carried at all: "you have not told me your companies yet" and "you told me and I
@@ -3527,7 +3517,6 @@ fn main() {
                 config: Mutex::new(config),
                 machinery_root,
                 entity: Mutex::new(boot.entity),
-                registry: Mutex::new(registry),
                 registry_path,
                 registry_source: registry_load.source,
                 // PRESENCE, not success. A `RICHOS_ENTITY` that names nothing resolves to
@@ -5560,7 +5549,7 @@ fn provision_memory(
     // list invented here, so the partitions a fresh corpus gets are exactly the entity areas
     // the rail renders — the condition `entities_with_no_lane` warns about at boot is
     // therefore satisfied on the first launch instead of after a manual pass.
-    let registry = state.registry.lock().unwrap().clone();
+    let registry = state.reader.snapshot().entity_registry().clone();
     let companies: Vec<(String, String)> = registry
         .entities()
         .iter()
@@ -5605,7 +5594,7 @@ fn provision_memory(
     // BOTH HALVES, from one resolution, exactly as the boot does it. `wire_company_memory`
     // installs the reader into the spine and hands back the writer; the writer becomes the
     // desk through the same `install_correction_desk` the boot calls.
-    let registry_now = state.registry.lock().unwrap().clone();
+    let registry_now = spine.entity_registry().clone();
     let wired = memory::wire_company_memory(&mut spine, &state.loro_provenance, &registry_now, &state.engine_dir.lock().unwrap());
     let mut status = wired.status;
 
@@ -5957,8 +5946,8 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
 #[richos_command::command]
 fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json::Value, String> {
     let selected = state.engine_dir.lock().unwrap().clone();
-    let registry = state.registry.lock().unwrap().clone();
     let mut spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
+    let registry = spine.entity_registry().clone();
     let workers:Vec<_>=state.control.lease_sessions().iter().map(|session|
         richos_core::app_workers::status(&state.data_dir.join("engine-state"),Some(session))).collect();
     let (worker_state, gap) = richos_core::work_gate::all_workers(&workers);
@@ -6055,7 +6044,8 @@ fn ready_the_front_desk_after_a_repair(app: &AppHandle, thread_id: &str) {
 /// Explicit repository access is separate from choosing a company folder.
 #[richos_command::command]
 fn repository_connections(state: State<AppState>) -> serde_json::Value {
-    let registry = state.registry.lock().unwrap();
+    let view = state.reader.snapshot();
+    let registry = view.entity_registry();
     serde_json::json!({"companies":registry.entities().iter().map(|e| serde_json::json!({
         "id":e.id, "name":e.display_name, "repositories":e.connected_repositories
     })).collect::<Vec<_>>()})
@@ -6094,13 +6084,11 @@ fn connect_repository(state: State<AppState>, entity_id: String, folder: String)
     let id = EntityId::parse(&entity_id).map_err(|e|e.to_string())?;
     let engine = state.engine_dir.lock().unwrap().clone();
     let runtime = richos_core::runtime::verify_engine(&engine).map_err(|e|e.to_string())?;
-    // Serialize registry mutations and hold the idle spine until both copies agree.
-    let mut current = state.registry.lock().unwrap();
+    // Hold the idle spine while the company list changes: its copy is the only one.
     let mut spine = state.spine.try_lock().map_err(|_| "Wait for the current turn to stop before connecting a repository.".to_string())?;
-    let (next, repository) = richos_core::repositories::connect_folder(&current, &id,
+    let (next, repository) = richos_core::repositories::connect_folder(spine.entity_registry(), &id,
         Path::new(folder.trim()), &runtime, &[&engine, &state.data_dir])?;
     next.save(&state.registry_path).map_err(|e| format!("The repository was verified but its connection could not be saved: {e}"))?;
-    *current = next.clone();
     spine.set_entity_registry(next);
     Ok(serde_json::json!({"entity_id":id,"repository":repository}))
 }
@@ -6139,10 +6127,10 @@ fn choose_entity(app: AppHandle, state: State<AppState>, entity_id: String) -> R
         return Err(ENTITY_PINNED_MESSAGE.to_string());
     }
     // AGAINST THE REGISTRY IN FORCE, not against a constant. Lock order is config, then
-    // registry, then entity, then spine — this takes and releases the registry lock before
-    // reaching for any of the others.
+    // entity, then spine — the company list is read off the spine's published snapshot, which
+    // takes no lock at all.
     let id = EntityId::parse(entity_id.trim()).map_err(|_| unknown_company_message(entity_id.trim()))?;
-    if !state.registry.lock().unwrap().contains(&id) {
+    if !state.reader.snapshot().entity_registry().contains(&id) {
         return Err(unknown_company_message(id.as_str()));
     }
 
@@ -6332,11 +6320,12 @@ fn register_entity(
     let runtime = if roots.is_empty() { None } else {
         Some(richos_core::runtime::verify_engine(&engine).map_err(|e| e.to_string())?)
     };
-    // Lock order everywhere in this file: config, then registry, then entity, then spine.
-    let mut current_registry = state.registry.lock().unwrap();
+    // Lock order everywhere in this file: config, then entity, then spine. The idle spine is
+    // held while the company list changes: its copy is the only one.
+    let mut registry_spine = state.spine.try_lock().map_err(|_| "Wait for the current turn to stop before adding a company.".to_string())?;
     let (id, mut next) = {
-        let current = &*current_registry;
-        let id = entity_id_from_name(&name, &current)?;
+        let current = registry_spine.entity_registry();
+        let id = entity_id_from_name(&name, current)?;
         let mut next = current.clone();
         next.register(Entity::try_new(id.as_str(), &name, roots.clone()).map_err(|e| {
             // These are the same refusals `register` makes, in the voice of the surface.
@@ -6360,7 +6349,6 @@ fn register_entity(
         (id, next)
     };
 
-    let mut registry_spine = state.spine.try_lock().map_err(|_| "Wait for the current turn to stop before adding a company.".to_string())?;
     if let (Some(root), Some(runtime)) = (roots.first(), runtime.as_ref()) {
         next = richos_core::repositories::connect_folder(&next, &id, root, runtime,
             &[&engine, &state.data_dir])?.0;
@@ -6373,10 +6361,8 @@ fn register_entity(
             state.registry_path.display()
         )
     })?;
-    *current_registry = next.clone();
-    registry_spine.set_entity_registry(next.clone());
+    registry_spine.set_entity_registry(next);
     drop(registry_spine);
-    drop(current_registry);
 
     // PROPERTY 4/5: the first company he adds becomes the one in force, unless the
     // environment already decided or he has already answered. Both of those are statements
@@ -6818,6 +6804,21 @@ mod send_wait_tests {
         let caller = concat!("Location::", "caller()");
         assert_eq!(source.matches(caller).count(), 2,
             "take_the_spine and take_the_spine_or_give_up each name their own caller");
+    }
+
+    /// INVARIANT: the company list has ONE copy, the spine's (follow-up 1.11, 2026-10-18).
+    ///
+    /// `AppState` kept a second `EntityRegistry` while `send_message` held the spine for a
+    /// whole turn. Turns now run outside that lock (`spine::drive_shared_turns`), and two
+    /// copies of one list can disagree. A scrape, for the reason the door test above is one:
+    /// a second copy would compile and pass every behavioral test.
+    #[test]
+    fn the_company_list_has_one_copy() {
+        let source = include_str!("main.rs");
+        let start = source.find(concat!("struct App", "State {")).expect("AppState must exist");
+        let end = start + source[start..].find("\n}\n").expect("a body");
+        assert!(!source[start..end].contains(concat!("Mutex<Entity", "Registry>")),
+            "AppState must not keep its own copy of the company list; read the spine's");
     }
 
     /// INVARIANT: `send_message` asks for the deferred road BEFORE it takes the spine's
@@ -9524,15 +9525,9 @@ fn set_home_entity_visible(
 
 /// Parse and check an id against the registry, or refuse with the sentence the CEO reads.
 /// Shared by both setters so the two cannot drift apart on what they accept.
-///
-/// It reads `AppState::registry` and NOT the spine's copy: `send_message` holds the spine
-/// mutex for the whole of a turn, and a settings write that queued behind a running turn
-/// would be a settings row nobody touches. That was the reason it read a compiled-in
-/// constant before the registry became data; the constant is gone and the reason is not, so
-/// the copy that is not behind the turn lock is the one it reads.
 fn registered_entity(state: &State<AppState>, entity_id: &str) -> Result<EntityId, String> {
     let id = EntityId::parse(entity_id.trim()).map_err(|_| unknown_company_message(entity_id.trim()))?;
-    if !state.registry.lock().unwrap().contains(&id) {
+    if !state.reader.snapshot().entity_registry().contains(&id) {
         return Err(unknown_company_message(id.as_str()));
     }
     Ok(id)
@@ -9575,10 +9570,11 @@ fn registered_entity(state: &State<AppState>, entity_id: &str) -> Result<EntityI
 ///
 /// # It does not take the spine's lock
 ///
-/// `send_message` holds that mutex for the whole of a turn. The corpus is reached through
-/// `AppState::loro_install` — the SAME `LoroInstall` `wire_company_memory` built the reader
-/// and the writer from, carried rather than resolved a second time — so the home screen draws
-/// while Rich is mid-turn, exactly as the correction desk and the stop control do.
+/// The company list comes off the spine's published snapshot (`AppState::reader`), and the
+/// corpus is reached through `AppState::loro_install` — the SAME `LoroInstall`
+/// `wire_company_memory` built the reader and the writer from, carried rather than resolved a
+/// second time — so the home screen draws while Rich is mid-turn, exactly as the correction
+/// desk and the stop control do.
 ///
 /// `(async)` because it spawns one `node` per company: 6 compiles, 2.795 s wall clock,
 /// measured against the CEO's own corpus on 2026-09-06. That must never run on the IPC
@@ -9601,7 +9597,7 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
             other => format!("company memory is {other}"),
         });
     };
-    let registry = state.registry.lock().unwrap().clone();
+    let registry = state.reader.snapshot().entity_registry().clone();
 
     let census = match home_field::probe_census(install.tools(), install.root()) {
         Ok(c) => c,

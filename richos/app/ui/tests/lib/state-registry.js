@@ -3341,16 +3341,18 @@ module.exports = [
     s: "Rich is working",
     c: "INFORMATIONAL",
     why:
-      "The waiting band's headline for `rich://turn-status: working` — the ledger's own " +
-      "transition, read back out of the ledger before it is emitted (`spine.rs` " +
-      "`turn_status_event`). A statement about a turn, with nothing in it for him to do.",
+      "The waiting band's headline for `rich://turn-status: working` once something has come " +
+      "back from Rich — the ledger's own transition, read back out of the ledger before it is " +
+      "emitted (`spine.rs` `turn_status_event`). A statement about a turn, with nothing in it " +
+      "for him to do.",
   },
   {
     s: "Rich is thinking",
     c: "INFORMATIONAL",
     why:
-      "The same band's headline for `queued`: the prompt is durably `received` and no lease " +
-      "has been handed it yet. Nothing to act on — the turn moves itself to `working`.",
+      "The same band's headline, in the CEO's words (2026-10-17), until anything comes back " +
+      "from Rich: `queued`, and `working` with no reply, step or worker row yet. Nothing to " +
+      "act on — the turn moves itself on.",
   },
   {
     s: "Waiting to start",

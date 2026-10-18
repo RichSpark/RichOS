@@ -78,13 +78,21 @@ pub fn read(state: &Path, entity: &str, thread: &str) -> Result<WorkSummary, Str
     let paths: Vec<_> = dated.into_iter().map(|(_, p)| p).collect();
     let mut summary = WorkSummary { omitted: paths.len().saturating_sub(100), ..Default::default() };
     let mut bytes_read = 0;
+    // Every shown record is read first, so each row can be told what the LATER rows of the
+    // same assignment did to it (`Later`). A record that cannot be read contributes nothing.
+    let rows: Vec<Result<Option<Value>, String>> = paths.iter().take(100)
+        .map(|path| read_row(path, entity, thread, &mut bytes_read)).collect();
+    let later = Later::of(rows.iter().filter_map(|row| row.as_ref().ok()?.as_ref()));
     // **One record the reader cannot read never hides the others** (Ray, test VM,
     // 2026-10-13). Each failure below is about ONE file, so it becomes one row saying that
     // file could not be read, and nothing from that file is shown: not its title, not its
     // repository, and never a guess at its state. Only a failure about the directory itself
     // (above) still refuses the whole view.
-    for path in paths.into_iter().take(100) {
-        let item = read_one(&path, &workspaces, entity, thread, &mut bytes_read).unwrap_or_else(|_reason| Some(WorkItem {
+    for row in rows {
+        let item = row.and_then(|row| match row {
+            Some(row) => describe(&row, &later, &workspaces, &mut bytes_read).map(Some),
+            None => Ok(None),
+        }).unwrap_or_else(|_reason| Some(WorkItem {
             title: "Work whose details couldn't be read".into(),
             repository: "unknown repository".into(),
             role: "unknown role".into(),
@@ -132,7 +140,7 @@ fn retired_execution(workspaces: &Path, row: &Value, bytes_read: &mut u64) -> Re
 /// dispatched" card under Under the hood). No worker ran and nothing was done, so there is
 /// nothing of it to show. Which records those are is the engine's own `never_dispatched`
 /// (`engine/mega-lander/app.py`): `blocked`, with no `tool_use_id` and no `agent_id`.
-fn read_one(path: &Path, workspaces: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Result<Option<WorkItem>, String> {
+fn read_row(path: &Path, entity: &str, thread: &str, bytes_read: &mut u64) -> Result<Option<Value>, String> {
     let size = std::fs::symlink_metadata(path).map_err(|_| "A saved work record could not be read.")?;
     if !size.is_file() || size.len() > 1024 * 1024 || *bytes_read + size.len() > 16 * 1024 * 1024 {
         return Err("A saved work record is too large or redirected.".into());
@@ -147,6 +155,91 @@ fn read_one(path: &Path, workspaces: &Path, entity: &str, thread: &str, bytes_re
     if row["status"] == "blocked" && !dispatched("tool_use_id") && !dispatched("agent_id") {
         return Ok(None);
     }
+    Ok(Some(row))
+}
+
+/// **What later rows of the same assignment did to an earlier one** (Ray, nightly 65 run U
+/// from 62, 2026-10-18). The month-end guide was written, fixed after a review, corrected
+/// again and pushed; Under the hood still said of the first two steps "It still needs a review
+/// before it's added to your project." and of the superseded review "A reviewer asked for
+/// changes." A row says what is true NOW, and that depends on the rows after it.
+///
+/// Every link here is one the engine wrote itself, never a guess from titles or times:
+/// - `continuation.worker_id` on a worker names the worker it continues. The engine starts
+///   that worker at the earlier one's saved commit and lands only a commit the integration
+///   branch then contains (`engine/mega-lander/app.py`, `prepare` and `integrate`), so every
+///   worker up a landed worker's continuation chain is in the project. This is the same walk
+///   the engine makes to clean those workspaces up after a land (`ancestors` in `integrate`),
+///   with the same bounds: one assignment, one repository, at most 50 links, no cycle.
+/// - `review_target.worker_id` on a reviewer names the worker whose commit it reviewed.
+///
+/// Only the rows this view shows are read, so a row is never described by a record that is
+/// not on screen beside it.
+#[derive(Default)]
+struct Later {
+    /// Workers with a verified integration of their own.
+    landed: std::collections::HashSet<String>,
+    /// Workers whose commit went into the project with a later, continuing worker's land.
+    landed_with_later: std::collections::HashSet<String>,
+    /// Workers that a later worker continues.
+    continued: std::collections::HashSet<String>,
+    /// Every worker shown, by the job and repository it worked on (`request.obligation_id`,
+    /// `request.repo`): the other attempts at the same work.
+    attempts: std::collections::HashMap<(String, String), Vec<String>>,
+}
+
+impl Later {
+    /// **Second review of `0e974e68b`, P3 (follow-up 7 after nightly 65)**: "This attempt ended
+    /// without a result" was shown the same way whether or not another attempt replaced it or
+    /// the work was done. The engine records no "replaces" link between a retired attempt and a
+    /// fresh one (nightly 65's retry started with no `continue_of`), so what a row can say is
+    /// what the other attempts at the same job and repository did: one of them landed, or one
+    /// is shown here, or there is none.
+    fn other_attempts(&self, row: &Value) -> (bool, bool) {
+        let key = (row["request"]["obligation_id"].as_str().unwrap_or("").to_string(),
+                   row["request"]["repo"].as_str().unwrap_or("").to_string());
+        let me = row["id"].as_str();
+        let others: Vec<&String> = self.attempts.get(&key).into_iter().flatten().filter(|id| Some(id.as_str()) != me).collect();
+        (others.iter().any(|id| self.landed.contains(*id) || self.landed_with_later.contains(*id)), !others.is_empty())
+    }
+}
+
+impl Later {
+    fn of<'a>(rows: impl Iterator<Item = &'a Value>) -> Later {
+        let rows: Vec<&Value> = rows.collect();
+        let by_id = |id: &str| rows.iter().copied().find(|row| row["id"].as_str() == Some(id));
+        let worker = |row: &Value| row["request"]["role"].as_str() == Some("worker");
+        let mut later = Later::default();
+        for row in rows.iter().copied().filter(|row| worker(row)) {
+            let Some(id) = row["id"].as_str() else { continue };
+            if let (Some(job), Some(repo)) = (row["request"]["obligation_id"].as_str(), row["request"]["repo"].as_str()) {
+                later.attempts.entry((job.to_string(), repo.to_string())).or_default().push(id.to_string());
+            }
+            if let Some(previous) = row["continuation"]["worker_id"].as_str() {
+                later.continued.insert(previous.to_string());
+            }
+            if row["integration"]["verified"] != true {
+                continue;
+            }
+            later.landed.insert(id.to_string());
+            let mut seen = std::collections::HashSet::from([id.to_string()]);
+            let mut step = row;
+            while let Some(previous) = step["continuation"]["worker_id"].as_str() {
+                let Some(earlier) = by_id(previous) else { break };
+                let same = ["obligation_id", "repo", "role"].iter().all(|key| earlier["request"][key] == row["request"][key]);
+                if !same || seen.contains(previous) || seen.len() >= 50 {
+                    break;
+                }
+                seen.insert(previous.to_string());
+                later.landed_with_later.insert(previous.to_string());
+                step = earlier;
+            }
+        }
+        later
+    }
+}
+
+fn describe(row: &Value, later: &Later, workspaces: &Path, bytes_read: &mut u64) -> Result<WorkItem, String> {
     let field = |key: &str| -> Result<String, String> {
         row["request"][key].as_str().filter(|s| !s.is_empty() && s.len() <= 4096)
             .map(str::to_owned).ok_or_else(|| "A saved work record is incomplete.".into())
@@ -154,6 +247,8 @@ fn read_one(path: &Path, workspaces: &Path, entity: &str, thread: &str, bytes_re
     // A consult (plan §3, slice 3) has no repository and nothing to integrate: its record
     // is the teammate's answer, handed back to the back end.
     let consult = row["request"]["role"].as_str() == Some("consult");
+    let id = row["id"].as_str();
+    let verdict = row["review_observation"]["report"]["verdict"].as_str();
     //
     // **EVERY SENTENCE BELOW IS FOR A BUSINESS OWNER** (hunt 57, finding 11, 2026-10-15): the
     // Under the hood panel said "consult · no repository", "It changed no repository.",
@@ -175,8 +270,37 @@ fn read_one(path: &Path, workspaces: &Path, entity: &str, thread: &str, bytes_re
         } else {
             ("cleanup-pending", "This part was checked and added to your project. Some tidying up is still left.")
         }
-    } else if retired_execution(workspaces, &row, bytes_read)? {
-        ("retired", "This attempt ended without a result. Any later attempts are shown separately.")
+    } else if !consult && id.is_some_and(|id| later.landed_with_later.contains(id)) {
+        // Its commit is in the project, carried there by the later step that continued it.
+        ("integrated-later", "Done. This part was added to your project together with a later step.")
+    } else if !consult && id.is_some_and(|id| later.continued.contains(id)) {
+        // The engine continues only settled work (`run-ended` or `interrupted`), so this step
+        // has ended and a later one starts from where it stopped.
+        ("continued", "This step ended. A later step carries on from where it stopped.")
+    } else if retired_execution(workspaces, row, bytes_read)? {
+        match later.other_attempts(row) {
+            (true, _) => ("retired-other-added", "This attempt ended without a result. Another attempt did this work, and it was added to your project."),
+            (false, true) => ("retired-other-shown", "This attempt ended without a result. Another attempt at this is shown separately."),
+            (false, false) => ("retired", "This attempt ended without a result."),
+        }
+    } else if row["status"] == "run-ended" && row["review_observation"]["valid"] == true
+        && matches!(verdict, Some("passed" | "changes-requested"))
+    {
+        // A review is about one worker's commit. What happened to that commit since is what
+        // the row has to say, or a review a later one replaced reads as the current state.
+        let target = row["review_target"]["worker_id"].as_str();
+        let reviewed = |set: &std::collections::HashSet<String>| target.is_some_and(|t| set.contains(t));
+        let passed = verdict == Some("passed");
+        match (passed, reviewed(&later.landed), reviewed(&later.landed_with_later), reviewed(&later.continued)) {
+            (true, true, _, _) => ("review-passed-added", "A reviewer approved it, and it was added to your project."),
+            (false, true, _, _) => ("review-changes-added", "A reviewer asked for changes. It has since been added to your project."),
+            (true, _, true, _) => ("review-passed-later-added", "A reviewer approved this version. A later version was added to your project."),
+            (false, _, true, _) => ("review-changes-later-added", "A reviewer asked for changes. A later version was added to your project."),
+            (true, _, _, true) => ("review-passed-continued", "A reviewer approved this version. A later version is shown separately."),
+            (false, _, _, true) => ("review-changes-continued", "A reviewer asked for changes. A later version is shown separately."),
+            (true, ..) => ("review-passed", "A reviewer approved it. Adding it to your project is a separate step."),
+            (false, ..) => ("changes-requested", "A reviewer asked for changes. Nothing has been added to your project yet."),
+        }
     } else {
         // Every status `engine/mega-lander/app.py` writes into a receipt: `preparing`,
         // `prepared`, `dispatching`, `running`, `blocked`, `unknown`, `interrupted`,
@@ -192,10 +316,6 @@ fn read_one(path: &Path, workspaces: &Path, entity: &str, thread: &str, bytes_re
             // one that never reached a worker. So it ended, and it never started.
             Some("blocked") => ("ended-without-starting", "Ended without starting. It was stopped before a teammate began, so nothing was done."),
             Some("interrupted") => ("interrupted", "Interrupted. The work so far is kept. Ask Rich to carry on with it."),
-            Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "changes-requested" =>
-                ("changes-requested", "A reviewer asked for changes. Nothing has been added to your project yet."),
-            Some("run-ended") if row["review_observation"]["valid"] == true && row["review_observation"]["report"]["verdict"] == "passed" =>
-                ("review-passed", "A reviewer approved it. Adding it to your project is a separate step."),
             Some("run-ended") => ("run-ended", "The teammate finished. It still needs a review before it's added to your project."),
             // The engine writes `integrated` only together with `integration.verified`, which
             // is read above. Without that evidence the land is not claimed.
@@ -204,7 +324,7 @@ fn read_one(path: &Path, workspaces: &Path, entity: &str, thread: &str, bytes_re
         }
     };
     let repository = if consult { "no repository".to_string() } else { field("repo")? };
-    Ok(Some(WorkItem { title: field("title")?, repository, role: field("role")?, state: state.into(), detail: detail.into() }))
+    Ok(WorkItem { title: field("title")?, repository, role: field("role")?, state: state.into(), detail: detail.into() })
 }
 
 // =======================================================================================
@@ -484,6 +604,45 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// **Follow-up 7 after nightly 65** (second review of `0e974e68b`, P3): the "This attempt
+    /// ended without a result" row read the same whether or not another attempt replaced it or
+    /// the work was done. In Ray's run U the first guide attempt was retired, a fresh retry
+    /// (no `continue_of`) was written, corrected and landed, and the retired row still pointed
+    /// at "any later attempts". It now says what the other attempts at the same job did; an
+    /// attempt at ANOTHER job, landed or not, says nothing about this one.
+    #[test] fn a_retired_attempt_says_what_the_other_attempts_at_its_job_did() {
+        let root = temp();
+        let mut old = receipt("old", "job", "worker");
+        old["status"] = "interrupted".into();
+        old["workspace_ref"] = "session--old".into();
+        old["agent_id"] = "agent-old".into();
+        let receipts = write(&root, &[old]);
+        let workspace = root.join("workspaces").join(receipts.file_name().unwrap());
+        std::fs::create_dir_all(workspace.join("done")).unwrap();
+        std::fs::write(workspace.join("done/session--old.json"), serde_json::to_vec(&serde_json::json!(
+            {"key":"session--old","agent_id":"agent-old","end":null,"disposition":{"kind":"landed"}})).unwrap()).unwrap();
+        let old_row = |root: &std::path::Path| read(root, "depot", "thread").unwrap().items.into_iter()
+            .find(|i| i.state.starts_with("retired")).map(|i| (i.state, i.detail)).expect("the retired attempt is not shown");
+        assert_eq!(old_row(&root), ("retired".into(), "This attempt ended without a result.".into()));
+        // Another job's land is not this job's.
+        let mut elsewhere = receipt("elsewhere", "another-job", "worker");
+        elsewhere["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
+        write(&root, &[elsewhere]);
+        assert_eq!(old_row(&root).0, "retired", "another job's land was read as this one's");
+        // A fresh attempt at the same job, still finishing.
+        let mut retry = receipt("retry", "job", "worker");
+        write(&root, &[retry.clone()]);
+        assert_eq!(old_row(&root).0, "retired-other-shown");
+        // That attempt landed: the retired row says the work was done.
+        retry["status"] = "integrated".into();
+        retry["integration"] = serde_json::json!({"verified":true,"cleanup_pending":[]});
+        write(&root, &[retry]);
+        let (state, detail) = old_row(&root);
+        assert_eq!(state, "retired-other-added");
+        assert!(!detail.contains("later attempts are shown"), "{detail}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test] fn a_verified_land_does_not_speculate_about_the_whole_job() {
         let root = temp();
         let mut worker = receipt("replacement", "job", "worker");
@@ -689,6 +848,10 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
             row["integration"] = serde_json::json!({"verified":true,"cleanup_pending":cleanup});
             rows.push(row);
         }
+        // Steps and reviews that later steps replaced, once landed and once still going.
+        for landed in [true, false] {
+            rows.extend(guide_job(if landed { "g" } else { "h" }, landed));
+        }
         for (n, answered) in [true, false].into_iter().enumerate() {
             let mut row = receipt(&format!("c{n}"), "o", "consult");
             row["request"]["repo"] = Value::Null;
@@ -708,6 +871,72 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
             }
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The shape of the month-end guide job in Ray's nightly 65 run U from 62
+    /// (`evidence/nightly-65-walk/u62/keepU.tgz`, receipts 75276bf9, 50a61580, f11a61bc,
+    /// 5f43a5e4, 7e0885b6, f0b33645): written, approved with notes, fixed, sent back by the
+    /// re-review, corrected, approved and landed. Each later worker continues the one before it
+    /// and each reviewer names the worker whose commit it reviewed, as the engine writes them.
+    /// With `landed` false the last step has finished but nothing has landed yet.
+    fn guide_job(prefix: &str, landed: bool) -> Vec<Value> {
+        let id = |n: &str| format!("{prefix}-{n}");
+        let worker = |n: &str, continues: Option<&str>| {
+            let mut row = receipt(&id(n), "guide", "worker");
+            row["request"]["title"] = format!("step {n}").into();
+            if let Some(previous) = continues {
+                row["continuation"] = serde_json::json!({"worker_id": id(previous), "commit": "c0ffee"});
+            }
+            row
+        };
+        let reviewer = |n: &str, of: &str, verdict: &str| {
+            let mut row = receipt(&id(n), "guide", "reviewer");
+            row["request"]["title"] = format!("review {n}").into();
+            row["review_target"] = serde_json::json!({"worker_id": id(of), "commit": "c0ffee"});
+            row["review_observation"] = serde_json::json!({"valid": true, "report": {"verdict": verdict}});
+            row
+        };
+        let mut last = worker("w3", Some("w2"));
+        if landed {
+            last["status"] = "integrated".into();
+            last["integration"] = serde_json::json!({"verified": true, "reviewer_id": id("r3"), "cleanup_pending": []});
+        }
+        vec![worker("w1", None), reviewer("r1", "w1", "passed"), worker("w2", Some("w1")),
+             reviewer("r2", "w2", "changes-requested"), last, reviewer("r3", "w3", "passed")]
+    }
+
+    /// **Item 3 of the follow-ups after nightly 65** (Ray, run U from 62): after the guide was
+    /// landed and pushed, its first two steps still said "It still needs a review before it's
+    /// added to your project." and the re-review that the correction replaced still said "A
+    /// reviewer asked for changes." A row says what is true now.
+    #[test] fn a_landed_jobs_earlier_steps_and_replaced_reviews_say_what_is_true_now() {
+        let root = temp();
+        write(&root, &guide_job("g", true));
+        let items = read(&root, "depot", "thread").unwrap().items;
+        let says = |title: &str| items.iter().find(|i| i.title == title).map(|i| (i.state.clone(), i.detail.clone())).unwrap();
+        for step in ["step w1", "step w2"] {
+            assert_eq!(says(step).0, "integrated-later", "{step}: {:?}", says(step).1);
+            assert!(!says(step).1.contains("still needs a review"), "{step} still asks for a review after the land");
+        }
+        assert_eq!(says("step w3").0, "integrated");
+        assert_eq!(says("review r1").0, "review-passed-later-added");
+        assert_eq!(says("review r2").0, "review-changes-later-added");
+        assert!(!says("review r2").1.contains("Nothing has been added"), "the replaced review reads as the current state");
+        assert_eq!(says("review r3"), ("review-passed-added".into(), "A reviewer approved it, and it was added to your project.".into()));
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // Before the land: the earlier steps were carried on and their reviews were replaced,
+        // and nothing claims a land that has not happened.
+        let going = temp();
+        write(&going, &guide_job("h", false));
+        let items = read(&going, "depot", "thread").unwrap().items;
+        let state = |title: &str| items.iter().find(|i| i.title == title).map(|i| i.state.clone()).unwrap();
+        assert_eq!((state("step w1"), state("step w2"), state("step w3")), ("continued".into(), "continued".into(), "run-ended".into()));
+        assert_eq!((state("review r1"), state("review r2"), state("review r3")),
+            ("review-passed-continued".into(), "review-changes-continued".into(), "review-passed".into()));
+        assert!(items.iter().all(|i| !i.state.starts_with("integrated") && !i.state.ends_with("-added")),
+            "a land was claimed before one happened: {items:?}");
+        std::fs::remove_dir_all(&going).unwrap();
     }
 
     /// The saved-work view shows the most recently written receipts, not the first hundred
