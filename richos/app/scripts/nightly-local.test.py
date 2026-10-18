@@ -1314,6 +1314,79 @@ while True: time.sleep(.02)
         with self.assertRaisesRegex(ValueError, "no pass recorded"):
             r.accept_passed_gates(self.RESUMED, "build")
 
+    NIGHTLY = "v1.2.0-nightly.20260928.28"
+
+    def stable_runner(self, source_commit=None):
+        """A Runner whose `stable_plan` resolves NIGHTLY to `source_commit` (SOURCE by default)."""
+        r = self.runner()
+        r.summary = Mock()
+        r.stable_plan = Mock(return_value=(self.root / "stable-plan.json", {
+            "tag": "v1.2.0", "source_commit": source_commit or self.SOURCE}))
+        return r
+
+    def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
+        # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
+        # HAD BEEN ALREADY PREVIOUSLY DONE FOR THAT NIGHTLY VERSION?" Nightly 65's run passed
+        # every gate on the very commit `stable` rebuilds; the rebuild runs none of them again.
+        for grade in ("build", "release"):
+            with self.subTest(grade):
+                self.recorded_run(grade=grade)
+                r = self.stable_runner()
+                with contextlib.redirect_stdout(io.StringIO()):
+                    r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+                r.gates.assert_not_called()
+                self.assertEqual(r.checkout.call_args_list[-1].args, (self.SOURCE,))
+                r.preflight.assert_called_once()
+                r.runtime.assert_called_once()
+                build = r.command.call_args_list[-1]
+                self.assertEqual(build.args[2], "run")
+                self.assertIs(build.kwargs["release_build"], True)
+                self.assertEqual(sorted(r.skipped), sorted(m.GATE_NAMES))
+        # A later run replacing the suite record is no reason to refuse: stable never reads it.
+        self.recorded_run(grade="build", suites_run="20261019T000000Z-00000000")
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        r.gates.assert_not_called()
+
+    def test_stable_refuses_the_gates_of_another_source_a_failed_run_or_changed_dependencies(self):
+        # Another commit's pass proves nothing about this one: refused after the plan names
+        # the nightly's commit, before any checkout of it, gate or build.
+        self.recorded_run(grade="build")
+        r = self.stable_runner(source_commit="1" * 40)
+        with self.assertRaisesRegex(ValueError, "prove nothing"), contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        self.assertEqual(r.checkout.call_args_list, [unittest.mock.call()])   # main only
+        r.gates.assert_not_called()
+        r.command.assert_not_called()
+        # A run whose gates did not all pass, or that never said what it built, is refused
+        # before anything runs at all.
+        cases = {
+            "a gate failed": dict(grade="build", verdicts={"gates/lint-tauri": "FAILED"},
+                                  reached_recheck=False),
+            "a gate never recorded a pass": dict(grade="build", verdicts={"gates/privacy-sweep": None}),
+            "a gate was skipped": dict(grade="build", verdicts={m.LAND_PROVEN_GATE: "SKIPPED"}),
+            "it never said which build it was": dict(grade=None),
+        }
+        for name, shape in cases.items():
+            with self.subTest(name):
+                self.recorded_run(**shape)
+                r = self.stable_runner()
+                with self.assertRaises(ValueError), contextlib.redirect_stdout(io.StringIO()):
+                    r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+                r.checkout.assert_not_called()
+                r.gates.assert_not_called()
+                r.command.assert_not_called()
+        # Changed dependencies: refused, never a silent rerun of every gate.
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        r.installed_dependencies_digest = Mock(return_value="e" * 64)
+        with self.assertRaisesRegex(ValueError, "differ"), contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        r.checkout.assert_not_called()
+        r.gates.assert_not_called()
+        r.command.assert_not_called()
+
     DENIED = ("git@github.com: Permission denied (publickey).\n"
               "fatal: Could not read from remote repository.\n")
 
@@ -1368,7 +1441,7 @@ while True: time.sleep(.02)
             with self.subTest(**kwargs), self.assertRaisesRegex(ValueError, "alone"):
                 r.perform("build", gates_passed_in=self.RESUMED, **kwargs)
         with self.assertRaisesRegex(ValueError, "alone"):
-            r.perform("stable", gates_passed_in=self.RESUMED, from_nightly="v1")
+            r.perform("stable", gates_passed_in=self.RESUMED, from_nightly="v1", no_host_screen=True)
         script = Path(m.__file__)
         for argv in (["publish", "--run", "x", "--gates-passed-in", self.RESUMED],
                      ["release", "--gates-passed-in", self.RESUMED, "--gates-at-once", "2"]):
@@ -2932,6 +3005,17 @@ class GatesAtOnceTests(unittest.TestCase):
         code, err = self.main_refusal("release", *self.NUMBERS, "--host-screen")
         self.assertEqual(code, 2)
         self.assertIn("--host-screen is for `build` alone", err)
+
+    def test_stable_takes_gates_passed_in_and_then_names_no_gate_count(self):
+        stable = ["stable", "--from-nightly", "v1.2.0-nightly.20261018.65",
+                  "--gates-passed-in", "20261018T154953Z-c752908c"]
+        _, args = self.main_with(*stable)
+        self.assertEqual(args[0], "stable")
+        self.assertEqual(args[-1], "20261018T154953Z-c752908c")
+        self.assertIs(args[self.NO_HOST_SCREEN_ARG], False)
+        code, err = self.main_refusal(*stable, *self.NUMBERS)
+        self.assertEqual(code, 2)
+        self.assertIn("which runs no gate", err)
 
     def test_the_guest_and_vm_settings_the_shell_gives_reach_the_vm_boot_proof(self):
         kwargs, _ = self.main_with("build", *self.NUMBERS, environ={

@@ -2806,17 +2806,27 @@ class Runner:
             # build it was (run 20261014T135757Z-c7955224: GitHub refused one `ls-remote`). Its
             # gates are what a finished build's are, so a candidate may reuse them.
             grade = "build"
+        if command == "stable" and grade is None:
+            # `stable` rebuilds the commit of a published nightly, so the run it reuses is
+            # the build or release that made that nightly, and such a run says which it was.
+            raise ValueError(f"run {run_id} never said which build it was, so it is not the run "
+                             "that built a published nightly; `stable` reuses only that run's gates")
         if grade is None or (command == "release" and grade != "release"):
             raise ValueError(f"run {run_id} was a {grade or 'unknown'} run; `release` reuses only the "
                              "gates of a release or stable run, which never skip a suite over "
                              "unchanged inputs")
-        try:
-            suites = json.loads((self.state / SUITE_RESULTS).read_text())
-        except (OSError, ValueError):
-            suites = None
-        if not isinstance(suites, dict) or suites.get("commit") != source or suites.get("run_id") != run_id:
-            raise ValueError(f"{self.state / SUITE_RESULTS} is no longer run {run_id}'s record of its "
-                             "script suites, and the candidate's provenance needs it. Run the gates again.")
+        suites = None
+        if command != "stable":
+            # A candidate's provenance carries the suite record; `stable` builds from the
+            # promoted nightly's plan and never reads it, so a later run replacing it is no
+            # reason to refuse a promotion.
+            try:
+                suites = json.loads((self.state / SUITE_RESULTS).read_text())
+            except (OSError, ValueError):
+                suites = None
+            if not isinstance(suites, dict) or suites.get("commit") != source or suites.get("run_id") != run_id:
+                raise ValueError(f"{self.state / SUITE_RESULTS} is no longer run {run_id}'s record of its "
+                                 "script suites, and the candidate's provenance needs it. Run the gates again.")
         recorded = [m[1] for m in filter(None, map(self.DEPENDENCIES_LINE.fullmatch, outer))]
         now = self.installed_dependencies_digest()
         if not recorded:
@@ -2836,11 +2846,15 @@ class Runner:
                 from_nightly=None, dry_run=False, gates_passed_in=None):
         passed = None
         if gates_passed_in:
-            if command not in ("build", "release") or checks_done_at_land or no_host_screen:
-                raise ValueError(f"{PASSED_GATES_FLAG} is for build or release, alone: it runs no gate, "
-                                 "so nothing else about the gates means anything beside it")
+            if command not in ("build", "release", "stable") or checks_done_at_land or no_host_screen:
+                raise ValueError(f"{PASSED_GATES_FLAG} is for build, release or stable, alone: it runs "
+                                 "no gate, so nothing else about the gates means anything beside it")
             # Before any network call: the whole question is answered by files on this Mac.
             passed = self.accept_passed_gates(gates_passed_in, command)
+            if passed["stale_dependencies"] and command == "stable":
+                # Never a silent rerun of the gates behind a promotion.
+                raise ValueError(f"{PASSED_GATES_FLAG} {gates_passed_in}: {passed['stale_dependencies']}, "
+                                 "so its gates do not prove this build. Nothing was built.")
             if passed["stale_dependencies"]:
                 # The earlier pass certified another dependency state: run the gates.
                 self.announce(f"Gates run: {passed['stale_dependencies']}, so run {gates_passed_in}'s "
@@ -2877,6 +2891,10 @@ class Runner:
                 self.checkout()
             with self.phase("stable-plan"):
                 plan_path, info = self.stable_plan(from_nightly)
+            if passed and passed["source_commit"] != info["source_commit"]:
+                raise ValueError(f"run {passed['run_id']} ran its gates on {passed['source_commit'][:12]}, "
+                                 f"but {from_nightly} was built from {info['source_commit'][:12]}; "
+                                 "its gates prove nothing about this stable build. Nothing was built.")
             if dry_run:
                 print(f"DRY RUN -- {from_nightly} would be rebuilt as a stable release.",
                       flush=True)
@@ -2889,10 +2907,15 @@ class Runner:
                 self.preflight()
             with self.phase("runtime-verify"):
                 self.runtime(runtime)
-            # EVERY GATE, EVERY TIME. `release` does the same and for the same reason:
-            # skipping is for candidates nobody can install, and this is the command that
-            # makes a build the one every stable user receives.
-            self.gates(no_host_screen=no_host_screen)
+            # EVERY GATE ON THIS COMMIT. Without --gates-passed-in every gate runs here. With
+            # it, the run that built the promoted nightly already passed every gate on this
+            # same source commit against the dependencies installed now (both checked above),
+            # so nothing already proven is redone (CEO, 2026-10-19).
+            if passed:
+                for name in GATE_NAMES:
+                    self.skip(name, f"passed in run {passed['run_id']} on {passed['source_commit']}")
+            else:
+                self.gates(no_host_screen=no_host_screen)
             out = self.state / "releases" / info["tag"]
             self.announce(f"Building and publishing {info['tag']} from "
                           f"{info['source_commit'][:12]}...")
@@ -3183,8 +3206,8 @@ def main():
     if args.gui_proof and args.command != "publish":
         parser.error("--gui-proof is evidence `publish` demands; it means nothing to any other "
                      "command")
-    if args.gates_passed_in and args.command not in ("build", "release"):
-        parser.error(f"{PASSED_GATES_FLAG} names a run whose gates a build or release reuses; it means "
+    if args.gates_passed_in and args.command not in ("build", "release", "stable"):
+        parser.error(f"{PASSED_GATES_FLAG} names a run whose gates a build, release or stable reuses; it means "
                      f"nothing to {args.command}")
     # NO SILENT DEFAULT (CEO, 2026-09-25: "how do I know that you won't fuck this up next
     # time?"). A command that runs the gates names how many run at once, or it does not start.
