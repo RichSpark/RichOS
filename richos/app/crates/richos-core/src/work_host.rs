@@ -38,8 +38,15 @@ struct Inner {
     peer_input: Option<Arc<dyn TurnCancel>>,
     overload: crate::upstream::RetryBudget,
     /// The same schedule for the overloads Claude Code reports for Stu's WORKERS (follow-up 11),
-    /// counted apart from his own so a turn of his that succeeds does not restart theirs.
-    workers: crate::upstream::RetryBudget,
+    /// counted apart from his own so a turn of his that succeeds does not restart theirs, and
+    /// one per worker: an overload hits every running worker at once, so a shared count would
+    /// let one worker's answer restart another's waits and several workers use up each other's
+    /// retries. Keyed by [`Inner::worker_names`], so a restarted worker keeps its place.
+    workers: std::collections::HashMap<String, crate::upstream::RetryBudget>,
+    /// The description each worker run was started under, by the tool call that started it
+    /// (Claude Code's `task_started`). A worker Stu restarts under the same description is the
+    /// same worker; a run with no description seen is known by its tool call alone.
+    worker_names: std::collections::HashMap<String, String>,
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
@@ -199,21 +206,34 @@ impl WorkHost {
     /// 2026-10-07: 1, 2, 5, 10, 20, 40 and 80 minutes). A worker belongs to Claude Code, which
     /// cannot be set to those waits, so this host waits, on the same budget, clock and Stop
     /// checks as Stu's own retry above, and then tells Stu, who restarts the worker (stu.md).
-    /// Any other answer a worker gets from the API starts the schedule again.
+    /// Any other answer a worker gets from the API starts the schedule again. Each worker has
+    /// its own schedule ([`Inner::workers`]).
     fn observe_worker(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
         frame: &serde_json::Value) {
+        if frame["type"] == "system" && frame["subtype"] == "task_started" && frame["task_type"] == "local_agent" {
+            if let (Some(call), Some(name)) = (frame["tool_use_id"].as_str(), frame["description"].as_str().filter(|name| !name.is_empty())) {
+                backend.inner.lock().unwrap().worker_names.insert(call.to_string(), name.to_string());
+            }
+            return;
+        }
         if frame["type"] != "assistant" { return; }
+        let call = frame["parent_tool_use_id"].as_str().unwrap_or_default();
+        let mut inner = backend.inner.lock().unwrap();
+        let name = inner.worker_names.get(call).cloned();
+        let worker = name.clone().unwrap_or_else(|| call.to_string());
         let Some(failure) = crate::native::overloaded_api_error_message(frame) else {
-            if frame.get("error").is_none_or(serde_json::Value::is_null) { backend.inner.lock().unwrap().workers.succeeded(); }
+            if frame.get("error").is_none_or(serde_json::Value::is_null) { inner.workers.remove(&worker); }
             return;
         };
         let (wait, spent) = {
-            let mut inner = backend.inner.lock().unwrap();
-            let granted = inner.workers.charge(crate::upstream::UpstreamFault::Overloaded);
-            (granted.then(|| inner.workers.wait_before_retry()).flatten(), inner.workers.retries_spent())
+            let budget = inner.workers.entry(worker).or_default();
+            let granted = budget.charge(crate::upstream::UpstreamFault::Overloaded);
+            (granted.then(|| budget.wait_before_retry()).flatten(), budget.retries_spent())
         };
+        drop(inner);
+        let task = name.map(serde_json::Value::from).or_else(|| frame.get("task_description").cloned());
         let fact = serde_json::json!({"event":"worker_overload",
-            "worker":{"tool_use_id":frame["parent_tool_use_id"],"agent_id":frame.get("agent_id"),"task":frame.get("task_description")},
+            "worker":{"tool_use_id":frame["parent_tool_use_id"],"agent_id":frame.get("agent_id"),"task":task},
             "error":failure.raw,"retry":wait.map(|_|spent),"retries_left":if wait.is_some() {crate::upstream::MAX_OVERLOAD_RETRIES-spent} else {0},
             "waited_minutes":wait.map(|wait|wait.as_secs()/60)});
         // Off the native reader: the wait, and the delivery to the same session, happen here.
@@ -692,6 +712,11 @@ impl WorkHost {
             let Some(host) = host.upgrade() else { return };
             for frame in records {
                 if frame.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null()) {
+                    if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
+                    continue;
+                }
+                // A worker's start names it, so its overload schedule survives Stu restarting it.
+                if frame["type"] == "system" && frame["subtype"] == "task_started" {
                     if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
                     continue;
                 }
@@ -1689,6 +1714,51 @@ mod tests {
         let mut waited = clock.0.lock().unwrap().clone();
         waited.sort();
         assert_eq!(waited, crate::upstream::OVERLOAD_RETRY_WAITS, "the quoted line was taken for an overload, or a wait was skipped");
+        backend.inner.lock().unwrap().closing = true;
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// Review rv-20261018T200657Z-585c24df-f9d6, finding 1: an overload hits every running
+    /// worker at once, so each worker has its own schedule. One worker's ordinary answer does
+    /// not restart another's waits, eight workers overloaded together each wait the first
+    /// minute, and a worker Stu restarts under the same description keeps its place.
+    #[test]
+    fn each_worker_keeps_its_own_overload_schedule_across_a_restart() {
+        let h = harness(0);
+        let clock = Arc::new(RecordedRetryClock::default());
+        h.host.set_retry_clock(clock.clone());
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("stu-session".into());
+        let observe = |frame: serde_json::Value| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
+        let overloaded = |call: &str| serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"overloaded",
+            "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}});
+        let answered = |call: &str| serde_json::json!({"type":"assistant","parent_tool_use_id":call,
+            "message":{"content":[{"type":"text","text":"Reading the files again."}]}});
+        // Claude Code 2.1.302's task_started names the tool call that started the run and its description.
+        let started = |call: &str| serde_json::json!({"type":"system","subtype":"task_started","task_id":format!("agent-{call}"),
+            "tool_use_id":call,"description":"Fix the login page","task_type":"local_agent"});
+        observe(overloaded("A"));
+        observe(answered("B"));
+        observe(overloaded("A"));
+        for n in 1..=8 { observe(overloaded(&format!("W{n}"))); }
+        observe(started("first-run"));
+        observe(overloaded("first-run"));
+        observe(started("restarted-run"));
+        observe(overloaded("restarted-run"));
+        let notices = || h.work_prompts.lock().unwrap().iter().filter_map(|prompt| {
+            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
+            (message["from"] == "overload-retry").then(|| serde_json::from_str::<serde_json::Value>(message["text"].as_str()?).ok()).flatten()
+        }).collect::<Vec<_>>();
+        until("Stu was not told about each worker's overload", || notices().len() == 12);
+        let mut told: Vec<_> = notices().iter().map(|fact| (fact["worker"]["tool_use_id"].as_str().unwrap_or("").to_string(),
+            fact["retry"].as_u64(), fact["waited_minutes"].as_u64())).collect();
+        told.sort();
+        let mut expected = vec![("A".to_string(), Some(1), Some(1)), ("A".into(), Some(2), Some(2)),
+            ("first-run".into(), Some(1), Some(1)), ("restarted-run".into(), Some(2), Some(2))];
+        expected.extend((1..=8).map(|n| (format!("W{n}"), Some(1), Some(1))));
+        expected.sort();
+        assert_eq!(told, expected, "the workers' schedules were not each their own");
         backend.inner.lock().unwrap().closing = true;
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
