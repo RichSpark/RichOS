@@ -2827,7 +2827,8 @@ impl Spine {
     pub fn queue_question_answer(&mut self,delivery:&crate::questions::Delivery)->Result<String,SpineError> {
         let binding=self.fence_binding(&delivery.thread_id)?;
         if binding.entity_id().as_str()!=delivery.entity_id {return Err(SpineError::Steering("Question scope mismatch".into()));}
-        let turn_id=self.ledger.record_question_answer(&binding,delivery)?;
+        // The same acceptance order a typed message takes, so a Stop he presses after it covers it.
+        let turn_id=self.ledger.record_question_answer(&binding,delivery,self.control.take_input_order())?;
         if self.ledger.turn(&turn_id).is_some_and(|t|t.state==crate::ledger::TurnState::Received)
             && !self.pending_delivery.iter().any(|pending|pending.turn_id==turn_id) {
             if delivery.set_id.is_none(){self.emit_live(self.ceo_message_event(&binding,&turn_id));}
