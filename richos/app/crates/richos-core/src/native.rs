@@ -8552,4 +8552,82 @@ while True:
     assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// Review rv-20261018T200657Z-585c24df-f9d6, finding 3: Claude Code starts turns of Stu's own
+/// (a helper's hand-back, a task notification) with no input of ours parked. One that carries
+/// Claude Code's overload message and still ends `end_turn` waits the schedule's first minute,
+/// and then Stu is woken through his own inbox to carry on; Rich gets no failure. Prose that
+/// only quotes the line, on a frame Claude Code did not mark as an API error, is Stu's reply.
+#[test]
+fn an_automatic_stu_turn_reported_only_as_an_overload_message_waits_and_wakes_him_again() {
+    for marked in [true, false] {
+        let root = std::env::temp_dir().join(format!("richos-automatic-overload-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("provider");
+        std::fs::write(&script, r#"#!/usr/bin/python3
+import json,pathlib,sys
+marked=json.loads(pathlib.Path('config.json').read_text())['marked']
+def send(v):print(json.dumps(v),flush=True)
+def read():
+ line=sys.stdin.readline()
+ if not line:raise SystemExit(0)
+ v=json.loads(line)
+ if v.get('type')=='user':
+  with pathlib.Path('received.jsonl').open('a') as f:f.write(json.dumps(v)+'\n')
+ return v
+def phase(v,s):send({'type':'command_lifecycle','command_uuid':v['uuid'],'state':s})
+init=read();send({'type':'control_response','response':{'subtype':'success','request_id':init['request_id'],'response':{}}})
+first=read();phase(first,'started')
+send({'type':'result','stop_reason':'end_turn'})
+# Claude Code's own turn after a helper hands back: no input of ours is parked.
+said={'type':'assistant','parent_tool_use_id':None,'message':{'content':[{'type':'text','text':'API Error: 529 Overloaded.'}]}}
+if marked:said['error']='overloaded'
+send(said)
+send({'type':'result','subtype':'success','is_error':False,'stop_reason':'end_turn'})
+while True:
+ v=read()
+ if v.get('type')=='user':
+  phase(v,'started');send({'type':'result','stop_reason':'end_turn'})
+"#).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("config.json"), json!({"marked":marked}).to_string()).unwrap();
+        let skills = crate::skills::ensure_rendered(&root.join("skills"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/app")).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
+        let thread = ledger.create_thread("Automatic overload", &EntityId::parse("company").unwrap()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let scope = StatusToolScope {version:1,state_root:root.join("state"),entity_id:"company".into(),thread_id:thread};
+        let status = root.join("rich.json");
+        crate::session_tools::bind(&status,&scope,"rich-session","rich",None).unwrap();
+        let (began,_started) = channel();
+        let (done,completed) = channel();
+        let (seen,observed) = channel();
+        let host = WorkHost::new(&scope.state_root,Box::new(Factory {
+            root:root.clone(),skills,started:began,completed:done,scheduled:Arc::new(AtomicU64::new(0)),observed:Some(seen),
+        }),Arc::new(SilentNotifier));
+        let clock = Arc::new(NoWait::default());
+        host.set_retry_clock(clock.clone());
+        crate::session_tools::send(&status,&scope,json!({"text":"Original input"})).unwrap();
+        host.wake_messages(&binding);
+        // load-bound: hang guard only; each native outcome, not elapsed time, is the verdict.
+        completed.recv_timeout(Duration::from_secs(10)).expect("the original input did not complete");
+        // load-bound: hang guard only; the automatic turn's result reaching the host is the verdict.
+        observed.recv_timeout(Duration::from_secs(10)).expect("the automatic turn's result was not observed");
+        if marked {
+            // load-bound: hang guard only; the woken turn's own completion is the verdict.
+            completed.recv_timeout(Duration::from_secs(10)).expect("Stu was not woken after his automatic turn's overload");
+        }
+        assert!(host.wait_for_completed(1,Duration::from_secs(10)));
+        host.shutdown();
+        let told: Vec<Value> = worker_notices(&std::fs::read_to_string(root.join("received.jsonl")).unwrap())
+            .into_iter().filter(|fact| fact["event"] == "turn_overload").collect();
+        assert_eq!(told.iter().map(|fact| (fact["waited_minutes"].clone(), fact["error"].clone())).collect::<Vec<_>>(),
+            if marked {vec![(json!(1), json!("API Error: 529 Overloaded."))]} else {vec![]}, "marked={marked}: {told:?}");
+        assert_eq!(*clock.0.lock().unwrap(), if marked {vec![crate::upstream::OVERLOAD_RETRY_WAITS[0]]} else {vec![]});
+        assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(), "marked={marked}: a recovered overload reached Rich as a failure");
+        assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none(), "marked={marked}: Stu's wake-up stayed unfinished");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
 }

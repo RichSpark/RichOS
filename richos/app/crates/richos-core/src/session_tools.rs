@@ -149,9 +149,10 @@ pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<()
     append(scope,"rich",&Message {handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})
 }
 
-/// One of Stu's workers met an overload: its wait is over, or its retries are used up
-/// (`work_host.rs` observe_worker). A host observation, like the stall watch's.
-pub(crate) fn observe_worker_overload(scope:&StatusToolScope,facts:&Value)->Result<(),String> {
+/// One of Stu's workers, or an automatic turn of his own, met an overload: its wait is over, or
+/// its retries are used up (`work_host.rs` observe_worker, observe_automatic_turn). A host
+/// observation, like the stall watch's.
+pub(crate) fn observe_overload_retry(scope:&StatusToolScope,facts:&Value)->Result<(),String> {
     append(scope,"stu",&Message {handoff:false,from:"overload-retry".into(),text:facts.to_string(),instruction:None,work:None})
 }
 

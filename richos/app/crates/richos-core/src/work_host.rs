@@ -238,22 +238,48 @@ impl WorkHost {
             "waited_minutes":wait.map(|wait|wait.as_secs()/60),
             // The end is the overload granted no retry, never the seventh, whose retry still runs.
             "retries_used_up":wait.is_none()});
-        // Off the native reader: the wait, and the delivery to the same session, happen here.
+        if let Err(error) = self.tell_stu_after(backend, binding, session, wait, fact) {
+            eprintln!("[richos] a worker's overload wait could not start: {error}");
+        }
+    }
+
+    /// Off the native reader: wait `wait` on the retry clock unless the session ends first, then
+    /// put `fact` in Stu's own inbox and wake him on the same session.
+    fn tell_stu_after(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
+        wait: Option<std::time::Duration>, fact: serde_json::Value) -> std::io::Result<()> {
         let (host, receiving, binding, session) = (Arc::downgrade(self), Arc::downgrade(backend), binding.clone(), session.to_string());
-        let told = std::thread::Builder::new().name("richos-worker-overload".into()).spawn(move || {
+        std::thread::Builder::new().name("richos-overload-retry".into()).spawn(move || {
             let (Some(host), Some(backend)) = (host.upgrade(), receiving.upgrade()) else { return };
             if let Some(wait) = wait {
                 let ended = || { let inner = backend.inner.lock().unwrap(); inner.closing || inner.lease_session.as_deref() != Some(session.as_str()) };
                 let clock = host.retry_clock.lock().unwrap().clone();
                 if !clock.wait(wait, &ended) { return; }
             }
-            if let Err(error) = crate::session_tools::observe_worker_overload(&host.message_scope(&binding), &fact) {
-                eprintln!("[richos] a worker's overload could not be passed to Stu: {error}");
+            if let Err(error) = crate::session_tools::observe_overload_retry(&host.message_scope(&binding), &fact) {
+                eprintln!("[richos] an overload could not be passed to Stu: {error}");
                 return;
             }
             host.wake_messages(&binding);
-        });
-        if let Err(error) = told { eprintln!("[richos] a worker's overload wait could not start: {error}"); }
+        }).map(|_| ())
+    }
+
+    /// **An automatic turn of Stu's that Claude Code gave up on with an overload waits the same
+    /// schedule as his other turns** (review rv-20261018T200657Z-585c24df-f9d6, finding 3).
+    /// Claude Code starts these turns itself, after a helper hands back or a task notification,
+    /// so no input of ours can be sent again: after the wait RichOS wakes Stu through his own
+    /// inbox to carry on. When the schedule grants no retry, the failure reaches Rich as before.
+    fn observe_automatic_turn(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
+        result: &Result<String, String>) {
+        if let Some(wait) = self.overload_wait(backend, binding, result) {
+            let fact = serde_json::json!({"event":"turn_overload","error":result.as_ref().err(),"waited_minutes":wait.as_secs()/60});
+            match self.tell_stu_after(backend, binding, session, Some(wait), fact) {
+                Ok(()) => return,
+                Err(error) => eprintln!("[richos] an automatic turn's overload wait could not start: {error}"),
+            }
+        }
+        if let Err(error) = self.observe_turn_result(binding, None, None, session, result) {
+            eprintln!("[richos] native turn status: {error}");
+        }
     }
 
     fn project_output(&self, binding: &ThreadBinding, session: &str) {
@@ -710,6 +736,10 @@ impl WorkHost {
         let receiving = Arc::downgrade(backend);
         let binding = binding.clone();
         let session = lease.session_id().to_string();
+        // An automatic turn (a helper's hand-back, a task notification) reaches this sink whole,
+        // no input of ours being parked: its last message says whether Claude Code gave up on an
+        // overload before the turn's ordinary end_turn, as a live input's sink reads it.
+        let said: Mutex<Option<String>> = Mutex::new(None);
         lease.set_between_turn_sink(Arc::new(move |records| {
             let Some(host) = host.upgrade() else { return };
             for frame in records {
@@ -722,10 +752,22 @@ impl WorkHost {
                     if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
                     continue;
                 }
+                if frame["type"] == "assistant" {
+                    *said.lock().unwrap() = crate::native::overloaded_api_error_message(&frame).map(|failure| failure.raw);
+                    continue;
+                }
                 if frame["type"] != "result" { continue }
-                let result = crate::native::native_result(&frame).map_err(|error| error.to_string());
-                if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
-                    eprintln!("[richos] native turn status: {error}");
+                let overload = said.lock().unwrap().take();
+                let result = crate::native::native_result(&frame).map_err(|error| error.to_string())
+                    .and_then(|reason| match overload {
+                        Some(raw) if reason == "end_turn" => Err(raw),
+                        _ => Ok(reason),
+                    });
+                match receiving.upgrade() {
+                    Some(backend) => host.observe_automatic_turn(&backend, &binding, &session, &result),
+                    None => if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
+                        eprintln!("[richos] native turn status: {error}");
+                    },
                 }
             }
         }));
