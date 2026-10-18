@@ -156,6 +156,45 @@ class Base(unittest.TestCase):
 
 class Collector(Base):
 
+    def test_run_finalizer_waits_past_the_collectors_lock_window(self):
+        device = self.device('rios-ui-mine')
+        owner = self.proc()
+        with patch.dict(os.environ, {'RICHOS_TEST_DEVICE_RUN_ID': 'mine'}):
+            T.register('ios-simulator', device, owner.pid)
+        owner.kill(); owner.wait()
+        holder = self.hold_registry_lock()
+        now = [time.time()]
+        real_sleep = time.sleep
+
+        def release_on_wait(seconds):
+            if holder.poll() is None:
+                now[0] += 2
+                holder.kill(); holder.wait()
+            else:
+                real_sleep(seconds)
+
+        # A real process owns the lock. Expire the collector's window before the
+        # first poll. Admission advances the controlled clock past the work budget;
+        # the finalizer must still have that budget when it acquires the lock.
+        with patch.object(T, 'REGISTRY_LOCK_SECONDS', 0), \
+                patch.object(T.time, 'time', side_effect=lambda: now[0]), \
+                patch.object(T.time, 'sleep', side_effect=release_on_wait):
+            errors = T.cleanup_run_simulators('mine', budget=1)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.devices(), [])
+        self.assertEqual(self.rows(), {})
+
+    def test_run_finalizer_still_fails_when_its_lock_budget_is_exhausted(self):
+        device = self.device('rios-ui-locked')
+        self.hold_registry_lock()
+        with patch.object(T, 'REGISTRY_LOCK_SECONDS', 0), \
+                patch.object(T, 'CLI_REGISTRY_LOCK_SECONDS', 0), \
+                patch.object(T, 'ios_devices', side_effect=AssertionError('lock not held')):
+            errors = T.cleanup_run_simulators('mine')
+        self.assertTrue(errors)
+        self.assertIn('collector:incomplete', self.rows())
+        self.assertEqual({d['udid'] for d in self.devices()}, {device})
+
     def test_run_finalizer_preserves_a_shared_foreign_live_owner_without_failure(self):
         device = self.device('rios-ui-shared')
         owner = self.proc()
