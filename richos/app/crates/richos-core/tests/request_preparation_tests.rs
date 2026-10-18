@@ -213,7 +213,12 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
     worker.join().unwrap().unwrap();
     let finished=shared.lock().unwrap();
     assert!(control.active_turn().is_none());
-    assert_eq!(*completed.0.lock().unwrap(),vec![(first_thread.clone(),first.clone()),(first_thread.clone(),second.clone())],
+    let mut actual=completed.0.lock().unwrap().clone();
+    let mut expected=vec![(first_thread.clone(),first.clone()),(first_thread.clone(),second.clone())];
+    // Independent reply owners can commit their receipts in either order.
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual,expected,
         "the ordinary completion observer must see both the original reply and its queued reply");
     for (id,thread,text) in [(first,first_thread.clone(),"first request"),(second,first_thread.clone(),"second request")] {
         let turn=finished.ledger().turn(&id).unwrap();
@@ -225,6 +230,14 @@ fn a_shared_reply_leaves_navigation_and_durable_input_available_without_changing
 
 #[test]
 fn another_conversation_completes_before_the_first_reply_is_released() {
+    struct Completed(mpsc::Sender<String>);
+    impl richos_core::stream::TurnObserver for Completed {
+        fn on_event(&self,event:&richos_core::stream::StreamEvent) {
+            if let richos_core::stream::StreamEvent::TurnCompleted {thread_id,..}=event {
+                self.0.send(thread_id.clone()).unwrap();
+            }
+        }
+    }
     let (mut spine, control, _, _) = fixture();
     let a=spine.active_thread().unwrap().to_string();
     let b=spine.create_thread("Independent conversation", &EntityId::parse("femcboost").unwrap()).unwrap();
@@ -233,6 +246,8 @@ fn another_conversation_completes_before_the_first_reply_is_released() {
     spine.attach_lease(Box::new(GatedReply {entered, release:gated, first:true,finished:Arc::new((Mutex::new(false),std::sync::Condvar::new()))}));
     spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["B answered"])));
     spine.detach_conversation_io();
+    let (completed, completion)=mpsc::channel();
+    spine.set_observer(Box::new(Completed(completed)));
     let first=spine.submit_prompt_to(&a,"A is busy",Source::Text).unwrap();
     let shared=Arc::new(Mutex::new(spine));
     let driving=shared.clone();
@@ -245,11 +260,14 @@ fn another_conversation_completes_before_the_first_reply_is_released() {
         state.ledger().thread_turns(&b).unwrap().iter().find(|t| t.source==Source::Text).map(|t|t.id.clone())
     };
     richos_core::spine::drive_shared_turns(&shared).unwrap();
+    // Either driver may own B. Wait for B's actual completion while A remains held.
+    let completed=completion.recv_timeout(Duration::from_secs(30));
     let b_finished=second.as_ref().is_some_and(|id|shared.lock().unwrap().ledger().turn(id).unwrap().state==TurnState::Completed);
     let a_still_working=shared.lock().unwrap().ledger().turn(&first).unwrap().state==TurnState::InFlight;
     // Release the owned reply before assertions, including on the expected red.
     release.send(()).unwrap();
     worker.join().unwrap().unwrap();
+    assert_eq!(completed.unwrap(),b,"hang guard: independent conversation never completed");
     assert!(b_finished,"conversation B waited for A's reply instead of running its own session");
     assert!(a_still_working,"B's completion changed A's lifecycle");
     let state=shared.lock().unwrap();
