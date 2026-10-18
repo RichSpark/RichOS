@@ -13,6 +13,8 @@
 #
 #   second-review.sh --name <teammate> [--repo <path>] [--trigger handover|long-job|quiet|manual]
 #   second-review.sh --repo <path> (--tip <sha> | --branch <b>) --base <sha> --words-file <file> [...]
+#   second-review.sh --follow-up <review-id>#<n> --why '<who rules, and why>'   (the lead only)
+#   second-review.sh --reopen <review-id>#<n>                                    (undoes --follow-up)
 #
 # Exit: 0 passed, 1 changes-requested, 2 no verdict (the row says why),
 # 64 refused before any reviewer ran (bad arguments, no original words).

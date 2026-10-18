@@ -30,7 +30,10 @@ WHAT IT READS (plan §2.2): RECORDS, NEVER ANYONE'S SUMMARY
     `git archive` into this run's scratch folder (allocated by the wrapper with
     the engine's scratch.sh), with the commit log and the diff beside it. The
     author cannot move what is reviewed, and the reviewer never works in the
-    author's workspace.
+    author's workspace. A recheck judges only what changed since the newest
+    earlier review of a commit this tip was built on (review_since): `git log
+    -p --remerge-diff base..tip ^since`, so main's commits merged in between
+    stay out (follow-up 12, D2, with Sage's F2 and F3). The whole tree is there.
   * WHAT THE AUTHOR CLAIMS: its commit messages, its last report (the last
     text it wrote in its transcript) and any --claims-file.
   * EARLIER REVIEWS OF THE SAME WORK, from the ledger below, so a recheck
@@ -113,16 +116,29 @@ THE VERDICT (plan §2.2, §2.4)
     a verdict about another commit is refused.
   * The verdict follows the findings (ruling §116): every finding, and every
     earlier finding still open, says whether it blocks. It blocks only when a
-    regular user of the app would notice it in normal use AND it would matter
-    to them (CEO 2026-10-10: "why is there a need for a change if it 'doesn't
-    matter'?"). How text renders somewhere other than the app, a missing or
-    weak test, wording and anything only a developer would see never block.
+    user could hit it in normal use AND it would matter to them (CEO
+    2026-10-10: "why is there a need for a change if it 'doesn't matter'?")
+    AND either it breaks what this work promises, or this work broke something
+    that worked before; a hole that was already there, outside what this work
+    promises, is a follow-up however real. That is §116's sort ("a user could
+    hit it in normal use and it breaks what the work promises"), which
+    282530b2b had widened to any hole in the app; follow-up 12 (D3) restored
+    it in the words of Sage's check (F4). How text renders somewhere other
+    than the app, a missing or weak test, wording and anything only a
+    developer would see never block.
     The author's claims are what the reviewer checks against, never extra
     promises. Changes-requested exactly when at least one blocks; passed
     otherwise, whatever the reviewer wrote. Priority is information only.
   * A passed review files each finding it did not block on, new or still open
     from earlier, in <state>/review-follow-ups.jsonl, once; the stdout line
     says how many and where.
+  * THE LEAD'S RULING (§116: "Rich applies the same test"; richos-hq
+    docs/plans/2026-10-18-review-rule-redesign.md D1, with Sage's check):
+    `--follow-up <review-id>#<n> --why '...'` files a blocking finding as a
+    follow-up in <state>/review-deferrals.jsonl and review-follow-ups.jsonl.
+    The gate (operator_fences.review_of) then stops holding the work for it at
+    every later commit, and each later reviewer of a commit built on that
+    review is told it is already filed. `--reopen` undoes it.
   * One row per review in <state>/reviews.jsonl and the full text, answer and
     fixtures in <state>/reviews/<id>/ (<state> is ~/.claude/state, outside
     every repository and session, like the escalation ledger). One line on
@@ -243,6 +259,10 @@ def ledger_path():
 
 def follow_ups_path():
     return os.path.join(state_root(), "review-follow-ups.jsonl")
+
+
+def deferrals_path():
+    return os.path.join(state_root(), "review-deferrals.jsonl")
 
 
 def read_ledger():
@@ -469,6 +489,105 @@ def earlier_findings(work_key, tip, repo, repo_id=""):
     return list(fences.open_review_findings(rows).items())
 
 
+def is_ancestor(repo, older, newer):
+    return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", older, newer],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def review_since(w, repo_id):
+    """(since, its review id): the tip of the newest handover or by-hand verdict in
+    THIS repository whose tip is one of this work's own commits before this one
+    (in base..tip, so never a commit main already holds), or ("", "") when there
+    is none. A recheck reviews only what changed after it (follow-up 12, D2): the
+    range before it already has a verdict, and its open findings carry by id.
+    Chosen by commit ancestry, never by work key (Sage's check, F2)."""
+    p = subprocess.run(["git", "-C", w.repo, "rev-list", "%s..%s" % (w.base, w.tip)],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    own = set(p.stdout.decode("ascii", "replace").split()) if p.returncode == 0 else set()
+    own.discard(w.tip)
+    since = None
+    for r in read_ledger():
+        if r.get("verdict") and r.get("trigger") in ("handover", "manual") and r.get("tip") in own \
+                and same_repo(r, w.repo, repo_id):
+            since = r
+    return (since["tip"], since["id"]) if since else ("", "")
+
+
+def filed_findings(repo, repo_id, tip):
+    """(the findings the lander filed as follow-ups whose review was of `tip` or a
+    commit it was built on, in THIS repository: [(id, ruling)], every filed id of
+    this repository). Linked by commit ancestry, never by work key: a by-hand
+    review's key is its base, so it never shares one with the handovers of the
+    same branch (Sage's check of the review rule redesign, F2)."""
+    import operator_fences as fences
+    mine = {fid: d for fid, d in fences.read_deferrals(ledger_path()).items() if same_repo(d, repo, repo_id)}
+    return ([(fid, d) for fid, d in mine.items() if d.get("tip") and is_ancestor(repo, d["tip"], tip)],
+            set(mine))
+
+
+def follow_up(finding, why, reopen=False):
+    """`--follow-up <review-id>#<n> --why '...'`: the lander rules a blocking
+    finding a follow-up (ruling §116: "Rich applies the same test to any finding
+    the reviewer has not sorted"), and the gate stops holding work for it at
+    every later commit of the same work. `--reopen` undoes it; the later row wins.
+
+    Only the lead rules: refused for a teammate's call (agent_hold.py exports
+    RICHOS_AGENT_OWNER into every subagent's shell) and for a caller with no
+    Claude session in its ancestry (Codex), so an author never files its own
+    finding. No land lease is needed or taken: a ruling writes no checkout."""
+    import operator_fences as fences
+    owner = (os.environ.get("RICHOS_AGENT_OWNER") or "").strip()
+    who = fences.claude_session()
+    if owner:
+        raise Refused("only the lead rules on a finding; this is a teammate's call (RICHOS_AGENT_OWNER=%s)" % owner)
+    if not who or "error" in who:
+        raise Refused("only the lead rules on a finding; no Claude session runs this command%s"
+                      % (" (%s)" % who["error"] if who else ""))
+    rid, sep, n = finding.partition("#")
+    if not sep or not rid or not n:
+        raise Refused("name the finding as <review-id>#<n>, as the refusal lists it")
+    rows = read_ledger()
+    at = next((i for i, r in enumerate(rows) if r.get("id") == rid and r.get("verdict")), None)
+    if at is None:
+        raise Refused("no review %s with a verdict in %s" % (rid, ledger_path()))
+    source = rows[at]
+    current = fences.read_deferrals(ledger_path()).get(finding)
+    if reopen:
+        if not current:
+            raise Refused("%s is not filed as a follow-up; there is nothing to reopen" % finding)
+        f = current
+    else:
+        if not (why or "").strip():
+            raise Refused("--why is required: who rules, and why")
+        if current:
+            raise Refused("%s is already filed as a follow-up (%s: %s)" % (finding, current.get("at"), current.get("why")))
+        repo_id = source.get("repo_id") or ""
+        # The finding as the reviews of its repository left it: the review that raised it and every
+        # later one that was asked about it (open_review_findings, the gate's own reading).
+        history = [r for r in rows[at:] if same_repo(r, source.get("repo"), repo_id) and r.get("verdict")
+                   and (r.get("id") == rid or any(e.get("id") == finding for e in
+                                                   fences.review_record(r).get("earlier_findings_in") or []))]
+        f = fences.open_review_findings(history).get(finding)
+        if not f or f.get("blocks") is False:
+            raise Refused("%s is not an open blocking finding in %s, so it holds no land" % (finding, ledger_path()))
+    row = {"at": iso(), "action": "reopen" if reopen else "follow-up", "finding": finding, "review": rid,
+           "repo": source.get("repo"), "repo_id": source.get("repo_id") or repo_identity(source.get("repo")),
+           "branch": source.get("branch") or "", "tip": source.get("tip"), "work": source.get("work") or "",
+           "priority": f.get("priority"), "title": f.get("title"), "files": f.get("files") or [],
+           "why": why or "", "who": who}
+    append_row(row, deferrals_path())
+    if reopen:
+        print("SECOND-REVIEW %s reopened: it blocks again. Record: %s" % (finding, deferrals_path()))
+        return 0
+    append_row({"at": row["at"], "review": rid, "finding": finding, "repo": row["repo"], "branch": row["branch"],
+                "tip": row["tip"], "work": row["work"], "priority": f.get("priority"), "title": f.get("title"),
+                "files": f.get("files") or [], "evidence": f.get("evidence"), "fixture": f.get("fixture") or "",
+                "filed_by": "lander", "why": why}, follow_ups_path())
+    print("SECOND-REVIEW %s filed as a follow-up: it no longer holds a land. Records: %s, %s"
+          % (finding, deferrals_path(), follow_ups_path()))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # the export and the input
 # ---------------------------------------------------------------------------
@@ -506,12 +625,27 @@ def build_input(w, a, export, earlier):
     os.makedirs(review)
     os.makedirs(os.path.join(export, "fixtures"))
     os.makedirs(os.path.join(export, "build"))
-    log = git(w.repo, "log", "--format=commit %H%nAuthor: %an%nDate: %cI%n%n%B%n", "%s..%s" % (w.base, w.tip))
+    since = getattr(w, "since", "")
+    span = ["%s..%s" % (w.base, w.tip)] + (["^" + since] if since else [])
+    if since:
+        # Only the work's own commits after the last review, each with its patch; a merge from main
+        # shows only how its conflicts were resolved (Sage's check, F3). Falls back to the whole
+        # base..tip when Git cannot make it.
+        with open(os.path.join(review, "diff.patch"), "wb") as f:
+            made = subprocess.run(["git", "-C", w.repo, "log", "-p", "--remerge-diff", "--no-color", "--no-ext-diff",
+                                   "--format=commit %H%n%n%B"] + span, stdout=f, stderr=subprocess.DEVNULL)
+        if made.returncode != 0:
+            w.since = w.since_review = since = ""
+            span = span[:1]
+    if not since:
+        with open(os.path.join(review, "diff.patch"), "wb") as f:
+            subprocess.run(["git", "-C", w.repo, "diff", "--no-color", "--no-ext-diff", w.base, w.tip], stdout=f,
+                           check=False)
+    log = git(w.repo, "log", "--format=commit %H%nAuthor: %an%nDate: %cI%n%n%B%n", *span)
     with open(os.path.join(review, "commits.txt"), "w", encoding="utf-8") as f:
         f.write(log)
-    with open(os.path.join(review, "diff.patch"), "wb") as f:
-        subprocess.run(["git", "-C", w.repo, "diff", "--no-color", "--no-ext-diff", w.base, w.tip], stdout=f, check=False)
-    stat = git(w.repo, "diff", "--stat", "--no-color", w.base, w.tip)
+    stat = (git(w.repo, "log", "--format=%h %s", "--stat", "--remerge-diff", "--no-color", *span) if since
+            else git(w.repo, "diff", "--stat", "--no-color", w.base, w.tip))
     tree = os.path.join(export, "tree")
     mid_job = a.trigger in ("long-job", "quiet")
     duty = ""
@@ -528,13 +662,22 @@ def build_input(w, a, export, earlier):
     parts.append("## The commits you review\n\nTIP: %s\nBASE: %s\nREPOSITORY: %s\nBRANCH: %s\nAUTHOR: %s (model: %s)\n"
                  "TRIGGER: %s\n\n" % (w.tip, w.base, w.repo, w.branch or "(none)", w.author,
                                       w.author_model or "unknown", a.trigger))
+    if since:
+        parts.append("SINCE: %s. Review %s already covered BASE..SINCE, and its open findings are listed below. "
+                     "You judge only what changed after it: the commits in `review/commits.txt` and "
+                     "`review/diff.patch`. The whole tree at the tip is there to read.\n\n"
+                     % (since, getattr(w, "since_review", "") or "(unknown)"))
+        what = ("every commit of this work after SINCE, with its full message",
+                "each of those commits with its patch (a merge from main shows only its conflict resolution)")
+    else:
+        what = ("every commit from base to tip, with its full message", "the full diff from base to tip")
     parts.append("Your working folder is `%s`. In it:\n"
                  "- `tree/`: the whole repository exactly as it is at the tip (a `git archive`; there is no `.git`).\n"
-                 "- `review/commits.txt`: every commit from base to tip, with its full message.\n"
-                 "- `review/diff.patch`: the full diff from base to tip.\n"
+                 "- `review/commits.txt`: %s.\n"
+                 "- `review/diff.patch`: %s.\n"
                  "- `fixtures/`: where any fixture you write goes. Its small files are kept with your verdict.\n"
                  "- `build/`: where build output goes (for example `CARGO_TARGET_DIR=build/target`). Not kept.\n\n"
-                 "The change at a glance:\n\n```\n%s```\n\n" % (export, stat))
+                 "The change at a glance:\n\n```\n%s```\n\n" % (export, what[0], what[1], stat))
     parts.append("## The original words\n\nThese are the request the work answers, verbatim. Judge the work "
                  "against them, not against the author's account of them.\n\n")
     for label, text in w.words:
@@ -543,7 +686,8 @@ def build_input(w, a, export, earlier):
     msgs = log if len(log) <= MAX_INLINE_LOG_BYTES else (
         log[:MAX_INLINE_LOG_BYTES] + "\n[... cut at %d characters; every commit is in review/commits.txt]\n"
         % MAX_INLINE_LOG_BYTES)
-    parts.append(fence("its commit messages, base to tip (also review/commits.txt)", msgs) + "\n")
+    parts.append(fence("its commit messages, %s (also review/commits.txt)" % ("after SINCE" if since else "base to tip"),
+                       msgs) + "\n")
     for label, text in w.claims:
         parts.append(fence(label, text) + "\n")
     if not w.claims:
@@ -562,6 +706,14 @@ def build_input(w, a, export, earlier):
         parts.append("\n")
     else:
         parts.append("None. `earlier_findings` is an empty list.\n\n")
+    filed = getattr(w, "filed", None) or []
+    if filed:
+        parts.append("## Already filed as follow-ups\n\nThe lander ruled these follow-ups. Do not report them "
+                     "again, in `findings` or in `earlier_findings`.\n\n")
+        for fid, d in filed:
+            parts.append("- `%s` (P%s) %s (%s). Why: %s\n" % (fid, d.get("priority"), d.get("title"),
+                                                            ", ".join(d.get("files") or []), d.get("why")))
+        parts.append("\n")
     parts.append("## The repository's own rules (as they are at the tip)\n\n")
     for rel in RULE_FILES:
         text = read_rule(tree, rel)
@@ -576,8 +728,10 @@ def build_input(w, a, export, earlier):
         "- Find what the author's tests miss. Where you can, prove a finding with a small fixture: write it "
         "under `fixtures/`, run it, and quote its output in the finding's evidence. Name the fixture's path in "
         "`fixture` (empty when there is none).\n"
-        "- Every finding says whether it blocks (`blocks`). It blocks only when a regular user of the app would "
-        "notice it in normal use AND it would matter to them. These never block, however they sound: how text "
+        "- Every finding says whether it blocks (`blocks`). It blocks only when a user could hit it in normal use "
+        "AND it would matter to them AND either it breaks what this work promises (the original words above), or "
+        "this work broke something that worked before; a hole that was already there, outside what this work "
+        "promises, is a follow-up however real. These never block, however they sound: how text "
         "renders somewhere other than the app (GitHub, a terminal, a Markdown viewer), a missing or weak test, "
         "wording, and anything only a developer would see; nor anything that needs an unusual setup, a "
         "hand-edited file, a deliberately hostile local process or a rare race. A finding that does not block "
@@ -585,9 +739,8 @@ def build_input(w, a, export, earlier):
         "- The author's claims above are what you check the work against, never extra promises: a difference "
         "from a claim blocks only when it passes the same test.\n"
         "- The verdict follows the findings: changes-requested exactly when at least one finding, or one "
-        "earlier finding still open, blocks; passed otherwise, whatever `verdict` says. This replaces the "
-        "duty's rule on an unresolved verification requirement: a claim you could not see hold is a finding, "
-        "judged by the same test.\n"
+        "earlier finding still open, blocks; passed otherwise, whatever `verdict` says. A claim you could not "
+        "see hold is a finding, judged by the same test.\n"
         "- `priority` is information only (1 the most serious, 3 a note); it never decides the verdict. Give a "
         "title, file:line locations (paths as in `tree/`) and evidence.\n"
         "- Never edit `tree/` to change the work, never commit, never touch the author's workspace (%s). "
@@ -1188,7 +1341,10 @@ def _review_owned(a, w):
     recovery_record = getattr(w, "recovery_record", None)
     say = lambda s: (sys.stderr.write(s + "\n"), sys.stderr.flush())
     repo_id = repo_identity(w.repo)
-    earlier = earlier_findings(w.work_key, w.tip, w.repo, repo_id)
+    filed, filed_ids = filed_findings(w.repo, repo_id, w.tip)
+    earlier = [(fid, f) for fid, f in earlier_findings(w.work_key, w.tip, w.repo, repo_id) if fid not in filed_ids]
+    w.filed = filed
+    w.since, w.since_review = review_since(w, repo_id)
     started_at = time.time()
     rid = "rv-%s-%s-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(started_at)), w.tip[:8], secrets.token_hex(2))
     record = os.path.join(state_root(), "reviews", rid)
@@ -1265,6 +1421,7 @@ def _review_owned(a, w):
         return finish()
     export_tree(w.repo, w.tip, os.path.join(export, "tree"))
     prompt = build_input(w, a, export, earlier)
+    row["since"], row["since_review"] = w.since, w.since_review
 
     limit = _env_seconds("SECOND_REVIEW_TIMEOUT_SECONDS", a.limit_minutes * 60.0)
     use_codex = w.author != "codex" and a.reviewer in ("auto", "codex")
@@ -1407,6 +1564,10 @@ def main(argv):
     ap.add_argument("--author-model", default="", help="the author's model, when no transcript says it")
     ap.add_argument("--work", default="", help="the key that ties rechecks of one piece of work together")
     ap.add_argument("--recheck", default="", help="the prior review id intentionally rechecked on the same source")
+    ap.add_argument("--follow-up", default="", metavar="REVIEW-ID#N",
+                    help="file a blocking finding as a follow-up (the lead's ruling); it holds no land after this")
+    ap.add_argument("--reopen", default="", metavar="REVIEW-ID#N", help="undo --follow-up: the finding blocks again")
+    ap.add_argument("--why", default="", help="with --follow-up: who rules, and why")
     ap.add_argument("--trigger", default="manual", choices=["handover", "long-job", "quiet", "manual"])
     ap.add_argument("--reviewer", default="auto", choices=["auto", "codex", "claude"])
     ap.add_argument("--claude", default="", help="the Claude CLI to review with (the app passes the one it ships)")
@@ -1419,6 +1580,10 @@ def main(argv):
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, _on_stop)
     try:
+        if a.follow_up or a.reopen:
+            if a.follow_up and a.reopen:
+                raise Refused("--follow-up and --reopen are two rulings; give one")
+            return follow_up(a.follow_up or a.reopen, a.why, reopen=bool(a.reopen))
         return review(a)
     except Refused as exc:
         sys.stderr.write("second-review: %s\n" % exc)
