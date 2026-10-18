@@ -116,10 +116,16 @@ THE VERDICT (plan §2.2, §2.4)
     a verdict about another commit is refused.
   * The verdict follows the findings (ruling §116): every finding, and every
     earlier finding still open, says whether it blocks. It blocks only when a
-    regular user of the app would notice it in normal use AND it would matter
-    to them (CEO 2026-10-10: "why is there a need for a change if it 'doesn't
-    matter'?"). How text renders somewhere other than the app, a missing or
-    weak test, wording and anything only a developer would see never block.
+    user could hit it in normal use AND it would matter to them (CEO
+    2026-10-10: "why is there a need for a change if it 'doesn't matter'?")
+    AND either it breaks what this work promises, or this work broke something
+    that worked before; a hole that was already there, outside what this work
+    promises, is a follow-up however real. That is §116's sort ("a user could
+    hit it in normal use and it breaks what the work promises"), which
+    282530b2b had widened to any hole in the app; follow-up 12 (D3) restored
+    it in the words of Sage's check (F4). How text renders somewhere other
+    than the app, a missing or weak test, wording and anything only a
+    developer would see never block.
     The author's claims are what the reviewer checks against, never extra
     promises. Changes-requested exactly when at least one blocks; passed
     otherwise, whatever the reviewer wrote. Priority is information only.
@@ -722,8 +728,10 @@ def build_input(w, a, export, earlier):
         "- Find what the author's tests miss. Where you can, prove a finding with a small fixture: write it "
         "under `fixtures/`, run it, and quote its output in the finding's evidence. Name the fixture's path in "
         "`fixture` (empty when there is none).\n"
-        "- Every finding says whether it blocks (`blocks`). It blocks only when a regular user of the app would "
-        "notice it in normal use AND it would matter to them. These never block, however they sound: how text "
+        "- Every finding says whether it blocks (`blocks`). It blocks only when a user could hit it in normal use "
+        "AND it would matter to them AND either it breaks what this work promises (the original words above), or "
+        "this work broke something that worked before; a hole that was already there, outside what this work "
+        "promises, is a follow-up however real. These never block, however they sound: how text "
         "renders somewhere other than the app (GitHub, a terminal, a Markdown viewer), a missing or weak test, "
         "wording, and anything only a developer would see; nor anything that needs an unusual setup, a "
         "hand-edited file, a deliberately hostile local process or a rare race. A finding that does not block "
@@ -731,9 +739,8 @@ def build_input(w, a, export, earlier):
         "- The author's claims above are what you check the work against, never extra promises: a difference "
         "from a claim blocks only when it passes the same test.\n"
         "- The verdict follows the findings: changes-requested exactly when at least one finding, or one "
-        "earlier finding still open, blocks; passed otherwise, whatever `verdict` says. This replaces the "
-        "duty's rule on an unresolved verification requirement: a claim you could not see hold is a finding, "
-        "judged by the same test.\n"
+        "earlier finding still open, blocks; passed otherwise, whatever `verdict` says. A claim you could not "
+        "see hold is a finding, judged by the same test.\n"
         "- `priority` is information only (1 the most serious, 3 a note); it never decides the verdict. Give a "
         "title, file:line locations (paths as in `tree/`) and evidence.\n"
         "- Never edit `tree/` to change the work, never commit, never touch the author's workspace (%s). "

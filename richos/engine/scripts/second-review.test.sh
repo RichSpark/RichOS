@@ -292,6 +292,9 @@ scratch_left() { find "$RUN_TMP/richos-scratch" -maxdepth 1 -name '*second-revie
 echo "second-review.test.sh"
 
 # --- C01 ---------------------------------------------------------------------
+# The blocking test, in the words of Sage's check of follow-up 12 (F4): a hole in this work's
+# normal use, or a regression it caused; never any hole elsewhere in the app (282530b2b).
+BLOCK_TEST="It blocks only when a user could hit it in normal use AND it would matter to them AND either it breaks what this work promises (the original words above), or this work broke something that worked before; a hole that was already there, outside what this work promises, is a follow-up however real."
 FAKE_MODE=pass run --name echo-sonnet-x1 --repo "$REPO" --trigger handover
 C="$(last_call)"
 check "C01 the command exits 0 on a passing verdict" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)" "rc=$RC out=$OUT"
@@ -307,9 +310,10 @@ has "$P" "BASE: $BASE"; check "C01 the input names the base" $? "base $BASE"
 has "$P" "COMMIT-MESSAGE-LINE"; check "C01 the input holds the author's commit message" $? ""
 has "$P" "LAST-REPORT-LINE: 12 tests green."; check "C01 the input holds the author's last report" $? ""
 has "$P" "AGENTS-RULE-LINE"; check "C01 the input holds the repository's own rules" $? ""
-has "$P" "It blocks only when a regular user of the app would notice it in normal use AND it would matter to them." \
-  && has "$P" "a deliberately hostile local process or a rare race"
-check "C01 the input gives the reviewer the blocking test" $? ""
+has "$P" "$BLOCK_TEST" && has "$P" "a deliberately hostile local process or a rare race" \
+  && has "$P" "A claim you could not see hold is a finding, judged by the same test." && ! has "$P" "This replaces the duty's rule" \
+  && has "$P" "list it in the report as a follow-up" && ! has "$P" "unresolved verification requirement"
+check "C01 the input gives the reviewer the blocking test: normal use of THIS work, or a regression it caused (follow-up 12, D3)" $? ""
 has "$P" "how text renders somewhere other than the app (GitHub, a terminal, a Markdown viewer), a missing or weak test, wording, and anything only a developer would see" \
   && has "$P" "The author's claims above are what you check the work against, never extra promises" \
   && ! has "$P" "it breaks what the work promises" && ! has "$P" "and the author's claims above)"
@@ -397,7 +401,7 @@ CARGV="$(field "$(cat "$CL/call.json")" '" ".join(r["argv"])')"
 check "C06 Codex at its usage limit: the Claude fallback reviews on Opus, and says why" $? "rc=$RC row=$ROW argv=$CARGV"
 [ "$(field "$ROW" 'r["reviewer_model"]')" = "claude-opus-5-5" ] && [ "$(field "$ROW" 'r["author_model"]')" = "sonnet" ]
 check "C06 the verdict says which model reviewed" $? "$ROW"
-has "$(cat "$CL/prompt.md")" "It blocks only when a regular user of the app would notice it in normal use AND it would matter to them."
+has "$(cat "$CL/prompt.md")" "$BLOCK_TEST"
 check "C06 the Claude fallback gets the same blocking test as Codex" $? "$CL/prompt.md"
 has "$CARGV" '"sandbox": {"enabled": true' && has "$CARGV" '"allowUnsandboxedCommands": false' \
   && has "$CARGV" "--disallowedTools Edit,Write,NotebookEdit" && has "$CARGV" "--setting-sources  "
