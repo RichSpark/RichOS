@@ -571,6 +571,21 @@ def ever_dispatched(record, canonical=None):
                 or (canonical and any(canonical.get(field) for field in SPAWN_EVIDENCE)))
 
 
+def retired_execution(record):
+    """A dispatched attempt with no result whose canonical cleanup is finished.
+
+    The active registry can carry cleanup intent before deletion succeeds. Only
+    its move to done proves retirement; a resumed lead does not restart it.
+    Verified results still belong to the final worker set.
+    """
+    if record.get("integration", {}).get("verified"):
+        return False
+    key = W.named_key(record["binding"]["session_id"], record["name"])
+    canonical = None if os.path.exists(W.agent_path(key)) else W.read_json(W.done_path(key))
+    return bool(canonical and not canonical.get("end") and ever_dispatched(record, canonical)
+                and (canonical.get("disposition") or {}).get("kind") == "landed")
+
+
 def refresh(record):
     canonical = W.load_agent(W.named_key(record["binding"]["session_id"], record["name"]))
     if canonical:
@@ -587,10 +602,12 @@ def refresh(record):
         # any other; one an older build already marked `interrupted` is put
         # back to `unknown` here, which is what it was.
         dispatched = ever_dispatched(record, canonical)
-        if not canonical.get("end") and dispatched \
-                and W.session_state(record["binding"]["session_id"])[0] == "ended":
+        retired = retired_execution(record)
+        if retired or (not canonical.get("end") and dispatched
+                       and W.session_state(record["binding"]["session_id"])[0] == "ended"):
             record["status"] = "interrupted"
-            record["interruption"] = "the owning provider process ended without an observed worker result"
+            record["interruption"] = ("canonical cleanup retired this execution without an observed worker result"
+                                      if retired else "the owning provider process ended without an observed worker result")
         elif record.get("status") == "interrupted" and not dispatched:
             record["status"] = "unknown"
             record["interruption"] = None
@@ -618,7 +635,7 @@ def project(scope, path, record):
     status = {"prepared":"created", "dispatching":"assigned", "running":"started", "blocked":"blocked", "integrated":"completed"}.get(record["status"], "unknown")
     if record["status"] == "run-ended" and record["request"]["role"] == "reviewer" and record.get("review_observation", {}).get("valid"):
         status = "completed"  # The review was performed; its verdict may still refuse integration.
-    if record.get("workspace_disposition", {}).get("kind") == "continued":
+    if retired_execution(record) or record.get("workspace_disposition", {}).get("kind") == "continued":
         status = "cancelled"  # This attempt was superseded, not the parent assignment.
     projection = json.dumps([status, record.get("agent_id"), record.get("end_observation"), record.get("review_observation"), record.get("workspace_disposition")], sort_keys=True)
     if record.get("ecs_projection") == projection: return
@@ -2220,7 +2237,7 @@ def completion_evidence(scope, obligation, worker_ids):
     # A worker receipt refused or settled before dispatch did no work, so it is
     # not a final worker: counting it would make the assignment uncompletable
     # the moment its replacement landed (part 4, finding 1).
-    workers = [record for record in rows if record["request"]["role"] == "worker" and not never_dispatched(record)]
+    workers = [record for record in rows if record["request"]["role"] == "worker" and not never_dispatched(record) and not retired_execution(record)]
     continued = {record["continuation"]["worker_id"] for record in workers if record.get("continuation")}
     final = [record for record in workers if record["id"] not in continued]
     if not final or sorted(record["id"] for record in final) != worker_ids:

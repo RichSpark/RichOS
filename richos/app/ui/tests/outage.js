@@ -332,10 +332,11 @@ async function main() {
     await page.evaluate((s) => window.__render(s), snapshot(null));
     const c = await cardText(page);
     assert(c, "the generic failure card must still render");
-    assert(c.body[0].includes(GENERIC_BODY), "the generic body: " + JSON.stringify(c.body));
-    assert(c.notes.some((n) => n.includes(GENERIC_NOTE)), "the generic note: " + JSON.stringify(c.notes));
+    assert(/\bRich\b/.test(c.body[0]), "the fallback names whose answer was cut off: " + JSON.stringify(c.body));
+    assert(!/\bI\b/.test(c.body.concat(c.notes).join(" ")), "the app cannot speak as Rich");
+    assert(!c.notes.some((n) => n.includes(GENERIC_NOTE)), "no unchecked saved-answer claim");
     assertEqual(c.action, RETRY_LABEL);
-    return "unchanged for every failure that is not the model API";
+    return "an unclassified outcome keeps a neutral RichOS card and its restoration control";
   });
 
   await run.check("NEGATIVE CONTROL: a COMPLETED turn draws no card at all", async () => {

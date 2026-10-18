@@ -2380,6 +2380,19 @@ mod tests {
         assert!(facts["error"].as_str().unwrap().contains("provider failed before opening"));
         crate::session_tools::acknowledge(&scope,"rich",end).unwrap();
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"one failure produced duplicate notices");
+        for attempt in 0..3 {
+            let reopened=WorkHost::new(&h.state,Box::new(Refused),Arc::new(SilentNotifier));
+            assert!(reopened.run_message(&Backend::new(),&h.binding,&message,&format!("peer:{through}")).is_err());
+            assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"retry {attempt} reported the same failed input again");
+            assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().1,through,"unsent input was discarded");
+            reopened.shutdown();
+        }
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"A different request"})).unwrap();
+        let (second,second_through)=crate::session_tools::pending_after(&scope,"stu",through).unwrap().unwrap();
+        assert!(host.run_message(&Backend::new(),&h.binding,&second,&format!("peer:{second_through}")).is_err());
+        let (notice,_)=crate::session_tools::pending(&scope,"rich").unwrap().unwrap();
+        let facts:serde_json::Value=serde_json::from_str(&notice.text).unwrap();
+        assert_eq!(facts["input_id"],format!("peer:{second_through}"),"dedup hid a different failed request");
         host.shutdown();
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();

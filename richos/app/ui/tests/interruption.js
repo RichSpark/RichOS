@@ -118,7 +118,7 @@ function snapshot(interruption, opts) {
   items.push(
     Object.assign(b(TURN + ":duration", { slot: "terminal", createdAt: 1788000000000 }), {
       kind: "work_duration",
-      state: "interrupted",
+      state: (opts && opts.state) || "interrupted",
       startedAt: 1788000000000,
       endedAt: 1788000001000,
       activeMs: 1000,
@@ -380,18 +380,24 @@ async function main() {
     return `label=${JSON.stringify(label)}, one press -> one handler call, no resume promise`;
   });
 
-  await run.check("an unclassified turn still falls back to the generic card", async () => {
-    // A turn written before 2026-09-17 carries no cause. It must render exactly as it
-    // always did rather than losing its card — the record is absent, not the failure.
-    await page.evaluate((s) => window.__render(s), snapshot(null));
-    await page.waitForSelector(".tl-intervention");
-    const c = await cardText(page);
-    assert(
-      c.body.some((t) => t.includes(GENERIC_BODY)),
-      "the legacy card must survive for records that carry no cause: " + JSON.stringify(c.body)
-    );
-    assertEqual(c.actionCount, 1, "and it keeps its control");
-    return "legacy record -> generic card, unchanged";
+  await run.check("an unclassified interrupted or failed turn speaks as RichOS and claims no saved answer", async () => {
+    // Restart recovery has no interruption/outage record. Exercise that fallback with
+    // no answer and a partial answer, independently of the structured Rust notices.
+    for (const state of ["interrupted", "failed"]) {
+      for (const withPartial of [false, true]) {
+        await page.evaluate((s) => window.__render(s), snapshot(null, { state, withPartial }));
+        await page.waitForSelector(".tl-intervention");
+        const c = await cardText(page);
+        const whole = c.body.concat(c.notes).join(" ");
+        assert(!/\bI\b/.test(whole), "the app must not speak as Rich: " + whole);
+        assert(c.body.some((t) => /\bRich\b/.test(t)), "the fallback must say whose answer was cut off: " + whole);
+        assert(!whole.includes(GENERIC_NOTE), "the fallback cannot claim an unchecked saved answer: " + whole);
+        assert(!/snag|already written above/.test(whole), "the fallback cannot invent a failure or saved work: " + whole);
+        assertEqual(c.actionCount, 1, "the original message remains restorable");
+        assertEqual(c.action, RETRY_LABEL, "the control describes restoration only");
+      }
+    }
+    return "both fallback states, with and without partial prose: app-owned notice and Restore my message";
   });
 
   // =====================================================================================

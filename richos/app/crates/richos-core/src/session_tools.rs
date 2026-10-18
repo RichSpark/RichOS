@@ -184,6 +184,20 @@ pub fn saved_handoff(scope:&StatusToolScope,instruction:&crate::ecs::UserInstruc
 }
 
 fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstruction)->Result<Option<(Message,u64)>,String> {
+    find_record(reader,|message| {
+        if !message.handoff || message.instruction.as_ref().is_none_or(|i|i.ledger_ref!=instruction.ledger_ref) {return Ok(false)}
+        if message.instruction.as_ref().unwrap().sha256!=instruction.sha256 {return Err("Saved handoff disagrees with the original request".into())}
+        Ok(true)
+    })
+}
+
+fn work_failure_input(message:&Message)->Option<String> {
+    if message.from!="work-status" {return None}
+    let facts:Value=serde_json::from_str(&message.text).ok()?;
+    (facts["event"]=="upstream_turn").then(||facts["input_id"].as_str().map(str::to_string)).flatten()
+}
+
+fn find_record(reader:&mut impl BufRead,mut matches:impl FnMut(&Message)->Result<bool,String>)->Result<Option<(Message,u64)>,String> {
     let mut through=0;
     loop {
         let mut line=String::new();
@@ -192,10 +206,7 @@ fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstructio
         if count==0 || !line.ends_with('\n') {return Ok(None)}
         through+=count as u64;
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
-        if message.handoff && message.instruction.as_ref().is_some_and(|i|i.ledger_ref==instruction.ledger_ref) {
-            if message.instruction.as_ref().unwrap().sha256!=instruction.sha256 {return Err("Saved handoff disagrees with the original request".into())}
-            return Ok(Some((message,through)))
-        }
+        if matches(&message)? {return Ok(Some((message,through)))}
     }
 }
 
@@ -270,6 +281,14 @@ fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bo
             file.set_len(complete).map_err(|e|e.to_string())?;
         }
     }
+    // Retries and restarts report one failed logical input, using the inbox itself.
+    // Scan acknowledged records too: Rich having read a failure cannot make it new.
+    if let Some(input)=work_failure_input(message) {
+        file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
+        if let Some((_,through))=find_record(&mut BufReader::new(&mut file),|saved|Ok(work_failure_input(saved).as_ref()==Some(&input)))? {
+            return Ok((through,true))
+        }
+    }
     if unique {
         file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
         if let Some((mut saved,through))=find_handoff(&mut BufReader::new(&mut file),message.instruction.as_ref().ok_or("Handoff has no request")?)? {
@@ -312,9 +331,36 @@ fn handoff_finished(scope:&StatusToolScope,message:&Message)->Result<bool,String
     Ok(record.user_stop_requested_at_ms.is_some() || matches!(record.reported_state(),Some(crate::assignment::AssignmentState::Settled|crate::assignment::AssignmentState::Failed)))
 }
 
+/// Older builds consumed handoffs when a native turn ended, even with work unfinished.
+/// Repair their existing receipts once from the canonical inbox, never from a dispatcher.
+fn retain_legacy_handoffs(scope:&StatusToolScope)->Result<(),String> {
+    let path=inbox(scope,"stu")?;
+    update_cursor(scope,"stu",|cursor| {
+        if cursor["handoffs_retained"]==true {return Ok(())}
+        let mut reader=BufReader::new(std::fs::File::open(&path).map_err(|e|e.to_string())?);
+        let mut through=0;
+        while let Some((message,length))=find_record(&mut reader,|_|Ok(true))? {
+            through+=length;
+            let accepted=through<=cursor["through"].as_u64().unwrap() || cursor["accepted"].get(through.to_string()).is_some();
+            if accepted && message.handoff && !handoff_finished(scope,&message)? {
+                let input=format!("peer:{through}");
+                if cursor["active"].get(&input).is_none() {
+                    cursor["active"][&input]=json!({"input":input,"session_id":null});
+                }
+            }
+        }
+        cursor["handoffs_retained"]=json!(true);
+        Ok(())
+    })
+}
+
 /// Read unfinished input in durable order, skipping only what this live connection took.
 pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
     let path=inbox(scope,role)?;let mut cursor=cursor_state(&path)?;
+    if role=="stu" && cursor["handoffs_retained"]!=true && path.is_file() {
+        retain_legacy_handoffs(scope)?;
+        cursor=cursor_state(&path)?;
+    }
     let accepted=cursor["through"].as_u64().unwrap();let mut unfinished=None;let mut retired=false;
     for input in cursor["active"].as_object().unwrap().keys() {
         let Some(offset)=input.strip_prefix("peer:") else{continue};
@@ -439,6 +485,41 @@ mod tests {
                 bridge:crate::ecs::EcsBridge {python:PathBuf::from("unused"),component:PathBuf::from("unused"),state_root:scope.state_root.clone()},
                 binding:crate::ecs::Binding {entity_id:scope.entity_id.clone(),thread_id:scope.thread_id.clone(),session_id:"native-rich".into(),turn_id:"original".into(),audience:"rich".into(),revision:1},seat:None})}).unwrap();
     }
+    #[test]
+    fn upgrade_recovers_a_consumed_unfinished_handoff_without_repeating_finished_work() {
+        let root=std::env::temp_dir().join(format!("richos-upgrade-inbox-{}",uuid::Uuid::new_v4()));
+        let scope=StatusToolScope {version:1,state_root:root.clone(),entity_id:"company".into(),thread_id:"thread".into()};
+        let mut offsets=Vec::new();let mut jobs=Vec::new();
+        for index in 1..=2 {
+            let instruction=crate::ecs::UserInstruction {ledger_ref:format!("ledger:thread:turn-{index}"),sha256:"0".repeat(64),text:None};
+            let record=crate::assignment::register(&root,&crate::assignment::Registration {
+                entity_id:"company".into(),thread_id:"thread".into(),obligation_id:format!("job-{index}"),
+                instruction_ledger_ref:instruction.ledger_ref.clone(),instruction_sha256:instruction.sha256.clone(),
+                title:format!("Original job {index}"),repositories:vec![],needs_screen:false,
+            }).unwrap();
+            append(&scope,"stu",&Message {handoff:true,from:"rich".into(),text:format!("Original job {index}"),instruction:Some(instruction),
+                work:Some(WorkReference {assignment_id:record.id.clone(),obligation_id:format!("job-{index}")})}).unwrap();
+            offsets.push(std::fs::metadata(inbox(&scope,"stu").unwrap()).unwrap().len());jobs.push(record.id);
+        }
+        crate::assignment::advance(&root,"company","thread",&jobs[0],crate::assignment::AssignmentState::Settled,"Verified completion before update").unwrap();
+        crate::assignment::advance(&root,"company","thread",&jobs[1],crate::assignment::AssignmentState::Running,"Worker active before update").unwrap();
+        append(&scope,"stu",&Message {handoff:false,from:"rich".into(),text:"Already consumed status request".into(),instruction:None,work:None}).unwrap();
+        let path=inbox(&scope,"stu").unwrap();let through=std::fs::metadata(&path).unwrap().len();
+        // Nightly 61 consumed the handoff at native end_turn and removed its active receipt.
+        for legacy in [json!(through),json!({"through":through}),json!({"through":through,"active":{},"accepted":{}})] {
+            crate::doctrine::write_verified(&path.with_extension("cursor"),&legacy.to_string()).unwrap();
+            let (message,resumed)=pending(&scope,"stu").unwrap().expect("upgrade lost the unfinished canonical handoff");
+            assert_eq!(resumed,offsets[1]);assert_eq!(message.work.unwrap().assignment_id,jobs[1]);
+            acknowledge(&scope,"stu",resumed).unwrap();
+            assert!(pending_after(&scope,"stu",resumed).unwrap().is_none(),"live Stu received completed work or an accepted correction twice");
+            assert_eq!(pending(&scope,"stu").unwrap().unwrap().1,resumed,"another restart lost the recovery receipt");
+            assert_eq!(crate::assignment::read_all(&root,"company","thread").unwrap().len(),2,"recovery registered duplicate work");
+        }
+        crate::assignment::advance(&root,"company","thread",&jobs[1],crate::assignment::AssignmentState::Settled,"Stu completed the resumed job").unwrap();
+        assert!(pending(&scope,"stu").unwrap().is_none(),"completed jobs restarted again");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn concurrent_hook_and_manual_handoffs_survive_restart_without_duplicating_execution() {
         use crate::{ledger::{Ledger,Source},entity::EntityId};

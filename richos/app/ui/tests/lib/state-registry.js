@@ -167,16 +167,14 @@ module.exports = [
       "on screen afterwards, so deferring can never become the §21 armed-composer leak.",
   },
   {
-    s: "I hit a snag mid-thought and had to stop before I finished.",
+    s: "Rich's answer was cut off before he finished.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: "failed-turn",
     why:
-      "§5.5 failure card. 'Say the word' is answered by the button directly beneath it. " +
-      "STILL REACHABLE AFTER 2026-09-17, and deliberately: it is now the FALLBACK, shown " +
-      "only for a turn whose cause was never classified — every record written before that " +
-      "date, and any record whose classification could not be written. The five rows below " +
-      "are what a turn with a known cause gets instead.",
+      "The renderer's fallback when no interruption or outage record explains an incomplete " +
+      "reply, including after a normal close. It speaks about Rich without guessing a cause or " +
+      "claiming saved answer text. The original message can be restored with this control.",
   },
 
   // -----------------------------------------------------------------------------------
@@ -703,9 +701,11 @@ module.exports = [
       "that puts nothing back is worse than none.",
   },
   {
-    s: "Everything I'd already written above is saved.",
-    c: "INFORMATIONAL",
-    why: "The note inside the failure card. The card's body carries the action.",
+    s: "Press Restore my message to put your words back in the box.",
+    c: "ACTIONABLE",
+    control: ".tl-intervention button.tl-intervention-action",
+    fixture: "failed-turn",
+    why: "The fallback's note names the restoration control. Pressing it restores the original text without sending it.",
   },
   {
     s: "How long it ran was not recorded: the turn ended without writing an end time.",
