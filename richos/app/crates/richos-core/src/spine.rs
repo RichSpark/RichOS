@@ -2834,6 +2834,12 @@ impl Spine {
         if self.ledger.turn(&turn_id).is_some_and(|t|t.state==crate::ledger::TurnState::Received)
             && !self.pending_delivery.iter().any(|pending|pending.turn_id==turn_id) {
             if delivery.set_id.is_none(){self.emit_live(self.ceo_message_event(&binding,&turn_id));}
+            // Accepted before a Stop that settled before this delivery: stopped with the rest.
+            if let Some(claim)=delivery.order.and_then(|order|self.control.for_thread(binding.thread_id()).settled_stop_covering(order)) {
+                self.ledger.stop_turn(&turn_id,claim.requested_at)?;
+                self.emit_live(self.turn_status_event(&binding,&turn_id,TurnStatus::Stopped,None));
+                return Ok(turn_id);
+            }
             self.deliver(&turn_id,&binding,&delivery.text,true)?;
         }
         Ok(turn_id)

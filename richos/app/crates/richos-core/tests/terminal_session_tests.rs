@@ -825,4 +825,45 @@ fn stop_covers_a_question_card_answer_sent_before_it() {
     let sent: Vec<_> = prompts.lock().unwrap().iter().flat_map(|p| p.lock().unwrap().clone()).collect();
     assert!(!sent.iter().any(|p| p.contains("Tomorrow")), "sent after Stop: {sent:?}");
     drop(spine); std::fs::remove_dir_all(root).unwrap();
+
+    // (5) As (4), but the stopped turn finishes and its Stop settles before the delivery
+    // worker gets the spine (review rv-20261018T203003Z-956a6d9c-1297#1).
+    let (root, mut spine, company) = fixture();
+    let thread = spine.create_thread("Conversation", &company).unwrap();
+    let controls = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(controls.clone());
+    spine.detach_conversation_io();
+    let factory = MockLeaseFactory::new(vec!["Continued despite Stop"]);
+    let prompts = factory.spawned_prompts.clone();
+    spine.set_lease_factory(Box::new(factory));
+    let first = spine.submit_prompt("Keep working", Source::Text).unwrap();
+    let store = Store::new(root.join("engine-state"));
+    let q = store.ask(&AskScope { root: root.join("engine-state"), entity_id: company.to_string(), thread_id: thread.clone(),
+        turn_id: first.clone(), asker: "front_desk".into(), obligation_id: None, session_id: "fixture-session".into(),
+        engine: None, entity_root: None, app_run: None }, vec![QuestionInput {
+        text: "When should the release ship?".into(), multiple: false, free_answer: true, recommended: Some(1),
+        options: vec![OptionInput { label: "Today".into(), description: "Sooner".into() },
+            OptionInput { label: "Tomorrow".into(), description: "More checking".into() }] }]).unwrap().remove(0);
+    let order = controls.take_input_order();
+    store.answer_in_order(company.as_str(), &thread, AnswerRequest { question_id: q.id.clone(),
+        client_id: "clicked-before-stop".into(), option_ids: vec![q.options[1].id.clone()], text: String::new(),
+        expected_revision: None }, "click", "mac", order).unwrap();
+    controls.for_thread(&thread).request_stop().unwrap();
+    let shared = Mutex::new(spine);
+    drive_shared_turns(&shared).unwrap();
+    assert_eq!(shared.lock().unwrap().ledger().turn(&first).unwrap().state, TurnState::Stopped);
+    assert!(controls.for_thread(&thread).stop_claim().is_none(), "the Stop settled before delivery");
+    let mut answer = None;
+    store.deliver(company.as_str(), &thread, "front_desk", |delivery| {
+        let id = shared.lock().unwrap().queue_question_answer(delivery).map_err(|e| e.to_string())?;
+        answer = Some(id.clone());
+        Ok(id)
+    }).unwrap();
+    drive_shared_turns(&shared).unwrap();
+    let spine = shared.into_inner().unwrap();
+    let answer = answer.expect("the saved answer was delivered");
+    assert_eq!(spine.ledger().turn(&answer).unwrap().state, TurnState::Stopped, "an answer clicked before Stop ran after it settled");
+    let sent: Vec<_> = prompts.lock().unwrap().iter().flat_map(|p| p.lock().unwrap().clone()).collect();
+    assert!(!sent.iter().any(|p| p.contains("Tomorrow")), "sent after Stop: {sent:?}");
+    drop(spine); std::fs::remove_dir_all(root).unwrap();
 }

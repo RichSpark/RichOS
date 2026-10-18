@@ -874,6 +874,9 @@ pub enum StopOutcome {
 struct ConversationState {
     active: Option<ActiveTurn>,
     stop: Option<StopClaim>,
+    /// The last Stop cleared at a boundary. Its cut still covers a card answer accepted
+    /// before it and delivered only after it settled.
+    settled: Option<StopClaim>,
     cancel: Option<Arc<dyn TurnCancel>>,
     lease_session: Option<String>,
 }
@@ -1362,7 +1365,15 @@ impl ConversationControl {
     }
 
     pub fn clear_stop_claim(&self) {
-        if let Some(state)=self.shared.inner.conversations.lock().unwrap().get_mut(self.key()) {state.stop=None;}
+        if let Some(state)=self.shared.inner.conversations.lock().unwrap().get_mut(self.key()) {
+            if let Some(claim)=state.stop.take() {state.settled=Some(claim);}
+        }
+    }
+
+    /// The cleared Stop whose cut covers an input accepted at `order`, if any.
+    pub fn settled_stop_covering(&self, order: u64) -> Option<StopClaim> {
+        self.shared.inner.conversations.lock().unwrap().get(self.key())
+            .and_then(|state|state.settled.clone()).filter(|claim|order<claim.intake_id)
     }
 }
 
