@@ -99,6 +99,14 @@ class WalkTests(unittest.TestCase):
         self.assertIsNotNone(pattern.search(token))
         self.assertIsNone(pattern.search(token.replace('b','6')))
         self.assertIsNone(pattern.search('x'+token+'x'))
+    def test_every_wait_band_matcher_takes_the_opening_headline(self):
+        # Review rv-20261018T195835Z-253cc28a-26b4#1: the band opens on "Rich is thinking"
+        # (ui/main.js), and the three matchers took only the later two headlines.
+        walk=module('delta-walk');pattern=re.compile(walk.WORKING_HEADLINE,re.I)
+        for line in ('Rich is thinking','Rich is working...','Writing the reply'):
+            self.assertIsNotNone(pattern.search('Conversation\n'+line+'\n'),line)
+        self.assertIsNone(pattern.search('Rich is thinking about the plan'))
+        self.assertNotIn('(?:Rich is working|Writing the reply)',(HERE/'delta-walk.py').read_text())
     def test_timing_interval_refuses_uncertainty_and_subtracts_conservatively(self):
         walk=module('delta-walk');w=object.__new__(walk.Walk)
         self.assertEqual(w.interval_bound([[0,100]],100)['intervals_ms'],[[0,100]])

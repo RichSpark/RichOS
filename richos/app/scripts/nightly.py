@@ -520,8 +520,12 @@ PROMOTIONS = APP / "stable-promotions.json"
 
 
 @release_step
-def promotion_decision(nightly_tag, record_text):
+def promotion_decision(nightly_tag, record_text, words=None, decided_on=None):
     """The CEO's own promotion decision for THIS nightly, or a refusal. Nothing else.
+
+    `words`, when given, is his decision about `nightly_tag` taken from the command line
+    (`stable --ceo-words`), dated `decided_on`. It joins the record before any check, so it
+    passes exactly the checks a written entry does, including one decision per nightly.
 
     WHAT THIS DELIBERATELY DOES NOT ACCEPT, because it is the whole point of §69: a READY
     verdict, a gui-boot proof, a green gate, an Urban signoff, a QA walk. Every one of
@@ -542,7 +546,9 @@ def promotion_decision(nightly_tag, record_text):
         raise ValueError(f"{PROMOTIONS} is not readable JSON: {error}") from error
     if not isinstance(entries, list):
         raise ValueError(f"{PROMOTIONS} must be a list of promotion decisions")
-    matching = [e for e in entries if isinstance(e, dict) and e.get("tag") == nightly_tag]
+    if words is not None:
+        entries = [*entries, {"tag": nightly_tag, "decided_on": decided_on, "words": words}]
+    matching =[e for e in entries if isinstance(e, dict) and e.get("tag") == nightly_tag]
     if not matching:
         raise ValueError(
             f"{PROMOTIONS} records no promotion decision for {nightly_tag}.\n"
@@ -553,7 +559,9 @@ def promotion_decision(nightly_tag, record_text):
             "file first.")
     if len(matching) > 1:
         raise ValueError(f"{PROMOTIONS} records {len(matching)} decisions for "
-                         f"{nightly_tag}; exactly one is expected")
+                         f"{nightly_tag}; exactly one is expected"
+                         + ("; it already records his words, so leave out --ceo-words"
+                            if words is not None and len(matching) == 2 else ""))
     entry = matching[0]
     missing = [field for field in ("tag", "decided_on", "words")
                if not str(entry.get(field, "")).strip()]
@@ -567,7 +575,16 @@ def promotion_decision(nightly_tag, record_text):
     return entry
 
 
-def stable_plan(nightly_tag, record_text, now=None):
+def with_promotion(info, record_text):
+    """`record_text` with the decision a stable plan carries, unless it already holds one."""
+    entries = json.loads(record_text)
+    if not any(isinstance(e, dict) and e.get("tag") == info["promoted_from"] for e in entries):
+        entries.append({"tag": info["promoted_from"], "decided_on": info["promotion_decided_on"],
+                        "words": info["promotion_words"]})
+    return json_text(entries)
+
+
+def stable_plan(nightly_tag, record_text, now=None, words=None):
     """Plan a STABLE release as a REBUILD of the commit a published nightly was built from.
 
     T3 Code's sentence, verbatim (`t3code:.github/workflows/release.yml:44-47`): *"Manual
@@ -587,8 +604,10 @@ def stable_plan(nightly_tag, record_text, now=None):
     """
     now = now or utc_now()
     # HIS DECISION FIRST, before the network and before anything is resolved. It is the
-    # refusal that costs nothing and the one most likely to fire.
-    decision = promotion_decision(nightly_tag, record_text)
+    # refusal that costs nothing and the one most likely to fire. Words given on the command
+    # line are dated today, on this Mac's calendar, which is his.
+    decision = promotion_decision(nightly_tag, record_text, words,
+                                  now.astimezone().strftime("%Y-%m-%d"))
     git("fetch", "--no-tags", "origin", f"refs/tags/{nightly_tag}")
     try:
         built = json.loads(git("show", f"FETCH_HEAD:{PROVENANCE}"))
@@ -750,6 +769,12 @@ def prepare(info):
     # files; see `release_step`'s note on why it is not two copies of one procedure.
     files = release_files(info, (ROOT / MANIFEST).read_text(), (ROOT / LOCK).read_text(),
                           (ROOT / CONFIG).read_text())
+    if info["channel"] == "stable":
+        # HIS DECISION, IN THE COMMIT THE RELEASE IS BUILT FROM: the stable tag's own
+        # promotion record names the nightly it promotes, so no separate commit has to
+        # reach main before `stable` may run (CEO, 2026-10-19).
+        files[str(PROMOTIONS)] = with_promotion(
+            info, (ROOT / PROMOTIONS).read_text() if (ROOT / PROMOTIONS).exists() else "[]")
     commit = commit_files(files, info["source_commit"], f"Build {info['tag']}")
     if info["channel"] == "nightly":
         ref = info["candidate_ref"]
@@ -1664,6 +1689,8 @@ def main():
                    help="a throwaway directory; everything written under it is fixture")
     p = sub.add_parser("stable-plan")
     p.add_argument("--from-nightly", required=True, metavar="TAG")
+    p.add_argument("--ceo-words", metavar="TEXT",
+                   help="his sentence promoting TAG, dated today; checked as a record entry is")
     p.add_argument("--output", type=Path, required=True)
     p = sub.add_parser("run")
     p.add_argument("--plan", type=Path, required=True)
@@ -1680,7 +1707,7 @@ def main():
         release_smoke(args.out.resolve())
     elif args.command == "stable-plan":
         info = stable_plan(args.from_nightly, (ROOT / PROMOTIONS).read_text()
-                           if (ROOT / PROMOTIONS).exists() else "[]")
+                           if (ROOT / PROMOTIONS).exists() else "[]", words=args.ceo_words)
         args.output.write_text(json_text(info))
         print(json_text(info))
     elif args.command == "check-rules":
