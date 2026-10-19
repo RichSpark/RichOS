@@ -3711,6 +3711,7 @@ fn main() {
             claude_account_remove,
             claude_account_use_first,
             claude_account_discard,
+            claude_account_email,
             claude_account_nudge_answer,
             set_claude_at_threshold,
             approve_claude_reset,
@@ -5851,6 +5852,16 @@ fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_c
         richos_core::provider_auth::logout_in(&resolve_claude_bin(), &folder);
     }
     state.quota.remove_account(&id).map_err(|e| e.to_string())
+}
+
+/// **Show email** on an account's card (round 31, the CEO 2026-10-18: "an extra click there
+/// somehow to temporarily reveal which email is connected to which account name"). Read at the
+/// click from Claude Code's own `claude auth status --json` under that account's folder
+/// (`provider_auth::signed_in_as`), returned, and not kept anywhere.
+#[richos_command::command]
+fn claude_account_email(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::SignedInAs, String> {
+    let folder = state.quota.accounts.sign_in_folder(&id).ok_or("That account is no longer on this Mac.")?;
+    Ok(richos_core::provider_auth::signed_in_as(&resolve_claude_bin(), folder.as_deref()))
 }
 
 /// **Not now** on Rich's one-time suggestion of a second account (round 18, `one-nudge`).
