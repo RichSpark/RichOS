@@ -2971,6 +2971,10 @@
       }
       return card;
     }
+    // The same rule for the cards below: Restore my message only when there is a message of
+    // his to restore. A capacity or usage-limit failure on a turn a button or an agent started
+    // keeps its explanation and gets no control (review rv-20261019T115204Z-2b619840-5405#1).
+    const hisText = !!(turn.user && turn.user.text);
     const outage = turn.outage;
     if (outage && outage.ceoMessage) {
       // What happened. Authored by `UpstreamFault::ceo_message`.
@@ -2984,10 +2988,12 @@
     } else {
       card.appendChild(elem("p", "tl-intervention-body",
         "Rich's answer was cut off before he finished."));
-      card.appendChild(elem("p", "tl-intervention-note",
-        "Press Restore my message to put your words back in the box."));
+      if (hisText) {
+        card.appendChild(elem("p", "tl-intervention-note",
+          "Press Restore my message to put your words back in the box."));
+      }
     }
-    card.appendChild(retryControl(turn, opts));
+    if (hisText) card.appendChild(retryControl(turn, opts));
     return card;
   }
 
