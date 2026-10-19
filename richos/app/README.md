@@ -703,6 +703,11 @@ richos/app/
                               its turn boundary so work he gives typed, aloud or from the
                               phone starts the same way (CEO ruling §88); each road has a
                               test, and the active thread is shown NOT to be the answer
+    tests/thread_title_tests.rs 4 tests of HAIKU NAMING A NEW CONVERSATION from his first
+                              message (CEO, 2026-10-19): the whole first message is asked
+                              about once, the answer reaches the shell's title sink, a later
+                              message starts no second title (nor hides the first when both
+                              queue at the start), and his reply never waits on it
     tests/work_gate_cost.rs   what it costs to ask "is RichOS doing anything" — timed over
                               3,000 worker rows with 1,500 liveness syscalls, because the
                               ruling the gate serves is about not getting in the way
@@ -899,11 +904,11 @@ already inside their entity's group, resolved through `Ledger::thread_binding` �
 accessor that reads the immutable durable record. An entity is a privacy boundary
 (§1), so a renderer that bucketed a flat list by an `entity_id` string would be one
 `if` away from a boundary violation with nothing to catch it. `richos/app/ui/main.js` renders
-the groups it is given and never re-sorts them, and the main-pane header renders from
+the groups it is given and never re-sorts them and the main-pane header renders from
 `active_context` — the spine's binding — so a UI bug can show the wrong thread but
 cannot mislabel which entity the CEO is talking to.
 
-**A thread with no entity home is rendered, calmly, and refused.** A record written
+**A thread with no entity home is rendered, calmly and refused.** A record written
 before entity scoping replays as `ThreadEntity::Unbound`: listed under "Needs an
 entity", never inside one, never activated, never read. The pane states the reason in
 Rich's voice and the composer is disabled. `Ledger::adopt_unbound_thread` is the only
@@ -912,26 +917,26 @@ so binding one remains a programmatic/back-office act until a core change lands.
 
 **Rail status marks are never fabricated.** The full list, with the signal that earns
 each, is `STATUS_MARKS` in `richos/app/ui/main.js`. §3.2's *Queued* and *Waiting for CEO* are
-absent because no per-thread enqueue event and no waiting signal exist in this build,
+absent because no per-thread enqueue event and no waiting signal exist in this build
 and §22 lists worker waiting state as something that must not be faked. No worker
 count appears in the rail at all.
 
 **Pin, rename and archive are shell state, not ledger events** (`src/nav.rs`). §25
 requires them to work *without changing context authority*; the ledger is evidence and
 has no rename/pin/archive event to append. A rename is therefore a display override
-with the ledger title returned untouched beside it, and archiving changes which list a
+with the ledger title returned untouched beside it and archiving changes which list a
 thread appears in and nothing else about its scope.
 
-## Between threads, and across a restart (Codex-UX slices 9 and 10)
+## Between threads and across a restart (Codex-UX slices 9 and 10)
 
 Contract: §24's last two slices — *"verify restart, multi-thread and scope behavior"* and
 *"update streaming and UI contracts"*. Slices 1–8 each proved ONE thread, in isolation, for
-the length of ONE turn. These two close what that leaves open, and they are two halves of
+the length of ONE turn. These two close what that leaves open and they are two halves of
 one job: the first checks the behavior, the second checks the sentences about it.
 
 **What is verified** (`richos/app/ui/tests/restart-scope.js`, through the real shell under WebKit):
 
-- **A working thread stays visibly active while another is selected**, and returning to it
+- **A working thread stays visibly active while another is selected** and returning to it
   RESUMES its timer rather than restarting it — measured, not asserted about: leave at 0s,
   return at 3s, still ticking, derived from the turn's own `startedAt`.
 - **A draft and a scroll position belong to one thread.** The draft one is a privacy
@@ -944,11 +949,11 @@ one job: the first checks the behavior, the second checks the sentences about it
   `window.RichTimeline` and cross-checked against the number of `accepts()` call sites in
   `timeline.js` on disk, so an eighth handler that forgets the fence fails the check rather
   than quietly widening the surface.
-- **Duplicates render once**, and **missed events recover from the durable snapshot** —
+- **Duplicates render once** and **missed events recover from the durable snapshot** —
   proven by replacing the whole typed family with functions that throw the events away and
   watching the reconciliation reload put the turn back.
 - **A turn still in flight when the app closed reads "outcome unknown", never finished**
-  (§14: *"Never infer that a turn completed because the app was closed"*), and **a mid-turn
+  (§14: *"Never infer that a turn completed because the app was closed"*) and **a mid-turn
   crash draws the CEO's prompt exactly once** — measured across the whole recovery window,
   not just at the end, because the end state is right either way.
 
@@ -960,7 +965,7 @@ the seeded FemcBoost thread. Fixed; the mutation that removes the fix is M4 in t
 transcript below.
 
 **Every check was run RED once**, by breaking the thing it guards in the shipped source.
-The ten runs, the coverage map derived from them, and the one check with no mutation of its
+The ten runs, the coverage map derived from them and the one check with no mutation of its
 own are in
 [`docs/verification/restart-scope-2026-08-30/mutation-runs.txt`](../../docs/verification/restart-scope-2026-08-30/mutation-runs.txt).
 Two of those runs changed the tests instead of confirming them, which is the whole argument
@@ -982,7 +987,7 @@ Its first run is the demonstrated failure and nothing in it was staged:
 [`docs/verification/restart-scope-2026-08-30/docs-claims-before-slice-10.txt`](../../docs/verification/restart-scope-2026-08-30/docs-claims-before-slice-10.txt).
 Five of six checks red — two crate totals wrong by 207 and 42 tests, four per-file counts
 stale, three whole test suites documented nowhere, three browser suites missing from their
-own table, and four declared `rich://` events absent from the document that calls itself
+own table and four declared `rich://` events absent from the document that calls itself
 *"the whole contract the UI needs"*, `rich://proactive-message` — Rich speaking unprompted
 — among them.
 
@@ -1016,7 +1021,7 @@ check 11 asserts that by comparing `#messages` innerHTML across a round trip.
 Five limits, stated rather than discovered later:
 
 1. **Retroactivity begins at the routing commit.** A thread that ran before it has no
-   machinery at all, and the honest state is *"No machinery was recorded for this
+   machinery at all and the honest state is *"No machinery was recorded for this
    conversation."* Nothing earlier is recoverable, ever. **That sentence is one of four**
    (`machinery_view.rs`): `nothing_recorded`, `not_retained` (nothing on this install),
    `unreadable` (the store is there and the OS refused it) and `recorded`. They are
@@ -1032,7 +1037,7 @@ Five limits, stated rather than discovered later:
    the day that changes; **no `● thinking` row is drawn**, because an always-empty
    affordance says the model is not thinking when the truth is that the agent does not say.
 
-   Same for client-directed file IO, and there the native answer is stronger than "not
+   Same for client-directed file IO and there the native answer is stronger than "not
    observed": the CLI was **OBSERVED NOT TO ASK** — it wrote and edited files itself and
    asked only for permission. `MachineryKind::ClientFsCall` therefore has no producer at
    all, which `machinery.rs` states at the constructor rather than leaving to be found.
@@ -1042,7 +1047,7 @@ Five limits, stated rather than discovered later:
 4. **The technical view is a RELOAD path, not a live technical stream.** While a turn runs
    its rows arrive from the calm live family, which is CEO-shaped by construction, so they
    gain their technical half when the turn ends. `rich://machinery` still has no UI
-   subscriber, and that is deliberate: subscribing would turn "the calm view does not
+   subscriber and that is deliberate: subscribing would turn "the calm view does not
    subscribe to this event" from a structural fact into a runtime branch.
 5. **No control of any kind.** No interrupt, no approve/deny, no re-run. Techy mode is a
    window, not a cockpit — `tests/techy.js` check 15 asserts the only button inside a
@@ -1051,9 +1056,9 @@ Five limits, stated rather than discovered later:
 **The four §7 questions are the CEO's and are left open** (`richos-hq/wiki/open-items.md`
 1.4). Global default vs per-thread: both exist and both are reversible
 (`set_techy_mode(enabled: null)` hands a pinned thread back). The raw-payload window:
-nothing in the read path or the renderer consults it, and no sentence names a duration.
+nothing in the read path or the renderer consults it and no sentence names a duration.
 Whether customers can find it: no conversation-surface affordance while it is off. Whether
-deleting a thread deletes its machinery: no delete-thread command is added, and both
+deleting a thread deletes its machinery: no delete-thread command is added and both
 primitives exist (`MachineryJournal::delete_thread`, `ConfigStore::forget_techy_thread`).
 
 ## Feedback channel — the local half (v1)
@@ -1063,14 +1068,14 @@ could be better, `3` Good, `0` Dismiss. On `1` or `2` it offers to let Rich tell
 RichOS developers, **fully anonymized and generically**, what annoyed the user and why it
 happened. Before that could ever travel, the user sees exactly what would be said.
 
-**This version has no outbound half at all.** No transport, no endpoint, and deliberately
+**This version has no outbound half at all.** No transport, no endpoint and deliberately
 no queue for a later version to find and flush. `tests/feedback_no_outbound_tests.rs`
-asserts that seven ways rather than promising it in a comment — four over the module, and
-three more over the Tauri commands, everything those commands call, and the shipped web
+asserts that seven ways rather than promising it in a comment — four over the module and
+three more over the Tauri commands, everything those commands call and the shipped web
 layer, because a claim written when the feature had no caller stops covering it the day it
 gets one.
 
-**The taxonomy is the feature, and it is a type problem rather than a filter problem.**
+**The taxonomy is the feature and it is a type problem rather than a filter problem.**
 A filter reads free text and decides whether it is safe. `FeedbackPayload` has no `String`
 field at any depth: a report is assembled from a closed, versioned vocabulary of terms
 that were authored once and compiled in, so there is nowhere for the user's specifics to
@@ -1083,12 +1088,12 @@ it discloses what the user does for a living. It reads "generic" both to the mod
 wrote it and to the human asked to approve it. Nothing that inspects prose catches that
 class reliably.
 
-What is pinned, and where:
+What is pinned and where:
 
 | Claim | Held by |
 |---|---|
 | Free text cannot enter a payload | two `compile_fail` doctests on `FeedbackPayload`, with a positive control beside them |
-| Prose is refused at the JSON boundary in every smuggling shape | `negative_control_*` tests (diagnosis field, term list, condition list, failure class, and an extra field) |
+| Prose is refused at the JSON boundary in every smuggling shape | `negative_control_*` tests (diagnosis field, term list, condition list, failure class and an extra field) |
 | The reference case's target payload IS expressible | `positive_control_the_reference_cases_target_payload_is_expressible` — without it the rejection tests could pass by rejecting everything |
 | The rendered report matches the target byte for byte | `the_reference_case_target_payload_renders_exactly_this` |
 | Everything the feature can say is a finite word set | all 60,960 expressible reports are rendered and every token checked against the vocabulary |
@@ -1103,11 +1108,11 @@ Two limits, stated rather than discovered later:
    five moments of real annoyance were volunteered mid-work, unprompted; none arrived at
    session end. A prompt fired at a chosen moment would have caught none of them at the
    moment they were felt. Catching what is already being said is a larger, later piece.
-2. **It appears when he opens it, and at no other time.** The rail carries a permanent
+2. **It appears when he opens it and at no other time.** The rail carries a permanent
    `Feedback` control with no count on it — nothing on that surface is ever waiting on
-   him. There is no timer, no end-of-session prompt and no trigger, and limit 1 above is
+   him. There is no timer, no end-of-session prompt and no trigger and limit 1 above is
    the reason: a prompt fired at a moment of RichOS's choosing would have caught none of
-   the five, and one that arrives during the work he is annoyed about is itself an
+   the five and one that arrives during the work he is annoyed about is itself an
    unprepared task handed to him. Reachable-when-he-wants-it is the honest fallback;
    catching what is already being said is still the larger, later piece.
 
@@ -1115,8 +1120,8 @@ Two limits, stated rather than discovered later:
 
 **If you are about to write something that starts `richos-tauri` and then stops it, read
 this paragraph and nothing else: you do not have to do anything.** Your boot will come up
-with no Dock icon, no window on his monitor and no keyboard focus, and it will still be a
-complete, driveable app. You do not opt in, you cannot forget to, and no variable has to be
+with no Dock icon, no window on his monitor and no keyboard focus and it will still be a
+complete, driveable app. You do not opt in, you cannot forget to and no variable has to be
 set.
 
 **The complaint, 2026-09-06, in his words:** *"It opens in the foreground on the main
@@ -1127,7 +1132,7 @@ harness proving an assignment survives a restart boots, kills and reboots the bi
 
 **And the shape of the fix is his second sentence, not his first:** *"GENERAL issue if and
 when the same or similar tests are run by others in the future."* So RichOS does **not**
-detect a test boot. Detecting tests means keeping a list of test shapes, and the author of
+detect a test boot. Detecting tests means keeping a list of test shapes and the author of
 the next harness is not on that list and never will be — the hand-maintained-inventory
 failure this repository spent 2026-09-04 and 2026-09-05 taking out of five other checks.
 It is inverted instead:
@@ -1136,7 +1141,7 @@ It is inverted instead:
 > positively establish that it is an installed launch by the person who installed it.**
 > Everything else is accessory.
 
-Three facts, all required, and none of them names a test — `richos/app/src-tauri/src/activation.rs`
+Three facts, all required and none of them names a test — `richos/app/src-tauri/src/activation.rs`
 argues each one:
 
 | | what has to be true | what it catches |
@@ -1162,19 +1167,19 @@ program is holding this process (parent pid 32883), and macOS hands a launch to 
 RICHOS_ACTIVATION=regular for the whole normal treatment.
 ```
 
-**If your test genuinely needs the window on screen**, call `show()` on it, or set
+**If your test genuinely needs the window on screen**, call `show()` on it or set
 `RICHOS_ACTIVATION=regular` and accept that the run will take his keyboard. The variable
 answers in both directions (`regular` / `accessory`) and an unrecognized value decides
 nothing, so a typo cannot hand a test run the screen.
 
 **Two things worth knowing before you try to improve this.** The obvious fix —
-`ActivationPolicy::Accessory` plus a window built `.focused(false)` — **does not work**, and
+`ActivationPolicy::Accessory` plus a window built `.focused(false)` — **does not work** and
 was measured not working: `lsappinfo front` still reported `richos-tauri` frontmost for 22
 of 24 samples. tao sends `makeKeyAndOrderFront:` to every *visible* window at
-`applicationDidFinishLaunching` and calls `activateIgnoringOtherApps(true)` unconditionally,
+`applicationDidFinishLaunching` and calls `activateIgnoringOtherApps(true)` unconditionally
 and neither consults the policy or the requested focus. What works is building the window
 **invisible** (tao skips invisible windows by name) plus the policy (which is what keeps the
-Dock clean — ablated separately, and both halves earn their line). Measurements and the tao
+Dock clean — ablated separately and both halves earn their line). Measurements and the tao
 citations are in `main.rs`'s `set_activation_policy` block and in
 `docs/verification/activation-2026-09-06/`.
 
@@ -1182,7 +1187,7 @@ citations are in `main.rs`'s `set_activation_policy` block and in
 
 ```sh
 # 1. The spine — fast, no native deps, no network:
-cargo test -p richos-core                       # 1830 tests + 8 doc-tests (1826 direct, 4 ignored)
+cargo test -p richos-core                       # 1840 tests + 8 doc-tests (1836 direct, 4 ignored)
 # Summarize a captured log separately: python3 scripts/rust-test-summary.py /path/to/cargo.log
 # Ordinary passes and doc-test passes are separate; do not add them into the total above.
 #     ONE IGNORED CHECK NEEDS A REAL LORO CORPUS, which is the CEO's own record, lives outside
@@ -1268,7 +1273,7 @@ run another checkout's stale binary when its source timestamps are older than th
 artifact. `scripts/bin/cargo` prevents that by treating `CARGO_TARGET_DIR` and
 `--target-dir` as cache roots and deriving a separate output directory for each workspace.
 The test runner, lint entry point and RichOS CPU admission wrapper enable this
-dispatcher. For a direct development command, use `scripts/bin/cargo test`, or source
+dispatcher. For a direct development command, use `scripts/bin/cargo test` or source
 `scripts/lib/cargo-cache-env.sh` before using `cargo`. Explicit output-directory overrides
 in Cargo config must be removed; choose a cache root through `CARGO_TARGET_DIR` instead.
 
@@ -1307,29 +1312,29 @@ here rather than there:
   (`97/97` against 304, `121/121` against 163) while every sentence around them stayed true,
   which is the one thing `richos/engine/scripts/publication-completeness.sh` explicitly cannot
   catch: *"Every path in a document can resolve while the sentence around it is false."*
-- **CI covers the spine and the browser suites, and neither has ever run.**
+- **CI covers the spine and the browser suites and neither has ever run.**
   `.github/workflows/app-spine-ci.yml` runs `cargo test -p richos-core` and a release
   build; `.github/workflows/ui-suite-ci.yml` runs every suite under `richos/app/ui/tests` on
   macOS, under the WebKit that ships in its own `node_modules`. The sentence that stood
   here until 2026-09-04 — *"the browser suites have no runner at all"* — was written
-  before that second file existed and is simply out of date. What is still true, and is
+  before that second file existed and is simply out of date. What is still true and is
   the part that matters, is that **neither workflow has ever executed**: both were
-  authored on the machine that runs the suites locally, and every workflow in this
+  authored on the machine that runs the suites locally and every workflow in this
   repository was switched off on 2026-09-01 over a billing block. So neither may be
   called CI-verified until a green run exists on a SHA somebody can name. Both were run
   verbatim from a fresh clone on 2026-09-04 —
   `docs/verification/workflows-on-a-clone-2026-09-04/` — which answers a narrower
   question: that they do not depend on the author's machine.
 
-## App icon — generated from real source art, verified, and shipping
+## App icon — generated from real source art, verified and shipping
 
 **CEO handover sheet: [`richos/app/APP-ICON.md`](APP-ICON.md)** — what the icon is, where to
-look at it, and the one command that replaces it. Nothing is asked of him there any more;
+look at it and the one command that replaces it. Nothing is asked of him there any more;
 this section is the engineering detail behind it.
 
 `src-tauri/icons/` holds all six files `tauri.conf.json`'s `bundle.icon` declares, each a
 distinct real image: `32x32.png` (32x32), `128x128.png` (128x128), `128x128@2x.png`
-(256x256), `icon.png` (512x512), `icon.icns`, and `icon.ico` carrying six layers from 16px
+(256x256), `icon.png` (512x512), `icon.icns` and `icon.ico` carrying six layers from 16px
 to 256px. They were produced by the pipeline below from
 `richos/app/icon-source/richos-icon-1024.png` (1024x1024 RGBA, with the vector original beside
 it), landed 2026-08-31. The verifier agrees:
@@ -1375,7 +1380,7 @@ icon on macOS and Windows — were never checked on any build.
 
 ### Warn on build, fatal on bundle
 
-Deliberate, and load-bearing: app development must never be blocked on artwork nobody
+Deliberate and load-bearing: app development must never be blocked on artwork nobody
 has yet.
 
 - `cargo check` / `cargo build` → **warnings only**, exit 0.
@@ -1383,19 +1388,19 @@ has yet.
 
 **`richos/app/scripts/package-app.sh` sets it** (2026-08-30). Two earlier versions of this
 paragraph were wrong in opposite directions: one claimed the variable was "set by
-bundling and CI" when nothing set it, and its correction then said
+bundling and CI" when nothing set it and its correction then said
 `.github/workflows/` contained only `engine-self-verify.yml`. Its correction's
 correction said three. **There are five** — `app-spine-ci.yml`,
 `engine-self-verify.yml`, `packaging-ci.yml`, `ui-suite-ci.yml` and
 `windows-companion-ci.yml` — and `.github/workflows/README.md` is where their states
 are kept, because a count in a paragraph has now been wrong three times running.
-The **conclusion** that sentence was drawn to support is nonetheless still true, and
+The **conclusion** that sentence was drawn to support is nonetheless still true and
 survives the correction: **no CI job builds this crate.** `app-spine-ci.yml`'s own
 header excludes `richos/app/src-tauri` by name as "a deliberately detached workspace with the
-whole webview dependency tree behind it". So CI is not what arms the gate, and an
+whole webview dependency tree behind it". So CI is not what arms the gate and an
 ordinary `cargo build` must stay non-fatal.
 
-The packaging entrypoint is what arms it, and the pre-flight it runs first is
+The packaging entrypoint is what arms it and the pre-flight it runs first is
 convenience rather than the guarantee. Proven by deleting the pre-flight from the
 script and resizing `icons/32x32.png` to 16x16: the run still stopped at `build.rs`'s
 panic and exited 4 with nothing packaged.
@@ -1410,7 +1415,7 @@ every released build is compiled in.
 **Pillow, SPDX `MIT-CMU`** (read from the installed distribution's `License-Expression`
 metadata, Pillow 12.3.0) for decode/resample/PNG/ICO, plus Apple's own
 **`/usr/bin/iconutil`** for the macOS `.icns`. Both are **authoring-time only**: nothing
-from either is linked into or shipped inside the signed `.app`, and the only artefacts
+from either is linked into or shipped inside the signed `.app` and the only artefacts
 that ship are pixels derived from the supplied artwork. That keeps the license question
 entirely clear of the signing/notarization path.
 
@@ -1459,7 +1464,7 @@ not over-fitted to this generator.
 There is no `iconutil` outside macOS, so `.icns` falls back to Pillow's ICNS writer,
 which emits **no 16px layer** (measured: `ic07 ic08 ic09 ic10 ic11 ic12 ic13 ic14`). The
 fallback prints a warning saying exactly that and telling the caller to regenerate on
-macOS before signing a release. It does not pretend to be equivalent, and the verifier
+macOS before signing a release. It does not pretend to be equivalent and the verifier
 fails it — `icons/icon.icns is missing layer size(s) [16]px`.
 
 ### Fixed along the way
@@ -1471,7 +1476,7 @@ emits `128x128@2x.png`, so the first real generation run would have written a fi
 config was not looking for. Fixed in `ad017b8`; the mangled form is now rejected by the
 derivation as an unsupported extension, so it cannot recur silently.
 
-## Packaging — one command, one line, and it refuses
+## Packaging — one command, one line and it refuses
 
 ```sh
 richos/app/scripts/package-app.sh                       # ad-hoc signed; the default, and all a machine with no certificate can do
@@ -1482,7 +1487,7 @@ richos/app/scripts/package-app.sh --verify-only path/to/RichOS.app [--expect-not
 richos/app/scripts/package-app.sh --updater             # ...and the signed update artifacts
 ```
 
-The last line is the whole report. In the default mode it names what it did not do, and
+The last line is the whole report. In the default mode it names what it did not do and
 the cdhash in it belongs to that one run — it moves with the shipped bytes:
 
 ```
@@ -1494,7 +1499,7 @@ that changes a shipped byte. Path: …/release/bundle/macos/RichOS.app
 
 The `--sign developer-id` modes print the same shape with the opposite content —
 `package-app.sh:1279` is the notarized-and-stapled line, `:1287` the signed-but-not-
-notarized one. That is the path v1.0.0, v1.0.1 and v1.0.2 were built through, and what
+notarized one. That is the path v1.0.0, v1.0.1 and v1.0.2 were built through and what
 those published bytes carry is measured further down rather than asserted here.
 
 Anything else is a refusal that names its reason. Exit codes: `0` success, `1` the
@@ -1504,7 +1509,7 @@ artifacts are not.
 
 `--updater` adds `RichOS.app.tar.gz` and its minisign `.sig`, both built from the
 bundle that was just VERIFIED rather than from the builder's intermediate — the
-bundler makes its own copy before anything has signed the `.app`, and that copy is
+bundler makes its own copy before anything has signed the `.app` and that copy is
 deleted on every run. It needs `TAURI_SIGNING_PRIVATE_KEY_PATH` (refused inside a
 git worktree, refused world-readable) and writes `latest.json` only when
 `RICHOS_UPDATE_BASE_URL` says where the archive will live. **`richos/app/UPDATES.md` is the
@@ -1514,13 +1519,13 @@ and the two bad ones it refused.
 ### What it refuses on
 
 - **Placeholder icons.** It exports `RICHOS_REQUIRE_REAL_ICONS=1`, which is what makes
-  `build.rs`'s gate fatal, and it pre-checks the same set so the failure arrives in two
+  `build.rs`'s gate fatal and it pre-checks the same set so the failure arrives in two
   seconds rather than after a release compile. Against the placeholder set this
   repository used to carry it refused with eleven named problems and exited 2; against
   the real set committed now the pre-flight passes, which is what lets a bundle be built
   at all.
 - **A signing configuration that cannot work.** `--sign developer-id` DISCOVERS the
-  identity when the machine has exactly one "Developer ID Application"; with none, or
+  identity when the machine has exactly one "Developer ID Application"; with none or
   with more than one, it refuses and names them, because choosing between two signing
   certificates by sort order is not a thing a script may do. `RICHOS_SIGNING_IDENTITY`
   still pins one and is still checked against `security find-identity -v -p
@@ -1539,13 +1544,13 @@ and the two bad ones it refused.
   code: the executable named by `CFBundleExecutable` exists, `codesign --verify --deep
   --strict` passes, the signature is the KIND that was asked for,
   `Contents/Resources/icon.icns` is byte-identical to the icon this repository
-  generated, and `Contents/Info.plist` carries `NSMicrophoneUsageDescription`.
+  generated and `Contents/Info.plist` carries `NSMicrophoneUsageDescription`.
   `--verify-only` runs that same set against an existing bundle, so the two paths
   cannot drift apart.
 - **A Developer ID signature whose DESIGNATED REQUIREMENT is a cdhash.** This is the
   only property the certificate is bought for: macOS stores `identifier
   "com.richos.app" and anchor apple generic and certificate leaf[subject.OU] =
-  "<TEAMID>"` against every permission it grants, and every future build satisfies it.
+  "<TEAMID>"` against every permission it grants and every future build satisfies it.
   A signature can be a valid Developer ID signature and still carry a cdhash-shaped
   requirement — ad-hoc's failure wearing a certificate — so the requirement is read
   back and joined to the bundle identifier on disk. Under `--expect-notarized` the
@@ -1570,16 +1575,16 @@ check two things. Both are now measured, on a real bundle:
 
 The first bundle this script ever produced carried
 `flags=0x20002(adhoc,linker-signed)`, `Sealed Resources=none`,
-`Identifier=richos_tauri-6a5998b21aa29388`, and `codesign --verify` **rejected it**:
+`Identifier=richos_tauri-6a5998b21aa29388` and `codesign --verify` **rejected it**:
 *"code has no resources but signature indicates they must be present"*. That is the
 arm64 linker's automatic ad-hoc signature on the executable, with the bundle around it
 unsigned — strictly worse than an ad-hoc-signed bundle, because nothing binds
 `Info.plist` or the icon to it and the signed identity is a mangled crate name rather
 than `com.richos.app`.
 
-So the script signs ad-hoc deliberately, and verifying `Signature=adhoc` is not
+So the script signs ad-hoc deliberately and verifying `Signature=adhoc` is not
 enough — that string was true in the broken state too. It also refuses
-`linker-signed`, `Sealed Resources=none`, and a signature identifier that differs from
+`linker-signed`, `Sealed Resources=none` and a signature identifier that differs from
 `CFBundleIdentifier`.
 
 ### What ad-hoc costs, measured rather than repeated
@@ -1595,19 +1600,19 @@ A hash of that build and nothing else — no bundle identifier, no team, nothing
 build can satisfy. It also prints Gatekeeper's own verdict (`spctl -a -vv` →
 `rejected`) rather than inferring it.
 
-**The common phrasing "every rebuild is a different application" is too strong, and
+**The common phrasing "every rebuild is a different application" is too strong and
 this is the correction.** What moves the cdhash is the produced BYTES, not the act of
 rebuilding. Measured 2026-08-30: three consecutive runs over an unchanged tree — plus
 one whose only edit was a `const` the optimizer removed — all produced
 `fc5051ac9ca8e…`, i.e. the same application, grant intact. Changing one shipped string
 literal moved it to `27a561effd404…`. It is not a tax on rebuilding; it is a tax on
-every change worth shipping. That is still the whole argument for Developer ID, and it
+every change worth shipping. That is still the whole argument for Developer ID and it
 is why the number in this paragraph is a measurement and not a warning.
 
-### The Developer ID path is finished, and it has signed, notarized and stapled a public release
+### The Developer ID path is finished and it has signed, notarized and stapled a public release
 
 The CEO enrolled in the Apple Developer Program on **2026-08-31**, so decision 1.1 is
-closed (`richos-hq/wiki/packaging-and-signing.md`), and the certificate has existed on
+closed (`richos-hq/wiki/packaging-and-signing.md`) and the certificate has existed on
 this machine since 2026-09-01. `security find-identity -v -p codesigning` reports
 `1 valid identities found` — *Developer ID Application: Alex Booster (TZ33A4QCZJ)*, SHA-1
 `BF4D68E6F858688FDAD63148BD271FCA2D02474F`.
@@ -1617,38 +1622,38 @@ this machine since 2026-09-01. `security find-identity -v -p codesigning` report
 fetching Apple's own log on rejection, stapling and validating the staple; and a
 designated-requirement check that is the only thing the certificate is bought for.
 
-**Three facts follow, and they are kept apart because each one can be true while the next
+**Three facts follow and they are kept apart because each one can be true while the next
 is not.** Each was measured on 2026-09-04 against the `RichOS.app` inside
 `RichOS-1.0.2-macos-aarch64.zip`, downloaded from its public URL rather than read out of
 this machine's build directory:
 
-- **It is signed by the real identity, and carries the requirement the certificate is
+- **It is signed by the real identity and carries the requirement the certificate is
   bought for.** `codesign -dvv` reads back `Authority=Developer ID Application: Alex
   Booster (TZ33A4QCZJ)`, `flags=0x10000(runtime)`, `Timestamp=4 Sep 2026 at 6:09:03 PM`;
   `codesign -d -r-` gives `identifier "com.richos.app" and anchor apple generic and …
   certificate leaf[subject.OU] = TZ33A4QCZJ`, with no `cdhash` term anywhere in it. That
   is the whole point of the certificate: the grants are bound to the identifier and the
   team, not to the build.
-- **It is notarized, and the ticket is stapled.** `codesign -dvv` prints
-  `Notarization Ticket=stapled`, and `xcrun stapler validate` answers *"The validate
+- **It is notarized and the ticket is stapled.** `codesign -dvv` prints
+  `Notarization Ticket=stapled` and `xcrun stapler validate` answers *"The validate
   action worked!"* — which is the part that matters offline, since a stapled copy is
   admitted without the Mac reaching Apple over the network.
 - **A stranger can install it.** Three public releases exist, all on 2026-09-04 —
   v1.0.0 (14:19 UTC), v1.0.1 (16:00 UTC) and v1.0.2 (17:08 UTC) —
   at <https://github.com/WebDevBooster/richos/releases>. All three first-install zips were
   downloaded and checked, not just the newest: each carries the same Developer ID
-  authority and a stapled ticket, and on each `spctl -a -vv -t exec` answers `accepted`,
+  authority and a stapled ticket and on each `spctl -a -vv -t exec` answers `accepted`,
   `source=Notarized Developer ID`. That verdict was taken on a downloaded bundle rather
   than on a local build, which carries no quarantine attribute and proves nothing.
 
-**Still true, and nothing above should be read as claiming otherwise.**
+**Still true and nothing above should be read as claiming otherwise.**
 
 - **Rebuild survival is proven at Layer 1 and no higher.** Two Developer ID signed builds
   differing by one shipped string literal produced different code hashes and
   character-for-character identical designated requirements, so the mechanism holds
   (`docs/verification/rebuild-survival-2026-09-01.md`). Layer 2 — a real permission grant
   surviving a second install — and Layer 3 — no dialog appearing on that second install —
-  have no recorded run. Both need one install-and-grant round done by hand, and neither
+  have no recorded run. Both need one install-and-grant round done by hand and neither
   needs anything bought or waited for.
 - The path still **never selects itself** — `sign_mode` defaults to `adhoc`
   (`package-app.sh:203`), so an identity being present on the machine does not change what
@@ -1663,7 +1668,7 @@ un-notarized bundle from a run that exited 0. And `tauri-macos-sign` 2.3.4
 `codesign`'s own man page describes as "may result in some but not all code signatures
 being timestamped" — and a secure timestamp is a notarization prerequisite. So this
 script unsets those variables before invoking the bundler, re-signs with the full
-explicit argv, and owns the notary step itself.
+explicit argv and owns the notary step itself.
 
 ### Named gaps
 
@@ -1676,7 +1681,7 @@ explicit argv, and owns the notary step itself.
 - **No sidecars are bundled.** `whisper.cpp` and
   `ffmpeg` are not in the `.app`; the shipped 1.0.2 bundle is 19 MB (`du -sk` reports
   19,444 KB on the extracted copy) and assumes them on the host.
-  When they land, each must be signed with the same identity and sealed in, or the
+  When they land, each must be signed with the same identity and sealed in or the
   bundle seal breaks and takes the grants with it.
 - **`--bundles app` by default**, not the `"targets": "all"` in `tauri.conf.json`. The
   `.app` is the artefact that matters; DMG creation is a separate, flakier downstream
@@ -1688,18 +1693,18 @@ explicit argv, and owns the notary step itself.
 - **The auto-update channel is live, so this entry is a status and not a gap.**
   `tauri.conf.json` carries the
   endpoint `https://github.com/WebDevBooster/richos/releases/latest/download/latest.json`
-  and the minisign public key, and v1.0.2 published `RichOS.app.tar.gz`, its `.sig` and
+  and the minisign public key and v1.0.2 published `RichOS.app.tar.gz`, its `.sig` and
   `latest.json` beside the first-install zip. `richos/app/UPDATES.md` is the design and the
   end-to-end run — read it knowing it was written before the certificate existed and
   still describes the ad-hoc world.
-- **Launched, and talked to.** As of 2026-09-01 the bundle is installed at
+- **Launched and talked to.** As of 2026-09-01 the bundle is installed at
   `~/Applications/RichOS.app`, opened with `/usr/bin/open` (working directory `/`, launchd's
-  environment), asked which company it is for, answered, and given a sentence that came back
+  environment), asked which company it is for, answered and given a sentence that came back
   as a real reply in 5,868 ms. Boot line, ledger and the verbatim exchange:
   `docs/verification/installed-app-2026-09-01/`. That copy was the ad-hoc build, which
   `spctl` rejects — it opened only because a locally installed bundle carries no quarantine
   attribute. The published 1.0.2 bundle is the opposite case and is measured above:
-  notarized, stapled, and `accepted` by `spctl` after being downloaded.
+  notarized, stapled and `accepted` by `spctl` after being downloaded.
 
 ## Runtime config (env)
 
@@ -1712,12 +1717,12 @@ explicit argv, and owns the notary step itself.
 - `RICHOS_CLAUDE_DEBUG` — if set, the child's stderr is echoed (developer machinery only;
   never reaches the CEO view).
 
-### Company memory (loro) — off unless configured, and never inferred
+### Company memory (loro) — off unless configured and never inferred
 
 Tier C of the re-prime payload, plus the correction desk. **All three are explicit; there
 is no default and there cannot be one.** A default corpus root means one owner's Rich
 answering out of another's memory and exiting 0 either way, which is a larger failure than
-an error wearing a success code — so with these unset the app boots, says so on stderr, and
+an error wearing a success code — so with these unset the app boots, says so on stderr and
 every re-prime states that company memory was NOT consulted rather than implying there is
 none.
 
@@ -1729,7 +1734,7 @@ none.
   `loro/` directory and never will — the corpus and the vocabulary are the owner's and live
   outside a repository that gets published. When a corpus root has been resolved and this
   is unset, the root's own `loro/` directory is used if it holds both entry points — which
-  is where it is by definition in the in-repo shape, and where a provisioned corpus may or
+  is where it is by definition in the in-repo shape and where a provisioned corpus may or
   may not have one. Unusable is an ERROR naming the root, never a silent "no corpus".
 - `RICHOS_NODE_BIN` — which `node` runs the compiler. Resolved the way `RICHOS_CLAUDE_BIN`
   is: explicit first, then the first `node` on `PATH` returned as an absolute path, then
@@ -1740,14 +1745,14 @@ none.
 
 #### Two per-user pointers, for a launch that has no environment
 
-Everything above is an environment variable, and **LaunchServices gives a double-clicked
+Everything above is an environment variable and **LaunchServices gives a double-clicked
 `.app` launchd's environment**, which has none of them. That is the same premise failure
-`engine.rs` fixed for the engine directory, and until 2026-09-01 the corpus still had it:
+`engine.rs` fixed for the engine directory and until 2026-09-01 the corpus still had it:
 the signed bundle booted `loro Tier C: no corpus configured` with the whole corpus one
 symlink away (`docs/verification/installed-app-2026-09-01/`).
 
-So after the explicit variables — which stay **exclusive**, and are never second-guessed —
-resolution reads two per-user pointers, in this order, and each must LOOK like what it
+So after the explicit variables — which stay **exclusive** and are never second-guessed —
+resolution reads two per-user pointers, in this order and each must LOOK like what it
 claims to be:
 
 | pointer | shape required | resolves as |
@@ -1761,7 +1766,7 @@ loro refuses `--corpus` for a corpus that sits inside a git checkout and says so
 words — resolving the wrong flag would be `exit 2` on every rotation, forever.
 
 **Nothing creates either pointer.** Not the app, not the bundler, not an installer — there
-is no installer. It is an operator act, exactly like the engine's own install pointer, and a
+is no installer. It is an operator act, exactly like the engine's own install pointer and a
 machine without one boots saying what it looked for:
 
 ```
@@ -1776,32 +1781,32 @@ directory. Inferring the corpus from the checkout the binary sits in is the one 
 `CONTEXT-CONTRACT.md` §1 names as a larger failure than an error.
 - `RICHOS_LORO_LANES` — optional, `entity=lane,entity=lane`. Maps an ECS entity area onto a
   loro company partition. **It is a map, never a rule** — name equality is not a mapping,
-  an entity with no lane reads the CEO layer and nothing else, and a slice carrying another
+  an entity with no lane reads the CEO layer and nothing else and a slice carrying another
   company's item is refused whole. It defaults to each registered entity mapped to a lane
   of the same name, which is an ENUMERATION of the registry rather than a pattern: an id
-  that is not registered gets no lane however much it looks like one, and a lane keyed by
+  that is not registered gets no lane however much it looks like one and a lane keyed by
   an unregistered id is refused at boot as the typo it is. Setting this wins outright,
   including setting it empty, which turns lane narrowing off.
 
   **Every lane is reconciled against the corpus before anything is sent.** A mapping is a
-  claim that a partition exists, and loro refuses a lane it does not have — `exit 2: no
+  claim that a partition exists and loro refuses a lane it does not have — `exit 2: no
   such company partition "x" in this corpus` — which would make every re-prime
   `Unavailable`. So at boot the app asks the corpus which partitions it actually has
-  (`loro-context.mjs corpus`, ~0.06 s), drops every mapping the corpus cannot satisfy, and
+  (`loro-context.mjs corpus`, ~0.06 s), drops every mapping the corpus cannot satisfy and
   names each drop on stderr. A failed probe leaves the map exactly as configured; it is
   never read as "no partitions", because those are different facts.
 
   **When the corpus has partitions and an entity is bound to none of them**, its compile
-  widens, loro returns every lane, and the cross-entity guard refuses the slice whole —
-  fail-closed and correct, and it reaches the CEO as "loro could not be consulted" every
+  widens, loro returns every lane and the cross-entity guard refuses the slice whole —
+  fail-closed and correct and it reaches the CEO as "loro could not be consulted" every
   turn. Boot says so by name.
 
   **When the corpus is one repository's own record** (`layout: repo` — no partitions,
   `company: null` on every item), the lane map has nothing to narrow and the guard has
-  nothing to refuse, and a thread bound to a different entity would silently receive that
+  nothing to refuse and a thread bound to a different entity would silently receive that
   product's record under a `COMPANY MEMORY` heading. The registry names the owner from the
-  corpus's own root, and every other entity's slice is prefixed with one sentence saying
-  whose record it is. The owner's own slices are untouched, and an unowned root leaves the
+  corpus's own root and every other entity's slice is prefixed with one sentence saying
+  whose record it is. The owner's own slices are untouched and an unowned root leaves the
   owner unstated rather than guessed.
 - `RICHOS_NODE_BIN` — optional; the `node` used to run the two loro entry points.
 
@@ -1812,16 +1817,16 @@ cargo run -p richos-core --example loro_reprime_demo -- "what did we decide abou
 cargo run -p richos-core --example loro_correction_demo   # provisions its own throwaway corpus
 ```
 
-### Tier E — the evidence lookup (the CEO's own files, and never company memory)
+### Tier E — the evidence lookup (the CEO's own files and never company memory)
 
 Executes §1/§4 of the 2026-09-17 evidence-retrieval ruling. When the compiled slice's own
-`coverage` says memory did not answer — `none` or `adjacent`, and **only** those two — the
+`coverage` says memory did not answer — `none` or `adjacent` and **only** those two — the
 turn looks in the CEO's Workspace evidence zone and appends one labeled block below the
 company-memory block, under `FROM YOUR FILES (evidence — not company memory)`.
 
 The two headings carry different epistemic weight and that difference is the whole point:
 `COMPANY MEMORY (loro)` means *the company holds this belief*; `FROM YOUR FILES` means *a
-document in your Drive says this, and nobody has concluded anything from it.* The block
+document in your Drive says this and nobody has concluded anything from it.* The block
 takes **no characters from the memory lanes' budget**, enters no memory page, promotes
 nothing and is retained nowhere.
 
@@ -1831,12 +1836,12 @@ nothing and is retained nowhere.
   payload renders NOTHING about files, never a claim that the owner has none.
 - The evidence zone is derived from the corpus `LORO_CORPUS` already named, so the lookup
   and the compiler cannot disagree about which corpus this is. **`LORO_ROOT` gets no
-  lookup** — the in-repo dogfood layout has no `ceo/evidence/`, and pointing one at it
+  lookup** — the in-repo dogfood layout has no `ceo/evidence/` and pointing one at it
   would ask it to read the product checkout.
-- **There is no default zone, and the entry point refuses to invent one.** `config.js`
+- **There is no default zone and the entry point refuses to invent one.** `config.js`
   `corpusRoot()` falls back to `~/RichOS/corpus`, which is right for the interactive CLI
   and wrong for a child process launched with launchd's empty environment; so
-  `richos-evidence lookup` exits 2 with the reason on stderr when nothing named a zone, and
+  `richos-evidence lookup` exits 2 with the reason on stderr when nothing named a zone and
   reads nothing.
 - `rich` audience only in v1. A `worker` or `org` request is a reported refusal on both
   sides of the process boundary.
@@ -1858,7 +1863,7 @@ Transcript and findings: `docs/verification/2026-09-17-evidence-lookup-wired-end
 persisted crash-safe → re-prime identity injected → real Claude replies **as Rich** →
 clean render. The Tauri shell builds into a real arm64 binary. `tests/spine_tests.rs` was
 11 tests on the day this was written and is 12 now; the layout above carries the current
-number, and `docs-claims.js` is what keeps it current.
+number and `docs-claims.js` is what keeps it current.
 
 **Streaming (2026-08-24):** Rich's reply deltas now stream **live** to the UI via Tauri
 events (`rich://turn-started` → `rich://chunk`… → `rich://turn-completed`/`rich://turn-error`),
@@ -1870,13 +1875,13 @@ ever emitted.
 
 **P1.4 continuity, landed (2026-08-24):** turn-boundary rotation (context-watermark +
 explicit triggers), self-authored handoff summaries on clean rotation, mid-turn-crash
-recovery/replay (bounded to one attempt, clean-render dedup via superseded turns), and the
+recovery/replay (bounded to one attempt, clean-render dedup via superseded turns) and the
 identity/action-ledger re-prime that structurally excludes false attribution — all wired
 in `richos-core::spine` (`LeaseFactory`, `rotate_lease`, `recover_and_replay`) and proven
 both headless (`cargo test -p richos-core`, `tests/terminal_session_tests.rs`, 15 tests) and live
 against the real binary (`examples/rotation_roundtrip.rs` — a forced mid-conversation
 rotation swaps the backing Claude session and the successor correctly recalls the prior
-exchange purely via the re-prime payload). Company name, the assertiveness dial, and the
+exchange purely via the re-prime payload). Company name, the assertiveness dial and the
 worker-status drill-down are also wired end-to-end (Tauri commands → `richos/app/ui/main.js`).
 Full detail + the honest gaps (loro Tier-C compiler still a seam contract, not built; no
 attention-seam TRIGGER yet — only the persistence + UI-event seam) are in
@@ -1891,7 +1896,7 @@ binary) and live (`examples/machinery_roundtrip.rs` — one real tool-using turn
 lines projecting to 9 rows, positions 0..=34 used exactly once across both families; the run
 is kept at `docs/verification/machinery-roundtrip-2026-08-28.txt`). The emission set the
 routing is built against was measured first, not assumed:
-`docs/verification/acp-emission-probe-2026-08-28.md`, and re-measured against the native
+`docs/verification/acp-emission-probe-2026-08-28.md` and re-measured against the native
 binary in `docs/verification/native-claude-stream-json-2026-08-31/` when §16 deleted the
 adapter. Honest gaps: **retroactivity starts here and nothing earlier is recoverable**;
 readable thinking text produces no data on either wire; between-turn updates were unrouted —
@@ -1924,7 +1929,7 @@ path like the rest of techy mode, not a live stream.
 **The rotation watermark reads the wire (2026-08-29):** the trigger that decides WHEN a
 lease rotates is now the adapter's own `usage_update` `{used, size}`, consumed live off the
 machinery stream in `deliver` — not from the journal, whose Tier B is evictable. Until a
-lease has reported, the chars÷4 estimate remains as the FALLBACK, and `context_source()`
+lease has reported, the chars÷4 estimate remains as the FALLBACK and `context_source()`
 returns `Estimated` vs `Measured` so nothing can print a context number without being able
 to say where it came from.
 
@@ -1941,17 +1946,17 @@ wire rather than tuning a constant. Recomputed from the raw capture on every `ca
 LESS often (turn 302.9 → 435.7); tool-heavy traffic — an orchestrator Rich's actual shape —
 had the old trigger firing 5.86× too late (turn 493.0 against a wall at 84.1).
 
-**Mid-turn is the failure this is aimed at, and the honest answer is written down rather
+**Mid-turn is the failure this is aimed at and the honest answer is written down rather
 than implied.** A `usage_update` crossing 0.95 of the measured window DURING a turn does not
 rotate: rotation mid-turn is structurally forbidden (continuity §3.1) and a mid-turn
 rotation is worse than a late one. It records the crossing as an `Internal` action against
 that turn and forces rotation at the next boundary under `context-critical`, ahead of any
 configured ratio. **It cannot prevent a turn already in flight from hitting the wall** — if
 that happens the existing crash path (positive termination signal → `interrupted` turn →
-`recover_and_replay`) is what catches it, and that limit is stated in
+`recover_and_replay`) is what catches it and that limit is stated in
 `spine.rs::settle_context_pressure` rather than papered over. Honest gaps: the cadence
 extrapolation is linear over FRESH single-turn probe sessions, so its turn counts are
-ceilings not predictions (real per-turn consumption grows as tool output accumulates), and
+ceilings not predictions (real per-turn consumption grows as tool output accumulates) and
 nothing here surfaces context state to the UI — `context_source()` has no reader outside
 tests yet.
 
@@ -1971,12 +1976,12 @@ to name in the open-source license audit). It is bit-transparent while Rich is s
 zero reference the estimate is exactly zero, so dictation and call transcription are provably
 untouched — and it costs 0.355 % of one core.
 
-Barge-in has two rules, and **which one is in force depends on whether a canceller exists at
+Barge-in has two rules and **which one is in force depends on whether a canceller exists at
 all — not on whether it is confident.** With a canceller present: 15 frames within a sliding
 25-frame (0.400 s) window, where a frame counts only if the VAD says speech AND the canceller
 says near-end. With no canceller: the 5.008 s consecutive debounce, unchanged.
 
-**That gating changed on 2026-09-18, and it changed because the CEO tested it.** He said one
+**That gating changed on 2026-09-18 and it changed because the CEO tested it.** He said one
 ordinary sentence over Rich on his own rig and Rich did not stop — *"no matter what I said, he
 couldn't hear me."* The short rule used to require `confident()`, which on this hardware is
 unreachable: measured by `examples/aec_probe.rs` on the built-in speakers into the Elgato, the
@@ -1984,7 +1989,7 @@ echo is real and dominant (24.9 dB over the room noise) and its timing is known 
 but its ENVELOPE correlates at 0.973 while its WAVEFORM correlates at only 0.174 — so
 magnitude-squared coherence caps ANY linear canceller at **5.5 dB** here, WebRTC AEC3 and
 Apple's VoiceProcessingIO included. Clock drift, loudspeaker overdrive and reverb longer than
-the filter were each tested and eliminated. So his rig fell to the 5.008 s continuity race, and
+the filter were each tested and eliminated. So his rig fell to the 5.008 s continuity race and
 nobody speaks for five seconds without a gap: his longest unbroken run was 66 frames = 1.056 s.
 
 **The rule did not need changing. The signal did.** `confident()` asks *is leftover echo too
@@ -2005,22 +2010,22 @@ spanning his volume 60 to 4 dB above Ray's 85:
 15 of 25 on the conjunction clears the worst echo ever measured here by 2.50x; the same window
 on a bare VAD verdict would fire on Rich at 23 of 25. Pinned both ways in
 `tests/barge_in_on_the_ceos_rig.rs` — zero barge-ins and zero admitted utterances across all
-fourteen echo-only conditions with a positive control that does fire, and a barge-in 0.176 s
+fourteen echo-only conditions with a positive control that does fire and a barge-in 0.176 s
 into the first thing the CEO actually said, with his words kept. The half-duplex taint rule
 still rests on `confident()` and so still stays in force on this desk; "headphones recommended"
 is still the honest note. Five reproducible rigs carry the evidence: `aec_rig` (offline),
-`aec_live`, `aec_probe`, `aec_transcribe`, `bargein_score` (offline, and the one that chose the
+`aec_live`, `aec_probe`, `aec_transcribe`, `bargein_score` (offline and the one that chose the
 rule).
 
-**The recording of the CEO's voice is not in this repository, and there is no copy of it here to
+**The recording of the CEO's voice is not in this repository and there is no copy of it here to
 find.** `richos` is public, so the microphone track named `ceo-rig-2026-09-18-nearend2-mic.wav` is
 committed only to the private `richos-hq` repository, under its `fixtures/echo-path/` directory; it
 is resolved at run time through `$RICHOS_PRIVATE_FIXTURES` or a side-by-side `richos-hq` checkout.
 The rest of that fixture family — the reference track and both sidecars — is in
-`crates/richos-voice/tests/fixtures/echo-path/`, and none of it carries his voice. Without the
+`crates/richos-voice/tests/fixtures/echo-path/` and none of it carries his voice. Without the
 private track the one test that needs it reports `ignored` with a reason naming it — never `ok` —
 and the false-positive test above still runs everywhere, because its recordings contain no near-end
-voice. What moved, and the measurements that say the rest is safe to keep:
+voice. What moved and the measurements that say the rest is safe to keep:
 `crates/richos-voice/TESTING.md` and
 `docs/verification/2026-09-18-the-ceos-voice-moves-to-the-private-repository.md`.
 
@@ -2030,17 +2035,17 @@ a magnitude-domain echo DETECTOR for the barge-in decision path (the linear canc
 landed; this is what would make barge-in work on hardware whose echo path is not linear —
 prototyped and measured at 0.7 % false positives / 73.6 % detection on a real recording, but
 not shipped: see `aec.rs`), a live partial transcript, a warm whisper daemon, a Windows
-`SpeechSynth`, and the rest of packaging — the bundled whisper binary and models (see the
+`SpeechSynth` and the rest of packaging — the bundled whisper binary and models (see the
 voice brief's size table), which the `.app` still assumes on the host. Signing,
 notarization, stapling and the update channel have left this list: the entrypoint produces
-a Developer ID signed, notarized and stapled bundle, and three public releases have gone
+a Developer ID signed, notarized and stapled bundle and three public releases have gone
 out through it — "Packaging" above. See the feasibility notes in the handoffs.
 
 **Delegated workers, live (2026-08-29):** the engine's worker-lifecycle stream now reaches
 the CEO *during* the turn. `rich://worker-upserted` — §13's eleventh event, deferred while
 no lifecycle signal existed — carries the same `worker_activity` row a reload projects,
 built by the same two functions (`timeline::worker_activity`, the join with its session
-clause, and `timeline::worker_activity_item`, the row), so the live path and the snapshot
+clause and `timeline::worker_activity_item`, the row), so the live path and the snapshot
 path cannot drift. Before this the join ran only inside `get_timeline`: a delegation
 appeared after a snapshot read and showed as a nameless *"Worked"* row during the turn.
 The §26 fixture measured it — 0 chips live, 3 after the snapshot — and now measures the

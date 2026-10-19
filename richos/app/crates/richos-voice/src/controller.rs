@@ -5675,7 +5675,7 @@ mod tests {
         // The exact sentence `richos-core`'s `UpstreamFault::Overloaded.ceo_message()`
         // authors. Voice does not know where it came from and does not parse it.
         let reason = "Anthropic's servers are at capacity, so that request never reached \
-                      Claude. This one ends when their capacity frees up, and nothing on this \
+                      Claude. This one ends when their capacity frees up and nothing on this \
                       machine brings it back sooner.";
         CutOffDesk::handle(Some(reason), &rec, |t| spoken.lock().unwrap().push(t.to_string()));
 

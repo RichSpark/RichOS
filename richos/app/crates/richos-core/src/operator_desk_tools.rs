@@ -341,7 +341,7 @@ fn dispatch(service: &dyn DeskService, token: &str, lead_token: Option<&str>, re
 fn tools() -> Value {
     json!({"tools": [
         {"name": STOP_TOOL,
-         "description": "Stop named agents of his team, and nothing else. Call it at once when he names agents to stop, \
+         "description": "Stop named agents of his team and nothing else. Call it at once when he names agents to stop, \
 from any channel. `names`: the agents exactly as he named them. `words`: his words, verbatim. It returns what was \
 measured: say an agent stopped only when this says it did.",
          "inputSchema": {"type": "object", "additionalProperties": false, "required": ["names", "words"],
@@ -349,11 +349,11 @@ measured: say an agent stopped only when this says it did.",
                             "words": {"type": "string", "minLength": 1}}}},
         {"name": INTERRUPT_TOOL,
          "description": "Stop what his team is doing in this conversation right now: its current turn ends, its agents \
-keep running, and any messages of his still queued run next. Use it when he asks his team itself to stop, not named agents.",
+keep running and any messages of his still queued run next. Use it when he asks his team itself to stop, not named agents.",
          "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}}},
         {"name": READ_TOOL,
          "description": "What his team is doing: whether it is running here, its named agents and their status, its last \
-words, the questions it is still waiting on (asked, and no answer relayed yet), and land leases it holds. `every`: true for every conversation, not only this one.",
+words, the questions it is still waiting on (asked and no answer relayed yet) and land leases it holds. `every`: true for every conversation, not only this one.",
          "inputSchema": {"type": "object", "additionalProperties": false,
              "properties": {"every": {"type": "boolean"}}}}
     ]})

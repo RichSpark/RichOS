@@ -8,12 +8,12 @@ What changed in each stable version of RichOS, newest first; nightly builds are 
 - Added spoken replies: Rich answers out loud in his own voice, ready as soon as the app is up
 - Added Dictation: choose a function key, then speak to type in any app on your Mac (Settings, Dictation)
 - Added Use Rich from your phone: pair a phone in Settings, check that six words match, then send Rich messages and voice notes from it and get notified when he answers
-- Added question cards: when Rich needs an answer he asks on a card you answer by clicking, typing or speaking, and other work keeps going meanwhile
-- Added hiring: Rich can add teammates to your company, and the home screen shows your team
+- Added question cards: when Rich needs an answer he asks on a card you answer by clicking, typing or speaking and other work keeps going meanwhile
+- Added hiring: Rich can add teammates to your company and the home screen shows your team
 - Added video watching: name a video and Rich downloads it and tells you what is in it
 - Added the Output panel (⌘⇧O): every file a conversation produced, with previews, Open, Show in Finder, Save a copy and Add to chat
 - Added pasting or dropping screenshots and files into a conversation
-- Added Claude accounts: add more than one Claude subscription, and RichOS moves the work to the next one before the current one runs out
+- Added Claude accounts: add more than one Claude subscription and RichOS moves the work to the next one before the current one runs out
 - Added a Token spend screen that shows what Rich's work costs today, this week, this month and in total
 - Added a Claude Code quota panel in Technical view
 - Added a choice of model for Rich, separately for talking with you and for directing your team
@@ -31,7 +31,7 @@ What changed in each stable version of RichOS, newest first; nightly builds are 
 - Changed closing the window to keep Rich's work running; Quit tells you first when work would stop
 - Changed background jobs to finish and report back on their own
 - Changed updates to install without an administrator password, wait until no work is running, then relaunch by themselves with your window, conversation and draft kept
-- Improved Talk to Rich so you can pause naturally while speaking, and every word is kept
+- Improved Talk to Rich so you can pause naturally while speaking and every word is kept
 - Improved how quickly Rich's first reply arrives after you send a message
 - Improved Stop so it also ends a reply Rich is speaking
 - Improved Escape so it closes popups and dialogs
@@ -48,11 +48,11 @@ What changed in each stable version of RichOS, newest first; nightly builds are 
 
 ## 1.0.2
 
-- Fixed the setup sheet closing into an app that could do nothing, and answers now read as prose instead of showing asterisks
+- Fixed the setup sheet closing into an app that could do nothing and answers now read as prose instead of showing asterisks
 
 ## 1.0.1
 
-- Fixed the first message on a fresh install; voice no longer pretends to listen, and the window opens at its designed size
+- Fixed the first message on a fresh install; voice no longer pretends to listen and the window opens at its designed size
 
 ## 1.0.0
 

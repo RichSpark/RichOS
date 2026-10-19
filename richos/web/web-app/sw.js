@@ -48,6 +48,7 @@ const SHELL = [
 	'/lib/queue.js',
 	'/lib/thread.js',
 	'/lib/markdown.js',
+	'/lib/oxford-comma.js',
 	'/lib/api.js',
 	'/lib/link.js',
 	'/lib/storage.js',

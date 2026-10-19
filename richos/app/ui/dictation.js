@@ -16,7 +16,7 @@
 //   On. Tap F1 to talk, Needs a permission, Waiting for macOS, Starting, Not working yet,
 //   Paused: <app> is hiding your keys).
 // - NEVER "ON" WITHOUT A WORKING TOOL (recheck finding 6): with no tool holding the key the
-//   sheet says "Starting dictation…", and with a tool that watches no key "Not working yet: the
+//   sheet says "Starting RichScribe…", and with a tool that watches no key "Not working yet: the
 //   key is not being watched. Turn the switch off and on again." Both lines are new here.
 // - THE SHEET: the switch, Your key (the strip, Press a different key), What macOS asks you for,
 //   Accuracy, and on the right Try it here, the three bar states, the difference from talking to
@@ -46,7 +46,7 @@
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   };
   // Round 19's words, word for word (dictation.html and dictation-more-lines.html).
-  const OFF_NOTICE = "Dictation is off. Turn it on in Settings, under Dictation.";
+  const OFF_NOTICE = "RichScribe is off. Turn it on in Settings, under RichScribe.";
   const MODIFIER_REFUSED = "Command, Option, Control and Shift can't be used: anything you type while one is down would set off shortcuts. Use a function key, F1 to F19.";
   const TYPING_REFUSED = "That key types text. Use a function key, F1 to F19.";
   const MODIFIERS = ["Shift", "Control", "Alt", "Meta", "CapsLock", "Fn"];
@@ -55,7 +55,7 @@
   let axWait = null; // { blurred } while the window waits for Accessibility in System Settings
   let micWait = null; // { blurred } while it waits for the microphone in System Settings
   let capture = null; // { err } while "Press a different key" waits
-  let feedback = null; // "on": the drawn "Dictation is on. Try it in the box on the right, or in any app."
+  let feedback = null; // "on": the drawn "RichScribe is on. Try it in the box on the right or in any app."
   let saved = false, savedTimer = null, lastRead = 0, reading = false, registered = false, nudged = false;
   let waiters = []; // RichDictation.turnOn's answers, given when the flow settles
   let flow = false;
@@ -110,7 +110,7 @@
       if (v) {
         // The first read of a launch: dictation left on may never have been set up (he turned it
         // on, Accessibility was refused, and he quit, allowed it and reopened RichOS), so it is
-        // set up once it works. The app opens the "Dictation feature" conversation only when it
+        // set up once it works. The app opens the "RichScribe feature" conversation only when it
         // never did (`dictation_offer::feature_action`), so this never makes a second one
         // (second review rv-20261013T193550Z, finding 1).
         if (!view && v.on) setUpPending = true;
@@ -165,13 +165,13 @@
   function build() {
     if (sheet.isConnected) return;
     sheet.innerHTML = `<section class="overlay-panel dict-panel">
-    <header class="dict-heading"><div><p class="dict-eyebrow">Settings</p><h2 id="dict-title">Dictation</h2>
+    <header class="dict-heading"><div><p class="dict-eyebrow">Settings</p><h2 id="dict-title">RichScribe</h2>
       <p class="dict-lede">Type with your voice in any app on your Mac. Your words appear where your cursor is.</p></div>
-      <button id="dict-close" type="button" aria-label="Close Dictation">${ICON.close}</button></header>
+      <button id="dict-close" type="button" aria-label="Close RichScribe">${ICON.close}</button></header>
     <div class="dict-body"><div id="dict-col" class="dict-col"></div>
       <div class="dict-how">
         <h3 class="dict-how-title">Try it here</h3>
-        <div id="dict-try" class="dict-try" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Try dictation here" data-ph=""></div>
+        <div id="dict-try" class="dict-try" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Try RichScribe here" data-ph=""></div>
         <p id="dict-try-note" class="dict-how-p is-soft" hidden></p>
         <div class="dict-how-sec">
           <p class="dict-how-h">While you talk</p>
@@ -184,7 +184,7 @@
         </div>
         <div class="dict-how-sec">
           <p class="dict-how-h">Not the same as talking to me</p>
-          <p class="dict-how-p is-soft">The round button beside my message box sends what you say to me. Dictation only types. You read it, fix it if you like, and send it yourself.</p>
+          <p class="dict-how-p is-soft">The round button beside my message box sends what you say to me. RichScribe only types. You read it, fix it if you like and send it yourself.</p>
         </div>
         <div class="dict-how-sec dict-priv">${ICON.lock}<p class="dict-how-p"><b>Your voice stays on this Mac.</b> Nothing you say is sent anywhere.</p></div>
       </div></div></section>`;
@@ -207,7 +207,7 @@
     const keys = [];
     if (start === 1) keys.push(`<span class="dict-key is-esc" aria-hidden="true">esc</span>`);
     for (let i = start; i < start + 7 && i <= 19; i++) keys.push(`<button class="dict-key" type="button" role="radio" aria-checked="${n === i}" data-act="key" data-k="${i}">F${i}</button>`);
-    return `<div class="dict-keys" role="radiogroup" aria-label="Dictation key">${keys.join("")}</div>`;
+    return `<div class="dict-keys" role="radiogroup" aria-label="RichScribe key">${keys.join("")}</div>`;
   }
   function sheetHtml() {
     const k = keyName();
@@ -220,19 +220,19 @@
     // line 4: another app left Secure Event Input on
     else if (view.secure) { st = `Paused: ${secureHead(k)} <span class="dict-fix">${secureFix()}</span>`; cls = " is-attention"; }
     // no tool holds the key yet (it is starting, or it could not start): never "On"
-    else if (view.owner === "none") { st = "Starting dictation&hellip;"; }
+    else if (view.owner === "none") { st = "Starting RichScribe&hellip;"; }
     // the tool runs but watches no key: never "On" (recheck finding 6)
     else if (!view.keyTap) { st = "Not working yet: the key is not being watched. Turn the switch off and on again."; cls = " is-attention"; }
     // On, whichever copy's tool holds the key: round 19's line, true for both
-    else { st = `On. Tap ${kcap(k)} in any app, talk, and tap it again.`; cls = " is-on"; }
+    else { st = `On. Tap ${kcap(k)} in any app, talk and tap it again.`; cls = " is-on"; }
     const warn = view.on && ((!elsewhere() && (mic() === "denied" || ax() === "denied")) || (ready() && !!view.secure) || (ready() && view.owner !== "none" && !view.keyTap));
     // The gold card only with a tool that holds the key and watches it (recheck finding 6).
     let html = `<div class="dict-card${view.on && !warn && toolWorking() ? " is-on" : ""}${warn ? " is-warn" : ""}"><span class="dict-spine"></span>
       <div class="dict-card-main"><h3 class="dict-card-title">Dictate in any app</h3><p class="dict-card-sub${cls}" id="dict-state">${st}</p></div>
       <button class="dict-switch" id="dict-switch" type="button" role="switch" data-act="toggle-on" aria-checked="${view.on}" aria-label="Dictate in any app"></button></div>`;
     // line 2: dictation works only while RichOS is open (every copy; the CEO, 2026-10-08), on or off
-    html += `<p class="dict-copy-note" id="dict-copy-note">${ICON.info}<span><b>Works only while RichOS is open.</b> When you quit RichOS, dictation stops until you open it again.</span></p>`;
-    if (feedback === "on" && works()) html += `<p class="dict-feedback" id="dict-feedback" role="status">${ICON.check}<span>Dictation is on. Try it in the box on the right, or in any app.</span></p>`;
+    html += `<p class="dict-copy-note" id="dict-copy-note">${ICON.info}<span><b>Works only while RichOS is open.</b> When you quit RichOS, RichScribe stops until you open it again.</span></p>`;
+    if (feedback === "on" && works()) html += `<p class="dict-feedback" id="dict-feedback" role="status">${ICON.check}<span>RichScribe is on. Try it in the box on the right or in any app.</span></p>`;
     // the key
     html += `<section class="dict-sec"><div class="dict-sec-h"><h4 class="dict-sec-t">Your key</h4><span class="dict-sec-note">Tap once to start, once more to stop. Nothing to hold down.</span></div>`;
     if (capture) {
@@ -240,7 +240,7 @@
       html += capture.err ? `<p class="dict-key-err" id="dict-key-err" role="alert">${esc(capture.err)}</p>` : `<p class="dict-key-say is-soft">Any function key works, F1 to F19.</p>`;
     } else {
       html += keysHtml();
-      html += `<div class="dict-key-row"><p class="dict-key-say">${k === "F1" ? "<b>F1</b> is the key just right of <b>esc</b>." : `<b>${esc(k)}</b> starts and stops dictation.`} Pick one you rarely use.</p><button class="dict-btn dict-btn-quiet" id="dict-capture" type="button" data-act="capture">Press a different key</button></div>`;
+      html += `<div class="dict-key-row"><p class="dict-key-say">${k === "F1" ? "<b>F1</b> is the key just right of <b>esc</b>." : `<b>${esc(k)}</b> starts and stops RichScribe.`} Pick one you rarely use.</p><button class="dict-btn dict-btn-quiet" id="dict-capture" type="button" data-act="capture">Press a different key</button></div>`;
     }
     html += `</section>`;
     // permissions
@@ -271,8 +271,8 @@
     }
     tryBox.dataset.ph = works() ? `Click here, tap ${keyName()} and say something.`
       : ready() && view.secure ? "You can try it here once your keys are back."
-      : ready() && !toolWorking() ? "You can try it here once dictation has started."
-      : view.on ? "Allow both permissions on the left to try it here." : "Turn dictation on to try it here.";
+      : ready() && !toolWorking() ? "You can try it here once RichScribe has started."
+      : view.on ? "Allow both permissions on the left to try it here." : "Turn RichScribe on to try it here.";
     tryNote.textContent = works() ? "This box is only for trying. Your words go wherever your cursor is." : "";
     tryNote.hidden = !works();
   }
@@ -312,7 +312,7 @@
     const range = document.createRange(); range.selectNodeContents(tryBox); range.collapse(false);
     const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
   }
-  // The line under the card ("Dictation is on. Try it in the box on the right, or in any app.")
+  // The line under the card ("RichScribe is on. Try it in the box on the right or in any app.")
   // is DECIDED here, where the flow reaches On, on round 19's own condition (dictation.html
   // `turnOn`, `afterGrant`, `ss-tog`: `if (ready()) S.feedback = "on"`), and DRAWN by `sheetHtml`
   // only once the tool holds the key and watches it (`works()`; never On without a working tool).
@@ -329,7 +329,7 @@
   }
   // **SET UP, SAID ONCE** (the CEO, 2026-10-13, onboarding5.png): a turn-on that worked is
   // announced as `richos:dictation-set-up` when the sheet closes, so the key named in the
-  // "Dictation feature" conversation is the one he picked in the sheet (main.js listens). If it
+  // "RichScribe feature" conversation is the one he picked in the sheet (main.js listens). If it
   // became ready with the sheet already closed (Accessibility allowed later), it is said then.
   let setUpPending = false;
   function announceSetUp() {
@@ -422,11 +422,11 @@
     const v = await call("dictation_set_key", { key: n });
     if (v) view = v;
     paint();
-    // The "Dictation feature" message names the key; a new key replaces it (main.js listens).
+    // The "RichScribe feature" message names the key; a new key replaces it (main.js listens).
     if (v) window.dispatchEvent(new CustomEvent("richos:dictation-key-changed"));
     const strip = (col && col.querySelector(`[data-act="key"][data-k="${n}"]`)) || $("dict-capture");
     if (strip) strip.focus();
-    if (window.RichSettings && window.RichSettings.toast) window.RichSettings.toast(`Dictation now starts and stops with F${n}.`);
+    if (window.RichSettings && window.RichSettings.toast) window.RichSettings.toast(`RichScribe now starts and stops with F${n}.`);
   }
   async function startCapture() {
     capture = { err: null };

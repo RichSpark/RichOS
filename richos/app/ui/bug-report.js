@@ -80,20 +80,20 @@ window.RichBug = (function () {
   var WORDS = {
     bug: {
       name: "Bust a bug", card: "Bug report", glyph: GLYPH_BUG, close: "Close the bug report panel",
-      ask: "What went wrong? Tell me in your own words, typed or out loud, and where it happened if it wasn't here. ",
-      phAsk: "Tell Rich what went wrong…", phDraft: "Tell Rich what to change, or press Send…",
+      ask: "What went wrong? Tell me in your own words, typed or out loud and where it happened if it wasn't here. ",
+      phAsk: "Tell Rich what went wrong…", phDraft: "Tell Rich what to change or press Send…",
       none: "No problem. Nothing was written up or sent.",
       hereItIs: "Here's the report as I'd file it. Nothing goes out until you press Send. Anyone can read GitHub issues, so I left out names, company details and file paths.",
-      notChecked: "I couldn't check this report for private details yet, because Claude didn't answer, so it isn't ready to send. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
-      changesNotChecked: "I couldn't check your changes for private details yet, because Claude didn't answer, so I didn't send the report. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
-      shownAgain: "I checked it again before sending, and some of its words would go out differently from how the card showed them. Here it is exactly as it would go. Nothing goes out until you press Send.",
+      notChecked: "I couldn't check this report for private details yet, because Claude didn't answer, so it isn't ready to send. It's saved on this Mac and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      changesNotChecked: "I couldn't check your changes for private details yet, because Claude didn't answer, so I didn't send the report. It's saved on this Mac and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      shownAgain: "I checked it again before sending and some of its words would go out differently from how the card showed them. Here it is exactly as it would go. Nothing goes out until you press Send.",
       earlier: "I've checked the bug report you told me about earlier. ",
       drop: "Cancel report", go: "Send report",
-      droppedUnchecked: "Canceled. Nothing was sent, and it's no longer saved on this Mac.",
+      droppedUnchecked: "Canceled. Nothing was sent and it's no longer saved on this Mac.",
       notDropped: "I couldn't take the report off this Mac, so it's still saved here. Press Cancel report to try again.",
       changing: "Rich is changing the report…",
       changedQueued: " The report changed, so it waits for you to send it again.", changedDraft: " It still waits for you to send it.",
-      notChanged: "I couldn't change the report just now. Press Change it and change the words yourself, or tell me again.",
+      notChanged: "I couldn't change the report just now. Press Change it and change the words yourself or tell me again.",
       notCanceled: "I couldn't cancel the report: it's still saved on this Mac and will go out by itself. Press Cancel report to try again.",
       notTakenBack: "I couldn't take the report back to change it: it's still saved on this Mac and will go out by itself. Press Change it to try again.",
       readers: "GitHub issues", thing: "report", notInIt: "it isn't in the report.",
@@ -101,24 +101,24 @@ window.RichBug = (function () {
       notSaved: "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.",
       canceled: "Canceled. Nothing was sent.",
       savedToast: "Your bug report is saved on this Mac and goes out by itself when it can.",
-      uncheckedToast: "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers, and show it to you here.",
+      uncheckedToast: "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
     idea: {
       name: "Request a feature", card: "Feature idea", glyph: GLYPH_BULB, close: "Close the feature request panel",
       ask: "What would you like RichOS to do? Tell me in your own words, typed or out loud. ",
-      phAsk: "Tell Rich your idea…", phDraft: "Tell Rich what to change, or post it…",
+      phAsk: "Tell Rich your idea…", phDraft: "Tell Rich what to change or post it…",
       none: "No problem. Nothing was written up or posted.",
       hereItIs: "Here's your idea as I'd post it. Nothing goes out until you press Post idea. Anyone can read GitHub Discussions, so I left out names, company details and file paths.",
-      notChecked: "I couldn't check your idea for private details yet, because Claude didn't answer, so it isn't ready to post. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
-      changesNotChecked: "I couldn't check your changes for private details yet, because Claude didn't answer, so I didn't post your idea. It's saved on this Mac, and I'll check it by myself as soon as Claude answers, then show it to you here.",
-      shownAgain: "I checked it again before posting, and some of its words would go out differently from how the card showed them. Here it is exactly as it would go. Nothing goes out until you press Post idea.",
+      notChecked: "I couldn't check your idea for private details yet, because Claude didn't answer, so it isn't ready to post. It's saved on this Mac and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      changesNotChecked: "I couldn't check your changes for private details yet, because Claude didn't answer, so I didn't post your idea. It's saved on this Mac and I'll check it by myself as soon as Claude answers, then show it to you here.",
+      shownAgain: "I checked it again before posting and some of its words would go out differently from how the card showed them. Here it is exactly as it would go. Nothing goes out until you press Post idea.",
       earlier: "I've checked the idea you told me about earlier. ",
       drop: "Cancel post", go: "Post idea",
-      droppedUnchecked: "Canceled. Nothing was posted, and it's no longer saved on this Mac.",
+      droppedUnchecked: "Canceled. Nothing was posted and it's no longer saved on this Mac.",
       notDropped: "I couldn't take your idea off this Mac, so it's still saved here. Press Cancel post to try again.",
       changing: "Rich is changing the post…",
       changedQueued: " The post changed, so it waits for you to post it again.", changedDraft: " It still waits for you to post it.",
-      notChanged: "I couldn't change the post just now. Press Change it and change the words yourself, or tell me again.",
+      notChanged: "I couldn't change the post just now. Press Change it and change the words yourself or tell me again.",
       notCanceled: "I couldn't cancel the post: it's still saved on this Mac and will be posted by itself. Press Cancel post to try again.",
       notTakenBack: "I couldn't take the post back to change it: it's still saved on this Mac and will be posted by itself. Press Change it to try again.",
       readers: "GitHub Discussions", thing: "post", notInIt: "it isn't in the post.",
@@ -126,7 +126,7 @@ window.RichBug = (function () {
       notSaved: "I couldn't save your idea on this Mac, so nothing was posted. Press Post idea to try again.",
       canceled: "Canceled. Nothing was posted.",
       savedToast: "Your idea is saved on this Mac and is posted by itself when it can.",
-      uncheckedToast: "Your idea is saved on this Mac. Rich will check it as soon as Claude answers, and show it to you here.",
+      uncheckedToast: "Your idea is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
   };
   function W(f) { return WORDS[(f && f.kind) || "bug"]; }
@@ -427,7 +427,7 @@ window.RichBug = (function () {
     var where =
       scr.key === "conversation" ? "I've noted that you were on " + scr.here + (f.kind === "idea" ? ", in case it's about this screen." : ".")
       : scr.key === "unbound" ? "I've noted that you were on " + scr.here + ", which can't take messages yet, so we're talking here."
-      : openWindow() ? "I've noted that you were in " + scr.here + ", and it stays open beside us."
+      : openWindow() ? "I've noted that you were in " + scr.here + " and it stays open beside us."
       : "I've noted that you were on " + scr.here + ".";
     var art = richSays(f, [W(f).ask + where]);
     var acts = node("div", "bug-actions-inline");
@@ -865,7 +865,7 @@ window.RichBug = (function () {
     var warn = node("p", "bug-warn");
     warn.hidden = true;
     c.appendChild(warn);
-    var hint = node("p", "bug-edithint", "Change any of the words above, or tell Rich what to change.");
+    var hint = node("p", "bug-edithint", "Change any of the words above or tell Rich what to change.");
     hint.hidden = true;
     c.appendChild(hint);
     c.appendChild(node("div", "bug-actions"));
@@ -1257,14 +1257,14 @@ window.RichBug = (function () {
 
   // ---- send, and what happens when it can't go ----------------------------------------------
   var WAITING_FIRST = {
-    offline: "This Mac is offline, so the report didn't go out. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll send it by myself as soon as you're back online, and tell you here when it's gone.",
+    offline: "This Mac is offline, so the report didn't go out. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll send it by myself as soon as you're back online and tell you here when it's gone.",
     "github-down": "GitHub isn't answering right now, so the report didn't go out. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll keep trying every few minutes and tell you here when it's filed.",
-    "not-set-up": "The RichOS reporting account isn't set up on this Mac yet, so the report didn't go out. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll send it by myself once the account is set up, and tell you here when it's filed.",
+    "not-set-up": "The RichOS reporting account isn't set up on this Mac yet, so the report didn't go out. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll send it by myself once the account is set up and tell you here when it's filed.",
     refused: "GitHub didn't accept the report from the RichOS reporting account, so it didn't go out. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll try again in a few minutes and tell you here when it's filed.",
   };
   var WAITING_AGAIN = {
     offline: "Still offline. It stays saved here and goes out by itself when you're back online.",
-    "github-down": "GitHub still isn't answering. It stays saved here, and I'll keep trying.",
+    "github-down": "GitHub still isn't answering. It stays saved here and I'll keep trying.",
   };
   var CAME_BACK = {
     offline: "You're back online, so I sent your bug report.",
@@ -1274,9 +1274,9 @@ window.RichBug = (function () {
   // account GitHub will not let post in RichOS's Discussions (a token without that permission),
   // said as it is, with the account it was.
   var IDEA_WAITING_FIRST = {
-    offline: "This Mac is offline, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself as soon as you're back online, and tell you here when it's up.",
+    offline: "This Mac is offline, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself as soon as you're back online and tell you here when it's up.",
     "github-down": "GitHub isn't answering right now, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll keep trying every few minutes and tell you here when it's up.",
-    "not-set-up": "The RichOS reporting account isn't set up on this Mac yet, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself once the account is set up, and tell you here when it's up.",
+    "not-set-up": "The RichOS reporting account isn't set up on this Mac yet, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself once the account is set up and tell you here when it's up.",
   };
   function ideaRefused() {
     var who = accountIsUser() ? "your GitHub account, @" + context.account.login + "," : "the RichOS reporting account";
@@ -1350,7 +1350,7 @@ window.RichBug = (function () {
     var first = f.kind === "idea"
       ? (d.reason === "refused" ? ideaRefused() : IDEA_WAITING_FIRST[d.reason] || IDEA_WAITING_FIRST["github-down"])
       : WAITING_FIRST[d.reason] || WAITING_FIRST["github-down"];
-    richSays(f, [(again && (WAITING_AGAIN[d.reason] || "It still didn't go out. It stays saved here, and I'll keep trying.")) || first]);
+    richSays(f, [(again && (WAITING_AGAIN[d.reason] || "It still didn't go out. It stays saved here and I'll keep trying.")) || first]);
   }
 
   /// `lead`, when given, is Rich's first sentence instead (a report that went out before it

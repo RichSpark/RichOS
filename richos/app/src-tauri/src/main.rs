@@ -1115,9 +1115,9 @@ fn create_thread(app: AppHandle, state: State<AppState>, title: String) -> Resul
     Ok(id)
 }
 
-/// A conversation was created or renamed: a paired phone hears its name now rather than at the
-/// next turn's end or its next `hello` (`phone::PhoneRuntime::threads_changed`). Off the
-/// command's thread, like the push after a turn, so the command never waits on the channel.
+/// A conversation was created, renamed or titled by Haiku: a paired phone hears its name now
+/// rather than at the next turn's end or its next `hello` (`phone::PhoneRuntime::threads_changed`).
+/// Off the caller's thread, like the push after a turn, so it never waits on the channel.
 fn tell_the_phone_the_threads(app: &AppHandle) {
     if let Some(runtime) = app.try_state::<Arc<phone::PhoneRuntime>>() {
         let runtime = Arc::clone(&runtime);
@@ -1874,7 +1874,7 @@ const LORO_DESK_ABSENT_MESSAGE: &str =
 /// is the worse direction: it teaches him not to look for a control that is right there.
 const ENTITY_UNRESOLVED_MESSAGE: &str =
     "I can't tell which company this work belongs to, so I won't guess. Filing it under \
-     the wrong one would mix two companies' records together, and that's not a mistake \
+     the wrong one would mix two companies' records together and that's not a mistake \
      worth risking to save you a question. Pick the company and I'll keep everything under \
      it from then on.";
 
@@ -2214,7 +2214,7 @@ fn main() {
             startup_alert::cannot_start(
                 &format!("application startup: {error}"),
                 "RichOS stopped before it could open a window. It was working out which copy \
-                 of itself to run, and that step did not finish, so it closed itself rather \
+                 of itself to run and that step did not finish, so it closed itself rather \
                  than start in a state it could not vouch for.\n\nOpening RichOS again is \
                  worth one try.",
             );
@@ -2725,6 +2725,20 @@ fn main() {
             // Attach the live UI sink: streamed reply deltas + turn-state events flow to
             // the webview via Tauri events (see app/STREAMING.md for the contract).
             spine.set_observer(Box::new(TauriEmitter { app: app.handle().clone() }));
+            // Haiku's title for a new conversation (`thread_title.rs`) arrives here, off the
+            // spine, after the first message. The sidebar is told to read its rows again, and a
+            // connected phone gets the list with the new name on its live stream.
+            let titles = app.handle().clone();
+            spine.set_title_observer(Arc::new(move |thread_id: &str, title: &str| {
+                let Some(state) = titles.try_state::<AppState>() else { return };
+                if show_haiku_title(&state.nav, thread_id, title) {
+                    let summary = serde_json::json!({ "threadId": thread_id });
+                    if let Err(e) = titles.emit(richos_core::live::EVENT_THREAD_SUMMARY_UPDATED, summary) {
+                        eprintln!("[richos] the sidebar was not told about the new title ({e})");
+                    }
+                    tell_the_phone_the_threads(&titles);
+                }
+            }));
 
             // Durable CEO preferences (company name, assertiveness dial, the raw-retention
             // window) — same app data dir as the ledger, same durability posture, survives
@@ -3725,6 +3739,7 @@ fn main() {
             claude_account_remove,
             claude_account_use_first,
             claude_account_discard,
+            claude_account_email,
             claude_account_nudge_answer,
             set_claude_at_threshold,
             approve_claude_reset,
@@ -3947,6 +3962,8 @@ fn main() {
             // — appended ---
             home_team,
             // --- a job's result said on its own (2026-10-15) — appended ---
+            // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
+            set_oxford_comma,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -4639,7 +4656,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
     #[cfg(target_os = "macos")]
     if let Some(link) = app.try_state::<Arc<dictation_app::Link>>() {
         if !link.finish() {
-            return Err("a dictation is still listening; tap its key to finish it, then try again".into());
+            return Err("RichScribe is still listening; tap its key to finish, then try again".into());
         }
     }
     let handle = app.state::<VoiceHandle>();
@@ -5057,7 +5074,7 @@ fn thread_turn_facts(ledger: &Ledger, thread_id: &str) -> (Option<String>, bool)
 /// §21 "Entity binding failure" wants one honest statement, and two independently-authored
 /// versions of it would drift the moment either side is edited.
 const UNBOUND_THREAD_EXPLANATION: &str =
-    "This thread has no entity home: it predates entity scoping, and Rich will not guess \
+    "This thread has no entity home: it predates entity scoping and Rich will not guess \
      which entity this work belongs to. An operator must bind it explicitly.";
 
 fn active_binding_view(spine: &dyn SpineView) -> Option<ActiveContext> {
@@ -5087,8 +5104,7 @@ fn build_navigation_tree(spine: &dyn SpineView, nav_state: &nav::NavState) -> Na
     let summaries = spine.threads();
     let row = |s: &ThreadSummary| -> ThreadRow {
         let (last_turn_state, has_pending_turn) = thread_turn_facts(ledger, &s.id);
-        let display_title =
-            nav_state.renamed_threads.get(&s.id).cloned().unwrap_or_else(|| s.title.clone());
+        let display_title = nav_state.display_title(&s.id, &s.title);
         ThreadRow {
             id: s.id.clone(),
             title: s.title.clone(),
@@ -5220,7 +5236,7 @@ struct OnboardingView {
 /// say one thing rather than two versions of one thing.
 const ONBOARDING_UNUSABLE_HEADLINE: &str = "I couldn't read your notes about this company.";
 const ONBOARDING_UNUSABLE_MESSAGE: &str =
-    "I'm working without them, and I won't guess at what they said. Whoever set RichOS up \
+    "I'm working without them and I won't guess at what they said. Whoever set RichOS up \
      will need to look at that.";
 
 fn onboarding_view_in(reader: &SpineReader) -> OnboardingView {
@@ -5472,7 +5488,7 @@ const ENTITY_PINNED_MESSAGE: &str =
 fn unknown_company_message(id: &str) -> String {
     format!(
         "I don't have a company called \"{id}\" on file, so I won't file anything under it. \
-         Pick one of the companies I do have, or whoever set RichOS up can add it."
+         Pick one of the companies I do have or whoever set RichOS up can add it."
     )
 }
 
@@ -5868,6 +5884,16 @@ fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_c
     state.quota.remove_account(&id).map_err(|e| e.to_string())
 }
 
+/// **Show email** on an account's card (round 31, the CEO 2026-10-18: "an extra click there
+/// somehow to temporarily reveal which email is connected to which account name"). Read at the
+/// click from Claude Code's own `claude auth status --json` under that account's folder
+/// (`provider_auth::signed_in_as`), returned, and not kept anywhere.
+#[richos_command::command]
+fn claude_account_email(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::SignedInAs, String> {
+    let folder = state.quota.accounts.sign_in_folder(&id).ok_or("That account is no longer on this Mac.")?;
+    Ok(richos_core::provider_auth::signed_in_as(&resolve_claude_bin(), folder.as_deref()))
+}
+
 /// **Not now** on Rich's one-time suggestion of a second account (round 18, `one-nudge`).
 #[richos_command::command]
 fn claude_account_nudge_answer(state: State<AppState>, answer: String) -> Result<richos_core::quota::View, String> {
@@ -6215,7 +6241,7 @@ const COMPANY_NAME_REQUIRED_MESSAGE: &str =
 fn company_folder_message(folder: &Path, why: &str) -> String {
     format!(
         "I couldn't use \"{}\" as this company's folder: {why}. Give me a folder that's \
-         already on this Mac, or leave it blank: a company works without one.",
+         already on this Mac or leave it blank: a company works without one.",
         folder.display()
     )
 }
@@ -6367,7 +6393,7 @@ fn register_entity(
             richos_core::entity::EntityError::OverlappingRoot { other, other_root, .. } => format!(
                 "That folder is inside (or contains) the folder I already have for \"{other}\" \
                  ({}). If I kept both I wouldn't be able to tell which company work in there \
-                 belongs to, and I won't guess. Pick a folder that isn't shared, or leave it \
+                 belongs to and I won't guess. Pick a folder that isn't shared or leave it \
                  blank.",
                 other_root.display()
             ),
@@ -6528,7 +6554,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
     // 2. Thread titles (ledger title AND the CEO's rename override — searching for what
     //    you can see on screen has to work).
     for s in &summaries {
-        let display = nav_state.renamed_threads.get(&s.id).cloned().unwrap_or_else(|| s.title.clone());
+        let display = nav_state.display_title(&s.id, &s.title);
         let matched = find_folded(&fold_chars(&s.title), &needle).is_some()
             || find_folded(&fold_chars(&display), &needle).is_some();
         if matched {
@@ -6550,7 +6576,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
             break;
         }
         let Ok(messages) = ledger.messages(&s.id) else { continue };
-        let display = nav_state.renamed_threads.get(&s.id).cloned().unwrap_or_else(|| s.title.clone());
+        let display = nav_state.display_title(&s.id, &s.title);
         let mut per_thread = 0usize;
         for m in messages.iter().rev() {
             if per_thread >= SEARCH_HITS_PER_THREAD || hits.len() >= limit {
@@ -6633,6 +6659,19 @@ fn set_thread_pinned(state: State<AppState>, thread_id: String, pinned: bool) ->
 #[richos_command::command]
 fn set_thread_archived(state: State<AppState>, thread_id: String, archived: bool) -> Result<(), String> {
     state.nav.lock().unwrap().set_thread_archived(&thread_id, archived).map_err(|e| e.to_string())
+}
+
+/// **Haiku's title for a new conversation** (CEO, 2026-10-19), kept as a display title beside
+/// his renames. Returns whether it is now what the conversation is called: never when he has
+/// named the conversation himself (`nav::NavStore::set_auto_title`).
+fn show_haiku_title(nav: &Mutex<nav::NavStore>, thread_id: &str, title: &str) -> bool {
+    match nav.lock().unwrap().set_auto_title(thread_id, title) {
+        Ok(kept) => kept,
+        Err(e) => {
+            eprintln!("[richos] Haiku's conversation title was not saved ({e})");
+            false
+        }
+    }
 }
 
 /// A DISPLAY override. The ledger's title is evidence and is left exactly as written — see
@@ -7902,6 +7941,82 @@ mod navigation_tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// CEO, 2026-10-19: Haiku's title replaces the provisional one in the sidebar by itself,
+    /// and "the user is free to manually change that thread title any time they want".
+    #[test]
+    fn haikus_title_names_the_row_and_his_own_name_is_never_replaced() {
+        let (mut spine, path) = spine_from_real_ledger("haiku-title");
+        let nav_path = path.with_extension("nav.json");
+        if nav_path.exists() {
+            std::fs::remove_file(&nav_path).unwrap();
+        }
+        let nav = Mutex::new(nav::NavStore::open(&nav_path));
+        let reader = spine.reader();
+        let shown = |nav: &Mutex<nav::NavStore>, id: &str| {
+            let tree = build_navigation_tree(&*reader.snapshot(), nav.lock().unwrap().state());
+            tree.groups.iter().flat_map(|g| &g.threads).chain(&tree.unbound)
+                .find(|t| t.id == id).expect("listed").display_title.clone()
+        };
+        assert_eq!(shown(&nav, BOUND_ID), "Running", "until Haiku answers, the provisional title stays");
+        assert!(show_haiku_title(&nav, BOUND_ID, "Weekly running plan"));
+        assert_eq!(shown(&nav, BOUND_ID), "Weekly running plan");
+
+        // He renames it afterwards: his name is shown, and a later answer changes nothing.
+        nav.lock().unwrap().rename_thread(BOUND_ID, "My plan").unwrap();
+        assert!(!show_haiku_title(&nav, BOUND_ID, "Something else"));
+        assert_eq!(shown(&nav, BOUND_ID), "My plan");
+
+        // He named it before Haiku answered: Haiku's title is never kept for it.
+        nav.lock().unwrap().rename_thread(UNBOUND_ID, "Old notes").unwrap();
+        assert!(!show_haiku_title(&nav, UNBOUND_ID, "General discussion"));
+        assert_eq!(shown(&nav, UNBOUND_ID), "Old notes");
+
+        // Durable: the same names after a relaunch.
+        let reopened = nav::NavStore::open(&nav_path);
+        assert_eq!(reopened.state().display_title(BOUND_ID, "Running"), "My plan");
+        assert_eq!(reopened.state().auto_titles.get(BOUND_ID).map(String::as_str), Some("Weekly running plan"));
+        std::fs::remove_file(&nav_path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// **Haiku's title reaches a phone that is already connected, as a `threads` frame** (review
+    /// `rv-20261019T135509Z-1d83fd75-da31`: it showed only on the phone's next list load). The
+    /// list is read the way `PhoneBridge::threads_changed` reads it (the reader's snapshot, named
+    /// as the sidebar names it) and sent the way `PhoneRuntime::threads_changed` sends it.
+    #[test]
+    fn a_saved_haiku_title_reaches_a_connected_phone_as_a_threads_frame() {
+        let (mut spine, path) = spine_from_real_ledger("haiku-title-phone");
+        let nav_path = path.with_extension("nav.json");
+        if nav_path.exists() {
+            std::fs::remove_file(&nav_path).unwrap();
+        }
+        let nav = Mutex::new(nav::NavStore::open(&nav_path));
+        let reader = spine.reader();
+        let hub = phone::stream::PhoneHub::new();
+        hub.set_live(true);
+        let mut connected = hub.subscribe();
+        let phone_hears = |rx: &mut tokio::sync::broadcast::Receiver<phone::stream::Frame>| {
+            let frame = rx.try_recv().expect("a threads frame on the live stream");
+            assert_eq!(frame.kind, "threads");
+            let data: serde_json::Value = serde_json::from_str(&frame.data).unwrap();
+            data["threads"].as_array().unwrap().iter()
+                .find(|t| t["id"] == BOUND_ID).expect("listed")["title"].as_str().unwrap().to_string()
+        };
+        let tell_the_phone =
+            || phone::send_threads(&hub, &phone::bridge::titled(reader.snapshot().threads(), nav.lock().unwrap().state()));
+
+        assert!(show_haiku_title(&nav, BOUND_ID, "Weekly running plan"));
+        tell_the_phone();
+        assert_eq!(phone_hears(&mut connected), "Weekly running plan", "Haiku's title, not the provisional one");
+
+        // He renames it: the phone hears his name, the same way.
+        nav.lock().unwrap().rename_thread(BOUND_ID, "My plan").unwrap();
+        tell_the_phone();
+        assert_eq!(phone_hears(&mut connected), "My plan");
+        std::fs::remove_file(&nav_path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+    }
+
     #[test]
     fn search_finds_titles_and_entities_but_never_an_unbound_threads_contents() {
         let (mut spine, path) = spine_from_real_ledger("search");
@@ -8480,7 +8595,7 @@ fn spoken_unsuppress_term(state: State<AppState>, key: String) -> Result<(), Str
 /// fix, and it invents no control, because there genuinely is none in the app. Asking him
 /// what he thinks and then dropping the answer would be worse than not asking.
 const FEEDBACK_STORE_UNAVAILABLE: &str =
-    "I can't keep an answer right now: the file I record them in wouldn't open, and I'm \
+    "I can't keep an answer right now: the file I record them in wouldn't open and I'm \
      not going to ask you what you think and then lose it. That one is for whoever set \
      RichOS up to look at; it isn't yours to fix.";
 
@@ -9083,12 +9198,30 @@ struct Appearance {
     theme: String,
     /// A percentage of the 16px root, always one of `FONT_SCALE_STEPS`.
     font_scale: u16,
+    /// Whether he keeps the Oxford comma in what Claude writes (CEO, 2026-10-19). `false`, his
+    /// default, deletes it where Rich's and Stu's words and the question cards are drawn.
+    oxford_comma: bool,
 }
 
 #[richos_command::command]
 fn get_appearance(state: State<AppState>) -> Appearance {
     let config = state.config.lock().unwrap();
-    Appearance { theme: config.theme().as_str().to_string(), font_scale: config.font_scale() }
+    Appearance {
+        theme: config.theme().as_str().to_string(),
+        font_scale: config.font_scale(),
+        oxford_comma: config.oxford_comma(),
+    }
+}
+
+/// Persist the Oxford comma choice (CEO, 2026-10-19: "make the Oxford comma linter switchable in
+/// settings"), and tell a watching phone at once so its screen changes with this one's.
+#[richos_command::command]
+fn set_oxford_comma(app: AppHandle, state: State<AppState>, keep: bool) -> Result<(), String> {
+    state.config.lock().unwrap().set_oxford_comma(keep).map_err(|e| e.to_string())?;
+    if let Some(phone) = app.try_state::<Arc<phone::PhoneRuntime>>() {
+        phone.announce_oxford_comma(keep);
+    }
+    Ok(())
 }
 
 /// Persist the CEO's lighting. An unparseable string is REFUSED rather than coerced to the

@@ -31,6 +31,7 @@ window.RichSettings = (function () {
   // site below tolerates null, because the opening screen has no shell behind it yet.
   var durable = null; // { saveTheme(pref), saveScale(pct) }
   var techy = null; // { read(), write(on) }
+  var oxford = null; // { read(), write(on) }: the Oxford comma in what Claude writes (CEO, 2026-10-19)
   var bug = null; // { open() } — what "Bust a bug" actually opens, when that exists
   var updates = null; // { render(container), onOpen() } — the update surface fills its own row
   var company = null; // { read(), write(id) } — which company this copy of Rich works for
@@ -196,6 +197,38 @@ window.RichSettings = (function () {
     row.appendChild(label);
     row.appendChild(seg);
     return row;
+  }
+
+  /// THE OXFORD COMMA (CEO, 2026-10-19; round 33, `design/mockups/rounds/round-33/`). His words:
+  /// "make the Oxford comma linter switchable in settings. Default setting: Oxford comma off.
+  /// Explainer line underneath" and, for the heading, "In the off setting change this heading:
+  /// "Oxford comma" to "Oxford comma: OFF" and in the on setting "Oxford comma: ON"". Drawn the
+  /// way the Technical view row is (the same `.set-row`, `.set-name` and `.set-switch`), with his
+  /// explainer in the panel's hint style under it. It decides only how what CLAUDE writes is
+  /// drawn; the app's own text never carries the comma, whatever this says.
+  function oxfordLabel(on) {
+    return on ? "Oxford comma: ON" : "Oxford comma: OFF";
+  }
+  function buildOxfordRow() {
+    var row = elem("div", "set-row", { id: "set-oxford-row" });
+    var label = elem("span", "set-name", { id: "set-oxford-label" });
+    label.textContent = oxfordLabel(!!oxford.read());
+    var input = elem("input", "set-switch", {
+      type: "checkbox",
+      id: "set-oxford",
+      "aria-labelledby": "set-oxford-label",
+      "aria-describedby": "oxford-hint",
+    });
+    row.appendChild(label);
+    row.appendChild(input);
+    return row;
+  }
+  function buildOxfordHint() {
+    var hint = elem("p", "popover-hint", { id: "oxford-hint" });
+    hint.textContent =
+      'Oxford comma AKA serial comma is what some style guides place before "and" and "or". ' +
+      "RichOS recommends to keep that nuisance off.";
+    return hint;
   }
 
   function buildTechyRow() {
@@ -475,6 +508,12 @@ window.RichSettings = (function () {
     var look = [];
     if (!T.forcedDark()) look.push(buildThemeRow());
     look.push(buildFontRow()); // ...then Text size directly under it (§15)
+    if (oxford) {
+      // Round 33: directly under Text size, after a rule, with his explainer under it.
+      look.push(divider());
+      look.push(buildOxfordRow());
+      look.push(buildOxfordHint());
+    }
     if (techy) {
       // Technical view: ONE switch (it was in both panels), the Preferences hint under it, and
       // Claude Code quota under that, shown only while the view is on (`paint`).
@@ -505,7 +544,7 @@ window.RichSettings = (function () {
     // line ("Off", "On. Tap F1 to talk", "Needs a permission"). `dictation.js` registers it only
     // once the app says dictation is there (DICTATION_READY).
     if (dictation) {
-      doors.push(buildDisclosureRow("set-dictation-open", "Dictation", function () {
+      doors.push(buildDisclosureRow("set-dictation-open", "RichScribe", function () {
         dictation.open();
       }, "set-dictation-state"));
     }
@@ -679,6 +718,12 @@ window.RichSettings = (function () {
     if (up) up.disabled = T.scale() >= steps[steps.length - 1];
     var sw = menuEl.querySelector("#set-techy");
     if (sw && techy) sw.checked = !!techy.read();
+    var ox = menuEl.querySelector("#set-oxford");
+    if (ox && oxford) {
+      ox.checked = !!oxford.read();
+      var oxLabel = menuEl.querySelector("#set-oxford-label");
+      if (oxLabel) oxLabel.textContent = oxfordLabel(ox.checked);
+    }
     var quotaRow = menuEl.querySelector("#set-quota-open");
     if (quotaRow) { quotaRow.hidden = !(techy && techy.read()); if (quota.paint) quota.paint(); }
     if (accounts && accounts.paint && menuEl.querySelector("#set-accounts-open")) accounts.paint();
@@ -898,6 +943,13 @@ window.RichSettings = (function () {
         if (techy && techy.write) techy.write(sw.checked);
       });
     }
+    var ox = menuEl.querySelector("#set-oxford");
+    if (ox) {
+      ox.addEventListener("change", function () {
+        if (oxford && oxford.write) oxford.write(ox.checked);
+        paint();
+      });
+    }
     var bugEl = menuEl.querySelector("#bug-btn");
     if (bugEl) bugEl.addEventListener("click", bustABug);
     var ideaEl = menuEl.querySelector("#idea-btn");
@@ -1026,6 +1078,14 @@ window.RichSettings = (function () {
      *  keeps the switch true to it. */
     registerTechy: function (host) {
       techy = host || null;
+      rebuild();
+    },
+
+    /** THE OXFORD COMMA (round 33): `host.read()` is whether he keeps it, `host.write(on)` saves
+     *  his choice. Registering is what makes the row exist, so a page with no shell behind it
+     *  (the opening screen) carries no switch it cannot save. */
+    registerOxford: function (host) {
+      oxford = host || null;
       rebuild();
     },
 

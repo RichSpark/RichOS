@@ -16,6 +16,10 @@ const ROOT = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 const renderRowSource = source.match(/function renderRow\(row, isLastDelivered\) \{[\s\S]*?\n\}/)[0];
 const markdownPath = path.join(ROOT, 'lib/markdown.js');
+// Rich's row goes through the Oxford comma setting before it is drawn as Markdown: the shipped
+// `said` and the desktop's own rule (`app/ui/oxford-comma.js`, served as `/lib/oxford-comma.js`).
+const saidSource = source.match(/function said\(text\) \{[^\n]*\}/)[0];
+const oxfordPath = path.join(ROOT, '..', '..', 'app', 'ui', 'oxford-comma.js');
 
 class Node {
 	constructor(tag, text) { this.tagName = tag; this.children = []; this.dataset = {}; this.attrs = {}; this.text = text || ''; this.className = ''; }
@@ -32,8 +36,9 @@ function draw(row) {
 	const context = vm.createContext({
 		document: doc, api: { offers: () => false }, hearIt() {}, timeOf: () => '10:01 AM', questionCard() {}, queue: null,
 		RichOSMarkdown: fs.existsSync(markdownPath) ? require(markdownPath) : undefined,
+		RichOxford: require(oxfordPath),
 	});
-	vm.runInContext(renderRowSource + '\nglobalThis.renderRow = renderRow;', context);
+	vm.runInContext(saidSource + '\n' + renderRowSource + '\nglobalThis.renderRow = renderRow;', context);
 	return context.renderRow(row, false);
 }
 
@@ -56,6 +61,14 @@ test('lists, headings, italics and code read as they do on the Mac; arithmetic a
 	assert.deepStrictEqual(body.all('code').map((n) => n.textContent), ['docs/welcome.md']);
 	assert.deepStrictEqual(body.all('ul')[0].children.map((n) => n.textContent), ['3 * 4 * 5', '<img src=x onerror=alert(1)>']);
 	assert.deepStrictEqual(body.all('img'), [], 'model output became markup');
+});
+
+test('Rich\'s answer is drawn as Markdown without the Oxford comma; code keeps its comma', () => {
+	const body = text(draw({ id: 'r', cursor: 2, role: 'rich', kind: 'text', complete: true,
+		text: 'Red, green, and **blue**. Run `a, and b`.' }));
+	assert.strictEqual(body.textContent, 'Red, green and blue. Run a, and b.');
+	assert.deepStrictEqual(body.all('strong').map((n) => n.textContent), ['blue']);
+	assert.deepStrictEqual(body.all('code').map((n) => n.textContent), ['a, and b']);
 });
 
 test('his own words are shown exactly as he wrote them', () => {

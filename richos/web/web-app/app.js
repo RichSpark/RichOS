@@ -660,6 +660,7 @@ function makeLink() {
 				// What this Mac can actually be asked for, before anything else in this handler:
 				// the screen should never be one frame ahead of what the Mac has said it can do.
 				applyCapabilities();
+				oxfordFrom(data);
 				// **BOTH SIDES OF THE CONVERSATION, AND THIS IS WHERE ONE OF THEM WENT.**
 				//
 				// The Mac puts the whole gated projection in every `hello` — *"The rows
@@ -707,7 +708,7 @@ function makeLink() {
 			// A conversation created or renamed on the Mac (`phone/mod.rs` `threads_changed`).
 			threads(data, id) { heardFrame(id); takeThreadList(data && data.threads); },
 			delta(data, id) { heardFrame(id); if (data && elsewhere(data.thread_id)) return; thread.applyDelta(data); scheduleRender(); },
-			state(data, id) { heardFrame(id); thread.applyState(data); scheduleRender(); }
+			state(data, id) { heardFrame(id); if (oxfordFrom(data)) return; thread.applyState(data); scheduleRender(); }
 		}
 	});
 }
@@ -754,9 +755,25 @@ function takeThreadList(named) {
 	renderThreadPicker();
 }
 
+/// The Oxford comma setting from a `hello` or a `state` frame (`said` below says what it decides).
+/// True when the frame carried it; a `state` frame that did is the setting and never a row.
+function oxfordFrom(data) {
+	if (!data || typeof data.oxford_comma !== 'boolean') return false;
+	if (globalThis.RichOxford.setKeeping(data.oxford_comma)) scheduleRender();
+	return true;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------------------------
+
+/// THE OXFORD COMMA SETTING, AS THE MAC SAYS IT (CEO, 2026-10-19). The switch is in the Mac's
+/// Settings; this phone draws what Claude writes the way it says: with the comma before and/or/nor
+/// deleted while the setting is off (the default), untouched while it is on. The Mac sends it in
+/// every `hello` and, when he flips it, in a `state` frame of its own, so the change shows at once.
+/// The rule is the desktop's own file (`app/ui/oxford-comma.js`, served here as
+/// `/lib/oxford-comma.js`), so the two screens cannot disagree about what it deletes.
+function said(text) { return globalThis.RichOxford.display(text); }
 
 function scheduleRender() {
 	if (renderQueued) return;
@@ -864,10 +881,11 @@ function renderRow(row, isLastDelivered) {
 		li.appendChild(text);
 	} else {
 		// Rich writes Markdown and the Mac draws it (Ray's nightly 67 walk: `**323**` on this
-		// page); his own words above stay exactly as he typed them.
+		// page); his own words above stay exactly as he typed them. What Claude wrote is drawn
+		// through the Oxford comma setting first (CEO, 2026-10-19); the rule skips code.
 		const text = document.createElement('div');
 		text.className = 'msg-text';
-		RichOSMarkdown.renderInto(text, row.text || '', document);
+		RichOSMarkdown.renderInto(text, said(row.text || ''), document);
 		li.appendChild(text);
 	}
 
@@ -951,7 +969,7 @@ const questionCards = new Map();
 
 function questionCard(row) {
 	const q = row.question;
-	const key = JSON.stringify([row.text, row.created_at, q]);
+	const key = JSON.stringify([row.text, row.created_at, q, globalThis.RichOxford.keeping()]);
 	const held = questionCards.get(q.id);
 	if (held && held.key === key) return held.li;
 	const draft = held ? held.draft : { selected: new Set(), other: false, text: '', editing: false, busy: false, note: '' };
@@ -963,7 +981,7 @@ function questionCard(row) {
 	li.dataset.questionState = q.state;
 	if (q.set_count > 1) li.appendChild(el('p', 'ask-aside', `Question ${q.set_index} of ${q.set_count}`));
 	if (q.asker === 'Your team') li.appendChild(el('p', 'ask-aside', 'Your team, through Rich'));
-	li.appendChild(el('p', 'msg-text', q.text));
+	li.appendChild(el('p', 'msg-text', said(q.text)));
 	const controls = el('div', 'ask-controls');
 	const status = el('p', 'ask-status');
 	status.setAttribute('role', 'status');
@@ -1053,8 +1071,8 @@ function questionCard(row) {
 			const button = el('button', 'ask-option');
 			button.type = 'button';
 			button.disabled = draft.busy;
-			button.appendChild(el('span', 'ask-label', option.label));
-			if (option.description) button.appendChild(el('span', 'ask-desc', option.description));
+			button.appendChild(el('span', 'ask-label', said(option.label)));
+			if (option.description) button.appendChild(el('span', 'ask-desc', said(option.description)));
 			if (q.recommended === option.id) button.appendChild(el('span', 'ask-rec', q.asker === 'Your team' ? 'Your team recommends' : 'Rich recommends'));
 			if (q.multiple) {
 				button.setAttribute('aria-pressed', String(draft.selected.has(option.id)));

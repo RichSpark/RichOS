@@ -56,17 +56,17 @@ window.RichDictationMenu = (function () {
     var paused = msg.on && msg.paused;
     var m = document.getElementById("sbMenu");
     m.innerHTML =
-      '<div class="sb-head"><span class="sb-name">' + IC.mic + 'Dictation</span><span class="sb-on' + (msg.on ? "" : " is-off") + '">' +
+      '<div class="sb-head"><span class="sb-name">' + IC.mic + 'RichScribe</span><span class="sb-on' + (msg.on ? "" : " is-off") + '">' +
       (paused ? "Paused" : msg.on ? "On" : "Off") + "</span></div>" +
       (paused
         ? '<p class="sb-warn" role="status">' + IC.lock + "<span>" + secureLine(k, msg.secureApp) + "</span></p>"
-        : '<p class="sb-say">' + (msg.on ? "Tap " + kcap(k) + " to start, and again to stop." : "Turn it on to type with your voice.") + "</p>") +
+        : '<p class="sb-say">' + (msg.on ? "Tap " + kcap(k) + " to start and again to stop." : "Turn it on to type with your voice.") + "</p>") +
       '<div class="sb-hr" role="separator"></div>' +
       item("mode", "More accurate", "accurate", msg.choice !== "fast", true) +
       item("mode", "Faster", "fast", msg.choice === "fast", true) +
       '<div class="sb-hr" role="separator"></div>' +
-      item("settings", "Dictation settings…") +
-      item("onoff", msg.on ? "Turn dictation off" : "Turn dictation on") +
+      item("settings", "RichScribe settings…") +
+      item("onoff", msg.on ? "Turn RichScribe off" : "Turn RichScribe on") +
       '<div class="sb-hr" role="separator"></div>' +
       item("open", "Open RichOS");
     // At once, never from an animation frame: this window is hidden until the report arrives,

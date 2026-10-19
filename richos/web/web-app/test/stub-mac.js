@@ -34,6 +34,7 @@ const { createCertificateAuthority, createServerCertificate } = require('../../.
 const pcm = require('../lib/pcm.js');
 
 const APP_DIR = path.join(__dirname, '..');
+const SHARED_OXFORD = path.join(APP_DIR, '..', '..', 'app', 'ui', 'oxford-comma.js');
 
 const TYPES = {
 	'.html': 'text/html; charset=utf-8',
@@ -312,10 +313,12 @@ function createStubMac(options) {
 		// --- static: the app itself ---------------------------------------------------------
 		if (!url.pathname.startsWith('/api/')) {
 			const rel = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\//, '');
-			const file = path.join(APP_DIR, rel);
+			// The one file the Mac serves from the desktop app rather than from this directory
+			// (`src-tauri/build.rs` SHARED_WITH_PHONE): the Oxford comma rule, one copy for both.
+			const file = rel === 'lib/oxford-comma.js' ? SHARED_OXFORD : path.join(APP_DIR, rel);
 			// No path can escape the app directory. The Mac serves four routes and a static app,
 			// and nothing else (§2.5 item 5).
-			if (!file.startsWith(APP_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+			if ((file !== SHARED_OXFORD && !file.startsWith(APP_DIR)) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
 				flat404(res);
 				return;
 			}

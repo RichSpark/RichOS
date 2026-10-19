@@ -27,11 +27,11 @@ const WORDS = {
   ],
   missing: [
     "Before your team's finished work is accepted, a second AI reviews it. Claude does that now. Codex could do it instead, so a model from a different company checks the work.",
-    "The Codex app isn't on this Mac. Install it and sign in to ChatGPT, and this switch can be turned on.",
+    "The Codex app isn't on this Mac. Install it and sign in to ChatGPT and this switch can be turned on.",
   ],
   signedout: [
     "Before your team's finished work is accepted, a second AI reviews it. Claude does that now. Codex could do it instead, so a model from a different company checks the work.",
-    "Codex isn't signed in. Open the Codex app and sign in to ChatGPT, and this switch can be turned on.",
+    "Codex isn't signed in. Open the Codex app and sign in to ChatGPT and this switch can be turned on.",
   ],
   "lapsed-signedout": [
     "You turned this on, so Codex reviews your team's work whenever it can.",
@@ -40,7 +40,7 @@ const WORDS = {
   ],
   "lapsed-missing": [
     "You turned this on, so Codex reviews your team's work whenever it can.",
-    "The Codex app isn't on this Mac right now, so Claude is reviewing in the meantime. Install it, sign in to ChatGPT, and Codex takes over again.",
+    "The Codex app isn't on this Mac right now, so Claude is reviewing in the meantime. Install it, sign in to ChatGPT and Codex takes over again.",
     "These reviews won't show up in your ChatGPT or Codex app: no conversations or history appear there.",
   ],
 };

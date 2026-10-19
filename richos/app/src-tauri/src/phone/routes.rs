@@ -125,6 +125,9 @@ pub trait Bridge: Send + Sync {
     fn native_notifications_available(&self)->bool {false}
     fn register_native_notifications(&self,_device:&str,_registration:Option<super::notifications::Registration>)->Result<Value,String> {Err("Native notifications are unavailable".into())}
     fn voice_available(&self) -> bool { false }
+    /// Whether he keeps the Oxford comma in what Claude writes (CEO, 2026-10-19). Sent in every
+    /// `hello`; `false`, his default, where the shell has not said.
+    fn oxford_comma(&self) -> bool { false }
     fn transcribe(&self, _bytes: &[u8]) -> Result<String, String> { Err("Speech recognition is unavailable".into()) }
     fn reply_audio(&self, _thread: Option<&str>, _id: &str) -> Result<Vec<u8>, String> { Err("Audio playback is unavailable".into()) }
 
@@ -1016,6 +1019,9 @@ fn hello_frame(channel: &Channel, thread_id: &str) -> Result<Frame, ()> {
         "protocol_version": PROTOCOL_VERSION,
         "attachment_limits": attachment_limits(),
         "build": BUILD,
+        // Whether he keeps the Oxford comma in what Claude writes (CEO, 2026-10-19): the phone
+        // draws Rich's replies and question cards through the same filter the desktop does.
+        "oxford_comma": channel.bridge.oxford_comma(),
         // The rows themselves ride along, so the first paint needs no second request. The phone
         // merges them by cursor exactly as it merges a live `message`.
         "messages": rows,
@@ -1209,9 +1215,12 @@ mod tests {
         voice: bool,
         rows: usize,
         questions: Option<richos_core::questions::Store>,
+        /// What the shell's Oxford comma setting answers (CEO, 2026-10-19).
+        oxford: bool,
     }
     impl Bridge for FakeBridge {
         fn questions_available(&self)->bool {self.questions.is_some()}
+        fn oxford_comma(&self)->bool {self.oxford}
         fn answer_question(&self,thread:&str,answer:richos_core::questions::AnswerRequest)->Result<Value,String> {
             self.questions.as_ref().unwrap().answer("femcboost",thread,answer,"phone_tap","phone").map(|r|r.public_value())
         }
@@ -1311,7 +1320,7 @@ mod tests {
         let challenge = devices.issue_challenge().unwrap();
         let hub = PhoneHub::new();
         hub.set_live(true);
-        let bridge = Arc::new(FakeBridge { submitted: Mutex::new(Vec::new()), client_ids: Mutex::new(Vec::new()), refuse, voice:false, rows, questions:None });
+        let bridge = Arc::new(FakeBridge { submitted: Mutex::new(Vec::new()), client_ids: Mutex::new(Vec::new()), refuse, voice:false, rows, questions:None, oxford:false });
         let channel = Channel {
             // No listener behind these tests, so there is nothing to ring. The route's own
             // behavior on a rejection — the device record going — is asserted here; that the
@@ -1559,7 +1568,7 @@ mod tests {
     fn bounded_signed_voice_is_durable_and_bound_to_its_thread() {
         let mut f = fixture("voice-enabled");
         // Install a bridge that actually accepts speech, leaving old-Mac coverage intact.
-        let bridge = Arc::new(FakeBridge {submitted:Mutex::new(Vec::new()),client_ids:Mutex::new(Vec::new()),refuse:false,voice:true,rows:3,questions:None});
+        let bridge = Arc::new(FakeBridge {submitted:Mutex::new(Vec::new()),client_ids:Mutex::new(Vec::new()),refuse:false,voice:true,rows:3,questions:None,oxford:false});
         f.channel.bridge = bridge.clone();
         let bytes=richos_voice::wav::encode_pcm16_mono(&vec![0.1;16000],16000);
         let query="client_id=spoken-1&thread_id=thr_5c1e&kind=voice&codec=wav16k&sample_rate=16000&seconds=1";
@@ -1973,10 +1982,28 @@ mod tests {
                 assert_eq!(data["protocol_version"], 1);
                 assert_eq!(data["attachment_limits"]["max_file_bytes"], 26_214_400);
                 assert_eq!(data["build"], BUILD);
+                // The Oxford comma setting, his default off (CEO, 2026-10-19).
+                assert_eq!(data["oxford_comma"], false);
                 assert_eq!(data["threads"][0]["title"], "the proposal");
                 assert_eq!(data["messages"].as_array().unwrap().len(), 4);
                 assert_eq!(data["messages"][0]["cursor"], 1);
                 assert_eq!(data["messages"][3]["cursor"], 4);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_hello_carries_the_oxford_comma_setting_the_shell_holds() {
+        // CEO, 2026-10-19: what Claude writes is drawn with or without the comma before and/or/nor
+        // as he chose, on the phone as on the Mac. The phone reads his choice from the hello.
+        let mut f = fixture("oxford");
+        let bridge = Arc::new(FakeBridge { submitted: Mutex::new(Vec::new()), client_ids: Mutex::new(Vec::new()), refuse: false, voice: false, rows: 1, questions: None, oxford: true });
+        f.channel.bridge = bridge;
+        match dispatch(&f.channel, &signed_stream(&f, "thread_id=thr_5c1e")) {
+            Outcome::Stream { opening, .. } => {
+                let data: Value = serde_json::from_str(opening[0].split("data: ").nth(1).unwrap().trim_end()).unwrap();
+                assert_eq!(data["oxford_comma"], true, "{data}");
             }
             other => panic!("{other:?}"),
         }
@@ -2558,7 +2585,7 @@ mod tests {
         let mut f=fixture("question-answers");let store=Store::new(&f.dir.0);
         let scope=AskScope{obligation_id:None,root:f.dir.0.clone(),entity_id:"femcboost".into(),thread_id:"thr_5c1e".into(),turn_id:"ask".into(),asker:"front_desk".into(),session_id:"session".into(),engine:None,entity_root:None,app_run:None};
         let q=store.ask(&scope,vec![QuestionInput{text:"When should the release ship?".into(),options:vec![OptionInput{label:"Today".into(),description:"Earlier fixes".into()},OptionInput{label:"Tomorrow".into(),description:"More tests".into()}],multiple:false,free_answer:true,recommended:None}]).unwrap().remove(0);
-        f.channel.bridge=Arc::new(FakeBridge{submitted:Mutex::new(vec![]),client_ids:Mutex::new(vec![]),refuse:false,voice:false,rows:0,questions:Some(store.clone())});
+        f.channel.bridge=Arc::new(FakeBridge{submitted:Mutex::new(vec![]),client_ids:Mutex::new(vec![]),refuse:false,voice:false,rows:0,questions:Some(store.clone()),oxford:false});
         let body=json!({"kind":"answer","client_id":"phone-answer","thread_id":"thr_5c1e","question_id":q.id,"option_ids":[q.options[0].id]}).to_string();
         let signed_request=signed(&f,"POST","/api/messages","",&body);
         let mut unsigned=signed(&f,"POST","/api/messages","",&body);unsigned.authorization=None;

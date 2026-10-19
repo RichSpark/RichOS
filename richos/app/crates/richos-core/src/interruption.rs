@@ -191,7 +191,7 @@ impl InterruptionCause {
             // which took the place of the old account row in Settings and holds the first
             // account's sign-in. The sentence names the row that exists.
             InterruptionCause::NotSignedIn => {
-                "RichOS couldn't send this to Rich because no Claude account is signed in on this Mac, or the sign-in has expired. Open Settings, choose Claude accounts and sign in, then send your message again."
+                "RichOS couldn't send this to Rich because no Claude account is signed in on this Mac or the sign-in has expired. Open Settings, choose Claude accounts and sign in, then send your message again."
             }
             InterruptionCause::CredentialRejected => {
                 "RichOS couldn't send this to Rich because the Claude key or sign-in token set up on this Mac was refused. Sending again won't help until that key or token is replaced."

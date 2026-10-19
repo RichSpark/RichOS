@@ -45,6 +45,11 @@
 // does not; lowercase Rust error text relayed through `String(e)` (blind spot B5, an
 // unbounded set). And it cannot see what Rich himself writes in a reply: that is generated at
 // run time, not shipped text.
+//
+// NO OXFORD COMMA IN ANY UI TEXT (CEO, 2026-10-19: "in the UI as well as any of our docs etc, the
+// Oxford comma must be always off"). The check after the dash check reads the same UI text and
+// fails on any ", and", ", or" or ", nor" left in it. Git deletes them at every commit
+// (`app/scripts/oxford-comma.js`), so this is the backstop for a commit made without the hook.
 
 "use strict";
 
@@ -52,6 +57,7 @@ const fs = require("fs");
 const path = require("path");
 const { createRun, assert, assertEqual, rustSentenceAfter, UI_DIR } = require("./lib/harness");
 const STRINGS = require("./lib/state-strings");
+const OXFORD_FIX = require("../../scripts/oxford-comma.js");
 
 const APP_DIR = path.resolve(UI_DIR, "..");
 const PROVIDER_AUTH_RS = path.join(APP_DIR, "crates", "richos-core", "src", "provider_auth.rs");
@@ -137,6 +143,24 @@ async function main() {
     return "UI files, the CEO-facing Rust scrape and sentence-shaped Rust literals hold no dash";
   });
 
+  await run.check("no UI text holds a comma before and/or/nor (CEO 2026-10-19), and the scan is not vacuous", async () => {
+    const repoRoot = path.resolve(APP_DIR, "..", "..");
+    const hits = [];
+    for (const abs of OXFORD_FIX.uiFiles()) {
+      const src = fs.readFileSync(abs, "utf8");
+      for (const o of OXFORD_FIX.uiCommas(OXFORD_FIX.uiKind(abs), abs, src)) {
+        hits.push(path.relative(repoRoot, abs) + ":" + src.slice(0, o).split("\n").length + "  " + src.slice(Math.max(0, o - 40), o + 20).replace(/\s+/g, " "));
+      }
+    }
+    assertEqual(hits, [], "UI text with ', and', ', or' or ', nor'; git deletes it at commit (app/scripts/oxford-comma.js --write <file> does it by hand)");
+
+    // Positive control, never written to disk: a planted comma in a string is deleted; the one
+    // in a code comment is not UI text and stays.
+    const js = 'const a = "Red, green, and blue."; // a comment, and fine\n';
+    assertEqual(OXFORD_FIX.fixed("richos/app/ui/main.js", js), 'const a = "Red, green and blue."; // a comment, and fine\n', "the fixer");
+    return "UI files, the CEO-facing Rust scrape and sentence-shaped Rust literals hold no comma before and/or/nor";
+  });
+
   const failed = run.report();
   return failed;
 }
@@ -164,25 +188,12 @@ function htmlDashes(src, name) {
     .map((s) => name + ":" + s.line + "  " + snippet(s.text));
 }
 
-const RUST_MACHINE_LINE = /\b(eprintln|println|print|panic|assert|assert_eq|assert_ne|debug_assert|unreachable|todo|unimplemented|debug|info|warn|trace)!|\.expect\(/;
-const PROMPT_HEADER = /^[A-Z]{4,}\b|\b[A-Z][A-Z']{2,}\b[ :]+[A-Z][A-Z']{1,}\b/;
-
-/// Sentence-shaped Rust literals outside test modules, minus log/assert lines and prompts.
+/// Sentence-shaped Rust literals outside test modules, minus log/assert lines and prompts
+/// (`lib/state-strings.js`, shared with the Oxford comma fixer).
 function rustSentenceDashes(src, name) {
-  const lines = src.split("\n");
-  const tests = STRINGS.testModuleRanges(lines);
-  const out = [];
-  for (const lit of STRINGS.rustStringLiterals(src)) {
-    const idx = lit.line - 1;
-    if (tests.some(([a, b]) => idx >= a && idx <= b)) continue;
-    const t = lit.text.trim();
-    if (!DASH.test(t)) continue;
-    if (RUST_MACHINE_LINE.test([lines[idx - 2] || "", lines[idx - 1] || "", lines[idx]].join("\n"))) continue;
-    if (!(/^[A-Z]/.test(t) && /[.?!]["”)]?$/.test(t) && t.split(/\s+/).length >= 4)) continue;
-    if (PROMPT_HEADER.test(t)) continue;
-    out.push(name + ":" + lit.line + "  " + snippet(t));
-  }
-  return out;
+  return STRINGS.rustSentenceLiterals(src)
+    .filter((lit) => DASH.test(lit.text.trim()))
+    .map((lit) => name + ":" + lit.line + "  " + snippet(lit.text.trim()));
 }
 
 function dashedUiText() {

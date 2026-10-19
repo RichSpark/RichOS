@@ -296,7 +296,7 @@ impl Activity {
             let string_class = AnyClass::get(c"NSString")?;
             let info: *mut AnyObject = msg_send![info_class, processInfo];
             let reason: *mut AnyObject =
-                msg_send![string_class, stringWithUTF8String: c"RichOS dictation listens for its key".as_ptr()];
+                msg_send![string_class, stringWithUTF8String: c"RichScribe listens for its key".as_ptr()];
             if info.is_null() || reason.is_null() {
                 return None;
             }

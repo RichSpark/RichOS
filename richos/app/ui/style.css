@@ -10009,6 +10009,43 @@ body.panel-full .op-body {
 .acc-acts { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .acc-note { margin-top: 2px; font-size: 1rem; color: var(--ink-soft); }
 .acc-note b { color: var(--ink); font-weight: 600; }
+
+/* WHICH CLAUDE ACCOUNT IS WHICH (round 31, item 18; richos-hq design/mockups/rounds/round-31/
+   item-18-which-account.html). One line under each account's name: "Show email" at rest; one
+   click shows the email that account is signed in with for 8 seconds, then it hides again by
+   itself (or on Hide). The sheet's own tokens on --card; computed in WebKit, both themes, by
+   ui/tests/accounts.js (the Show email checks). */
+.acc-who { display: flex; align-items: center; gap: 10px; min-height: 34px; margin: 2px 0 0 -8px; }
+.acc-reveal, .acc-who-hide {
+  display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 1rem; line-height: 1.4;
+  background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 8px; cursor: pointer;
+}
+.acc-reveal { color: var(--ink-soft); }
+.acc-reveal:hover { color: var(--ink); background: var(--gold-soft); }
+.acc-reveal[aria-busy="true"] { cursor: progress; }
+.acc-reveal svg { width: 18px; height: 18px; flex-shrink: 0; }
+.acc-panel :is(.acc-reveal, .acc-who-hide):focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+.acc-who-mail { display: inline-flex; align-items: center; gap: 10px; padding-left: 8px; flex-wrap: wrap; min-width: 0; }
+.acc-who-label { font-size: 1rem; color: var(--ink-soft); }
+.acc-who-addr {
+  font-size: 1rem; font-weight: 600; color: var(--ink); letter-spacing: .005em; overflow-wrap: anywhere;
+  clip-path: inset(0 0 0 0); transition: clip-path .32s cubic-bezier(.2, .7, .2, 1), filter .32s ease;
+}
+.acc-who.is-wiping .acc-who-addr { clip-path: inset(0 100% 0 0); filter: blur(2px); }
+.acc-who-hide { color: var(--gold-text); font-weight: 600; }
+.acc-who-hide:hover { background: var(--gold-soft); }
+/* The time left, as a ring that empties: a non-text indicator, so 3:1 for its gold arc (the
+   track is decoration). */
+.acc-who-ring { width: 20px; height: 20px; flex-shrink: 0; transform: rotate(-90deg); }
+.acc-who-ring circle { fill: none; stroke-width: 3; }
+.acc-who-ring .trk { stroke: var(--line-soft); }
+.acc-who-ring .arc { stroke: var(--gold); stroke-linecap: round; stroke-dasharray: 50.27; stroke-dashoffset: 0; }
+.acc-who.is-counting .arc { animation: acc-who-drain var(--acc-who-secs, 8s) linear forwards; }
+@keyframes acc-who-drain { to { stroke-dashoffset: 50.27; } }
+@media (prefers-reduced-motion: reduce) {
+  .acc-who-addr { transition: none; }
+  .acc-who.is-wiping .acc-who-addr { filter: none; }
+}
 .acc-meters { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .acc-meter { display: grid; grid-template-columns: 120px minmax(0, 1fr) 112px; align-items: center; gap: 0 16px; }
 .acc-meter-label { font-size: 1rem; color: var(--ink); font-weight: 500; }

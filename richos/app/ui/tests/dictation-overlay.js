@@ -165,7 +165,7 @@ async function main() {
     await say(page, "dictation-bar", bar("problem", { problem: "did-not-catch", key: "F5" }));
     assertEqual(await text(page, "#dhud .dh-label"), "I didn't catch anything. Tap F5 and talk.", "the chosen key is named");
     await say(page, "dictation-bar", bar("off"));
-    assertEqual(await text(page, "#dhud"), "Dictation is off.", "the menu's off notice");
+    assertEqual(await text(page, "#dhud"), "RichScribe is off.", "the menu's off notice");
     await say(page, "dictation-bar", bar("hidden"));
     assertEqual(await page.locator("#dhud > *").count(), 0, "hidden draws nothing");
     assertEqual(page.__errors.length, 0, page.__errors.join(" | "));
@@ -266,10 +266,10 @@ async function main() {
     const page = await open(browser, MENU);
     const menu = (extra) => Object.assign({ seq: 3, on: true, key: "F1", choice: "accurate", paused: false, secureApp: null, theme: "dark", fontScale: 100 }, extra || {});
     await say(page, "dictation-menu", menu());
-    assertEqual(await text(page, ".sb-head"), "Dictation On", "the heading");
-    assertEqual(await text(page, ".sb-say"), "Tap F1 to start, and again to stop.", "the line under it");
+    assertEqual(await text(page, ".sb-head"), "RichScribe On", "the heading");
+    assertEqual(await text(page, ".sb-say"), "Tap F1 to start and again to stop.", "the line under it");
     const rows = await page.locator(".sb-item").allInnerTexts();
-    assertEqual(JSON.stringify(rows.map((r) => r.trim())), JSON.stringify(["More accurate", "Faster", "Dictation settings…", "Turn dictation off", "Open RichOS"]), "the rows");
+    assertEqual(JSON.stringify(rows.map((r) => r.trim())), JSON.stringify(["More accurate", "Faster", "RichScribe settings…", "Turn RichScribe off", "Open RichOS"]), "the rows");
     assertEqual(await page.locator('.sb-item[aria-checked="true"]').innerText(), "More accurate", "the tick");
     await say(page, "dictation-menu", menu({ choice: "fast" }));
     assertEqual(await page.locator('.sb-item[aria-checked="true"]').innerText(), "Faster", "the tick follows the model");
@@ -279,13 +279,13 @@ async function main() {
     await say(page, "dictation-menu", menu({ paused: true, secureApp: null }));
     assertEqual(await text(page, ".sb-warn"), "Another app is hiding your keys, so F1 can't reach me. Quitting the app where you last typed a password usually fixes it.", "line 4, unnamed");
     await say(page, "dictation-menu", menu({ on: false }));
-    assertEqual(await text(page, ".sb-head"), "Dictation Off", "off");
+    assertEqual(await text(page, ".sb-head"), "RichScribe Off", "off");
     assertEqual(await text(page, ".sb-say"), "Turn it on to type with your voice.", "off's line");
     await say(page, "dictation-menu", menu());
     const size = await page.evaluate(() => window.__calls.filter((c) => c[0] === "dictation_menu_laid_out").pop()[1]);
     const box = await page.locator("#sbMenu").boundingBox();
     assertEqual(size.w, Math.ceil(box.width + 16), "the menu's window width");
-    for (const label of ["Faster", "Dictation settings…", "Turn dictation off", "Open RichOS"]) {
+    for (const label of ["Faster", "RichScribe settings…", "Turn RichScribe off", "Open RichOS"]) {
       await page.locator(".sb-item", { hasText: label }).click();
     }
     const acts = await page.evaluate(() => window.__calls.filter((c) => c[0] === "dictation_menu_act").map((c) => c[1].act + (c[1].value ? ":" + c[1].value : "")));

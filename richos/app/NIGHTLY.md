@@ -72,7 +72,7 @@ stopped and unrun gates receive the first available slots. Changed or unreadable
 inputs and damaged evidence require execution. Earlier failures remain failures.
 The candidate records the original passing runs in `gate_evidence`; `REUSED` does
 not claim a new passing invocation. UI reuse runs the existing coverage verifier
-on a frozen copy of every receipt. The release smoke runs on every attempt, and
+on a frozen copy of every receipt. The release smoke runs on every attempt and
 `release` and `stable` retain fresh gates. Older runs without these input records
 cannot be retroactively qualified from their logs.
 
@@ -111,7 +111,7 @@ python3 richos/app/scripts/nightly-local.py candidate --run <run-id>
 `candidate` reads only the recorded build; it never runs any command and never
 touches the network.
 
-### A build opens nothing on this Mac, and proves the boot in the test VM itself
+### A build opens nothing on this Mac and proves the boot in the test VM itself
 
 CEO, 2026-09-19: *"So, every engineer will keep opening the app making me
 unable to do anything here or WHAT???"* — `gui-boot.test.sh` boots the real app
@@ -120,10 +120,10 @@ on the real screen for ~162 s of every build.
 **Since 2026-09-29 this is what `build` does with no flag at all.** Once the
 signed candidate exists, the build boots that bundle in a test-VM guest
 (`gui-proof-in-vm.sh`, below), keeps the proof at
-`~/.richos-nightly/gui-proofs/<run-id>.proof`, and `publish --run <run-id>`
+`~/.richos-nightly/gui-proofs/<run-id>.proof` and `publish --run <run-id>`
 uses it without `--gui-proof`. A proof that does not pass fails the build after
-the candidate is printed, and says how to take it again without a rebuild.
-`RICHOS_GUI_HOST=<guest>` names the guest, and `TESTVM_*` settings reach the
+the candidate is printed and says how to take it again without a rebuild.
+`RICHOS_GUI_HOST=<guest>` names the guest and `TESTVM_*` settings reach the
 VM step; any other `RICHOS_*` / `RUN_TESTS_*` setting no step would receive
 refuses the run before anything starts, instead of being dropped.
 `--host-screen` puts the screen suites back on this Mac's display (never on the
@@ -140,9 +140,9 @@ It is accepted for `build` and refused for `release`, which publishes in one
 motion with no `publish` step to refuse an unproven boot.
 
 **The price is real and `publish` collects it.** Such a candidate records
-`gui-boot.test.sh: not-run` in its `build-info.json`, and `publish` refuses it
+`gui-boot.test.sh: not-run` in its `build-info.json` and `publish` refuses it
 until somebody has watched it start. The build takes that proof itself; by hand
-(a build whose VM step failed, or an older candidate) it is:
+(a build whose VM step failed or an older candidate) it is:
 
 ```sh
 richos/app/scripts/gui-proof-in-vm.sh --run <run-id>
@@ -151,7 +151,7 @@ python3 richos/app/scripts/nightly-local.py publish --run <run-id> --gui-proof <
 
 `gui-proof-in-vm.sh` boots the candidate's own signed bundle inside a `testvm`
 guest (`docs/testvm.md`) on an empty fixture home, reads `windows=N` back — a
-pid is not a proof; the app can run and draw nothing — writes the proof, and
+pid is not a proof; the app can run and draw nothing — writes the proof and
 stops the guest. Nothing appears on this Mac's screen.
 
 A proof must name **this** candidate's commit, exactly as `--checks-done-at-land`
@@ -175,11 +175,11 @@ python3 richos/app/scripts/nightly-local.py publish --run <run-id>
 `publish` refuses rather than uploading anything if the candidate's recorded
 files (the app archive, its updater `.sig`, `latest.json` — version, SHA and
 signature are all just files under the staged directory, so one check covers
-all three) no longer match what `build` produced, or if the built source
+all three) no longer match what `build` produced or if the built source
 commit is no longer an ancestor of the current `main` — a rebase or a
 force-push that happened while a walker was on the candidate. Neither `build`
 nor `candidate` needs a signing or notarization credential to have reached
-this point; only `build` does (it is the step that signs and notarizes), and
+this point; only `build` does (it is the step that signs and notarizes) and
 `publish` does not re-request one.
 
 `--run <run-id>` is the id `build` printed. It is looked up under
@@ -188,7 +188,7 @@ candidate directory `build` already produced — nothing is copied or rebuilt.
 
 ## Stable: a rebuild of a nightly the CEO has tested himself
 
-A stable release is **never** a fresh build of today's `main`, and it is **never** a
+A stable release is **never** a fresh build of today's `main` and it is **never** a
 published nightly's bytes re-tagged. It is a **rebuild of the commit a published
 nightly was built from** — copied from T3 Code, whose release workflow says it in one
 sentence: *"Manual stable releases build the commit of the latest published nightly,
@@ -203,7 +203,7 @@ python3 richos/app/scripts/nightly-local.py stable --from-nightly v1.2.0-nightly
 Nothing is prepared first. His words are his decision for that tag, dated today and
 checked by the same rules as a written record entry (below). The gates are not run
 again: the run on this Mac that built that nightly is found in `~/.richos-nightly/logs`
-by its own `Building <tag>...` line, and its gates are reused with every refusal of
+by its own `Building <tag>...` line and its gates are reused with every refusal of
 `--gates-passed-in` (every gate passed, same source commit, same installed
 dependencies). When an attempt failed and its retry built the same tag, the run that
 finished (its `phase timings` summary follows the line) is the one. If no single run
@@ -221,7 +221,7 @@ python3 richos/app/scripts/nightly-local.py stable --from-nightly v1.2.0-nightly
 ```
 
 `--dry-run` prints exactly what would be built and published — the source commit, the
-version, the endpoint that would be compiled in, and his recorded decision — and does
+version, the endpoint that would be compiled in and his recorded decision — and does
 nothing else. No tag is created, nothing is built, uploaded or published.
 
 ### Only the CEO promotes a nightly
@@ -232,14 +232,14 @@ build from a nightly if I have extensively tested that nightly and deemed it goo
 enough to be promoted to stable."*
 
 A READY verdict, a gui-boot proof, a green gate and an Urban signoff are preconditions
-for **publishing a nightly**. **None of them promotes anything**, and none of them is
+for **publishing a nightly**. **None of them promotes anything** and none of them is
 accepted here. "Extensively tested" is his own use of that nightly, for as long as he
 chooses; nobody else's test counts toward it. There is no override flag and no
 environment variable — a decision a stray export could make would not be his.
 
-His decision is given with `--ceo-words` on the command line, or as an entry Rich
+His decision is given with `--ceo-words` on the command line or as an entry Rich
 wrote earlier in `richos/app/stable-promotions.json` on main. Either way the stable
-release commit carries it: its own `stable-promotions.json` gains the entry, and its
+release commit carries it: its own `stable-promotions.json` gains the entry and its
 `nightly-build.json` and release notes name the nightly, the date and his words. The
 record's shape:
 
@@ -253,13 +253,13 @@ record's shape:
 ]
 ```
 
-An entry naming a different tag, missing his words, or dated malformed is refused, and
+An entry naming a different tag, missing his words or dated malformed is refused and
 so are two entries for one nightly, including `--ceo-words` for a nightly main's record
 already decides on.
 
 ### Why a rebuild and not the bytes
 
-Re-tagging a nightly's bytes as stable would ship a broken stable release, and two of
+Re-tagging a nightly's bytes as stable would ship a broken stable release and two of
 the three reasons are properties of the bytes that re-tagging cannot fix:
 
 - **The update endpoint is compiled into the binary.** A promoted copy would fetch
@@ -273,7 +273,7 @@ of the **commit**, never of the bytes.
 
 ### What it does
 
-1. Reads his promotion decision for that tag. This is first, and it costs nothing.
+1. Reads his promotion decision for that tag. This is first and it costs nothing.
 2. Resolves the nightly's **source commit** from that nightly's own tagged provenance.
 3. Takes the version from **that commit's** `Cargo.toml` — a stable release of commit
    X ships X's own version, whatever `main` has since bumped to.
@@ -289,7 +289,7 @@ of the **commit**, never of the bytes.
    `src-tauri/Cargo.toml` and the app's `Cargo.lock` entry), as an ordinary commit in
    the worktree where main is checked out, with its usual land checks and push, so the
    next nightly is `1.2.1-nightly.N` without anyone remembering. It touches nothing
-   unless that checkout is clean and at `origin/main`; otherwise, or if the commit or
+   unless that checkout is clean and at `origin/main`; otherwise or if the commit or
    push is refused, the command says the release IS published and names the bump to
    make by hand. A main already past the released version is left alone.
 
@@ -365,7 +365,7 @@ The same credentials as stable releases are used:
 The release commit and the channel commit are authored with this Mac's
 configured Git identity rather than a synthetic `nightly@` one, because the release is
 your own act and this machine's commit-identity guard refuses to push a commit that
-says otherwise; `check` prints the identity it will author with, and refuses in
+says otherwise; `check` prints the identity it will author with and refuses in
 milliseconds if none is configured instead of failing at the tag push after the gates.
 
 The private files must belong to the current user and have mode 600. Their
@@ -376,7 +376,7 @@ app. It does not submit an app to Apple or create a GitHub release. The full
 release path separately verifies the produced artifact's updater signature.
 
 Credentials reach only the steps that use them: the preflight signing probe, the
-notarization check, the updater signature, and the publisher. The gates, meaning the
+notarization check, the updater signature and the publisher. The gates, meaning the
 two `cargo test` runs, the twelve `app/scripts` suites and the privacy sweep, run in
 an environment holding no `RICHOS_NOTARY_*`, `TAURI_SIGNING_*`, `APPLE_*`,
 `RICHOS_NOTARIZE` or `RICHOS_SIGNING_IDENTITY` variable, including any the operator's
@@ -402,16 +402,16 @@ present cache but never builds a missing one.
 
 ## Publication
 
-The repository's `main-only` ruleset needs **no exception of any kind**, and the
+The repository's `main-only` ruleset needs **no exception of any kind** and the
 publisher reads it back before every publish to make sure it still has none:
 `nightly.py check-rules` refuses the run unless `main` is the only branch exempt
-from it, the ruleset is active, nobody can bypass it, and both `creation` and
+from it, the ruleset is active, nobody can bypass it and both `creation` and
 `update` are restricted. The runner asks the same question in preflight so a
 widened rule costs seconds instead of forty minutes of gates.
 
 That check exists because the opposite one used to. Until 2026-09-17 this page
 asked for an exception for exactly `refs/heads/nightly-channel` and the runner
-refused to start without one; on 2026-09-16 the exception was added, and the next
+refused to start without one; on 2026-09-16 the exception was added and the next
 morning the public repository page read "2 Branches". The channel is a release tag
 now (below), so there is nothing left to grant.
 
@@ -434,13 +434,13 @@ candidate in between:
    `richos-engine-sha256-<digest>.tar.gz`, then downloads and verifies it before
    compiling that URL and digest into the app. Reused assets are also verified.
 6. Builds, signs, notarizes and staples the app locally. It verifies both the
-   plist version and the executable's compiled update identity, and records a
+   plist version and the executable's compiled update identity and records a
    SHA-256 of every staged file so `finish` can detect tampering later.
 
 **`finish`** (what `publish --run <run-id>` invokes):
 
 7. Refuses if any of the files `build` recorded no longer match what is on
-   disk, or if the built source commit is no longer an ancestor of the
+   disk or if the built source commit is no longer an ancestor of the
    current `main`. Checks that the remote reservation still names this build.
    Creates the public version tag and prerelease, then uploads immutable artifacts,
    provenance and checksums with the manifest last. Downloads them again to verify
@@ -448,7 +448,7 @@ candidate in between:
    an additional engine copy is included on the versioned release for its checksums.
 8. Advances the update channel, in that order: a Git compare-and-swap push moves
    the rolling `nightly` release tag to a commit carrying the new `latest.json`
-   and `build-info.json`, and only then is that `latest.json` uploaded over the
+   and `build-info.json` and only then is that `latest.json` uploaded over the
    `nightly` release's asset, which is the file installed copies fetch. Older
    versions and regressed/divergent source commits are refused.
 
@@ -497,7 +497,7 @@ https://github.com/WebDevBooster/richos/releases/download/nightly/latest.json
 
 That is an asset on `nightly`, a permanent prerelease whose tag moves on every
 publish. It is pinned to that tag, so unlike the stable endpoint it does not
-depend on which release GitHub considers `latest`, and it puts nothing on the
+depend on which release GitHub considers `latest` and it puts nothing on the
 public repository but a release tag.
 
 **Copies installed before 2026-09-17 point at the retired
@@ -509,7 +509,7 @@ copies by hand, once, with any nightly published from this change onward.
 Stable builds keep their stable endpoint. For a user, a nightly replaces the same
 app and uses the same data; there is no settings toggle and no second copy. The one
 exception is a developer who has to keep his own copy untouched while he tests a
-nightly beside it, and that is the next section, not a product feature.
+nightly beside it and that is the next section, not a product feature.
 To leave the channel, install a stable version at least as new as the nightly.
 Stable `1.2.0` supersedes `1.2.0-nightly.*`; stable `1.1.0` does not.
 
@@ -523,7 +523,7 @@ richos/app/scripts/nightly-launch.sh status
 
 It unpacks the ZIP into `~/myrichos-nightly-a` (a newborn: empty data, what a
 customer gets) or `~/myrichos-nightly-b` (the same nightly on data carrying the
-team roster page), records the version and the ZIP's digest, and opens that
+team roster page), records the version and the ZIP's digest and opens that
 folder's own app. Your own copy keeps your real `HOME` and `~/myrichos`. The
 terminal can be closed once it prints the pid.
 
@@ -545,17 +545,17 @@ What makes it separate, all set by the script:
   same bundle identifier as your own copy. That was measured, not assumed: in a
   test guest an instance started with `HOME` alone wrote
   `~/Library/WebKit/com.richos.app` and `~/Library/Caches/com.richos.app` in the
-  real home, and instances started by this script wrote neither.
+  real home and instances started by this script wrote neither.
 * **Nothing from the terminal it was started in.** `open` passes the caller's
   environment on to the app (also measured), so the script runs it under `env -i`
   with only what an app opened from Finder gets: launchd's `PATH`, who you are,
-  your shell and ssh agent, and a `TMPDIR` inside the folder.
+  your shell and ssh agent and a `TMPDIR` inside the folder.
 * **The engine is the nightly's own.** `RICHOS_ENGINE_DIR` and
   `RICHOS_ENGINE_ROOT` are passed empty, never set: a published nightly boots only
-  the engine installed from its own pinned asset, and an explicit engine would
+  the engine installed from its own pinned asset and an explicit engine would
   outrank that pin. The first start installs it through the ordinary setup sheet.
 * **Your Claude sign-in reaches it** through three things from your home: a link
-  to `~/.claude`, a copy of `~/.claude.json` (refreshed at every start), and a
+  to `~/.claude`, a copy of `~/.claude.json` (refreshed at every start) and a
   link to `~/Library/Keychains`; plus a link to `~/.local/bin/claude`, which is
   where an app opened from Finder looks for `claude`. The cost is plain:
   `~/.claude` is your whole Claude configuration and history, shared with the
@@ -574,7 +574,7 @@ not make; any path under `~/myrichos`, after following links; a second start
 while that folder's nightly is running; and a `CLAUDE_CONFIG_DIR` anywhere the
 app would inherit it.
 
-* **To open it again**, run the same line, or `nightly-launch.sh a --again`.
+* **To open it again**, run the same line or `nightly-launch.sh a --again`.
   A nightly that updated itself runs its updated copy from inside the folder.
 * **To see what each folder holds**, `nightly-launch.sh status`: version,
   commit, what it updated itself to, whether it is running.
@@ -582,7 +582,7 @@ app would inherit it.
   outside the folder refers to it.
 * **Never open the nightly any other way.** Opened from Finder, from the Dock
   (keeping it there is the trap) or from the Apple menu's Recent Items, it runs
-  on your real `HOME`, against your own copy's data, and its updater installs
+  on your real `HOME`, against your own copy's data and its updater installs
   into your real `~/Applications`. Both folders end in `.noindex` so Spotlight
   never offers it; the other ways in cannot be closed from here.
 * **Only one of the two can serve your phone.** The phone listener binds fixed
@@ -607,7 +607,7 @@ What still leaves the folder, on purpose or because nothing can stop it:
 previous nightly's own manifest from that tag's release
 (`releases/download/v<version>/latest.json`, which `finish` uploads beside the
 archive and which is never overwritten), verifies its signature against the same
-compiled public key as any update, and stages it. The next time RichOS opens it
+compiled public key as any update and stages it. The next time RichOS opens it
 is running the earlier build — the same swap an update uses, at the same moment,
 with nothing to do by hand. The boot line says which way it went:
 
@@ -624,7 +624,7 @@ sentence rather than a surprise:
   hand has no such receipt and is told so.
 * **It never steps up.** After going back, the version this copy came from is
   the newer one, so the control is gone; the way forward from there is an
-  ordinary update, and the newer nightly is still offered.
+  ordinary update and the newer nightly is still offered.
 * **It refuses while an update is already prepared for the next launch.** That
   prepared update is what the next launch will do; open RichOS again first.
 * **It is absent while RichOS is working**, exactly as the update control is.
@@ -646,7 +646,7 @@ throwaway directory, before a single crate is compiled.
 python3 richos/app/scripts/nightly.py release-smoke --out /tmp/some-throwaway-dir
 ```
 
-It is `gates/release-smoke`, and it is **first** because it is the cheapest refusal in
+It is `gates/release-smoke` and it is **first** because it is the cheapest refusal in
 the build: **0.2 s** against roughly 950 s. The class it catches — a release-only step
 that rotted since the last release — is otherwise found forty minutes in, by the
 release that needed it. It is never skipped for a candidate and cannot be dropped by
@@ -655,20 +655,20 @@ release that needed it. It is never skipped for a candidate and cannot be droppe
 **One function, two callers.** The smoke does not re-implement anything. Each
 release-only step is a single function that both the real release path and the smoke
 call, marked `@release_step`. This is deliberately *not* how T3 Code does it: their
-smoke duplicates their release workflow's inline bash, and the two have already drifted
+smoke duplicates their release workflow's inline bash and the two have already drifted
 — `release.yml:795` passes two positional arguments in one order and
 `release-smoke.ts:328-331` passes them in the other, so their smoke does not execute
 the text their release executes.
 
 **And the part that holds the line:** the smoke refuses unless **every** registered
-step was reached during it. Add a release-only step and forget to smoke it, and the
+step was reached during it. Add a release-only step and forget to smoke it and the
 build fails naming your function. Without that check, this mechanism would decay into
 T3's position one commit at a time with nothing red to show for it.
 
 **Not in it, with the numbers.** Engine-asset packaging: `make-engine-asset.test.sh` is
-112 s in the same build's `gates/script-suites`, and the real build phase runs
+112 s in the same build's `gates/script-suites` and the real build phase runs
 `make-release.sh engine` for every candidate anyway — it is neither release-only nor
-unexercised. Signing, notarization and upload need credentials and the network, and a
+unexercised. Signing, notarization and upload need credentials and the network and a
 gate gets neither by construction.
 
 Its fixtures are removed however it ends, including when it refuses.
@@ -684,7 +684,7 @@ cargo test --locked --manifest-path richos/app/crates/richos-user-update/Cargo.t
 
 Tests cover version ordering, reservations, source isolation, private credential
 parsing, concurrent commands, explicit-only publication, failed checks leaving
-the existing channel intact, and the signing credentials never reaching a gate
+the existing channel intact and the signing credentials never reaching a gate
 subprocess. Local preflight is distinct from a complete signed release. Only an
 explicit `release` or `publish` invocation exercises actual publication.
 
@@ -706,7 +706,7 @@ For the release smoke and the stable channel: `nightly.test.py`'s `OneCodePathTe
 asserts that the smoke reaches every registered release-only step, that each of those
 steps is named in the body of the code a real release runs (the failure it prevents is
 not a rename — Python catches that — but a step re-implemented inline "just for this
-path" while the smoke keeps exercising the old function), and that the smoke exercises
+path" while the smoke keeps exercising the old function) and that the smoke exercises
 refusals rather than only happy paths. **The case that matters is the one that proves
 the mechanism by defeat:** it registers a release-only step the smoke never calls and
 requires the gate to turn red naming it. Without that case the completeness check could
@@ -721,9 +721,9 @@ cannot ship again; and that publishing stable flips the release to `latest` in e
 one call while leaving the nightly channel exactly where it was.
 
 `nightly-local.test.py` asserts that `gates/release-smoke` is first in the gate order,
-that `--checks-done-at-land` cannot drop it, and that the gate environment is an
+that `--checks-done-at-land` cannot drop it and that the gate environment is an
 allowlist — including a case that plants a variable **no list in this repository
 mentions** and requires no gate to see it. That case is the only one here that can tell
 an allowlist from the deny-list it replaced; every other environment case names a
-variable somebody already knew was dangerous, and all of them passed against the
+variable somebody already knew was dangerous and all of them passed against the
 deny-list that broke the build on 2026-09-19.

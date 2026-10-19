@@ -53,7 +53,25 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg>',
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+    ring: '<svg class="acc-who-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="trk" cx="10" cy="10" r="8"/><circle class="arc" cx="10" cy="10" r="8"/></svg>',
   };
+
+  // ---- which account is which: Show email (round 31, item 18) ----------------------------
+  // The CEO, 2026-10-18: "The user needs to know which account is which but we don't want to
+  // display the emails associated with each account directly on the corresponding screen.
+  // Instead, I imagine the user would need to do an extra click there somehow to temporarily
+  // reveal which email is connected to which account name." Round 31's item-18 mockup: each card
+  // says "Show email"; one click shows "Signed in as <email>" beside a gold ring that empties
+  // over 8 seconds, with Hide; then it hides again. Closing the sheet hides every email.
+  //
+  // The email is read at the click from Claude Code's own `claude auth status` for that
+  // account's folder (main.rs `claude_account_email`), held here only while it shows, and never
+  // in the page before the click or after it hides. When it cannot be read, the line says so.
+  const EMAIL_SECS = 8, WIPE_MS = 320;
+  const shown = new Map(); // id -> { answer, at }
+  const reading = new Set(), emailTimers = new Map();
+  let sheetOpens = 0, wipeIn = null;
 
   // ---- the accounts, as the app reports them --------------------------------------------
   // With one account `accounts` is empty and the top-level reading is that account's.
@@ -169,7 +187,8 @@
   sheet.innerHTML = `<section class="overlay-panel acc-panel">
     <header class="acc-heading"><div><p class="acc-eyebrow">Settings</p><h2 id="acc-title">Claude accounts</h2><p id="acc-lede" class="acc-lede"></p></div>
       <button id="acc-close" type="button" aria-label="Close Claude accounts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
-    <div class="acc-body"><div id="acc-col" class="acc-col"></div><div id="acc-how" class="acc-how"></div></div></section>`;
+    <div class="acc-body"><div id="acc-col" class="acc-col"></div><div id="acc-how" class="acc-how"></div></div>
+    <p id="acc-who-status" class="sr-only" role="status"></p></section>`;
   document.body.appendChild(sheet);
   const $ = id => document.getElementById(id);
   const col = $("acc-col"), how = $("acc-how");
@@ -208,7 +227,7 @@
     } else if (kind === "next") { pill = `<span class="acc-pill is-next"><i></i>Next</span>`; note = "Its week is fresh again soonest, so it goes next."; }
     else if (kind === "resting") { pill = `<span class="acc-pill is-resting"><i></i>Resting</span>`; note = "Rich can use it again once its week is fresh."; }
     else if (kind === "ready") { pill = `<span class="acc-pill"><i></i>Ready</span>`; note = "Waiting its turn."; }
-    else { pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`; note = signingId === a.id ? "Finish signing in in your browser, then come back here." : "Sign in to this account, and Rich can use it."; }
+    else { pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`; note = signingId === a.id ? "Finish signing in in your browser, then come back here." : "Sign in to this account and Rich can use it."; }
     let acts = "";
     if (multi() && kind !== "inuse" && kind !== "arriving" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
     if (!read(a) && a.id === "1") acts += `<button class="acc-btn" type="button" data-act="sign-one">Sign in</button>`;
@@ -217,13 +236,85 @@
     if (multi() && a.id !== "1") acts += `<button class="acc-btn acc-btn-quiet" type="button" data-act="remove" data-id="${esc(a.id)}" aria-label="Remove ${esc(a.label)}">Remove</button>`;
     let confirm = "";
     if (removeId === a.id) {
-      confirm = `<div class="acc-confirm"><span>Remove <b>${esc(a.label)}</b> from RichOS? RichOS signs out of it here. Nothing changes on the account itself, and you can add it back any time.</span>
+      confirm = `<div class="acc-confirm"><span>Remove <b>${esc(a.label)}</b> from RichOS? RichOS signs out of it here. Nothing changes on the account itself and you can add it back any time.</span>
         <button class="acc-btn acc-btn-primary" type="button" id="acc-remove-yes" data-act="remove-yes" data-id="${esc(a.id)}">Remove ${esc(a.label)}</button><button class="acc-btn" type="button" id="acc-remove-no" data-act="remove-no">Keep it</button></div>`;
     }
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
     return `<article class="acc-card is-${look}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
       <header class="acc-head"><h3 class="acc-name">${esc(nameOf(a))}</h3>${pill}<span class="acc-acts">${acts}</span></header>
-      <p class="acc-note">${note}</p><div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>${confirm}</article>`;
+      ${who(a)}<p class="acc-note">${note}</p><div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>${confirm}</article>`;
+  }
+  // The card's one line under its name: "Show email" at rest, the email while it shows.
+  function who(a) {
+    const id = esc(a.id), name = esc(nameOf(a)), s = shown.get(a.id);
+    if (!s) {
+      return `<div class="acc-who" data-id="${id}"><button class="acc-reveal" type="button" id="acc-email-${id}" data-act="email-show" data-id="${id}" aria-expanded="false" aria-label="Show the email ${name} is signed in with"${reading.has(a.id) ? ` aria-busy="true"` : ""}>${ICON.eye}<span>Show email</span></button></div>`;
+    }
+    const said = s.answer.state === "email"
+      ? `<span class="acc-who-label">Signed in as</span><span class="acc-who-addr">${esc(s.answer.email)}</span>`
+      : `<span class="acc-who-label">${s.answer.state === "signedOut" ? "This account is not signed in on this Mac." : "Claude Code did not say which email this account uses."}</span>`;
+    return `<div class="acc-who is-counting" data-id="${id}" data-at="${s.at}" style="--acc-who-secs:${EMAIL_SECS}s"><span class="acc-who-mail">${ICON.ring}${said}<button class="acc-who-hide" type="button" id="acc-email-hide-${id}" data-act="email-hide" data-id="${id}" aria-label="Hide the email for ${name}">Hide</button></span></div>`;
+  }
+  // After a repaint, each ring is set to the time that has really passed, so a repaint while
+  // an email shows never starts its 8 seconds again; the one just shown wipes in.
+  function paintWho() {
+    for (const line of col.querySelectorAll(".acc-who[data-at]")) {
+      const arc = line.querySelector(".arc");
+      if (arc) arc.style.animationDelay = -(Date.now() - Number(line.dataset.at)) + "ms";
+      if (line.dataset.id === wipeIn) {
+        line.classList.add("is-wiping");
+        requestAnimationFrame(() => requestAnimationFrame(() => line.classList.remove("is-wiping")));
+      }
+    }
+    wipeIn = null;
+  }
+  const say = text => { const s = $("acc-who-status"); if (s) s.textContent = text; };
+  async function showEmail(id) {
+    if (reading.has(id) || shown.has(id)) return;
+    const opens = sheetOpens, a = list().find(x => x.id === id);
+    reading.add(id); render();
+    let answer = null;
+    try { answer = await bridge.invoke("claude_account_email", { id }); } catch (_) { /* said below as not read */ }
+    reading.delete(id);
+    // Closed (or closed and opened again) while it was being read: nothing is shown.
+    if (sheet.hidden || opens !== sheetOpens) { render(); return; }
+    if (!answer || !["email", "signedOut", "unknown"].includes(answer.state) || (answer.state === "email" && !answer.email)) answer = { state: "unknown" };
+    shown.set(id, { answer, at: Date.now() });
+    wipeIn = id;
+    render();
+    const hide = $("acc-email-hide-" + id);
+    if (hide) hide.focus({ preventScroll: true });
+    const name = a ? nameOf(a) : "This account";
+    say(answer.state === "email" ? `${name} is signed in as ${answer.email}. It hides again in ${EMAIL_SECS} seconds.`
+      : answer.state === "signedOut" ? `${name} is not signed in on this Mac.` : `Claude Code did not say which email ${name} uses.`);
+    clearTimeout(emailTimers.get(id));
+    emailTimers.set(id, setTimeout(() => hideEmail(id, false), EMAIL_SECS * 1000));
+  }
+  function hideEmail(id, now) {
+    clearTimeout(emailTimers.get(id)); emailTimers.delete(id);
+    if (!shown.has(id)) return;
+    const line = col.querySelector(`.acc-who[data-id="${CSS.escape(id)}"]`);
+    const hadFocus = !!line && line.contains(document.activeElement);
+    const done = () => {
+      if (!shown.has(id)) return;
+      shown.delete(id);
+      render();
+      if (hadFocus) { const show = $("acc-email-" + id); if (show) show.focus({ preventScroll: true }); }
+      say("Email hidden.");
+    };
+    if (now || !line) return done();
+    line.classList.add("is-wiping");
+    setTimeout(done, WIPE_MS);
+  }
+  // Closing the sheet hides every email, and it always opens with all of them hidden.
+  function hideAllEmails() {
+    for (const t of emailTimers.values()) clearTimeout(t);
+    const had = shown.size > 0 || reading.size > 0;
+    emailTimers.clear(); shown.clear(); reading.clear(); wipeIn = null;
+    sheetOpens++;
+    say("");
+    // Out of the page at once, not left in a hidden sheet until it next opens.
+    if (had && view) renderCol();
   }
   function why(s) {
     const from = labelOf(s.from), fromAcct = list().find(a => a.id === s.from);
@@ -232,7 +323,7 @@
     const fresh = back ? ` It is fresh again ${esc(when(back))}.` : "";
     if (s.why === "limit") return `Why: ${esc(from)} reached a Claude usage limit, so the step it was on ran again on ${esc(labelOf(s.to))}.${fresh}`;
     const what = s.why === "fiveHour" ? "5-hour limit" : "weekly limit";
-    return `Why: ${esc(from)} had used ${Math.floor(s.used || 0)}% of its ${what}.${fresh} Nothing stopped, and the team carried on.`;
+    return `Why: ${esc(from)} had used ${Math.floor(s.used || 0)}% of its ${what}.${fresh} Nothing stopped and the team carried on.`;
   }
   const bannerKey = "richos-accounts-banner-seen";
   function banner() {
@@ -298,7 +389,7 @@
     html += `<div class="acc-cards">${cards.map((a, i) => card(a) + (i === 0 && !moving() && nx && cards[1] && cards[1].id === nx.id
       ? `<div class="acc-handover" aria-hidden="true"><span>${ICON.down}Then ${esc(nx.label)}, when ${esc(a.label)} is nearly full</span></div>` : "")).join("")}</div>`;
     if (add) html += addHtml();
-    else if (!multi()) html += `<button class="acc-slot" type="button" data-act="add-open"><span class="acc-slot-plus">${ICON.plus}</span><span><span class="acc-slot-title">Add another Claude account</span><span class="acc-slot-body">Have a second Claude account, for example one for work? Add it here, and Rich switches to it when this one is nearly full.</span></span></button>`;
+    else if (!multi()) html += `<button class="acc-slot" type="button" data-act="add-open"><span class="acc-slot-plus">${ICON.plus}</span><span><span class="acc-slot-title">Add another Claude account</span><span class="acc-slot-body">Have a second Claude account, for example one for work? Add it here and Rich switches to it when this one is nearly full.</span></span></button>`;
     else html += `<div class="acc-more"><button class="acc-btn acc-btn-quiet" type="button" data-act="add-open">${ICON.plus}Add another account</button></div>`;
     if (feedback) html += `<p class="acc-feedback" role="status">${ICON.check}<span>${feedback.html}</span>${feedback.undo ? `<button class="acc-btn acc-btn-quiet" type="button" data-act="undo" data-id="${esc(feedback.undo)}">Undo</button>` : ""}</p>`;
     // The DOM is only replaced when what it says changed, so a press, a hover or a focus is never
@@ -306,6 +397,7 @@
     if (html === col.dataset.painted && !(add && add.focus)) return;
     col.dataset.painted = html;
     col.innerHTML = html;
+    paintWho();
     if (add && add.focus) {
       const input = $(multi() || add.cur ? "acc-nu" : "acc-cur") || $("acc-open-signin") || $("acc-try-again");
       if (input) { input.focus(); if (input.setSelectionRange) input.setSelectionRange(input.value.length, input.value.length); }
@@ -341,7 +433,7 @@
       <div class="acc-how-sec"><p class="acc-how-h" id="acc-five-h">When a 5-hour limit is almost used up</p>
         <div class="acc-choice" role="radiogroup" aria-labelledby="acc-five-h">
           <button class="acc-opt" type="button" role="radio" id="acc-five-pause" data-act="five" data-v="pause" aria-checked="${choice === "pause"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Pause the team until it is fresh again</span><span class="acc-opt-s">The default. Never longer than 5 hours.</span></span></button>
-          <button class="acc-opt" type="button" role="radio" id="acc-five-switch" data-act="five" data-v="switch" aria-checked="${choice === "switch"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Switch to ${nx ? esc(nx.label) : "the next account"}</span><span class="acc-opt-s">The team keeps going, and uses up the next account's week sooner.</span></span></button>
+          <button class="acc-opt" type="button" role="radio" id="acc-five-switch" data-act="five" data-v="switch" aria-checked="${choice === "switch"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Switch to ${nx ? esc(nx.label) : "the next account"}</span><span class="acc-opt-s">The team keeps going and uses up the next account's week sooner.</span></span></button>
         </div>${saved ? `<p class="acc-saved" role="status">Saved.</p>` : ""}</div>
       <div class="acc-how-sec"><p class="acc-how-h">Recent changes</p>
         ${rows.length ? `<ul class="acc-log">${rows.map(c => `<li><time>${esc(ago(c.at))}</time><span>${changeText(c)}</span></li>`).join("")}</ul>`
@@ -503,6 +595,8 @@
       }
       case "sign": signingId = id; render(); if ((await call("claude_account_sign_in", { id })).ok) watch(); else { signingId = null; render(); } break;
       case "sign-one": close(); if (window.RichSettings && window.RichSettings.openAccount) window.RichSettings.openAccount(); break;
+      case "email-show": showEmail(id); break;
+      case "email-hide": hideEmail(id, false); break;
       case "five": if (b.getAttribute("aria-checked") !== "true") setFive(b.dataset.v); break;
       case "banner-ok": localStorage.setItem(bannerKey, b.dataset.at); render(); break;
     }
@@ -528,6 +622,7 @@
   function open(options) {
     if (window.RichSettings && window.RichSettings.close) window.RichSettings.close();
     sheet.hidden = false; feedback = null; removeId = null;
+    hideAllEmails();
     if (options && options.add) add = { step: "name", cur: "", nu: "", err: null, id: null, focus: true };
     render();
     if (!add) $("acc-close").focus();
@@ -536,6 +631,7 @@
   function close() {
     if (add && add.id) discard();
     add = null; removeId = null; feedback = null;
+    hideAllEmails();
     sheet.hidden = true;
     queueMicrotask(() => { const btn = document.getElementById("set-btn"); if (btn) btn.focus(); });
   }

@@ -408,7 +408,7 @@ MUTANTS = [
      ['operator_desk_tools::tests::a_request_without_the_launch_s_token_or_without_names_and_words_changes_nothing'],
      'item 2: the socket answers only the app\'s own scope'),
     ('tools-read-waiting', 'operator_desk_tools.rs',
-     'words, the questions it is still waiting on (asked, and no answer relayed yet), and land leases it holds.',
+     'words, the questions it is still waiting on (asked and no answer relayed yet) and land leases it holds.',
      'words, questions it asked him, and land leases it holds.',
      ['operator_desk_tools::tests::the_read_tool_says_it_lists_the_questions_still_waiting'],
      'Frank F16: the read says it lists only the questions still waiting'),
