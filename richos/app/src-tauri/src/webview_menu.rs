@@ -58,6 +58,14 @@ where
     }
 }
 
+/// **The page's own guard, for every frame of a window, not only the page** (nightly 66: a
+/// right-click on the PDF preview highlighted the word under the pointer). The PDF preview is a
+/// frame of its own, from the output scheme, which the page's `<script>` never reaches. Its viewer
+/// selects the word and builds its menu only when the right-click's events reach it, and they reach
+/// it only when nothing in that frame cancels them; this script cancels them there as it does in the
+/// page. Given to each window as an initialization script for all frames.
+pub const EVERY_FRAME: &str = include_str!("../../ui/no-native-menu.js");
+
 /// Replace the menu call. Once per process, before any window; later calls do nothing.
 pub fn install() {
     #[cfg(target_os = "macos")]
