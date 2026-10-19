@@ -388,6 +388,11 @@ pub enum CapMsg {
     /// exact rather than a supervisor-tick estimate, and an utterance cut at the 30.000 s window
     /// while he is still talking does not start it early.
     TurnQuiet,
+    /// **His turn reached the hard bound** ([`crate::turn::MAX_TURN_FRAMES`], 60.000 s from its
+    /// first start) without that quiet. The open recording has just been closed (its `Utterance`
+    /// or `Discarded` comes first); what he said up to here is his turn, even if more is already
+    /// being said ([`crate::turn::TurnAssembler::time_limit`]).
+    TurnLimit,
 }
 
 /// **AN ADMITTED UTTERANCE AND WHAT THE CAPTURE PATH KNEW ABOUT RICH'S OWN VOICE.**
@@ -491,6 +496,9 @@ pub struct CaptureBrain {
     /// (`TurnDesk::withdraw_unanswered`; review rv-20261013T210558Z, finding 1). Mirrored into
     /// the recorder, which applies the minimum.
     turn_open: bool,
+    /// Frames since the first utterance of the turn under way started, 0 when none is: compared
+    /// with [`crate::turn::MAX_TURN_FRAMES`], after which the turn ends whatever is heard.
+    turn_frames: u32,
 }
 
 impl Default for CaptureBrain {
@@ -518,6 +526,7 @@ impl CaptureBrain {
             since_speech: 0,
             turn_quiet_armed: false,
             turn_open: false,
+            turn_frames: 0,
         }
     }
 
@@ -611,25 +620,40 @@ impl CaptureBrain {
     /// Rich's echo, discarded otherwise. Nothing is sent when nothing was being recorded.
     pub fn finish(&mut self) -> Vec<CapMsg> {
         let mut out = Vec::new();
+        self.close_now(&mut out);
+        self.turn_quiet_armed = false;
+        self.turn_frames = 0;
+        self.set_turn_open(false);
+        out
+    }
+
+    /// Close the open recording now, by the rules of any other end: admitted if it holds a
+    /// sentence's worth of speech and is not Rich's echo, discarded otherwise. `true` if admitted.
+    fn close_now(&mut self, out: &mut Vec<CapMsg>) -> bool {
         let was_recording = self.recorder.is_recording();
-        match self.recorder.finish_now() {
+        let admitted = match self.recorder.finish_now() {
             Some(utterance) if !self.tainted || self.barged => {
                 out.push(CapMsg::Utterance(Box::new(AdmittedUtterance {
                     utterance: Box::new(utterance),
                     rich_audible: self.rich_audible,
                 })));
+                true
             }
-            Some(_) => out.push(CapMsg::Discarded { tainted: true }),
-            None if was_recording => out.push(CapMsg::Discarded { tainted: self.tainted }),
-            None => {}
-        }
+            Some(_) => {
+                out.push(CapMsg::Discarded { tainted: true });
+                false
+            }
+            None if was_recording => {
+                out.push(CapMsg::Discarded { tainted: self.tainted });
+                false
+            }
+            None => false,
+        };
         self.was_recording = false;
         self.tainted = false;
         self.barged = false;
         self.rich_audible = false;
-        self.turn_quiet_armed = false;
-        self.set_turn_open(false);
-        out
+        admitted
     }
 
     fn set_turn_open(&mut self, open: bool) {
@@ -693,6 +717,10 @@ impl CaptureBrain {
         confident: bool,
         out: &mut Vec<CapMsg>,
     ) {
+        // While Rich is silent the VAD's floor may not climb past the room inside the CEO's speech,
+        // or the end of his sentence stops being speech (nightly 65, `vad::ROOM_WINDOW_FRAMES`).
+        // While Rich is audible the floor follows his echo exactly as before.
+        self.vad.set_cap_to_room(!speaking);
         let is_speech = self.vad.push_frame(frame);
 
         // How long since Rich was last audible, in frames. Saturating, and updated BEFORE any
@@ -877,7 +905,27 @@ impl CaptureBrain {
             && self.since_speech >= crate::turn::END_OF_TURN_FRAMES
         {
             self.turn_quiet_armed = false;
+            self.turn_frames = 0;
             out.push(CapMsg::TurnQuiet);
+        }
+
+        // **THE HARD BOUND** (`turn::MAX_TURN_FRAMES`, 60.000 s from the turn's first start). The
+        // quiet above needs 2.000 s the VAD did not call speech, and nothing guarantees an input
+        // ever gives it that; this does. The recording is closed by the ordinary rules, so what
+        // he said is admitted, and the turn is handed over. `turn_frames` is 1 on the start's own
+        // frame, so the limit falls exactly 3750 frames = 60.000 s after it.
+        if self.turn_frames > 0 {
+            self.turn_frames += 1;
+        } else if started {
+            self.turn_frames = 1;
+        }
+        if self.turn_frames > crate::turn::MAX_TURN_FRAMES {
+            if self.close_now(out) {
+                self.set_turn_open(true);
+            }
+            self.turn_quiet_armed = false;
+            self.turn_frames = 0;
+            out.push(CapMsg::TurnLimit);
         }
     }
 }
@@ -2795,11 +2843,19 @@ impl TurnDesk {
             at: now_millis(),
         });
         self.sent += 1;
-        self.unanswered = Some(Unanswered {
-            seq: self.sent,
-            turn: turn.clone(),
-            turns_started_at_send: self.turns_started.load(Ordering::SeqCst),
-        });
+        if turn.at_limit {
+            // Ended by the time limit (`turn::MAX_TURN_FRAMES`): it goes ahead as it is. Waiting
+            // for the floor, or for his next words to carry it, would wait on the very input that
+            // never stops (review rv-20261019T160520Z, finding 2).
+            self.floor.let_through(self.sent);
+            self.unanswered = None;
+        } else {
+            self.unanswered = Some(Unanswered {
+                seq: self.sent,
+                turn: turn.clone(),
+                turns_started_at_send: self.turns_started.load(Ordering::SeqCst),
+            });
+        }
         if self.submit_tx.send((turn.text, turn.rich_audible)).is_err() {
             // Only when the submit thread is already gone, which is voice shutting down.
             eprintln!("[richos-voice] the turn could not be handed over: the submit thread has ended");
@@ -2880,6 +2936,9 @@ struct HisFloor {
     /// He has the floor, and how many spoken turns are waiting for it.
     held: Mutex<(bool, usize)>,
     changed: std::sync::Condvar,
+    /// The last turn number ended by the time limit (`turn::MAX_TURN_FRAMES`): it and those
+    /// before it go ahead without waiting for the floor ([`Self::let_through`]).
+    limit_seq: AtomicU64,
 }
 
 type FloorHold = Arc<HisFloor>;
@@ -2893,13 +2952,23 @@ impl HisFloor {
         }
     }
 
-    /// Returns once he does not have the floor. `true` when it had to wait.
-    fn wait_until_free(&self) -> bool {
+    /// Turn `seq` was ended by the time limit: it does not wait for the floor. An input that
+    /// holds the floor for ever is exactly the input that limit exists for.
+    fn let_through(&self, seq: u64) {
+        let _held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        self.limit_seq.fetch_max(seq, Ordering::SeqCst);
+        self.changed.notify_all();
+    }
+
+    /// Returns once he does not have the floor, or at once for a turn ended by the time limit.
+    /// `true` when it had to wait.
+    fn wait_until_free(&self, seq: u64) -> bool {
+        let through = || seq <= self.limit_seq.load(Ordering::SeqCst);
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        let waited = held.0;
+        let waited = held.0 && !through();
         held.1 += 1;
         self.changed.notify_all();
-        while held.0 {
+        while held.0 && !through() {
             held = self.changed.wait(held).unwrap_or_else(|p| p.into_inner());
         }
         held.1 -= 1;
@@ -2984,7 +3053,7 @@ pub fn spoken_turn_withdrawn() -> bool {
     SUBMITTING.with(|s| {
         let s = s.borrow();
         let Some((seq, w, floor)) = s.as_ref() else { return false };
-        if floor.wait_until_free() {
+        if floor.wait_until_free(*seq) {
             eprintln!(
                 "[richos-voice] {} turn {seq} waited before it started: he was speaking again",
                 wall_clock_utc()
@@ -3346,6 +3415,17 @@ fn supervise(
                         turns.assembler.awaiting_recognition(),
                     );
                     turns.assembler.quiet();
+                }
+                Ok(CapMsg::TurnLimit) => {
+                    eprintln!(
+                        "[richos-voice] {} end of turn at the {:.3} s limit, without {:.3} s of silence; {} fragment(s) held, {} at the recognizer",
+                        wall_clock_utc(),
+                        crate::vad::frames_to_secs(crate::turn::MAX_TURN_FRAMES),
+                        crate::turn::end_of_turn_secs(),
+                        turns.assembler.fragments_held(),
+                        turns.assembler.awaiting_recognition(),
+                    );
+                    turns.assembler.time_limit();
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
@@ -3900,6 +3980,63 @@ mod tests {
         words_tx.send(Some(("Send the draft".to_string(), false))).unwrap();
         assert!(desk.collect());
         assert_eq!(desk.continue_thought(false, false), None, "words the shell already handled were carried");
+    }
+
+    /// INVARIANT — review rv-20261019T160520Z, finding 2. A turn ended by the time limit
+    /// (`turn::MAX_TURN_FRAMES`) reaches the model through the real submit thread and
+    /// [`spoken_turn_withdrawn`] even though the input that never stops has already opened his
+    /// next utterance and holds the floor, and his next words do not withdraw it to carry it.
+    /// Before this the submit waited on that floor, so the bound ended nothing.
+    #[test]
+    fn a_turn_ended_by_the_time_limit_runs_while_the_floor_is_still_held() {
+        let (words_tx, words_rx) = channel();
+        let (submit_tx, submit_rx) = channel();
+        let mut desk = TurnDesk {
+            assembler: TurnAssembler::new(),
+            words_rx,
+            submit_tx,
+            observer: Arc::new(Recorder::default()),
+            last_end: None,
+            sent: 0,
+            unanswered: None,
+            withdrawn: Default::default(),
+            turns_started: Default::default(),
+            submits_done: Default::default(),
+            stop: Default::default(),
+            floor: Default::default(),
+        };
+        let (ran_tx, ran_rx) = channel();
+        let callback_floor = desk.floor.clone();
+        let submit: SubmitFn = Arc::new(move |text: String, _| {
+            if !spoken_turn_withdrawn() {
+                ran_tx.send(text).unwrap();
+            }
+            callback_floor.nudge();
+        });
+        let (withdrawn, hold, done) = (desk.withdrawn.clone(), desk.floor.clone(), desk.submits_done.clone());
+        let worker = std::thread::spawn(move || submit_turns(submit_rx, withdrawn, hold, done, submit));
+
+        // 60.000 s of input: the limit closes it, and the next utterance opens before the
+        // recognizer has returned the last fragment.
+        desk.assembler.his_utterance_started();
+        desk.assembler.utterance_admitted(30_000);
+        desk.assembler.time_limit();
+        desk.assembler.his_utterance_started();
+        assert!(desk.publish_floor(), "premise: the next utterance holds the floor");
+        words_tx.send(Some(("everything up to the limit".to_string(), false))).unwrap();
+        assert!(desk.collect());
+        desk.release();
+        assert!(desk.publish_floor(), "premise: the floor is still held while the turn goes out");
+        match desk.floor.turn_waits_or_ran(&ran_rx) {
+            Err(ran) => assert_eq!(ran, "everything up to the limit"),
+            Ok(()) => panic!("the turn ended by the time limit is waiting for a floor the input never gives back"),
+        }
+        // His next words are a turn of their own: nothing to carry, nothing withdrawn.
+        assert_eq!(desk.continue_thought(true, true), None, "the limited turn was carried into the next one");
+
+        desk.floor.set(false);
+        drop(desk);
+        worker.join().unwrap();
     }
 
     /// INVARIANT — review rv-20261013T214648Z. "Send the draft" waits for the spine behind

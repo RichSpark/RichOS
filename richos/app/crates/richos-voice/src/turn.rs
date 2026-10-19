@@ -98,6 +98,20 @@ pub const END_OF_TURN_FRAMES: u32 = 125;
 /// while he is still talking waits the full 2.000 s (review rv-20261013T163358Z, finding 2).
 pub const TURN_QUIET_FRAMES: u32 = END_OF_TURN_FRAMES - SILENCE_HANGOVER_FRAMES;
 
+/// **The hard bound: no turn lasts longer than this, whatever the microphone hears.**
+/// 3750 x 256 / 16000 = 60.000 s from the moment its first utterance started. His turn ends on
+/// [`END_OF_TURN_FRAMES`] of silence, and silence is the VAD's verdict; an input the VAD keeps
+/// calling speech (a click every 0.496 s in a quiet room, a television, words that never pause)
+/// would otherwise hold it open for ever. At the bound the capture path closes the recording,
+/// admits what it holds by the ordinary rules and sends `CapMsg::TurnLimit`, and the turn is
+/// handed over as soon as the recognizer returns it ([`TurnAssembler::time_limit`]) and goes
+/// to the model without waiting for the floor or for his next words ([`Turn::at_limit`]):
+/// a turn that waited on either would wait for ever on the same input. Twice whisper's 30.000 s
+/// window ([`crate::endpoint::MAX_UTTERANCE_FRAMES`]), so an utterance continued once after that
+/// cut still ends with its own silence. If he is in fact still talking, what he says next is a
+/// turn of its own, and Rich's spoken answer still waits while he has the floor.
+pub const MAX_TURN_FRAMES: u32 = 3750;
+
 /// [`END_OF_TURN_FRAMES`] in seconds, from the one frame-math helper. Never typed.
 pub fn end_of_turn_secs() -> f32 {
     frames_to_secs(END_OF_TURN_FRAMES)
@@ -115,6 +129,9 @@ pub struct Turn {
     pub fragments: u32,
     /// The recorded audio behind those fragments, in milliseconds.
     pub audio_ms: u64,
+    /// Ended by [`MAX_TURN_FRAMES`], not by his quiet: it goes ahead as it is, without waiting
+    /// for the floor and without being joined to what he says next (`controller::TurnDesk::send`).
+    pub at_limit: bool,
 }
 
 /// Holds his fragments until his turn is over. See the module documentation.
@@ -136,6 +153,9 @@ pub struct TurnAssembler {
     /// discards in `controller.rs`), and letting it hold the floor would make Rich stall on his
     /// own echo.
     his_open: bool,
+    /// The turn reached [`MAX_TURN_FRAMES`]: how many of the fragments at the recognizer are
+    /// still part of it. At `Some(0)` it is handed over, whatever has started since.
+    limit: Option<usize>,
 }
 
 impl TurnAssembler {
@@ -179,6 +199,9 @@ impl TurnAssembler {
     /// is the moment an answer still unsaid stops being an answer to what he is saying.
     pub fn recognized(&mut self, words: Option<(String, bool)>) -> bool {
         let audio_ms = self.awaiting.pop_front().unwrap_or(0);
+        if let Some(n) = self.limit.as_mut() {
+            *n = n.saturating_sub(1);
+        }
         if let Some((text, rich_audible)) = words {
             let text = text.trim();
             if !text.is_empty() {
@@ -204,6 +227,15 @@ impl TurnAssembler {
         self.quiet = true;
     }
 
+    /// The capture path ended his turn at [`MAX_TURN_FRAMES`]. Unlike [`Self::quiet`], an
+    /// utterance that starts after it does not hold it back: what he said up to the limit is
+    /// handed over as soon as the recognizer has returned it, or a turn that never falls quiet
+    /// would never be handed over at all.
+    pub fn time_limit(&mut self) {
+        self.quiet = true;
+        self.limit = Some(self.awaiting.len());
+    }
+
     /// **His earlier turn joins this one** (review rv-20261013T184256Z, finding 4). He paused
     /// for longer than the window, so `earlier` was handed over; then he went on before Rich
     /// had said a word of the answer. The words he is saying now are the rest of the same thought,
@@ -226,7 +258,11 @@ impl TurnAssembler {
 
     /// The turn, if he is finished: quiet for [`END_OF_TURN_FRAMES`], nothing open, nothing at
     /// the recognizer, and at least one fragment with words in it.
+    /// Or, after [`Self::time_limit`], once every fragment admitted before it is back.
     pub fn take_turn(&mut self) -> Option<Turn> {
+        if self.limit == Some(0) {
+            return self.take().map(|t| Turn { at_limit: true, ..t });
+        }
         if !self.quiet || self.open || !self.awaiting.is_empty() {
             return None;
         }
@@ -243,6 +279,7 @@ impl TurnAssembler {
     }
 
     fn take(&mut self) -> Option<Turn> {
+        self.limit = None;
         if self.words.is_empty() {
             return None;
         }
@@ -252,6 +289,7 @@ impl TurnAssembler {
             rich_audible: self.rich_audible,
             fragments: words.len() as u32,
             audio_ms: self.audio_ms,
+            at_limit: false,
         };
         self.rich_audible = false;
         self.audio_ms = 0;
@@ -532,6 +570,38 @@ mod tests {
         assert_eq!(TURN_QUIET_FRAMES, 75);
         assert!((frames_to_secs(TURN_QUIET_FRAMES) - 1.200).abs() < 1e-6);
         assert_eq!(SILENCE_HANGOVER_FRAMES + TURN_QUIET_FRAMES, END_OF_TURN_FRAMES);
+        assert_eq!(MAX_TURN_FRAMES, frames_for_secs(60.0)); // 3750.0 exactly
+        assert!((frames_to_secs(MAX_TURN_FRAMES) - 60.000).abs() < 1e-3);
+        assert_eq!(MAX_TURN_FRAMES, 2 * crate::endpoint::MAX_UTTERANCE_FRAMES);
+    }
+
+    /// INVARIANT: a turn ended by the time limit is handed over even though the next utterance
+    /// started before the recognizer returned it, which voids an ordinary quiet. Without that, an
+    /// input that never falls quiet would never hand over a turn at all.
+    #[test]
+    fn a_turn_at_the_time_limit_is_handed_over_while_the_next_is_open() {
+        for limited in [false, true] {
+            let mut t = TurnAssembler::new();
+            t.his_utterance_started();
+            t.utterance_admitted(60_000);
+            if limited {
+                t.time_limit();
+            } else {
+                t.quiet();
+            }
+            t.his_utterance_started(); // the input goes on at once
+            assert_eq!(t.take_turn(), None, "handed over before the recognizer returned it");
+            t.recognized(words("everything up to the limit"));
+            let taken = t.take_turn();
+            if limited {
+                assert_eq!(taken.map(|x| x.text).as_deref(), Some("everything up to the limit"));
+                t.utterance_admitted(1_000);
+                t.recognized(words("what came after"));
+                assert_eq!(t.take_turn(), None, "what came after is not a turn until its own end");
+            } else {
+                assert_eq!(taken, None, "premise: an ordinary quiet is voided by the next start");
+            }
+        }
     }
 
     /// INVARIANT: his measured pause (1.406 s, nightly 54) is inside the window, so a thought
@@ -733,7 +803,7 @@ mod tests {
         t.his_utterance_started();
         t.utterance_admitted(1000);
         t.recognized(words("after I approve it."));
-        t.carry(Turn { text: "Send the draft".into(), rich_audible: false, fragments: 1, audio_ms: 1500 });
+        t.carry(Turn { text: "Send the draft".into(), rich_audible: false, fragments: 1, audio_ms: 1500, at_limit: false });
         t.quiet();
         let turn = t.take_turn().unwrap();
         assert_eq!(turn.text, "Send the draft after I approve it.");
