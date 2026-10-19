@@ -49,11 +49,11 @@
               '</div>' +
               '<div data-st="missing" id="cx-tip-missing" hidden>' +
                 '<p class="cx-p">Before your team’s finished work is accepted, a second AI reviews it. Claude does that now. Codex could do it instead, so a model from a different company checks the work.</p>' +
-                '<p class="cx-why"><strong>The Codex app isn’t on this Mac.</strong> Install it and sign in to ChatGPT, and this switch can be turned on.</p>' +
+                '<p class="cx-why"><strong>The Codex app isn’t on this Mac.</strong> Install it and sign in to ChatGPT and this switch can be turned on.</p>' +
               '</div>' +
               '<div data-st="signedout" id="cx-tip-signedout" hidden>' +
                 '<p class="cx-p">Before your team’s finished work is accepted, a second AI reviews it. Claude does that now. Codex could do it instead, so a model from a different company checks the work.</p>' +
-                '<p class="cx-why"><strong>Codex isn’t signed in.</strong> Open the Codex app and sign in to ChatGPT, and this switch can be turned on.</p>' +
+                '<p class="cx-why"><strong>Codex isn’t signed in.</strong> Open the Codex app and sign in to ChatGPT and this switch can be turned on.</p>' +
               '</div>' +
               '<div data-st="lapsed" id="cx-tip-lapsed" hidden>' +
                 '<p class="cx-p">You turned this on, so Codex reviews your team’s work whenever it can.</p>' +
@@ -69,7 +69,7 @@
     '<div class="set-rule" role="presentation"></div>';
   // The on-but-not-ready line, by what went away (round 20.2's paintCodex).
   const LAPSED = {
-    missing: '<strong>The Codex app isn’t on this Mac right now,</strong> so Claude is reviewing in the meantime. Install it, sign in to ChatGPT, and Codex takes over again.',
+    missing: '<strong>The Codex app isn’t on this Mac right now,</strong> so Claude is reviewing in the meantime. Install it, sign in to ChatGPT and Codex takes over again.',
     signedout: '<strong>Codex isn’t signed in right now,</strong> so Claude is reviewing in the meantime. Sign in to ChatGPT in the Codex app and Codex takes over again.',
   };
 

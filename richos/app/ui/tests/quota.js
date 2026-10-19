@@ -820,8 +820,8 @@ async function main() {
     assertEqual(await page.locator("#quota-sentence-end").textContent(), ", unless the reset is under 20 minutes away.");
     assertEqual(await text("#quota-hint"), "Off: the line is only drawn, not enforced.");
     assertEqual(await text("#quota-hold-status"), "Off. Nothing is paused.");
-    assertEqual(await text("#quota-hold-detail"), "Rich’s agents keep working through the limit. When the five-hour window is spent, Claude Code turns them away until it resets, and Rich tells you.");
-    assertEqual(await text("#quota-boundary-one"), "A pause is not a stop. Each agent finishes the step it is on, then waits before the next, keeping its place and everything it knows. Because a step is allowed to finish, usage can climb a little past the line. Your conversation with Rich, and any Claude Code you run outside RichOS, are never paused.");
+    assertEqual(await text("#quota-hold-detail"), "Rich’s agents keep working through the limit. When the five-hour window is spent, Claude Code turns them away until it resets and Rich tells you.");
+    assertEqual(await text("#quota-boundary-one"), "A pause is not a stop. Each agent finishes the step it is on, then waits before the next, keeping its place and everything it knows. Because a step is allowed to finish, usage can climb a little past the line. Your conversation with Rich and any Claude Code you run outside RichOS, are never paused.");
     await page.click("#quota-enabled");
     await page.waitForFunction(() => document.getElementById("quota-hold-status").textContent === "On. Nothing is waiting.");
     assertEqual(await text("#quota-hint"), "Change the number to move the line.");

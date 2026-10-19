@@ -162,7 +162,7 @@ async function main() {
     // Allowed in System Settings: read within a second, the tool told, RichOS to the front.
     await set(page, { ax: "allowed", keyTap: true });
     await waitText(page, "#dict-state", "On. Tap F1 in any app, talk, and tap it again.");
-    assertEqual(await text(page, "#dict-feedback"), "Dictation is on. Try it in the box on the right, or in any app.");
+    assertEqual(await text(page, "#dict-feedback"), "Dictation is on. Try it in the box on the right or in any app.");
     assert((await calls(page)).includes("dictation_permissions_changed:true"), "the tool told, RichOS brought forward");
     await page.waitForFunction(() => document.activeElement && document.activeElement.id === "dict-try");
     assertEqual(await page.getAttribute("#dict-try", "data-ph"), "Click here, tap F1 and say something.");
@@ -180,7 +180,7 @@ async function main() {
   // started by the switch (run T3: "Starting" first, On 8 s later). Check 4 above gives the tap
   // in the same breath as the grant, which is not how the app sees it; here the tap comes last.
   await run.check("D18: round 19's 'Dictation is on' line shows once the tool holds the key, when the tap comes after Accessibility was allowed and when it comes after the switch with both grants already there", async () => {
-    const LINE = "Dictation is on. Try it in the box on the right, or in any app.";
+    const LINE = "Dictation is on. Try it in the box on the right or in any app.";
     const ON = "On. Tap F1 in any app, talk, and tap it again.";
     // A2's shape: the microphone, then Accessibility allowed in System Settings, then the tap.
     let page = await open("dark", {}, { tapNever: true });

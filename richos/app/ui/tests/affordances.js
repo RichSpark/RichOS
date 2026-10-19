@@ -1103,7 +1103,7 @@ const FIXTURES = {
     return openDesk(browser, (m) => {
       m.setLoroReadFailure(
         "I can't tell which company this work belongs to, so I won't guess. Filing it under " +
-          "the wrong one would mix two companies' records together, and that's not a mistake " +
+          "the wrong one would mix two companies' records together and that's not a mistake " +
           "worth risking to save you a question. Pick the company and I'll keep everything " +
           "under it from then on."
       );

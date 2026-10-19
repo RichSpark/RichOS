@@ -208,7 +208,7 @@
     } else if (kind === "next") { pill = `<span class="acc-pill is-next"><i></i>Next</span>`; note = "Its week is fresh again soonest, so it goes next."; }
     else if (kind === "resting") { pill = `<span class="acc-pill is-resting"><i></i>Resting</span>`; note = "Rich can use it again once its week is fresh."; }
     else if (kind === "ready") { pill = `<span class="acc-pill"><i></i>Ready</span>`; note = "Waiting its turn."; }
-    else { pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`; note = signingId === a.id ? "Finish signing in in your browser, then come back here." : "Sign in to this account, and Rich can use it."; }
+    else { pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`; note = signingId === a.id ? "Finish signing in in your browser, then come back here." : "Sign in to this account and Rich can use it."; }
     let acts = "";
     if (multi() && kind !== "inuse" && kind !== "arriving" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
     if (!read(a) && a.id === "1") acts += `<button class="acc-btn" type="button" data-act="sign-one">Sign in</button>`;
@@ -217,7 +217,7 @@
     if (multi() && a.id !== "1") acts += `<button class="acc-btn acc-btn-quiet" type="button" data-act="remove" data-id="${esc(a.id)}" aria-label="Remove ${esc(a.label)}">Remove</button>`;
     let confirm = "";
     if (removeId === a.id) {
-      confirm = `<div class="acc-confirm"><span>Remove <b>${esc(a.label)}</b> from RichOS? RichOS signs out of it here. Nothing changes on the account itself, and you can add it back any time.</span>
+      confirm = `<div class="acc-confirm"><span>Remove <b>${esc(a.label)}</b> from RichOS? RichOS signs out of it here. Nothing changes on the account itself and you can add it back any time.</span>
         <button class="acc-btn acc-btn-primary" type="button" id="acc-remove-yes" data-act="remove-yes" data-id="${esc(a.id)}">Remove ${esc(a.label)}</button><button class="acc-btn" type="button" id="acc-remove-no" data-act="remove-no">Keep it</button></div>`;
     }
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
@@ -232,7 +232,7 @@
     const fresh = back ? ` It is fresh again ${esc(when(back))}.` : "";
     if (s.why === "limit") return `Why: ${esc(from)} reached a Claude usage limit, so the step it was on ran again on ${esc(labelOf(s.to))}.${fresh}`;
     const what = s.why === "fiveHour" ? "5-hour limit" : "weekly limit";
-    return `Why: ${esc(from)} had used ${Math.floor(s.used || 0)}% of its ${what}.${fresh} Nothing stopped, and the team carried on.`;
+    return `Why: ${esc(from)} had used ${Math.floor(s.used || 0)}% of its ${what}.${fresh} Nothing stopped and the team carried on.`;
   }
   const bannerKey = "richos-accounts-banner-seen";
   function banner() {
@@ -298,7 +298,7 @@
     html += `<div class="acc-cards">${cards.map((a, i) => card(a) + (i === 0 && !moving() && nx && cards[1] && cards[1].id === nx.id
       ? `<div class="acc-handover" aria-hidden="true"><span>${ICON.down}Then ${esc(nx.label)}, when ${esc(a.label)} is nearly full</span></div>` : "")).join("")}</div>`;
     if (add) html += addHtml();
-    else if (!multi()) html += `<button class="acc-slot" type="button" data-act="add-open"><span class="acc-slot-plus">${ICON.plus}</span><span><span class="acc-slot-title">Add another Claude account</span><span class="acc-slot-body">Have a second Claude account, for example one for work? Add it here, and Rich switches to it when this one is nearly full.</span></span></button>`;
+    else if (!multi()) html += `<button class="acc-slot" type="button" data-act="add-open"><span class="acc-slot-plus">${ICON.plus}</span><span><span class="acc-slot-title">Add another Claude account</span><span class="acc-slot-body">Have a second Claude account, for example one for work? Add it here and Rich switches to it when this one is nearly full.</span></span></button>`;
     else html += `<div class="acc-more"><button class="acc-btn acc-btn-quiet" type="button" data-act="add-open">${ICON.plus}Add another account</button></div>`;
     if (feedback) html += `<p class="acc-feedback" role="status">${ICON.check}<span>${feedback.html}</span>${feedback.undo ? `<button class="acc-btn acc-btn-quiet" type="button" data-act="undo" data-id="${esc(feedback.undo)}">Undo</button>` : ""}</p>`;
     // The DOM is only replaced when what it says changed, so a press, a hover or a focus is never
@@ -341,7 +341,7 @@
       <div class="acc-how-sec"><p class="acc-how-h" id="acc-five-h">When a 5-hour limit is almost used up</p>
         <div class="acc-choice" role="radiogroup" aria-labelledby="acc-five-h">
           <button class="acc-opt" type="button" role="radio" id="acc-five-pause" data-act="five" data-v="pause" aria-checked="${choice === "pause"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Pause the team until it is fresh again</span><span class="acc-opt-s">The default. Never longer than 5 hours.</span></span></button>
-          <button class="acc-opt" type="button" role="radio" id="acc-five-switch" data-act="five" data-v="switch" aria-checked="${choice === "switch"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Switch to ${nx ? esc(nx.label) : "the next account"}</span><span class="acc-opt-s">The team keeps going, and uses up the next account's week sooner.</span></span></button>
+          <button class="acc-opt" type="button" role="radio" id="acc-five-switch" data-act="five" data-v="switch" aria-checked="${choice === "switch"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Switch to ${nx ? esc(nx.label) : "the next account"}</span><span class="acc-opt-s">The team keeps going and uses up the next account's week sooner.</span></span></button>
         </div>${saved ? `<p class="acc-saved" role="status">Saved.</p>` : ""}</div>
       <div class="acc-how-sec"><p class="acc-how-h">Recent changes</p>
         ${rows.length ? `<ul class="acc-log">${rows.map(c => `<li><time>${esc(ago(c.at))}</time><span>${changeText(c)}</span></li>`).join("")}</ul>`

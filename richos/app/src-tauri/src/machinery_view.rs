@@ -35,7 +35,7 @@ use serde_json::json;
 /// began at the routing commit (richos `48561e4`); nothing earlier is recoverable, ever
 /// (§5). This says what was recorded, not what happened.
 pub const NOTHING_RECORDED: &str =
-    "No machinery was recorded for this conversation. Retention started on 2026-08-28, and \
+    "No machinery was recorded for this conversation. Retention started on 2026-08-28 and \
      anything Rich did before that was never written down, so this is a gap in the record, \
      not a quiet conversation.";
 
@@ -50,7 +50,7 @@ pub const NOT_RETAINED: &str =
 /// The operator-facing reason travels alongside, in its own field, and names who owns it.
 pub const UNREADABLE: &str =
     "I can't read the technical record for this conversation. It's on this machine and I \
-     haven't lost it. Something is refusing to open it, and whoever set RichOS up needs to \
+     haven't lost it. Something is refusing to open it and whoever set RichOS up needs to \
      look.";
 
 /// The CEO-facing sentence for a thread whose BETWEEN-TURN lane is empty (techy-mode §1.5).

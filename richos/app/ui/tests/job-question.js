@@ -4,7 +4,7 @@
 // frame `e-overlap-light`): a background job stopped to ask him a question, and under that
 // question card the conversation said
 //
-//     This turn was still running the last time RichOS was open, and I can't tell you how
+//     This turn was still running the last time RichOS was open and I can't tell you how
 //     it ended.
 //
 // while RichOS had never closed.

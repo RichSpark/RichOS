@@ -225,7 +225,7 @@
         <ol class="phone-steps">
           <li class="overlay-note">Install Tailscale from the store.</li>
           <li class="overlay-note" id="phone-ts-step2">Sign in with the <strong>same</strong>
-            identity you used on this Mac. A different provider makes a different network, and then
+            identity you used on this Mac. A different provider makes a different network and then
             the two will never see each other.</li>
           <li class="overlay-note">Allow the VPN connection your phone asks about.</li>
           <li class="overlay-note">The switch says Connected.</li>
@@ -313,17 +313,17 @@
       <h3 class="phone-step-title">First: Tailscale has no password</h3>
       <p class="overlay-note">Tailscale has no username and password. It only offers
         <strong>Sign in with Google</strong>, <strong>Apple</strong>, <strong>Microsoft</strong> or
-        <strong>GitHub</strong>, and whichever one you pick, that identity <strong>is</strong> your
+        <strong>GitHub</strong> and whichever one you pick, that identity <strong>is</strong> your
         private network.</p>
       <p class="overlay-note">So this Mac and your phone have to sign in with the
         <strong>same</strong> one. Two different identities make two separate networks that cannot
-        see each other, and neither device says so: the phone simply never finds this Mac.</p>
+        see each other and neither device says so: the phone simply never finds this Mac.</p>
       <p class="overlay-note">There is no "connect to my Mac" step in Tailscale, on either device.
         Signing in on both with the same identity is the whole connection. If the phone cannot find
         this Mac, reinstalling Tailscale will not help: the identity is the only thing that
         decides it.</p>
       <p class="overlay-note">If you would rather not use a personal identity on both devices, make
-        one that is only for this: a new Google account, which costs nothing, and sign in with
+        one that is only for this: a new Google account, which costs nothing and sign in with
         that one here and on the phone.</p>
       <div class="desk-card-actions">
         <button id="phone-identity-ok" class="desk-btn desk-btn--confirm" type="button">I understand, show me what to do</button>
@@ -368,7 +368,7 @@
       <p class="overlay-note" id="phone-ts-account"></p>
       <p class="phone-tailnet-name" id="phone-ts-name"></p>
       <p class="overlay-note">That is this Mac's name on your own Tailscale network. Only devices
-        signed in to your Tailscale account can reach it, and no port on this Mac is open to the
+        signed in to your Tailscale account can reach it and no port on this Mac is open to the
         internet.</p>
       <!-- AND THE WATCH LIVES HERE TOO, not only on the phone step. MEASURED: the pairing window
            is 60 s (PAIRING_WINDOW_MS) and the join grace is 60 s, and the watch starts strictly
@@ -559,14 +559,14 @@
   /// cleanup that does not happen, it says the old build may have left something on the phone
   /// and where to look. It does not walk him through it: the product that asked for it is gone.
   const PAIRED_FORGET_NOTE_TAILNET =
-    "Forgetting it here stops this Mac answering it, deletes the keys, and stops this Mac " +
+    "Forgetting it here stops this Mac answering it, deletes the keys and stops this Mac " +
     "answering at its Tailscale name. There is nothing to remove from your phone.";
 
   /// A record from a build that paired some other way — or one written before the field existed.
   /// **It says what it knows and no more.** A default here would be the original defect with a
   /// longer comment on it.
   const PAIRED_FORGET_NOTE_OLD =
-    "Forgetting it here stops this Mac answering it, and deletes the keys. This phone was " +
+    "Forgetting it here stops this Mac answering it and deletes the keys. This phone was " +
     "paired by an older version of RichOS, which connected a way this one does not use. Pair " +
     "it again to keep using it. If that older version put a RichOS profile on the phone, you " +
     "can remove it in the phone's own settings; nothing RichOS does now needs one.";
@@ -588,7 +588,7 @@
   /// both of which this Mac can stand behind — and not about what never travels.
   const LEAD =
     "Your phone reaches this Mac over your own Tailscale network, from anywhere it has a " +
-    "signal. The connection to this Mac is encrypted, your conversations stay here, and it " +
+    "signal. The connection to this Mac is encrypted, your conversations stay here and it " +
     "costs one free Tailscale account signed in on both devices.";
 
   /// **WHAT AN EXPIRED CODE SAYS**, on the screen it expired on. It names what happened, says
@@ -661,7 +661,7 @@
   /// already gone, and the port is closed within milliseconds of it (measured at 1 ms in
   /// `phone::listen::tests::they_do_not_match_over_the_wire_stops_the_listener`).
   const REJECTED_NOTE =
-    "Your phone said the six words did not match, so I stopped answering, forgot the phone, " +
+    "Your phone said the six words did not match, so I stopped answering, forgot the phone " +
     "and deleted the certificate this Mac was serving.";
 
   /// **WHO STOPPED IT DECIDES THE SENTENCE, AND NOTHING ELSE.** `status.rejectedBy`
@@ -674,20 +674,20 @@
   const STOPPED_NOTES = {
     phone: REJECTED_NOTE,
     mac:
-      "You said the six words did not match, so I stopped answering, forgot the phone, and " +
+      "You said the six words did not match, so I stopped answering, forgot the phone and " +
       "deleted the certificate this Mac was serving.",
     "code-used-twice":
       "A second phone used the same code, which means someone else may have seen it, so I " +
-      "stopped answering, forgot the phone that used it first, and deleted the certificate this " +
+      "stopped answering, forgot the phone that used it first and deleted the certificate this " +
       "Mac was serving.",
     expired:
       "Nobody pressed They match on this Mac within five minutes, so I stopped answering, forgot " +
-      "the phone, and deleted the certificate this Mac was serving.",
+      "the phone and deleted the certificate this Mac was serving.",
     // Sage's pair-v2 review §2: this Mac pressed They match, and the phone never used the pairing
     // within the grace after the window. Written here in the shape above; Urban has not reviewed it.
     unfinished:
       "This Mac accepted your phone, but the phone never finished pairing, so I stopped " +
-      "answering, forgot the phone, and deleted the certificate this Mac was serving.",
+      "answering, forgot the phone and deleted the certificate this Mac was serving.",
   };
   function stoppedNoteFor(by) {
     return Object.prototype.hasOwnProperty.call(STOPPED_NOTES, by) ? STOPPED_NOTES[by] : REJECTED_NOTE;
@@ -778,7 +778,7 @@
     absent: {
       heading: "Install Tailscale on this Mac",
       note1:
-        "Tailscale is somebody else's app, and it is free for one person. It gives this Mac a name your phone can reach from anywhere, and it is the whole reason this path has no certificate in it.",
+        "Tailscale is somebody else's app and it is free for one person. It gives this Mac a name your phone can reach from anywhere and it is the whole reason this path has no certificate in it.",
       note2: "Download it, install it, then come back here. This screen moves on by itself when it sees it.",
       url: LINKS.mac,
       action: { label: "Get Tailscale", target: LINKS.mac },
@@ -786,21 +786,21 @@
     "needs-sign-in": {
       heading: "Sign in to Tailscale on this Mac",
       note1:
-        "Tailscale is installed here but not signed in. Open it and sign in. Any of the sign-in choices it offers is fine, and the free plan is enough. I cannot do this part for you.",
+        "Tailscale is installed here but not signed in. Open it and sign in. Any of the sign-in choices it offers is fine and the free plan is enough. I cannot do this part for you.",
       // THE SHORTENED WHY, ON THE SCREEN WHERE THE IDENTITY IS ACTUALLY CHOSEN. Same CEO ruling as
       // the phone screen's opening paragraph: he would "normally absolutely NEVER use the same
       // identity on the Mac and on the phone", so the choice has to be made KNOWING it will be
       // reused. Telling him afterwards, on the phone screen, is telling him after he has already
       // picked — and by then the fix is signing out of an account he just created.
       note2:
-        "Whichever you pick, you will sign in to the SAME one on your phone: your Tailscale account is your private network, and devices signed in to it are what can reach each other. Nothing else connects them.",
+        "Whichever you pick, you will sign in to the SAME one on your phone: your Tailscale account is your private network and devices signed in to it are what can reach each other. Nothing else connects them.",
       url: "",
       action: { label: "Open Tailscale", target: TAILSCALE_APP },
     },
     "certificates-off": {
       heading: "Tailscale is signed in, but this Mac has no name yet",
       note1:
-        "Tailscale gives each machine a name on your network, and this Mac does not have one I can use. In Tailscale's own admin console, turn on MagicDNS and HTTPS certificates for your network, then come back.",
+        "Tailscale gives each machine a name on your network and this Mac does not have one I can use. In Tailscale's own admin console, turn on MagicDNS and HTTPS certificates for your network, then come back.",
       note2: "",
       url: LINKS.console,
       action: { label: "Open the Tailscale console", target: LINKS.console },
@@ -1148,9 +1148,9 @@
       field("phone-ts-step2").innerHTML = tailnet.account
         ? "Sign in with <strong>" + escapeText(tailnet.account) +
           "</strong>, the same one this Mac is signed in to. A different provider makes a " +
-          "different network, and then the two will never see each other."
+          "different network and then the two will never see each other."
         : "Sign in with the <strong>same</strong> identity you used on this Mac. A different " +
-          "provider makes a different network, and then the two will never see each other.";
+          "provider makes a different network and then the two will never see each other.";
 
       // WAITING, THEN SAYING SO — the same three sentences Screen 4 uses, from the same helper,
       // so the two screens cannot word the same evidence differently.

@@ -279,7 +279,7 @@ fn describe(row: &Value, later: &Later, workspaces: &Path, bytes_read: &mut u64)
         ("continued", "This step ended. A later step carries on from where it stopped.")
     } else if retired_execution(workspaces, row, bytes_read)? {
         match later.other_attempts(row) {
-            (true, _) => ("retired-other-added", "This attempt ended without a result. Another attempt did this work, and it was added to your project."),
+            (true, _) => ("retired-other-added", "This attempt ended without a result. Another attempt did this work and it was added to your project."),
             (false, true) => ("retired-other-shown", "This attempt ended without a result. Another attempt at this is shown separately."),
             (false, false) => ("retired", "This attempt ended without a result."),
         }
@@ -292,7 +292,7 @@ fn describe(row: &Value, later: &Later, workspaces: &Path, bytes_read: &mut u64)
         let reviewed = |set: &std::collections::HashSet<String>| target.is_some_and(|t| set.contains(t));
         let passed = verdict == Some("passed");
         match (passed, reviewed(&later.landed), reviewed(&later.landed_with_later), reviewed(&later.continued)) {
-            (true, true, _, _) => ("review-passed-added", "A reviewer approved it, and it was added to your project."),
+            (true, true, _, _) => ("review-passed-added", "A reviewer approved it and it was added to your project."),
             (false, true, _, _) => ("review-changes-added", "A reviewer asked for changes. It has since been added to your project."),
             (true, _, true, _) => ("review-passed-later-added", "A reviewer approved this version. A later version was added to your project."),
             (false, _, true, _) => ("review-changes-later-added", "A reviewer asked for changes. A later version was added to your project."),
@@ -922,7 +922,7 @@ pub fn trail(state: &Path, entity: &str, thread: &str, obligation: &str) -> Resu
         assert_eq!(says("review r1").0, "review-passed-later-added");
         assert_eq!(says("review r2").0, "review-changes-later-added");
         assert!(!says("review r2").1.contains("Nothing has been added"), "the replaced review reads as the current state");
-        assert_eq!(says("review r3"), ("review-passed-added".into(), "A reviewer approved it, and it was added to your project.".into()));
+        assert_eq!(says("review r3"), ("review-passed-added".into(), "A reviewer approved it and it was added to your project.".into()));
         std::fs::remove_dir_all(&root).unwrap();
 
         // Before the land: the earlier steps were carried on and their reviews were replaced,

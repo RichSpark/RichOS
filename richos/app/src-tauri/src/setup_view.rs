@@ -183,19 +183,19 @@ pub const SETUP_UNPINNED_NOTE: &str =
 /// sentence nobody can classify, and the state registry would be carrying a fragment instead
 /// of the thing he reads.
 pub const SETUP_INCOMPLETE_ENGINE: &str =
-    "I can't take that on yet: the RichOS engine isn't on this Mac, and that's the part \
+    "I can't take that on yet: the RichOS engine isn't on this Mac and that's the part \
      of me that knows how I work. I've put the setting up back on your screen: press Set \
      it up and I'll fetch it. There's nothing to quit and nothing to reopen.";
 
 /// The same state, when what is missing is the program rather than the instructions.
 pub const SETUP_INCOMPLETE_CLAUDE: &str =
-    "I can't take that on yet: Claude Code isn't on this Mac, and that's the program I \
+    "I can't take that on yet: Claude Code isn't on this Mac and that's the program I \
      think with. I've put the setting up back on your screen: press Set it up and I'll \
      fetch it. There's nothing to quit and nothing to reopen.";
 
 /// The same state on a Mac that has neither — the customer's, on the day he installs.
 pub const SETUP_INCOMPLETE_BOTH: &str =
-    "I can't take that on yet: this Mac doesn't have Claude Code or the RichOS engine, \
+    "I can't take that on yet: this Mac doesn't have Claude Code or the RichOS engine \
      and those are what I think with. I've put the setting up back on your screen: press \
      Set it up and I'll fetch them. There's nothing to quit and nothing to reopen.";
 

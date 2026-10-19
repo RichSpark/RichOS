@@ -557,7 +557,7 @@ async function main() {
     }));
     assertEqual(
       line.text,
-      "Nothing in Q4 hiring has produced a file yet. The moment Rich or the team writes one, it is listed here, and the count on the Output button says so."
+      "Nothing in Q4 hiring has produced a file yet. The moment Rich or the team writes one, it is listed here and the count on the Output button says so."
     );
     assertEqual(line.bold, "Q4 hiring");
     assertEqual(line.focus, "op-empty", "focus moves to the sentence's container");

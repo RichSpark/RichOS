@@ -112,7 +112,7 @@ AX_PROMPT = 'control this computer'
 ON_RUN = 'in any app, talk, and tap it again.'
 # Round 19 state 10's line under the card, drawn by the turn-on once the tool holds the key (D18,
 # the candidate 46 walk: it never showed, because the window decided it before the tool's tap).
-FEEDBACK_LINE = 'Dictation is on. Try it in the box on the right, or in any app.'
+FEEDBACK_LINE = 'Dictation is on. Try it in the box on the right or in any app.'
 DENIED_LINE = 'Not working yet: macOS has not let me type into other apps.'
 # The second copy's row and sheet say round 19's On line, through the first copy's tool (the CEO,
 # 2026-10-08: dictation runs only while RichOS runs, so "On even when RichOS is closed" is drawn

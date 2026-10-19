@@ -60,7 +60,7 @@ window.RichDictationMenu = (function () {
       (paused ? "Paused" : msg.on ? "On" : "Off") + "</span></div>" +
       (paused
         ? '<p class="sb-warn" role="status">' + IC.lock + "<span>" + secureLine(k, msg.secureApp) + "</span></p>"
-        : '<p class="sb-say">' + (msg.on ? "Tap " + kcap(k) + " to start, and again to stop." : "Turn it on to type with your voice.") + "</p>") +
+        : '<p class="sb-say">' + (msg.on ? "Tap " + kcap(k) + " to start and again to stop." : "Turn it on to type with your voice.") + "</p>") +
       '<div class="sb-hr" role="separator"></div>' +
       item("mode", "More accurate", "accurate", msg.choice !== "fast", true) +
       item("mode", "Faster", "fast", msg.choice === "fast", true) +

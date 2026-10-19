@@ -224,7 +224,7 @@ async function main() {
     const at = await page.evaluate(() => window.RichBridge.invoke("claude_quota", {}).then(v => v.lastSwitch.at));
     assertEqual(await text(page, ".acc-banner-head"), `Rich switched to Work at ${clock(at)}`);
     assert((await text(page, ".acc-banner-body")).startsWith("Why: Home had used 99% of its weekly limit. It is fresh again "), await text(page, ".acc-banner-body"));
-    assert((await text(page, ".acc-banner-body")).endsWith("Nothing stopped, and the team carried on."));
+    assert((await text(page, ".acc-banner-body")).endsWith("Nothing stopped and the team carried on."));
     assertEqual((await texts(page, ".acc-log li"))[0], `${clock(at)} Rich switched to Work. Home reached 99% of its week.`);
     assertEqual(await texts(page, ".acc-name"), ["Work", "Home"], "the one in use now is on top");
     assertEqual(await texts(page, ".acc-pill"), ["In use now", "Next"]);
@@ -322,7 +322,7 @@ async function main() {
     const page = await open("dark", two([58, 72], [0, 12]));
     await sheet(page);
     await page.click('[aria-label="Remove Work"]');
-    assert((await text(page, ".acc-confirm")).startsWith("Remove Work from RichOS? RichOS signs out of it here. Nothing changes on the account itself, and you can add it back any time."));
+    assert((await text(page, ".acc-confirm")).startsWith("Remove Work from RichOS? RichOS signs out of it here. Nothing changes on the account itself and you can add it back any time."));
     await page.click("#acc-remove-yes");
     await page.waitForSelector(".acc-feedback");
     assertEqual(await text(page, ".acc-feedback"), "Work is removed from RichOS. You can add it back any time.");

@@ -109,7 +109,7 @@ impl UpstreamFault {
         match self {
             UpstreamFault::Overloaded => {
                 "Anthropic's servers are at capacity, so that request never reached \
-                 Claude. This one ends when their capacity frees up, and nothing on this \
+                 Claude. This one ends when their capacity frees up and nothing on this \
                  machine brings it back sooner."
             }
             UpstreamFault::RateLimited => {
@@ -119,7 +119,7 @@ impl UpstreamFault {
             }
             UpstreamFault::ServerError => {
                 "Claude's API answered with a server error, so that request never reached \
-                 the model. It is on Anthropic's side rather than yours, and it carries no \
+                 the model. It is on Anthropic's side rather than yours and it carries no \
                  schedule."
             }
             UpstreamFault::Unclassified => {

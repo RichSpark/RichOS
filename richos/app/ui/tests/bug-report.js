@@ -717,7 +717,7 @@ async function main() {
     await page.keyboard.press("Enter");
     await page.waitForSelector("#bug-unchecked-cancel");
     await page.click("#bug-unchecked-cancel");
-    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"Canceled. Nothing was sent, and it's no longer saved on this Mac.\")");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"Canceled. Nothing was sent and it's no longer saved on this Mac.\")");
     assertEqual(await kept(page), 0, "the canceled report is still kept");
     // Claude answering afterwards brings nothing back.
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.claudeAnswers());
@@ -2018,7 +2018,7 @@ async function main() {
     assert((await page.locator(".bugcard .lo-text").innerText()).startsWith("Left out, because anyone can read GitHub Discussions: one conversation name."), "the left-out line");
     assertEqual(await page.locator("#bug-send").innerText(), "Post idea", "the post button");
     assertEqual(await page.locator("#bug-cancel").innerText(), "Cancel", "Cancel");
-    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Tell Rich what to change, or post it…", "the composer");
+    assertEqual(await page.getAttribute("#bugdock-input", "placeholder"), "Tell Rich what to change or post it…", "the composer");
     assert((await lastSaid(page)).startsWith("Here's your idea as I'd post it. Nothing goes out until you press Post idea. Anyone can read GitHub Discussions"), await lastSaid(page));
     const before = await ideaWords(page);
     assert(!NEVER_AN_ISSUE.test(before), "a feature request says issue or bug: " + before);
@@ -2068,7 +2068,7 @@ async function main() {
     await page.click("#bug-send");
     await page.waitForSelector(".bugcard.is-queued .bug-pill:has-text('Waiting to post · saved on this Mac')");
     const waiting = await lastSaid(page);
-    assertEqual(waiting, "This Mac is offline, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself as soon as you're back online, and tell you here when it's up.", "Rich's line");
+    assertEqual(waiting, "This Mac is offline, so your idea wasn't posted. Nothing is lost: it's saved on this Mac exactly as you approved it. I'll post it by myself as soon as you're back online and tell you here when it's up.", "Rich's line");
     assertEqual(await page.locator("#bug-try-now").innerText(), "Try now", "Try now");
     assertEqual(await page.locator("#bug-cancel").innerText(), "Cancel post", "Cancel post");
     assert(!NEVER_AN_ISSUE.test(await ideaWords(page)), "a waiting idea says issue or bug: " + (await ideaWords(page)));

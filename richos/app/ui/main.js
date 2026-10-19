@@ -849,9 +849,9 @@ function showUnboundView(row, rawError) {
   const title = row ? row.display_title : "This thread";
   el("unbound-view-title").textContent = title;
   el("unbound-view-body").textContent =
-    "I can't open this one. It has no entity home: it predates entity scoping, and I won't guess " +
+    "I can't open this one. It has no entity home: it predates entity scoping and I won't guess " +
     "which entity this work belongs to. Filing it under the wrong one would mix up two companies' " +
-    "records, and that's not a mistake worth risking to save you a question.";
+    "records and that's not a mistake worth risking to save you a question.";
   // WHO CHANGES THIS, AND WHAT HAPPENS NEXT. The old sentence ended at "Binding it is an
   // explicit operator decision and there is no control for it in the app yet" — true, and
   // useless to the man reading it: it named no party, offered no next step, and left him
@@ -861,7 +861,7 @@ function showUnboundView(row, rawError) {
     (navTree.unbound_explanation || rawError || "") +
     " Filing it under a company is a job for whoever set RichOS up. There is no control for" +
     " it in the app yet, so it will not sort itself out. Meanwhile the button above starts a" +
-    " fresh thread wherever you say, and I'll carry on there.";
+    " fresh thread wherever you say and I'll carry on there.";
   sendBlockedReason = "This thread has no entity home, so I can't take a message in it.";
   composerBlockedEl.textContent = sendBlockedReason;
   composerBlockedEl.hidden = false;
@@ -953,7 +953,7 @@ function showEntityView(entityId, mode) {
   // thing he might be expected to fix. This is a NEEDS-SOMEONE-ELSE state and it now says
   // who, and that there is nothing here for him.
   el("entity-view-note").textContent =
-    "I can't show priorities for this area yet, and the area itself is set up inside RichOS " +
+    "I can't show priorities for this area yet and the area itself is set up inside RichOS " +
     "rather than in settings. Whoever set RichOS up is the one who changes it. Nothing here " +
     "needs you.";
 
@@ -1744,7 +1744,7 @@ function retryTurn(turn) {
 /// control. Kept apart so the promise can be withheld without rewriting the greeting.
 const GREETING =
   "I'm Rich, your chief of staff. Tell me what you're working on and I'll take it from there.";
-const GREETING_VOICE_INVITE = "You can type, or tap ◉ to talk to me.";
+const GREETING_VOICE_INVITE = "You can type or tap ◉ to talk to me.";
 
 function renderFirstRun() {
   // Authored, in Rich's voice — never a blank screen. Client-side only.
@@ -2364,7 +2364,7 @@ async function send(explicitText, opts) {
         const setupPending = !!(setupNow && setupNow.ask && setupNow.ask.items.length);
         window.RichTimeline.addLocalNotice(
           timelineModel,
-          (reason || "I couldn't get that to my desk just now, and nothing is running.") +
+          (reason || "I couldn't get that to my desk just now and nothing is running.") +
             (setupPending
               ? " Press " + pressed + " again when the setting up is done."
               : " Press " + pressed + " when you want me to try again."),
@@ -2411,7 +2411,7 @@ async function send(explicitText, opts) {
     const setupPending = !!(setupNow && setupNow.ask && setupNow.ask.items.length);
     window.RichTimeline.addLocalNotice(
       timelineModel,
-      (reason || "I couldn't get that to my desk just now, and nothing is running.") +
+      (reason || "I couldn't get that to my desk just now and nothing is running.") +
         (setupPending
           ? " Your words are back in the box below, word for word. They'll be there when the" +
             " setting up is done."
@@ -4495,7 +4495,7 @@ function renderVoiceModelState(which) {
 function voiceOfferSentence(offer) {
   if (!offer) return "";
   const head = "I can hear you once I download my speech model. It's " + offer.sizeLabel +
-    ", and it's a one-time download.";
+    " and it's a one-time download.";
   if (offer.enoughRoom === false) {
     // SAID, AND THE BUTTON STAYS. Free space is not a fixed property of the machine — he can
     // change it while this sentence is on screen — and the download re-checks the disk at the
@@ -5371,7 +5371,7 @@ let entityPickerResolve = null;
 const PICKER_TITLE_THREAD = "Which company is this work in?";
 const PICKER_TITLE_COMPANY = "Which company is this copy of Rich for?";
 const PICKER_NOTE_COMPANY =
-  "I'll keep everything you tell me under the company you pick, and I'll remember it, so " +
+  "I'll keep everything you tell me under the company you pick and I'll remember it, so " +
   "you won't be asked again. You can change it later in Settings.";
 
 /// The lead line above the add-a-company form, in its two states.
@@ -5394,7 +5394,7 @@ const ADD_COMPANY_LEAD_MORE = "Not one of these? Add it here.";
 /// working — while quietly implying the one he wrote is gone.
 function registryUnreadableLine(path) {
   return (
-    "Your list of companies is saved at " + path + ", and I couldn't read it just now, so " +
+    "Your list of companies is saved at " + path + " and I couldn't read it just now, so " +
     "I'm not showing any, rather than showing you a wrong list. That file is fixed by " +
     "whoever set RichOS up. You can also add a company here in the meantime."
   );
@@ -5607,7 +5607,7 @@ function clearCompanyBlock() {
 /// says what happened and names who owns it (§21's rule for a state he cannot fix).
 const COMPANY_PINNED_BLOCK =
   "This copy of me was told which company it works for when it was started up, from " +
-  "outside this window, and I can't make sense of what it was told, so I won't file " +
+  "outside this window and I can't make sense of what it was told, so I won't file " +
   "anything until whoever set RichOS up has sorted it out.";
 
 /// What the composer says on a first launch, when there is no company to pick yet.
@@ -6511,7 +6511,7 @@ let memoryState = null;
 let companyQuestionDeferred = false;
 
 const MEMORY_ASK =
-  "I'll keep your decisions, your companies and how you work in a folder on this Mac, and " +
+  "I'll keep your decisions, your companies and how you work in a folder on this Mac and " +
   "nothing in it leaves this Mac. If this looks right, I'll set it up now.";
 const MEMORY_DONE =
   "That's set up. From now on I'll keep what you tell me in that folder and read it back " +
@@ -6543,7 +6543,7 @@ const MEMORY_DONE =
 /// `resolve_tools` searches the install directory and the bundle's resources at every launch,
 /// so a compiler that appears is picked up with no action from him.
 const MEMORY_NO_READER =
-  "Your memory folder is on this Mac, and I can't read or write it yet: the part of me that " +
+  "Your memory folder is on this Mac and I can't read or write it yet: the part of me that " +
   "does isn't in this version. Nothing else is affected: our conversations stay on this Mac " +
   "and I pick them up when you come back. There's nothing for you to install and nothing for " +
   "you to fix. I'll start using the folder on my own as soon as that part arrives.";
@@ -6650,9 +6650,9 @@ const FIRST_RUN_HEADLINE = "I don't know your business yet.";
 /// pronouns never trade places, which is the one thing that breaks when copy written for a
 /// screen is read aloud.
 const FIRST_RUN_BODY =
-  "There's nothing on file about what this company does, who it's for, or how you want to " +
+  "There's nothing on file about what this company does, who it's for or how you want to " +
   "work. I can ask you about it (about twenty minutes) and write your answers down, so I " +
-  "use them from then on. You can stop partway, and \"not sure yet\" is a real answer to any " +
+  "use them from then on. You can stop partway and \"not sure yet\" is a real answer to any " +
   "of it.";
 
 /// WHAT THE SECOND BUTTON DOES, stated beside the button rather than crammed into its label.
@@ -7050,7 +7050,7 @@ memorySetupEl.addEventListener("click", (e) => {
 /// doc comment says it must.
 const MEMORY_UNUSABLE =
   "That folder is there and I couldn't use it. Everything else works as it does now: our " +
-  "conversations are kept somewhere else and are untouched, and there's nothing for you to fix.";
+  "conversations are kept somewhere else and are untouched and there's nothing for you to fix.";
 
 window.RichSettings.registerMemory({
   open: async () => {
@@ -7907,7 +7907,7 @@ function feedbackNotice(text, tone) {
 /// happened, in the same register.
 const FEEDBACK_KEPT = "Taken down. It stays on this machine.";
 const FEEDBACK_KEPT_WITH_REPORT =
-  "Taken down, word for word as you read it, and it stays on this machine.";
+  "Taken down, word for word as you read it and it stays on this machine.";
 const FEEDBACK_KEPT_WITHOUT_REPORT = "Taken down, with no report attached.";
 
 // ---- reading ----------------------------------------------------------------------------
@@ -8614,7 +8614,7 @@ function retentionWindowSentence(view) {
   const age = days === "forever" ? null : days === 1 ? "1 day" : days + " days";
   const cap = bytes === "forever" ? null : formatBytes(bytes);
   if (!age && !cap) return "Nothing is ever removed.";
-  if (age && cap) return "Kept for " + age + ", or " + cap + " of output, whichever comes first.";
+  if (age && cap) return "Kept for " + age + " or " + cap + " of output, whichever comes first.";
   if (age) return "Kept for " + age + ". No size limit.";
   return "Kept until it reaches " + cap + ", oldest first.";
 }

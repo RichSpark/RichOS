@@ -212,7 +212,7 @@
             label: "Status unavailable",
             duration: null,
             tone: "unknown",
-            note: "This turn was still running when RichOS last closed, and nothing recorded how it ended.",
+            note: "This turn was still running when RichOS last closed and nothing recorded how it ended.",
             live: false,
           };
         }
@@ -3041,7 +3041,7 @@
     const card = elem("aside", "tl-intervention tl-intervention--quiet");
     card.setAttribute("role", "note");
     card.appendChild(elem("p", "tl-intervention-body",
-      "This turn was still running the last time RichOS was open, and I can't tell you how it ended."));
+      "This turn was still running the last time RichOS was open and I can't tell you how it ended."));
     const canRetry = !!(turn.user && turn.user.text);
     card.appendChild(elem("p", "tl-intervention-note",
       canRetry

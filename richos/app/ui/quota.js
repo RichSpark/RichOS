@@ -64,7 +64,7 @@
           <button id="quota-release" type="button" class="quota-btn" hidden>Let them continue now</button></div>
       </div>
       <div id="quota-boundary-one" class="quota-boundary"><p><b>A pause is not a stop.</b> Each agent finishes the step it is on, then waits before the next, keeping its place and everything it knows. Because a step is allowed to finish, usage can climb a little past the line.</p>
-        <p>Your conversation with Rich, and any Claude Code you run outside RichOS, are never paused.</p></div>
+        <p>Your conversation with Rich and any Claude Code you run outside RichOS, are never paused.</p></div>
       <div id="quota-boundary-many" class="quota-boundary" hidden><p><b>A pause is not a stop; a switch is not a restart.</b> Paused, an agent keeps its place and waits; switched, its next step runs on the next account with everything carried over.</p>
         <p>At <b>99%</b> of an account’s week Rich switches whatever you choose here, always to the account whose week ends soonest; when every account is used up, work waits for the soonest reset.</p></div>
     </form></div></section>`;
@@ -502,12 +502,12 @@
       // Round 16's `fresh` card with one account. With several the app keeps its own second
       // sentence, because a turned-away step runs again on the next account with room.
       body = many ? `Rich’s agents keep working through the line. If ${cur ? poss(cur.label) : "the"} five-hour window runs out, the step Claude Code turns away runs again on the next account with room. The switch at 99% of the week still happens; that is what a second account is for.`
-        : "Rich’s agents keep working through the limit. When the five-hour window is spent, Claude Code turns them away until it resets, and Rich tells you.";
+        : "Rich’s agents keep working through the limit. When the five-hour window is spent, Claude Code turns them away until it resets and Rich tells you.";
     } else if (noReading) {
       // Not drawn in round 16: the check came back with no figures, so nothing is held on it.
       head = "No current reading, so nothing is held.";
       const ask = view.retryAt > now ? view.retryAt : view.nextCheckAt;
-      body = `${state === "unknown" ? "There is no current usage reading" : view.message ? "The last check brought no usage figures" : "Claude Code’s last answer had no usage figures"}, and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows the five-hour window past <b>${fiveLine()}%</b>.`
+      body = `${state === "unknown" ? "There is no current usage reading" : view.message ? "The last check brought no usage figures" : "Claude Code’s last answer had no usage figures"} and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows the five-hour window past <b>${fiveLine()}%</b>.`
         + (ask > now ? ` RichOS asks again in <span class="quota-keep">${esc(duration(ask - now))}.</span>` : "");
     } else if (state === "held") {
       head = "Ready to pause"; body = esc(weeklyHeld ? "Weekly usage reached 99%. Agents will pause at their next step until allowance is confirmed." : `The five-hour allowance has reached ${view.policy.pausePercent}%. Agents will pause when they finish their current step. No pauses observed yet.`);
@@ -525,7 +525,7 @@
           + (nx ? `When ${esc(cur.label)} reaches its line, the next is <b>${esc(nx.label)}</b>.` : "No other account has room right now, so at the line Rich pauses.");
       } else if (many && view.atThreshold === "switch") {
         head = "On. Rich switches at the line.";
-        body = `${whose} five-hour window is at ${used}. At <b>${line}%</b>, every agent’s next step runs on <b>${esc(nx ? nx.label : "the next account")}</b>, the account whose week ends soonest, and Rich says so in the conversation. Nothing stops.` + (nx ? "" : " No other account has room right now, so Rich would pause instead.");
+        body = `${whose} five-hour window is at ${used}. At <b>${line}%</b>, every agent’s next step runs on <b>${esc(nx ? nx.label : "the next account")}</b>, the account whose week ends soonest and Rich says so in the conversation. Nothing stops.` + (nx ? "" : " No other account has room right now, so Rich would pause instead.");
       } else {
         // Round 16's `hold-idle` with one account, `two` / `choice-pause` with several.
         head = "On. Nothing is waiting.";
