@@ -388,6 +388,11 @@ pub enum CapMsg {
     /// exact rather than a supervisor-tick estimate, and an utterance cut at the 30.000 s window
     /// while he is still talking does not start it early.
     TurnQuiet,
+    /// **His turn reached the hard bound** ([`crate::turn::MAX_TURN_FRAMES`], 60.000 s from its
+    /// first start) without that quiet. The open recording has just been closed (its `Utterance`
+    /// or `Discarded` comes first); what he said up to here is his turn, even if more is already
+    /// being said ([`crate::turn::TurnAssembler::time_limit`]).
+    TurnLimit,
 }
 
 /// **AN ADMITTED UTTERANCE AND WHAT THE CAPTURE PATH KNEW ABOUT RICH'S OWN VOICE.**
@@ -491,6 +496,9 @@ pub struct CaptureBrain {
     /// (`TurnDesk::withdraw_unanswered`; review rv-20261013T210558Z, finding 1). Mirrored into
     /// the recorder, which applies the minimum.
     turn_open: bool,
+    /// Frames since the first utterance of the turn under way started, 0 when none is: compared
+    /// with [`crate::turn::MAX_TURN_FRAMES`], after which the turn ends whatever is heard.
+    turn_frames: u32,
 }
 
 impl Default for CaptureBrain {
@@ -518,6 +526,7 @@ impl CaptureBrain {
             since_speech: 0,
             turn_quiet_armed: false,
             turn_open: false,
+            turn_frames: 0,
         }
     }
 
@@ -611,25 +620,40 @@ impl CaptureBrain {
     /// Rich's echo, discarded otherwise. Nothing is sent when nothing was being recorded.
     pub fn finish(&mut self) -> Vec<CapMsg> {
         let mut out = Vec::new();
+        self.close_now(&mut out);
+        self.turn_quiet_armed = false;
+        self.turn_frames = 0;
+        self.set_turn_open(false);
+        out
+    }
+
+    /// Close the open recording now, by the rules of any other end: admitted if it holds a
+    /// sentence's worth of speech and is not Rich's echo, discarded otherwise. `true` if admitted.
+    fn close_now(&mut self, out: &mut Vec<CapMsg>) -> bool {
         let was_recording = self.recorder.is_recording();
-        match self.recorder.finish_now() {
+        let admitted = match self.recorder.finish_now() {
             Some(utterance) if !self.tainted || self.barged => {
                 out.push(CapMsg::Utterance(Box::new(AdmittedUtterance {
                     utterance: Box::new(utterance),
                     rich_audible: self.rich_audible,
                 })));
+                true
             }
-            Some(_) => out.push(CapMsg::Discarded { tainted: true }),
-            None if was_recording => out.push(CapMsg::Discarded { tainted: self.tainted }),
-            None => {}
-        }
+            Some(_) => {
+                out.push(CapMsg::Discarded { tainted: true });
+                false
+            }
+            None if was_recording => {
+                out.push(CapMsg::Discarded { tainted: self.tainted });
+                false
+            }
+            None => false,
+        };
         self.was_recording = false;
         self.tainted = false;
         self.barged = false;
         self.rich_audible = false;
-        self.turn_quiet_armed = false;
-        self.set_turn_open(false);
-        out
+        admitted
     }
 
     fn set_turn_open(&mut self, open: bool) {
@@ -881,7 +905,27 @@ impl CaptureBrain {
             && self.since_speech >= crate::turn::END_OF_TURN_FRAMES
         {
             self.turn_quiet_armed = false;
+            self.turn_frames = 0;
             out.push(CapMsg::TurnQuiet);
+        }
+
+        // **THE HARD BOUND** (`turn::MAX_TURN_FRAMES`, 60.000 s from the turn's first start). The
+        // quiet above needs 2.000 s the VAD did not call speech, and nothing guarantees an input
+        // ever gives it that; this does. The recording is closed by the ordinary rules, so what
+        // he said is admitted, and the turn is handed over. `turn_frames` is 1 on the start's own
+        // frame, so the limit falls exactly 3750 frames = 60.000 s after it.
+        if self.turn_frames > 0 {
+            self.turn_frames += 1;
+        } else if started {
+            self.turn_frames = 1;
+        }
+        if self.turn_frames > crate::turn::MAX_TURN_FRAMES {
+            if self.close_now(out) {
+                self.set_turn_open(true);
+            }
+            self.turn_quiet_armed = false;
+            self.turn_frames = 0;
+            out.push(CapMsg::TurnLimit);
         }
     }
 }
@@ -3350,6 +3394,17 @@ fn supervise(
                         turns.assembler.awaiting_recognition(),
                     );
                     turns.assembler.quiet();
+                }
+                Ok(CapMsg::TurnLimit) => {
+                    eprintln!(
+                        "[richos-voice] {} end of turn at the {:.3} s limit, without {:.3} s of silence; {} fragment(s) held, {} at the recognizer",
+                        wall_clock_utc(),
+                        crate::vad::frames_to_secs(crate::turn::MAX_TURN_FRAMES),
+                        crate::turn::end_of_turn_secs(),
+                        turns.assembler.fragments_held(),
+                        turns.assembler.awaiting_recognition(),
+                    );
+                    turns.assembler.time_limit();
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,

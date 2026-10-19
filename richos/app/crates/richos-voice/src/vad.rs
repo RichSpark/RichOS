@@ -67,8 +67,8 @@ pub const ROOM_WINDOW_FRAMES: u32 = 125;
 /// RMS 0.0102 and the clicks are RMS 0.050: a threshold of 3 x 1.5 x 0.0102 = 0.046 does not clear
 /// them), 1.7 to 3.0 x pass every case in `long_speech_on_the_ceos_rig.rs`, 3.5 x loses 5 of his
 /// 1287 speech-level frames over the -36.0 dBFS room and 4 x loses 654. 2 x sits nearer the
-/// speech side's margin (1.75 x below where his words are lost), because lost words are not
-/// recovered by anything.
+/// speech side's margin (1.75 x below where his words are lost) because a turn that does not end
+/// is still ended by `crate::turn::MAX_TURN_FRAMES`, and lost words are not recovered by anything.
 pub const ROOM_CAP_RATIO: f32 = 2.0;
 
 /// Frame duration in milliseconds, derived — never hard-coded as "16".

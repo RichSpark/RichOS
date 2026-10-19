@@ -19,8 +19,9 @@
 //!
 //! Three properties, each of which an earlier round of this fix traded for another (reviews
 //! rv-20261019T123341Z, rv-20261019T131907Z, rv-20261019T145840Z, whose generated signals these
-//! are): his passage keeps every speech-level frame over silence and over room noise; and his
-//! turn still ends in a noisy room, with or without clicks in it.
+//! are): his passage keeps every speech-level frame over silence and over room noise; his turn
+//! still ends in a noisy room, with or without clicks in it; and no input holds a turn open for
+//! longer than `turn::MAX_TURN_FRAMES` (60.000 s).
 //!
 //! No sound is played anywhere. Everything here is samples in memory (CEO §53).
 
@@ -79,6 +80,8 @@ struct Replay {
     spans: Vec<(usize, usize)>,
     /// The frames on which his end-of-turn quiet was sent.
     quiet: Vec<usize>,
+    /// The frames on which his turn reached the hard bound instead.
+    limit: Vec<usize>,
     /// The frames on which an utterance started.
     starts: Vec<usize>,
     /// The frames on which a turn was handed over, recognition taking 1.600 s per utterance.
@@ -93,7 +96,7 @@ fn replay(mic: &[f32]) -> Replay {
     let mut brain = CaptureBrain::with_aec(aec);
     let mut turns = TurnAssembler::new();
     let silence = vec![0.0f32; VAD_FRAME_SAMPLES];
-    let mut r = Replay { spans: Vec::new(), quiet: Vec::new(), starts: Vec::new(), handed_over: Vec::new() };
+    let mut r = Replay { spans: Vec::new(), quiet: Vec::new(), limit: Vec::new(), starts: Vec::new(), handed_over: Vec::new() };
     let mut at_recognizer: Vec<usize> = Vec::new();
     for (n, frame) in mic.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
         ring.push(&silence);
@@ -113,6 +116,10 @@ fn replay(mic: &[f32]) -> Replay {
                 CapMsg::TurnQuiet => {
                     r.quiet.push(n);
                     turns.quiet();
+                }
+                CapMsg::TurnLimit => {
+                    r.limit.push(n);
+                    turns.time_limit();
                 }
                 _ => {}
             }
@@ -266,5 +273,57 @@ fn his_turn_still_ends_when_the_noisy_room_also_has_clicks() {
             let what = format!("noisy room, {} ms click at RMS {click_rms}", click_frames * 16);
             assert_his_turn_ends(&what, &noisy_room(click_frames, click_rms));
         }
+    }
+}
+
+/// **No input holds his turn open past 60.000 s** (`turn::MAX_TURN_FRAMES`). His turn ends on
+/// 2.000 s the VAD does not call speech; these two inputs never give it that, on main or on any
+/// round of this fix: words that never pause (the passage said three times over, no gap between),
+/// and a 48 ms click every 0.496 s at RMS 0.050 in a quiet room (-44.0 dBFS), loud enough to be
+/// speech against that room. Each must hand a turn over, through the assembler and a recognizer
+/// that takes 1.600 s, with the limit exactly 60.000 s after the turn's first start.
+#[test]
+fn no_input_holds_his_turn_open_past_sixty_seconds() {
+    let limit = frames_for_secs(60.0) as usize;
+    assert!((frames_to_secs(limit as u32) - 60.0).abs() < 1e-3);
+
+    let mic = mic();
+    let gain = gain_to(HIS_LEVEL_DBFS, &mic[passage()]);
+    let mut endless: Vec<f32> = mic[..secs_to_samples(PASSAGE.0)].to_vec();
+    for _ in 0..3 {
+        endless.extend_from_slice(&mic[passage()]);
+    }
+    let endless: Vec<f32> = endless.iter().map(|s| s * gain).collect();
+
+    let room = &mic[..ROOM_FRAMES * VAD_FRAME_SAMPLES];
+    let room_gain = gain_to(-44.0, room);
+    let mut clicks = vec![0.12f32; SPOKEN_FRAMES * VAD_FRAME_SAMPLES];
+    let noise: Vec<f32> = room.iter().cycle().take(4500 * VAD_FRAME_SAMPLES).map(|s| s * room_gain).collect();
+    for (n, frame) in noise.chunks_exact(VAD_FRAME_SAMPLES).enumerate() {
+        let g = if n % 31 < 3 { 0.050 / rms(frame) } else { 1.0 };
+        clicks.extend(frame.iter().map(|s| s * g));
+    }
+
+    for (what, track) in [("words that never pause", &endless), ("a click every 0.496 s in a quiet room", &clicks)] {
+        let r = replay(track);
+        println!(
+            "[replay] {what} ({:.3} s): starts {:?}, quiet {:?}, limit {:?}, handed over {:?}",
+            track.len() as f32 / SAMPLE_RATE as f32,
+            r.starts,
+            r.quiet,
+            r.limit,
+            r.handed_over
+        );
+        let first = *r.starts.first().expect("premise: his speech started an utterance");
+        // PREMISE: this input never gives his turn its 2.000 s of quiet.
+        assert!(r.quiet.is_empty(), "{what}: premise broken, the turn fell quiet at {:?}", r.quiet);
+        assert!(track.len() / VAD_FRAME_SAMPLES > first + limit + 200, "premise: the input outlasts the limit");
+        assert_eq!(r.limit.first(), Some(&(first + limit)), "{what}: the turn did not end 60.000 s after it started");
+        assert!(!r.spans.is_empty(), "{what}: what was said up to the limit was not admitted");
+        assert!(
+            r.handed_over.first().is_some_and(|&h| h <= first + limit + 100),
+            "{what}: no turn was handed over within 60.000 s + recognition (handed over at {:?})",
+            r.handed_over
+        );
     }
 }

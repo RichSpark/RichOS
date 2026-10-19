@@ -645,13 +645,14 @@ richos/app/
                               at each codec block while the rest of the sentence is generated
     src/controller.rs        four threads, CaptureBrain, the half-duplex taint rule
     tests/barge_in_composition.rs  the WIRING: echo defense + real interruptions
-    tests/long_speech_on_the_ceos_rig.rs 5 tests: 23.466 s of speech recorded in his room on his
+    tests/long_speech_on_the_ceos_rig.rs 6 tests: 23.466 s of speech recorded in his room on his
                               microphone, at his -18.1 dBFS, reaches the recognizer to its last
                               frame, over silence and over his room's noise at -44.0 and -36.0
                               dBFS; the VAD floor that climbed inside speech kept 1.376-5.840 s
                               of it and lost the rest (nightly 65). His turn still ends within
                               5.000 s when the room's own noise sits at -36.0 dBFS, with or
-                              without a 16 ms or 48 ms click every 0.496 s
+                              without a 16 ms or 48 ms click every 0.496 s. And no input holds
+                              a turn open past 60.000 s, through the turn assembler
     tests/on_it_spoken_at_once.rs 1 test: on his spoken go the early "On it!" reaches speech
                               the moment it is shown, through the real spine and the production
                               sentence chunker, not at turn end
@@ -1218,7 +1219,7 @@ cargo test -p richos-core                       # 1830 tests + 8 doc-tests (1826
 #     Last run: PASS against 2.1.263 (docs/verification/inner-doctrine-live-2026-09-06/).
 
 # 1b. Voice mode — pure logic + the native edges (no mic needed):
-cargo test -p richos-voice                      # 427 tests (426 direct, 1 ignored; 4 live-device tests also ignored without a device)
+cargo test -p richos-voice                      # 429 tests (428 direct, 1 ignored; 4 live-device tests also ignored without a device)
 #     The 327 library tests include four `ignored, LIVE AUDIO: …` tests, each naming its own
 #     reason. Those four open a real output device and one is audible for about a second, so
 #     they are opt-in. Until 2026-09-05 they opted out with an early `return` — and a test
