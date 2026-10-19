@@ -541,16 +541,28 @@ struct Snapshot {
 pub const FIRST_READING_RETRY_MS: u64 = 30_000;
 pub const FIRST_READING_RETRY_MAX_MS: u64 = 120_000;
 
-/// One window's reading as a speed base: used percent, its reset time, and when it was read.
+/// One window's reading as a speed base: used percent, its reset time, when it was read, and
+/// whether its rise into that value was seen (`rose`: a lower reading came just before it).
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct SpeedBase { used: f64, resets_at: Option<u64>, at: u64 }
+struct SpeedBase { used: f64, resets_at: Option<u64>, at: u64, rose: bool }
+
+/// A value Claude reports in whole points.
+fn whole(used: f64) -> bool { used.fract() == 0. }
 
 impl Snapshot {
     /// Measure each window's speed against its base, a reading of the SAME window (same reset
     /// time) at least `SPEED_MIN_GAP_MS` earlier. A new window starts again with no speed.
+    ///
+    /// **The base is the FIRST reading of its value** (nightly 65, 2026-10-18): a reading that
+    /// shows the same value again leaves it where it is. Claude reports the week in whole
+    /// points, so measuring from the last reading of 95% to the first of 96% timed one point by
+    /// the gap between two readings, a minute or two, and an ordinary pace read as abnormal
+    /// speed (Work was left at 96% instead of his 99%). And when the rise into the base value
+    /// was not seen (the first reading of a window), a whole-point value may already have been
+    /// nearly a point higher, so that one point is not counted as speed.
     fn measure(&mut self, windows: &[Window], observed: u64) {
         for window in windows {
-            let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed };
+            let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, rose: false };
             // The SAME window when the reset times agree within a minute: the probe reports
             // an ISO time and the stream whole seconds, so exact equality would treat one
             // window read two ways as two windows and never measure a speed across them.
@@ -562,9 +574,12 @@ impl Snapshot {
                 Some(base) if same(base.resets_at, window.resets_at) => {
                     if observed >= base.at + SPEED_MIN_GAP_MS {
                         let gained = (window.used_percent - base.used).max(0.);
-                        self.speeds.insert(window.id.clone(), gained / (observed - base.at) as f64);
+                        let unseen = if !base.rose && whole(base.used) && whole(window.used_percent) { 1. } else { 0. };
+                        self.speeds.insert(window.id.clone(), (gained - unseen).max(0.) / (observed - base.at) as f64);
                         self.rises.insert(window.id.clone(), Rise { from: base.used, to: window.used_percent, ms: observed - base.at });
-                        self.bases.insert(window.id.clone(), fresh);
+                        if window.used_percent != base.used {
+                            self.bases.insert(window.id.clone(), SpeedBase { rose: gained > 0., ..fresh });
+                        }
                     }
                 }
                 _ => {
@@ -2116,10 +2131,12 @@ pub(crate) mod tests {
     /// (from 93). Weekly gaining 2 a minute, checked every minute: the next check and a
     /// 5-minute handoff (the default until one is measured) use 2 x (1 + 5) = 12 points, so the
     /// weekly handoff point is 99 - (12 - 1) = 88, and 88 + 12 = 100 (weekly-switch plan §1;
-    /// 78 while the guessed handoff was 10 minutes).
+    /// 78 while the guessed handoff was 10 minutes). Both windows' rise into 40% and 60% was
+    /// seen a minute before, so their whole points are measured as they are.
     #[test]
     fn a_measured_jump_moves_both_check_points_and_the_view_shows_them() {
         let mut s = Snapshot::default();
+        s.accept(both_at(39., 59.), NOW - 60_000);
         s.accept(both_at(40., 60.), NOW);
         assert_eq!(s.view(policy(), NOW).act_at, [("five_hour".to_string(), 93.), ("seven_day".to_string(), 99.)].into());
         s.accept(both_at(48., 62.), NOW + 60_000);
@@ -2137,7 +2154,9 @@ pub(crate) mod tests {
     /// - 0.05 a minute: 0.05 x 10 = 0.5 points, 1 or less, so 99;
     /// - 0.15 a minute: 0.15 x 10 = 1.5 points, so 98;
     /// - 0.25 a minute: 0.25 x 10 = 2.5 points, so 97;
-    /// - 1 point in 3 minutes: (1 / 3) x 10 = 3.3 points, so 96;
+    /// - 1 point in 3 minutes, its rise into 60% seen a minute earlier: (1 / 3) x 10 = 3.3
+    ///   points, so 96 (`one_whole_point_after_a_steady_reading_is_not_an_abnormal_speed` is
+    ///   the same point timed from the last of many equal readings, which is no speed);
     /// - 4 a minute (fast, checked every minute): 4 x 6 = 24 points, so 76.
     ///
     /// At every speed the point plus `s x (I + H)` is at or under 100: the next check and the
@@ -2153,6 +2172,7 @@ pub(crate) mod tests {
             (4., 1, FAST_REFRESH_INTERVAL_MS, 76.),
         ] {
             let mut s = Snapshot::default();
+            s.accept(both_at(39., 59.), NOW - 60_000);
             s.accept(both_at(40., 60.), NOW);
             let at = NOW + minutes * 60_000;
             s.accept(both_at(40., 60. + gain), at);
@@ -2169,6 +2189,38 @@ pub(crate) mod tests {
                 assert_eq!(matches!(admission, Admission::Held { .. }), held, "{gain} in {minutes} min at {used}%: {admission:?}");
             }
         }
+    }
+
+    /// **One whole point is not a speed** (nightly 65, 2026-10-18: Work was left at 96% of its
+    /// week, not at his 99%). Claude reports the week in whole points. Work read 95% for many
+    /// minutes and 96% at 22:48:39Z; the speed was taken from the last 95% reading to the first
+    /// 96% one, a minute or two apart, so one point looked like abnormal speed and the point
+    /// moved to 96. The real pace was 96% -> 97% in about 74 minutes. A speed is measured from
+    /// the first reading of a value; a value whose rise was not seen (the first reading after
+    /// launch) may already have been nearly a point higher, so that point is not counted.
+    #[test]
+    fn one_whole_point_after_a_steady_reading_is_not_an_abnormal_speed() {
+        let mut s = Snapshot::default();
+        s.accept(both_at(6., 95.), NOW);
+        for minute in [4, 8, 12, 16] {
+            s.observe(&both_at(6., 95.), NOW + minute * 60_000);
+        }
+        let at = NOW + 17 * 60_000;
+        s.observe(&both_at(6., 96.), at);
+        let view = s.view(policy(), at);
+        assert_eq!(view.act_at["seven_day"], 99., "{:?} {:?}", view.act_at, s.speeds);
+        assert_eq!(view.refresh_interval_ms, REFRESH_INTERVAL_MS);
+        // The next point, 74 minutes later, is measured edge to edge: normal speed, still 99.
+        s.observe(&both_at(6., 97.), at + 74 * 60_000);
+        assert_eq!(s.view(policy(), at + 74 * 60_000).act_at["seven_day"], 99.);
+        // A real burn in whole points is still caught once one rise has been seen.
+        let mut burn = Snapshot::default();
+        burn.accept(both_at(6., 93.), NOW);
+        burn.observe(&both_at(6., 94.), NOW + 60_000);
+        burn.observe(&both_at(6., 97.), NOW + 120_000);
+        let view = burn.view(policy(), NOW + 120_000);
+        assert_eq!(view.refresh_interval_ms, FAST_REFRESH_INTERVAL_MS);
+        assert!(view.act_at["seven_day"] <= 97., "{:?}", view.act_at);
     }
 
     #[test]
