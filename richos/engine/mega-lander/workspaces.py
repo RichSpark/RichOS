@@ -260,6 +260,21 @@ def _git_env():
     return env
 
 
+# The branch a land moves, told to the merge gate (richos autocheck.py reads it). A merge into a
+# branch the main checkout is not on runs in a temporary checkout of that branch, where the gate
+# saw no main and ran the commit check instead of the land check (review
+# rv-20261013T095956Z-f4ae06df-2813, finding 1; 2026-10-18: two app suites broken on v1.2.1 were
+# found only when v1.2.1 was merged into main). A land onto a release branch runs the check a
+# land onto main runs.
+LAND_TARGET_ENV = "RICHOS_AUTOCHECK_LAND_TARGET"
+
+
+def _land_env(target):
+    env = _git_env()
+    env[LAND_TARGET_ENV] = target
+    return env
+
+
 def git(repo, *args, **kw):
     try:
         r = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True,
@@ -5325,7 +5340,8 @@ def merge_and_land(ref, me="", message=""):
             if in_main:
                 before = git(main, "rev-parse", "HEAD")[1].strip()
                 # git's own checks (pre-merge-commit) run here and may take minutes.
-                r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True, env=_git_env())
+                r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True,
+                                   env=_land_env(target))
                 if r.returncode != 0:
                     raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
                                     % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
@@ -5384,7 +5400,7 @@ def _merge_in_temporary_checkout(main, target, args, b):
                         "landed:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
     try:
         # git's own checks (pre-merge-commit) run here and may take minutes.
-        r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True, env=_git_env())
+        r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True, env=_land_env(target))
     finally:
         left = _remove_temporary_checkout(main, path)
     if r.returncode != 0:

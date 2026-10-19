@@ -9,6 +9,7 @@
          the default then correcting is a full-screen flash of the wrong palette on every
          launch. See theme-boot.js — the durable answer still lives in config.rs; this
          applies a mirror of it and main.js reconciles the two at init. -->
+    <script src="no-native-menu.js"></script>
     <script src="theme-boot.js"></script>
     <!-- THE FACES, BEFORE ANYTHING THAT SETS TYPE IN THEM. First so the webview has the
          @font-face declarations in hand the moment it meets text that needs them — the
@@ -1336,7 +1337,7 @@
          OUTSIDE #app, like the settings button: Bust a bug is pressed on the home screen and on
          the held opening screen too, and the home screen makes #app inert: nothing inside it can
          be clicked or typed into, however high it is painted. -->
-    <aside id="bugdock" hidden aria-label="Bust a bug, with Rich">
+    <aside id="bugdock" data-dismiss="control:#bugdock-x" hidden aria-label="Bust a bug, with Rich">
       <header class="bugdock-head">
         <!-- The R and its arrow, the rail wordmark's own two paths, as round 21 draws them. -->
         <svg class="bugdock-mark" viewBox="0 0 744 754.5" aria-hidden="true" focusable="false"><use href="#R"/><use href="#arrow"/></svg>

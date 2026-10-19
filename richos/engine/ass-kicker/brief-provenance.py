@@ -423,7 +423,12 @@ def triggers(sentence):
 # ---------------------------------------------------------------------------
 # CHECK 1 — QUOTATION, and CHECK 2 — RESTATEMENT
 # ---------------------------------------------------------------------------
-PATH_IN = re.compile(r"`?((?:[\w.-]+/)+[\w.-]+\.(?:md|py|sh|ts|js|json|txt))`?")
+# A match starts only where a run of path characters starts. It finds exactly what it found
+# without the lookbehind (a path found from inside a run is also found from the run's start,
+# which comes first), but a search over a long run with no "/" in it is now linear: tried from
+# every position of 65,000 "x" characters it took 10 s per search, three searches per brief,
+# and pushed one hire in app.test.py past the app's 120 s bound on a loaded Mac.
+PATH_IN = re.compile(r"`?(?<![\w.-])((?:[\w.-]+/)+[\w.-]+\.(?:md|py|sh|ts|js|json|txt))`?")
 VERBATIM = re.compile(r"\b(verbatim|word for word|in (?:his|her|their|its) own words|quoted?)\b",
                       re.I)
 POINT_REF = re.compile(r"\b(?:point|points|§|clause|section)\s*(\d+(?:\s*(?:,|and|-)\s*\d+)*)",

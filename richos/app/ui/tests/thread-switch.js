@@ -222,6 +222,62 @@ async function main() {
       await page.mouse.click(900, 500, { button: "right" });
       assert(await page.locator("#thread-menu").isHidden(), "the row menu must not stay open");
     });
+    // CEO, nightly 65 (2026-10-19): a right-click on the company name showed WebKit's Look Up /
+    // Translate / Search with Google / Share / Speech / Services menu and selected part of the
+    // name. no-native-menu.js removes it for the whole window; a text field keeps its editing menu.
+    const probeContextClick = async (locator, fieldHint) => {
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => {
+        window.getSelection().removeAllRanges();
+        window.__ctx = null;
+        window.addEventListener("contextmenu", e => { window.__ctx = { prevented: e.defaultPrevented }; }, { once: true });
+      });
+      const box = await locator.boundingBox();
+      await page.mouse.click(box.x + Math.min(box.width / 2, 20), box.y + box.height / 2, { button: "right" });
+      await page.waitForTimeout(50);
+      return page.evaluate(() => ({ ...window.__ctx, selection: window.getSelection().toString() }));
+    };
+    const labelOf = async (selector) => {
+      const handle = await page.evaluateHandle(selector => {
+        const walker = document.createTreeWalker(document.querySelector(selector), NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          const el = n.parentElement, r = el.getBoundingClientRect();
+          if (n.textContent.trim().length > 3 && r.width > 0 && r.height > 0) return el;
+        }
+        return null;
+      }, selector);
+      return handle.asElement();
+    };
+    await run.check("the app's own menu still opens on a thread row", async () => {
+      const view = await rightClick(row, box => ({ x: 20, y: box.height / 2 }));
+      assert(view.open, "the thread menu must still open");
+    });
+    await page.goto(APP);
+    await leaveHome(page);
+    await open(page, "acme");
+    await page.locator("#input").fill("A message to right-click");
+    await page.locator("#input").press("Enter");
+    await page.waitForFunction(() => document.querySelector("#conversation").innerText.includes("A message to right-click"));
+    for (const [what, selector] of [
+      ["the company name in the sidebar", ".nav-group-label"],
+      ["a message in the conversation", "#conversation"],
+      ["the chrome above the conversation", "#scope-entity"],
+    ]) {
+      await run.check(`a right-click on ${what} shows no native menu and selects nothing`, async () => {
+        const el = selector === ".nav-group-label" || selector === "#scope-entity" ? await page.locator(selector).first().elementHandle() : await labelOf(selector);
+        assert(el, `${what} must be on screen`);
+        const seen = await probeContextClick(el, false);
+        assertEqual(seen.prevented, true, "the browser's own context menu must be suppressed");
+        assertEqual(seen.selection, "", "a right-click must not select the text");
+        return `on "${(await el.innerText()).trim().slice(0, 40)}"`;
+      });
+    }
+    // Last on purpose: in a text field the native editing menu really opens, and in headless
+    // WebKit an open native menu holds the pointer, so nothing after it would receive a click.
+    await run.check("a right-click in the composer keeps the editing menu (Cut, Copy, Paste)", async () => {
+      const seen = await probeContextClick(page.locator("#input"), true);
+      assertEqual(seen.prevented, false, "the text field's own menu must stay");
+    });
     await run.check("no browser errors", () => assertEqual(errors.length, 0, errors.join("\n")));
   } finally {
     await browser.close();

@@ -2278,6 +2278,30 @@ async function main() {
     });
   }
 
+  await run.check("Escape closes the Bust a bug panel and the Request a feature panel like the x does, with the field focused or not (CEO 2026-10-19)", async () => {
+    const seen = [];
+    for (const [name, opener] of [["bug", bustABug], ["idea", requestAFeature]]) {
+      for (const focused of [true, false]) {
+        const page = await open("dark");
+        await opener(page);
+        await page.waitForSelector("#bugdock:not([hidden]) #bugdock-msgs .bug-rich");
+        if (focused) {
+          await page.waitForFunction(() => document.activeElement === document.getElementById("bugdock-input"));
+        } else {
+          await page.evaluate(() => document.activeElement && document.activeElement.blur());
+          assert(await page.evaluate(() => document.activeElement === document.body), "focus did not leave the panel");
+        }
+        await page.keyboard.press("Escape");
+        await page.waitForSelector("#bugdock", { state: "hidden" }); // times out (red) if Escape left the panel open
+        assert(await page.isHidden("#bugdock"), `${name}, field ${focused ? "focused" : "unfocused"}: Escape left the panel open`);
+        assert(!(await page.evaluate(() => document.body.classList.contains("bug-dock-open"))), `${name}: the panel's open mark stayed`);
+        seen.push(`${name}/${focused ? "focused" : "unfocused"}`);
+        await page.close();
+      }
+    }
+    return seen.join(", ") + " all closed";
+  });
+
   await run.check("no renderer errors on any page", async () => {
     assertEqual(errors, [], "page errors");
     return "0 page errors";

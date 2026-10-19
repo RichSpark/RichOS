@@ -370,6 +370,138 @@ fn the_switch_notice_is_drawn_while_the_turn_on_the_new_account_runs() {
     drop(std::fs::remove_dir_all(dir));
 }
 
+/// A reply that runs until the test lets it end.
+#[derive(Clone, Default)]
+struct Gate(Arc<(Mutex<bool>, std::sync::Condvar)>);
+impl Gate {
+    fn open(&self) { *self.0.0.lock().unwrap() = true; self.0.1.notify_all(); }
+    fn wait(&self) {
+        let open = self.0.0.lock().unwrap();
+        // load-bound: hang guard only; the test opens every gate itself.
+        let (open, _) = self.0.1.wait_timeout_while(open, std::time::Duration::from_secs(30), |open| !*open).unwrap();
+        assert!(*open, "the test never let the reply end");
+    }
+}
+/// Every reply a lease has accepted: (account, text), in order.
+#[derive(Clone, Default)]
+struct Accepted(Arc<AcceptedReplies>);
+#[derive(Default)]
+struct AcceptedReplies { seen: Mutex<Vec<(String, String)>>, changed: std::sync::Condvar }
+impl Accepted {
+    fn push(&self, account: &str, text: &str) {
+        self.0.seen.lock().unwrap().push((account.to_string(), text.to_string()));
+        self.0.changed.notify_all();
+    }
+    fn wait_for(&self, count: usize) {
+        let seen = self.0.seen.lock().unwrap();
+        // load-bound: hang guard only; the replies are submitted by the drivers the test started.
+        let (seen, _) = self.0.changed.wait_timeout_while(seen, std::time::Duration::from_secs(30), |seen| seen.len() < count).unwrap();
+        assert!(seen.len() >= count, "only {} replies started: {:?}", seen.len(), *seen);
+    }
+    fn all(&self) -> Vec<(String, String)> { self.0.seen.lock().unwrap().clone() }
+}
+/// A conversation's lease whose reply is answered on another thread, as the app's are
+/// (`drive_shared_turns`), and only once its gate opens.
+struct HeldReply { session_id: String, account: String, gate: Gate, accepted: Accepted }
+impl Cognition for HeldReply {
+    fn session_id(&self) -> &str { &self.session_id }
+    fn account(&self) -> Option<&str> { Some(&self.account) }
+    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+        unreachable!("replies are detached, as in the app")
+    }
+    fn enqueue_prompt(&mut self, text: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>)
+        -> Result<richos_core::cognition::PendingReply, CognitionError> {
+        started().map_err(CognitionError::Protocol)?;
+        self.accepted.push(&self.account, text);
+        let (gate, account) = (self.gate.clone(), self.account.clone());
+        Ok(richos_core::cognition::PendingReply::new(move |on_item| {
+            gate.wait();
+            on_item(TurnItem::Text { seq: 0, text: &format!("answered on account {account}") });
+            Ok("end_turn".into())
+        }))
+    }
+}
+/// Opens every lease on the account in use (`main.rs`, `spawn_chat`), each with the next gate.
+struct HeldReplies { quota: Arc<richos_core::quota::Service>, gates: Mutex<std::collections::VecDeque<Gate>>, accepted: Accepted }
+impl LeaseFactory for HeldReplies {
+    fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
+        let account = self.quota.lease_account().id;
+        let gate = self.gates.lock().unwrap().pop_front().expect("a gate for every lease");
+        Ok(Box::new(HeldReply { session_id: format!("sess-{account}-{}", uuid::Uuid::new_v4()), account,
+            gate, accepted: self.accepted.clone() }))
+    }
+    fn quota(&self) -> Option<Arc<richos_core::quota::Service>> { Some(self.quota.clone()) }
+}
+
+/// **Two conversations at once: the switch is complete only when neither is still on the old
+/// account** (review rv-20261019T030516Z-0a1a8728-e798, finding 2; the CEO: "that Home account
+/// is deffinitely NOT in use"). Conversation A's reply runs on Account 1. The switch to Work is
+/// decided at conversation B's turn, whose reply then runs on Work, side by side with A's. The
+/// panel shows Rich on both accounts, and nothing says "I switched the team" until A's reply
+/// has ended too; then Account 1 has nobody on it and the line is said.
+#[test]
+fn the_switch_is_complete_only_once_no_conversation_is_still_on_the_old_account() {
+    use richos_core::spine::drive_shared_turns;
+    const NOTICE: &str = "I switched the team to your **Work** account.";
+    let (dir, quota) = two_accounts("two-conversations", 60.);
+    quota.set_policy(richos_core::quota::Policy { enabled: true, pause_percent: 93 }).unwrap();
+    quota.set_at_threshold(richos_core::claude_accounts::AtThreshold::Switch).unwrap();
+    let (path, ledger) = tmp_ledger("two-conversations");
+    let mut spine = support::spine(ledger);
+    spine.set_turn_control(richos_core::steering::TurnControl::open(path.with_extension("intake.jsonl")).unwrap());
+    let (a_ends, b_ends) = (Gate::default(), Gate::default());
+    let accepted = Accepted::default();
+    spine.set_lease_factory(Box::new(HeldReplies { quota: quota.clone(),
+        gates: Mutex::new([a_ends.clone(), b_ends.clone()].into()), accepted: accepted.clone() }));
+    spine.detach_conversation_io();
+    let a = spine.create_thread("Pricing", &femcboost()).unwrap();
+    let b = spine.create_thread("Hiring", &femcboost()).unwrap();
+    // B already has a lease on Account 1, whose own reading says 93% of the five hours.
+    spine.switch_thread(&b).unwrap();
+    spine.attach_lease(Box::new(AccountLease { session_id: "sess-b-account-1".into(), account: "1".into(),
+        streamed: Arc::new(Mutex::new(Some(streamed_five_hour(93., richos_core::util::now_millis() + 1_000)))),
+        fail_with: None, prompts: Arc::new(Mutex::new(Vec::new())) }));
+    let shared = Arc::new(Mutex::new(spine));
+    let working = |id: &str| quota.view().accounts.iter().find(|x| x.id == id).map(|x| x.working.clone()).unwrap();
+    let said = |shared: &Mutex<richos_core::spine::Spine>| shared.lock().unwrap().ledger().turns().iter()
+        .filter(|t| t.assistant_text.starts_with(NOTICE)).count();
+
+    // ---- A's reply runs on Account 1 ------------------------------------------------------
+    shared.lock().unwrap().submit_prompt_to(&a, "Draft the pricing note", Source::Text).unwrap();
+    let a_driver = { let shared = shared.clone(); std::thread::spawn(move || drive_shared_turns(&shared)) };
+    accepted.wait_for(1);
+    assert_eq!(accepted.all()[0], ("1".to_string(), "Draft the pricing note".to_string()));
+
+    // ---- the switch is decided at B's turn, and B's reply runs on Work while A's runs on ----
+    shared.lock().unwrap().submit_prompt_to(&b, "Who did we shortlist?", Source::Text).unwrap();
+    let b_driver = { let shared = shared.clone(); std::thread::spawn(move || drive_shared_turns(&shared)) };
+    accepted.wait_for(2);
+    assert_eq!(accepted.all()[1], ("2".to_string(), "Who did we shortlist?".to_string()), "B's reply runs on Work");
+    assert_eq!(quota.accounts.in_use().id, "2", "the switch to Work is decided");
+    assert_eq!(working("1"), vec!["rich".to_string()], "A's reply still runs on Account 1");
+    assert_eq!(working("2"), vec!["rich".to_string()], "B's reply runs on Work");
+    assert!(quota.view().last_switch.is_none(), "the switch is not complete while A runs on Account 1");
+
+    // ---- B's reply ends first: A is still on Account 1 -------------------------------------
+    b_ends.open();
+    b_driver.join().unwrap().unwrap();
+    assert_eq!(working("1"), vec!["rich".to_string()], "A's reply still runs on Account 1 after B's ended");
+    assert_eq!(said(&shared), 0, "\"I switched the team\" was said while A's reply ran on Account 1");
+    assert!(quota.view().last_switch.is_none());
+
+    // ---- A's reply ends: nobody is on Account 1, and the switch is complete -----------------
+    a_ends.open();
+    a_driver.join().unwrap().unwrap();
+    assert_eq!(working("1"), Vec::<String>::new(), "nobody is left on Account 1");
+    shared.lock().unwrap().raise_quota_notices(None);
+    assert_eq!(said(&shared), 1, "the switch is said once it is complete");
+    assert_eq!(quota.view().last_switch.map(|s| s.to), Some("2".to_string()));
+    drop(shared);
+    drop(std::fs::remove_file(&path));
+    drop(std::fs::remove_file(path.with_extension("intake.jsonl")));
+    drop(std::fs::remove_dir_all(dir));
+}
+
 /// **The backstop, only for one turn that by itself used up what remained.** The lease on
 /// Account 1 is refused mid-turn with the error `native.rs` writes for any of the three real
 /// signals. The account is marked gone, Work is put in use, and his prompt is re-served on a
