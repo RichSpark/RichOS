@@ -118,6 +118,18 @@ every job capped at 10 minutes. A merge into main runs exactly:
    keeps every pass, and runs only those checks. See "A large land runs in rounds" below.
 5. **A failure is retried alone, once (since 2026-10-08)**: see the next section.
 
+## A land onto a release branch is checked as a land onto main (2026-10-13, landed 2026-10-19)
+
+`workspaces.sh merge` lands onto a branch the main checkout is not on (v1.2.1, v1.3.0) in a
+temporary checkout of that branch. The gate chose the land check only for a checked-out main,
+so there it ran the commit check, and work the land into main refuses went onto the release
+branch (review rv-20261013T095956Z-f4ae06df-2813, finding 1). On 2026-10-18 eighteen fixes
+landed onto v1.2.1 that way, and two app suites one of them broke were found only when v1.2.1
+was merged into main. The lander now names the branch it lands onto in `RICHOS_AUTOCHECK_LAND_TARGET`, and a merge
+or commit carrying it, detached or on that same branch, runs the land check. A name that
+disagrees with the checked-out branch is ignored, so it can add the check and never remove
+it. `../autocheck.test.py` proves it for v1.2.1 and main, detached and checked out.
+
 ## What every commit refuses, the merge refuses (2026-10-11)
 
 The merge of `codex/axel-wes-recovery` (`9c5f0f6dc`) passed this gate and left
