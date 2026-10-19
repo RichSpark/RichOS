@@ -34,6 +34,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import uuid
 
 # Gate ceilings include rebuilds, not just reuse of successful receipts. Cargo
@@ -1563,6 +1564,64 @@ class Runner:
                      "--output", path, timeout=300)
         return path, json.loads(path.read_text())
 
+    def bump_next_version(self, released):
+        """After stable `released` is published: main's next release version is the next patch.
+
+        The CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published,
+        the next nightly version is automatically guaranteed to NOT start with
+        "1.2.0-nightly"?" Without this, the next nightly refuses at its plan (`v1.2.0 already
+        exists; bump the next release version first`) until somebody remembers.
+
+        An ordinary commit on main, made where main is checked out, exactly as a hand bump
+        would be: its pre-commit hook runs the land checks and its push is the usual push of
+        main. Nothing is skipped, and nothing is done to a checkout that is not on
+        origin/main with no changes: then it refuses, naming the bump to make by hand.
+        Returns the new commit, or None when main had already moved past `released`.
+        """
+        def git(*args, cwd):
+            result = subprocess.run(["git", *map(str, args)], cwd=cwd, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True)
+            self.log.write(result.stdout + result.stderr)
+            if result.returncode:
+                raise ValueError(f"git {args[0]} failed: {(result.stderr or result.stdout).strip()}")
+            return result.stdout
+
+        listed = git("worktree", "list", "--porcelain", cwd=self.repo).split("\n\n")
+        checkout = next((Path(block.split("\n", 1)[0].removeprefix("worktree "))
+                         for block in listed if "branch refs/heads/main" in block.splitlines()), None)
+        if checkout is None:
+            raise ValueError(f"main is not checked out in any worktree of {self.repo}")
+        git("fetch", "origin", "refs/heads/main", cwd=checkout)
+        tip = git("rev-parse", "FETCH_HEAD", cwd=checkout).strip()
+        if git("rev-parse", "HEAD", cwd=checkout).strip() != tip:
+            raise ValueError(f"main in {checkout} is not origin/main ({tip[:12]}); it has to be, "
+                             "so that the bump is the only change pushed")
+        if git("status", "--porcelain", "--untracked-files=no", cwd=checkout).strip():
+            raise ValueError(f"main in {checkout} has uncommitted changes")
+        bumped = next_patch_version_files((checkout / APP_MANIFEST).read_text(),
+                                          (checkout / APP_LOCK).read_text(), released)
+        if bumped is None:
+            self.announce(f"main's next release version is already past {released}; nothing bumped.")
+            return None
+        following, files = bumped
+        for path, text in files.items():
+            (checkout / path).write_text(text)
+        try:
+            git("add", *files, cwd=checkout)
+            git("-c", "user.useConfigOnly=true", "commit", "-m",
+                f"Next release version {following}: v{released} is published\n\n"
+                f"Bumped by `nightly-local.py stable` after publishing v{released}, so the next "
+                f"nightly is {following}-nightly.N and its plan does not refuse.", cwd=checkout)
+        except ValueError:
+            # Back to exactly what was there: the bump's own two files, nothing else.
+            git("checkout", "HEAD", "--", *files, cwd=checkout)
+            raise
+        commit = git("rev-parse", "HEAD", cwd=checkout).strip()
+        git("push", "origin", "refs/heads/main:refs/heads/main", cwd=checkout)
+        self.announce(f"main's next release version is now {following} ({commit[:12]}, pushed): "
+                      f"the next nightly is {following}-nightly.N.")
+        return commit
+
     def describe_stable(self, info):
         """Exactly what `stable` would build and publish, and nothing it would not.
 
@@ -2968,6 +3027,16 @@ class Runner:
                              release_build=True)
             print(f"Published https://github.com/{REPO}/releases/tag/{info['tag']}",
                   flush=True)
+            # The next nightly must not start with this version: bump it on main now.
+            with self.phase("next-version"):
+                try:
+                    self.bump_next_version(info["version"])
+                except (ValueError, OSError) as error:
+                    raise RuntimeError(
+                        f"{info['tag']} IS PUBLISHED, but main's next release version was not "
+                        f"bumped: {error}. Before the next nightly, on main: set the version past "
+                        f"{info['version']} in {APP_MANIFEST} and in {APP_LOCK}'s richos-tauri "
+                        "entry, commit and push.") from None
             self.summary()
             return
         if command == "candidate":
@@ -3144,6 +3213,35 @@ def simulated_phones_value(text):
     if text.isdigit() and int(text) >= 1:
         return int(text)
     raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of at least 1")
+
+
+APP_MANIFEST = Path("richos/app/src-tauri/Cargo.toml")
+APP_LOCK = Path("richos/app/src-tauri/Cargo.lock")
+
+
+def next_patch_version_files(manifest, lock, released):
+    """Cargo.toml and Cargo.lock with the app moved from `released` to the next patch version:
+    (that version, {path: text}), or None when Cargo.toml no longer says `released`.
+
+    Cargo.toml is the only copy of the application version (make-release.sh says so), and
+    Cargo.lock repeats it in the app's own package entry; both move together, as
+    `nightly.py release_files` moves them for a nightly.
+    """
+    if not re.fullmatch(r"\d+\.\d+\.\d+", released):
+        raise ValueError(f"{released!r} is not a stable version")
+    if tomllib.loads(manifest)["package"]["version"] != released:
+        return None
+    major, minor, patch = released.split(".")
+    following = f"{major}.{minor}.{int(patch) + 1}"
+    manifest, in_manifest = re.subn(r'^version = "' + re.escape(released) + r'"$',
+                                    f'version = "{following}"', manifest, count=1, flags=re.M)
+    lock, in_lock = re.subn(r'(\[\[package\]\]\nname = "richos-tauri"\nversion = ")'
+                            + re.escape(released) + r'("\n)',
+                            lambda m: m[1] + following + m[2], lock)
+    if in_manifest != 1 or in_lock != 1:
+        raise ValueError(f"cannot move the app version {released} to {following} in "
+                         f"{APP_MANIFEST} and {APP_LOCK}")
+    return following, {APP_MANIFEST: manifest, APP_LOCK: lock}
 
 
 def chosen_by():

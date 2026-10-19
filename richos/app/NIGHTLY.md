@@ -278,6 +278,13 @@ of the **commit**, never of the bytes.
    installed can see a partial release, however long the upload takes or however badly
    it fails — then flips it to `--latest --prerelease=false`. That flip *is* the
    channel move, which is why stable needs no rolling tag.
+7. Bumps main's next release version to the next patch (`1.2.0` → `1.2.1` in
+   `src-tauri/Cargo.toml` and the app's `Cargo.lock` entry), as an ordinary commit in
+   the worktree where main is checked out, with its usual land checks and push, so the
+   next nightly is `1.2.1-nightly.N` without anyone remembering. It touches nothing
+   unless that checkout is clean and at `origin/main`; otherwise, or if the commit or
+   push is refused, the command says the release IS published and names the bump to
+   make by hand. A main already past the released version is left alone.
 
 A commit whose release tooling predates the stable channel is refused at step 1, because
 it cannot build a stable release of itself.
@@ -295,8 +302,8 @@ The base is the next release version in `src-tauri/Cargo.toml`:
 
 The final number is one continuous candidate/build counter across **all dates and
 base versions**. It never resets, is never padded and can grow beyond four digits.
-The UTC date is captured at allocation after checks finish. After publishing stable
-`v1.2.0`, bump the base version before creating more nightlies; the counter continues.
+The UTC date is captured at allocation after checks finish. Publishing stable `v1.2.0`
+bumps the base to `1.2.1` on main by itself (step 7 above); the counter continues.
 
 The number is reserved before building the candidate. Candidate 43 and published
 nightly build 43 are the same build: `publish --run <run-id>` uploads the staged,

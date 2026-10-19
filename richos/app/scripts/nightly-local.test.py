@@ -1321,8 +1321,33 @@ while True: time.sleep(.02)
         r = self.runner()
         r.summary = Mock()
         r.stable_plan = Mock(return_value=(self.root / "stable-plan.json", {
-            "tag": "v1.2.0", "source_commit": source_commit or self.SOURCE}))
+            "tag": "v1.2.0", "version": "1.2.0", "source_commit": source_commit or self.SOURCE}))
+        r.bump_next_version = Mock()
         return r
+
+    def test_a_published_stable_ends_by_bumping_main_and_says_so_when_it_cannot(self):
+        # CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published,
+        # the next nightly version is automatically guaranteed to NOT start with
+        # "1.2.0-nightly"?" Yes: the stable run's last step bumps main.
+        self.recorded_run(grade="build")
+        r = self.stable_runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        r.bump_next_version.assert_called_once_with("1.2.0")
+        # A bump that fails after the upload never hides that the release is out.
+        r = self.stable_runner()
+        r.bump_next_version = Mock(side_effect=ValueError("main has uncommitted changes"))
+        with self.assertRaisesRegex(RuntimeError, "v1.2.0 IS PUBLISHED, but main's next release "
+                                    "version was not bumped: main has uncommitted changes"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED)
+        # A dry run publishes nothing, so it bumps nothing.
+        r = self.stable_runner()
+        r.describe_stable = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, gates_passed_in=self.RESUMED,
+                      dry_run=True)
+        r.bump_next_version.assert_not_called()
 
     def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
         # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
@@ -3174,6 +3199,101 @@ class GatesAtOnceTests(unittest.TestCase):
                 self.assertIn(f"your shell sets {name}, and no step of `{command}` would receive it", err)
                 self.assertIn("Nothing has started", err)
                 self.assertFalse((self.root / "state").exists())
+
+
+class NextVersionTests(unittest.TestCase):
+    """After stable vX.Y.Z is published, main says X.Y.(Z+1): a real main and a real remote.
+
+    The CEO, 2026-10-19: "Can I assume that because v1.2.0 stable has now been published, the
+    next nightly version is automatically guaranteed to NOT start with "1.2.0-nightly"?"
+    """
+
+    MANIFEST = '[package]\nname = "richos-tauri"\nversion = "1.2.0"\n\n[dependencies]\nserde = { version = "1.2.0" }\n'
+    LOCK = ('version = 4\n\n[[package]]\nname = "richos-tauri"\nversion = "1.2.0"\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.2.0"\n')
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd or self.main, check=True, text=True,
+                              capture_output=True).stdout.strip()
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        environment = patch.dict(os.environ, {})
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+                     "GIT_COMMITTER_EMAIL", "EMAIL", "GIT_DIR", "GIT_INDEX_FILE"):
+            os.environ.pop(name, None)
+        root = Path(temp.name)
+        self.remote, self.main = root / "remote.git", root / "main"
+        self.git("init", "--bare", "-q", str(self.remote), cwd=root)
+        self.git("init", "-q", "-b", "main", str(self.main), cwd=root)
+        for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid"),
+                           ("core.hooksPath", "/dev/null")):
+            self.git("config", key, value)
+        self.git("remote", "add", "origin", str(self.remote))
+        for path, text in ((m.APP_MANIFEST, self.MANIFEST), (m.APP_LOCK, self.LOCK)):
+            (self.main / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.main / path).write_text(text)
+        self.git("add", ".")
+        self.git("commit", "-qm", "1.2.0")
+        self.git("push", "-q", "origin", "main")
+        self.released = self.git("rev-parse", "HEAD")
+        self.runner = m.Runner(self.main, root / "state", {}, io.StringIO())
+
+    def on_remote(self, path):
+        return self.git("show", f"refs/heads/main:{path}", cwd=self.remote)
+
+    def test_a_published_stable_leaves_main_on_the_next_patch_version(self):
+        commit = self.runner.bump_next_version("1.2.0")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), commit)
+        self.assertEqual(self.git("rev-parse", f"{commit}^"), self.released)
+        self.assertEqual(self.on_remote(m.APP_MANIFEST) + "\n",
+                         self.MANIFEST.replace('version = "1.2.0"\n', 'version = "1.2.1"\n', 1))
+        # The app's own lock entry moves; a dependency that happens to share the number does not.
+        self.assertEqual(self.on_remote(m.APP_LOCK) + "\n",
+                         self.LOCK.replace('"richos-tauri"\nversion = "1.2.0"', '"richos-tauri"\nversion = "1.2.1"'))
+        self.assertEqual(self.git("diff", "--name-only", self.released, commit).splitlines(),
+                         [str(m.APP_LOCK), str(m.APP_MANIFEST)])
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        # Run again, or after a hand bump: main is already past 1.2.0, so nothing moves.
+        self.assertIsNone(self.runner.bump_next_version("1.2.0"))
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), commit)
+
+    def test_a_main_with_changes_or_not_at_origin_is_left_alone(self):
+        (self.main / "notes.txt").write_text("someone's work\n")
+        self.git("add", "notes.txt")
+        with self.assertRaisesRegex(ValueError, "uncommitted changes"):
+            self.runner.bump_next_version("1.2.0")
+        self.git("commit", "-qm", "unpushed land")
+        with self.assertRaisesRegex(ValueError, "is not origin/main"):
+            self.runner.bump_next_version("1.2.0")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.released)
+        self.assertEqual(self.git("show", f"HEAD:{m.APP_MANIFEST}") + "\n", self.MANIFEST)
+
+    def test_a_refused_commit_puts_the_two_files_back(self):
+        hooks = self.main.parent / "hooks"
+        hooks.mkdir()
+        (hooks / "pre-commit").write_text("#!/bin/sh\necho 'land checks failed' >&2\nexit 1\n")
+        (hooks / "pre-commit").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        with self.assertRaisesRegex(ValueError, "land checks failed"):
+            self.runner.bump_next_version("1.2.0")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main", cwd=self.remote), self.released)
+
+    def test_the_real_tree_moves_to_the_next_patch_in_exactly_two_lines(self):
+        manifest = (m.ROOT / m.APP_MANIFEST).read_text()
+        lock = (m.ROOT / m.APP_LOCK).read_text()
+        version = m.tomllib.loads(manifest)["package"]["version"]
+        following, files = m.next_patch_version_files(manifest, lock, version)
+        major, minor, patch = version.split(".")
+        self.assertEqual(following, f"{major}.{minor}.{int(patch) + 1}")
+        for path, before in ((m.APP_MANIFEST, manifest), (m.APP_LOCK, lock)):
+            changed = [(a, b) for a, b in zip(before.splitlines(), files[path].splitlines()) if a != b]
+            self.assertEqual(changed, [(f'version = "{version}"', f'version = "{following}"')], path)
+        self.assertIsNone(m.next_patch_version_files(files[m.APP_MANIFEST], files[m.APP_LOCK], version))
 
 
 class WalkRecipeTests(unittest.TestCase):
