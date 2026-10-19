@@ -329,6 +329,59 @@ window.RichUpdates = (function () {
     return n;
   }
 
+  /// "SEE WHAT'S NEW" (CEO, 2026-10-19; round 34, `design/mockups/rounds/round-34/` in
+  /// richos-hq): the RichOS changelog, opened in his default browser and never in this window.
+  /// It sits after "Check for updates" because this row is the one place that names the running
+  /// version (it is the action line's last item; see `build`). The click goes to `open_external` by KEY (`src-tauri/src/opener.rs` allowlists it,
+  /// as `main.js` does for the pricing link); the `href` is the same page, so the link is
+  /// announced and disclosed as what it is. `tabindex="0"` because WebKit on a Mac leaves a
+  /// plain link out of the Tab order. Enter on a focused link fires this same `click`.
+  var CHANGELOG_KEY = "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md";
+
+  /// What a screen reader hears is the `aria-label`: the visible words first (WCAG 2.5.3 "Label
+  /// in Name", as the update cue does), then where it goes. Not a clipped `.sr-only` span: that
+  /// span's text is still laid out at full width from the arrow onward, invisible but ~200px
+  /// long, and where the link ends near its column's edge it ran past the column
+  /// (`tests/rich-model.js` check 6, "nothing in Settings leaves its place").
+  function changelogLink() {
+    var a = el("a", "update-notes", {
+      id: "update-notes",
+      href: "https://" + CHANGELOG_KEY,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      tabindex: "0",
+      "aria-label": "See what’s new (opens in your web browser)",
+    });
+    var text = el("span", "update-notes-text");
+    text.textContent = "See what’s new";
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    var attrs = {
+      class: "update-notes-glyph",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2.25",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "aria-hidden": "true",
+      "data-contrast-role": "indicator",
+    };
+    for (var k in attrs) svg.setAttribute(k, attrs[k]);
+    ["M7 17 17 7", "M8.5 7H17v8.5"].forEach(function (d) {
+      var p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d", d);
+      svg.appendChild(p);
+    });
+    a.appendChild(text);
+    a.appendChild(svg);
+    a.addEventListener("click", function (e) {
+      e.preventDefault();
+      var b = window.RichBridge;
+      if (b) b.invoke("open_external", { target: CHANGELOG_KEY }).catch(function () {});
+    });
+    return a;
+  }
+
   /// Build the row's DOM once per container. `settings-button.js` throws the menu away and
   /// rebuilds it on a forced-dark flip, so "once" is per container, not once ever.
   function build(container) {
@@ -370,6 +423,9 @@ window.RichUpdates = (function () {
     actions.appendChild(check);
     actions.appendChild(install);
     actions.appendChild(back);
+    // LAST on the line: in round 34's state (up to date) that is right after Check for updates,
+    // as drawn; where Download update or Go back show, the row's own action keeps the lead.
+    actions.appendChild(changelogLink());
 
     var why = el("button", "update-why", {
       id: "update-why",

@@ -7674,6 +7674,68 @@ body.home-open {
   outline-offset: 2px;
 }
 
+/* "See what's new" (round 34, CEO 2026-10-19): the changelog link after "Check for updates".
+   This row's own tokens: `--accent-text` label (as `.update-why`), `--tint-soft` hover ground (as
+   `.update-btn`), `.update-why`'s focus ring. Ratios on `--card`, from round 34's README:
+   label, arrow and underline 6.36 dark / 6.65 light at rest; 5.32 / 5.88 on the hover tint;
+   focus ring 6.36 / 3.83. */
+.update-notes {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-family: var(--font);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--accent-text);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.14s ease;
+}
+.update-notes-text {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+.update-notes-glyph {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  transition: transform 0.16s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.update-notes:hover {
+  background: var(--tint-soft);
+}
+.update-notes:hover .update-notes-text {
+  text-decoration-thickness: 2px;
+}
+.update-notes:hover .update-notes-glyph {
+  transform: translate(2px, -2px);
+}
+.update-notes:active .update-notes-glyph {
+  transform: translate(3px, -3px);
+}
+.update-notes:focus {
+  outline: none;
+}
+.update-notes:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-notes,
+  .update-notes-glyph {
+    transition: none;
+  }
+  .update-notes:hover .update-notes-glyph,
+  .update-notes:active .update-notes-glyph {
+    transform: none;
+  }
+}
+
 /* The vendor's own error text, verbatim, wrapped rather than clipped — a truncated error is
    an error you cannot search for. */
 .update-detail {
