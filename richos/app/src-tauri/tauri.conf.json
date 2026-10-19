@@ -41,13 +41,13 @@
     },
     "category": "Productivity",
     "shortDescription": "Talk to Rich.",
-    "longDescription": "RichOS — the executive operating interface. One conversation with Rich.",
+    "longDescription": "RichOS \u2014 the executive operating interface. One conversation with Rich.",
     "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/WebDevBooster/richos/releases/latest/download/latest.json"
+        "https://github.com/WebDevBooster/richos/releases/download/nightly/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGMjE4OTkxQzkyOEZEMEEKUldRSy9TakprWWtoTHhkSXQwVHpWeFBoNVh6MjR2RkdBVEk0ZDloOXZLbXVpaVNkd2p2Nko3KzIK",
       "windows": {
