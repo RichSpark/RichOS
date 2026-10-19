@@ -14,8 +14,10 @@
 //   1  OFF BY DEFAULT: a fresh install draws Rich's reply and the question Claude wrote on a card
 //      with the comma before and/or/nor deleted. A code span keeps its comma. The stored message
 //      is untouched (the filter is applied where the text is drawn, never to what is kept).
-//   3  SWITCHING ON TAKES EFFECT AT ONCE: the reply and the card on screen show the comma again
-//      with no reload, and the choice is saved.
+//   2  THE ROW, as round 33 draws it: directly under Text size after a rule, the label "Oxford
+//      comma: OFF" on an unchecked switch, his explainer word for word under it.
+//   3  SWITCHING ON TAKES EFFECT AT ONCE: the label reads "Oxford comma: ON", the reply and the
+//      card on screen show the comma again with no reload, and the choice is saved.
 //   4  IT IS KEPT ACROSS A RELAUNCH, and switching back off deletes the comma at once again.
 //   5  THE APP'S OWN TEXT stays without it whatever the switch says: the switch filters only
 //      what Claude wrote, so a line the app wrote with "and" in it is drawn as written.
@@ -31,6 +33,7 @@ const APP = "file://" + path.join(UI_DIR, "index.html");
 const REPLY = "Red, green, and blue. Tea, or coffee? Run `a, and b` first.";
 const REPLY_OFF = "Red, green and blue. Tea or coffee? Run a, and b first.";
 const REPLY_ON = "Red, green, and blue. Tea, or coffee? Run a, and b first.";
+const HINT = 'Oxford comma AKA serial comma is what some style guides place before "and" and "or". RichOS recommends to keep that nuisance off.';
 
 /// The shell, with the live-event handlers `main.js` registers captured so a reply and a question
 /// card can be put on screen exactly the way the Mac sends them. `context` is a relaunch: a page in
@@ -108,6 +111,31 @@ async function onScreen(page) {
   });
 }
 
+async function openMenu(page) {
+  await page.click("#set-btn");
+  await page.waitForSelector("#set-menu", { state: "visible" });
+}
+
+async function row(page) {
+  return page.evaluate(() => {
+    const r = document.getElementById("set-oxford-row");
+    if (!r) return null;
+    const prev = r.previousElementSibling;
+    const before = prev ? prev.previousElementSibling : null;
+    const next = r.nextElementSibling;
+    return {
+      label: document.getElementById("set-oxford-label").textContent,
+      checked: document.getElementById("set-oxford").checked,
+      describedBy: document.getElementById("set-oxford").getAttribute("aria-describedby"),
+      hint: next && next.id === "oxford-hint" ? next.textContent : null,
+      hintClass: next ? next.className : null,
+      ruleAbove: !!(prev && prev.classList.contains("sm-divider")),
+      aboveRule: before ? (before.querySelector(".set-name") || {}).textContent || "" : "",
+      stored: JSON.parse(localStorage.getItem("richos-mock-config") || "{}").oxford_comma,
+    };
+  });
+}
+
 async function main() {
   const run = createRun("The Oxford comma in what Claude writes, and its switch (CEO 2026-10-19)");
   const { webkit } = loadPlaywright();
@@ -124,31 +152,44 @@ async function main() {
     return JSON.stringify(s.reply);
   });
 
-  await run.check("3  switching it on takes effect at once and is saved: the reply and the card show the comma again", async () => {
-    // What the Settings row's switch does (it arrives in the next commit): save the choice and
-    // set the shared filter. The conversation on screen redraws at once, with no reload.
-    await page.evaluate(async () => {
-      await window.RichBridge.invoke("set_oxford_comma", { keep: true });
-      window.RichOxford.setKeeping(true);
-    });
+  await run.check("2  the row, as round 33 draws it: under Text size after a rule, \"Oxford comma: OFF\", his explainer under it", async () => {
+    await openMenu(page);
+    const r = await row(page);
+    assert(r, "there is no Oxford comma row in Settings");
+    assertEqual(r.label, "Oxford comma: OFF", "the heading while off");
+    assertEqual(r.checked, false, "the switch is off by default");
+    assertEqual(r.hint, HINT, "his explainer, word for word, directly under the row");
+    assertEqual(r.hintClass, "popover-hint", "in the panel's hint style");
+    assertEqual(r.describedBy, "oxford-hint", "the switch is described by the explainer");
+    assert(r.ruleAbove && r.aboveRule === "Text size", "directly under Text size, after a rule: " + JSON.stringify(r));
+    return r.label;
+  });
+
+  await run.check("3  switching it on takes effect at once, says \"Oxford comma: ON\", and is saved", async () => {
+    await page.click("#set-oxford");
     await frames(page);
+    const r = await row(page);
+    assertEqual([r.label, r.checked, r.stored], ["Oxford comma: ON", true, true], "the row and the saved choice");
     const s = await onScreen(page);
     assertEqual(s.reply, REPLY_ON, "the reply on screen shows the comma again with no reload");
     assertEqual([s.question, s.label, s.description], ["Ship today, or tomorrow?", "Today, or never", "Fixes, tests, and notes"], "the question card");
     return JSON.stringify(s.reply);
   });
 
-  await run.check("4  the saved choice is read back at the next launch", async () => {
+  await run.check("4  his choice survives a relaunch, and switching it off deletes the comma at once again", async () => {
     await page.close();
     page = await openApp(context);
-    const s = await onScreen(page);
+    let s = await onScreen(page);
     assertEqual(s.reply, REPLY_ON, "after the relaunch, still on");
-    await page.evaluate(async () => {
-      await window.RichBridge.invoke("set_oxford_comma", { keep: false });
-      window.RichOxford.setKeeping(false);
-    });
+    await openMenu(page);
+    let r = await row(page);
+    assertEqual([r.label, r.checked], ["Oxford comma: ON", true], "the row after the relaunch");
+    await page.click("#set-oxford");
     await frames(page);
-    assertEqual((await onScreen(page)).reply, REPLY_OFF, "and off again at once");
+    r = await row(page);
+    assertEqual([r.label, r.checked, r.stored], ["Oxford comma: OFF", false, false], "switched back off");
+    s = await onScreen(page);
+    assertEqual(s.reply, REPLY_OFF, "the comma is gone again at once");
     return "on across the relaunch, then off";
   });
 

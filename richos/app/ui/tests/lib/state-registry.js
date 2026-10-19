@@ -909,6 +909,13 @@ module.exports = [
   { s: "How much should Rich interrupt you?", c: "CONTROL", why: "The interruption choice's title over its radios, in the Settings panel's Working with Rich column (round 27)." },
   { s: "Only when it's urgent", c: "CONTROL", why: "Assertiveness radio label." },
   { s: "Show it when RichOS starts", c: "CONTROL", why: "The splash screen's off switch in the Settings panel's foot band (CEO 2026-10-06 item 7, round 27): a checkbox label, and the control IS the state." },
+  { s: "Oxford comma: OFF", c: "CONTROL", why: "The Oxford comma switch's heading while it is off (CEO 2026-10-19, round 33; settings-button.js): the label of the switch beside it, and the control IS the state." },
+  { s: "Oxford comma: ON", c: "CONTROL", why: "The same switch's heading while it is on (CEO 2026-10-19): the label of the switch beside it." },
+  {
+    s: 'Oxford comma AKA serial comma is what some style guides place before "and" and "or". RichOS recommends to keep that nuisance off.',
+    c: "INFORMATIONAL",
+    why: "His explainer under the Oxford comma switch, word for word (CEO 2026-10-19): it says what the switch above it is, and the switch is the control.",
+  },
   { s: "Which company is this work in?", c: "CONTROL", why: "Entity picker title over its list. \"company\", never \"entity\" — Ray candidate-.11 §3.5." },
   { s: "Search entities, threads and conversations…", c: "CONTROL", why: "#search-input placeholder." },
   { s: "Talk to Rich", c: "CONTROL", why: "#talk-toggle title." },
