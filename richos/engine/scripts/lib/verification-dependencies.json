@@ -11513,7 +11513,7 @@
     },
     "scripts/prepare-agent-spawn.py": {
       "source": "scripts/prepare-agent-spawn.py",
-      "sha256": "916ec2a2f12b877e5820edf1d90bd9cce06117117573e652d5c344393ce79e85",
+      "sha256": "65740e2dafc47f39392e533698f2aa2d7c3973f29e631a4eee18bc40c81a7f64",
       "evidence": "Full prepare module reviewed: literal JSON validation and acknowledgement text construction. No command in the prepared prompt is executed.",
       "keys": [],
       "edges": []
@@ -17787,7 +17787,7 @@
         "scripts/lib/testdevice_alerts.py": "3de44527bec2b57834c8b3e3ab5e299c8fdf87d35d9d2c66fd25141f304ef3b7",
         "scripts/lib/testdevices.py": "4778658233aa549936341e4b85a6cac2f36e99364b7fe4381439424d29e3fec2",
         "scripts/lib/unevaluated-notice.sh": "e752a54291b49b6d84a5a90c6c11d9fcdc5767d28a8e5fbe9b56c8f8bd685631",
-        "scripts/prepare-agent-spawn.py": "916ec2a2f12b877e5820edf1d90bd9cce06117117573e652d5c344393ce79e85",
+        "scripts/prepare-agent-spawn.py": "65740e2dafc47f39392e533698f2aa2d7c3973f29e631a4eee18bc40c81a7f64",
         "scripts/spawn.sh": "c1965676afbb3cca7b2659304bc23574cc738dedd84c1410841b11498ba26bc9",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3"
       },
