@@ -1041,6 +1041,7 @@ impl Service {
                     policy.line(), self.accounts.limited_until(&account.id), now);
                 crate::claude_accounts::AccountView {
                     in_use: account.id == in_use.id,
+                    working: self.accounts.working_on(&account.id),
                     id: account.id,
                     label: account.label,
                     windows: account_view.windows,

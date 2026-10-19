@@ -84,17 +84,41 @@
     return list().filter(a => !a.inUse && read(a) && !resting(a)).sort((a, b) => resetOf(a) - resetOf(b))[0] || null;
   }
   // Compared by id: with one account `list()` builds its card's object afresh on every call.
+  // While a move is under way, the account still being left comes right after the one in use.
   function ordered() {
-    const nx = nextAcct(), cur = inUse();
-    const rest = list().filter(a => (!cur || a.id !== cur.id) && (!nx || a.id !== nx.id))
+    const nx = nextAcct(), cur = inUse(), held = stillOn();
+    const first = [cur, ...held, ...(nx && !held.some(a => a.id === nx.id) ? [nx] : [])].filter(Boolean);
+    const rest = list().filter(a => !first.some(f => f.id === a.id))
       .sort((a, b) => resting(a) - resting(b) || resetOf(a) - resetOf(b));
-    return [cur, ...(nx ? [nx] : []), ...rest].filter(Boolean);
+    return [...first, ...rest];
   }
   const recentSwitch = () => {
     const s = view && view.lastSwitch, cur = inUse();
     return s && cur && multi() && s.to === cur.id && Date.now() - s.at < RECENT ? s : null;
   };
   const labelOf = id => (list().find(a => a.id === id) || {}).label || "";
+  // WHO IS REALLY ON EACH ACCOUNT (claude_accounts.rs `working`): "rich" when the conversation's
+  // last turn ran on it, "team" when Stu's session runs on it. The account in use is where the next
+  // session starts; while someone is still on another account the move is under way, and the cards
+  // say so instead of calling the new one "In use now" (review rv-20261019T005929Z-e3d9ad03-3e7b,
+  // finding 3: the panel said Home was in use while the team still ran on Work).
+  const workingOn = a => (a && a.working) || [];
+  const stillOn = () => multi() ? list().filter(a => !a.inUse && workingOn(a).length) : [];
+  const moving = () => stillOn().length > 0;
+  function movingNote(a) {
+    const cur = inUse(), here = workingOn(a), away = stillOn().flatMap(workingOn);
+    if (!a.inUse) {
+      const to = esc(cur ? cur.label : "the next account"), said = [];
+      if (here.includes("team")) said.push(`The team is finishing the step it is on here, then moves to ${to}.`);
+      if (here.includes("rich")) said.push(`Rich moves to ${to} with his next reply.`);
+      return said.join(" ");
+    }
+    const said = [];
+    if (here.length) said.push(`${here.length > 1 ? "Rich and the team are" : here[0] === "rich" ? "Rich is" : "The team is"} working on this one now.`);
+    if (away.includes("team")) said.push("The team moves here once it finishes the step it is on.");
+    if (away.includes("rich")) said.push("Rich moves here with his next reply.");
+    return said.join(" ");
+  }
 
   // ---- the Settings row -------------------------------------------------------------------
   // No second line with one account and room (see below), "86% of this week used" (gold, from
@@ -111,9 +135,9 @@
     // it says something: 85% of the week, or a second account.
     let line = "", time = "", attention = false;
     if (multi()) {
-      line = sw ? `Using ${cur.label}, switched ` : `Using ${cur.label}`;
-      time = sw ? clock(sw.at) : "";
-      attention = !!sw;
+      line = moving() ? `Switching to ${cur.label}` : sw ? `Using ${cur.label}, switched ` : `Using ${cur.label}`;
+      time = sw && !moving() ? clock(sw.at) : "";
+      attention = !!sw || moving();
     } else if (week && week.usedPercent >= ATTENTION) {
       line = `${Math.floor(week.usedPercent)}% of this week used`;
       attention = true;
@@ -169,10 +193,15 @@
   }
   function card(a) {
     const nx = nextAcct(), n = view.agentsWorking || 0;
-    const kind = a.inUse ? "inuse" : !read(a) ? "unread" : resting(a) ? "resting" : nx && nx.id === a.id ? "next" : "ready";
+    const leaving = !a.inUse && workingOn(a).length > 0 && multi();
+    const kind = leaving ? "leaving" : a.inUse ? (moving() ? "arriving" : "inuse") : !read(a) ? "unread" : resting(a) ? "resting" : nx && nx.id === a.id ? "next" : "ready";
     const team = n ? `: <b>${n} ${n === 1 ? "agent" : "agents"}</b>` : "";
     let pill = "", note;
-    if (kind === "inuse") {
+    // The account being left is still really in use (the gold card); the one being moved to is
+    // drawn as Next is, with its own words.
+    if (kind === "leaving") { pill = `<span class="acc-pill is-inuse"><i></i>Still in use</span>`; note = movingNote(a); }
+    else if (kind === "arriving") { pill = `<span class="acc-pill is-next"><i></i>Switching to this one</span>`; note = movingNote(a); }
+    else if (kind === "inuse") {
       pill = `<span class="acc-pill is-inuse"><i></i>In use now</span>`;
       note = !read(a) ? "No reading yet. If this account is not signed in on this Mac, sign in here."
         : multi() ? `Rich and the team are working on this one${team}.` : `Rich and the team work on this account${n ? `${team} right now` : ""}.`;
@@ -181,7 +210,7 @@
     else if (kind === "ready") { pill = `<span class="acc-pill"><i></i>Ready</span>`; note = "Waiting its turn."; }
     else { pill = `<span class="acc-pill is-resting"><i></i>Not signed in</span>`; note = signingId === a.id ? "Finish signing in in your browser, then come back here." : "Sign in to this account, and Rich can use it."; }
     let acts = "";
-    if (multi() && kind !== "inuse" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
+    if (multi() && kind !== "inuse" && kind !== "arriving" && kind !== "unread" && kind !== "resting") acts += `<button class="acc-btn" type="button" data-act="use" data-id="${esc(a.id)}" aria-label="Use ${esc(a.label)} now">${ICON.swap}Use this one now</button>`;
     if (!read(a) && a.id === "1") acts += `<button class="acc-btn" type="button" data-act="sign-one">Sign in</button>`;
     else if (kind === "unread" && signingId !== a.id) acts += `<button class="acc-btn" type="button" data-act="sign" data-id="${esc(a.id)}">Sign in</button>`;
     // Account 1 is this Mac's own Claude sign-in and is never removed here (claude_accounts.rs).
@@ -191,7 +220,8 @@
       confirm = `<div class="acc-confirm"><span>Remove <b>${esc(a.label)}</b> from RichOS? RichOS signs out of it here. Nothing changes on the account itself, and you can add it back any time.</span>
         <button class="acc-btn acc-btn-primary" type="button" id="acc-remove-yes" data-act="remove-yes" data-id="${esc(a.id)}">Remove ${esc(a.label)}</button><button class="acc-btn" type="button" id="acc-remove-no" data-act="remove-no">Keep it</button></div>`;
     }
-    return `<article class="acc-card is-${kind}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
+    const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
+    return `<article class="acc-card is-${look}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
       <header class="acc-head"><h3 class="acc-name">${esc(nameOf(a))}</h3>${pill}<span class="acc-acts">${acts}</span></header>
       <p class="acc-note">${note}</p><div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>${confirm}</article>`;
   }
@@ -265,7 +295,7 @@
     const focus = document.activeElement && col.contains(document.activeElement) ? (document.activeElement.id || document.activeElement.dataset.act + (document.activeElement.dataset.id || "")) : null;
     let html = banner();
     const cards = ordered(), nx = nextAcct();
-    html += `<div class="acc-cards">${cards.map((a, i) => card(a) + (i === 0 && nx && cards[1] && cards[1].id === nx.id
+    html += `<div class="acc-cards">${cards.map((a, i) => card(a) + (i === 0 && !moving() && nx && cards[1] && cards[1].id === nx.id
       ? `<div class="acc-handover" aria-hidden="true"><span>${ICON.down}Then ${esc(nx.label)}, when ${esc(a.label)} is nearly full</span></div>` : "")).join("")}</div>`;
     if (add) html += addHtml();
     else if (!multi()) html += `<button class="acc-slot" type="button" data-act="add-open"><span class="acc-slot-plus">${ICON.plus}</span><span><span class="acc-slot-title">Add another Claude account</span><span class="acc-slot-body">Have a second Claude account, for example one for work? Add it here, and Rich switches to it when this one is nearly full.</span></span></button>`;

@@ -211,6 +211,13 @@ pub struct AccountView {
     pub id: String,
     pub label: String,
     pub in_use: bool,
+    /// **Who is working on this account right now** ([`Accounts::working_on`]): `"rich"` when
+    /// the conversation's last turn ran on it, `"team"` when a back end's lease (Stu's) runs on
+    /// it. `in_use` is where the next session starts; during a switch the account being left
+    /// still lists whoever has not moved yet (review rv-20261019T005929Z-e3d9ad03-3e7b, finding
+    /// 3: the panel said the new account was "In use now" while Stu still ran on the old one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub working: Vec<String>,
     pub windows: Vec<Window>,
     pub checked_at: Option<u64>,
     /// Set while this account is exhausted, with when it comes back.
@@ -340,6 +347,8 @@ pub struct Accounts {
     /// the work host when it opens or ends one (nightly 65, 2026-10-18: "I switched the team
     /// to your Home account" was said while Stu's whole job ran on, and stayed on, Work).
     back_ends: Mutex<BTreeMap<String, String>>,
+    /// The account the conversation's last turn ran on ([`Accounts::ran_on`]).
+    conversation: Mutex<Option<String>>,
     notice: Mutex<Option<String>>,
     /// The webview's offset from UTC (`quota::Service::set_utc_offset`), so the switch line
     /// can say as a clock time when the account it left is fresh again.
@@ -364,7 +373,7 @@ impl Accounts {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Stored::default(),
             Err(e) => return Err(e),
         };
-        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
+        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), conversation: Mutex::new(None), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
     }
 
     fn save(&self, state: &Stored) -> io::Result<()> {
@@ -603,6 +612,16 @@ impl Accounts {
         self.release();
     }
 
+    /// **Who is working on `account` right now**, for the panel ([`AccountView::working`]):
+    /// `"rich"` when the conversation's last turn ran on it, `"team"` when a back end's live
+    /// lease runs on it.
+    pub fn working_on(&self, account: &str) -> Vec<String> {
+        let mut who = Vec::new();
+        if self.conversation.lock().unwrap().as_deref() == Some(account) { who.push("rich".to_string()); }
+        if self.back_ends.lock().unwrap().values().any(|on| on == account) { who.push("team".to_string()); }
+        who
+    }
+
     /// The switch has happened once a conversation turn ran under `to` and every live back end
     /// is on `to` too; then its notice is released for [`Accounts::take_notice`].
     fn release(&self) {
@@ -656,6 +675,7 @@ impl Accounts {
     /// released for [`Accounts::take_notice`]. Called by the conversation (`spine.rs`,
     /// `prepare_request`).
     pub fn ran_on(&self, account: &str) {
+        *self.conversation.lock().unwrap() = Some(account.to_string());
         if let Some(pending) = self.pending.lock().unwrap().as_mut().filter(|p| p.to == account) {
             pending.ran = true;
         }
