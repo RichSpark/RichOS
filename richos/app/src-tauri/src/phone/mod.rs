@@ -1684,6 +1684,15 @@ impl PhoneRuntime {
         }
     }
 
+    /// **A conversation was created or renamed on this Mac: the phone hears its name now**
+    /// (Ray's nightly 66 and 67 walks: it was `Conversation` in the phone's picker until opened).
+    /// The list otherwise rides only in a `hello`, so it goes out on the live stream as its own
+    /// `threads` frame, which a client that does not know the name ignores.
+    pub fn threads_changed(&self) {
+        let Some(bridge) = self.running.lock().unwrap().as_ref().map(|r| Arc::clone(&r.bridge)) else { return };
+        drop(self.hub.publish("threads", self.hub.cursor_now(), threads_frame(&bridge.threads_changed())));
+    }
+
     /// **Push the reply that just finished**, if there is a phone to push to.
     ///
     /// Called after the actual completion event on the existing blocking pool. Network
@@ -1833,9 +1842,37 @@ fn phone_assets() -> assets::PhoneApp {
     assets::PhoneApp::embedded()
 }
 
+/// The data of a `threads` frame: the conversation list in the `hello`'s own shape.
+fn threads_frame(threads: &[(String, String)]) -> String {
+    let list: Vec<serde_json::Value> =
+        threads.iter().map(|(id, title)| serde_json::json!({ "id": id, "title": title })).collect();
+    serde_json::json!({ "threads": list }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A conversation created or renamed on the Mac reaches a listening phone by its name**
+    /// (Ray's nightly 66 and 67 walks). The runtime's hub, as a running channel has it: the
+    /// `threads` frame is published on the one live stream, under the newest cursor (no row is
+    /// opened), in the list shape the `hello` uses.
+    #[test]
+    fn a_new_or_renamed_conversation_goes_out_to_the_phone_as_a_threads_frame() {
+        let hub = stream::PhoneHub::new();
+        hub.set_live(true);
+        let mut rx = hub.subscribe();
+        hub.seed_cursor(7);
+        let list = vec![("thr_a".to_string(), "Onboarding".to_string()), ("thr_b".to_string(), "Welcome email".to_string())];
+        hub.publish("threads", hub.cursor_now(), threads_frame(&list)).unwrap();
+        let frame = rx.try_recv().unwrap();
+        assert_eq!((frame.kind, frame.cursor), ("threads", 7));
+        let data: serde_json::Value = serde_json::from_str(&frame.data).unwrap();
+        assert_eq!(data, serde_json::json!({ "threads": [
+            { "id": "thr_a", "title": "Onboarding" }, { "id": "thr_b", "title": "Welcome email" }
+        ] }));
+        assert_eq!(hub.cursor_now(), 7, "a list is not a row and takes no cursor");
+    }
 
     #[test]
     fn only_address_in_use_claims_another_program_holds_the_connection() {
