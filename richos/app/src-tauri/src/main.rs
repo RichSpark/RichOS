@@ -2593,6 +2593,8 @@ fn main() {
                         start_ordinal,
                         durable_splash_enabled(&data_dir),
                     ))
+                    // The right-click guard in every frame, the PDF preview's too (nightly 66).
+                    .initialization_script_for_all_frames(webview_menu::EVERY_FRAME)
                     // FOCUS IS ASKED FOR AT CONSTRUCTION, not corrected afterwards, so
                     // there is no instant in which the keyboard moved and came back.
                     .focused(activation.presentation == activation::Presentation::Regular)
@@ -9854,6 +9856,7 @@ fn reopen_window(app: &AppHandle) {
             None,
             durable_splash_enabled(&data_dir),
         ))
+        .initialization_script_for_all_frames(webview_menu::EVERY_FRAME)
         // He asked for it by clicking the Dock icon, so it is visible and focused — the
         // unattended-boot reasoning at the setup site is about a launch nobody asked for.
         .visible(true)
